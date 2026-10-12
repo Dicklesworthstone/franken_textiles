@@ -1,0 +1,7 @@
+[toolchain]
+# Pinned date so every worker and local build resolves the same nightly, matching the
+# sibling Franken projects (checked 2026-10-12). Bump deliberately, never to a floating
+# "nightly": the conformance fixtures and the deterministic solver both assume one compiler.
+channel = "nightly-2026-08-31"
+components = ["rustfmt", "clippy", "rust-src"]
+targets = ["wasm32-unknown-unknown"]

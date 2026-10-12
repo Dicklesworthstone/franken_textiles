@@ -1,0 +1,18 @@
+# Use the beads merge driver for beads JSONL files.
+.beads/issues.jsonl merge=beads
+
+# Oracle fixtures are byte-exact evidence captured from the reference implementations.
+# Never diff or text-munge them, and never regenerate them from the candidate.
+tests/fixtures/oracle/** -diff -text
+*.png -diff -text
+*.pdf -diff -text
+*.dst -diff -text
+*.pc2 -diff -text
+
+# Text formats we author or compare as text keep LF endings.
+*.rs text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.svg text eol=lf
+*.dxf text eol=lf
+*.plt text eol=lf

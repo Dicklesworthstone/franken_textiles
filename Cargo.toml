@@ -1,0 +1,51 @@
+[workspace]
+resolver = "3"
+members = []
+
+# Planned workspace crates (plan §16 / AGENTS.md "Planned Workspace Crates"). A crate is
+# added to `members` when it gets real code, not before. No crate outside this list without
+# explicit approval. Ceiling: 120,000 lines of Rust including tests.
+# - crates/ftx-core        ( 8,000) units, deterministic math, geometry kernels, JSON schemas, refusals
+# - crates/ftx-pattern     (16,000) pattern model, instances, validation, alteration, drafting programs
+# - crates/ftx-body        ( 9,000) Anny forward model, measurement slicing, fitting, poses, landmarks
+# - crates/ftx-measure     (16,000) catalogue, priors, fusion, readiness, photo scale, photogrammetry
+# - crates/ftx-drape       (14,000) garment meshing, IPC contact cloth solver, metrics and flags
+# - crates/ftx-export      (14,000) SVG, PDF, DXF, HPGL, cutter, GarmentCode, DST, acceptance checks
+# - crates/ftx-trace       ( 7,000) tracing AI pattern sheets into pattern JSON
+# - crates/ftx-cli         ( 4,000) the `ftx` binary
+# - crates/ftx-wasm        ( 3,000) browser bindings
+# - crates/ftx-conformance ( 9,000) oracle fixtures, differential and known-answer tests
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["FrankenTextiles Contributors"]
+repository = "https://github.com/Dicklesworthstone/franken_textiles"
+homepage = "https://github.com/Dicklesworthstone/franken_textiles"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+
+[workspace.dependencies]
+# Small, pinned allowlist (plan §15). Serialization for files and manifests only,
+# never inside a solver iteration.
+serde = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+
+[profile.release-perf]
+inherits = "release"
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"

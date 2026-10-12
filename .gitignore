@@ -1,0 +1,58 @@
+# Rust build output
+/target/
+target/
+**/*.rs.bk
+
+# Keep Cargo.lock tracked: ftx-cli is a binary and every result names its inputs.
+
+# Profiling, coverage, benchmark scratch
+*.profraw
+*.profdata
+/coverage/
+/lcov.info
+/criterion/
+/bench-output/
+perf.data
+perf.data.old
+flamegraph.svg
+
+# Wasm build output (wasm-pack / wasm-bindgen)
+/pkg/
+/crates/*/pkg/
+*.wasm
+
+# === FrankenTextiles specific ===
+
+# Body-model data is converted locally from the pinned upstream package by
+# `tools/body-model/convert_anny.py`; the converted tensors are never committed.
+/models/
+*.ftxbody
+
+# Run workspaces, renders and drapes produced by `ftx` are user data, not source.
+/runs/
+/out/
+/ws/
+*.pc2
+fold_viewer.html
+
+# NEVER commit a real person's measurements, photos or videos. Real wearers live in
+# a workspace outside this repository; fixtures are synthetic or the public-prior
+# reference wearer only.
+/private/
+*.private.json
+*.mov
+*.MOV
+*.mp4
+*.heic
+*.HEIC
+
+# Python oracle tooling (fixture capture, body-model conversion)
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
