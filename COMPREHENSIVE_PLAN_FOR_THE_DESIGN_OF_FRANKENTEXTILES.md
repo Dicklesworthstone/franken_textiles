@@ -54,7 +54,7 @@ The plan has three tiers, kept distinguishable in code, docs and status reports:
 | **Optional research** | Ideas that may never ship: learned fabric parameters from drape videos, differentiable pattern optimisation through the solver, garment capture from a flat-lay photo. These never consume budget before the kill gates pass. |
 
 Read §3 (the four claims) and §19 (kill gates) before anything else. The detailed behaviour specifications
-extracted from the reference live in `docs/spec/01…04-*.md`; this plan states architecture and decisions,
+extracted from the reference live in `docs/spec/01…04-*.md` (and the Anny forward model in `05`); this plan states architecture and decisions,
 the specs state exact behaviour.
 
 ---
@@ -277,17 +277,27 @@ Checked on 2026-10-12 with `anny==0.6.1` on CPU: six phenotype parameters (gende
 height, proportions), 256 local shape changes including twenty `measure-*` targets (bust, underbust, waist,
 hips, neck, nape-to-waist, waist-to-hip, shoulder width, front chest, upper arm, lower arm, wrist, thigh,
 knee, calf, ankle, upper and lower leg heights), a 13,718-vertex quad mesh, a 163-bone default rig, about
-8 ms per forward pass after loading. A toddler girl at age parameter 0.12 is 95 cm tall with a 48.5 cm waist
-and 12.2 kg; an adult man at 0.6 is 169 cm.
+7 ms per forward pass after loading. Gender 0 is male and 1 female; the age parameter is morphological
+(WHO-calibrated map: 0 y → 0.0, 1 y → 0.05, 4 y → 0.215, 11 y → 0.415, 16 y → 0.67, 18 y → 0.77,
+30 y → 0.786, 64 y → 0.83). At average build a girl of 2.5 years is 94.4 cm tall with a 45.9 cm waist and
+11.4 kg, a boy of 6 is 131.6 cm, a man of 30 is 189.8 cm and a woman of 30 is 176.4 cm
+(`docs/spec/05-anny-forward-model.md` §8). Its local changes are fixed-size offsets (+1 on the waist adds
+about 10 cm at any age), so fitting priors must scale with body size; its weight and muscle age priors look
+unreliable and only the height prior is used.
 
 ### 9.2 Port: the forward model, not the training code
 
 Essence extraction of Anny's forward model:
-1. **Data conversion** (`tools/body-model/convert_anny.py`, Python, run once per pin): load the pinned
-   package, export the template mesh, the phenotype anchor blend shapes and their interpolation rules, the
-   local-change targets, the rig (bone heads, tails, rest orientations) and skinning weights into a compact,
-   versioned little-endian file (`*.ftxbody`, with a JSON header naming the pin and every array's shape and
-   hash). Converted data is never committed (§18; `.gitignore`); the pin and the converter are.
+1. **Data conversion** (`tools/body-model/convert_anny.py`, Python, run once per pin): build the model data
+   from the pinned package's bundled MakeHuman/MPFB2 assets into a fresh cache directory (the package's own
+   cache key ignores its version; `data/cached/anny.pth` is not what this configuration uses), check the
+   hashes listed in `docs/spec/05` §8.1, and export the template mesh, the phenotype blend shapes, the
+   local-change targets, the rig (bone heads, tails and the float32 bone-roll matrices exactly as stored) and
+   the skinning weights into a versioned little-endian file (`*.ftxbody`, with a JSON header naming the pin
+   and every array's shape and hash). The blend shapes are 374 MB dense in float64; stored sparse as 16-bit
+   integers × 0.1 mm (exact for all but the derived newborn rows) they are about 80 MB, and 216 of 1,136 rows
+   (breast shapes, always zero in this configuration) are dropped. Converted data is never committed (§18;
+   `.gitignore`); the pin and the converter are.
 2. **Forward model in Rust**: phenotype interpolation exactly as Anny computes it, local changes, rest
    skeleton, pose (linear blend skinning first; dual-quaternion only if a fixture needs it), triangulation.
 3. **Parity gate G1a**: vertices within 0.05 mm of PyTorch Anny for a fixture set of phenotypes, local
@@ -718,6 +728,9 @@ G2.
   bellies, seats and nappies is unproven; local changes and photo terms are the remedy, residuals the report.
 - **A moving toddler**: still windows may be short or absent; the protocol (tape first, photos second) stays.
 - **wasm performance**: an estimated 1.5–2× slower than native without fused multiply-add; to be measured.
+- **Body-model size in the browser**: about 80 MB sparse even quantized. Options: an age-band subset of the
+  blend shapes, a coarser fitting mesh with the full mesh only for the drape, or fetching the converted data
+  from the user's own installation. Decided at G4, measured, not guessed.
 - **The reference keeps moving** while the port happens; pins and fixture refreshes are deliberate events.
 
 ---
@@ -755,6 +768,6 @@ Not ported, by decision:
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
 - Li et al., "Incremental Potential Contact", SIGGRAPH 2020; Li et al., "Codimensional Incremental Potential
   Contact" (C-IPC), 2021; ipc-toolkit (MIT).
-- The reference implementation's behaviour specifications: `docs/spec/01…04`.
+- The reference implementation's behaviour specifications: `docs/spec/01…04`; the Anny forward model: `docs/spec/05`.
 - Research behind the reference (body measurement and body models; formats and manufacturing; Blender
   sewing; the frankensim cloth survey; the photogrammetry port survey), summarised where used above.

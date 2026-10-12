@@ -94,7 +94,8 @@ agent's changes.
 
 - `COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md` - the technical constitution (architecture,
   claims, gates, phases, crates, budgets).
-- `docs/spec/01…04-*.md` - the behaviour specifications extracted from the reference implementation. **When
+- `docs/spec/01…05-*.md` - the behaviour specifications extracted from the reference implementation
+  (01–04) and from the pinned Anny body model (05). **When
   porting, implement from the spec, not from the legacy code.** If the spec is wrong or silent, fix the spec
   first (with the evidence), then the code.
 - `FEATURE_PARITY.md` - what is present, partial, missing or excluded, with the fixture IDs that prove it.

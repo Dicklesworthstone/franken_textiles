@@ -31,9 +31,10 @@ Last updated: 2026-10-12 (plan stage, no Rust code).
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
 | Analytic landmarks and sections (compatibility with drafted values) | 02 Part B | missing | |
-| Anny data conversion at the pin | plan §9.2 | missing | |
-| Anny forward model (phenotypes, local changes, skeleton, skinning) | plan §9.2 | missing | |
-| Anny anthropometry (height, waist, volume, mass, BMI) | plan §9.2 | missing | |
+| Anny data conversion at the pin | 05 §1, §8.1 | missing | |
+| Anny forward model (phenotypes, local changes, skeleton, skinning) | 05 §2–5 | missing | |
+| Anny anthropometry (height, waist, volume, mass, BMI) | 05 §6 | missing | |
+| Anny reference cases (16 phenotype, local-change and pose cases) | 05 §8 | missing | |
 | Tape functionals (girths as convex hulls of slices, lengths) | plan §9.3 | missing | |
 | Fitting from age/sex/height/weight/BMI | plan §9.4 | missing | |
 | Fitting from tape measurements | plan §9.4 | missing | |

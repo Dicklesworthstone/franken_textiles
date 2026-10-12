@@ -33,7 +33,7 @@ is deterministic, testable against known answers, and runs in a browser with not
 | Question | Answer |
 |---|---|
 | Is there a design? | **Yes**: [`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md`](COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md) |
-| Is the reference behaviour specified? | **Yes**: four behaviour specifications extracted from the Python reference by running it ([`docs/spec/`](docs/spec/)), about 6,200 lines with fixture cases |
+| Is the reference behaviour specified? | **Yes**: four behaviour specifications extracted from the Python reference by running it, and one for the Anny forward model ([`docs/spec/`](docs/spec/)), about 7,100 lines with fixture cases. The Anny spec was checked by re-implementing the model in NumPy from the text alone (agrees to 2e-15 m) |
 | Is there a Cargo workspace with code? | **No**: the workspace manifest lists the planned crates; none has code yet |
 | Does the body model work? | **Upstream only**: Anny 0.6.1 runs on CPU in Python (about 8 ms per body); the Rust port is the first Phase 0 gate |
 | Does the drape solver exist? | **No**: designed (plan §11), not written. The reference still drapes in Blender |
@@ -71,13 +71,14 @@ spec-first with conformance fixtures captured from the reference, and compiles t
 ## Bodies: Anny, not a dress form
 
 <div align="center">
-<img src="docs/images/anny-bodies.jpg" alt="Four Anny bodies: a toddler girl, a six-year-old boy, an adult man and an adult woman" width="760">
+<img src="docs/images/anny-bodies.jpg" alt="Four Anny bodies: a girl of two and a half, a six-year-old boy, a man of thirty and a woman of thirty" width="760">
 </div>
 
 [Anny](https://github.com/naver/anny) (NAVER LABS Europe, arXiv 2511.03589) is a parametric body model built
 from MakeHuman/MPFB2 assets that covers newborn to elderly, with height-for-age calibrated to WHO data. Its
-code is Apache-2.0 and its assets CC0. The picture shows four bodies from it: a toddler girl (95 cm), a
-six-year-old boy (130 cm), a man and a woman. Six phenotype parameters (gender, age, muscle, weight, height,
+code is Apache-2.0 and its assets CC0. The picture shows four bodies from it at average build: a girl of two
+and a half (94 cm), a boy of six (132 cm), a man of thirty (190 cm) and a woman of thirty (176 cm). Six
+phenotype parameters (gender, age, muscle, weight, height,
 proportions) and 256 local shape changes, twenty of them tape-measure targets (bust, underbust, waist, hips,
 neck, nape to waist, thigh, calf…), let it be fitted from age and height alone, from height, weight or BMI,
 from a full set of tape measurements, or from photos and video with a sheet of paper for scale.
