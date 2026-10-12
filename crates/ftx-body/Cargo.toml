@@ -1,0 +1,17 @@
+[package]
+name = "ftx-body"
+description = "FrankenTextiles bodies: the Anny parametric body model (newborn to adult) in Rust, from converted .ftxbody data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+ftx-core = { path = "../ftx-core" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

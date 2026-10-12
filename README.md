@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Status](https://img.shields.io/badge/status-plan--stage%20%C2%B7%20no%20Rust%20yet-orange)](#honest-status)
+[![Status](https://img.shields.io/badge/status-phase%200%20%C2%B7%20core%20%2B%20body%20model-orange)](#honest-status)
 [![Reference](https://img.shields.io/badge/reference-Python%20skill%20%4088e03965-3776ab)](#oracles-and-pins)
 [![Body model](https://img.shields.io/badge/body-Anny%200.6.1%20(newborn%E2%86%92adult)-2ea44f)](#bodies-anny-not-a-dress-form)
 [![Core](https://img.shields.io/badge/core-Rust%20%2F%20Wasm-b7410e)](#architecture)
@@ -28,14 +28,15 @@ is deterministic, testable against known answers, and runs in a browser with not
 
 ## Honest status
 
-**Plan stage. There is no Rust code yet.**
+**Phase 0.** Two crates have code: `ftx-core` (deterministic maths and the pattern geometry kernels) and
+`ftx-body` (the Anny body model). Patterns, the drape solver and the exports are not ported yet.
 
 | Question | Answer |
 |---|---|
 | Is there a design? | **Yes**: [`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md`](COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md) |
 | Is the reference behaviour specified? | **Yes**: four behaviour specifications extracted from the Python reference by running it, and one for the Anny forward model ([`docs/spec/`](docs/spec/)), about 7,100 lines with fixture cases. The Anny spec was checked by re-implementing the model in NumPy from the text alone (agrees to 2e-15 m) |
-| Is there a Cargo workspace with code? | **No**: the workspace manifest lists the planned crates; none has code yet |
-| Does the body model work? | **Upstream only**: Anny 0.6.1 runs on CPU in Python (about 8 ms per body); the Rust port is the first Phase 0 gate |
+| Is there a Cargo workspace with code? | **Partly**: `ftx-core` and `ftx-body` (tests pass natively, on x86-64 and as wasm under Node); the other eight crates are planned |
+| Does the body model work? | **Yes, in Rust**: the Anny forward model matches the Python package on 16 reference bodies (newborn to adult, extremes, local changes, two poses) to 1e-14 m, about 0.3–0.4 ms per body against 7 ms upstream. Fitting it to a person's measurements is next |
 | Does the drape solver exist? | **No**: designed (plan §11), not written. The reference still drapes in Blender |
 | Has anything been benchmarked? | **No**. Every number in the plan is a target or a measurement of the reference |
 

@@ -5,8 +5,10 @@ rounds up**. A row becomes `present` only when the fixture IDs in its last colum
 `ftx-conformance`. Spec references point into `docs/spec/`. Reference: the `fabric-pattern-creation-and-alteration`
 skill's Python implementation at revision `88e03965`; body model: `anny==0.6.1`.
 
-Last updated: 2026-10-12 (`ftx-core` landed; F1–F6 pass as unit tests, not yet as captured oracle
-fixtures in `ftx-conformance`, so those rows stay partial).
+Last updated: 2026-10-12. `ftx-core`: F1–F6 pass as unit tests from the spec's values, not yet as captured
+oracle fixtures, so those rows stay partial. `ftx-body`: the Anny rows pass against the captured oracle
+`tests/fixtures/oracle/body/anny-0.6.1-reference.json` (`crates/ftx-body/tests/anny_parity.rs`, run with
+`--include-ignored` after `tools/body-model/convert_anny.py`).
 
 ## Patterns (`ftx-pattern`, spec 01)
 
@@ -32,10 +34,10 @@ fixtures in `ftx-conformance`, so those rows stay partial).
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
 | Analytic landmarks and sections (compatibility with drafted values) | 02 Part B | missing | |
-| Anny data conversion at the pin | 05 §1, §8.1 | missing | |
-| Anny forward model (phenotypes, local changes, skeleton, skinning) | 05 §2–5 | missing | |
-| Anny anthropometry (height, waist, volume, mass, BMI) | 05 §6 | missing | |
-| Anny reference cases (16 phenotype, local-change and pose cases) | 05 §8 | missing | |
+| Anny data conversion at the pin | 05 §1, §8.1 | present | package array and label hashes (converter); `loaded_arrays_hash_to_the_package_values` |
+| Anny forward model (phenotypes, local changes, skeleton, skinning) | 05 §2–5 | present | anny-0.6.1-reference cases 0–15 (worst 1.05e-14 m) |
+| Anny anthropometry (height, waist, volume, mass, BMI) | 05 §6 | present | anny-0.6.1-reference cases 0–15 (worst 1.1e-13 relative) |
+| Anny reference cases (16 phenotype, local-change and pose cases) | 05 §8 | present | anny-0.6.1-reference cases 0–15 |
 | Tape functionals (girths as convex hulls of slices, lengths) | plan §9.3 | missing | |
 | Fitting from age/sex/height/weight/BMI | plan §9.4 | missing | |
 | Fitting from tape measurements | plan §9.4 | missing | |
@@ -127,4 +129,5 @@ fixtures in `ftx-conformance`, so those rows stay partial).
 | Malformed inputs that crash the reference | exception | structure error with a message | Fail closed |
 | DXF extents | ±1e20 placeholders | real extents | Correct values; no check reads them |
 | Cubic Bézier samples | x³ via the platform `pow` (not correctly rounded, varies by platform) | correctly rounded x³ | Deterministic; ≤ 1 ULP from numpy, which disagrees with itself across platforms |
+| Anny batch size | any batch, broadcast | batch 1 | Loop over bodies instead; simpler and as fast here (0.3–0.4 ms per body) |
 | PDF/DXF creation dates | wall clock | the pattern's `created` | Reproducible files |
