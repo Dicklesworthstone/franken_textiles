@@ -228,7 +228,9 @@ Shared foundations, no domain logic:
   counts (lengths depend on them; `docs/spec/01` §2), arclength, fractions, tangents, mirror and reverse.
 - Polygons: signed area, point-in-polygon, horizontal width at a level, offsetting with mitre limits (the
   seam-allowance outline lives in `ftx-export` but uses these kernels).
-- The JSON schemas as typed structs with serde, round-trip tested against the reference's files.
+- The shared JSON types (the edge `curve` object, refusals, receipts) with serde. The pattern and fit
+  documents are typed in `ftx-pattern`, because their structure checks must read malformed input and
+  report it with the reference's messages instead of failing to parse.
 - Refusal and report types; a run receipt (input hashes, versions, parameters, output hash).
 
 ---

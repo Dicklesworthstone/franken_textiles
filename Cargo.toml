@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = []
+members = ["crates/ftx-core"]
 
 # Planned workspace crates (plan §16 / AGENTS.md "Planned Workspace Crates"). A crate is
 # added to `members` when it gets real code, not before. No crate outside this list without

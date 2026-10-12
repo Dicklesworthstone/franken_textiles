@@ -5,7 +5,8 @@ rounds up**. A row becomes `present` only when the fixture IDs in its last colum
 `ftx-conformance`. Spec references point into `docs/spec/`. Reference: the `fabric-pattern-creation-and-alteration`
 skill's Python implementation at revision `88e03965`; body model: `anny==0.6.1`.
 
-Last updated: 2026-10-12 (plan stage, no Rust code).
+Last updated: 2026-10-12 (`ftx-core` landed; F1–F6 pass as unit tests, not yet as captured oracle
+fixtures in `ftx-conformance`, so those rows stay partial).
 
 ## Patterns (`ftx-pattern`, spec 01)
 
@@ -13,8 +14,8 @@ Last updated: 2026-10-12 (plan stage, no Rust code).
 |---|---|---|---|
 | `fabric-pattern/1` document read/write round trip | 01 §2 | missing | |
 | `fabric-fit/1` document | 01 §3 | missing | |
-| Curve geometry (chord-relative cubic/quadratic, sampling counts) | 01 §4 | missing | |
-| Numeric helpers (lengths, fractions, tangents, areas, widths) | 01 §5 | missing | |
+| Curve geometry (chord-relative cubic/quadratic, sampling counts) | 01 §4 | partial | F1, F2, F3 (ftx-core unit tests) |
+| Numeric helpers (lengths, fractions, tangents, areas, widths) | 01 §5 | partial | F4, F5, F6 (ftx-core unit tests) |
 | Instances (mirror pairs, on-fold unfolding, edge suffixes) | 01 §6 | missing | |
 | Structure checks with the reference's messages | 01 §7 | missing | |
 | Seam sides, notch fractions, seam pair sampling | 01 §8 | missing | |
@@ -125,4 +126,5 @@ Last updated: 2026-10-12 (plan stage, no Rust code).
 | Bisection with no root | returns the upper bound silently | typed refusal | Fail closed |
 | Malformed inputs that crash the reference | exception | structure error with a message | Fail closed |
 | DXF extents | ±1e20 placeholders | real extents | Correct values; no check reads them |
+| Cubic Bézier samples | x³ via the platform `pow` (not correctly rounded, varies by platform) | correctly rounded x³ | Deterministic; ≤ 1 ULP from numpy, which disagrees with itself across platforms |
 | PDF/DXF creation dates | wall clock | the pattern's `created` | Reproducible files |
