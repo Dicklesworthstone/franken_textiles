@@ -85,6 +85,44 @@ pub fn encode_png_gray(img: &Gray) -> Vec<u8> {
     out
 }
 
+/// Encode a validated BGR raster as an RGB PNG, without reordering pixels or adding a clock.
+/// The 16-million-pixel limit bounds the uncompressed scanlines and intermediate allocations.
+pub fn encode_png_bgr(img: &Bgr) -> Result<Vec<u8>, String> {
+    let pixels = img.w.checked_mul(img.h).ok_or("PNG dimensions overflow")?;
+    if img.w == 0
+        || img.h == 0
+        || pixels > 16_000_000
+        || pixels.checked_mul(3) != Some(img.data.len())
+    {
+        return Err("BGR PNG needs a complete raster of 1..=16000000 pixels".into());
+    }
+    let mut raw = Vec::with_capacity(img.data.len() + img.h);
+    for row in img.data.chunks_exact(3 * img.w) {
+        raw.push(0);
+        for p in row.as_chunks::<3>().0 {
+            raw.extend_from_slice(&[p[2], p[1], p[0]]);
+        }
+    }
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8], data: &[u8]| {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        out.extend_from_slice(&crc32(&[kind, data]).to_be_bytes());
+    };
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&(img.w as u32).to_be_bytes());
+    ihdr.extend_from_slice(&(img.h as u32).to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &ihdr);
+    chunk(
+        b"IDAT",
+        &miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6),
+    );
+    chunk(b"IEND", &[]);
+    Ok(out)
+}
+
 /// CRC-32 (IEEE) of a chunk's type and data.
 fn crc32(parts: &[&[u8]]) -> u32 {
     let mut table = [0u32; 256];
