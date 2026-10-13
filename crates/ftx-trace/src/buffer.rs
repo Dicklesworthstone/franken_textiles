@@ -580,8 +580,10 @@ fn raw_ring_curve(shell: &[Vec2], distance: f64, join: Join) -> Vec<Vec2> {
             coords.push(p);
         }
     }
-    if coords.first() != coords.last() {
-        coords.push(coords[0]);
+    if let Some(&f) = coords.first()
+        && coords.last() != Some(&f)
+    {
+        coords.push(f);
     }
     let d = distance.abs();
     let mut left = distance >= 0.0;
@@ -590,6 +592,10 @@ fn raw_ring_curve(shell: &[Vec2], distance: f64, join: Join) -> Vec<Vec2> {
     }
     let tol = d / 100.0;
     let simp = simplify_input(&coords, if left { tol } else { -tol });
+    // fewer than two distinct points has no ring curve (GEOS would buffer it as a line or a point)
+    if simp.len() < 3 {
+        return Vec::new();
+    }
     let n = simp.len() - 1;
     let mut g = SegGen::new(d, join, left);
     g.init(simp[n - 1], simp[0]);
@@ -772,4 +778,22 @@ pub fn line_project_normalized(line: &[Vec2], p: Vec2) -> f64 {
         total += len;
     }
     if total == 0.0 { 0.0 } else { measure / total }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A single point or a doubled segment (a one-pixel blob traced with no opening) never panics.
+    #[test]
+    fn degenerate_rings_do_not_panic() {
+        let (a, b) = (Vec2::new(3.0, 4.0), Vec2::new(5.0, 4.0));
+        for ring in [vec![a], vec![a, a], vec![a, b, a], vec![a, b, a, b, a]] {
+            for d in [-1.0, 0.0, 0.5, 2.0] {
+                for join in [Join::Mitre(4.0), Join::Round(16)] {
+                    assert!(buffer(&[Polygon::new(ring.clone())], d, join).is_ok());
+                }
+            }
+        }
+    }
 }
