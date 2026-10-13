@@ -12,7 +12,8 @@
 //!
 //! Every command prints human text, or with `--json` one JSON envelope `{"schema": "ftx-cli/1",
 //! "command", "ok", "exit", "result" | "refusal"}`. Exit codes: 0 converged / no gating flags, 2 not
-//! converged / gating flags, 3 refused input.
+//! converged / gating flags, 3 refused input or (validate) BLOCKED. A refusal's text goes to stderr, a
+//! result's to stdout.
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
@@ -427,21 +428,25 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
 }
 
 fn emit(command: &str, json_out: bool, outcome: Result<(Value, i32, String), Refusal>) -> ExitCode {
-    let (envelope, code, text) = match outcome {
+    // a refusal's text goes to stderr; a result's to stdout whatever its exit code (a BLOCKED
+    // validation exits 3 with a table)
+    let (envelope, code, text, refused) = match outcome {
         Ok((result, code, text)) => (
             json!({"schema": "ftx-cli/1", "command": command, "ok": code == 0, "exit": code, "result": result}),
             code,
             text,
+            false,
         ),
         Err(r) => (
             json!({"schema": "ftx-cli/1", "command": command, "ok": false, "exit": 3, "refusal": r}),
             3,
             format!("{r}"),
+            true,
         ),
     };
     if json_out {
         println!("{envelope}");
-    } else if code == 3 {
+    } else if refused {
         eprintln!("{text}");
     } else {
         println!("{text}");

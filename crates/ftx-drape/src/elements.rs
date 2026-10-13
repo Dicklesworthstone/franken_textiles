@@ -66,7 +66,9 @@ pub struct Local<const N: usize, const NN: usize> {
     /// Hessian, row-major.
     pub hess: [f64; NN],
     /// The Hessian is positive semidefinite by construction (exactly, before rounding), so projecting
-    /// it would change nothing but rounding: projected Newton skips it.
+    /// it would change nothing but rounding: projected Newton skips it. For a membrane this assumes a
+    /// physical material (`Membrane::q` positive semidefinite, as `Membrane::orthotropic` gives for
+    /// positive moduli and ν₁₂ν₂₁ < 1).
     pub psd: bool,
 }
 

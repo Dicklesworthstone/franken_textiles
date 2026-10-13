@@ -20,6 +20,9 @@ use crate::nearest::NearestTree;
 use crate::scene::{Fabric, PartFrames, PhaseReport, Scene, build_scene, run_phase};
 use crate::start::{edge_strain, face_edges};
 
+/// Most steps a run takes (1/24 s each: about 40 minutes of simulated time).
+pub const MAX_STEPS: usize = 60_000;
+
 /// The body a run drapes on.
 pub struct DrapeBody<'a> {
     /// Part frames, landmarks and section radii.
@@ -127,7 +130,8 @@ fn strings(v: &Value) -> Vec<String> {
 /// Drapes `pattern` on `body`, calling `progress` with a line per stage.
 ///
 /// # Errors
-/// [`RefusalCode::OutOfRange`] for fewer than [`MIN_FRAMES`] steps in all; refusals from meshing,
+/// [`RefusalCode::OutOfRange`] for fewer than [`MIN_FRAMES`] or more than [`MAX_STEPS`] steps in all;
+/// refusals from meshing,
 /// placement, the start state, the cloth model, contact or the solver.
 pub fn drape(
     pattern: &Pattern,
@@ -136,17 +140,18 @@ pub fn drape(
     opts: &DrapeOptions,
     mut progress: impl FnMut(&str),
 ) -> Result<DrapeRun, Refusal> {
-    if opts.sew_steps + opts.drape_steps < MIN_FRAMES {
+    let total = opts.sew_steps.checked_add(opts.drape_steps);
+    if !total.is_some_and(|n| (MIN_FRAMES..=MAX_STEPS).contains(&n)) {
         return Err(Refusal::new(
             RefusalCode::OutOfRange,
             format!(
                 "{} sewing and {} draping steps: the fit metrics need at least {MIN_FRAMES} in all \
-                 (settledness compares the means of the last frames)",
+                 (settledness compares the means of the last frames), and a run at most {MAX_STEPS}",
                 opts.sew_steps, opts.drape_steps
             ),
         )
         .repair(format!(
-            "ask for at least {MIN_FRAMES} steps (--sew, --drape)"
+            "ask for {MIN_FRAMES} to {MAX_STEPS} steps in all (--sew, --drape)"
         )));
     }
     let mesh = build_garment(pattern, opts.spacing)?;

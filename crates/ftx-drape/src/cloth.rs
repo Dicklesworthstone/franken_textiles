@@ -194,7 +194,7 @@ impl ClothModel {
     /// draw the cloth up.
     ///
     /// # Errors
-    /// [`RefusalCode::OutOfRange`] unless there is one factor per element, each in (0, 1].
+    /// [`RefusalCode::OutOfRange`] unless there is one factor per element, each in [0, 1].
     pub fn set_compression(&mut self, per_element: &[f64]) -> Result<(), Refusal> {
         if per_element.len() != self.membranes.len() {
             return Err(Refusal::new(
@@ -206,10 +206,11 @@ impl ClothModel {
                 ),
             ));
         }
-        if let Some(c) = per_element.iter().find(|c| !(**c > 0.0 && **c <= 1.0)) {
+        // 0 is a tension-only membrane, as `Membrane::compression` allows
+        if let Some(c) = per_element.iter().find(|c| !(0.0..=1.0).contains(*c)) {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                format!("compression factor {c} must be in (0, 1]"),
+                format!("compression factor {c} must be in [0, 1]"),
             ));
         }
         self.compression = per_element.iter().map(|&c| [c, c]).collect();

@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use ftx_core::Vec3;
+use ftx_core::{Vec3, det};
 
 /// The closed loops where the horizontal plane at height `z` cuts the mesh, as (x, y) polygons. A loop
 /// that does not close (an open mesh) is left out.
@@ -28,8 +28,15 @@ pub struct Slicer<'a> {
 
 impl<'a> Slicer<'a> {
     /// Buckets `triangles` by height in slabs of `width`.
+    ///
+    /// # Panics
+    /// Unless `width` is finite and positive.
     #[must_use]
     pub fn new(vertices: &'a [Vec3], triangles: &'a [[usize; 3]], width: f64) -> Self {
+        assert!(
+            width.is_finite() && width > 0.0,
+            "slicer slab width {width} must be finite and positive"
+        );
         let (z0, z1) = vertices
             .iter()
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
@@ -213,7 +220,7 @@ pub fn hull_perimeter(points: &[[f64; 2]]) -> f64 {
     (0..n)
         .map(|i| {
             let (a, b) = (hull[i], hull[(i + 1) % n]);
-            (b[0] - a[0]).hypot(b[1] - a[1])
+            det::hypot(b[0] - a[0], b[1] - a[1])
         })
         .sum()
 }
@@ -289,7 +296,7 @@ fn near_of(loops: &[Vec<[f64; 2]>], around: [f64; 2]) -> Option<f64> {
             let (x, y) = l
                 .iter()
                 .fold((0.0, 0.0), |(x, y), p| (x + p[0] / n, y + p[1] / n));
-            (x - around[0]).hypot(y - around[1])
+            det::hypot(x - around[0], y - around[1])
         };
         loops.iter().min_by(|a, b| dist(a).total_cmp(&dist(b)))
     })?;

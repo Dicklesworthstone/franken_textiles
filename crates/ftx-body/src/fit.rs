@@ -333,7 +333,7 @@ pub fn tape_readings(
     loop {
         let y = torso.back_point(frames.floor_z + h, axis[0])?;
         if let Some((ph, py)) = prev {
-            back += (h - ph).hypot(y - py);
+            back += ftx_core::det::hypot(h - ph, y - py);
         }
         prev = Some((h, y));
         if h >= c7_h {
@@ -397,13 +397,13 @@ pub struct TapeFit {
     pub iterations: usize,
 }
 
-/// Fits the body of `wearer` (age and gender; its stature is used when `targets` has none) to `targets`
-/// on `pose`.
+/// Fits the body of `wearer` (age and gender set; its stature fitted unless `targets` has one, its
+/// weight when known) to `targets` on `pose`.
 ///
 /// # Errors
 /// [`RefusalCode::InvalidDocument`] for a target that is not a [`TAPE_FIELDS`] name or not finite and
 /// positive, or a model without the [`FREE`] local changes; refusals of [`fit_stature`] (the start) and of
-/// the model; [`RefusalCode::DegenerateGeometry`] when the start body has no torso sections.
+/// the model; [`RefusalCode::DegenerateGeometry`] when the start body lacks a section a reading needs.
 pub fn fit_tape(
     model: &AnnyModel,
     wearer: &Wearer,
@@ -435,6 +435,10 @@ pub fn fit_tape(
             FIT_SIGMA_LENGTH_MM
         };
         rows.push((k, t.value_mm, sigma));
+    }
+    // the wearer's stature is a target unless `targets` gives one
+    if !rows.iter().any(|r| r.0 == 0) {
+        rows.insert(0, (0, wearer.stature_mm, FIT_SIGMA_LENGTH_MM));
     }
     // the weight: a row on the mass, read in the extra slot after the tape readings
     if let Some(kg) = wearer.weight_kg {
@@ -526,7 +530,8 @@ pub fn fit_tape(
     let mut readings = read(&th)?.ok_or_else(|| {
         Refusal::new(
             RefusalCode::DegenerateGeometry,
-            "the start body has no torso section at the chest, waist or hip",
+            "the start body lacks a section one of the tape readings needs (a body far outside the \
+             model's range?)",
         )
     })?;
     let mut r = resid(&th, &readings);
