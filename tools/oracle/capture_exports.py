@@ -6,6 +6,9 @@
     OUT_DIR/geoms.json     piece geometry (spec 03 §5: notches, grain, fold marks, internal lines, drills, decor,
                            labels, label texts, grain marks and rotation) of every piece as drafted and every
                            instance, at text sizes 6 and 10
+    OUT_DIR/master_svg.json the master SVG (spec 03 §6, §7.1) and its manifest entry for every pattern (and the
+                           NOTE piece), plus --unfold and --layout-width 300 for TESTBODICE, ROBUST and the 92 cm
+                           bolero and trousers
     OUT_DIR/outlines.json  seam-allowance cut outlines (ring and method), sew rings and edge breaks of every
                            piece as drafted and of every instance, for the spec's fixture patterns (TESTBODICE,
                            ROBUST, the single pieces) and the drafted garments of tests/fixtures/oracle/pattern
@@ -191,6 +194,29 @@ def main(argv=None) -> int:
     path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "export", "fixture": "geoms", "meta": meta,
                                 "cases": gcases}, separators=(",", ":"), ensure_ascii=False) + "\n")
     print(f"wrote {len(gcases)} geometry cases to {path}")
+
+    # ------------------------------------------------------------------ master SVG
+    import tempfile
+    note = single(T.rect_piece(False), "NOTE")
+    note["pieces"][0]["note"] = "Elastic 25 mm wide: cut 524 mm"
+    svg_patterns = [(cid, doc) for cid, doc, _sa, _limit in patterns if cid not in ("testbodice_sa15_mitre2",)]
+    svg_patterns.append(("note", note))
+    scases = []
+    for cid, doc in svg_patterns:
+        for opt_id, opts in (("default", {}), ("unfold", {"unfold": True}), ("width300", {"layout_width": 300.0})):
+            if opt_id != "default" and cid not in ("testbodice", "robust", "zouave_bolero-920", "zouave_trousers-920"):
+                continue
+            with tempfile.TemporaryDirectory() as tmp:
+                ctx = X.Ctx(pm.Pattern(json.loads(json.dumps(doc))), Path(tmp), created="2026-10-11T12:00", **opts)
+                path = X.export_svg(ctx)
+                svg = path.read_text()
+                master = ctx.manifest["master"]
+            scases.append({"id": f"{cid}/{opt_id}", "input": {"pattern": doc, "options": opts},
+                           "output": {"svg": svg, "master": master}})
+    path = args.out_dir / "master_svg.json"
+    path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "export", "fixture": "master_svg", "meta": meta,
+                                "cases": scases}, separators=(",", ":"), ensure_ascii=False) + "\n")
+    print(f"wrote {len(scases)} master SVG cases to {path}")
     return 0
 
 

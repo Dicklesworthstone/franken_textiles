@@ -146,6 +146,83 @@ pub struct Geom {
     pub decor: Vec<Decor>,
 }
 
+impl Geom {
+    /// The geometry under `P ↦ A·P + b` (directions as `unit(A·d)`; texts, sizes and kinds unchanged).
+    #[must_use]
+    pub fn transform(&self, m: &Affine) -> Self {
+        let f = |p: Vec2| m.apply(p);
+        let fs = |q: &[Vec2]| q.iter().map(|&p| m.apply(p)).collect::<Vec<_>>();
+        Self {
+            pid: self.pid.clone(),
+            iid: self.iid.clone(),
+            name: self.name.clone(),
+            meta: self.meta.clone(),
+            cut: fs(&self.cut),
+            sew: fs(&self.sew),
+            sew_breaks: self.sew_breaks.clone(),
+            notches: self
+                .notches
+                .iter()
+                .map(|n| Notch {
+                    id: n.id.clone(),
+                    kind: n.kind.clone(),
+                    base: f(n.base),
+                    inward: m.direction(n.inward),
+                    tangent: m.direction(n.tangent),
+                    depth: n.depth,
+                    width: n.width,
+                    marks: n.marks.iter().map(|k| fs(k)).collect(),
+                    sew_point: f(n.sew_point),
+                })
+                .collect(),
+            grain: self.grain.map(|(a, b)| (f(a), f(b))),
+            grain_default: self.grain_default,
+            fold_lines: self
+                .fold_lines
+                .iter()
+                .map(|(q, st)| (fs(q), st.clone()))
+                .collect(),
+            internal_draw: self
+                .internal_draw
+                .iter()
+                .map(|(q, c)| (fs(q), *c))
+                .collect(),
+            internal_cut: self.internal_cut.iter().map(|(q, c)| (fs(q), *c)).collect(),
+            drills: self.drills.iter().map(|&(p, d)| (f(p), d)).collect(),
+            labels: self
+                .labels
+                .iter()
+                .map(|lb| Label {
+                    p: f(lb.p),
+                    ..lb.clone()
+                })
+                .collect(),
+            decor: self
+                .decor
+                .iter()
+                .map(|d| Decor {
+                    pts: fs(&d.pts),
+                    ..d.clone()
+                })
+                .collect(),
+        }
+    }
+
+    /// Bounding box of the cut ring: `(min x, min y, max x, max y)`.
+    #[must_use]
+    pub fn bbox(&self) -> (f64, f64, f64, f64) {
+        self.cut.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |(a, b, c, d), p| (a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y)),
+        )
+    }
+}
+
 /// An affine map `P ↦ A·P + b`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Affine {

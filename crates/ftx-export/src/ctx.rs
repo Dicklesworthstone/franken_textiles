@@ -1,0 +1,156 @@
+//! The export context (`docs/spec/03` §1.2): options, the names every file uses and the master layout.
+
+use std::cell::OnceCell;
+
+use ftx_core::{Refusal, RefusalCode};
+use ftx_pattern::{Instance, Pattern, Side};
+use serde_json::Value;
+
+use crate::geom::{Geom, Source, build_geom};
+use crate::layout::{Layout, shelf_layout};
+use crate::outline::DEFAULT_SA;
+use crate::text::{ascii_text, safe_name};
+
+/// Export options (the CLI's flags).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportOptions {
+    /// Show pieces cut on the fold unfolded in the master, tiles, copy shop and HPGL.
+    pub unfold: bool,
+    /// Mitre limit in multiples of the seam allowance.
+    pub mitre_limit: f64,
+    /// Projector sheet width (mm).
+    pub projector_width: f64,
+    /// Master layout width (mm); automatic when `None`.
+    pub layout_width: Option<f64>,
+    /// Keep blank tiles.
+    pub keep_blank: bool,
+    /// Seam allowance override (mm).
+    pub sa: Option<f64>,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self {
+            unfold: false,
+            mitre_limit: 4.0,
+            projector_width: 1500.0,
+            layout_width: None,
+            keep_blank: false,
+            sa: None,
+        }
+    }
+}
+
+/// What every export of one pattern shares.
+pub struct Ctx<'a> {
+    /// The pattern.
+    pub pattern: &'a Pattern,
+    /// `safe_name(style)` (20 characters): every file stem.
+    pub style: String,
+    /// The size label as ASCII (`base` when empty).
+    pub size: String,
+    /// The default seam allowance.
+    pub sa: f64,
+    /// The options.
+    pub opts: ExportOptions,
+    master: OnceCell<Layout>,
+}
+
+/// The first instance of a piece with side C, else R, else the first.
+#[must_use]
+pub fn primary_instance<'a>(pattern: &'a Pattern, pid: &str) -> Option<&'a Instance> {
+    let insts: Vec<&Instance> = pattern
+        .instances
+        .iter()
+        .filter(|i| i.piece == pid)
+        .collect();
+    [Side::C, Side::R]
+        .iter()
+        .find_map(|s| insts.iter().find(|i| i.side == *s).copied())
+        .or_else(|| insts.first().copied())
+}
+
+impl<'a> Ctx<'a> {
+    /// The context of a pattern.
+    ///
+    /// # Errors
+    /// `invalid_document` for a pattern traced in pixels (`meta.scale_status` UNSCALED): every file claims true
+    /// size.
+    pub fn new(pattern: &'a Pattern, opts: ExportOptions) -> Result<Self, Refusal> {
+        let raw = pattern.raw();
+        let meta = &raw["meta"];
+        if meta["scale_status"] == "UNSCALED" {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "pattern is UNSCALED (1 unit = 1 px of the traced sheet): run `vectorize scale-fit` before \
+                 exporting; its PDFs and machine files would be printed and cut at the wrong size",
+            ));
+        }
+        let style = match raw.get("style") {
+            Some(Value::String(s)) if !s.is_empty() => s.clone(),
+            Some(v) if !v.is_null() && v != &Value::Bool(false) => v.to_string(),
+            _ => "STYLE".to_string(),
+        };
+        let size_label = match meta.get("size_label") {
+            Some(Value::String(s)) if !s.is_empty() => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => "base".to_string(),
+        };
+        let size = ascii_text(&size_label);
+        let sa = opts
+            .sa
+            .or_else(|| meta.get("sa_mm").and_then(Value::as_f64))
+            .unwrap_or(DEFAULT_SA);
+        Ok(Self {
+            pattern,
+            style: safe_name(&style, 20),
+            size: if size.is_empty() { "base".into() } else { size },
+            sa,
+            opts,
+            master: OnceCell::new(),
+        })
+    }
+
+    /// The geometry of a piece or an instance at a text size.
+    ///
+    /// # Errors
+    /// As [`build_geom`].
+    pub fn geom(&self, src: Source, text_size: f64) -> Result<Geom, Refusal> {
+        build_geom(self.pattern, src, self.sa, self.opts.mitre_limit, text_size)
+    }
+
+    /// The master layout (master SVG, tiles, copy shop, HPGL): per piece its drafted half when cut on the fold
+    /// (unless `unfold`), else its primary instance; shelves 15 mm apart, 10 mm margin.
+    ///
+    /// # Errors
+    /// As [`build_geom`].
+    pub fn master(&self) -> Result<&Layout, Refusal> {
+        if let Some(l) = self.master.get() {
+            return Ok(l);
+        }
+        let doc = self.pattern.doc.as_ref().ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::InvalidDocument,
+                "the pattern has no typed document",
+            )
+        })?;
+        let mut geoms = Vec::new();
+        for (i, piece) in doc.pieces.iter().enumerate() {
+            let fold = piece.on_fold().filter(|f| !f.is_empty());
+            let src = if self.opts.unfold || fold.is_none() {
+                let inst = primary_instance(self.pattern, &piece.id).ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::InvalidDocument,
+                        format!("{}: no instance", piece.id),
+                    )
+                })?;
+                Source::Instance(inst)
+            } else {
+                Source::Piece(i)
+            };
+            geoms.push(self.geom(src, 6.0)?);
+        }
+        let lay = shelf_layout(&geoms, 15.0, 10.0, self.opts.layout_width, false, true, 0.0);
+        Ok(self.master.get_or_init(|| lay))
+    }
+}

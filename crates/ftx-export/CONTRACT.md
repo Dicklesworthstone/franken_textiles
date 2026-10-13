@@ -1,8 +1,9 @@
 # ftx-export
 
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
-number helpers (§2), the seam-allowance cut outline (§3–4) and piece geometry (§5). Layouts, the master SVG
-and the other targets follow (FTX-15 to FTX-17).
+number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the
+master SVG (§7.1) and its acceptance checks (§8). The PDFs, DXFs, HPGL, cutter files, GarmentCode, DST, the
+manifest and the other checks follow (FTX-16, FTX-17).
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
@@ -61,8 +62,25 @@ All 188 main labels fit their region with the same lines; 23 are more than 5 % l
 more than 5 % smaller where the reference's own block does not fit, the rest within 5 % (the spec asks for
 "inside the region, no obstacle overlap, size within 5 %").
 
+**Layouts and the master SVG** (`layout.rs`, `ctx.rs`, `svg.rs`, §6, §7.1). `Ctx` holds the options and the
+names every file uses (`safe_name(style)`, the ASCII size label; a pattern traced in pixels is refused with the
+reference's message). The master layout puts per piece its drafted half when cut on the fold (unless
+`unfold`), else its primary instance, on shelves (tallest first, ties by instance id; 15 mm gaps, 10 mm margin,
+width automatic or `layout_width`). `master_svg` writes the reference's SVG line for line (one element per
+line, `fnum` numbers, Python `repr` stroke widths, JSON-null material as `None`) and the manifest's `master`
+entry. Against `tests/fixtures/oracle/export/master_svg.json` (every fixture pattern and the NOTE piece, plus
+`--unfold` and `--layout-width 300` for four of them; 25 SVGs, 2,479 lines): 2,080 lines byte-identical, every
+other line equal but for the cut line of a union outline (within 0.05 mm) and the main label's lines (its own
+anchor and size); manifest entries within 0.002 mm.
+
+**Checks** (`checks.rs`, `xml.rs`, §8). `check_svg`: `svg.no_transform`, `svg.mm_units_viewbox`,
+`svg.piece_subgroups` (master) or `cutter.single_closed_path` (cutter), with the reference's details, reading
+the file back with a small XML reader. They pass on all 25 of ftx's and the reference's master SVGs, and the
+reference's own mutation (a `transform` before the title), a piece without its fold group and a wrong viewBox
+each fail exactly their check.
+
 **Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve or a seam allowance
 outline without area.
 
 **No claims.** GEOS's exact vertex lists for union outlines (its ring starts where its overlay starts and
-its sliver clean moves points by up to 1e-4 mm); the reference's main label anchors; anything after §5.
+its sliver clean moves points by up to 1e-4 mm); the reference's main label anchors; the targets after §7.1, the manifest file and the other checks.
