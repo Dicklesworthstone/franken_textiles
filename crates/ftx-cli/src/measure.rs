@@ -1,6 +1,7 @@
 //! Measurement evidence workflow. Library computations are clock-free; the CLI defaults to UTC today.
 
 mod photo;
+mod section;
 
 use super::{Args, bad_input, known_options, read_json, required};
 use ftx_core::{Refusal, RefusalCode};
@@ -183,6 +184,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mut output = option(args, "out");
     let mut code = 0;
     let value = match command {
+        "girth-from-section" => section::run(args)?,
         "photo-scale" | "measure-photo" => {
             let (value, status) = photo::run(args, command)?;
             code = status;
@@ -379,7 +381,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         _ => {
             return Err(bad_input(format!(
-                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, photo-scale or measure-photo"
+                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, photo-scale, measure-photo or girth-from-section"
             )));
         }
     };
@@ -419,7 +421,10 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         serde_json::to_string_pretty(&value).map_err(|e| bad_input(e.to_string()))?
     };
     if let Some(path) = output {
-        if matches!(command, "photo-scale" | "measure-photo") {
+        if matches!(
+            command,
+            "photo-scale" | "measure-photo" | "girth-from-section"
+        ) {
             photo::save(path, &value)?;
         } else {
             write_json(path, &value)?;

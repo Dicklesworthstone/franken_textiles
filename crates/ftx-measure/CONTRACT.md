@@ -69,3 +69,12 @@ corners are recommended. Duplicate/invalid IDs, excessive input, invalid coordin
 unstable consensus are explicit errors. Blur, if supplied, is external metadata, not a
 computed image diagnostic. No claim of OpenCV RANSAC/noisy-fit or NumPy RNG parity.
 Runnable CLI and input examples are in `docs/photo-measurement.md`.
+
+**Section girths** (spec 02 A.5). `girth_from_section` applies the documented uncertain
+chest/waist/hip shape factors to the Ramanujan ellipse perimeter, propagating width, depth
+and shape-factor uncertainty separately. Clothing offsets and calibrated k ratios are
+explicit. `calibrate_k` estimates a coefficient from a tape girth; it is not another girth
+observation. Published D.5 values and prior-section round trips are covered by direct tests.
+The CLI emits PHOTO_ESTIMATED records and accepts `--from` only for consistent photo-derived
+width/depth evidence, recomputed from source records. It does not relabel charts or model
+predictions as photo evidence. See `docs/section-girth.md` for commands and independence limits.

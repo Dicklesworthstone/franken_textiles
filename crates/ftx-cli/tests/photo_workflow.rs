@@ -304,3 +304,223 @@ fn imported_charuco_detections_are_accepted_without_an_image_runtime() {
             .starts_with("resample identified inlier")
     );
 }
+
+const SECTION: &[&str] = &[
+    "measure",
+    "girth-from-section",
+    "--width-mm",
+    "160",
+    "--depth-mm",
+    "130",
+    "--sigma-width-mm",
+    "4",
+    "--sigma-depth-mm",
+    "5",
+];
+
+#[test]
+fn section_girth_and_tape_calibration_keep_separate_evidence() {
+    let dir = setup();
+    let mut args = SECTION.to_vec();
+    args.extend(["--out", "girth.json"]);
+    let result = run(&dir, &args, 0)["result"].clone();
+    assert_eq!(result["girth_mm"], 484.2);
+    assert_eq!(result["sigma_mm"], 14.6);
+    assert_eq!(result["record"], result["records"][0]);
+    assert_eq!(result["record"]["provenance"], "PHOTO_ESTIMATED");
+    assert!(result["notes"].as_str().unwrap().contains("UNCERTAIN"));
+    assert_eq!(read(&dir.join("girth.json")), result);
+    run(&dir, &["measure", "validate", "girth.json"], 0);
+    let fused = run(&dir, &["measure", "fuse", "girth.json", "--no-priors"], 0);
+    assert_eq!(fused["result"]["fused"]["waist"]["value_mm"], 484.2);
+    assert_eq!(
+        fused["result"]["fused"]["waist"]["primary_provenance"],
+        "PHOTO_ESTIMATED"
+    );
+    // Re-running never truncates an earlier output.
+    run(&dir, &args, 3);
+    assert_eq!(read(&dir.join("girth.json")), result);
+    let k = run(
+        &dir,
+        &[
+            "measure",
+            "girth-from-section",
+            "--level",
+            "chest",
+            "--width-mm",
+            "172",
+            "--depth-mm",
+            "150",
+            "--tape-girth-mm",
+            "560",
+            "--sigma-tape-mm",
+            "10",
+        ],
+        0,
+    );
+    assert_eq!(k["result"]["k_child"], 1.1058);
+    assert_eq!(k["result"]["k_ratio"], 1.0335);
+    assert_eq!(k["result"]["k_ratio_sigma"], 0.0185);
+    assert!(k["result"].get("records").is_none());
+    assert!(k["result"].get("record").is_none());
+}
+
+#[test]
+fn calibrated_photo_sections_feed_girth_fusion_without_stale_cache() {
+    let dir = setup();
+    save(
+        &dir.join("points.json"),
+        &json!({
+            "waist_width":{"points":[[250,900],[570,900]],"view":"P1"},
+            "waist_depth":{"points":[[250,1100],[510,1100]],"view":"P2"}
+        }),
+    );
+    let mut args = MEASURE.to_vec();
+    args.extend(["--out", "sections.json", "--taken-on", "2026-10-13"]);
+    run(&dir, &args, 0);
+    let mut sections = read(&dir.join("sections.json"));
+    sections["fused"]["waist_width"] = json!({"value_mm":9000,"sigma_mm":0});
+    sections["wearer"] = json!({"label":"synthetic section example"});
+    save(&dir.join("sections.json"), &sections);
+    let args = [
+        "measure",
+        "girth-from-section",
+        "--from",
+        "sections.json",
+        "--out",
+        "girth.json",
+    ];
+    let girth = run(&dir, &args, 0)["result"].clone();
+    assert_eq!(girth["width_mm"], 160.0);
+    assert_eq!(girth["depth_mm"], 130.0);
+    assert_eq!(girth["girth_mm"], 484.2);
+    assert_eq!(girth["taken_on"], "2026-10-13");
+    assert_eq!(girth["wearer"], sections["wearer"]);
+    for dimension in ["width", "depth"] {
+        assert_eq!(
+            girth["section_inputs"][dimension]["primary_provenance"],
+            "PHOTO_ESTIMATED"
+        );
+        assert!(
+            girth["section_inputs"][dimension]["sigma_mm"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+    }
+    let fused = run(
+        &dir,
+        &[
+            "measure",
+            "fuse",
+            "sections.json",
+            "girth.json",
+            "--no-priors",
+        ],
+        0,
+    );
+    assert_eq!(
+        fused["result"]["fused"]["waist"]["primary_provenance"],
+        "PHOTO_ESTIMATED"
+    );
+    assert_eq!(fused["result"]["fused"]["waist"]["value_mm"], 484.2);
+    assert!(
+        fused["result"]["fused"]["waist"]["sigma_mm"]
+            .as_f64()
+            .unwrap()
+            >= 10.0
+    );
+    let before = std::fs::read(dir.join("sections.json")).unwrap();
+    run(
+        &dir,
+        &[
+            "measure",
+            "girth-from-section",
+            "--from",
+            "sections.json",
+            "--out",
+            "sections.json",
+        ],
+        3,
+    );
+    assert_eq!(std::fs::read(dir.join("sections.json")).unwrap(), before);
+}
+
+#[test]
+fn section_girth_refuses_nonphoto_or_conflicting_inputs_and_invalid_controls() {
+    let dir = setup();
+    let record = |name, v, provenance, method| {
+        ftx_measure::make_record(name, v, 4.0, provenance, method, None, "synthetic").unwrap()
+    };
+    let base = json!({"schema":"fabric-measurements/1","wearer":{},"taken_on":null,
+        "records":[record("waist_width",160.0,"PHOTO_ESTIMATED","front"),
+            record("waist_depth",130.0,"PHOTO_ESTIMATED","side")],"fused":{}});
+    for provenance in ["MODEL_FIT", "CHART_PRIOR", "MEASURED_TAPE"] {
+        let mut doc = base.clone();
+        doc["records"][0]["provenance"] = json!(provenance);
+        save(&dir.join("section.json"), &doc);
+        let r = run(
+            &dir,
+            &[
+                "measure",
+                "girth-from-section",
+                "--from",
+                "section.json",
+                "--out",
+                "absent/girth.json",
+            ],
+            3,
+        );
+        assert!(
+            r["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("photo evidence")
+        );
+        assert!(!dir.join("absent").exists());
+    }
+    for conflicting in [false, true] {
+        let mut doc = base.clone();
+        doc["records"].as_array_mut().unwrap().push(record(
+            "waist_width",
+            if conflicting { 240.0 } else { 160.0 },
+            if conflicting {
+                "PHOTO_ESTIMATED"
+            } else {
+                "MODEL_FIT"
+            },
+            "independent",
+        ));
+        save(&dir.join("section.json"), &doc);
+        run(
+            &dir,
+            &[
+                "measure",
+                "girth-from-section",
+                "--from",
+                "section.json",
+                "--out",
+                "absent/girth.json",
+            ],
+            3,
+        );
+        assert!(!dir.join("absent").exists());
+    }
+    for options in [
+        vec!["--level", "unknown"],
+        vec!["--k", "0"],
+        vec!["--k-sigma", "-1"],
+        vec!["--clothing-mm", "65"],
+        vec!["--name", "arm_length"],
+        vec!["--tape-girth-mm", "0"],
+        vec!["--tape-girth-mm", "560", "--k", "1.1"],
+        vec!["--sigma-tape-mm", "10"],
+        vec!["--from", "section.json"],
+    ] {
+        let mut args = SECTION.to_vec();
+        args.extend(options);
+        args.extend(["--out", "absent/girth.json"]);
+        run(&dir, &args, 3);
+        assert!(!dir.join("absent").exists());
+    }
+}
