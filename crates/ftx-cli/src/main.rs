@@ -24,6 +24,7 @@ mod outfit;
 mod render;
 mod round;
 mod trace;
+mod two_start;
 mod workspace;
 
 use std::collections::BTreeMap;
@@ -53,6 +54,8 @@ const USAGE: &str = "usage:
             [--sim|--stills] [--arm-deg DEG] [--res WIDTHxHEIGHT]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N]
+            [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
+            [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx render DRAPE_DIR [--res 960x540] [--json]
@@ -658,9 +661,15 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "self-mu",
             "elastic-ea",
             "arm-deg",
+            "two-start-sew",
+            "spread-vertex-mm",
+            "spread-hem-mm",
+            "spread-clearance-mm",
+            "spread-seam-pp",
         ],
     )?;
     let opts = drape_options(args)?;
+    let pair = two_start::options(args, &opts)?;
     let pose = drape_pose(args)?;
     let pattern_path = args
         .positional
@@ -692,7 +701,14 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
     let started = std::time::Instant::now();
-    let run = drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?;
+    let run = match pair {
+        Some(policy) => {
+            ftx_drape::two_start::drape(&pattern, &spec, &body, &opts, &policy, |line| {
+                eprintln!("{line}")
+            })?
+        }
+        None => drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?,
+    };
     let mut report = run.report.clone();
     if let Some(o) = report.as_object_mut() {
         o.insert("pattern".into(), json!(pattern_path));
@@ -765,20 +781,24 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "self-contact: not simulated\n"
     });
     text.push_str(&format!("wrote {}", out.display()));
+    let pair_summary = two_start::summary(&report);
+    if !pair_summary.is_empty() {
+        text.push_str(&format!("\n{pair_summary}"));
+    }
     let code = if gating.is_empty() { 0 } else { 2 };
-    Ok((
-        json!({
-            "out": out,
-            "gating": gating,
-            "advisory": advisory,
-            "settled": report["settled"],
-            "self_contact": report["self_contact"],
-            "files": ["sim_report.json", "fold.pc2", "mesh_map.json", "fold_viewer.html",
-                      "garment.obj", "garment_strain.obj", "body.obj"],
-        }),
-        code,
-        text,
-    ))
+    let mut result = json!({
+        "out": out,
+        "gating": gating,
+        "advisory": advisory,
+        "settled": report["settled"],
+        "self_contact": report["self_contact"],
+        "files": ["sim_report.json", "fold.pc2", "mesh_map.json", "fold_viewer.html",
+                  "garment.obj", "garment_strain.obj", "body.obj"],
+    });
+    if let Some(pair) = report.get("two_start") {
+        result["two_start"] = pair.clone();
+    }
+    Ok((result, code, text))
 }
 
 fn emit(command: &str, json_out: bool, outcome: Result<(Value, i32, String), Refusal>) -> ExitCode {

@@ -293,6 +293,7 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
         list(&mut out, &val["worst"]);
         let sim = &entry["sim"];
         if sim.is_object() {
+            out.push_str(&crate::two_start::review_html(sim));
             let _ = write!(
                 out,
                 "<h3>Drape prediction</h3><p>Settled: {}. Self-contact enabled: {}.</p>",

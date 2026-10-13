@@ -27,6 +27,11 @@ const SIM_OPTIONS: &[&str] = &[
     "self-contact-mm",
     "self-mu",
     "arm-deg",
+    "two-start-sew",
+    "spread-vertex-mm",
+    "spread-hem-mm",
+    "spread-clearance-mm",
+    "spread-seam-pp",
 ];
 
 type SimOutcome = (Option<Value>, String, Option<String>, bool);
@@ -313,6 +318,11 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "self-contact-mm",
             "self-mu",
             "arm-deg",
+            "two-start-sew",
+            "spread-vertex-mm",
+            "spread-hem-mm",
+            "spread-clearance-mm",
+            "spread-seam-pp",
             "stills",
             "res",
         ],
@@ -331,7 +341,8 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         None
     };
     if wants_sim {
-        super::drape_options(args)?;
+        let run_options = super::drape_options(args)?;
+        super::two_start::options(args, &run_options)?;
         super::drape_pose(args)?;
     } else if let Some(key) = SIM_OPTIONS.iter().find(|&&k| args.options.contains_key(k)) {
         return Err(bad_input(format!("--{key} requires --sim or --stills")));
