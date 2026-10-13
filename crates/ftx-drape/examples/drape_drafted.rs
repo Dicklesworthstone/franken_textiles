@@ -3,7 +3,9 @@
 //! [drape_steps]` (default case `zouave_bolero-920`). Needs the converted Anny model. Writes the body,
 //! the start state and the draped garment as OBJ files, `sim_report.json`, and the fold-up as `fold.pc2`,
 //! `mesh_map.json` and a self-contained `fold_viewer.html`. For experiments: `FTX_STEP` (s, default
-//! 1/24), `FTX_MU` (0.4), `FTX_EPS_V` (m/s, 1e-3) and `FTX_COMPRESSION` (1). `ftx drape` does the same for any pattern.
+//! 1/24), `FTX_MU` (0.4), `FTX_EPS_V` (m/s, 1e-3), `FTX_COMPRESSION` (1), `FTX_ELASTIC_EA` (N, 15; 0 = no
+//! elastic) and `FTX_ELASTIC_FRAC` (the casing elastic as a fraction of the waist; default as drafted).
+//! `ftx drape` does the same for any pattern.
 
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -54,6 +56,7 @@ fn main() {
     opts.contact.mu = env("FTX_MU", opts.contact.mu);
     opts.contact.eps_v = env("FTX_EPS_V", opts.contact.eps_v);
     opts.compression = env("FTX_COMPRESSION", opts.compression);
+    opts.elastic_ea = env("FTX_ELASTIC_EA", opts.elastic_ea);
     std::fs::create_dir_all(&out).expect("output directory");
 
     let drafts: Value = serde_json::from_str(
@@ -108,7 +111,17 @@ fn main() {
     );
     std::fs::write(out.join("body.obj"), obj(&full.vertices, &full.triangles)).unwrap();
 
-    let pattern = Pattern::new(case["input"]["pattern"].clone());
+    let mut raw = case["input"]["pattern"].clone();
+    // the elastic ladder: an elastic of FTX_ELASTIC_FRAC × the waist instead of the drafted one
+    if let Ok(frac) = std::env::var("FTX_ELASTIC_FRAC") {
+        let frac: f64 = frac.parse().expect("FTX_ELASTIC_FRAC");
+        let waist = meas["fused"]["waist"]["value_mm"].as_f64().expect("waist");
+        let overlap = raw["meta"]["style"]["elastic_overlap"]
+            .as_f64()
+            .unwrap_or(0.0);
+        raw["meta"]["solved"]["elastic_cut_mm"] = (frac * waist + overlap).into();
+    }
+    let pattern = Pattern::new(raw);
     let body = DrapeBody {
         frames: &frames,
         collision: (&skin.vertices, &skin.triangles),

@@ -53,6 +53,20 @@ against the drape body), untangled, welded and handed to the solver with contact
 - Offset ramp: when an edge of the start passes closer to the body than the cloth offset ξ, contact
   starts at half the smallest distance and `run_phase` raises ξ by 0.25 mm a step while every gap stays
   above ĝ/10.
+- Elastic casing: a drafted casing (the one-instance `waistband` piece) is simulated at its cut length
+  (`sim_scale` 1, gathered: compression at 3 %) and drawn up by two rings of `ElasticSegment`s, along its
+  fold (`top`) and along its seam line, each with half of EA = `ELASTIC_EA` (15 N,
+  `DrapeOptions::elastic_ea`; 0 simulates the casing at its finished size as the reference does), each
+  relaxed at `meta.solved.elastic_cut_mm` − the overlap: an elastic in a narrow channel gathers the whole
+  channel (a ring on the fold alone left the seam line near its cut length, 639 of 704 mm on the 92 cm
+  trousers). The report's `elastic` field gives the relaxed and worn length (the mean of the rings, and each
+  ring), stretch, tension (the rings' sum), grip `2πμT` (KAT 4's law), the garment's weight and `holds`
+  (grip ≥ weight); an elastic that does not hold is an advisory flag. KAT 7 (`tests/kat_elastic.rs`) drapes
+  the 92 cm trousers (1.08 N) on the tape-fitted toddler with the elastic at 0.85, 0.95, 1.0 and 1.2 × the
+  530 mm waist: it ends 22.8 %, 12.9 % and 9.1 % stretched with a grip of 8.9, 5.1 and 3.7 N and the
+  waistband 15, 16 and 17 mm below where it was drafted; at 1.2 it grips 0.17 N (flagged) and the waistband
+  rests 19 mm down on the hips and crotch. Without the elastic the waistband sits 6.5 mm down: a casing
+  gathered from its cut length hangs lower than one cut to the finished size.
 - `run_phase` runs implicit steps under a gravity (the reference's sew then drape).
 The drape body (`ftx_body::trimmed_skin`) leaves out the hands and feet; with Anny's bent elbows a
 straight sleeve crossed the forearm, so the drape pose straightens the arms (`Pose::drape`). The drafted
@@ -76,7 +90,7 @@ sewing step get friction from the next step on.
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
 
-**Energy.** `E(x) = ½h⁻²(x − x̃)ᵀM(x − x̃) + Ψ_membrane + Ψ_bend + B + D`, `x̃ = xₙ + h vₙ + h² g`
+**Energy.** `E(x) = ½h⁻²(x − x̃)ᵀM(x − x̃) + Ψ_membrane + Ψ_bend + Ψ_elastic + B + D`, `x̃ = xₙ + h vₙ + h² g`
 (B, D: contact barrier and friction, below; the static solve drops inertia and friction).
 - Membrane: StVK on Green strain with plane-stress resultants Q (N/m): warp E1, weft E2, Poisson ν12,
   bias G12. Each normal strain is softened under compression by
@@ -84,6 +98,9 @@ frame (+u along the grain).
   100 iterations a step on a sagging sheet; the blend converges in 1–2) and stiffness → s·Q in compression.
 - Bending: Bergou's quadratic hinges, weight `3a/(A₀+A₁)²` with each triangle's area handed to its interior
   hinges; constant PSD Hessian.
+- Elastic (`ElasticSegment`): a tension-only spring per segment, `(EA/r)·g(l − r)` with g zero below
+  −δ, cubic across [−δ, 0] and `e²/2 + δe/2 + δ²/6` above (δ = `ELASTIC_ONSET` = 0.1 mm): C², no force
+  when slack, so a casing's elastic only ever pulls it in; PSD Hessian.
 
 **Solver.** Exact Hessian first; when the LDLᵀ inertia shows a negative eigenvalue, element blocks are
 projected to PSD (negative eigenvalues zeroed) for the rest of that solve (retrying the exact Hessian
@@ -203,7 +220,7 @@ only its lower triangle: bit-identical, both KAT digests unchanged), `eigen.rs` 
 (`SolveReport`), not refused.
 
 **No claims.** Garment-scale self-contact qualification or self-contact native/wasm digest parity;
-a moving body; elastic grip (as in the reference, a casing is simulated
-at its finished size, `sim_scale`, and whether the elastic holds is a flat check); fabric parameters (they are inputs; plan §11, research 07 §2.7); performance
+a moving body; an elastic's own mass or its friction in the casing; fabric parameters (they are inputs;
+plan §11, research 07 §2.7); performance
 targets (§11.7; contact re-queries the grid each iteration, and cached candidates are the planned
 speed-up).

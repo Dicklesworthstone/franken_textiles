@@ -17,8 +17,14 @@ use crate::contact::{Contact, ContactParams};
 use crate::garment::build_garment;
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
-use crate::scene::{Fabric, PartFrames, PhaseReport, Scene, build_scene, run_phase};
+use crate::scene::{
+    Fabric, PartFrames, PhaseReport, Scene, build_scene, casing_at_cut_length, elastic_casing,
+    run_phase,
+};
 use crate::start::{edge_strain, face_edges};
+
+/// Standard gravity (m/s²) of the drape phase.
+pub const GRAVITY: f64 = 9.81;
 
 /// The body a run drapes on.
 pub struct DrapeBody<'a> {
@@ -51,6 +57,10 @@ pub struct DrapeOptions {
     /// Friction lag rounds per step (re-solves with the normal forces and contacts of the step's end)
     /// while sewing and while draping.
     pub lag_rounds: [usize; 2],
+    /// Axial stiffness EA of a drafted casing's elastic (N): the casing is simulated at its cut length,
+    /// drawn up by a tension-only elastic ring. 0: no elastic, the casing at its finished size
+    /// (`sim_scale`) as the reference simulates it.
+    pub elastic_ea: f64,
     /// Body contact and friction.
     pub contact: ContactParams,
     /// Optional cloth–cloth contact: independent friction and the sum of both half-thicknesses.
@@ -62,8 +72,8 @@ pub struct DrapeOptions {
 impl Default for DrapeOptions {
     /// 12 mm mesh, 12 sewing and 36 draping steps of 1/24 s, Newton to 1e-4 m/s, compression as stiff
     /// as tension outside gather zones (the reference's `tension = compression = E_t·L`, spec 04 §5.3),
-    /// friction lagged once a step while draping and not while sewing, ĝ 1 mm, the cloth's mid-surface
-    /// 1.5 mm off the body, μ 0.4.
+    /// friction lagged once a step while draping and not while sewing, a drafted casing's elastic at
+    /// [`crate::scene::ELASTIC_EA`], ĝ 1 mm, the cloth's mid-surface 1.5 mm off the body, μ 0.4.
     fn default() -> Self {
         Self {
             spacing: 12.0,
@@ -73,6 +83,7 @@ impl Default for DrapeOptions {
             tol: 1e-4,
             compression: 1.0,
             lag_rounds: [0, 1],
+            elastic_ea: crate::scene::ELASTIC_EA,
             contact: ContactParams {
                 dhat: 1e-3,
                 thickness: 1.5e-3,
@@ -114,6 +125,13 @@ impl DrapeOptions {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 "compression factor must be at most 1",
+            ));
+        }
+        Refusal::finite("elastic stiffness", self.elastic_ea)?;
+        if self.elastic_ea < 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "the elastic stiffness EA must be 0 (no elastic) or positive",
             ));
         }
         let total = self
@@ -197,6 +215,16 @@ pub fn drape(
     mut progress: impl FnMut(&str),
 ) -> Result<DrapeRun, Refusal> {
     opts.validate()?;
+    // an elastic casing is simulated at its cut length and drawn up by its elastic
+    let elastic = elastic_casing(pattern, opts.elastic_ea);
+    let simulated;
+    let pattern = match &elastic {
+        Some(c) => {
+            simulated = casing_at_cut_length(pattern, c);
+            &simulated
+        }
+        None => pattern,
+    };
     let mesh = build_garment(pattern, opts.spacing)?;
     let fabric = Fabric::of(pattern);
     let mut scene = build_scene(
@@ -208,6 +236,7 @@ pub fn drape(
         fabric,
         opts.compression,
         opts.contact,
+        elastic.as_ref(),
     )?;
     if let Some(p) = opts.self_contact {
         scene.solver = scene.solver.with_self_contact(p)?;
@@ -227,7 +256,7 @@ pub fn drape(
     let mut phases = Vec::new();
     for (name, steps, g, lag) in [
         ("sew", opts.sew_steps, 0.0, opts.lag_rounds[0]),
-        ("drape", opts.drape_steps, 9.81, opts.lag_rounds[1]),
+        ("drape", opts.drape_steps, GRAVITY, opts.lag_rounds[1]),
     ] {
         scene.solver.friction_rounds = lag;
         let rep = run_phase(&mut scene, steps, opts.step, g, |_, x| {
@@ -386,6 +415,58 @@ fn add_run_fields(
         "self_contact".into(),
         self_contact_report(scene.solver.contact.as_ref(), &scene.solver.x),
     );
+    let elastics = &scene.solver.model.elastics;
+    if !scene.elastic_rings.is_empty() {
+        // FrankenTextiles: the casing's elastic at the end (the reference has none). Its rings (fold and
+        // seam line) pull in parallel: the elastic's tension is their sum and it lies between them.
+        let x = &scene.solver.x;
+        let rings: Vec<(f64, f64, f64)> = scene
+            .elastic_rings
+            .iter()
+            .map(|r| {
+                let seg = &elastics[r.clone()];
+                let rest: f64 = seg.iter().map(|e| e.rest).sum();
+                let now: f64 = seg.iter().map(|e| (x[e.v[1]] - x[e.v[0]]).norm()).sum();
+                let tension = seg.iter().map(|e| e.tension(x)).sum::<f64>() / seg.len() as f64;
+                (rest, now, tension)
+            })
+            .collect();
+        let n = rings.len() as f64;
+        let relaxed = rings[0].0;
+        let length = rings.iter().map(|r| r.1).sum::<f64>() / n;
+        let tension: f64 = rings.iter().map(|r| r.2).sum();
+        let stretch = (length / relaxed - 1.0) * 100.0;
+        // KAT 4's law: a ring of tension T holds up to 2πμT, here against the whole garment's weight
+        let grip = 2.0 * std::f64::consts::PI * opts.contact.mu * tension;
+        let weight = scene.solver.model.mass.iter().sum::<f64>() * GRAVITY;
+        o.insert(
+            "elastic".into(),
+            json!({
+                "relaxed_mm": round(relaxed * 1000.0, 1),
+                "length_mm": round(length * 1000.0, 1),
+                "rings_mm": rings.iter().map(|r| round(r.1 * 1000.0, 1)).collect::<Vec<_>>(),
+                "stretch_pct": round(stretch, 1),
+                "tension_n": round(tension, 3),
+                "grip_n": round(grip, 3),
+                "weight_n": round(weight, 3),
+                "holds": grip >= weight,
+                "ea_n": elastics[0].ea * n,
+            }),
+        );
+        if grip < weight {
+            // advisory, as the flat `elastic_hold` row already judges the elastic
+            if let Some(flags) = o.get_mut("flags").and_then(Value::as_array_mut) {
+                flags.push(json!(format!(
+                    "the elastic does not grip: {} % against its relaxed length on the body, its friction \
+                     holds {} N of the garment's {} N, so the waistband rests on the body instead (shorten \
+                     the elastic)",
+                    ftx_core::py::fixed(stretch, 1),
+                    ftx_core::py::fixed(grip, 2),
+                    ftx_core::py::fixed(weight, 2)
+                )));
+            }
+        }
+    }
 }
 
 fn self_contact_report(contact: Option<&Contact>, x: &[Vec3]) -> Value {

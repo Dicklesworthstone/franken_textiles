@@ -330,6 +330,91 @@ impl Hinge {
     }
 }
 
+/// Width of the slack-to-taut blend of an elastic (m).
+pub const ELASTIC_ONSET: f64 = 1e-4;
+
+/// A tension-only elastic segment (a stretch of the elastic tape in a casing): `(EA/r)·g(l − r)` with
+/// `g` zero below `r − δ`, `(e + δ)³/(6δ)` up to `r` and `e²/2 + δe/2 + δ²/6` beyond (δ =
+/// [`ELASTIC_ONSET`]). A slack elastic stores nothing, a stretched one pulls like a spring of stiffness
+/// EA/r, and the blend keeps the energy C² (a kink at `l = r` would make Newton cycle, as compression's
+/// did). Its Hessian `(EA/r)·[g''·n nᵀ + (g'/l)(I − n nᵀ)]` is PSD: `g'`, `g''` ≥ 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ElasticSegment {
+    /// The two vertices.
+    pub v: [usize; 2],
+    /// Relaxed length (m).
+    pub rest: f64,
+    /// Axial stiffness EA (N).
+    pub ea: f64,
+}
+
+/// `g(e)`, `g'(e)`, `g''(e)` of [`ElasticSegment`].
+fn tension_only(e: f64) -> (f64, f64, f64) {
+    let d = ELASTIC_ONSET;
+    if e <= -d {
+        (0.0, 0.0, 0.0)
+    } else if e < 0.0 {
+        let s = e + d;
+        (s * s * s / (6.0 * d), s * s / (2.0 * d), s / d)
+    } else {
+        (0.5 * e * e + 0.5 * d * e + d * d / 6.0, e + 0.5 * d, 1.0)
+    }
+}
+
+impl ElasticSegment {
+    /// Energy (J).
+    #[must_use]
+    pub fn energy(&self, x: &[Vec3]) -> f64 {
+        let l = (x[self.v[1]] - x[self.v[0]]).norm();
+        self.ea / self.rest * tension_only(l - self.rest).0
+    }
+
+    /// Tension (N): the force along the segment.
+    #[must_use]
+    pub fn tension(&self, x: &[Vec3]) -> f64 {
+        let l = (x[self.v[1]] - x[self.v[0]]).norm();
+        self.ea / self.rest * tension_only(l - self.rest).1
+    }
+
+    /// Energy, gradient (6) and Hessian (6 × 6).
+    #[must_use]
+    pub fn local(&self, x: &[Vec3]) -> Local<6, 36> {
+        let k = self.ea / self.rest;
+        let d = x[self.v[1]] - x[self.v[0]];
+        let l = d.norm();
+        let (g, g1, g2) = tension_only(l - self.rest);
+        let mut grad = [0.0; 6];
+        let mut hess = [0.0; 36];
+        if l > 0.0 && g1 > 0.0 {
+            let n = d * (1.0 / l);
+            // the 3 × 3 block H₁₁ = k·[g''·n nᵀ + (g'/l)(I − n nᵀ)]; H₀₀ = H₁₁, H₀₁ = −H₁₁
+            let mut b = [[0.0; 3]; 3];
+            for (i, row) in b.iter_mut().enumerate() {
+                for (j, h) in row.iter_mut().enumerate() {
+                    let id = if i == j { 1.0 } else { 0.0 };
+                    *h = k * (g2 * n[i] * n[j] + g1 / l * (id - n[i] * n[j]));
+                }
+            }
+            for i in 0..3 {
+                grad[i] = -k * g1 * n[i];
+                grad[3 + i] = k * g1 * n[i];
+                for j in 0..3 {
+                    hess[i * 6 + j] = b[i][j];
+                    hess[(3 + i) * 6 + 3 + j] = b[i][j];
+                    hess[i * 6 + 3 + j] = -b[i][j];
+                    hess[(3 + i) * 6 + j] = -b[i][j];
+                }
+            }
+        }
+        Local {
+            energy: k * g,
+            grad,
+            hess,
+            psd: true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +601,35 @@ mod tests {
             |x| hinge.energy(x, 1e-5),
             |x| hinge.local(x, 1e-5),
         );
+    }
+
+    #[test]
+    fn elastic_derivatives_in_every_regime() {
+        // 20 mm relaxed; stretched to 22 mm, inside the onset blend, and slack
+        let seg = ElasticSegment {
+            v: [0, 1],
+            rest: 0.02,
+            ea: 15.0,
+        };
+        for (len, tilt) in [
+            (0.022, 0.3_f64),
+            (0.02 - 0.5 * ELASTIC_ONSET, 0.7),
+            (0.015, 0.2),
+        ] {
+            let x = [
+                Vec3::new(0.001, -0.002, 0.003),
+                Vec3::new(0.001, -0.002, 0.003)
+                    + Vec3::new(tilt.cos(), tilt.sin(), 0.4).normalized() * len,
+            ];
+            check(&x, &[0, 1], 1e-8, |x| seg.energy(x), |x| seg.local(x));
+        }
+        // slack: nothing; stretched by 10 %: tension EA·10 % (plus the blend's δ/2)
+        let at = |len: f64| [Vec3::ZERO, Vec3::new(len, 0.0, 0.0)];
+        assert_eq!(seg.energy(&at(0.015)), 0.0);
+        assert_eq!(seg.local(&at(0.015)).grad, [0.0; 6]);
+        let t = seg.tension(&at(0.022));
+        let want = 15.0 / 0.02 * (0.002 + 0.5 * ELASTIC_ONSET);
+        assert!((t - want).abs() < 1e-12, "{t} vs {want}");
+        assert!(seg.local(&at(0.022)).psd);
     }
 }

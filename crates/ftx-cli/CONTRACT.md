@@ -8,8 +8,9 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
 **Commands.**
 - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation of `ftx-pattern`, the
   reference's text table, exit 0 CONVERGED, 2 NOT_CONVERGED, 3 BLOCKED.
-- `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH]
-  [--self-contact-mm MM] [--self-mu MU] [--json]`:
+- `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--model PATH]
+  [--self-contact-mm MM] [--self-mu MU] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
+  casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does):
   an Anny body of the wearer's age (`wearer.age_months`) and sex (`wearer.sex`; unknown = sexes
   averaged), fitted on the drape pose to whichever of the 15 tape measurements of
   `ftx_body::TAPE_FIELDS` the file has fused values for (the stature from `wearer.stature_mm` first) and

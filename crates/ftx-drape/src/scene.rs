@@ -16,11 +16,11 @@ use serde_json::Value;
 
 use crate::cloth::{ClothModel, SolveReport, Solver};
 use crate::contact::{Body, Contact, ContactParams, Intersection};
-use crate::elements::Membrane;
+use crate::elements::{ElasticSegment, Membrane};
 use crate::garment::GarmentMesh;
 use crate::nearest::NearestTree;
 use crate::start::{
-    GATHER_COMPRESSION, PartFrame, StartState, WrapPlacement, start_state, wrap_points,
+    GATHER_COMPRESSION, MM, PartFrame, StartState, WrapPlacement, start_state, wrap_points,
 };
 
 /// Fabric parameters (spec 04 §5.3).
@@ -236,6 +236,8 @@ pub struct Scene {
     pub target_thickness: f64,
     /// The solver (positions are the welded vertices).
     pub solver: Solver,
+    /// The casing elastic's rings (fold, seam line) as ranges of the model's `elastics`; empty without one.
+    pub elastic_rings: Vec<std::ops::Range<usize>>,
 }
 
 impl Scene {
@@ -244,6 +246,140 @@ impl Scene {
     pub fn positions(&self) -> Vec<Vec3> {
         self.weld.iter().map(|&w| self.solver.x[w]).collect()
     }
+}
+
+/// Axial stiffness of a casing elastic (N): a soft knit elastic, 10 % stretch under 1.5 N. Chosen, not
+/// measured; KAT 7's ladder separates gripping from slack elastics with it.
+pub const ELASTIC_EA: f64 = 15.0;
+
+/// An elastic in a casing (plan §11.2 "Elastic"): the casing instance, the relaxed elastic length (m) and
+/// its axial stiffness EA (N).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ElasticCasing {
+    /// The casing instance (its fold, the `top` edge, and its seam line carry the elastic).
+    pub instance: String,
+    /// Relaxed elastic length (m).
+    pub length: f64,
+    /// Axial stiffness EA (N).
+    pub ea: f64,
+}
+
+/// The elastic casing of a drafted pattern: the piece with role `waistband` (one instance), the relaxed
+/// elastic `meta.solved.elastic_cut_mm` less `meta.style.elastic_overlap`. `None` without them (a traced
+/// pattern), or with `ea` ≤ 0 (the elastic switched off).
+#[must_use]
+pub fn elastic_casing(pattern: &Pattern, ea: f64) -> Option<ElasticCasing> {
+    let raw = pattern.raw();
+    let cut = raw["meta"]["solved"]["elastic_cut_mm"].as_f64()?;
+    let overlap = raw["meta"]["style"]["elastic_overlap"]
+        .as_f64()
+        .unwrap_or(0.0);
+    let length = (cut - overlap) * MM;
+    if !(length > 0.0 && ea > 0.0 && ea.is_finite()) {
+        return None;
+    }
+    let piece = raw["pieces"]
+        .as_array()?
+        .iter()
+        .find(|p| p["role"] == "waistband")?;
+    let mut casings = pattern
+        .instances
+        .iter()
+        .filter(|i| piece["id"] == i.piece.as_str());
+    let instance = casings.next()?.id.clone();
+    if casings.next().is_some() {
+        return None;
+    }
+    Some(ElasticCasing {
+        instance,
+        length,
+        ea,
+    })
+}
+
+/// `pattern` with the casing piece simulated at its cut length (its `sim_scale` along the band set to 1):
+/// the elastic, not a shrunken casing, draws it to the waist.
+#[must_use]
+pub fn casing_at_cut_length(pattern: &Pattern, casing: &ElasticCasing) -> Pattern {
+    let mut raw = pattern.raw().clone();
+    let piece = pattern.instance(&casing.instance).map(|i| i.piece_index);
+    if let Some(sc) = piece.and_then(|p| raw["pieces"][p].get_mut("sim_scale"))
+        && let Some(x) = sc.get_mut(0)
+    {
+        *x = Value::from(1.0);
+    }
+    Pattern::new(raw)
+}
+
+/// The casing's elastic as two rings of tension-only segments, along its fold (the `top` edge) and along
+/// its seam line (every other edge but the `end_*` ones), each with half the stiffness: an elastic in a
+/// narrow channel gathers the whole channel. A ring on the fold alone left the seam line near its cut
+/// length (on the 92 cm trousers a cone 100 mm wider at the seam, the trousers hanging 12 mm lower). Each
+/// ring's rest is its flat length scaled to the elastic's.
+fn elastic_rings_of(
+    mesh: &GarmentMesh,
+    weld: &[usize],
+    casing: &ElasticCasing,
+) -> Result<Vec<Vec<ElasticSegment>>, Refusal> {
+    let edges: Vec<(&str, &Vec<usize>)> = mesh
+        .index
+        .iter()
+        .filter(|((inst, _), _)| *inst == casing.instance)
+        .map(|((_, edge), path)| (edge.as_str(), path))
+        .collect();
+    let fold: Vec<&Vec<usize>> = edges
+        .iter()
+        .filter(|(e, _)| *e == "top")
+        .map(|(_, p)| *p)
+        .collect();
+    let seam: Vec<&Vec<usize>> = edges
+        .iter()
+        .filter(|(e, _)| *e != "top" && !e.starts_with("end"))
+        .map(|(_, p)| *p)
+        .collect();
+    [("top edge", fold), ("seam line", seam)]
+        .into_iter()
+        .map(|(what, paths)| elastic_ring(mesh, weld, casing, what, &paths))
+        .collect()
+}
+
+fn elastic_ring(
+    mesh: &GarmentMesh,
+    weld: &[usize],
+    casing: &ElasticCasing,
+    what: &str,
+    paths: &[&Vec<usize>],
+) -> Result<Vec<ElasticSegment>, Refusal> {
+    let mut segments = Vec::new();
+    for path in paths {
+        for w in path.windows(2) {
+            let (a, b) = (weld[w[0]], weld[w[1]]);
+            if a != b {
+                segments.push((a, b, (mesh.verts2d[w[1]] - mesh.verts2d[w[0]]).norm() * MM));
+            }
+        }
+    }
+    // a closed ring: every welded vertex on exactly two segments
+    let mut degree: BTreeMap<usize, usize> = BTreeMap::new();
+    for &(a, b, _) in &segments {
+        *degree.entry(a).or_default() += 1;
+        *degree.entry(b).or_default() += 1;
+    }
+    if segments.len() < 3 || degree.values().any(|&d| d != 2) {
+        return Err(bad(format!(
+            "the casing {}'s {what} does not close into a ring (are its ends sewn?)",
+            casing.instance
+        )));
+    }
+    let scale = casing.length / segments.iter().map(|s| s.2).sum::<f64>();
+    Ok(segments
+        .into_iter()
+        .map(|(a, b, l)| ElasticSegment {
+            v: [a, b],
+            rest: l * scale,
+            ea: casing.ea / 2.0,
+        })
+        .collect())
 }
 
 /// Builds the scene: mesh → placements → start state against `skin` → weld → cloth model → solver with
@@ -262,7 +398,9 @@ pub fn build_scene(
     fabric: Fabric,
     compression: f64,
     contact: ContactParams,
+    elastic: Option<&ElasticCasing>,
 ) -> Result<Scene, Refusal> {
+    let casing = elastic.and_then(|e| mesh.instances.iter().position(|i| *i == e.instance));
     let places = placements(pattern, &mesh, frames)?;
     let wrapped = wrapped_positions(&mesh, &places);
     let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
@@ -300,8 +438,13 @@ pub fn build_scene(
         }
         tris.push(t);
         tri_rest.push(f.map(|v| rest[v]));
-        let w = f.iter().map(|&v| start.gather_weights[v]).sum::<f64>() / 3.0;
-        tri_compression.push(low + w * (compression - low));
+        if casing == Some(mesh.owner[f[0]]) {
+            // a casing at its cut length, drawn up by its elastic: gathered all through
+            tri_compression.push(low);
+        } else {
+            let w = f.iter().map(|&v| start.gather_weights[v]).sum::<f64>() / 3.0;
+            tri_compression.push(low + w * (compression - low));
+        }
     }
     let mut model = ClothModel::from_triangles(
         next,
@@ -312,6 +455,14 @@ pub fn build_scene(
         fabric.areal_kg_m2,
     )?;
     model.set_compression(&tri_compression)?;
+    let mut elastic_rings = Vec::new();
+    if let Some(e) = elastic {
+        for ring in elastic_rings_of(&mesh, &weld, e)? {
+            let at = model.elastics.len();
+            model.elastics.extend(ring);
+            elastic_rings.push(at..model.elastics.len());
+        }
+    }
     let body = Body::new(skin_vertices.to_vec(), skin_triangles.to_vec(), 5e-3)?;
     let untangled = untangle(&mut x, &tris, &body, &tree)?;
     // The relaxed start keeps every vertex 4.8 mm out, but an edge between two of them can pass close to
@@ -348,6 +499,7 @@ pub fn build_scene(
         untangled,
         target_thickness: contact.thickness,
         solver,
+        elastic_rings,
     })
 }
 

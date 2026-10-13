@@ -12,7 +12,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::eigen::project_psd;
-use crate::elements::{Hinge, Membrane, MembraneElement};
+use crate::elements::{ElasticSegment, Hinge, Membrane, MembraneElement};
 use crate::sparse::{Coo, Csr, CsrFill, LdltOptions, SymbolicLdlt, amd_order};
 
 /// Edge (lo, hi) → its uses as (edge start, edge end, opposite vertex, triangle).
@@ -36,6 +36,9 @@ pub struct ClothModel {
     pub compression: Vec<[f64; 2]>,
     /// Bending stiffness B (N·m, flexural rigidity per unit width).
     pub bending: f64,
+    /// Tension-only elastic segments (a casing's elastic), between vertices that share an element so the
+    /// Hessian pattern does not change.
+    pub elastics: Vec<ElasticSegment>,
 }
 
 impl ClothModel {
@@ -188,6 +191,7 @@ impl ClothModel {
             mass,
             membrane,
             bending,
+            elastics: Vec::new(),
         })
     }
 
@@ -226,7 +230,7 @@ impl ClothModel {
         }
     }
 
-    /// Elastic energy Ψ (membrane + bending) at positions `x`.
+    /// Elastic energy Ψ (membrane + bending + elastics) at positions `x`.
     #[must_use]
     pub fn elastic_energy(&self, x: &[Vec3]) -> f64 {
         let m: f64 = self
@@ -236,7 +240,8 @@ impl ClothModel {
             .map(|(i, e)| e.energy(x, &self.material(i)))
             .sum();
         let b: f64 = self.hinges.iter().map(|h| h.energy(x, self.bending)).sum();
-        m + b
+        let t: f64 = self.elastics.iter().map(|e| e.energy(x)).sum();
+        m + b + t
     }
 }
 
@@ -558,6 +563,10 @@ impl Solver {
         for h in &self.model.hinges {
             let mut l = h.local(x, self.model.bending);
             scatter(&h.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
+        }
+        for e in &self.model.elastics {
+            let mut l = e.local(x);
+            scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for (i, &m) in self.model.mass.iter().enumerate() {
             for k in 0..3 {
@@ -929,6 +938,12 @@ impl Solver {
         for h in &self.model.hinges {
             let l = h.local(&self.x, self.model.bending);
             for (a, &vi) in h.v.iter().enumerate() {
+                f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
+            }
+        }
+        for e in &self.model.elastics {
+            let l = e.local(&self.x);
+            for (a, &vi) in e.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
         }

@@ -3,8 +3,9 @@
 //!
 //! - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation (seam walk, truing,
 //!   points of measure), bit-exact with the reference.
-//! - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH]
-//!   [--self-contact-mm MM] [--self-mu MU] [--json]`: an Anny body fitted to the wearer's measurements in the drape pose, the pattern meshed,
+//! - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N]
+//!   [--model PATH] [--self-contact-mm MM] [--self-mu MU] [--json]`: an Anny body fitted to the wearer's
+//!   measurements in the drape pose, the pattern meshed,
 //!   placed, sewn and draped on it, and `sim_report.json`, `fold.pc2`, `mesh_map.json`,
 //!   `fold_viewer.html` and the last frame as OBJ written to DIR.
 //! - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH]
@@ -37,8 +38,8 @@ const VIEWER_TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template
 
 const USAGE: &str = "usage:
   ftx validate PATTERN --measurements M [--fit F] [--json]
-  ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH]
-            [--self-contact-mm MM] [--self-mu MU] [--json]
+  ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N]
+            [--model PATH] [--self-contact-mm MM] [--self-mu MU] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx alter slash-spread PATTERN --piece P --axis x|y --at MM --add MM --out OUT [--json]
   ftx alter move PATTERN --piece P --vertex V [--dx MM] [--dy MM] --out OUT [--json]
@@ -449,6 +450,11 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
         return Err(bad_input("--self-mu requires --self-contact-mm")
             .repair("specify the sum of the cloth layers' half-thicknesses in millimetres"));
     }
+    if let Some(v) = args.options.get("elastic-ea") {
+        opts.elastic_ea = v
+            .parse()
+            .map_err(|_| bad_input("--elastic-ea must be a number of newtons (0: no elastic)"))?;
+    }
     opts.validate()?;
     Ok(opts)
 }
@@ -466,6 +472,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "model",
             "self-contact-mm",
             "self-mu",
+            "elastic-ea",
         ],
     )?;
     let opts = drape_options(args)?;
