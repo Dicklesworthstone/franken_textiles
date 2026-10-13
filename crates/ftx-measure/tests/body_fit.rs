@@ -317,3 +317,198 @@ fn distinct_shape_minima_are_ambiguous_even_with_full_local_rank() {
     assert!(r.attempts.iter().all(|a| a.status == "CONVERGED"));
     assert!(r.shape_spread_fraction.unwrap()[0] > 0.5);
 }
+
+struct CountedBody {
+    body: HingedBody,
+    calls: std::cell::Cell<usize>,
+}
+impl BodyModel for CountedBody {
+    fn layout(&self) -> &ModelLayout {
+        self.body.layout()
+    }
+    fn measurements(&self, s: &[f64]) -> Result<Vec<f64>, Refusal> {
+        self.calls.set(self.calls.get() + 1);
+        self.body.measurements(s)
+    }
+    fn points(&self, s: &[f64], p: &[f64]) -> Result<Vec<Vec3>, Refusal> {
+        self.calls.set(self.calls.get() + 1);
+        self.body.points(s, p)
+    }
+}
+
+#[test]
+fn global_evaluation_budget_covers_derivatives_trials_checks_and_final_publication() {
+    let (body, input, _) = scene();
+    let model = CountedBody {
+        body,
+        calls: std::cell::Cell::new(0),
+    };
+    let options = FitOptions::default();
+    let complete = fit_body(&input, &model, &options).unwrap();
+    assert_eq!(complete.status, "ACCEPTED");
+    let total = complete.model_evaluations;
+    assert_eq!(total, model.calls.get());
+    assert_eq!(
+        total,
+        complete
+            .attempts
+            .iter()
+            .map(|a| a.model_evaluations)
+            .sum::<usize>()
+            + 1
+    );
+    assert!(total > 100);
+    let first = complete.attempts[0].model_evaluations;
+    // Exhaust every callback in the first two Jacobian/line-search rounds and at the
+    // first-start boundary and final publication. No hidden derivative or rejected trial work.
+    let limits: Vec<usize> = (1..=140)
+        .chain([first - 1, first, first + 1, total - 1])
+        .collect();
+    for limit in limits {
+        model.calls.set(0);
+        let r = fit_body(
+            &input,
+            &model,
+            &FitOptions {
+                max_model_evaluations: limit,
+                ..options
+            },
+        )
+        .unwrap();
+        assert_eq!(r.status, "BUDGET_STOP", "limit {limit}: {r:#?}");
+        assert_eq!(model.calls.get(), limit);
+        assert_eq!(r.model_evaluations, limit);
+        assert!(r.solution.is_none());
+        assert_eq!(r.attempts.len(), input.starts.len());
+        assert_eq!(
+            r.attempts
+                .iter()
+                .map(|a| a.model_evaluations)
+                .sum::<usize>(),
+            limit
+        );
+        if limit == first {
+            assert_eq!(r.attempts[0].status, "CONVERGED");
+            assert_eq!(r.attempts[1].status, "BUDGET_STOP");
+            assert_eq!(r.attempts[1].model_evaluations, 0);
+        }
+        if limit == total - 1 {
+            assert!(r.attempts.iter().all(|a| a.status == "CONVERGED"));
+            assert!(!r.flags.is_empty());
+        }
+    }
+    model.calls.set(0);
+    let exact = fit_body(
+        &input,
+        &model,
+        &FitOptions {
+            max_model_evaluations: total,
+            ..options
+        },
+    )
+    .unwrap();
+    assert_eq!(exact.status, "ACCEPTED");
+    assert_eq!(exact.model_evaluations, total);
+    assert_eq!(
+        serde_json::to_value(exact.solution).unwrap(),
+        serde_json::to_value(complete.solution).unwrap()
+    );
+}
+
+#[test]
+fn invalid_evaluation_or_pose_policy_refuses_without_model_work() {
+    let (body, input, _) = scene();
+    let model = CountedBody {
+        body,
+        calls: std::cell::Cell::new(0),
+    };
+    for options in [
+        FitOptions {
+            max_model_evaluations: 0,
+            ..FitOptions::default()
+        },
+        FitOptions {
+            max_model_evaluations: 1_000_001,
+            ..FitOptions::default()
+        },
+        FitOptions {
+            max_pose_spread_fraction: f64::NAN,
+            ..FitOptions::default()
+        },
+        FitOptions {
+            max_pose_spread_fraction: 0.0,
+            ..FitOptions::default()
+        },
+        FitOptions {
+            max_pose_spread_fraction: 1.0,
+            ..FitOptions::default()
+        },
+    ] {
+        assert!(fit_body(&input, &model, &options).is_err());
+        assert_eq!(model.calls.get(), 0);
+    }
+}
+
+struct TwoPoses(HingedBody);
+impl BodyModel for TwoPoses {
+    fn layout(&self) -> &ModelLayout {
+        self.0.layout()
+    }
+    fn measurements(&self, s: &[f64]) -> Result<Vec<f64>, Refusal> {
+        self.0.measurements(s)
+    }
+    fn points(&self, s: &[f64], p: &[f64]) -> Result<Vec<Vec3>, Refusal> {
+        // Synthetic ambiguous correspondence mapping: distinct poses with identical observed points.
+        // Each root has full local rank; no shape-only comparison can detect the ambiguity.
+        let mut pose = p.to_vec();
+        pose[3] *= pose[3];
+        self.0.points(s, &pose)
+    }
+}
+
+#[test]
+fn identical_shape_minima_do_not_hide_conflicting_per_frame_poses() {
+    let (body, mut input, mut poses) = scene();
+    let model = TwoPoses(body);
+    poses[0][3] = 0.6;
+    poses[1][3] = 0.7;
+    for (frame, pose) in input.frames.iter_mut().zip(&poses) {
+        let points = model.points(&[0.48, 1.25], pose).unwrap();
+        for (k, obs) in frame.keypoints.iter_mut().enumerate() {
+            obs.pixel_px = frame.camera.project(points[k]).unwrap();
+        }
+    }
+    for (start, sign) in input.starts.iter_mut().zip([1.0, -1.0]) {
+        for p in &mut start.poses {
+            p.values[3] = sign * 0.65;
+        }
+    }
+    let r = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(r.status, "AMBIGUOUS", "{r:#?}");
+    assert!(r.solution.is_none());
+    assert!(r.attempts.iter().all(|a| a.status == "CONVERGED"));
+    assert!(
+        r.shape_spread_fraction
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|&v| v < 1e-6)
+    );
+    let spread = r.pose_spread_fraction.as_ref().unwrap();
+    for (p, f) in spread.iter().zip(&r.input.frames) {
+        assert_eq!(p.frame, f.frame);
+        assert!(p.fractions[3] > 0.39);
+        assert!(p.fractions[..3].iter().all(|&v| v < 1e-6));
+    }
+    assert!(r.flags.iter().any(|s| s.contains("pose")));
+    // Canonical frame identities, not input ordinal, bind the pose disagreement to its evidence.
+    input.frames.reverse();
+    for start in &mut input.starts {
+        start.poses.reverse();
+    }
+    let reversed = fit_body(&input, &model, &FitOptions::default()).unwrap();
+    assert_eq!(
+        serde_json::to_value(r).unwrap(),
+        serde_json::to_value(reversed).unwrap()
+    );
+}

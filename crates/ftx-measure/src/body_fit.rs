@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use ftx_core::{Refusal, Vec2, Vec3};
+use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -143,6 +143,12 @@ pub struct FitOptions {
     pub iterations: usize,
     /// Largest permitted shared-shape spread as a fraction of each parameter's range.
     pub max_shape_spread_fraction: f64,
+    /// Largest per-frame pose spread, normalized by each declared parameter range.
+    /// This is a conservative parameter-space gate, not an angular equivalence test.
+    pub max_pose_spread_fraction: f64,
+    /// Total points/measurements calls across ALL starts, derivatives, trials and final output.
+    /// Failed calls consume budget too; layout queries do not. Not a wall-clock limit.
+    pub max_model_evaluations: usize,
 }
 
 impl Default for FitOptions {
@@ -150,6 +156,8 @@ impl Default for FitOptions {
         Self {
             iterations: 50,
             max_shape_spread_fraction: 0.01,
+            max_pose_spread_fraction: 0.01,
+            max_model_evaluations: 100_000,
         }
     }
 }
@@ -184,6 +192,17 @@ pub struct FitAttempt {
     pub checks: Vec<FitCheck>,
     /// Concrete numerical or evidence failures.
     pub flags: Vec<String>,
+    /// Model calls consumed by this start, including failed evaluations and validation.
+    pub model_evaluations: usize,
+}
+
+/// Parameter disagreement for one decoded frame; never confused with physical pose values.
+#[derive(Clone, Debug, Serialize)]
+pub struct PoseSpread {
+    /// Canonical decoded-frame identity.
+    pub frame: FrameId,
+    /// High minus low over converged starts, in normalized `ModelLayout::pose` order.
+    pub fractions: Vec<f64>,
 }
 
 /// Accepted local model estimate, not a measured body or an uncertainty estimate.
@@ -214,12 +233,45 @@ pub struct BodyFitReport {
     pub attempts: Vec<FitAttempt>,
     /// Shared-shape range over all converged starts, normalized by parameter bounds.
     pub shape_spread_fraction: Option<Vec<f64>>,
-    /// Present only when every start converged, every check passed and shape spread passed.
+    /// Per-frame pose disagreement, populated only when all attempts converged and passed.
+    pub pose_spread_fraction: Option<Vec<PoseSpread>>,
+    /// Total model calls, including any final publication check outside the attempts.
+    pub model_evaluations: usize,
+    /// Hard failures after individual attempts, such as ambiguity or a final budget stop.
+    pub flags: Vec<String>,
+    /// Present only when every start, residual check and shape/pose spread gate passed.
     pub solution: Option<BodyFitSolution>,
     /// Explicit scope limitations and missing independent checks.
     pub advisories: Vec<String>,
     /// Boundary of this inference.
     pub no_claim: &'static str,
+}
+
+struct EvaluationBudget {
+    used: usize,
+    limit: usize,
+}
+
+impl EvaluationBudget {
+    fn call<T>(&mut self, evaluate: impl FnOnce() -> Result<T, Refusal>) -> Result<T, Refusal> {
+        if self.used >= self.limit {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "global body-model evaluation budget exhausted",
+            ));
+        }
+        self.used += 1;
+        evaluate()
+    }
+}
+
+impl FitAttempt {
+    fn failed_evaluation(&mut self, error: &Refusal) {
+        if error.code == RefusalCode::BudgetExceeded {
+            self.status = "BUDGET_STOP";
+        }
+        self.flags.push(error.to_string());
+    }
 }
 
 fn text(s: &str) -> bool {
@@ -390,10 +442,15 @@ struct Prediction {
     points: Vec<Vec<Vec3>>,
     metrics: Vec<f64>,
 }
-fn predict(model: &impl BodyModel, x: &[f64], frames: usize) -> Result<Prediction, Refusal> {
+fn predict(
+    model: &impl BodyModel,
+    x: &[f64],
+    frames: usize,
+    budget: &mut EvaluationBudget,
+) -> Result<Prediction, Refusal> {
     let l = model.layout();
     let shape = values(&x[..l.shape.len()], &l.shape);
-    let metrics = model.measurements(&shape)?;
+    let metrics = budget.call(|| model.measurements(&shape))?;
     if metrics.len() != l.measurements.len() || metrics.iter().any(|v| !v.is_finite() || *v <= 0.0)
     {
         return Err(invalid("model returned invalid measurement vector"));
@@ -402,7 +459,7 @@ fn predict(model: &impl BodyModel, x: &[f64], frames: usize) -> Result<Predictio
     for f in 0..frames {
         let begin = l.shape.len() + f * l.pose.len();
         let pose = values(&x[begin..begin + l.pose.len()], &l.pose);
-        let p = model.points(&shape, &pose)?;
+        let p = budget.call(|| model.points(&shape, &pose))?;
         if p.len() != l.keypoints.len() || p.iter().any(|v| !v.is_finite()) {
             return Err(invalid("model returned invalid keypoint vector"));
         }
@@ -411,8 +468,13 @@ fn predict(model: &impl BodyModel, x: &[f64], frames: usize) -> Result<Predictio
     Ok(Prediction { points, metrics })
 }
 
-fn residual(input: &BodyFitInput, model: &impl BodyModel, x: &[f64]) -> Result<Vec<f64>, Refusal> {
-    let p = predict(model, x, input.frames.len())?;
+fn residual(
+    input: &BodyFitInput,
+    model: &impl BodyModel,
+    x: &[f64],
+    budget: &mut EvaluationBudget,
+) -> Result<Vec<f64>, Refusal> {
+    let p = predict(model, x, input.frames.len(), budget)?;
     let l = model.layout();
     let mut r = Vec::new();
     for (f, frame) in input.frames.iter().enumerate() {
@@ -482,8 +544,9 @@ fn checks(
     input: &BodyFitInput,
     model: &impl BodyModel,
     x: &[f64],
+    budget: &mut EvaluationBudget,
 ) -> Result<Vec<FitCheck>, Refusal> {
-    let p = predict(model, x, input.frames.len())?;
+    let p = predict(model, x, input.frames.len(), budget)?;
     let l = model.layout();
     let mut out = Vec::new();
     for (f, frame) in input.frames.iter().enumerate() {
@@ -527,18 +590,20 @@ fn attempt(
     model: &impl BodyModel,
     start: &FitStart,
     options: &FitOptions,
+    budget: &mut EvaluationBudget,
 ) -> (FitAttempt, Option<Vec<f64>>) {
     let mut result = FitAttempt {
         status: "NOT_CONVERGED",
         cost_history: Vec::new(),
         checks: Vec::new(),
         flags: Vec::new(),
+        model_evaluations: 0,
     };
     let mut x = encode(start, model.layout()).expect("validated start");
-    let mut r = match residual(input, model, &x) {
+    let mut r = match residual(input, model, &x, budget) {
         Ok(r) => r,
         Err(e) => {
-            result.flags.push(e.to_string());
+            result.failed_evaluation(&e);
             return (result, None);
         }
     };
@@ -567,8 +632,8 @@ fn attempt(
             let mut minus = x.clone();
             plus[k] += h;
             minus[k] -= h;
-            let pair = residual(input, model, &plus)
-                .and_then(|a| residual(input, model, &minus).map(|b| (a, b)));
+            let pair = residual(input, model, &plus, budget)
+                .and_then(|a| residual(input, model, &minus, budget).map(|b| (a, b)));
             match pair {
                 Ok((a, b)) => cols.push(
                     a.iter()
@@ -577,7 +642,8 @@ fn attempt(
                         .collect::<Vec<_>>(),
                 ),
                 Err(e) => {
-                    result.flags.push(format!("derivative unavailable: {e}"));
+                    result.flags.push("derivative unavailable".into());
+                    result.failed_evaluation(&e);
                     return (result, None);
                 }
             }
@@ -613,10 +679,10 @@ fn attempt(
             .map(|c| c.iter().zip(&r).map(|(j, v)| j * v).sum())
             .collect();
         if g.iter().all(|v| v.abs() <= 1e-6 * cost(&r).sqrt().max(1.0)) {
-            match checks(input, model, &x) {
+            match checks(input, model, &x, budget) {
                 Ok(c) => result.checks = c,
                 Err(e) => {
-                    result.flags.push(e.to_string());
+                    result.failed_evaluation(&e);
                     return (result, None);
                 }
             }
@@ -648,13 +714,19 @@ fn attempt(
                 .zip(step.iter().zip(&norms))
                 .map(|(v, (s, n))| v + s / n)
                 .collect();
-            if trial.iter().all(|v| v.is_finite() && *v > 0.0 && *v < 1.0)
-                && let Ok(next) = residual(input, model, &trial)
-                && cost(&next) < cost(&r)
-            {
-                accepted = Some((trial, next));
-                damping = (damping * 0.3).max(1e-12);
-                break;
+            if trial.iter().all(|v| v.is_finite() && *v > 0.0 && *v < 1.0) {
+                match residual(input, model, &trial, budget) {
+                    Ok(next) if cost(&next) < cost(&r) => {
+                        accepted = Some((trial, next));
+                        damping = (damping * 0.3).max(1e-12);
+                        break;
+                    }
+                    Err(e) if e.code == RefusalCode::BudgetExceeded => {
+                        result.failed_evaluation(&e);
+                        return (result, None);
+                    }
+                    _ => {}
+                }
             }
             damping *= 10.0;
         }
@@ -682,9 +754,12 @@ pub fn fit_body(
     if !(1..=100).contains(&options.iterations)
         || !options.max_shape_spread_fraction.is_finite()
         || !(1e-6..=0.1).contains(&options.max_shape_spread_fraction)
+        || !options.max_pose_spread_fraction.is_finite()
+        || !(1e-6..=0.1).contains(&options.max_pose_spread_fraction)
+        || !(1..=1_000_000).contains(&options.max_model_evaluations)
     {
         return Err(invalid(
-            "invalid body-fit iteration or multistart-spread budget",
+            "invalid body-fit iteration, model-evaluation or multistart-spread budget",
         ));
     }
     let input = canonical(input, model.layout())?;
@@ -696,6 +771,9 @@ pub fn fit_body(
         options: *options,
         attempts: Vec::new(),
         shape_spread_fraction: None,
+        pose_spread_fraction: None,
+        model_evaluations: 0,
+        flags: Vec::new(),
         solution: None,
         advisories: Vec::new(),
         no_claim: "Local model estimate conditional on camera calibration, correspondences and tape evidence. Not measured anatomy, a global uniqueness proof, a covariance estimate or a real-wearer fit claim.",
@@ -711,11 +789,18 @@ pub fn fit_body(
     }
     report.advisories.push("Cameras, lens parameters and tape definitions are fixed; their systematic uncertainty is not estimated. Silhouettes are not fitted in this keypoint slice.".into());
     let mut states = Vec::new();
+    let mut budget = EvaluationBudget {
+        used: 0,
+        limit: options.max_model_evaluations,
+    };
     for start in &input.starts {
-        let (a, x) = attempt(&input, model, start, options);
+        let before = budget.used;
+        let (mut a, x) = attempt(&input, model, start, options, &mut budget);
+        a.model_evaluations = budget.used - before;
         report.attempts.push(a);
         states.push(x);
     }
+    report.model_evaluations = budget.used;
     for status in ["BUDGET_STOP", "UNOBSERVABLE", "NOT_CONVERGED", "REJECTED"] {
         if report.attempts.iter().any(|a| a.status == status) {
             report.status = status;
@@ -723,25 +808,52 @@ pub fn fit_body(
         }
     }
     let ns = model.layout().shape.len();
-    let spread: Vec<f64> = (0..ns)
-        .map(|k| {
-            let lo = states
-                .iter()
-                .map(|s| s.as_ref().unwrap()[k])
-                .fold(f64::INFINITY, f64::min);
-            let hi = states
-                .iter()
-                .map(|s| s.as_ref().unwrap()[k])
-                .fold(f64::NEG_INFINITY, f64::max);
-            hi - lo
-        })
-        .collect();
-    let ambiguous = spread
+    let parameter_spread = |k: usize| {
+        let lo = states
+            .iter()
+            .map(|s| s.as_ref().unwrap()[k])
+            .fold(f64::INFINITY, f64::min);
+        let hi = states
+            .iter()
+            .map(|s| s.as_ref().unwrap()[k])
+            .fold(f64::NEG_INFINITY, f64::max);
+        hi - lo
+    };
+    let spread: Vec<f64> = (0..ns).map(parameter_spread).collect();
+    let shape_ambiguous = spread
         .iter()
         .any(|s| *s > options.max_shape_spread_fraction);
     report.shape_spread_fraction = Some(spread);
-    if ambiguous {
+    let np = model.layout().pose.len();
+    let poses: Vec<PoseSpread> = input
+        .frames
+        .iter()
+        .enumerate()
+        .map(|(i, f)| PoseSpread {
+            frame: f.frame.clone(),
+            fractions: (ns + i * np..ns + (i + 1) * np)
+                .map(parameter_spread)
+                .collect(),
+        })
+        .collect();
+    let pose_ambiguous = poses.iter().any(|p| {
+        p.fractions
+            .iter()
+            .any(|s| *s > options.max_pose_spread_fraction)
+    });
+    report.pose_spread_fraction = Some(poses);
+    if shape_ambiguous || pose_ambiguous {
         report.status = "AMBIGUOUS";
+        if shape_ambiguous {
+            report
+                .flags
+                .push("converged starts disagree on shared shape".into());
+        }
+        if pose_ambiguous {
+            report
+                .flags
+                .push("converged starts disagree on a frame's pose parameters".into());
+        }
         return Ok(report);
     }
     let best = (0..states.len())
@@ -769,8 +881,28 @@ pub fn fit_body(
             ),
         })
         .collect();
+    let final_metrics = budget.call(|| model.measurements(&shape));
+    report.model_evaluations = budget.used;
+    let predicted_measurements_m = match final_metrics {
+        Ok(m) if m.len() == l.measurements.len() && m.iter().all(|v| v.is_finite() && *v > 0.0) => {
+            m
+        }
+        Ok(_) => {
+            report
+                .flags
+                .push("model returned invalid final measurements".into());
+            return Ok(report);
+        }
+        Err(e) => {
+            if e.code == RefusalCode::BudgetExceeded {
+                report.status = "BUDGET_STOP";
+            }
+            report.flags.push(e.to_string());
+            return Ok(report);
+        }
+    };
     report.solution = Some(BodyFitSolution {
-        predicted_measurements_m: model.measurements(&shape)?,
+        predicted_measurements_m,
         shape,
         poses,
     });
