@@ -100,6 +100,23 @@ impl PyJson {
         }
     }
 
+    /// Parses JSON keeping object key order (integers without a fraction or exponent stay integers).
+    ///
+    /// # Errors
+    /// Text that is not JSON, with the byte offset.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let mut p = Parser {
+            s: text.as_bytes(),
+            i: 0,
+        };
+        let v = p.value()?;
+        p.ws();
+        if p.i != p.s.len() {
+            return Err(format!("trailing data at byte {}", p.i));
+        }
+        Ok(v)
+    }
+
     /// `json.dumps(self, indent=indent)` (`None`: one line with `, ` and `: `).
     #[must_use]
     pub fn dumps(&self, indent: Option<usize>) -> String {
@@ -160,6 +177,174 @@ impl PyJson {
     }
 }
 
+struct Parser<'a> {
+    s: &'a [u8],
+    i: usize,
+}
+
+impl Parser<'_> {
+    fn ws(&mut self) {
+        while self.i < self.s.len() && matches!(self.s[self.i], b' ' | b'\t' | b'\n' | b'\r') {
+            self.i += 1;
+        }
+    }
+
+    fn err<T>(&self, what: &str) -> Result<T, String> {
+        Err(format!("{what} at byte {}", self.i))
+    }
+
+    fn eat(&mut self, lit: &str) -> bool {
+        if self.s[self.i..].starts_with(lit.as_bytes()) {
+            self.i += lit.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn value(&mut self) -> Result<PyJson, String> {
+        self.ws();
+        match self.s.get(self.i) {
+            None => self.err("unexpected end"),
+            Some(b'{') => {
+                self.i += 1;
+                let mut items = Vec::new();
+                self.ws();
+                if self.eat("}") {
+                    return Ok(PyJson::Dict(items));
+                }
+                loop {
+                    self.ws();
+                    let k = self.string()?;
+                    self.ws();
+                    if !self.eat(":") {
+                        return self.err("expected ':'");
+                    }
+                    items.push((k, self.value()?));
+                    self.ws();
+                    if self.eat(",") {
+                        continue;
+                    }
+                    if self.eat("}") {
+                        return Ok(PyJson::Dict(items));
+                    }
+                    return self.err("expected ',' or '}'");
+                }
+            }
+            Some(b'[') => {
+                self.i += 1;
+                let mut v = Vec::new();
+                self.ws();
+                if self.eat("]") {
+                    return Ok(PyJson::List(v));
+                }
+                loop {
+                    v.push(self.value()?);
+                    self.ws();
+                    if self.eat(",") {
+                        continue;
+                    }
+                    if self.eat("]") {
+                        return Ok(PyJson::List(v));
+                    }
+                    return self.err("expected ',' or ']'");
+                }
+            }
+            Some(b'"') => Ok(PyJson::Str(self.string()?)),
+            _ if self.eat("null") => Ok(PyJson::Null),
+            _ if self.eat("true") => Ok(PyJson::Bool(true)),
+            _ if self.eat("false") => Ok(PyJson::Bool(false)),
+            _ if self.eat("NaN") => Ok(PyJson::Float(f64::NAN)),
+            _ if self.eat("Infinity") => Ok(PyJson::Float(f64::INFINITY)),
+            _ if self.eat("-Infinity") => Ok(PyJson::Float(f64::NEG_INFINITY)),
+            _ => {
+                let start = self.i;
+                while self.i < self.s.len()
+                    && matches!(
+                        self.s[self.i],
+                        b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9'
+                    )
+                {
+                    self.i += 1;
+                }
+                let t = std::str::from_utf8(&self.s[start..self.i]).unwrap_or("");
+                if t.is_empty() {
+                    return self.err("unexpected character");
+                }
+                if !t.contains(['.', 'e', 'E'])
+                    && let Ok(n) = t.parse::<i64>()
+                {
+                    return Ok(PyJson::Int(n));
+                }
+                t.parse::<f64>()
+                    .map(PyJson::Float)
+                    .map_err(|_| format!("bad number at byte {start}"))
+            }
+        }
+    }
+
+    fn string(&mut self) -> Result<String, String> {
+        if !self.eat("\"") {
+            return self.err("expected a string");
+        }
+        let mut out = String::new();
+        let mut units: Vec<u16> = Vec::new();
+        let flush = |out: &mut String, units: &mut Vec<u16>| {
+            if !units.is_empty() {
+                out.push_str(&String::from_utf16_lossy(units));
+                units.clear();
+            }
+        };
+        loop {
+            let Some(&c) = self.s.get(self.i) else {
+                return self.err("unterminated string");
+            };
+            self.i += 1;
+            match c {
+                b'"' => break,
+                b'\\' => {
+                    let Some(&e) = self.s.get(self.i) else {
+                        return self.err("unterminated escape");
+                    };
+                    self.i += 1;
+                    if e == b'u' {
+                        let hex =
+                            std::str::from_utf8(self.s.get(self.i..self.i + 4).unwrap_or(&[]))
+                                .unwrap_or("");
+                        let u = u16::from_str_radix(hex, 16)
+                            .map_err(|_| format!("bad \\u escape at byte {}", self.i))?;
+                        self.i += 4;
+                        units.push(u);
+                        continue;
+                    }
+                    flush(&mut out, &mut units);
+                    out.push(match e {
+                        b'n' => '\n',
+                        b't' => '\t',
+                        b'r' => '\r',
+                        b'b' => '\u{8}',
+                        b'f' => '\u{c}',
+                        other => char::from(other),
+                    });
+                }
+                _ => {
+                    flush(&mut out, &mut units);
+                    // a run of raw UTF-8 bytes
+                    let start = self.i - 1;
+                    let mut end = self.i;
+                    while end < self.s.len() && self.s[end] != b'"' && self.s[end] != b'\\' {
+                        end += 1;
+                    }
+                    out.push_str(&String::from_utf8_lossy(&self.s[start..end]));
+                    self.i = end;
+                }
+            }
+        }
+        flush(&mut out, &mut units);
+        Ok(out)
+    }
+}
+
 fn write_str(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
@@ -202,5 +387,8 @@ mod tests {
             "{\n \"b\": [\n  841.0,\n  1e-05,\n  0.1\n ],\n \"a\": 3,\n \"\\u00e9\": \"x\\ud83d\\ude00\\n\",\n \"e\": [],\n \"d\": {},\n \"n\": null\n}"
         );
         assert_eq!(PyJson::floats(&[1.5, 2.0]).dumps(None), "[1.5, 2.0]");
+        // parsing keeps key order and round-trips
+        let text = v.dumps(Some(1));
+        assert_eq!(PyJson::parse(&text).unwrap().dumps(Some(1)), text);
     }
 }

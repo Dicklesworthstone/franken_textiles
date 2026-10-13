@@ -91,8 +91,8 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Cutter SVGs and report | 03 §7 | present | `cutter.rs`: outlines within 0.05 mm as regions, the same report and manifest entry |
 | GarmentCode JSON | 03 §7 | present | `gc.rs`: byte-identical to the reference's on TESTBODICE, ROBUST and the 92 cm fez, bolero and trousers; `check_garmentcode` (`tests/export_gc.rs`) |
 | Tajima DST embroidery files | 03 §7 | present | `dst.rs`: byte-identical to the reference's (TESTBODICE fronts, braided bolero), README equal; `check_dst` reproduces the reference checker and catches a shifted braid (`tests/export_dst.rs`) |
-| Export manifest | 03 §7 | missing | |
-| Acceptance checks (51) | 03 §8 | partial | the SVG and PDF checks (`checks.rs`): pass on ftx's files; on the reference's PDFs the PDF checker gives exactly its 294 items; mutations fail exactly their check; DXF, HPGL, cutter, GarmentCode and DST checks to come (FTX-17) |
+| Export manifest | 03 §7 | present | `all.rs` `export_all`: the reference's manifest line for line (numbers within 0.05 mm) on TESTBODICE, ROBUST and the 92 cm bolero with and without soutache (`tests/export_all.rs`) |
+| Acceptance checks (51) | 03 §8 | present | `checks.rs`, `check_files`: every check; on the reference's files exactly its items; over ftx's exports the spec's goldens (146/150/125/183) all passing; mutations (transform, sub-group, viewBox, paper, restitch, tile cover, shifted braid, missing file) fail exactly their check |
 
 ## Tracing (`ftx-trace`, spec 04 §10)
 

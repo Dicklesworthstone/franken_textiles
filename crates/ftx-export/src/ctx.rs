@@ -28,6 +28,10 @@ pub struct ExportOptions {
     pub keep_blank: bool,
     /// Seam allowance override (mm).
     pub sa: Option<f64>,
+    /// HPGL turned 90°.
+    pub hpgl_rotate90: bool,
+    /// HPGL mirrored.
+    pub hpgl_mirror: bool,
     /// Creation time (`YYYY-MM-DDTHH:MM`) for file dates and the manifest; the pattern's `meta.created` when
     /// `None`.
     pub created: Option<String>,
@@ -42,6 +46,8 @@ impl Default for ExportOptions {
             layout_width: None,
             keep_blank: false,
             sa: None,
+            hpgl_rotate90: false,
+            hpgl_mirror: false,
             created: None,
         }
     }
@@ -82,14 +88,14 @@ impl<'a> Ctx<'a> {
     /// The context of a pattern.
     ///
     /// # Errors
-    /// `invalid_document` for a pattern traced in pixels (`meta.scale_status` UNSCALED): every file claims true
+    /// `unscaled` for a pattern traced in pixels (`meta.scale_status` UNSCALED): every file claims true
     /// size.
     pub fn new(pattern: &'a Pattern, opts: ExportOptions) -> Result<Self, Refusal> {
         let raw = pattern.raw();
         let meta = &raw["meta"];
         if meta["scale_status"] == "UNSCALED" {
             return Err(Refusal::new(
-                RefusalCode::InvalidDocument,
+                RefusalCode::Unscaled,
                 "pattern is UNSCALED (1 unit = 1 px of the traced sheet): run `vectorize scale-fit` before \
                  exporting; its PDFs and machine files would be printed and cut at the wrong size",
             ));

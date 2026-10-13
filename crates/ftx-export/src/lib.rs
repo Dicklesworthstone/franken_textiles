@@ -5,6 +5,7 @@
 //! Frame: millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 #![forbid(unsafe_code)]
 
+pub mod all;
 pub mod checks;
 pub mod ctx;
 pub mod cutter;
@@ -23,6 +24,7 @@ pub mod text;
 pub mod union;
 mod xml;
 
+pub use all::{ExportSet, check_files, export_all, read_dir_files};
 pub use checks::{
     CheckItem, check_dst, check_dxf, check_flat_dxf, check_garmentcode, check_hpgl, check_pdf,
     check_svg, pdf_objects, svg_cut_points,

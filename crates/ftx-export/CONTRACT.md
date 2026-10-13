@@ -3,8 +3,8 @@
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
 number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the
 master SVG (§7.1), the PDFs (§7.2–7.6), the DXFs (§7.7–7.8), HPGL (§7.9), the cutter files (§7.10),
-GarmentCode (§7.11), the soutache DST files (§7.12), the manifest's piece reference (§7.13) and their acceptance
-checks (§8). The manifest file and the export/check orchestration follow.
+GarmentCode (§7.11), the soutache DST files (§7.12), the manifest (§7.13), every acceptance check (§8) and the
+orchestration of both (`export_all`, `check_files`). The `ftx export` / `ftx check` commands are FTX-18.
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
@@ -136,6 +136,16 @@ the README. The record encoder matches the spec's goldens and round-trips every 
 `check_dst` reproduces the reference checker's 140 items (with and without the pattern's braid lines) and catches
 the spec's braid shifted 4 mm (on-braid fails, lengths pass).
 
+**Everything, end to end** (`all.rs`, §1.3, §7.13, §8.1). `export_all` makes every target in the reference's
+order and the manifest (`schema`, `style`, `size`, `created`, `source_schema`, `files` in target order, `pieces`,
+`master`, `hpgl`; written like Python's `json.dumps(indent=1)`); `check_files` runs the checks over a set of files
+in the reference's order (DXFs, master SVG, PDFs, cutter SVGs, HPGL, GarmentCode, DSTs; with the pattern the
+sew references recomputed and the braid lines checked), a missing listed file a failed `file.missing` item (the
+reference raises, plan §12); `read_dir_files` reads an output directory. Against `all.json` (TESTBODICE, ROBUST,
+the 92 cm bolero with and without soutache): the same files, the same manifest line for line (numbers within
+0.05 mm), and the same checks in the same order, all passing, as many as the spec's goldens (TESTBODICE 146, 150
+with the pattern; ROBUST 125; the braided bolero 183 with the pattern; the plain one 128).
+
 **Checks** (`checks.rs`, `xml.rs`, §8). `check_svg`: `svg.no_transform`, `svg.mm_units_viewbox`,
 `svg.piece_subgroups` (master) or `cutter.single_closed_path` (cutter), with the reference's details, reading
 the file back with a small XML reader. They pass on all 25 of ftx's and the reference's master SVGs, and the
@@ -151,8 +161,9 @@ a wrong paper, master vertices 1 mm off and a master vertex off every tile each 
 exactly the reference checker's 113 items on its HPGL and cutter files and pass on ftx's.
 
 **Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve, a seam allowance
-outline without area or a pattern traced in pixels; `out_of_range` for a projector page over 200 in.
+outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` for a projector page over
+200 in; `io` for an unreadable output directory.
 
 **No claims.** GEOS's exact vertex lists for union outlines (its ring starts where its overlay starts and
-its sliver clean moves points by up to 1e-4 mm); the reference's main label anchors; zlib's compressed bytes; the targets after §7.6, the manifest file and the
-other checks.
+its sliver clean moves points by up to 1e-4 mm); the reference's main label anchors; zlib's compressed bytes; the reference's DXF template; a check that raises
+on a missing file.

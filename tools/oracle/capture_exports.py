@@ -18,6 +18,9 @@
                            flat DXFs (clocks and random ids fixed), GarmentCode, the soutache DSTs (hex) and README, the manifest and the reference checker's HPGL,
                            cutter, SVG, DXF, GarmentCode and DST items (DST also with the pattern reference), for TESTBODICE, ROBUST, the 92 cm fez,
                            bolero and trousers
+    OUT_DIR/all.json       export all + check, end to end: the file list, the manifest and the reference checker's
+                           report without and with the pattern for TESTBODICE, ROBUST and the 92 cm bolero with and
+                           without soutache
     OUT_DIR/outlines.json  seam-allowance cut outlines (ring and method), sew rings and edge breaks of every
                            piece as drafted and of every instance, for the spec's fixture patterns (TESTBODICE,
                            ROBUST, the single pieces) and the drafted garments of tests/fixtures/oracle/pattern
@@ -41,7 +44,7 @@ from pathlib import Path
 import numpy as np
 
 SCHEMA = "ftx-oracle/1"
-FILES = ("export.py", "pattern_model.py", "tests/test_export.py")
+FILES = ("export.py", "pattern_model.py", "tests/test_export.py", "drafting.py", "measurements.py")
 DRAFTS = Path(__file__).resolve().parents[2] / "tests/fixtures/oracle/pattern/drafts.json"
 
 
@@ -308,6 +311,34 @@ def main(argv=None) -> int:
     path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "export", "fixture": "targets", "meta": meta,
                                 "cases": tcases}, separators=(",", ":"), ensure_ascii=False) + "\n")
     print(f"wrote {len(tcases)} HPGL/cutter/manifest cases to {path}")
+
+    # ------------------------------------------------------------------ export all + check, end to end
+    import drafting
+    import measurements
+    plain = drafting.PROGRAMS["zouave_bolero"](measurements.reference_wearer(920.0, 30.0), {"soutache": False})[0]
+    acases = []
+    for cid, doc in (("testbodice", by_id["testbodice"]), ("robust", by_id["robust"]),
+                     ("bolero920", by_id["zouave_bolero-920"]), ("bolero920_plain", json.loads(json.dumps(plain)))):
+        with tempfile.TemporaryDirectory() as tmp:
+            ppath = Path(tmp) / "in" / "pattern.json"
+            ppath.parent.mkdir()
+            ppath.write_text(json.dumps(doc))
+            outd = Path(tmp) / "out"
+            X.export_all(pm.Pattern(json.loads(json.dumps(doc))), outd, created="2026-10-11T12:00")
+            files = sorted(str(q.relative_to(outd)) for q in outd.rglob("*") if q.is_file())
+            manifest = next(outd.glob("*_export_manifest.json")).read_text()
+            plain_rep = X.check_dir(outd)
+            ref_rep = X.check_dir(outd, ppath)
+        acases.append({"id": cid, "input": {"pattern": doc, "created": "2026-10-11T12:00"},
+                       "output": {"files": files, "manifest": manifest, "checks": plain_rep.items,
+                                  "checks_with_pattern": ref_rep.items}})
+    path = args.out_dir / "all.json"
+    path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "export", "fixture": "all", "meta": meta,
+                                "cases": acases}, separators=(",", ":"), ensure_ascii=False) + "\n")
+    print(f"wrote {len(acases)} export-all cases to {path}: " + ", ".join(
+        f"{c['id']} {sum(i['ok'] for i in c['output']['checks'])}/{len(c['output']['checks'])} and "
+        f"{sum(i['ok'] for i in c['output']['checks_with_pattern'])}/{len(c['output']['checks_with_pattern'])}"
+        for c in acases))
     return 0
 
 
