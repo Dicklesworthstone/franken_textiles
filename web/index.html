@@ -132,6 +132,20 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     <details><summary>Seam walk and truing</summary><div class="scroll"><table id="resSeams"></table></div></details>
     <details><summary>Export checks</summary><div id="resChecks"></div></details>
     <details><summary>Solved drafting values</summary><pre id="resSolved"></pre></details>
+    <div id="foldBox" class="hidden">
+      <h2 style="margin-top:14px">Fold it up on a fitted body</h2>
+      <p class="mut">Sews and drapes this pattern on an Anny body fitted to the measurements above, as
+        <code>ftx drape</code> does (cloth self-contact at Blender's 2 mm). It needs the converted body model,
+        <code>anny-0.6.1-default.ftxbody</code> (about 150 MB, made by FrankenTextiles'
+        <code>tools/body-model/convert_anny.py</code>); the file stays in this page. A bolero takes about half a
+        minute, trousers a minute or two.</p>
+      <p class="row"><label>Body model <input type="file" id="bodyFile" accept=".ftxbody"></label>
+        <label><input type="checkbox" id="selfContact" checked> cloth self-contact</label>
+        <button id="foldGo" disabled>Fold it up</button></p>
+      <pre id="foldLog" class="mut" style="white-space:pre-wrap;max-height:9em;overflow:auto"></pre>
+      <p id="foldSummary"></p>
+      <iframe id="foldView" class="hidden" title="the fold-up" style="width:100%;height:560px;border:1px solid var(--line);border-radius:8px"></iframe>
+    </div>
   </section>
   <section id="errorBox" class="hidden err"><h2>Something went wrong</h2><pre id="errorText" style="white-space:pre-wrap"></pre>
     <details id="errorDetailBox" class="hidden"><summary>Details</summary><pre id="errorDetail" style="white-space:pre-wrap;font-size:12px"></pre></details></section>
@@ -146,6 +160,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     set(k, v) { try { localStorage.setItem("fab-wb-" + k, JSON.stringify(v)); } catch (e) { /* private window */ } },
   };
   let info = {}, program = store.get("program", "zouave_bolero"), fields = [], urls = [], ready = false;
+  let foldable = false, bodyLoaded = false;
   const worker = new Worker(new URL("worker.js", location.href), { type: "module" });
   const status = (t) => { $("status").textContent = t; };
   const human = (n) => n.replace(/_deg$/, "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
@@ -299,11 +314,31 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     else if (msg.type === "result") {
       $("go").disabled = false; status("Done.");
       renderResult(msg.res, msg.blobs);
+      // a garment with fold-up placements can be draped here once the body model is loaded
+      foldable = !!msg.res.basis && !String(msg.res.basis.sim).startsWith("not applicable");
+      $("foldBox").classList.toggle("hidden", !foldable);
+      $("foldGo").disabled = !(foldable && bodyLoaded);
+      finished();
+    } else if (msg.type === "bodyReady") {
+      bodyLoaded = true; $("foldGo").disabled = !foldable; status("Body model loaded.");
+    } else if (msg.type === "foldProgress") {
+      $("foldLog").textContent += msg.text + "\n"; $("foldLog").scrollTop = $("foldLog").scrollHeight;
+    } else if (msg.type === "folded") {
+      $("foldGo").disabled = false; status("Folded.");
+      const r = msg.report, gating = r.gating || [], advisory = (r.flags || []).filter((f) => !gating.includes(f));
+      $("foldSummary").innerHTML = `<b>${gating.length ? "Gating flags" : r.settled ? "Settled, no gating flag" : "Not settled"}</b>`
+        + (gating.length ? "<br>" + gating.map(esc).join("<br>") : "")
+        + (advisory.length ? `<br><span class="mut">${advisory.map(esc).join("<br>")}</span>` : "");
+      const u = URL.createObjectURL(new Blob([msg.viewer], { type: "text/html" })); urls.push(u);
+      const ru = URL.createObjectURL(new Blob([JSON.stringify(r, null, 2)], { type: "application/json" })); urls.push(ru);
+      $("foldSummary").innerHTML += `<br><a download="fold_viewer.html" href="${u}">fold_viewer.html</a> · <a download="sim_report.json" href="${ru}">sim_report.json</a>`;
+      $("foldView").src = u; $("foldView").classList.remove("hidden");
       finished();
     } else if (msg.type === "error") {
       status("");
       if (ready) $("go").disabled = false;
       else $("go").textContent = "Could not load";             // no module to run: keep it disabled
+      $("foldGo").disabled = !(foldable && bodyLoaded);
       showError(msg.message, msg.detail);
     }
   };
@@ -334,6 +369,18 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       status("Drafting, checking and exporting…");
       worker.postMessage({ type: "run", req });
     } catch (e) { $("go").disabled = false; showError(e.message); }
+  });
+  $("bodyFile").addEventListener("change", async () => {
+    const f = $("bodyFile").files[0];
+    if (!f) return;
+    status("Reading the body model…");
+    const buf = await f.arrayBuffer();
+    worker.postMessage({ type: "body", bytes: buf }, [buf]);
+  });
+  $("foldGo").addEventListener("click", () => {
+    $("foldGo").disabled = true; $("foldLog").textContent = ""; $("foldSummary").textContent = "";
+    status("Fitting the body, sewing and draping…");
+    worker.postMessage({ type: "fold", selfContactMm: $("selfContact").checked ? 2 : 0 });
   });
   worker.postMessage({ type: "init", pkg: PKG });
 })();

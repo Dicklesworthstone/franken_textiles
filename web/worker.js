@@ -1,6 +1,9 @@
-// FrankenTextiles in a worker: drafting and exports take a second or two and must not freeze the page. It
-// answers the page's three messages (init, fields, run) as the Pyodide worker running webapp.py did.
+// FrankenTextiles in a worker: drafting and exports take a second or two, a fold-up half a minute or more,
+// and neither may freeze the page. It answers the page's messages (init, fields, run, body, fold) as the
+// Pyodide worker running webapp.py answered the first three.
 let ftx = null;
+let body = null; // the parsed body model, kept for every fold-up
+let docs = null; // the last round's pattern, measurements and fit spec (JSON text)
 
 const pad = (n) => String(n).padStart(2, "0");
 function clock() {
@@ -9,6 +12,11 @@ function clock() {
   const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   return { today, created: `${today}T${pad(d.getHours())}:${pad(d.getMinutes())}` };
 }
+
+// the drape's progress lines, called from inside the module while it works
+self.ftxProgress = (line) => postMessage({ type: "foldProgress", text: line });
+
+const text = (bytes) => (bytes ? new TextDecoder().decode(bytes) : null);
 
 onmessage = async (ev) => {
   const msg = ev.data;
@@ -31,8 +39,26 @@ onmessage = async (ev) => {
       const blobs = {};
       if (res.zip) blobs.zip = round.zip();
       for (const f of res.files || []) blobs[f.name] = round.file(f.name);
+      docs = res.status === "BLOCKED" ? null : {
+        pattern: text(round.file("pattern.json")),
+        measurements: text(round.file("measurements.json")),
+        fit: text(round.file("fit_spec.json")),
+      };
       round.free();
       return postMessage({ type: "result", res, blobs }, Object.values(blobs).map((b) => b.buffer));
+    }
+    if (msg.type === "body") {
+      if (body) body.free();
+      body = new ftx.WebBody(new Uint8Array(msg.bytes));
+      return postMessage({ type: "bodyReady" });
+    }
+    if (msg.type === "fold") {
+      if (!body || !docs) throw new Error("load the body model and run a round first");
+      const fold = ftx.fold_up(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm);
+      const report = JSON.parse(fold.report());
+      const viewer = fold.viewer();
+      fold.free();
+      return postMessage({ type: "folded", report, viewer });
     }
   } catch (e) {
     const full = String((e && e.message) || e).trim();

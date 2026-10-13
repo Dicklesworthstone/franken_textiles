@@ -1,9 +1,10 @@
 //! The `wasm-bindgen` boundary (wasm32 only): JSON text in and out, files as bytes. The page's worker calls
-//! `program_info()`, `form_fields(args)` and `run(req)` as it called `webapp.py` under Pyodide.
+//! `program_info()`, `form_fields(args)` and `run(req)` as it called `webapp.py` under Pyodide, then
+//! `WebBody(bytes)` and `fold_up(body, …)` for the fold-up on a fitted body.
 
 use wasm_bindgen::prelude::*;
 
-use crate::page;
+use crate::{fold, page};
 
 /// `{program: {label, style}}` as JSON text.
 #[wasm_bindgen]
@@ -79,4 +80,80 @@ pub fn run(req: &str, today: &str, created: &str) -> Result<WebRound, JsError> {
     page::run(req, today, created)
         .map(|inner| WebRound { inner })
         .map_err(|e| JsError::new(&e))
+}
+
+#[wasm_bindgen]
+extern "C" {
+    /// The worker's `self.ftxProgress(line)`: the drape's progress lines while it runs.
+    #[wasm_bindgen(js_name = ftxProgress)]
+    fn ftx_progress(line: &str);
+}
+
+/// A converted body model (`.ftxbody`), parsed once and kept for every fold-up.
+#[wasm_bindgen]
+pub struct WebBody {
+    inner: ftx_body::AnnyModel,
+}
+
+#[wasm_bindgen]
+impl WebBody {
+    /// Parses the model file's bytes.
+    ///
+    /// # Errors
+    /// Not a converted model, or a malformed one.
+    #[wasm_bindgen(constructor)]
+    pub fn new(bytes: &[u8]) -> Result<WebBody, JsError> {
+        fold::load_body(bytes)
+            .map(|inner| WebBody { inner })
+            .map_err(|e| JsError::new(&e))
+    }
+}
+
+/// A finished fold-up: the fit report and the viewer page.
+#[wasm_bindgen]
+pub struct WebFold {
+    inner: fold::Fold,
+}
+
+#[wasm_bindgen]
+impl WebFold {
+    /// `sim_report.json`'s content as JSON text.
+    #[must_use]
+    pub fn report(&self) -> String {
+        self.inner.report.to_string()
+    }
+
+    /// The fold-up viewer page (HTML).
+    #[must_use]
+    pub fn viewer(&self) -> String {
+        self.inner.viewer.clone()
+    }
+}
+
+/// Drapes the round's pattern on `body` fitted to its measurements (all JSON text, as the round wrote
+/// them); `self_contact_mm` > 0 turns on cloth self-contact at that thickness.
+///
+/// # Errors
+/// Bad JSON, a tape the fit cannot use, a pattern the drape refuses.
+#[wasm_bindgen]
+pub fn fold_up(
+    body: &WebBody,
+    pattern: &str,
+    measurements: &str,
+    fit_spec: &str,
+    self_contact_mm: f64,
+) -> Result<WebFold, JsError> {
+    let parse = |s: &str| -> Result<serde_json::Value, JsError> {
+        serde_json::from_str(s).map_err(|e| JsError::new(&e.to_string()))
+    };
+    fold::fold_up(
+        &body.inner,
+        &parse(pattern)?,
+        &parse(measurements)?,
+        &parse(fit_spec)?,
+        self_contact_mm,
+        ftx_progress,
+    )
+    .map(|inner| WebFold { inner })
+    .map_err(|e| JsError::new(&e))
 }

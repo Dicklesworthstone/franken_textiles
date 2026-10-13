@@ -25,12 +25,26 @@ validation, readiness, exports, table, solved, title, the key files) and every d
 to 1e-9 relative); the exports' bytes are the exporters' own (their fixtures). Style defaults list their keys
 alphabetically (the drafting programs return sorted maps); the reference lists them in definition order.
 
+**The fold-up.** `fold` is `ftx drape` without files: `load_body(bytes)` reads a converted model the page
+was given (`.ftxbody`, not verified array by array, as the CLI loads it), and `fold_up(model, pattern,
+measurements, fit_spec, self_contact_mm, progress)` fits Anny to the tape in the drape pose, trims the
+collision skin, sews and drapes (self-contact at `self_contact_mm` when positive, the skill's 2 mm), and
+returns the fit report (`sim_report.json` without the CLI's `pattern`, `measurements_sha256`, `body` and
+`wall_s`) and the viewer page. `web` exposes `WebBody(bytes)`, `fold_up(body, pattern, measurements, fit,
+mm)` → `WebFold {report(), viewer()}`, and calls the worker's `self.ftxProgress(line)` with the drape's
+progress lines.
+
 **The page.** `web/index.html` is the skill's `browser/index.html` with its Pyodide worker replaced by
 `web/worker.js` (a module worker loading `web/pkg`, built by `tools/build_web.sh`: release wasm32 build plus
-`wasm-bindgen --target web`, 2.1 MB). In headless Chromium a bolero round (draft, checks, every export, the
-zip) takes about a second; the tape form, the fez, NOT_READY gates and refusals behave as on the Pyodide page.
-The fold-up on a fitted body is not in the page yet (`basis.sim` says the command line runs it, as the
-reference's page does).
+`wasm-bindgen --target web`, 3.2 MB). A round (draft, checks, every export, the zip) takes about a second.
+After a round whose pattern has fold-up placements, the page offers the fold-up: the wearer picks the
+converted model file (145 MB, read in about 0.1 s, kept for later rounds), and the worker drapes the round's
+own `pattern.json`, `measurements.json` and `fit_spec.json`, then shows the flags, the viewer in the page
+and both files to download. `basis.sim` keeps the reference's "not run" text, since the round itself does not
+drape. `tools/check_web.cjs` (Playwright) drives it in headless Chromium: every program's round, an empty
+tape form NOT_READY, a refused stature, and with `--model` both garments folded up (bolero 25 s, trousers
+76–85 s; natively 22 s and 57 s) with viewer pages byte-identical to `ftx drape`'s on the same documents
+(bolero `c8a4ae42…`, trousers `3c5b499e…`), so the drape is bit-identical across native and the browser.
 
 **Error model.** `page` returns the reference's message as a `String` for a request it refuses, and a
 refusal's message for a draft or export the library refuses; `web` turns them into `JsError`s.

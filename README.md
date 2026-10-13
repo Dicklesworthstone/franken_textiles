@@ -28,22 +28,24 @@ is deterministic, testable against known answers, and runs in a browser with not
 
 ## Honest status
 
-**Phase 1.** Six crates have code: `ftx-core` (deterministic maths, geometry kernels), `ftx-body` (the Anny
-body model, poses, landmarks), `ftx-pattern` (the pattern model, structure checks and validation, bit-exact
-with the reference), `ftx-drape` (the garment mesh, start state, cloth solver with body contact and friction,
-fold-up animation, metrics and flags), `ftx-cli` (`ftx validate`, `ftx drape`, `ftx body`, `ftx alter`) and
-`ftx-conformance` (oracle fixtures). The alteration ops are bit-exact with the reference; drafting, exports,
-tracing, the round and the browser build are not ported yet.
+**Status.** Every crate has code: `ftx-core` (deterministic maths, geometry kernels), `ftx-body` (the Anny
+body model, poses, landmarks, tape fitting), `ftx-pattern` (the pattern model, validation, drafting and
+alterations, bit-exact with the reference), `ftx-measure` (the measurement catalogue, priors, fusion and the
+round's gate), `ftx-drape` (the garment mesh, start state, cloth solver with body contact, friction and
+self-contact, fold-up animation, metrics and flags), `ftx-export` (every deliverable and its checks),
+`ftx-trace` (tracing AI pattern sheets), `ftx-cli` (the `ftx` binary), `ftx-wasm` (the browser page) and
+`ftx-conformance` (oracle fixtures). Still to come: the round's re-run semantics, measuring from photos and
+photogrammetry, JPEG/WebP sheets, and the gauntlet.
 
 | Question | Answer |
 |---|---|
 | Is there a design? | **Yes**: [`COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md`](COMPREHENSIVE_PLAN_FOR_THE_DESIGN_OF_FRANKENTEXTILES.md) |
 | Is the reference behaviour specified? | **Yes**: four behaviour specifications extracted from the Python reference by running it, and one for the Anny forward model ([`docs/spec/`](docs/spec/)), about 7,100 lines with fixture cases. The Anny spec was checked by re-implementing the model in NumPy from the text alone (agrees to 2e-15 m) |
-| Is there a Cargo workspace with code? | **Partly**: `ftx-core`, `ftx-body`, `ftx-pattern`, `ftx-measure`, `ftx-drape`, `ftx-export` (every deliverable: master SVG, tiled/copy-shop/projector PDFs, ASTM/AAMA and flat DXF, HPGL, cutter files, GarmentCode, soutache DSTs, the manifest and all 51 acceptance checks), `ftx-trace` (annotate, scale-fit and the round-0 audit of traced sheets; the raster trace itself is next), `ftx-cli` and `ftx-conformance` (tests pass natively and, where run, as wasm under Node); `ftx-wasm` is planned |
-| Can I run it? | **Yes, three commands**: `ftx validate PATTERN --measurements M --fit F` (the reference's validation table and exit codes), `ftx drape PATTERN --measurements M --fit F --out DIR` (an Anny body of the wearer's age and sex fitted to their measurements, the drape, the fit flags, and a self-contained 3D fold-up page) and `ftx body --measurements M --out DIR [--pose seated]` (that body alone as OBJ and JSON). All take `--json`; the fabric-pattern skill runs its fold-ups through `ftx drape` when `ftx` is installed |
+| Is there a Cargo workspace with code? | **Partly**: `ftx-core`, `ftx-body`, `ftx-pattern`, `ftx-measure`, `ftx-drape`, `ftx-export` (every deliverable: master SVG, tiled/copy-shop/projector PDFs, ASTM/AAMA and flat DXF, HPGL, cutter files, GarmentCode, soutache DSTs, the manifest and all 51 acceptance checks), `ftx-trace` (the raster trace of a PNG sheet, annotate, scale-fit and the round-0 audit), `ftx-cli`, `ftx-wasm` (the browser page) and `ftx-conformance` (tests pass natively and, where run, as wasm under Node) |
+| Can I run it? | **Yes**: `ftx draft`, `ftx validate`, `ftx export`, `ftx alter`, `ftx measure`, `ftx trace` and `ftx round` do what the reference's commands do; `ftx drape PATTERN --measurements M --fit F --out DIR` fits an Anny body of the wearer's age and sex to their measurements, drapes the garment, and writes the fit flags and a self-contained 3D fold-up page; `ftx body` writes that body alone. All take `--json` (`ftx --help`). The fabric-pattern skill runs these through `ftx` when it is installed. In a browser: `tools/build_web.sh`, then serve `web/` (draft, checks, measurement gate and every export in about a second; with the converted body model, the fold-up too) |
 | Does the body model work? | **Yes, in Rust**: the Anny forward model matches the Python package on 16 reference bodies (newborn to adult, extremes, local changes, two poses) to 1e-14 m, about 0.3–0.4 ms per body against 7 ms upstream. The drape poses (A-pose 35°/50°, arms up, seated, squat, with a ramp from rest and an optional nappy) match the package to 1e-15 m, and the skin comes out as a checked, closed, outward-wound mesh for contact. It is fitted to a wearer's age, sex, height and weight (or BMI), and to fifteen of their tape measurements (stature; chest, waist, hip, thigh, knee, calf, ankle, upper-arm and wrist girths; waist, crotch and knee heights; arm length; back neck to waist), read the way a tape reads them (convex hulls of body sections, limbs across their own axes), by Levenberg–Marquardt in about two seconds, with priors that let Anny's scanned shape space explain the body before its hand-made blend shapes adjust it; measurements drawn from the model itself are recovered within 0.43 mm. A body fitted to stature alone was 62–75 mm too small round the chest, waist and hip of the 92 cm reference toddler |
-| Does the drape solver exist? | **Yes, and it drapes a drafted garment on a realistic body**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica). Barrier contact on the thickness-offset gap with Coulomb friction passes its own: a ring on a cylinder holds below 2πμT and slides above it, a ring on a cone slides iff tan α > μ, and tight and loose tubes settle at the predicted strain and clearance. Results are bit-identical native and in wasm. The garment mesh and start state match the reference (all 42,003 triangles; pre-sew and relaxation to 1e-12 m), and the drafted bolero and trousers sew and drape on an Anny toddler fitted to the wearer's tape (about 30 seconds and 2.6 minutes on a laptop; pictures below) with no fit flag. Compression is as stiff as tension except in gather zones, as in the reference. An elastic casing is simulated as one: on the trousers an elastic of 0.85, 0.95 or 1.0 × the waist grips the toddler (its friction carries the garment) and one of 1.2 × does not, and the report says so. The metrics and flags match the reference's to the bit on recorded drapes, and the fold-up animation plays in a self-contained page. Self-contact and more speed are next, and the reference still judges fit in Blender |
-| Has anything been benchmarked? | **No**. Every number in the plan is a target or a measurement of the reference |
+| Does the drape solver exist? | **Yes, and it drapes a drafted garment on a realistic body**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica). Barrier contact on the thickness-offset gap with Coulomb friction passes its own: a ring on a cylinder holds below 2πμT and slides above it, a ring on a cone slides iff tan α > μ, and tight and loose tubes settle at the predicted strain and clearance. Results are bit-identical native and in wasm. The garment mesh and start state match the reference (all 42,003 triangles; pre-sew and relaxation to 1e-12 m), and the drafted bolero and trousers sew and drape on an Anny toddler fitted to the wearer's tape (22 and 56 seconds on a laptop with cloth self-contact; pictures below) with no fit flag. In the browser they take 25 and 76–85 seconds and come out bit-identical. Compression is as stiff as tension except in gather zones, as in the reference. An elastic casing is simulated as one: on the trousers an elastic of 0.85, 0.95 or 1.0 × the waist grips the toddler (its friction carries the garment) and one of 1.2 × does not, and the report says so. The metrics and flags match the reference's to the bit on recorded drapes, and the fold-up animation plays in a self-contained page. Cloth self-contact holds layers at Blender's 2 mm |
+| Has anything been benchmarked? | **Timed, not benchmarked**: the drape times above, and a browser round in about a second. The plan's other numbers are targets or measurements of the reference |
 
 The plan is written to be falsifiable: it names kill gates that can stop the body port or the drape solver
 early and fall back to the reference's tools.
@@ -225,10 +227,12 @@ proven otherwise.
 1. **G1 Body**: Rust Anny within 0.05 mm of upstream; fitting recovers synthetic tape targets within 3 mm.
 2. **G2 Drape**: the known-answer tests pass (ring on a cylinder, ring on a cone, ease sweep, elastic ladder,
    armpit wedge, determinism) and real garments settle on fitted bodies within budget. If not, the Blender
-   path stays.
+   path stays. *Passed 2026-10-13* (FEATURE_PARITY, dynamics).
 3. **G3 Port slice**: patterns, validation, drafting and exports pass their fixtures; the skill's round runs
    through `ftx`.
-4. **G4 Browser**: the wasm page reaches parity and drapes a small garment.
+4. **G4 Browser**: the wasm page reaches parity and drapes a small garment. *Passed 2026-10-13*: the page's
+   round equals the reference's on its 25 oracle cases, and the bolero and trousers drape in Chromium
+   bit-identical to `ftx drape` (`tools/check_web.cjs`).
 5. **G5 Gauntlet**: a convergent multi-round parity, physics and surface audit before 1.0.
 
 ---

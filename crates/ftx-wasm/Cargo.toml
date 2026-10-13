@@ -1,6 +1,6 @@
 [package]
 name = "ftx-wasm"
-description = "FrankenTextiles in the browser: the page's round (body, draft, flat checks, measurement gate, exports, zip) behind a thin wasm-bindgen boundary"
+description = "FrankenTextiles in the browser: the page's round (body, draft, flat checks, measurement gate, exports, zip) and the fold-up on a fitted body, behind a thin wasm-bindgen boundary"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,9 @@ homepage.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+ftx-body = { path = "../ftx-body" }
 ftx-core = { path = "../ftx-core" }
+ftx-drape = { path = "../ftx-drape" }
 ftx-export = { path = "../ftx-export" }
 ftx-measure = { path = "../ftx-measure" }
 ftx-pattern = { path = "../ftx-pattern" }
