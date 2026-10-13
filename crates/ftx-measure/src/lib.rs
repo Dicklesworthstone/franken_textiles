@@ -4,6 +4,7 @@
 //! model prediction never become measured evidence merely because their uncertainty is small.
 #![forbid(unsafe_code)]
 
+pub mod body_fit;
 pub mod bundle;
 pub mod camera;
 mod catalogue;
