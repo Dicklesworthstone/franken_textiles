@@ -2,7 +2,7 @@
 
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
 FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx validate`,
-`ftx drape`, `ftx body`, `ftx alter` and `ftx measure`; `round`, `draft`, `export`, `trace`,
+`ftx drape`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export` and `ftx check`; `round`, `draft`, `trace`,
 `viewer` and `report` follow their subsystems.
 
 **Commands.**
@@ -45,6 +45,22 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   overwritten. Serialization completes before file creation; the write is flushed before success.
   This intentional no-clobber exception preserves previous pattern revisions. Impossible seam/cap
   targets are refused before any output is created, not saved as saturated adjustments.
+
+- `ftx export TARGET PATTERN --out DIR [--unfold] [--sa MM] [--mitre-limit N] [--projector-width MM]
+  [--layout-width MM] [--keep-blank-pages] [--hpgl-rotate90] [--hpgl-mirror] [--created YYYY-MM-DDTHH:MM]` with
+  TARGET `svg`, `pdf`, `letter`, `a4`, `copyshop`, `projector`, `dxf`, `astm`, `aama`, `flat-dxf`, `hpgl`,
+  `cutter`, `garmentcode`, `embroidery` or `all`: the reference's `export.py` (spec 03 §1.3) on `ftx-export`.
+  Writes the target's files into DIR and updates `<STYLE>_export_manifest.json` there (an existing manifest
+  keeps its entries and key order, so separate runs share one), printing each file's path. `all` runs every
+  target, then every acceptance check with the pattern, printing `FAIL check [file] detail` lines and
+  `PASS|FAIL: n/m checks`; exit 0, or 2 when a check fails (the reference exits 1). The structure errors are
+  printed to stderr as warnings. A refused target (a pattern traced in pixels: `unscaled`; a projector page
+  over 200 in) writes nothing. Without `--created` or the pattern's `meta.created`, the current UTC minute
+  (the reference uses local time). `ftx export check DIR` is `ftx check DIR`.
+- `ftx check DIR [--pattern-ref PATTERN]`: every acceptance check (spec 03 §8.1) over an export directory,
+  printed as above; exit 0, or 2 when one fails. With the pattern the DXF sew references are recomputed and
+  the DSTs' couching checked against the braid lines. A file the manifest lists but DIR lacks is a failed
+  `file.missing` item (the reference raises); no manifest is a failed `manifest` item.
 
 **Output.** Human text, or with `--json` exactly one JSON envelope on stdout:
 `{"schema": "ftx-cli/1", "command", "ok", "exit", "result"}` or, for refused input,

@@ -24,7 +24,7 @@ pub mod text;
 pub mod union;
 mod xml;
 
-pub use all::{ExportSet, check_files, export_all, read_dir_files};
+pub use all::{ExportSet, Target, check_files, export_all, export_targets, read_dir_files};
 pub use checks::{
     CheckItem, check_dst, check_dxf, check_flat_dxf, check_garmentcode, check_hpgl, check_pdf,
     check_svg, pdf_objects, svg_cut_points,

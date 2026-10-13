@@ -17,6 +17,7 @@
 //! result's to stdout.
 #![forbid(unsafe_code)]
 
+mod export;
 mod measure;
 
 use std::collections::BTreeMap;
@@ -56,6 +57,10 @@ const USAGE: &str = "usage:
   ftx measure fuse FILES... [--no-priors] [--out FILE] [--json]
   ftx measure ready FILES... --garment KIND [--as-of DATE] [--no-priors] [--closed-cuff] [--passes-hip]
       [--nappies|--no-nappies] [--elastic-waist] [--cuff-level knee|calf|ankle] [--cuff-opening] [--out FILE] [--json]
+  ftx export TARGET PATTERN --out DIR [--unfold] [--sa MM] [--mitre-limit N] [--projector-width MM]
+            [--layout-width MM] [--keep-blank-pages] [--hpgl-rotate90] [--hpgl-mirror] [--created YYYY-MM-DDTHH:MM] [--json]
+      TARGET: svg pdf letter a4 copyshop projector dxf astm aama flat-dxf hpgl cutter garmentcode embroidery all
+  ftx check DIR [--pattern-ref PATTERN] [--json]
   ftx --version";
 
 /// Parsed command line: the positional arguments and the `--flag value` options.
@@ -74,7 +79,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         if a == "--json" {
             json = true;
         } else if let Some(name) = a.strip_prefix("--") {
-            if measure::BOOLEAN_OPTIONS.contains(&name) {
+            if measure::BOOLEAN_OPTIONS.contains(&name) || export::BOOLEAN_OPTIONS.contains(&name) {
                 if options
                     .insert(name.to_string(), "true".to_string())
                     .is_some()
@@ -679,6 +684,12 @@ fn main() -> ExitCode {
         Some("body") => emit("body", args.json, cmd_body(&args)),
         Some("alter") => emit("alter", args.json, cmd_alter(&args)),
         Some("measure") => emit("measure", args.json, measure::run(&args)),
+        Some("export") => emit("export", args.json, export::cmd_export(&args)),
+        Some("check") => emit(
+            "check",
+            args.json,
+            export::cmd_check(&args, args.positional.get(1)),
+        ),
         other => emit(
             other.unwrap_or("ftx"),
             args.json,

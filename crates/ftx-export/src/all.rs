@@ -49,84 +49,215 @@ fn ordered(v: &Value, keys: &[&str]) -> PyJson {
     PyJson::Dict(items)
 }
 
-/// Every target in the reference's order (master SVG, tiled PDFs, copy shop, projector, ASTM and AAMA DXF, flat
-/// DXF, HPGL, cutter files, GarmentCode, soutache DSTs) and the manifest, in memory.
+/// An export target (`ftx export <target>`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// The master SVG.
+    Svg,
+    /// Tiled Letter and A4 PDFs.
+    Pdf,
+    /// Tiled Letter only.
+    Letter,
+    /// Tiled A4 only.
+    A4,
+    /// Copy-shop A0 and 36 × 48 in.
+    Copyshop,
+    /// Projector light and dark.
+    Projector,
+    /// ASTM and AAMA DXF.
+    Dxf,
+    /// ASTM DXF only.
+    Astm,
+    /// AAMA DXF only.
+    Aama,
+    /// Flat DXF.
+    FlatDxf,
+    /// HPGL.
+    Hpgl,
+    /// Cutter SVGs and report.
+    Cutter,
+    /// GarmentCode JSON.
+    Garmentcode,
+    /// Soutache DSTs and README.
+    Embroidery,
+}
+
+impl Target {
+    /// Every target, in the order `all` runs them.
+    pub const ALL: [Target; 10] = [
+        Self::Svg,
+        Self::Pdf,
+        Self::Copyshop,
+        Self::Projector,
+        Self::Dxf,
+        Self::FlatDxf,
+        Self::Hpgl,
+        Self::Cutter,
+        Self::Garmentcode,
+        Self::Embroidery,
+    ];
+
+    /// The target of a CLI name (`svg`, `pdf`, `letter`, `a4`, `copyshop`, `projector`, `dxf`, `astm`, `aama`,
+    /// `flat-dxf`, `hpgl`, `cutter`, `garmentcode`, `embroidery`).
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "svg" => Self::Svg,
+            "pdf" => Self::Pdf,
+            "letter" => Self::Letter,
+            "a4" => Self::A4,
+            "copyshop" => Self::Copyshop,
+            "projector" => Self::Projector,
+            "dxf" => Self::Dxf,
+            "astm" => Self::Astm,
+            "aama" => Self::Aama,
+            "flat-dxf" => Self::FlatDxf,
+            "hpgl" => Self::Hpgl,
+            "cutter" => Self::Cutter,
+            "garmentcode" => Self::Garmentcode,
+            "embroidery" => Self::Embroidery,
+            _ => return None,
+        })
+    }
+}
+
+/// The targets' files and the manifest, starting from an existing manifest when given (the reference updates
+/// the one already in the output directory: keys keep their place, new ones are appended, its other files stay
+/// listed).
 ///
 /// # Errors
 /// As the targets (a projector page over 200 in, an unbuildable pattern).
-pub fn export_all(ctx: &Ctx) -> Result<ExportSet, Refusal> {
+pub fn export_targets(
+    ctx: &Ctx,
+    targets: &[Target],
+    existing: Option<PyJson>,
+) -> Result<ExportSet, Refusal> {
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut entries: Vec<(String, PyJson)> = Vec::new();
+    let mut man = match existing {
+        Some(m @ PyJson::Dict(_)) => m,
+        _ => PyJson::Dict(Vec::new()),
+    };
+    man.set("schema", PyJson::str("fabric-pattern-export/1"));
+    man.set("style", PyJson::str(&ctx.style));
+    man.set("size", PyJson::str(&ctx.size));
+    man.set("created", PyJson::str(&ctx.created));
+    man.set(
+        "source_schema",
+        PyJson::from_value(ctx.pattern.raw().get("schema").unwrap_or(&Value::Null)),
+    );
+    if man.get("files").is_none() {
+        man.set("files", PyJson::Dict(Vec::new()));
+    }
+    let pieces = ctx.piece_reference()?;
+    man.set("pieces", pieces.clone());
+    let record = |man: &mut PyJson, key: &str, entry: PyJson| {
+        if let PyJson::Dict(items) = man
+            && let Some((_, f)) = items.iter_mut().find(|(k, _)| k == "files")
+        {
+            f.set(key, entry);
+        }
+    };
     let file_only = |f: &str| PyJson::dict(vec![("file", PyJson::str(f))]);
-    let (svg, master) = master_svg(ctx)?;
-    let master_name = master["file"].as_str().unwrap_or("").to_string();
-    files.push((master_name.clone(), svg.into_bytes()));
-    entries.push(("svg_master".into(), file_only(&master_name)));
     let pdf_keys = [
         "file", "kind", "paper_mm", "cols", "rows", "tiles", "printed", "blank", "pages",
     ];
-    for f in export_tiled(ctx)?
-        .into_iter()
-        .chain(export_copyshop(ctx)?)
-        .chain(export_projector(ctx)?)
-    {
-        entries.push((f.key.clone(), ordered(&f.entry, &pdf_keys)));
-        files.push((f.name, f.bytes));
+    for &t in targets {
+        match t {
+            Target::Svg => {
+                let (svg, master) = master_svg(ctx)?;
+                let name = master["file"].as_str().unwrap_or("").to_string();
+                man.set(
+                    "master",
+                    ordered(
+                        &master,
+                        &["file", "width_mm", "height_mm", "cut_bbox", "fold_mode"],
+                    ),
+                );
+                record(&mut man, "svg_master", file_only(&name));
+                files.push((name, svg.into_bytes()));
+            }
+            Target::Pdf | Target::Letter | Target::A4 | Target::Copyshop | Target::Projector => {
+                let made = match t {
+                    Target::Copyshop => export_copyshop(ctx)?,
+                    Target::Projector => export_projector(ctx)?,
+                    _ => export_tiled(ctx)?
+                        .into_iter()
+                        .filter(|f| match t {
+                            Target::Letter => f.key == "pdf_letter",
+                            Target::A4 => f.key == "pdf_a4",
+                            _ => true,
+                        })
+                        .collect(),
+                };
+                for f in made {
+                    record(&mut man, &f.key, ordered(&f.entry, &pdf_keys));
+                    files.push((f.name, f.bytes));
+                }
+            }
+            Target::Dxf | Target::Astm | Target::Aama => {
+                for astm in [true, false] {
+                    if (t == Target::Astm && !astm) || (t == Target::Aama && astm) {
+                        continue;
+                    }
+                    let (name, text, entry) = export_dxf_astm(ctx, &pieces, astm)?;
+                    record(&mut man, if astm { "dxf_astm" } else { "dxf_aama" }, entry);
+                    files.push((name, text.into_bytes()));
+                }
+            }
+            Target::FlatDxf => {
+                let (name, text, entry) = export_flat_dxf(ctx)?;
+                record(&mut man, "dxf_flat", entry);
+                files.push((name, text.into_bytes()));
+            }
+            Target::Hpgl => {
+                let (name, text, hpgl) =
+                    export_hpgl(ctx, ctx.opts.hpgl_rotate90, ctx.opts.hpgl_mirror)?;
+                man.set("hpgl", hpgl);
+                record(&mut man, "hpgl", file_only(&name));
+                files.push((name, text.into_bytes()));
+            }
+            Target::Cutter => {
+                let (cutter, report_path, report, entry) = export_cutter(ctx)?;
+                for c in cutter {
+                    files.push((c.path, c.text.into_bytes()));
+                }
+                files.push((report_path, report.into_bytes()));
+                record(&mut man, "cutter", entry);
+            }
+            Target::Garmentcode => {
+                let (name, text, entry) = export_garmentcode(ctx)?;
+                record(&mut man, "garmentcode", entry);
+                files.push((name, text.into_bytes()));
+            }
+            Target::Embroidery => {
+                let (dsts, readme) = export_embroidery(ctx)?;
+                for d in dsts {
+                    record(&mut man, &d.key, d.entry);
+                    files.push((d.name, d.bytes));
+                }
+                if let Some((name, text)) = readme {
+                    files.push((name, text.into_bytes()));
+                }
+            }
+        }
     }
-    let pieces = ctx.piece_reference()?;
-    for astm in [true, false] {
-        let (name, text, entry) = export_dxf_astm(ctx, &pieces, astm)?;
-        entries.push((if astm { "dxf_astm" } else { "dxf_aama" }.into(), entry));
-        files.push((name, text.into_bytes()));
-    }
-    let (name, text, entry) = export_flat_dxf(ctx)?;
-    entries.push(("dxf_flat".into(), entry));
-    files.push((name, text.into_bytes()));
-    let (name, text, hpgl) = export_hpgl(ctx, ctx.opts.hpgl_rotate90, ctx.opts.hpgl_mirror)?;
-    entries.push(("hpgl".into(), file_only(&name)));
-    files.push((name, text.into_bytes()));
-    let (cutter, report_path, report, entry) = export_cutter(ctx)?;
-    for c in cutter {
-        files.push((c.path, c.text.into_bytes()));
-    }
-    files.push((report_path, report.into_bytes()));
-    entries.push(("cutter".into(), entry));
-    let (name, text, entry) = export_garmentcode(ctx)?;
-    entries.push(("garmentcode".into(), entry));
-    files.push((name, text.into_bytes()));
-    let (dsts, readme) = export_embroidery(ctx)?;
-    for d in dsts {
-        entries.push((d.key, d.entry));
-        files.push((d.name, d.bytes));
-    }
-    if let Some((name, text)) = readme {
-        files.push((name, text.into_bytes()));
-    }
-    let manifest = PyJson::Dict(vec![
-        ("schema".into(), PyJson::str("fabric-pattern-export/1")),
-        ("style".into(), PyJson::str(&ctx.style)),
-        ("size".into(), PyJson::str(&ctx.size)),
-        ("created".into(), PyJson::str(&ctx.created)),
-        (
-            "source_schema".into(),
-            PyJson::from_value(ctx.pattern.raw().get("schema").unwrap_or(&Value::Null)),
-        ),
-        ("files".into(), PyJson::Dict(entries)),
-        ("pieces".into(), pieces),
-        (
-            "master".into(),
-            ordered(
-                &master,
-                &["file", "width_mm", "height_mm", "cut_bbox", "fold_mode"],
-            ),
-        ),
-        ("hpgl".into(), hpgl),
-    ]);
     files.push((
         format!("{}_export_manifest.json", ctx.style),
-        (manifest.dumps(Some(1)) + "\n").into_bytes(),
+        (man.dumps(Some(1)) + "\n").into_bytes(),
     ));
-    Ok(ExportSet { files, manifest })
+    Ok(ExportSet {
+        files,
+        manifest: man,
+    })
+}
+
+/// Every target in the reference's order (master SVG, tiled PDFs, copy shop, projector, ASTM and AAMA DXF, flat
+/// DXF, HPGL, cutter files, GarmentCode, soutache DSTs) and a fresh manifest, in memory.
+///
+/// # Errors
+/// As the targets.
+pub fn export_all(ctx: &Ctx) -> Result<ExportSet, Refusal> {
+    export_targets(ctx, &Target::ALL, None)
 }
 
 /// The acceptance checks over a set of files (relative path → bytes), in the reference's order (§8.1): the DXFs,
