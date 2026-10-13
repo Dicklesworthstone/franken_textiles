@@ -21,9 +21,10 @@ use ftx_body::{
     AnnyModel, BodyFrames, FREE, Pose, TAPE_FIELDS, Wearer, default_model_path, fit_tape,
     pose_deltas, skin_mesh, tape_targets, trimmed_skin,
 };
+use ftx_core::Vec3;
 use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
-use ftx_drape::animation::{mesh_map, pc2};
+use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
 use ftx_drape::run::{DrapeBody, DrapeOptions, drape, viewer};
 use ftx_pattern::{Measurements, Pattern, format_table, validate};
 use serde_json::{Value, json};
@@ -60,6 +61,23 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         options,
         json,
     })
+}
+
+/// A Wavefront OBJ (metres; `v x y z [r g b]`, 1-based faces).
+fn obj(vertices: &[Vec3], faces: &[[usize; 3]], colours: Option<&[[f64; 3]]>) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::new();
+    for (i, v) in vertices.iter().enumerate() {
+        let _ = write!(s, "v {} {} {}", v.x, v.y, v.z);
+        if let Some(c) = colours.and_then(|c| c.get(i)) {
+            let _ = write!(s, " {} {} {}", c[0], c[1], c[2]);
+        }
+        s.push('\n');
+    }
+    for f in faces {
+        let _ = writeln!(s, "f {} {} {}", f[0] + 1, f[1] + 1, f[2] + 1);
+    }
+    s
 }
 
 fn bad_input(m: impl Into<String>) -> Refusal {
@@ -234,6 +252,23 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     )?;
     let html = viewer(&run, &pattern, &body, VIEWER_TEMPLATE).map_err(bad_input)?;
     write("fold_viewer.html", html.as_bytes())?;
+    // the last frame and the body as OBJ, for renders outside (the skill's Blender stills): the
+    // garment once with its seam colours and once with its strain colours (spec 04 §9.4)
+    let mesh = &run.scene.mesh;
+    let last = run.fold.frames.last().map_or(&[][..], Vec::as_slice);
+    let style = pattern.raw()["style"].as_str().unwrap_or("");
+    write(
+        "garment.obj",
+        obj(last, &mesh.faces, Some(&seam_colours(mesh, style))).as_bytes(),
+    )?;
+    write(
+        "garment_strain.obj",
+        obj(last, &mesh.faces, Some(&strain_colours(mesh, last))).as_bytes(),
+    )?;
+    write(
+        "body.obj",
+        obj(&full.vertices, &full.triangles, None).as_bytes(),
+    )?;
     let (gating, advisory) = (run.gating(), run.advisory());
     let mut text = format!(
         "fit: {} gating, {} advisory, {}\n",
@@ -259,7 +294,8 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "gating": gating,
             "advisory": advisory,
             "settled": report["settled"],
-            "files": ["sim_report.json", "fold.pc2", "mesh_map.json", "fold_viewer.html"],
+            "files": ["sim_report.json", "fold.pc2", "mesh_map.json", "fold_viewer.html",
+                      "garment.obj", "garment_strain.obj", "body.obj"],
         }),
         code,
         text,
@@ -329,6 +365,18 @@ mod tests {
         assert_eq!(a.options["sew"], "3");
         assert!(a.json);
         assert!(parse(&["drape".to_string(), "--out".to_string()]).is_err());
+    }
+
+    #[test]
+    fn obj_with_and_without_colours() {
+        let v = [Vec3::new(0.0, 0.5, 1.0), Vec3::new(1.0, 0.0, 0.0)];
+        let f = [[0, 1, 0]];
+        assert_eq!(obj(&v, &f, None), "v 0 0.5 1\nv 1 0 0\nf 1 2 1\n");
+        let c = [[1.0, 0.0, 0.25], [0.5, 0.5, 0.5]];
+        assert_eq!(
+            obj(&v, &f, Some(&c)),
+            "v 0 0.5 1 1 0 0.25\nv 1 0 0 0.5 0.5 0.5\nf 1 2 1\n"
+        );
     }
 
     #[test]

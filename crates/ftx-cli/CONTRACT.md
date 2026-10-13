@@ -15,8 +15,10 @@ follow their subsystems.
   (`ftx_body::fit_tape`; `Pose::drape`, hands and feet left out of contact), then
   `ftx_drape::run::drape`, writing `sim_report.json` (the metrics and flags plus run fields: pattern path
   as given, measurements SHA-256, wall time, and `body` with the fit's target and body value per
-  measurement, its free parameters and every tape reading), `fold.pc2`, `mesh_map.json` and
-  `fold_viewer.html`. Exit 0 when no gating flag, 2 with gating flags. Without `--fit`, no girth landmarks
+  measurement, its free parameters and every tape reading), `fold.pc2`, `mesh_map.json`,
+  `fold_viewer.html`, and the last frame as OBJ for renders elsewhere (metres, z up): `garment.obj` with
+  per-vertex seam colours and `garment_strain.obj` with strain colours (`v x y z r g b`, spec 04 §9.4),
+  and `body.obj` (the full posed skin). Exit 0 when no gating flag, 2 with gating flags. Without `--fit`, no girth landmarks
   are read.
 
 **Output.** Human text, or with `--json` exactly one JSON envelope on stdout:
