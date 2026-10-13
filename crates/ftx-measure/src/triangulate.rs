@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{camera::Camera, invalid};
 
+pub mod uncertainty;
+
 /// Decoded presentation time identifies a frame, never its ordinal in a decoder's output.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
