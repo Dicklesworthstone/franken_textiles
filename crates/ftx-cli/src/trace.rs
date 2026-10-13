@@ -8,7 +8,51 @@ use ftx_pattern::doc::PatternDoc;
 use ftx_trace::{AuditOptions, OValue, annotate, audit, fit_scale, parse_length};
 use serde_json::{Value, json};
 
-use super::{Args, bad_input, known_options, make_dir, required};
+use super::{Args, bad_input, known_options, make_dir, required, workspace};
+
+fn unused(path: &Path) -> Result<(), Refusal> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Err(bad_input(format!(
+            "{} already exists; choose a new review output",
+            path.display()
+        ))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(workspace::io_error(path, e)),
+    }
+}
+
+fn save_new(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        make_dir(parent)?;
+    }
+    workspace::write_new(path, bytes)
+}
+
+fn publish(out: &Path, files: &[(String, Vec<u8>)]) -> Result<(), Refusal> {
+    // Compute every artifact before publication. Existing unrelated files in the destination
+    // are allowed, but no artifact or dangling link may be replaced. JSON is written last.
+    if std::fs::symlink_metadata(out).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(bad_input("review output directory must not be a symlink"));
+    }
+    for (name, _) in files {
+        unused(&out.join(name))?;
+    }
+    for (name, bytes) in files {
+        save_new(&out.join(name), bytes)?;
+    }
+    Ok(())
+}
+
+fn source_image(args: &Args) -> Result<Option<ftx_trace::raster::Bgr>, Refusal> {
+    args.options
+        .get("image")
+        .map(|p| {
+            // Never follow a filename embedded in pattern metadata. Only --image authorizes I/O.
+            let bytes = std::fs::read(p).map_err(|e| workspace::io_error(Path::new(p), e))?;
+            ftx_trace::raster::image::load_png_with_limit(&bytes, 16_000_000).map_err(bad_input)
+        })
+        .transpose()
+}
 
 fn read_text(path: &str) -> Result<String, Refusal> {
     std::fs::read_to_string(path).map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))
@@ -37,14 +81,32 @@ fn input<'a>(args: &'a Args, command: &str, what: &str) -> Result<&'a str, Refus
 /// `ftx annotate DRAFT --names N --out P`: `names.json` applied to a traced draft; the result passes the
 /// structure check. Prints the output path, the piece and seam ids and the annotation notes.
 pub(super) fn cmd_annotate(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(args, "annotate", &["names", "out"])?;
+    known_options(args, "annotate", &["names", "out", "overlay", "image"])?;
+    if args.options.contains_key("image") && !args.options.contains_key("overlay") {
+        return Err(bad_input("annotate --image requires --overlay PNG"));
+    }
     let draft = read_doc(input(args, "annotate", "a traced draft")?)?;
     let names_path = required(args, "names")?;
     let out = required(args, "out")?;
     let names: OValue = serde_json::from_str(&read_text(names_path)?)
         .map_err(|e| bad_input(format!("{names_path}: {e}")))?;
     let data = annotate(&draft, &names).map_err(bad_input)?;
-    write_json(Path::new(out), &data)?;
+    if let Some(path) = args.options.get("overlay") {
+        unused(Path::new(out))?;
+        unused(Path::new(path))?;
+        if Path::new(out) == Path::new(path) {
+            return Err(bad_input("pattern and overlay must be different files"));
+        }
+        let image = source_image(args)?;
+        let png = ftx_trace::review::overlay(&data, image.as_ref())?;
+        // Serialize the typed document directly: to_value would sort the ordered vertex map.
+        let mut bytes = serde_json::to_vec_pretty(&data).map_err(|e| bad_input(e.to_string()))?;
+        bytes.push(b'\n');
+        save_new(Path::new(path), &png)?;
+        save_new(Path::new(out), &bytes)?;
+    } else {
+        write_json(Path::new(out), &data)?;
+    }
     let pieces: Vec<&str> = data.pieces.iter().map(|p| p.id.as_str()).collect();
     let seams: Vec<String> = data
         .seams()
@@ -152,7 +214,14 @@ pub(super) fn cmd_audit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "audit",
-        &["out", "labels", "tol-mm", "median-seam-mm", "label-tol"],
+        &[
+            "out",
+            "labels",
+            "tol-mm",
+            "median-seam-mm",
+            "label-tol",
+            "image",
+        ],
     )?;
     let doc = read_doc(input(args, "audit", "a pattern")?)?;
     let out = Path::new(required(args, "out")?);
@@ -170,9 +239,17 @@ pub(super) fn cmd_audit(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ..AuditOptions::default()
     };
     let report = audit(&doc, labels.as_deref(), &opts);
-    make_dir(out)?;
+    let source = source_image(args)?;
+    let png = ftx_trace::review::audit_image(&doc, &report, source.as_ref())?;
     let file = out.join("round0_audit.json");
-    write_json(&file, &report)?;
+    let picture = out.join("round0_audit.png");
+    publish(
+        out,
+        &[
+            ("round0_audit.png".into(), png),
+            ("round0_audit.json".into(), workspace::json_bytes(&report)?),
+        ],
+    )?;
     let findings: Vec<String> = report["findings"]
         .as_array()
         .into_iter()
@@ -200,7 +277,7 @@ pub(super) fn cmd_audit(args: &Args) -> Result<(Value, i32, String), Refusal> {
         text.push_str(f);
     }
     let result = json!({"summary": report["summary"], "scale_basis": report["scale_basis"],
-                        "findings": findings, "files": [file.display().to_string()]});
+                        "findings": findings, "files": [file.display().to_string(),picture.display().to_string()]});
     Ok((result, if ok { 0 } else { 2 }, text))
 }
 
@@ -241,7 +318,7 @@ fn number<T: std::str::FromStr>(args: &Args, key: &str) -> Result<Option<T>, Ref
 /// [--min-area-frac F] [--erase X,Y,W,H ...] [--invert | --no-invert] [--no-dashes]`: a pattern sheet (PNG)
 /// traced into an UNSCALED draft, the reference's `vectorize.py trace`. Writes `DIR/draft.pattern.json`
 /// (the reference's text) and `DIR/mask.png`, and reports each piece as the reference does; exits 3 when no
-/// piece was found. The overlay and the per-piece label crops are not drawn yet.
+/// piece was found. Review images use the native stroke renderer, not OpenCV's text pixels.
 pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
     use ftx_trace::raster::image::{encode_png_gray, load_png};
     use ftx_trace::{TraceOptions, trace_image};
@@ -270,6 +347,8 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
     )?;
     let image = input(args, "trace", "an image")?;
     let out = Path::new(required(args, "out")?);
+    // A previous labels directory could contain extra pieces from another run.
+    unused(&out.join("labels"))?;
     if args.options.contains_key("invert") && args.options.contains_key("no-invert") {
         return Err(bad_input(
             "argument --no-invert: not allowed with argument --invert",
@@ -327,14 +406,8 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let source = std::fs::canonicalize(image)
         .map_or_else(|_| image.to_string(), |p| p.display().to_string());
     let traced = trace_image(&img, Some(&source), &opts).map_err(bad_input)?;
-    make_dir(out)?;
     let draft = out.join("draft.pattern.json");
     let mask = out.join("mask.png");
-    let io = |p: &Path, e: std::io::Error| {
-        Refusal::new(RefusalCode::Io, format!("{}: {e}", p.display()))
-    };
-    std::fs::write(&draft, traced.pattern.dumps(Some(1)) + "\n").map_err(|e| io(&draft, e))?;
-    std::fs::write(&mask, encode_png_gray(&traced.mask)).map_err(|e| io(&mask, e))?;
     let data = traced.pattern.to_value();
     // each piece's stroke-centre polygon (crop px, y down, closed): what the label crops are cut along
     let px = out.join("trace_px.json");
@@ -352,10 +425,30 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
         })
         .collect();
     let px_doc = json!({"schema": "ftx-trace-px/1", "units": "crop px, y down", "pieces": rings});
-    std::fs::write(&px, px_doc.to_string() + "\n").map_err(|e| io(&px, e))?;
-
     let doc: PatternDoc =
         serde_json::from_value(data.clone()).map_err(|e| bad_input(e.to_string()))?;
+    let overlay = out.join("overlay.png");
+    let label_dir = out.join("labels");
+    let mut artifacts = vec![
+        ("mask.png".into(), encode_png_gray(&traced.mask)),
+        (
+            "trace_px.json".into(),
+            (px_doc.to_string() + "\n").into_bytes(),
+        ),
+        (
+            "overlay.png".into(),
+            ftx_trace::review::overlay(&doc, Some(&img))?,
+        ),
+    ];
+    for (i, label) in ftx_trace::review::label_crops(&traced, &img)?
+        .into_iter()
+        .enumerate()
+    {
+        if label.piece_id != format!("p{}", i + 1) {
+            return Err(bad_input("trace label ids must follow pN order"));
+        }
+        artifacts.push((format!("labels/{}.png", label.piece_id), label.png));
+    }
     let mut pieces = Vec::new();
     let mut lines = Vec::new();
     for (p, piece) in data["pieces"]
@@ -398,8 +491,13 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
         pieces.push(row);
     }
     let diag = traced.diagnostics.to_value();
+    artifacts.push((
+        "draft.pattern.json".into(),
+        (traced.pattern.dumps(Some(1)) + "\n").into_bytes(),
+    ));
+    publish(out, &artifacts)?;
     let files = json!({"draft": draft.display().to_string(), "mask": mask.display().to_string(),
-                       "polygons": px.display().to_string()});
+                       "polygons": px.display().to_string(),"overlay":overlay.display().to_string(),"labels":label_dir.display().to_string()});
     let text = format!(
         "traced {} pieces -> {}{}{}",
         pieces.len(),
