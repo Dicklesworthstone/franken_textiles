@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 
 use ftx_core::{Vec3, det};
 
+use crate::landmarks::BodyFrames;
+
 /// The closed loops where the horizontal plane at height `z` cuts the mesh, as (x, y) polygons. A loop
 /// that does not close (an open mesh) is left out.
 #[must_use]
@@ -194,11 +196,28 @@ pub fn contains(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
 /// Perimeter of the convex hull of `points` (monotone chain).
 #[must_use]
 pub fn hull_perimeter(points: &[[f64; 2]]) -> f64 {
+    let hull = convex_hull(points);
+    if hull.len() < 2 {
+        return 0.0;
+    }
+    let n = hull.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (hull[i], hull[(i + 1) % n]);
+            det::hypot(b[0] - a[0], b[1] - a[1])
+        })
+        .sum()
+}
+
+/// The convex hull of `points`, counter-clockwise from the lowest-x point (monotone chain; collinear
+/// points dropped).
+#[must_use]
+pub fn convex_hull(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
     let mut p = points.to_vec();
     p.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
     p.dedup();
     if p.len() < 2 {
-        return 0.0;
+        return p;
     }
     let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| {
         (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
@@ -216,13 +235,235 @@ pub fn hull_perimeter(points: &[[f64; 2]]) -> f64 {
     };
     let mut hull = chain(&mut p.iter().copied());
     hull.extend(chain(&mut p.iter().rev().copied()));
-    let n = hull.len();
-    (0..n)
-        .map(|i| {
-            let (a, b) = (hull[i], hull[(i + 1) % n]);
-            det::hypot(b[0] - a[0], b[1] - a[1])
-        })
+    hull
+}
+
+/// Length of the polyline through `points`.
+fn path_length(points: &[[f64; 2]]) -> f64 {
+    points
+        .windows(2)
+        .map(|w| det::hypot(w[1][0] - w[0][0], w[1][1] - w[0][1]))
         .sum()
+}
+
+/// The arc of a counter-clockwise `hull` from vertex `a` to vertex `b`, going forward (`true`) or back.
+fn hull_arc(hull: &[[f64; 2]], a: usize, b: usize, forward: bool) -> Vec<[f64; 2]> {
+    let n = hull.len();
+    let mut out = vec![hull[a]];
+    let mut i = a;
+    while i != b {
+        i = if forward {
+            (i + 1) % n
+        } else {
+            (i + n - 1) % n
+        };
+        out.push(hull[i]);
+    }
+    out
+}
+
+/// Where the edges of a closed polygon cross the line `coord = value` (`coord` 0: x, 1: y), as points.
+fn crossings(poly: &[[f64; 2]], coord: usize, value: f64) -> Vec<[f64; 2]> {
+    let n = poly.len();
+    let other = 1 - coord;
+    (0..n)
+        .filter_map(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            ((a[coord] >= value) != (b[coord] >= value)).then(|| {
+                let t = (value - a[coord]) / (b[coord] - a[coord]);
+                let mut p = [0.0; 2];
+                p[coord] = value;
+                p[other] = a[other] + t * (b[other] - a[other]);
+                p
+            })
+        })
+        .collect()
+}
+
+/// Neck base girth: the section perpendicular to the neck at its base (the `neck01` head), around the
+/// neck axis; and, in world millimetres, the section's point furthest to the wearer's right (the side neck
+/// point).
+#[must_use]
+pub fn neck_base(mm: &[Vec3], faces: &[[usize; 3]], frames: &BodyFrames) -> Option<(f64, Vec3)> {
+    let f = frames.neck;
+    let local = in_frame(mm, f.origin, f.lat, f.front, f.up);
+    let loops = section_loops(&local, faces, 0.0);
+    let l = outermost_around(&loops, [0.0, 0.0])?;
+    let side = l.iter().copied().min_by(|a, b| a[0].total_cmp(&b[0]))?;
+    Some((
+        hull_perimeter(l),
+        f.origin + f.lat * side[0] + f.front * side[1],
+    ))
+}
+
+/// Head girth: the fullest horizontal section around the head bone's axis from 15 % to 50 % of the way
+/// down from the crown to C7 (the hat band line, above the brows and over the occiput).
+#[must_use]
+pub fn head_girth(torso: &Slicer, frames: &BodyFrames) -> Option<f64> {
+    let top = *frames.landmarks.get("head_top")?;
+    let hh = top - frames.landmarks.get("c7")?;
+    let axis = [frames.head_bone.x, frames.head_bone.y];
+    let mut best: Option<f64> = None;
+    let mut d = 0.15 * hh;
+    while d <= 0.5 * hh {
+        let g = torso.girth_near(frames.floor_z + top - d, axis)?;
+        best = Some(best.map_or(g, |b: f64| b.max(g)));
+        d += 2.0;
+    }
+    best
+}
+
+/// Shoulder length and across back (spec 02 catalogue, ISO 8559-1 5.4.1 and 5.4.2), with the shoulder point
+/// (acromion) taken as the top of the shoulder straight above the shoulder joint. Shoulder length: along the
+/// top of the shoulder in the coronal section through the joint, from the side neck point `snp` to the
+/// shoulder point. Across back: the back of the horizontal section 15 mm below the shoulder point, between
+/// the two shoulder points' x, as a tape bridging hollows (its convex hull).
+#[must_use]
+pub fn shoulder_and_back(
+    mm: &[Vec3],
+    faces: &[[usize; 3]],
+    torso: &Slicer,
+    frames: &BodyFrames,
+    snp: Vec3,
+) -> Option<(f64, f64)> {
+    let j = frames.shoulder_joint_r;
+    // coronal section through the joint: (x, z) in world millimetres
+    let coronal = in_frame(
+        mm,
+        Vec3::new(0.0, j.y, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let loops = section_loops(&coronal, faces, 0.0);
+    // the top of the shoulder at x, below the side neck point's height (the head and ears are higher)
+    let top_at = |x: f64| -> Option<f64> {
+        loops
+            .iter()
+            .flat_map(|l| crossings(l, 0, x))
+            .map(|p| p[1])
+            .filter(|&z| z <= snp.z + 5.0)
+            .fold(None, |m: Option<f64>, z| Some(m.map_or(z, |m| m.max(z))))
+    };
+    let acromion_z = top_at(j.x)?;
+    let mut line = vec![[snp.x, snp.z]];
+    let mut x = snp.x - 2.0;
+    while x > j.x {
+        line.push([x, top_at(x)?]);
+        x -= 2.0;
+    }
+    line.push([j.x, acromion_z]);
+    let shoulder = path_length(&line);
+    // across the back
+    let pts: Vec<[f64; 2]> = torso
+        .loops(acromion_z - 15.0)
+        .into_iter()
+        .flatten()
+        .collect();
+    let hull = convex_hull(&pts);
+    if hull.len() < 3 {
+        return None;
+    }
+    // the hull's back-most crossings of x = ±(shoulder point): +y is the back
+    let at = |x: f64| -> Option<[f64; 2]> {
+        crossings(&hull, 0, x)
+            .into_iter()
+            .max_by(|a, b| a[1].total_cmp(&b[1]))
+    };
+    // a on the wearer's right (−x), b on the left; the hull's back chain between them is its vertices left
+    // of a → b (larger y), in order of x
+    let (a, b) = (at(j.x.min(-j.x))?, at(j.x.max(-j.x))?);
+    let left_of_ab =
+        |p: [f64; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) > 0.0;
+    let mut arc: Vec<[f64; 2]> = hull
+        .iter()
+        .copied()
+        .filter(|&p| p[0] > a[0] && p[0] < b[0] && left_of_ab(p))
+        .collect();
+    arc.sort_by(|p, q| p[0].total_cmp(&q[0]));
+    arc.insert(0, a);
+    arc.push(b);
+    Some((shoulder, path_length(&arc)))
+}
+
+/// Total crotch length (ISO 8559-1 5.4.18): from the centre-front waist down between the legs to the
+/// centre-back waist, as a snug tape bridging hollows: the lower convex hull of the median sagittal sections
+/// within 15 mm either side of the body's centre line, below the waist line.
+#[must_use]
+pub fn crotch_length(mm: &[Vec3], faces: &[[usize; 3]], frames: &BodyFrames) -> Option<f64> {
+    let waist = frames.floor_z + frames.landmarks.get("waist")?;
+    let x0 = frames.torso.origin.x;
+    // sagittal sections: (y, z) in world millimetres, cut at x = x0 + h
+    let sagittal = in_frame(
+        mm,
+        Vec3::new(x0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    );
+    let s = Slicer::new(&sagittal, faces, 5.0);
+    let mut pts: Vec<[f64; 2]> = Vec::new();
+    for h in [-15.0, -7.5, 0.0, 7.5, 15.0] {
+        for l in s.loops(h) {
+            pts.extend(l.iter().copied().filter(|p| p[1] <= waist));
+            pts.extend(crossings(&l, 1, waist));
+        }
+    }
+    let hull = convex_hull(&pts);
+    if hull.len() < 3 {
+        return None;
+    }
+    // the hull's two corners on the waist line: front (−y) and back (+y); the tape is the lower chain
+    // between them (counter-clockwise from front to back runs along the bottom)
+    let on_waist: Vec<usize> = (0..hull.len())
+        .filter(|&i| hull[i][1] >= waist - 1e-9)
+        .collect();
+    let front = *on_waist
+        .iter()
+        .min_by(|&&i, &&k| hull[i][0].total_cmp(&hull[k][0]))?;
+    let back = *on_waist
+        .iter()
+        .max_by(|&&i, &&k| hull[i][0].total_cmp(&hull[k][0]))?;
+    Some(path_length(&hull_arc(&hull, front, back, true)))
+}
+
+/// Outseam (ISO 8559-1 5.4.22): from the waist at the side, over the hip, to the floor, as a tape hanging
+/// down the side: seen from the front, the outer edge of the wearer's-right torso and leg between crotch and
+/// waist (its convex hull, from the waist section's side point to the widest point of the hip), then
+/// straight down to the floor (the tape hangs; it does not follow a leg spread in the pose).
+#[must_use]
+pub fn outseam(torso: &Slicer, frames: &BodyFrames) -> Option<f64> {
+    let waist = frames.floor_z + frames.landmarks.get("waist")?;
+    let crotch = frames.floor_z + frames.landmarks.get("crotch")?;
+    let x0 = frames.torso.origin.x;
+    let axis = [x0, frames.torso.origin.y];
+    let side = outermost_around(&torso.loops(waist), axis)?
+        .iter()
+        .copied()
+        .min_by(|a, b| a[0].total_cmp(&b[0]))?;
+    let top = [side[0], waist];
+    let mut pts: Vec<[f64; 2]> = frames
+        .torso_points
+        .iter()
+        .chain(&frames.leg_points)
+        .filter(|p| p.x < x0 && p.z <= waist && p.z >= crotch)
+        .map(|p| [p.x, p.z])
+        .collect();
+    pts.push(top);
+    let hull = convex_hull(&pts);
+    if hull.len() < 3 {
+        return None;
+    }
+    let start = (0..hull.len()).find(|&i| hull[i] == top)?;
+    // the widest point of the hip: the hull's smallest x (the lowest of ties); counter-clockwise from the
+    // waist corner runs down the outer side
+    let widest = (0..hull.len()).min_by(|&i, &k| {
+        hull[i][0]
+            .total_cmp(&hull[k][0])
+            .then(hull[i][1].total_cmp(&hull[k][1]))
+    })?;
+    let arc = hull_arc(&hull, start, widest, true);
+    Some(path_length(&arc) + (hull[widest][1] - frames.floor_z))
 }
 
 /// The vertices in a frame's coordinates: (·lat, ·front, ·up) relative to `origin`, so a section

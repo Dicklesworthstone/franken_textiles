@@ -14,19 +14,32 @@ mesh are closed loops. Torso girths are horizontal, around the torso axis; limb 
 to the right leg's or arm's part-frame axis (the vertices taken into that frame), around the axis or,
 where the axis passes beside a narrow limb, the nearest loop (`girth_near`). `Slicer` buckets triangles
 by height (5 mm slabs) so a search over levels visits only nearby triangles (same loops, same order).
-`tape_readings` reads 15 measurements on the posed body (`TAPE_FIELDS`, definitions in the `fit.rs`
-table): stature, chest, waist, hip, waist and crotch heights, thigh, knee, calf, ankle, upper arm,
-wrist, arm length, knee height and back neck to waist (along the back's median line). `fit_stature`
-bisects the height parameter to a stature. `fit_tape` runs Levenberg–Marquardt (central differences,
-step 1e-3; stops when a step gains less than 1e-5 of the cost) over four phenotype parameters (height,
-weight, muscle, proportions; prior 1σ = 0.5 about 0.5) and fifteen `measure-*` local changes (prior
-1σ = 0.35 about 0: the scanned shape space explains the body before the authored blend shapes adjust
-it), with 1σ = 3 mm per girth and 2 mm per length; the phenotype is clamped to [0, 1], local changes to
-[−1, 1]; age and gender are set, not fitted. Residuals are returned, never hidden. Gate G1b
-(`tests/fit_tape.rs`): all 15 measurements drawn from the model itself (1.5, 2.5, 4 and 30 years, local
-changes up to ±0.3) are recovered within 0.43 mm (the gate asks 3 mm girths, 2 mm lengths); the 92 cm
-reference toddler's 15 chart values within 2.4 mm in 8 iterations (about 2 s), where the stature-only
-body read 75 mm less at the chest, 66 mm at the waist and 62 mm at the hip. With weak priors (1σ = 1)
+`tape_readings` reads 21 measurements on the posed body (`TAPE_FIELDS`, definitions in the `fit.rs`
+table and the `tape.rs` functions): stature, chest, waist, hip, waist and crotch heights, thigh, knee,
+calf, ankle, upper arm, wrist, arm length, knee height, back neck to waist (along the back's median line),
+neck base (the section across the neck axis at the `neck01` head: below it the section turns into the
+trunk), head (the fullest horizontal section round the head bone's axis, 15–50 % of the way from crown to
+C7), shoulder length (along the top of the shoulder in the coronal section through the shoulder joint,
+from the side neck point to the shoulder point, taken as the top of the shoulder above the joint), across
+back (the back of the horizontal section 15 mm below the shoulder points, between them, as a hull), total
+crotch length (the lower hull of the median sagittal sections within ±15 mm, waist to waist: a snug tape
+bridges the gluteal cleft) and outseam (from the waist's side point over the hip, as a hull of the
+right-side torso and leg seen from the front, to the hip's widest point, then straight down to the
+floor). `fit_stature` bisects the height parameter to a stature. `fit_tape` runs Levenberg–Marquardt
+(central differences, step 1e-3; stops when a step gains less than 1e-5 of the cost) over four phenotype
+parameters (height, weight, muscle, proportions; prior 1σ = 0.5 about 0.5) and nineteen local changes
+(fifteen `measure-*`, `measure-neck-circ-incr`, `measure-shoulder-dist-incr`, and both head scales, so the
+prior spreads a head change evenly; prior 1σ = 0.35 about 0: the scanned shape space explains the body
+before the authored blend shapes adjust it), with 1σ = 3 mm per girth and 2 mm per length, except 5 mm
+for shoulder length, across back and total crotch length and 8 mm for the outseam (`fit_sigma`: readings
+that rest on where a measurer puts the tape, whose catalogue tape σ is 10–15 mm); the phenotype is
+clamped to [0, 1], local changes to [−1, 1]; age and gender are set, not fitted. Residuals are returned,
+never hidden. Gate G1b (`tests/fit_tape.rs`): all 21 measurements drawn from the model itself (1.5, 2.5,
+4 and 30 years, local changes up to ±0.3) are recovered within 1.5 mm (the gate asks 3 mm girths, 2 mm
+lengths); the 92 cm reference toddler's 21 chart values in 9 iterations, the gate's within 2.6 mm and the
+four gentler ones within 2σ (shoulder length 9 mm short and outseam 9 mm short: the chart's shoulder is
+wider than Anny's toddler and its outseam 10 mm over its waist height; crotch length 7 mm long), where
+the stature-only body read 75 mm less at the chest, 66 mm at the waist and 62 mm at the hip. With weak priors (1σ = 1)
 the same fit had driven `weight` to 0 and compensated with large local changes. A known body weight
 (`Wearer::weight_kg`) adds a row on Anny's mass (980 kg/m³ × volume) with 1σ = 1 % of it, at least
 0.1 kg: with the stature alone it is the plan's "fit from little" (`tests/fit_tape.rs`: 2.5-, 6- and

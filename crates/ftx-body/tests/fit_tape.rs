@@ -7,7 +7,7 @@
 
 use ftx_body::{
     AnnyModel, BodyFrames, FREE, N_PHENOTYPE, N_TAPE, Pose, TAPE_FIELDS, TapeTarget, Wearer,
-    default_model_path, fit_tape, is_girth, pose_deltas, tape_readings,
+    default_model_path, fit_sigma, fit_tape, is_girth, pose_deltas, tape_readings,
 };
 
 fn model() -> AnnyModel {
@@ -38,13 +38,13 @@ fn synthetic_targets_are_recovered() {
         .collect();
     let pose = Pose::drape();
     // (years, gender, free parameters in FREE order)
-    let cases: [(f64, f64, [f64; 19]); 4] = [
+    let cases: [(f64, f64, [f64; 23]); 4] = [
         (
             2.5,
             1.0,
             [
                 0.40, 0.65, 0.6, 0.4, 0.3, 0.4, -0.2, -0.3, 0.1, 0.2, -0.1, 0.3, -0.2, 0.25, -0.15,
-                0.2, -0.1, 0.15, -0.2,
+                0.2, -0.1, 0.15, -0.2, 0.2, -0.2, 0.15, 0.15,
             ],
         ),
         (
@@ -52,7 +52,7 @@ fn synthetic_targets_are_recovered() {
             0.0,
             [
                 0.60, 0.35, 0.3, 0.55, -0.2, -0.3, 0.3, 0.2, -0.2, -0.25, 0.2, -0.1, 0.1, -0.2,
-                0.2, -0.15, 0.25, -0.1, 0.2,
+                0.2, -0.15, 0.25, -0.1, 0.2, -0.2, 0.25, -0.1, -0.1,
             ],
         ),
         (
@@ -60,7 +60,7 @@ fn synthetic_targets_are_recovered() {
             0.5,
             [
                 0.50, 0.50, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             ],
         ),
         (
@@ -68,7 +68,7 @@ fn synthetic_targets_are_recovered() {
             1.0,
             [
                 0.55, 0.60, 0.45, 0.6, 0.4, 0.2, 0.3, -0.2, 0.2, 0.3, 0.1, -0.2, 0.2, 0.15, 0.1,
-                -0.2, 0.1, -0.15, 0.1,
+                -0.2, 0.1, -0.15, 0.1, 0.1, 0.2, -0.15, -0.15,
             ],
         ),
     ];
@@ -148,7 +148,7 @@ fn the_reference_toddler_is_fitted() {
     // the reference wearer's fused values (Ottobre chart priors at 92 cm), in TAPE_FIELDS order
     let want = [
         920.0, 540.0, 530.0, 580.0, 530.0, 372.5, 288.8, 210.6, 204.5, 146.9, 156.8, 109.8, 320.0,
-        231.0, 225.0,
+        231.0, 225.0, 251.2, 483.8, 80.0, 225.7, 396.6, 540.0,
     ];
     let faces: Vec<[usize; 3]> = model
         .data()
@@ -189,9 +189,16 @@ fn the_reference_toddler_is_fitted() {
             r.body_mm - r.target_mm
         );
     }
-    // every measurement within 3 mm: the chart values are reachable, the priors keep the shape natural
+    // every measurement within 3 mm, the definition-limited lengths within 2σ of the fit (the chart's
+    // outseam and shoulder length are not both reachable with its crotch height); the priors keep the
+    // shape natural
     for r in &fit.residuals {
-        assert!((r.body_mm - r.target_mm).abs() < 3.0, "{r:?}");
+        let tol = if fit_sigma(&r.name) > 3.0 {
+            2.0 * fit_sigma(&r.name)
+        } else {
+            3.0
+        };
+        assert!((r.body_mm - r.target_mm).abs() < tol, "{r:?}");
     }
 }
 

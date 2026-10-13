@@ -72,8 +72,16 @@ pub struct BodyFrames {
     pub arm_length: f64,
     /// Landmark heights above the floor (mm).
     pub landmarks: BTreeMap<String, f64>,
-    torso_points: Vec<Vec3>,
-    leg_points: Vec<Vec3>,
+    /// The neck frame: origin the `neck01` head (the base of the neck), `up` towards the `head` bone's head.
+    pub neck: Frame,
+    /// The `head` bone's head (mm): the axis of the horizontal head sections.
+    pub head_bone: Vec3,
+    /// The wearer's-right shoulder joint, the `upperarm01.R` head (mm).
+    pub shoulder_joint_r: Vec3,
+    /// Torso vertices (head and neck included; mm).
+    pub(crate) torso_points: Vec<Vec3>,
+    /// Wearer's-right leg vertices (mm).
+    pub(crate) leg_points: Vec<Vec3>,
 }
 
 fn orthonormal(up: Vec3) -> Frame {
@@ -233,6 +241,10 @@ impl BodyFrames {
         let knee_z = head("lowerleg01.R")?.z;
         let shoulder_z = (shoulder + arm.up * tip_h).z;
         let snp_z = head("neck01")?.z;
+        // Neck: up the neck01 bone's line to the head bone.
+        let head_bone = head("head")?;
+        let mut neck = orthonormal(head_bone - head("neck01")?);
+        neck.origin = head("neck01")?;
         let landmarks: BTreeMap<String, f64> = [
             ("floor", floor_z),
             ("ankle", ankle.z),
@@ -267,6 +279,9 @@ impl BodyFrames {
             upper_arm_radius,
             arm_length,
             landmarks,
+            neck,
+            head_bone,
+            shoulder_joint_r: shoulder,
             torso_points: pick(Region::Torso),
             leg_points: pick(Region::LegR),
         })

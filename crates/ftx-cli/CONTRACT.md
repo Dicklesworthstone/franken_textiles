@@ -18,7 +18,7 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   [--self-contact-mm MM] [--self-mu MU] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
   casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does):
   an Anny body of the wearer's age (`wearer.age_months`) and sex (`wearer.sex`; unknown = sexes
-  averaged), fitted on the drape pose to whichever of the 15 tape measurements of
+  averaged), fitted on the drape pose to whichever of the 21 tape measurements of
   `ftx_body::TAPE_FIELDS` the file has fused values for (the stature from `wearer.stature_mm` first) and
   to `wearer.weight_kg` or `wearer.bmi` when given (`ftx_body::fit_tape`; `Pose::drape`, hands and feet
   left out of contact), then

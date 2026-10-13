@@ -187,7 +187,7 @@ pub fn fit_stature(model: &AnnyModel, wearer: &Wearer) -> Result<(BodyParams, f6
 
 /// The measurements the tape fit reads, in the measurement files' names; [`tape_readings`] returns them
 /// in this order (mm).
-pub const TAPE_FIELDS: [&str; 15] = [
+pub const TAPE_FIELDS: [&str; 21] = [
     "stature",
     "chest",
     "waist",
@@ -203,6 +203,12 @@ pub const TAPE_FIELDS: [&str; 15] = [
     "arm_length",
     "knee_height",
     "back_neck_to_waist",
+    "neck_base",
+    "head",
+    "shoulder_length",
+    "across_back",
+    "total_crotch_length",
+    "outseam",
 ];
 
 /// Number of tape readings.
@@ -213,7 +219,17 @@ pub const N_TAPE: usize = TAPE_FIELDS.len();
 pub fn is_girth(name: &str) -> bool {
     matches!(
         name,
-        "chest" | "waist" | "hip" | "thigh" | "knee" | "calf" | "ankle" | "upper_arm" | "wrist"
+        "chest"
+            | "waist"
+            | "hip"
+            | "thigh"
+            | "knee"
+            | "calf"
+            | "ankle"
+            | "upper_arm"
+            | "wrist"
+            | "neck_base"
+            | "head"
     )
 }
 
@@ -229,9 +245,25 @@ pub const FIT_SIGMA_GIRTH_MM: f64 = 3.0;
 /// See [`FIT_SIGMA_GIRTH_MM`].
 pub const FIT_SIGMA_LENGTH_MM: f64 = 2.0;
 
+/// The fit's 1σ for a [`TAPE_FIELDS`] measurement (mm). Four lengths whose reading on a body rests on an
+/// approximation of where a measurer puts the tape (the shoulder point taken above the shoulder joint, a tape
+/// hanging from the hip, a snug tape through the crotch as a hull) pull more gently: 5 mm, and 8 mm for the
+/// outseam (the catalogue's tape σ for them is 10–15 mm). Pulled to 2 mm they distort the body where the
+/// definition, not the body, is uncertain (the 92 cm chart's outseam and shoulder length cannot both be met
+/// with its crotch height).
+#[must_use]
+pub fn fit_sigma(name: &str) -> f64 {
+    match name {
+        "shoulder_length" | "across_back" | "total_crotch_length" => 5.0,
+        "outseam" => 8.0,
+        _ if is_girth(name) => FIT_SIGMA_GIRTH_MM,
+        _ => FIT_SIGMA_LENGTH_MM,
+    }
+}
+
 /// The free parameters of [`fit_tape`]: [`N_PHENOTYPE`] phenotype parameters (Anny's shape space,
 /// learned from scans), then the `measure-*` local changes (authored blend shapes, one measurement each).
-pub const FREE: [&str; 19] = [
+pub const FREE: [&str; 23] = [
     "height",
     "weight",
     "muscle",
@@ -251,6 +283,11 @@ pub const FREE: [&str; 19] = [
     "measure-lowerarm-length-incr",
     "measure-lowerleg-height-incr",
     "measure-napetowaist-dist-incr",
+    "measure-neck-circ-incr",
+    "measure-shoulder-dist-incr",
+    // the head girth: both scales free, so the prior spreads a change evenly (a uniform scale)
+    "head-scale-horiz-incr",
+    "head-scale-depth-incr",
 ];
 const N_FREE: usize = FREE.len();
 /// How many of [`FREE`] are phenotype parameters.
@@ -341,6 +378,12 @@ pub fn tape_readings(
         }
         h = (h + SEARCH_STEP_MM).min(c7_h);
     }
+    let (neck_base, snp) = crate::tape::neck_base(&mm, faces, frames)?;
+    let head = crate::tape::head_girth(&torso, frames)?;
+    let (shoulder_length, across_back) =
+        crate::tape::shoulder_and_back(&mm, faces, &torso, frames, snp)?;
+    let total_crotch_length = crate::tape::crotch_length(&mm, faces, frames)?;
+    let outseam = crate::tape::outseam(&torso, frames)?;
     Some([
         rest_height_m * 1000.0,
         g(armpit_h - CHEST_BELOW_ARMPIT_MM)?,
@@ -357,6 +400,12 @@ pub fn tape_readings(
         frames.arm_length,
         lm("knee")?,
         back,
+        neck_base,
+        head,
+        shoulder_length,
+        across_back,
+        total_crotch_length,
+        outseam,
     ])
 }
 
@@ -429,12 +478,7 @@ pub fn fit_tape(
                 t.name, t.value_mm
             )));
         }
-        let sigma = if is_girth(&t.name) {
-            FIT_SIGMA_GIRTH_MM
-        } else {
-            FIT_SIGMA_LENGTH_MM
-        };
-        rows.push((k, t.value_mm, sigma));
+        rows.push((k, t.value_mm, fit_sigma(&t.name)));
     }
     // the wearer's stature is a target unless `targets` gives one
     if !rows.iter().any(|r| r.0 == 0) {
@@ -662,14 +706,19 @@ mod tests {
             "wearer": {"age_months": 30.0, "stature_mm": 921.0},
             "fused": {"stature": {"value_mm": 920.0}, "waist": {"value_mm": 530.0},
                       "thigh": {"value_mm": 290.0}, "hip": {"value_deg": 3.0},
-                      "head": {"value_mm": 480.0}},
+                      "head": {"value_mm": 480.0}, "belly_depth": {"value_mm": 140.0}},
         });
         let t = tape_targets(&m);
         let got: Vec<(&str, f64)> = t.iter().map(|t| (t.name.as_str(), t.value_mm)).collect();
-        // in TAPE_FIELDS order; no value_mm (hip) or not a tape reading (head): left out
+        // in TAPE_FIELDS order; no value_mm (hip) or not a tape reading (belly_depth): left out
         assert_eq!(
             got,
-            [("stature", 921.0), ("waist", 530.0), ("thigh", 290.0)]
+            [
+                ("stature", 921.0),
+                ("waist", 530.0),
+                ("thigh", 290.0),
+                ("head", 480.0)
+            ]
         );
     }
 }

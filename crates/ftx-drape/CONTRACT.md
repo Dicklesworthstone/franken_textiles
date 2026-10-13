@@ -85,7 +85,10 @@ measurements (ftx-body), 50 s and 5.4 minutes; without the friction lag round wh
 iterations instead of 448, the trousers 318 instead of 680, the same verdicts (no flag, settled),
 readings within a few millimetres (bands within 3.7 mm, hem rise within 6 mm, hem balance −2.2 → 6.0 mm,
 seam strain p90 within 1 %) — the run-to-run spread the reference itself shows. Contacts made during a
-sewing step get friction from the next step on.
+sewing step get friction from the next step on. On the body fitted to 21 measurements (neck, head,
+shoulders, crotch length and outseam added) the verdicts are unchanged (no flag, settled) and the work
+grows: the bolero 374 Newton iterations, the trousers 563 (one sewing step unconverged, the drape
+converged).
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
