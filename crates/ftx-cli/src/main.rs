@@ -49,9 +49,10 @@ const USAGE: &str = "usage:
   ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
   ftx validate PATTERN --measurements M [--fit F] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--export]
+            [--sim|--stills] [--arm-deg DEG] [--res WIDTHxHEIGHT]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N]
-            [--model PATH] [--self-contact-mm MM] [--self-mu MU] [--json]
+            [--model PATH] [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx render DRAPE_DIR [--res 960x540] [--json]
   ftx alter slash-spread PATTERN --piece P --axis x|y --at MM --add MM --out OUT [--json]
@@ -575,6 +576,25 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
     Ok(opts)
 }
 
+/// Pose the same fitted body at the requested angle; do not change its tape-fit reference pose.
+fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
+    let mut pose = Pose::drape();
+    if let Some(value) = args.options.get("arm-deg") {
+        let angle = value
+            .parse::<f64>()
+            .map_err(|_| bad_input("--arm-deg must be a finite angle in degrees"))?;
+        Refusal::finite("--arm-deg", angle)?;
+        if !(0.0..=180.0).contains(&angle) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "--arm-deg must be in 0..=180 degrees from vertical",
+            ));
+        }
+        pose.arm_abduction_deg = Some(angle);
+    }
+    Ok(pose)
+}
+
 fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
@@ -589,9 +609,11 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "self-contact-mm",
             "self-mu",
             "elastic-ea",
+            "arm-deg",
         ],
     )?;
     let opts = drape_options(args)?;
+    let pose = drape_pose(args)?;
     let pattern_path = args
         .positional
         .get(1)
@@ -604,7 +626,6 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     // before the minutes of draping, so an unwritable DIR refuses at once
     make_dir(&out)?;
     let model = load_model(args)?;
-    let pose = Pose::drape();
     let (w, fit) = fitted_body(&model, &meas)?;
     let rest = model.rest(&fit.params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
@@ -801,6 +822,24 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_arm_angles_including_zero_reach_the_straight_arm_pose() {
+        let default = drape_pose(&parse(&["drape".into()]).unwrap()).unwrap();
+        assert_eq!(default, Pose::drape());
+        for angle in [0.0, 35.0, 50.0, 150.0, 180.0] {
+            let args = parse(&["drape".into(), "--arm-deg".into(), angle.to_string()]).unwrap();
+            let pose = drape_pose(&args).unwrap();
+            assert_eq!(pose.arm_abduction_deg, Some(angle));
+            assert!(pose.straight_arms);
+            assert_eq!(pose.legs, default.legs);
+        }
+        for angle in ["NaN", "inf", "-0.1", "180.1", "arms-up"] {
+            let args =
+                parse(&["drape", "absent.json", "--arm-deg", angle].map(String::from)).unwrap();
+            assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+        }
+    }
 
     #[test]
     fn drape_self_contact_units_and_friction_are_independent() {

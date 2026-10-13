@@ -15,8 +15,9 @@ use serde_json::{Value, json};
 use super::{Args, bad_input, export, known_options, make_dir, read_json};
 
 mod report;
+mod stills;
 
-pub(super) const BOOLEAN_OPTIONS: &[&str] = &["export", "update-measurements", "sim"];
+pub(super) const BOOLEAN_OPTIONS: &[&str] = &["export", "update-measurements", "sim", "stills"];
 
 const SIM_OPTIONS: &[&str] = &[
     "sew",
@@ -25,6 +26,7 @@ const SIM_OPTIONS: &[&str] = &[
     "model",
     "self-contact-mm",
     "self-mu",
+    "arm-deg",
 ];
 
 type SimOutcome = (Option<Value>, String, Option<String>, bool);
@@ -310,15 +312,29 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "model",
             "self-contact-mm",
             "self-mu",
+            "arm-deg",
+            "stills",
+            "res",
         ],
     )?;
     if args.positional.len() != 2 {
         return Err(bad_input("ftx round needs exactly one workspace"));
     }
-    if args.options.contains_key("sim") {
+    let wants_sim = args.options.contains_key("sim") || args.options.contains_key("stills");
+    let render_size = if args.options.contains_key("stills") {
+        Some(super::render::resolution(
+            args.options.get("res").map(String::as_str),
+        )?)
+    } else if args.options.contains_key("res") {
+        return Err(bad_input("--res requires --stills"));
+    } else {
+        None
+    };
+    if wants_sim {
         super::drape_options(args)?;
+        super::drape_pose(args)?;
     } else if let Some(key) = SIM_OPTIONS.iter().find(|&&k| args.options.contains_key(k)) {
-        return Err(bad_input(format!("--{key} requires --sim")));
+        return Err(bad_input(format!("--{key} requires --sim or --stills")));
     }
     let ws = PathBuf::from(&args.positional[1]);
     let (_, latest) = inventory(&ws)?;
@@ -411,11 +427,12 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let svg = ftx_export::diagnostic_svg(&pattern, &validation, dark)?;
         write_new(&rd.join(file), svg.as_bytes())?;
     }
-    let (sim, sim_basis, viewer, budget_stop) = if args.options.contains_key("sim") {
+    let (sim, sim_basis, viewer, budget_stop) = if wants_sim {
         simulate(args, &rd, n, &raw, validation.status(), unscaled)?
     } else {
         (None, "not run".to_string(), None, false)
     };
+    let (rendering, images) = stills::publish(&rd, n, sim.as_ref(), render_size)?;
     let mut exports = None;
     let mut export_basis = "not run".to_string();
     if args.options.contains_key("export") {
@@ -466,7 +483,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let basis = json!({"flat":validation.status(), "sim":sim_basis, "exports":export_basis, "measurements":ready["status"]});
     let entry = json!({"round":n, "dir":format!("rounds/{n:03}"), "note":args.options.get("note").map_or("", String::as_str),
         "auto_notes":notes, "status":state, "basis":basis, "readiness":ready, "exports":exports,
-        "pattern_meta":raw["meta"], "validation":val, "images":[], "video":null, "viewer":viewer, "sim":sim, "at":at,
+        "pattern_meta":raw["meta"], "validation":val, "images":images, "rendering":rendering, "video":null, "viewer":viewer, "sim":sim, "at":at,
         "preview":format!("rounds/{n:03}/preview.svg"), "preview_dark":format!("rounds/{n:03}/preview_dark.svg")});
     write_json(&rd.join("round.json"), &entry)?;
     append(&ws, &entry)?;
@@ -500,9 +517,15 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     text.push_str(&format!("\nROUND STATUS: {state} (flat: {}; sim: {sim_basis}; exports: {export_basis}; measurements: {})\nround dir: {}",
         validation.status(), ready["status"].as_str().unwrap_or("NOT_CHECKED"), rd.display()));
     text.push_str(&format!("\nreport: {}", ws.join("report.html").display()));
-    let code = if budget_stop {
+    if render_size.is_some() {
+        text.push_str(&format!(
+            "\nSTILLS: {}",
+            rendering["status"].as_str().unwrap_or("FAILED")
+        ));
+    }
+    let code = if budget_stop || rendering["refusal"]["code"] == "budget_exceeded" {
         4
-    } else if state == "CONVERGED" {
+    } else if state == "CONVERGED" && rendering["status"] != "FAILED" {
         0
     } else {
         2

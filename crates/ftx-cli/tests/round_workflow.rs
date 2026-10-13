@@ -321,3 +321,57 @@ fn simulation_options_are_checked_before_workspace_mutation() {
         assert!(!dir.join("ws").exists());
     }
 }
+
+#[test]
+fn stills_imply_simulation_but_do_not_reuse_old_images_on_skip_or_failure() {
+    for (program, exit) in [("fez-920", 0), ("zouave_bolero-920", 2)] {
+        let (dir, _, _) = setup_program(program);
+        let mut args = FIRST.to_vec();
+        args.extend([
+            "--stills",
+            "--arm-deg",
+            "0",
+            "--res",
+            "48x32",
+            "--model",
+            "missing.ftxbody",
+        ]);
+        let r = run(&dir, &args, exit)["result"].clone();
+        assert_eq!(r["rendering"]["status"], "SKIPPED");
+        assert_eq!(r["images"], json!([]));
+        assert!(r["video"].is_null());
+        assert!(!dir.join("ws/rounds/000/sim/still_front.png").exists());
+        if exit == 2 {
+            assert!(
+                r["sim"]["refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("missing.ftxbody")
+            );
+        } else {
+            assert!(r["sim"].is_null());
+        }
+    }
+}
+
+#[test]
+fn pose_and_still_options_are_validated_before_reserving_a_round() {
+    for (options, exit) in [
+        (vec!["--arm-deg", "50"], 3),
+        (vec!["--sim", "--arm-deg", "NaN"], 3),
+        (vec!["--stills", "--arm-deg", "181"], 3),
+        (vec!["--stills", "--res", "48X32"], 3),
+        (vec!["--stills", "--res", "0x32"], 3),
+        (vec!["--res", "48x32"], 3),
+        (vec!["--stills", "--res", "8192x8192"], 4),
+    ] {
+        let (dir, _, _) = setup();
+        let mut args = FIRST.to_vec();
+        args.extend(options);
+        run(&dir, &args, exit);
+        assert!(!dir.join("ws").exists());
+    }
+    let (dir, _, _) = setup();
+    let refusal = run(&dir, &["render", "missing", "--res", "8192x8192"], 4);
+    assert_eq!(refusal["refusal"]["code"], "budget_exceeded");
+}

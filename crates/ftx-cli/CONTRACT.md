@@ -3,7 +3,7 @@
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
 FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx draft`, `ftx validate`,
 `ftx drape`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export`, `ftx check`, `ftx trace`,
-`ftx annotate`, `ftx scale-fit` and `ftx audit`; `round`, `viewer` and `report` follow their subsystems.
+`ftx annotate`, `ftx scale-fit`, `ftx audit` and immutable `ftx round` workspaces with their local review.
 
 **Commands.**
 - `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
@@ -14,8 +14,21 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   (exit 3) and write nothing.
 - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation of `ftx-pattern`, the
   reference's text table, exit 0 CONVERGED, 2 NOT_CONVERGED, 3 BLOCKED.
+- `ftx round WS [--pattern P] [--measurements M] [--sim|--stills] [--arm-deg DEG]
+  [--res WxH] [--export] [--json]`: a new immutable round with separate construction, physics,
+  manufacturing and measurement bases. `--stills` implies simulation and adds six native PNG
+  views to the portable review (default 960x540), without Blender. No video is produced; this
+  deliberately does not claim the reference's `--render` movie behavior. `--res` needs `--stills`.
+  Rendering is recorded separately as `rendering.status`: PASS, FAILED, SKIPPED or NOT_REQUESTED.
+  A renderer failure retains the construction/physics verdict and its diagnostics, but returns
+  exit 2 (4 for a budget stop), with no images advertised; incomplete or previous still sets are
+  never reused. Failed, blocked, unscaled and inapplicable simulations do not render. New images
+  use exclusive creation; the review permits only this round's six known paths and no symlinks.
+  Legacy re-run-in-place semantics, videos and qualification parity remain incomplete.
+  Tests: `round_workflow`, `round_review`, and `round::stills` synthetic triangle scenes; these
+  tests do not certify an Anny garment's fit or solve at every requested arm angle.
 - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--model PATH]
-  [--self-contact-mm MM] [--self-mu MU] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
+  [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
   casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does):
   an Anny body of the wearer's age (`wearer.age_months`) and sex (`wearer.sex`; unknown = sexes
   averaged), fitted on the drape pose to whichever of the 21 tape measurements of
@@ -37,6 +50,10 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   says self-contact was not simulated. Both `sim_report.json` and the CLI result contain a
   `self_contact` object with enabled/audit status, parameters and nearby final gap when enabled.
   This audit covers sewing/draping solver states, not the kinematic fold/zip animation or fit accuracy.
+  `--arm-deg` accepts a finite 0–180 degrees from vertical (default 35), including an explicit zero
+  rather than the reference round's ignored-zero quirk (spec 04 §16). Body fitting keeps the standard
+  tape reference pose; only the collision/display pose and garment placement change. Reports retain
+  the actual angle. A requested pose can still fail contact/feasibility gates; it is not a fit claim.
 - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]`:
   the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,
@@ -45,11 +62,12 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   record with provenance `MODEL_FIT` and the population spread as σ (the chart prior's at the wearer's
   stature and age, else the catalogue's 12 mm), so it can be added to the file as a model value, never
   as a measurement (`tests/body_model_fit.rs`, which needs the model).
-- `ftx render DRAPE_DIR [--res WxH] [--json]` (default 960x540, each side 16 to 8192): the six stills of an
+- `ftx render DRAPE_DIR [--res WxH] [--json]` (default 960x540, each side 16 to 8192, at most 16 million
+  pixels per view): the six stills of an
   `ftx drape` run (`ftx_drape::render`) from its `body.obj`, `garment.obj` and `garment_strain.obj`, written
   into DRAPE_DIR as `still_{front,side,back,three_quarter,strain_front,strain_back}.png`, printing
   `{"stills": {view: path}}` as the reference's `blender_sew.py --stills-from` does; no Blender. A missing
-  or unreadable OBJ is refused (`io`, `invalid_document`).
+  or unreadable OBJ, empty mesh or non-finite geometry is refused (`io`, `invalid_document`).
 - `ftx alter OP PATTERN --out OUT [...]` with OP `slash-spread` (`--piece --axis x|y --at --add`), `move`
   (`--piece --vertex [--dx] [--dy]`), `true-seam` (`--seam [--end start|end]`), `cap-ease` (`--piece
   --seams S1,S2 --target`) or `transfer-curve` (`--from SRC.json:INSTANCE/EDGE`, split at the last `:`,
@@ -98,21 +116,21 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
 
 **Output.** Human text, or with `--json` exactly one JSON envelope on stdout:
 `{"schema": "ftx-cli/1", "command", "ok", "exit", "result"}` or, for refused input,
-`{..., "ok": false, "exit": 3, "refusal": {code, message, repairs}}`. Progress lines go to stderr.
+`{..., "ok": false, "exit": 3, "refusal": {code, message, repairs}}` (exit 4 for budget refusals).
+Progress lines go to stderr.
 Malformed option syntax and unknown commands also use that envelope when `--json` is requested.
 Duplicate options (except repeated measurement `--value` readings), a flag in place of an option
 value, and extra alteration positionals are refused rather than silently changing the requested
 edit. Negative numeric values remain valid.
 
-**Error model.** Every failure is a `Refusal` printed with its repairs, exit 3: an option the command
+**Error model.** A refusal is printed with its repairs, exit 3 (4 for `budget_exceeded`): an option the command
 does not take (`invalid_document`, so a misspelt `--fit` cannot silently drop the fit spec), unreadable
 or malformed files (`io`, `invalid_document`), an output directory that cannot be created (checked
 before the drape starts), a wearer without age or stature, a stature the body model cannot reach
 at that age (`out_of_range`; other measurements out of reach stay residuals in `body.fit.tape`), a start that crosses the body (`intersecting_start`).
 
-**No claims.** The round and its statuses; stills and videos (the skill renders stills from the OBJs);
-a body that matches the wearer anywhere but the fitted measurements; speed (a drape takes from about
-half a minute to a few minutes).
+**No claims.** Legacy round parity and rendered movies; Blender pixel parity; a body that matches the
+wearer anywhere but the fitted measurements; performance at arbitrary garment sizes or requested poses.
 
 ## Measurement evidence commands
 

@@ -316,11 +316,38 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                         link(&mut out, ws, &format!("{dir}/sim/{name}"), label)?;
                     }
                 }
+                if sim.get("refusal").is_none()
+                    && entry["rendering"]["status"] == "PASS"
+                    && super::regular(&ws.join(dir), true)?
+                    && super::regular(&ws.join(format!("{dir}/sim")), true)?
+                {
+                    out.push_str("<h3>Drape stills — construction and strain</h3>");
+                    for (view, label) in super::stills::VIEWS {
+                        let path = format!("{dir}/sim/still_{view}.png");
+                        if entry["images"]
+                            .as_array()
+                            .is_some_and(|a| a.iter().any(|v| v == &path))
+                            && regular_file(&ws.join(&path))?
+                        {
+                            let _ = write!(
+                                out,
+                                "<figure><figcaption>{label}</figcaption><img class=\"preview\" loading=\"lazy\" src=\"{path}\" alt=\"{label} drape prediction\"></figure>"
+                            );
+                        }
+                    }
+                }
             }
             let _ = write!(
                 out,
                 "<details><summary>Full physics, contact and body-fit details</summary><pre>{}</pre></details>",
                 xml_escape(&serde_json::to_string_pretty(sim).map_err(|e| super::io(ws, e))?)
+            );
+        }
+        if entry["rendering"]["status"] == "FAILED" {
+            let _ = write!(
+                out,
+                "<p class=\"warning\"><strong>Stills failed; no rendered images published.</strong> {}. The physics and construction verdicts above are unchanged.</p>",
+                cell(&entry["rendering"]["refusal"]["message"])
             );
         }
         out.push_str("<h3>Manufacturing files</h3>");
