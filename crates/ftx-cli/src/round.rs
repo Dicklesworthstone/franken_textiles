@@ -14,7 +14,18 @@ use serde_json::{Value, json};
 
 use super::{Args, bad_input, export, known_options, make_dir, read_json};
 
-pub(super) const BOOLEAN_OPTIONS: &[&str] = &["export", "update-measurements"];
+pub(super) const BOOLEAN_OPTIONS: &[&str] = &["export", "update-measurements", "sim"];
+
+const SIM_OPTIONS: &[&str] = &[
+    "sew",
+    "drape",
+    "elastic-ea",
+    "model",
+    "self-contact-mm",
+    "self-mu",
+];
+
+type SimOutcome = (Option<Value>, String, Option<String>, bool);
 
 fn io(path: &Path, e: impl std::fmt::Display) -> Refusal {
     Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display()))
@@ -285,10 +296,22 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "note",
             "as-of",
             "created",
+            "sim",
+            "sew",
+            "drape",
+            "elastic-ea",
+            "model",
+            "self-contact-mm",
+            "self-mu",
         ],
     )?;
     if args.positional.len() != 2 {
         return Err(bad_input("ftx round needs exactly one workspace"));
+    }
+    if args.options.contains_key("sim") {
+        super::drape_options(args)?;
+    } else if let Some(key) = SIM_OPTIONS.iter().find(|&&k| args.options.contains_key(k)) {
+        return Err(bad_input(format!("--{key} requires --sim")));
     }
     let ws = PathBuf::from(&args.positional[1]);
     let (_, latest) = inventory(&ws)?;
@@ -343,12 +366,16 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let _workspace = super::workspace::Workspace::open(&ws)?;
     let current = WorkspaceBody::read(&ws, args)?;
     if current.bytes != body.bytes || current.previous != body.previous {
-        return Err(bad_input("workspace measurements changed during preflight; retry"));
+        return Err(bad_input(
+            "workspace measurements changed during preflight; retry",
+        ));
     }
     if regular(&fp, false)? != existing_fit
         || (existing_fit && read_json(&fp.to_string_lossy())?.0 != spec)
     {
-        return Err(bad_input("workspace fit contract changed during preflight; retry"));
+        return Err(bad_input(
+            "workspace fit contract changed during preflight; retry",
+        ));
     }
     let (n, rd) = reserve(&ws)?;
     let mut notes = body.adopt(&ws, &rd, n)?;
@@ -373,6 +400,11 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     write_json(&rd.join("readiness.json"), &ready)?;
     let val = serde_json::to_value(&validation).map_err(|e| bad_input(e.to_string()))?;
     write_json(&rd.join("validation.json"), &val)?;
+    let (sim, sim_basis, viewer, budget_stop) = if args.options.contains_key("sim") {
+        simulate(args, &rd, n, &raw, validation.status(), unscaled)?
+    } else {
+        (None, "not run".to_string(), None, false)
+    };
     let mut exports = None;
     let mut export_basis = "not run".to_string();
     if args.options.contains_key("export") {
@@ -416,14 +448,14 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let state = status(
         validation.status(),
         unscaled,
-        None,
+        sim.as_ref(),
         exports.as_ref(),
         ready["status"].as_str().unwrap_or("NOT_CHECKED"),
     );
-    let basis = json!({"flat":validation.status(), "sim":"not run", "exports":export_basis, "measurements":ready["status"]});
+    let basis = json!({"flat":validation.status(), "sim":sim_basis, "exports":export_basis, "measurements":ready["status"]});
     let entry = json!({"round":n, "dir":format!("rounds/{n:03}"), "note":args.options.get("note").map_or("", String::as_str),
         "auto_notes":notes, "status":state, "basis":basis, "readiness":ready, "exports":exports,
-        "pattern_meta":raw["meta"], "validation":val, "images":[], "video":null, "viewer":null, "sim":null, "at":at});
+        "pattern_meta":raw["meta"], "validation":val, "images":[], "video":null, "viewer":viewer, "sim":sim, "at":at});
     write_json(&rd.join("round.json"), &entry)?;
     append(&ws, &entry)?;
     let mut text = format!(
@@ -434,9 +466,123 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     for note in &notes {
         text.push_str(&format!("\nNOTE: {note}"));
     }
-    text.push_str(&format!("\nROUND STATUS: {state} (flat: {}; sim: not run; exports: {export_basis}; measurements: {})\nround dir: {}",
+    if let Some(sim) = &sim {
+        for (key, label) in [("gating", "gating"), ("advisory", "advisory")] {
+            let flags: Vec<&str> = sim[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            text.push_str(&format!(
+                "\nSIM {label} flags: {}",
+                if flags.is_empty() {
+                    "none".into()
+                } else {
+                    flags.join("; ")
+                }
+            ));
+        }
+    }
+    text.push_str(&format!("\nROUND STATUS: {state} (flat: {}; sim: {sim_basis}; exports: {export_basis}; measurements: {})\nround dir: {}",
         validation.status(), ready["status"].as_str().unwrap_or("NOT_CHECKED"), rd.display()));
-    Ok((entry, if state == "CONVERGED" { 0 } else { 2 }, text))
+    let code = if budget_stop {
+        4
+    } else if state == "CONVERGED" {
+        0
+    } else {
+        2
+    };
+    Ok((entry, code, text))
+}
+
+/// Only a successful invocation in this newly reserved directory authorizes reading its report.
+/// A failed solver/output write cannot substitute a previous round's report or viewer.
+fn simulate(
+    args: &Args,
+    rd: &Path,
+    number: u64,
+    pattern: &Value,
+    flat: &str,
+    unscaled: bool,
+) -> Result<SimOutcome, Refusal> {
+    let skipped = if flat == "BLOCKED" {
+        Some("skipped (validation BLOCKED)")
+    } else if unscaled {
+        Some("skipped (pattern UNSCALED)")
+    } else if !pattern["pieces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|p| p["sim"] != false && ftx_pattern::truthy(&p["placement"]))
+    {
+        Some("not applicable (no piece has a fold-up placement; judged flat)")
+    } else {
+        None
+    };
+    if let Some(why) = skipped {
+        return Ok((None, why.into(), None, false));
+    }
+    let mut options: BTreeMap<String, String> = args
+        .options
+        .iter()
+        .filter(|(k, _)| SIM_OPTIONS.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for (key, path) in [
+        ("measurements", rd.join("measurements.json")),
+        ("fit", rd.join("fit_spec.json")),
+        ("out", rd.join("sim")),
+    ] {
+        options.insert(key.into(), path.to_string_lossy().into_owned());
+    }
+    let drape_args = Args {
+        positional: vec![
+            "drape".into(),
+            rd.join("pattern.json").to_string_lossy().into_owned(),
+        ],
+        options,
+        values: Vec::new(),
+        json: true,
+    };
+    let outcome = super::cmd_drape(&drape_args).and_then(|(result, _, _)| {
+        let (mut report, _) = read_json(&rd.join("sim/sim_report.json").to_string_lossy())?;
+        if !report.is_object() || !report["gating"].is_array() || !report["settled"].is_boolean() {
+            return Err(bad_input(
+                "the new simulation did not produce a complete report",
+            ));
+        }
+        report["advisory"] = result["advisory"].clone();
+        Ok(report)
+    });
+    match outcome {
+        Ok(report) => {
+            let basis = if ftx_pattern::truthy(&report["gating"]) {
+                "gating flags"
+            } else {
+                "no gating flags"
+            };
+            Ok((
+                Some(report),
+                basis.into(),
+                Some(format!("rounds/{number:03}/sim/fold_viewer.html")),
+                false,
+            ))
+        }
+        Err(refusal) => {
+            let budget = refusal.code == RefusalCode::BudgetExceeded;
+            let flag = format!("simulation failed: {}", refusal.message);
+            let report = json!({"flags":[flag], "gating":[flag], "advisory":[],
+                "settled":false, "verdict":"FAILED", "refusal":refusal});
+            write_json(&rd.join("sim_failure.json"), &report)?;
+            Ok((
+                Some(report),
+                "gating flags (simulation failed)".into(),
+                None,
+                budget,
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

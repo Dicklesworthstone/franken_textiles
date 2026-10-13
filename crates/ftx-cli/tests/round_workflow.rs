@@ -7,6 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{Value, json};
 
 fn setup() -> (PathBuf, Value, Value) {
+    setup_program("fez-920")
+}
+
+fn setup_program(id: &str) -> (PathBuf, Value, Value) {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -25,7 +29,7 @@ fn setup() -> (PathBuf, Value, Value) {
         .as_array()
         .unwrap()
         .iter()
-        .find(|c| c["id"] == "fez-920")
+        .find(|c| c["id"] == id)
         .unwrap();
     let (m, p) = (
         case["input"]["measurements"].clone(),
@@ -226,4 +230,94 @@ fn preflight_refuses_bad_inputs_without_changing_the_workspace() {
     save(&dir.join("m.json"), &m);
     run(&dir, FIRST, 3);
     assert!(!dir.join("ws").exists());
+}
+
+#[test]
+fn non_simulated_hat_and_invalid_patterns_do_not_load_a_body() {
+    let (dir, _, _) = setup();
+    let mut args = FIRST.to_vec();
+    args.extend(["--sim", "--model", "missing.ftxbody"]);
+    let r = run(&dir, &args, 0);
+    assert!(
+        r["result"]["basis"]["sim"]
+            .as_str()
+            .unwrap()
+            .starts_with("not applicable")
+    );
+    assert!(r["result"]["sim"].is_null());
+    assert!(!dir.join("ws/rounds/000/sim").exists());
+    for blocked in [false, true] {
+        let (dir, _, mut p) = setup_program("zouave_bolero-920");
+        p["meta"]["scale_status"] = json!("UNSCALED");
+        if blocked {
+            p["schema"] = json!("broken");
+        }
+        save(&dir.join("p.json"), &p);
+        let r = run(&dir, &args, 2);
+        assert!(
+            r["result"]["basis"]["sim"]
+                .as_str()
+                .unwrap()
+                .starts_with("skipped")
+        );
+        assert!(r["result"]["sim"].is_null());
+        assert!(!dir.join("ws/rounds/000/sim").exists());
+    }
+}
+
+#[test]
+fn failed_simulation_cannot_reuse_an_earlier_success() {
+    let (dir, _, _) = setup_program("zouave_bolero-920");
+    run(&dir, FIRST, 0);
+    let old = dir.join("ws/rounds/000/sim");
+    std::fs::create_dir(&old).unwrap();
+    save(
+        &old.join("sim_report.json"),
+        &json!({"gating":[], "settled":true}),
+    );
+    std::fs::write(old.join("fold_viewer.html"), "old successful viewer").unwrap();
+    let r = run(
+        &dir,
+        &[
+            "round",
+            "ws",
+            "--sim",
+            "--model",
+            "missing.ftxbody",
+            "--as-of",
+            "2026-10-13",
+        ],
+        2,
+    );
+    let r = &r["result"];
+    assert_eq!(r["status"], "SIM_GATING_FLAGS");
+    assert_eq!(r["sim"]["settled"], false);
+    assert!(r["sim"]["refusal"].is_object());
+    assert!(r["viewer"].is_null());
+    assert!(
+        r["sim"]["gating"][0]
+            .as_str()
+            .unwrap()
+            .contains("missing.ftxbody")
+    );
+    assert_eq!(read(&old.join("sim_report.json"))["settled"], true);
+    assert_eq!(read(&dir.join("ws/rounds/001/sim_failure.json")), r["sim"]);
+    assert!(!dir.join("ws/rounds/001/sim/fold_viewer.html").exists());
+}
+
+#[test]
+fn simulation_options_are_checked_before_workspace_mutation() {
+    for options in [
+        vec!["--self-mu", "0.3"],
+        vec!["--model", "model.ftxbody"],
+        vec!["--sim", "--self-contact-mm", "NaN"],
+        vec!["--sim", "--self-mu", "0.3"],
+        vec!["--sim", "--sew", "0", "--drape", "0"],
+    ] {
+        let (dir, _, _) = setup();
+        let mut args = FIRST.to_vec();
+        args.extend(options);
+        run(&dir, &args, 3);
+        assert!(!dir.join("ws").exists());
+    }
 }
