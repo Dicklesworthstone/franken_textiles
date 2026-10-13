@@ -9,6 +9,7 @@
 //! at a fraction of the cost; a garment's assembly spent a quarter of its time sorting.)
 
 pub mod direct;
+pub mod precond;
 
 pub use direct::{
     DirectOrdering, FactorStats, Inertia, LdltError, LdltFactor, LdltOptions, SymbolicLdlt,

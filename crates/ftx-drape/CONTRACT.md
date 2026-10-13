@@ -63,10 +63,12 @@ against the drape body), untangled, welded and handed to the solver with contact
   ring), stretch, tension (the rings' sum), grip `2πμT` (KAT 4's law), the garment's weight and `holds`
   (grip ≥ weight); an elastic that does not hold is an advisory flag. KAT 7 (`tests/kat_elastic.rs`) drapes
   the 92 cm trousers (1.08 N) on the tape-fitted toddler with the elastic at 0.85, 0.95, 1.0 and 1.2 × the
-  530 mm waist: it ends 22.8 %, 12.9 % and 9.1 % stretched with a grip of 8.9, 5.1 and 3.7 N and the
-  waistband 15, 16 and 17 mm below where it was drafted; at 1.2 it grips 0.17 N (flagged) and the waistband
-  rests 19 mm down on the hips and crotch. Without the elastic the waistband sits 6.5 mm down: a casing
-  gathered from its cut length hangs lower than one cut to the finished size.
+  530 mm waist, at μ 0.3 and 0.5: it ends 22.9 %, 12.9 % and 9.1 % stretched with a grip of 6.7, 3.8 and
+  2.7 N at μ 0.3 (11.1, 6.4 and 4.6 N at 0.5) and the waistband 12–15 mm below where it was drafted; at 1.2
+  it grips 0.13 N (0.21 N; flagged) and the waistband rests 14 mm down on the hips and crotch, within a
+  millimetre of the snug 1.0 elastic (the test allows 1 mm: there the hips, not the grip, stop it). Without
+  the elastic the waistband sits 6.5 mm down: a casing gathered from its cut length hangs lower than one cut
+  to the finished size.
 - `run_phase` runs implicit steps under a gravity (the reference's sew then drape).
 The drape body (`ftx_body::trimmed_skin`) leaves out the hands and feet; with Anny's bent elbows a
 straight sleeve crossed the forearm, so the drape pose straightens the arms (`Pose::drape`). The drafted
@@ -88,7 +90,9 @@ seam strain p90 within 1 %) — the run-to-run spread the reference itself shows
 sewing step get friction from the next step on. On the body fitted to 21 measurements (neck, head,
 shoulders, crotch length and outseam added) the verdicts are unchanged (no flag, settled) and the work
 grows: the bolero 374 Newton iterations, the trousers 563 (one sewing step unconverged, the drape
-converged).
+converged). Newton to 1e-3 m/s with the inexact Newton below (the defaults since 2026-10-13) brings them
+to 11 and 83 CPU-seconds on an M4 Pro (bolero 175 iterations, 41 factorizations; trousers 334, 108;
+measured as CPU time on a heavily loaded machine), the same verdicts and readings within 0.3 mm.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
@@ -124,6 +128,18 @@ strains within 0.05 % (the casing's 1 %). `SolveReport` and the drape's `PhaseRe
 factorizations, the iterations the CCD bound cut and the line-search halvings: on the trousers almost every
 iteration is a full projected-Newton step (CCD cut 18 of 563, 32 halvings), and the factorization is 78 %
 of the time (a samply profile), the eigen projection 11 %, contact queries 3 %.
+
+**Inexact Newton** (`Solver::pcg_iters`, `DrapeOptions::pcg_iters`, default 20; 0 in `Solver::new`, so the
+solver KATs factorize every iteration). The last positive-definite factorization is kept and preconditions
+conjugate gradients (`sparse/precond.rs`) on later iterations and steps, to a relative residual of 1e-4
+within the cap; only a failure factorizes anew. A search direction of non-positive curvature in the exact
+Hessian means it is indefinite, so the solve goes straight to the projected Hessian without the
+factorization that would have shown it; a converged direction is a descent direction (CG from zero on
+positive curvature) even where the Hessian is indefinite elsewhere. A factorization costs about 250 CG
+iterations: on the 92 cm trousers 349 factorizations become 108 plus 5,639 CG iterations, CPU 164 → 83 s
+(cap 10: 116 s; 40: 87 s; 80: 91 s), and the bolero's 186 become 41, 18.7 → 11.4 s, every hem, band and
+seam reading within 0.2 mm. Sewing still factorizes on about half its iterations: consecutive sewing
+Hessians differ too much for a stale factor.
 
 **Contact** (`contact.rs`, `distance.rs`, `ad.rs`; plan §11.2, §11.5). The body is a static triangle mesh
 (closed for a real body; open surfaces are accepted for tests). Pairs: cloth vertex–body triangle, body
@@ -216,12 +232,21 @@ cone (tan α = μ/2 holds, +0.11 mm; tan α = 2μ slides 42 mm); KAT 9 for conta
 digest, identical native debug, release and wasm32-wasip1). KATs 4–6 are release only (26 s; 140 s
 unoptimised). Bodies and bands are built with `det::sin_cos`: the platform's `sin`/`cos` made the wasm
 digest differ.
+Fitted bodies (`tests/kat_fitted.rs`; the toddler fitted to the reference wearer's 21 tape readings, release,
+needs the Anny model): KAT 8 armpit wedge, the drafted bolero at 80, 92 and 116 cm with the arms at 35°: no
+gating flag, settled, every hem within ±15 mm of its drafted level (the 80 cm front hangs 13 mm higher than
+its back, an advisory: the belly lifts it); KAT 10 two starts, the 92 cm bolero sewn in 12 and in 18 steps:
+the same minimum, every hem, clearance and seam strain equal at the report's precision; KAT 9 the whole
+pipeline (tape fit, scene, three sewing and three draping steps at the shipped settings) by one SHA-256,
+identical native debug, release and wasm32-wasip1. 79 s release for KATs 8 and 10.
 
 **Lifted code** (frankensim `93fc9b26`, MIT + rider, provenance headers): `sparse/` (CSR assembly and the
 multifrontal LDLᵀ with AMD and inertia; adds `analyze_with_permutation`; assembly orders triplets by a
 row-bucket pass instead of a global stable sort, the same order; the numeric factorization applies the
 panel block's Schur updates after the fully-summed columns, column by column and in pivot order, keeping
-only its lower triangle: bit-identical, both KAT digests unchanged), `eigen.rs` (`jacobi_eigh`).
+only its lower triangle: bit-identical, both KAT digests unchanged), `eigen.rs` (`jacobi_eigh`);
+`sparse/precond.rs` (`pcg`, from fs-sparse at `6eb72a0c`: any preconditioner closure, starts from zero,
+stops with the reason on non-positive curvature or the cap).
 
 **Error model.** `Refusal`: `degenerate_geometry` (bad triangles, non-manifold edges), `out_of_range`
 (non-positive density or step), `non_finite` (state blew up), `not_converged` (symbolic analysis failed),

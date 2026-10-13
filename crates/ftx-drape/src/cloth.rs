@@ -13,7 +13,8 @@ use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::eigen::project_psd;
 use crate::elements::{ElasticSegment, Hinge, Membrane, MembraneElement};
-use crate::sparse::{Coo, Csr, CsrFill, LdltOptions, SymbolicLdlt, amd_order};
+use crate::sparse::precond::{PcgFailure, pcg};
+use crate::sparse::{Coo, Csr, CsrFill, LdltFactor, LdltOptions, SymbolicLdlt, amd_order};
 
 /// Edge (lo, hi) → its uses as (edge start, edge end, opposite vertex, triangle).
 type EdgeUses = std::collections::BTreeMap<(usize, usize), Vec<(usize, usize, usize, usize)>>;
@@ -270,6 +271,8 @@ pub struct SolveReport {
     pub ccd_limited: usize,
     /// Line-search halvings, summed.
     pub halvings: usize,
+    /// Preconditioned conjugate-gradient iterations, failed attempts included.
+    pub pcg_iterations: usize,
 }
 
 /// What [`Solver::settle`] did.
@@ -308,12 +311,20 @@ pub struct Solver {
     pub contact: Option<Contact>,
     /// Friction lag rounds per step after the first solve (IPC; 1 is usually enough).
     pub friction_rounds: usize,
+    /// Inexact Newton: the iteration cap of conjugate gradients preconditioned by the last
+    /// positive-definite factorization, tried before factorizing anew (0: factorize every iteration).
+    pub pcg_iters: usize,
     free: Vec<Option<usize>>,
     nfree: usize,
     symbolic: Option<SymbolicLdlt>,
     /// The Hessian pattern used by the current symbolic analysis.
     pattern: Option<Csr>,
+    /// The last positive-definite factorization, the preconditioner for [`Solver::pcg_iters`].
+    precond: Option<LdltFactor>,
 }
+
+/// The relative residual an inexact Newton direction is solved to.
+const PCG_TOL: f64 = 1e-4;
 
 /// Where an assembly's entries go: straight into the fixed pattern once it is known, else a triplet
 /// buffer (the first assembly). Both give the same matrix bit for bit ([`CsrFill`]).
@@ -370,10 +381,12 @@ impl Solver {
             max_newton: 100,
             contact: None,
             friction_rounds: 1,
+            pcg_iters: 0,
             free,
             nfree,
             symbolic: None,
             pattern: None,
+            precond: None,
         }
     }
 
@@ -719,8 +732,7 @@ impl Solver {
                 (Vec::new(), None)
             } else {
                 let (g, a) = self.assemble(&self.x, inertia, false);
-                rep.factorizations += 1;
-                let p = self.newton_direction(&a, &g)?;
+                let p = self.newton_direction(&a, &g, false, &mut rep)?;
                 (g, p)
             };
             if p.is_none() {
@@ -728,8 +740,7 @@ impl Solver {
                 rep.projected_iterations += 1;
                 let (g2, a2) = self.assemble(&self.x, inertia, true);
                 g = g2;
-                rep.factorizations += 1;
-                p = self.newton_direction(&a2, &g)?;
+                p = self.newton_direction(&a2, &g, true, &mut rep)?;
             }
             // Singular even after projection: steepest descent.
             let mut p = p.unwrap_or_else(|| g.iter().map(|v| -v).collect());
@@ -778,12 +789,45 @@ impl Solver {
         Ok(rep)
     }
 
-    /// The Newton direction `−A⁻¹g`, or `None` when `A` is singular or not positive definite.
-    fn newton_direction(&mut self, a: &Csr, g: &[f64]) -> Result<Option<Vec<f64>>, Refusal> {
+    /// The Newton direction `−A⁻¹g`, or `None` when `A` is singular or not positive definite. With
+    /// [`Solver::pcg_iters`], conjugate gradients preconditioned by the last positive-definite factor go
+    /// first (Newton-CG): a direction of negative curvature in an exact Hessian is `None` without a
+    /// factorization, since the caller then projects; a converged one is a descent direction even where
+    /// the Hessian is indefinite elsewhere; anything else falls back to factorizing `A`.
+    fn newton_direction(
+        &mut self,
+        a: &Csr,
+        g: &[f64],
+        projected: bool,
+        rep: &mut SolveReport,
+    ) -> Result<Option<Vec<f64>>, Refusal> {
+        let b: Vec<f64> = g.iter().map(|v| -v).collect();
+        if self.pcg_iters > 0
+            && let Some(f) = &self.precond
+        {
+            match pcg(a, &b, |r: &[f64]| f.solve(r), PCG_TOL, self.pcg_iters) {
+                Ok((p, r)) => {
+                    rep.pcg_iterations += r.iters;
+                    return Ok(Some(p));
+                }
+                Err(PcgFailure::NegativeCurvature(k)) if !projected => {
+                    rep.pcg_iterations += k;
+                    return Ok(None);
+                }
+                Err(PcgFailure::NegativeCurvature(k) | PcgFailure::NotConverged(k)) => {
+                    rep.pcg_iterations += k;
+                }
+            }
+        }
         let sym = self.symbolic(a)?;
+        rep.factorizations += 1;
         Ok(match sym.factor(a, &LdltOptions::default()) {
             Ok(f) if f.inertia().negative == 0 => {
-                Some(f.solve(&g.iter().map(|v| -v).collect::<Vec<_>>()))
+                let p = f.solve(&b);
+                if self.pcg_iters > 0 {
+                    self.precond = Some(f);
+                }
+                Some(p)
             }
             _ => None,
         })
@@ -852,6 +896,7 @@ impl Solver {
             rep.factorizations += again.factorizations;
             rep.ccd_limited += again.ccd_limited;
             rep.halvings += again.halvings;
+            rep.pcg_iterations += again.pcg_iterations;
             rep.converged = again.converged;
             rep.energy_end = again.energy_end;
             rep.residual = again.residual;

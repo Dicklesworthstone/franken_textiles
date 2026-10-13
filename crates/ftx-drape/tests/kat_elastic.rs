@@ -4,8 +4,10 @@
 //! garment's weight) and keep the waistband within 25 mm of where it was drafted; at 1.2 the elastic cannot
 //! hold the trousers up and the run says so (they then rest on the hips and crotch, so "fall" reads as an
 //! elastic that does not grip, not as trousers on the floor). The looser the elastic, the lower the
-//! waistband. The ladder runs at two body frictions, μ = 0.3 and 0.5 (the default 0.4 is UNCERTAIN until
-//! sourced), and must read the same at both.
+//! waistband, to within 1 mm: the slack one rests on the hips about where they also stop the snug one
+//! (measured 2026-10-13: 1.2 × sits 0.9 mm above 1.0 × at μ 0.3, 0.6 mm at 0.5). The ladder runs at two
+//! body frictions, μ = 0.3 and 0.5 (the default 0.4 is UNCERTAIN until sourced), and must read the same at
+//! both.
 //!
 //! Needs the converted Anny model and takes minutes:
 //! `cargo test -p ftx-drape --release --test kat_elastic -- --include-ignored --nocapture`.

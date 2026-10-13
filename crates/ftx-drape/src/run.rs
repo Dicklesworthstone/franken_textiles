@@ -70,10 +70,16 @@ pub struct DrapeOptions {
     /// Starts with intersecting layers are refused. `None` preserves body-only draping and is
     /// explicitly reported as self-contact not simulated.
     pub self_contact: Option<ContactParams>,
+    /// Inexact Newton ([`crate::cloth::Solver::pcg_iters`]): conjugate-gradient iterations preconditioned
+    /// by the last factorization before factorizing anew; 0 factorizes every iteration. The default, 20,
+    /// halves the 92 cm trousers' CPU time (164 → 83 s; 10: 116 s, 40: 87 s, 80: 91 s) and takes the
+    /// bolero's from 18.7 to 11.4 s, every reading within 0.2 mm: a factorization costs about 250
+    /// conjugate-gradient iterations.
+    pub pcg_iters: usize,
 }
 
 impl Default for DrapeOptions {
-    /// 12 mm mesh, 12 sewing and 36 draping steps of 1/24 s, Newton to 1e-4 m/s, compression as stiff
+    /// 12 mm mesh, 12 sewing and 36 draping steps of 1/24 s, Newton to 1e-3 m/s, compression as stiff
     /// as tension outside gather zones (the reference's `tension = compression = E_t·L`, spec 04 §5.3),
     /// friction lagged once a step while draping and not while sewing, a drafted casing's elastic at
     /// [`crate::scene::ELASTIC_EA`], ĝ 1 mm, the cloth's mid-surface 1.5 mm off the body, μ 0.4.
@@ -95,6 +101,7 @@ impl Default for DrapeOptions {
                 eps_v: 1e-3,
             },
             self_contact: None,
+            pcg_iters: 20,
         }
     }
 }
@@ -246,6 +253,7 @@ pub fn drape(
         progress("self-contact: start audit passed; cloth–cloth contact enabled");
     }
     scene.solver.tol = opts.tol;
+    scene.solver.pcg_iters = opts.pcg_iters;
     progress(&format!(
         "start: {} vertices ({} after welding), relaxed {} iterations to p95 strain {:.3}",
         scene.mesh.verts2d.len(),

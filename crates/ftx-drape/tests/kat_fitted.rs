@@ -5,8 +5,8 @@
 //! - KAT 10, two starts: the 92 cm bolero sewn in 12 and in 18 steps (two paths to the same garment); both
 //!   without flags, and their readings apart by no more than the run-to-run spread the reference shows
 //!   (hems 6 mm, landmark clearances 3 mm, seam strain p90 1.5 %). The spread is printed. Measured
-//!   2026-10-13: the two paths (198 and 210 sewing Newton iterations) settle into the same minimum, every
-//!   reading equal at the report's precision (0.1 mm, 0.01 %).
+//!   2026-10-13, with exact Newton to 1e-4 m/s and again with the shipped inexact Newton to 1e-3 m/s: the two
+//!   paths settle into the same minimum, every reading equal at the report's precision (0.1 mm, 0.01 %).
 //!
 //! Needs the converted Anny model and takes minutes:
 //! `cargo test -p ftx-drape --release --test kat_fitted -- --include-ignored --nocapture`.
@@ -232,9 +232,11 @@ fn kat10_two_starts() {
 }
 
 /// KAT 9 on a fitted body: the whole pipeline (the tape fit, the scene, three sewing and three draping steps
-/// of the 92 cm bolero, the fewest the drape's metrics accept) pinned by the SHA-256 of the fitted parameters and the last frame's positions. The
-/// same digest must come out of native debug, native release and wasm32-wasip1 (`FTX_ANNY_MODEL` naming
-/// the model file inside the WASI sandbox).
+/// of the 92 cm bolero, the fewest the drape's metrics accept) pinned by the SHA-256 of the fitted
+/// parameters and the last frame's positions. The same digest must come out of native debug, native release
+/// and wasm32-wasip1 (`FTX_ANNY_MODEL` naming the model file inside the WASI sandbox). The solver settings
+/// are the shipped ones, so the inexact Newton's paths are covered: these six steps take 1,589 conjugate-
+/// gradient iterations, 38 factorizations and 86 projected iterations.
 #[test]
 #[ignore = "needs the converted Anny model"]
 fn kat9_fitted_pipeline_digest() {
@@ -273,11 +275,10 @@ fn kat9_fitted_pipeline_digest() {
         display: (&full.vertices, &full.triangles),
         arm_deg: Pose::A_POSE_DEG,
     };
-    // the tolerance the digest was pinned at (the default has since become 1e-3)
+    // the shipped solver settings (tolerance, inexact Newton), shortened schedule
     let opts = DrapeOptions {
         sew_steps: 3,
         drape_steps: 3,
-        tol: 1e-4,
         ..DrapeOptions::default()
     };
     let run = drape(
@@ -301,6 +302,6 @@ fn kat9_fitted_pipeline_digest() {
     assert!(last.iter().all(|p| p.is_finite()));
     assert_eq!(
         digest,
-        "5739b16c47d79aac124456d6e5fb6a58a9156044d6ddc626405d986e2e3ec2cf"
+        "4fc0027b3c79e8435897dcfb7796f41cab0fb48622eebcadee5d55de20db26db"
     );
 }
