@@ -610,6 +610,14 @@ pub struct PhaseReport {
     pub iterations: usize,
     /// Steps that did not converge.
     pub unconverged: usize,
+    /// Sparse factorizations, summed.
+    pub factorizations: usize,
+    /// Iterations whose step the CCD bound cut, summed.
+    pub ccd_limited: usize,
+    /// Line-search halvings, summed.
+    pub halvings: usize,
+    /// Iterations that projected element Hessians to PSD, summed.
+    pub projected_iterations: usize,
     /// Largest vertex speed at the end (m/s).
     pub max_speed: f64,
     /// The cloth offset at the end (m).
@@ -636,6 +644,10 @@ pub fn run_phase(
         rep.steps += 1;
         rep.iterations += r.iterations;
         rep.unconverged += usize::from(!r.converged);
+        rep.factorizations += r.factorizations;
+        rep.ccd_limited += r.ccd_limited;
+        rep.halvings += r.halvings;
+        rep.projected_iterations += r.projected_iterations;
         frame(k, &scene.positions());
     }
     rep.max_speed = scene.solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max);

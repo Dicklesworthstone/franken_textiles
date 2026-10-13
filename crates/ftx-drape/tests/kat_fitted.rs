@@ -273,9 +273,11 @@ fn kat9_fitted_pipeline_digest() {
         display: (&full.vertices, &full.triangles),
         arm_deg: Pose::A_POSE_DEG,
     };
+    // the tolerance the digest was pinned at (the default has since become 1e-3)
     let opts = DrapeOptions {
         sew_steps: 3,
         drape_steps: 3,
+        tol: 1e-4,
         ..DrapeOptions::default()
     };
     let run = drape(

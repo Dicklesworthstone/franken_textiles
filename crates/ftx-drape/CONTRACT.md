@@ -117,7 +117,13 @@ report identical and re-pinned the contact digest (native and wasm agree). Tried
 eigen-projection (cheaper iterations, 2.7× as many in the drape, slower overall). For body-only contact the symbolic analysis is computed once,
 ordered by AMD on the vertex graph and expanded to the free DOFs (the pattern never changes: every
 element block is always assembled). Per-DOF constraints (rollers, pins). Convergence: `‖p‖∞/h < tol`
-(step) or `‖p‖∞ < tol` (static).
+(step) or `‖p‖∞ < tol` (static); a garment's default `tol` is 1e-3 m/s (`DrapeOptions`; 42 µm per step):
+at 1e-4 Newton chased the cloth's tiny buckling modes on projected Hessians for twice the factorizations
+(the 92 cm bolero 374 → 180 iterations, the trousers 563 → 334) with hems and bands within 0.3 mm and seam
+strains within 0.05 % (the casing's 1 %). `SolveReport` and the drape's `PhaseReport` count the
+factorizations, the iterations the CCD bound cut and the line-search halvings: on the trousers almost every
+iteration is a full projected-Newton step (CCD cut 18 of 563, 32 halvings), and the factorization is 78 %
+of the time (a samply profile), the eigen projection 11 %, contact queries 3 %.
 
 **Contact** (`contact.rs`, `distance.rs`, `ad.rs`; plan §11.2, §11.5). The body is a static triangle mesh
 (closed for a real body; open surfaces are accepted for tests). Pairs: cloth vertex–body triangle, body

@@ -264,6 +264,12 @@ pub struct SolveReport {
     pub line_search_failures: usize,
     /// Iterations whose exact Hessian was indefinite, so element blocks were projected to PSD.
     pub projected_iterations: usize,
+    /// Sparse LDLᵀ factorizations (the dominant cost: one per iteration, two where projection begins).
+    pub factorizations: usize,
+    /// Iterations whose step the CCD bound cut below a full Newton step.
+    pub ccd_limited: usize,
+    /// Line-search halvings, summed.
+    pub halvings: usize,
 }
 
 /// What [`Solver::settle`] did.
@@ -713,6 +719,7 @@ impl Solver {
                 (Vec::new(), None)
             } else {
                 let (g, a) = self.assemble(&self.x, inertia, false);
+                rep.factorizations += 1;
                 let p = self.newton_direction(&a, &g)?;
                 (g, p)
             };
@@ -721,6 +728,7 @@ impl Solver {
                 rep.projected_iterations += 1;
                 let (g2, a2) = self.assemble(&self.x, inertia, true);
                 g = g2;
+                rep.factorizations += 1;
                 p = self.newton_direction(&a2, &g)?;
             }
             // Singular even after projection: steepest descent.
@@ -743,6 +751,7 @@ impl Solver {
                 Some(c) => c.step_bound(&self.x, &self.displacement(&p)),
                 None => 1.0,
             };
+            rep.ccd_limited += usize::from(alpha < 1.0);
             let mut accepted = false;
             for _ in 0..50 {
                 let trial = self.apply(&self.x, &p, alpha);
@@ -754,6 +763,7 @@ impl Solver {
                     break;
                 }
                 alpha *= 0.5;
+                rep.halvings += 1;
             }
             if !accepted {
                 rep.line_search_failures += 1;
@@ -839,6 +849,9 @@ impl Solver {
             rep.iterations += again.iterations;
             rep.projected_iterations += again.projected_iterations;
             rep.line_search_failures += again.line_search_failures;
+            rep.factorizations += again.factorizations;
+            rep.ccd_limited += again.ccd_limited;
+            rep.halvings += again.halvings;
             rep.converged = again.converged;
             rep.energy_end = again.energy_end;
             rep.residual = again.residual;

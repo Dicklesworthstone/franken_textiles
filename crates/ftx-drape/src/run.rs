@@ -49,7 +49,10 @@ pub struct DrapeOptions {
     pub drape_steps: usize,
     /// Time step (s).
     pub step: f64,
-    /// Newton tolerance on ‖Δx‖∞/h (m/s).
+    /// Newton tolerance on ‖Δx‖∞/h (m/s). The default, 1e-3 (each step converged to 42 µm), halves the
+    /// work of 1e-4: tighter, Newton descends into the cloth's tiny buckling modes, where the exact Hessian is
+    /// indefinite and the projected one converges linearly (the 92 cm bolero 374 → 180 iterations, the
+    /// trousers 563 → 334; hems and bands within 0.3 mm, seam strains within 0.05 %, the casing's 1 %).
     pub tol: f64,
     /// Compression stiffness as a fraction of tension, outside gather zones (inside them it falls to
     /// [`crate::start::GATHER_COMPRESSION`] at the gathered seam).
@@ -80,7 +83,7 @@ impl Default for DrapeOptions {
             sew_steps: 12,
             drape_steps: 36,
             step: 1.0 / 24.0,
-            tol: 1e-4,
+            tol: 1e-3,
             compression: 1.0,
             lag_rounds: [0, 1],
             elastic_ea: crate::scene::ELASTIC_EA,
