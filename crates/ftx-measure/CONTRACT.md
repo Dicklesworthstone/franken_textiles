@@ -88,3 +88,20 @@ Brown–Conrady calibration and its certified lens domain. Exact synthetic pose/
 off-plane held-out projection and analytic-Jacobian finite differences are tested in
 `photo::camera::tests`. This is an algebraic calibrated-pose slice, not unknown-focal
 calibration, image detection, noisy-PnP parity, bundle adjustment or a real-wearer fit claim.
+
+**Calibrated 3D geometry** (plan §10.2, FTX-20). `camera` provides oriented-image intrinsics,
+polynomial Brown distortion and bounded certified inversion; rotations must be right-handed
+and orthonormal. Its 3D coordinates are metres, z up, unlike the millimetre evidence records.
+`triangulate::triangulate` consumes `ftx-triangulation-input/1`: calibrated cameras in one
+metric frame, unique decoded stream/timestamp identities, explicit fit/held-out assignments,
+and a caller-reviewed still-window or synchronized-capture assertion. It does not detect
+stillness, synchronize clocks or establish calibration/scale accuracy itself.
+
+Equal-weight ray-distance fitting uses the existing SVD with origin/baseline normalization
+and canonical frame ordering. Fit geometry must have at least 3-degree acute parallax before
+and after solving. Every fit and held-out view must project in front of its camera, inside its
+lens domain and within 3 pixels. Held-out views never fit or rescue weak geometry. Weak,
+inconsistent or behind-camera geometry publishes diagnostics with no usable point; malformed
+inputs produce typed refusals. Reports retain the full input receipt and distinguish fitted
+from held-out errors. No measurement sigma, fused record, READY status or body-fit claim is
+created. See `docs/triangulation.md` for the CLI, schema and remaining FTX-20 work.

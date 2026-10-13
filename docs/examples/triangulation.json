@@ -1,0 +1,41 @@
+{
+  "schema": "ftx-triangulation-input/1",
+  "metric_scale_source": "Synthetic z-up world; optical centers exactly 0.8 metres apart",
+  "capture": {
+    "kind": "synchronized",
+    "max_skew_us": 0,
+    "evidence": "Synthetic simultaneous cameras viewing a stationary point; no real wearer"
+  },
+  "observations": [
+    {
+      "frame": {"stream": "synthetic-left", "timestamp_us": 1000000},
+      "camera": {
+        "intrinsics": {"focal_px": [900, 900], "principal_px": [500, 400]},
+        "world_to_camera": {"rows": [[1, 0, 0], [0, 0, -1], [0, 1, 0]]},
+        "center_m": [-0.4, -3, 1]
+      },
+      "pixel_px": [620, 310],
+      "partition": "fit"
+    },
+    {
+      "frame": {"stream": "synthetic-right", "timestamp_us": 1000000},
+      "camera": {
+        "intrinsics": {"focal_px": [900, 900], "principal_px": [500, 400]},
+        "world_to_camera": {"rows": [[1, 0, 0], [0, 0, -1], [0, 1, 0]]},
+        "center_m": [0.4, -3, 1]
+      },
+      "pixel_px": [380, 310],
+      "partition": "fit"
+    },
+    {
+      "frame": {"stream": "synthetic-validation", "timestamp_us": 1000000},
+      "camera": {
+        "intrinsics": {"focal_px": [900, 900], "principal_px": [500, 400]},
+        "world_to_camera": {"rows": [[1, 0, 0], [0, 0, -1], [0, 1, 0]]},
+        "center_m": [0, -3, 1]
+      },
+      "pixel_px": [500, 310],
+      "partition": "held_out"
+    }
+  ]
+}

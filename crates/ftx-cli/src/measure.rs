@@ -2,6 +2,7 @@
 
 mod photo;
 mod section;
+mod triangulate;
 
 use super::{Args, bad_input, known_options, read_json, required};
 use ftx_core::{Refusal, RefusalCode};
@@ -184,6 +185,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mut output = option(args, "out");
     let mut code = 0;
     let value = match command {
+        "triangulate" => return triangulate::run(args),
         "girth-from-section" => section::run(args)?,
         "photo-scale" | "measure-photo" => {
             let (value, status) = photo::run(args, command)?;
@@ -381,7 +383,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         _ => {
             return Err(bad_input(format!(
-                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, photo-scale, measure-photo or girth-from-section"
+                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, photo-scale, measure-photo, girth-from-section or triangulate"
             )));
         }
     };
