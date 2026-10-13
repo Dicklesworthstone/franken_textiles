@@ -65,7 +65,8 @@ since, measured interleaved against the previous build on 6 sewing steps of the 
 iterations): skipping the projection of element Hessians that are PSD by construction (66–75 s → 56 s)
 and deferring the factorization's panel updates (→ 45–50 s); assembly now fills the fixed pattern in
 place (bit-identical, no triplet sort). With compression at the reference's stiffness (above) the whole
-bolero drape takes about 70 s and the trousers about 7.5 minutes.
+bolero drape takes about 70 s and the trousers about 7.5 minutes; on the body fitted to 15 tape
+measurements (ftx-body), 50 s and 5.4 minutes.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
