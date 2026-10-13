@@ -65,10 +65,10 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 |---|---|---|---|
 | Garment mesh (spacing, seam pairs, instance ranges) | 04 §2 | missing | |
 | Placement and start shape (wrap, pre-sew) | 04 §3–4 | missing | |
-| Dynamics contract | 04 §5 | missing | |
+| Dynamics contract | 04 §5 | partial | implicit Euler on the incremental potential without contact (`ftx-drape` CONTRACT); pre-sew, collider and flags pending |
 | Metrics and flags with the reference's text and gating split | 04 §6 | missing | |
 | Qualification bands and tightness gating | 04 §7 | missing | |
-| Known-answer tests (plan §11.9) | 04 §8 | missing | |
+| Known-answer tests (plan §11.9) | 04 §8 | partial | KAT 2 (anisotropy, compression law), KAT 3 (Peirce cantilever vs exact elastica), KAT 9 (small drape digest equal native/wasm) in `crates/ftx-drape/tests/kat.rs`; KAT 1, 4–8 need contact |
 | Output formats (fold.pc2, mesh_map.json, report, viewer data) | 04 §9 | missing | |
 
 ## Exports (`ftx-export`, spec 03)

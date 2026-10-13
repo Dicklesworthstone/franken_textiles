@@ -1,0 +1,15 @@
+[package]
+name = "ftx-drape"
+description = "FrankenTextiles drape: an implicit cloth solver (orthotropic membrane, quadratic bending, projected Newton on a sparse LDLT) for sewing patterns onto bodies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+ftx-core = { path = "../ftx-core" }
+
+[lints]
+workspace = true

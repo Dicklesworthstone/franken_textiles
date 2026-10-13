@@ -29,6 +29,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftx-drape"
+version = "0.1.0"
+dependencies = [
+ "ftx-core",
+]
+
+[[package]]
 name = "ftx-pattern"
 version = "0.1.0"
 dependencies = [

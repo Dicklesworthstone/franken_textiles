@@ -1,0 +1,435 @@
+//! Cloth element energies with exact gradients and Hessians (plan §11.2).
+//!
+//! - **Membrane**: constant-strain triangle, Green strain from the deformation gradient against the
+//!   piece's flat rest coordinates (rotation-invariant, so large rotations store no energy), orthotropic
+//!   plane-stress resultants `Q` (N/m) in the material frame (axis 1 = warp/grain, axis 2 = weft,
+//!   engineering shear = bias), StVK energy `A·½ εᵀQε`. Each normal strain is softened under compression,
+//!   `φ(e) = e` for e ≥ 0 and `r·e + (1 − r)·δ·tanh(e/δ)` below (r = √s), so cloth buckles and gathers
+//!   instead of resisting compression like a plate. The blend makes the energy C² at e = 0: with a plain
+//!   `r·e` the Hessian jumps by 1/s at zero strain and Newton cycles on a sagging sheet. Well into
+//!   compression the stiffness tends to s·Q. Rest coordinates are expected in the material frame (rotate
+//!   the pattern so the grainline is +u).
+//! - **Bending**: Bergou et al.'s quadratic model for inextensible surfaces: per interior edge
+//!   `½·B·w·|Σᵢ Kᵢ xᵢ|²` with cotangent weights K from the flat rest shape. Its Hessian is constant and
+//!   positive semidefinite, which suits Newton.
+
+use ftx_core::{Vec2, Vec3};
+
+/// Orthotropic membrane material (resultants in N/m, so thickness is folded in).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Membrane {
+    /// Plane-stress stiffness in the material frame, Voigt order (ε₁₁, ε₂₂, γ₁₂).
+    pub q: [[f64; 3]; 3],
+    /// Compression stiffness factor per normal direction (1 = as stiff as in tension).
+    pub compression: [f64; 2],
+    /// Strain width δ of the tension–compression blend (default 1e-3).
+    pub transition: f64,
+}
+
+impl Membrane {
+    /// From warp and weft Young's moduli E1, E2 (N/m), the major Poisson ratio ν12, the shear (bias)
+    /// modulus G12 (N/m) and a compression factor applied to both directions.
+    #[must_use]
+    pub fn orthotropic(e1: f64, e2: f64, nu12: f64, g12: f64, compression: f64) -> Self {
+        let nu21 = nu12 * e2 / e1;
+        let d = 1.0 - nu12 * nu21;
+        Self {
+            q: [
+                [e1 / d, nu12 * e2 / d, 0.0],
+                [nu12 * e2 / d, e2 / d, 0.0],
+                [0.0, 0.0, g12],
+            ],
+            compression: [compression, compression],
+            transition: 1e-3,
+        }
+    }
+}
+
+/// A constant-strain membrane triangle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MembraneElement {
+    /// Vertex indices.
+    pub v: [usize; 3],
+    /// Rest area (m²).
+    pub area: f64,
+    /// Shape-function gradients: `g[a] = (∂Nₐ/∂u, ∂Nₐ/∂v)` in the material frame.
+    pub g: [[f64; 2]; 3],
+}
+
+/// Energy, gradient (9) and Hessian (9 × 9, row-major) of one element.
+#[derive(Clone, Copy, Debug)]
+pub struct Local<const N: usize, const NN: usize> {
+    /// Energy (J).
+    pub energy: f64,
+    /// Gradient.
+    pub grad: [f64; N],
+    /// Hessian, row-major.
+    pub hess: [f64; NN],
+}
+
+impl MembraneElement {
+    /// Builds the element from its rest coordinates; `None` for a degenerate triangle.
+    #[must_use]
+    pub fn new(v: [usize; 3], rest: [Vec2; 3]) -> Option<Self> {
+        let (d1, d2) = (rest[1] - rest[0], rest[2] - rest[0]);
+        let det = d1.x * d2.y - d2.x * d1.y;
+        if !det.is_finite() || det == 0.0 {
+            return None;
+        }
+        // Dm = [d1 d2] (columns); Dm⁻¹ rows give ∂N₁ and ∂N₂.
+        let inv = [[d2.y / det, -d2.x / det], [-d1.y / det, d1.x / det]];
+        let g1 = inv[0];
+        let g2 = inv[1];
+        let g0 = [-g1[0] - g2[0], -g1[1] - g2[1]];
+        Some(Self {
+            v,
+            area: 0.5 * det.abs(),
+            g: [g0, g1, g2],
+        })
+    }
+
+    fn frame(&self, x: &[Vec3]) -> (Vec3, Vec3) {
+        let mut f1 = Vec3::ZERO;
+        let mut f2 = Vec3::ZERO;
+        for (a, &vi) in self.v.iter().enumerate() {
+            f1 += x[vi] * self.g[a][0];
+            f2 += x[vi] * self.g[a][1];
+        }
+        (f1, f2)
+    }
+
+    /// Green strain `(E₁₁, E₂₂, γ₁₂)` in the material frame.
+    #[must_use]
+    pub fn strain(&self, x: &[Vec3]) -> [f64; 3] {
+        let (f1, f2) = self.frame(x);
+        [
+            0.5 * (f1.dot(f1) - 1.0),
+            0.5 * (f2.dot(f2) - 1.0),
+            f1.dot(f2),
+        ]
+    }
+
+    /// Energy only.
+    #[must_use]
+    pub fn energy(&self, x: &[Vec3], m: &Membrane) -> f64 {
+        let e = self.strain(x);
+        let (eff, _, _) = soften(e, m);
+        let s = mat3(&m.q, eff);
+        0.5 * self.area * (eff[0] * s[0] + eff[1] * s[1] + eff[2] * s[2])
+    }
+
+    /// Energy, gradient and exact Hessian (material plus geometric part).
+    #[must_use]
+    pub fn local(&self, x: &[Vec3], m: &Membrane) -> Local<9, 81> {
+        let (f1, f2) = self.frame(x);
+        let e = [
+            0.5 * (f1.dot(f1) - 1.0),
+            0.5 * (f2.dot(f2) - 1.0),
+            f1.dot(f2),
+        ];
+        let (eff, dphi, ddphi) = soften(e, m);
+        let sigma = mat3(&m.q, eff);
+        // B (3 × 9): rows d(eff_i)/dx.
+        let mut b = [[0.0; 9]; 3];
+        for a in 0..3 {
+            let (ga0, ga1) = (self.g[a][0], self.g[a][1]);
+            for k in 0..3 {
+                b[0][3 * a + k] = dphi[0] * ga0 * f1[k];
+                b[1][3 * a + k] = dphi[1] * ga1 * f2[k];
+                b[2][3 * a + k] = ga0 * f2[k] + ga1 * f1[k];
+            }
+        }
+        let mut grad = [0.0; 9];
+        for (i, gi) in grad.iter_mut().enumerate() {
+            *gi = self.area * (sigma[0] * b[0][i] + sigma[1] * b[1][i] + sigma[2] * b[2][i]);
+        }
+        let mut hess = [0.0; 81];
+        // Material part A·Bᵀ Q B.
+        let mut qb = [[0.0; 9]; 3];
+        for r in 0..3 {
+            for j in 0..9 {
+                qb[r][j] = m.q[r][0] * b[0][j] + m.q[r][1] * b[1][j] + m.q[r][2] * b[2][j];
+            }
+        }
+        for i in 0..9 {
+            for j in 0..9 {
+                hess[i * 9 + j] =
+                    self.area * (b[0][i] * qb[0][j] + b[1][i] * qb[1][j] + b[2][i] * qb[2][j]);
+            }
+        }
+        // Geometric part: Σ σᵢ ∂²effᵢ, a scalar per vertex pair times I₃.
+        for a in 0..3 {
+            for c in 0..3 {
+                let (ga, gc) = (self.g[a], self.g[c]);
+                let s = sigma[0] * dphi[0] * ga[0] * gc[0]
+                    + sigma[1] * dphi[1] * ga[1] * gc[1]
+                    + sigma[2] * (ga[0] * gc[1] + ga[1] * gc[0]);
+                for k in 0..3 {
+                    hess[(3 * a + k) * 9 + 3 * c + k] += self.area * s;
+                }
+            }
+        }
+        // Curvature of the softening blend: σᵢ·φ''(Eᵢᵢ)·(∂Eᵢᵢ/∂x)(∂Eᵢᵢ/∂x)ᵀ.
+        for (i, (&dd, f)) in ddphi.iter().zip([f1, f2]).enumerate() {
+            if dd == 0.0 {
+                continue;
+            }
+            let de: [f64; 9] = std::array::from_fn(|j| self.g[j / 3][i] * f[j % 3]);
+            let c = self.area * sigma[i] * dd;
+            for r in 0..9 {
+                for s in 0..9 {
+                    hess[r * 9 + s] += c * de[r] * de[s];
+                }
+            }
+        }
+        Local {
+            energy: 0.5 * self.area * (eff[0] * sigma[0] + eff[1] * sigma[1] + eff[2] * sigma[2]),
+            grad,
+            hess,
+        }
+    }
+}
+
+fn mat3(q: &[[f64; 3]; 3], e: [f64; 3]) -> [f64; 3] {
+    [
+        q[0][0] * e[0] + q[0][1] * e[1] + q[0][2] * e[2],
+        q[1][0] * e[0] + q[1][1] * e[1] + q[1][2] * e[2],
+        q[2][0] * e[0] + q[2][1] * e[1] + q[2][2] * e[2],
+    ]
+}
+
+/// Compression softening of the two normal strains: effective strains φ(e), φ'(e) and φ''(e).
+fn soften(e: [f64; 3], m: &Membrane) -> ([f64; 3], [f64; 2], [f64; 2]) {
+    let mut eff = e;
+    let mut d = [1.0; 2];
+    let mut dd = [0.0; 2];
+    for i in 0..2 {
+        let r = m.compression[i].sqrt();
+        if e[i] < 0.0 && r < 1.0 {
+            let delta = m.transition;
+            let t = ftx_core::det::tanh(e[i] / delta);
+            let sech2 = 1.0 - t * t;
+            eff[i] = r * e[i] + (1.0 - r) * delta * t;
+            d[i] = r + (1.0 - r) * sech2;
+            dd[i] = -(1.0 - r) * 2.0 * sech2 * t / delta;
+        }
+    }
+    (eff, d, dd)
+}
+
+/// A bending hinge: interior edge (v0, v1) with opposite vertices v2 and v3.
+///
+/// Energy `½·B·w·|Σᵢ Kᵢ xᵢ|²`. On a fine mesh `|Σ Kᵢxᵢ|² → κ²(A₀+A₁)²/3` for normal curvature κ across
+/// the edge, so `w = 3a/(A₀+A₁)²` makes the hinge carry `½·B·κ²·a`, the plate energy of the area `a` it
+/// stands for. Interior hinges stand for a third of each triangle (`w = 1/(A₀+A₁)`); [`Hinge::set_area`]
+/// lets a mesh hand boundary triangles' whole area to their few hinges (else free edges are too soft by
+/// O(h)). Checked on a cylinder: total energy → ½·B·A/R².
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hinge {
+    /// `[edge start, edge end, opposite in the first triangle, opposite in the second]`.
+    pub v: [usize; 4],
+    /// Cotangent weights (they sum to zero, so translations store no energy).
+    pub k: [f64; 4],
+    /// Rest areas of the two triangles (m²).
+    pub areas: [f64; 2],
+    /// `3a / (A₀ + A₁)²` (1/m²).
+    pub weight: f64,
+}
+
+fn cot(a: Vec2, b: Vec2) -> f64 {
+    a.dot(b) / a.cross(b).abs()
+}
+
+impl Hinge {
+    /// From the flat rest coordinates of the stencil; `None` if a triangle is degenerate.
+    #[must_use]
+    pub fn new(v: [usize; 4], rest: [Vec2; 4]) -> Option<Self> {
+        let [x0, x1, x2, x3] = rest;
+        let (e0, e1, e2, e3, e4) = (x1 - x0, x2 - x0, x3 - x0, x2 - x1, x3 - x1);
+        let (c01, c02, c03, c04) = (cot(e0, e1), cot(e0, e2), cot(-e0, e3), cot(-e0, e4));
+        let a0 = 0.5 * e0.cross(e1).abs();
+        let a1 = 0.5 * e0.cross(e2).abs();
+        let k = [c03 + c04, c01 + c02, -c01 - c03, -c02 - c04];
+        (a0 > 0.0 && a1 > 0.0 && k.iter().all(|c| c.is_finite())).then(|| Self {
+            v,
+            k,
+            areas: [a0, a1],
+            weight: 1.0 / (a0 + a1),
+        })
+    }
+
+    /// Sets the area this hinge stands for (m²); the default is a third of each triangle.
+    pub fn set_area(&mut self, area: f64) {
+        let s = self.areas[0] + self.areas[1];
+        self.weight = 3.0 * area / (s * s);
+    }
+
+    fn curvature_vector(&self, x: &[Vec3]) -> Vec3 {
+        self.v
+            .iter()
+            .zip(self.k)
+            .fold(Vec3::ZERO, |acc, (&vi, ki)| acc + x[vi] * ki)
+    }
+
+    /// Energy `½·B·w·|Σ Kᵢxᵢ|²` for bending stiffness `b` (N·m).
+    #[must_use]
+    pub fn energy(&self, x: &[Vec3], b: f64) -> f64 {
+        0.5 * b * self.weight * self.curvature_vector(x).norm2()
+    }
+
+    /// Energy, gradient (12) and Hessian (12 × 12, constant).
+    #[must_use]
+    pub fn local(&self, x: &[Vec3], b: f64) -> Local<12, 144> {
+        let s = self.curvature_vector(x);
+        let c = b * self.weight;
+        let mut grad = [0.0; 12];
+        let mut hess = [0.0; 144];
+        for i in 0..4 {
+            for k in 0..3 {
+                grad[3 * i + k] = c * self.k[i] * s[k];
+            }
+            for j in 0..4 {
+                for k in 0..3 {
+                    hess[(3 * i + k) * 12 + 3 * j + k] = c * self.k[i] * self.k[j];
+                }
+            }
+        }
+        Local {
+            energy: 0.5 * c * s.norm2(),
+            grad,
+            hess,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lcg(seed: &mut u64) -> f64 {
+        *seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((*seed >> 11) as f64) / ((1u64 << 53) as f64) - 0.5
+    }
+
+    /// Central differences (step `h`, m) of the energy and of the gradient against the analytic
+    /// gradient and Hessian.
+    fn check<const N: usize, const NN: usize>(
+        x: &[Vec3],
+        dofs: &[usize],
+        h: f64,
+        energy: impl Fn(&[Vec3]) -> f64,
+        local: impl Fn(&[Vec3]) -> Local<N, NN>,
+    ) {
+        let l = local(x);
+        assert!((l.energy - energy(x)).abs() <= 1e-14 * l.energy.abs().max(1e-12));
+        let scale_g = l.grad.iter().fold(0.0f64, |m, g| m.max(g.abs())).max(1e-12);
+        let scale_h = l.hess.iter().fold(0.0f64, |m, g| m.max(g.abs())).max(1e-12);
+        for i in 0..N {
+            let (vi, k) = (dofs[i / 3], i % 3);
+            let mut xp = x.to_vec();
+            let mut xm = x.to_vec();
+            let bump = |p: &mut Vec3, d: f64| match k {
+                0 => p.x += d,
+                1 => p.y += d,
+                _ => p.z += d,
+            };
+            bump(&mut xp[vi], h);
+            bump(&mut xm[vi], -h);
+            let fd = (energy(&xp) - energy(&xm)) / (2.0 * h);
+            assert!(
+                (fd - l.grad[i]).abs() < 1e-6 * scale_g,
+                "grad[{i}]: fd {fd} vs {}",
+                l.grad[i]
+            );
+            let (gp, gm) = (local(&xp).grad, local(&xm).grad);
+            for j in 0..N {
+                let fdh = (gp[j] - gm[j]) / (2.0 * h);
+                assert!(
+                    (fdh - l.hess[j * N + i]).abs() < 1e-5 * scale_h,
+                    "hess[{j}][{i}]: fd {fdh} vs {}",
+                    l.hess[j * N + i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn membrane_derivatives_match_finite_differences() {
+        let mat = Membrane::orthotropic(800.0, 400.0, 0.2, 60.0, 0.05);
+        let rest = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.012, 0.001),
+            Vec2::new(0.003, 0.010),
+        ];
+        let e = MembraneElement::new([0, 1, 2], rest).unwrap();
+        let mut seed = 5;
+        for case in 0..20 {
+            // Random deformations around a stretched or compressed state, and (every third case) small
+            // ones that keep the strains inside the softening blend around zero.
+            let s = [1.1, 0.9, 0.9995][case % 3];
+            let noise = if case % 3 == 2 { 2e-6 } else { 0.002 };
+            let x: Vec<Vec3> = rest
+                .iter()
+                .map(|p| {
+                    Vec3::new(p.x * s, p.y * (2.0 - s), 0.0)
+                        + Vec3::new(lcg(&mut seed), lcg(&mut seed), lcg(&mut seed)) * noise
+                })
+                .collect();
+            // Inside the blend the strain moves by ~1e-4 per micrometre: step finer there.
+            let h = if case % 3 == 2 { 1e-8 } else { 1e-6 };
+            check(
+                &x,
+                &[0, 1, 2],
+                h,
+                |x| e.energy(x, &mat),
+                |x| e.local(x, &mat),
+            );
+        }
+    }
+
+    #[test]
+    fn rigid_motion_stores_no_membrane_energy() {
+        let mat = Membrane::orthotropic(800.0, 400.0, 0.2, 60.0, 0.05);
+        let rest = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.012, 0.001),
+            Vec2::new(0.003, 0.010),
+        ];
+        let e = MembraneElement::new([0, 1, 2], rest).unwrap();
+        let r = ftx_core::Mat3::rotation(Vec3::new(0.3, -0.5, 0.8).normalized(), 1.1);
+        let x: Vec<Vec3> = rest
+            .iter()
+            .map(|p| r.mul_vec(Vec3::new(p.x, p.y, 0.0)) + Vec3::new(1.0, 2.0, 3.0))
+            .collect();
+        let l = e.local(&x, &mat);
+        assert!(l.energy.abs() < 1e-20, "{}", l.energy);
+        assert!(l.grad.iter().all(|g| g.abs() < 1e-12), "{:?}", l.grad);
+    }
+
+    #[test]
+    fn bending_derivatives_and_flat_zero() {
+        let rest = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.01, 0.0),
+            Vec2::new(0.004, 0.008),
+            Vec2::new(0.006, -0.009),
+        ];
+        let hinge = Hinge::new([0, 1, 2, 3], rest).unwrap();
+        let flat: Vec<Vec3> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        assert!(hinge.energy(&flat, 1e-5) < 1e-30);
+        let mut seed = 9;
+        let x: Vec<Vec3> = flat
+            .iter()
+            .map(|p| *p + Vec3::new(lcg(&mut seed), lcg(&mut seed), lcg(&mut seed)) * 0.003)
+            .collect();
+        check(
+            &x,
+            &[0, 1, 2, 3],
+            1e-6,
+            |x| hinge.energy(x, 1e-5),
+            |x| hinge.local(x, 1e-5),
+        );
+    }
+}
