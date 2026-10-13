@@ -123,6 +123,7 @@ version = "0.1.0"
 dependencies = [
  "ftx-core",
  "ftx-pattern",
+ "miniz_oxide",
  "serde",
  "serde_json",
 ]

@@ -12,6 +12,7 @@ pub mod audit;
 pub mod geos;
 pub mod length;
 pub mod ordered;
+pub mod raster;
 pub mod refs;
 pub mod scale;
 

@@ -48,6 +48,18 @@ exactly by `ftx-conformance/tests/tracing.rs`: 408 cases (52 `parse_length`, 298
 bit-identical and every message equal. `parse_length` reads ASCII digits (Python's `\d` also takes other
 Unicode decimal digits).
 
+**Raster** (`raster/`, for the trace; oracle `trace/raster_*` from `tools/oracle/capture_raster.py`, test
+`ftx-conformance/tests/trace_raster.rs`). `load_png`: Pillow 12.3's `load_image` semantics (palette, gray+alpha
+and RGBA composited on white with Pillow's fixed-point `alpha_composite`; 1/2/4-bit gray scaled, 16-bit gray
+clipped at 255, 16-bit colour to its high byte; gray/RGB `tRNS` ignored), every filter and Adam7: 55 PNGs
+bit-identical. JPEG and WebP are refused (convert to PNG): matching libjpeg-turbo and libwebp is not done.
+Colour (OpenCV 5.0 `cvtColor`, 8-bit): Lab is OpenCV's integer formula over tables built as OpenCV builds them,
+including its truncating `softfloat` cube root, bit-identical over all 16,777,216 colours; the `auto`
+channel (float32 Lab distance) bit-identical. Gray and HSV saturation are OpenCV's own fixed-point code,
+but the reference's arm64 OpenCV runs them through its KleidiCV/carotene HAL, which rounds 0.24 % (gray) and
+0.02 % (saturation) of pixels one level differently and even depends on a row's memory offset: they agree
+within one level, not bit for bit (on x86 the reference's own results would differ again).
+
 **Error model.** `PyError` (`Key` prints quoted, `Value` as is) for `measure_ref`, `resolve_side`, `twin`,
 `fit_scale`; `annotate` returns the reference's message as a `String`; `audit` reports every problem as a
 finding and never fails.
