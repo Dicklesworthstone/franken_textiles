@@ -17,6 +17,7 @@
 //! result's to stdout.
 #![forbid(unsafe_code)]
 
+mod body_source;
 mod draft;
 mod export;
 mod fold;
@@ -52,13 +53,14 @@ const USAGE: &str = "usage:
   ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
   ftx validate PATTERN --measurements M [--fit F] [--json]
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--export]
-            [--sim|--stills] [--arm-deg DEG] [--res WIDTHxHEIGHT]
+            [--sim|--stills] [--body-fit REPORT] [--arm-deg DEG] [--res WIDTHxHEIGHT]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
-            [--model PATH] [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]
+            [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
+  ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--model PATH] [--json]
   ftx render DRAPE_DIR [--res 960x540] [--json]
   ftx sim-points SIMDIR --pattern P --measurements M [--json]
   ftx outfit --measurements M --sim DIR [--sim DIR ...] --out NEW_DIR [--hat P] [--seams] [--res 960x960] [--json]
@@ -350,6 +352,9 @@ fn model_fit_records(w: &Wearer, fit: &TapeFit) -> Vec<Value> {
 /// `ftx body`: the body fitted to a measurement file, posed, as `body.obj` and `body.json`
 /// (`ftx-body/1`: the fit, the readings, the phenotype and the local changes in use).
 fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    if args.options.contains_key("body-fit") {
+        return body_source::cmd_body(args);
+    }
     known_options(args, "body", &["measurements", "out", "pose", "model"])?;
     let (meas, meas_bytes) = read_json(required(args, "measurements")?)?;
     let out = PathBuf::from(required(args, "out")?);
@@ -663,6 +668,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "self-mu",
             "elastic-ea",
             "arm-deg",
+            "body-fit",
             "two-start-sew",
             "spread-vertex-mm",
             "spread-hem-mm",
@@ -684,9 +690,13 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let spec = fit_spec(args)?;
     // Refuse unwritable/existing destinations before the expensive fit and drape.
     reserve_drape_output(&out)?;
-    let model = load_model(args)?;
-    let (w, fit) = fitted_body(&model, &meas)?;
-    let rest = model.rest(&fit.params)?;
+    let body_source::PreparedBody {
+        model,
+        params,
+        description,
+        ..
+    } = body_source::prepare(args, Some(&meas))?;
+    let rest = model.rest(&params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
     let skin = trimmed_skin(
         &model,
@@ -719,7 +729,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "wall_s".into(),
             json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
         );
-        let mut b = body_json(&w, &fit);
+        let mut b = description;
         b.insert(
             "pose".into(),
             json!(format!(
