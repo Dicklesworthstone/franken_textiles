@@ -799,8 +799,8 @@ impl SymbolicLdlt {
                         let acol: Vec<f64> = (k + 2..m).map(|i| f[i + k * m]).collect();
                         let bcol: Vec<f64> = (k + 2..m).map(|i| f[i + (k + 1) * m]).collect();
                         for (idx, i) in (k + 2..m).enumerate() {
-                            let l1 = acol[idx].mul_add(inv11, bcol[idx] * inv21);
-                            let l2 = acol[idx].mul_add(inv21, bcol[idx] * inv22);
+                            let l1 = acol[idx] * inv11 + bcol[idx] * inv21;
+                            let l2 = acol[idx] * inv21 + bcol[idx] * inv22;
                             f[i + k * m] = l1;
                             f[i + (k + 1) * m] = l2;
                         }
@@ -811,7 +811,7 @@ impl SymbolicLdlt {
                             let sa = &left[k * m + jc..(k + 1) * m];
                             let sb = &left[(k + 1) * m + jc..(k + 2) * m];
                             for ((x, &u), &w) in right[jc..m].iter_mut().zip(sa).zip(sb) {
-                                *x -= u.mul_add(aj, w * bj);
+                                *x -= u * aj + w * bj;
                             }
                         }
                         // the panel rows' pre-scaling column values, for the deferred update
@@ -879,7 +879,7 @@ impl SymbolicLdlt {
                             let sa = &left[k * m + jc..(k + 1) * m];
                             let sb = &left[(k + 1) * m + jc..(k + 2) * m];
                             for ((x, &u), &w) in dst.iter_mut().zip(sa).zip(sb) {
-                                *x -= u.mul_add(aj, w * bj);
+                                *x -= u * aj + w * bj;
                             }
                         }
                     }
@@ -1069,12 +1069,12 @@ fn dot4(a: &[f64], b: &[f64]) -> f64 {
     let ((ca, ta), (cb, tb)) = (a.as_chunks::<4>(), b.as_chunks::<4>());
     for (x, y) in ca.iter().zip(cb) {
         for j in 0..4 {
-            s[j] = x[j].mul_add(y[j], s[j]);
+            s[j] += x[j] * y[j];
         }
     }
     let mut t = (s[0] + s[1]) + (s[2] + s[3]);
     for (x, y) in ta.iter().zip(tb) {
-        t = x.mul_add(*y, t);
+        t += x * y;
     }
     t
 }
@@ -1149,8 +1149,8 @@ fn choose_pivot(
                 }
                 let gp = gamma_pair(f, m, k, p, q);
                 let gq = gamma_pair(f, m, k, q, p);
-                let g1 = e22.abs().mul_add(gp, e21.abs() * gq) / det.abs();
-                let g2 = e21.abs().mul_add(gp, e11.abs() * gq) / det.abs();
+                let g1 = (e22.abs() * gp + e21.abs() * gq) / det.abs();
+                let g2 = (e21.abs() * gp + e11.abs() * gq) / det.abs();
                 if g1.max(g2) <= 1.0 / u {
                     return PivotChoice::Two(p, q);
                 }
@@ -1269,7 +1269,7 @@ impl LdltFactor {
                 let vk = v[k];
                 let col = &s.l[k * m + k + 1..(k + 1) * m];
                 for (vi, &l) in v[k + 1..].iter_mut().zip(col) {
-                    *vi = l.mul_add(-vk, *vi);
+                    *vi -= l * vk;
                 }
             }
             for (k, &i) in s.block_vars.iter().enumerate() {
@@ -1312,7 +1312,7 @@ impl LdltFactor {
                 let col = &s.l[k * m..(k + 1) * m];
                 let mut acc = v[k] - dot4(&col[w..], &v[w..]);
                 for (&l, &vi) in col[k + 1..w].iter().zip(&v[k + 1..w]) {
-                    acc = l.mul_add(-vi, acc);
+                    acc -= l * vi;
                 }
                 v[k] = acc;
             }

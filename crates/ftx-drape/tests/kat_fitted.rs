@@ -302,6 +302,6 @@ fn kat9_fitted_pipeline_digest() {
     assert!(last.iter().all(|p| p.is_finite()));
     assert_eq!(
         digest,
-        "8f9d0e14a1009ff9ce06ca9da2f527f5708fcb46477e9cc2e15830b78cff6ecc"
+        "7693994660a8605f5d0081abffde860400c955b109f61d050042d49f1fcac336"
     );
 }

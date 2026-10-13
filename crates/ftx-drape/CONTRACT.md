@@ -95,7 +95,11 @@ to 11 and 83 CPU-seconds on an M4 Pro (bolero 175 iterations, 41 factorizations;
 measured as CPU time on a heavily loaded machine), the same verdicts and readings within 0.3 mm; the
 vectorized factorization (below) then 8.3 and 59 s, bit for bit the same drape; the translation-free
 projection and the backward solve by partial sums 6.7 and 36 s, the same iterations and every reading
-equal at the report's precision.
+equal at the report's precision. In the browser build (wasm32-wasip1 under node, one thread) the
+solver's multiply-adds are what cost: wasm has no fused multiply-add, so every `f64::mul_add` was a call to
+the software `fma`, 68 % of a bolero's time (plus 7 % in its `scalbn`). With the kernels written as a
+multiply then an add, `ftx drape` takes 14.7 CPU-seconds for the bolero (was 62) and 53 for the trousers
+(was 454; §11.7's browser budget is five minutes), the same Newton iterations; native 9.8 and 37 s, unchanged.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
@@ -262,7 +266,11 @@ and delayed pivots, every KAT digest unchanged; then the backward solve sums eac
 first by four partial sums, 2.1× faster with different rounding: the three KAT 9 digests re-pinned,
 each identical native debug, release and wasm32-wasip1), `eigen.rs` (`jacobi_eigh`);
 `sparse/precond.rs` (`pcg`, from fs-sparse at `6eb72a0c`: any preconditioner closure, starts from zero,
-stops with the reason on non-positive curvature or the cap).
+stops with the reason on non-positive curvature or the cap). The lifted kernels' `mul_add`s (LDLᵀ updates
+and solves, `dot4`, SpMV, PCG, the Jacobi rotations) are now a multiply then an add, the same on every
+target and 8.5× faster in wasm (above): the three KAT 9 digests re-pinned again, each identical native
+debug, release and wasm32-wasip1; KATs 1–8 and 10 pass unchanged. `ftx_core::det` keeps its fused
+multiply-adds, which its correctly rounded functions need.
 
 **Error model.** `Refusal`: `degenerate_geometry` (bad triangles, non-manifold edges), `out_of_range`
 (non-positive density or step), `non_finite` (state blew up), `not_converged` (symbolic analysis failed),

@@ -72,15 +72,15 @@ pub fn pcg(
         }
         let alpha = rz / pap;
         for i in 0..n {
-            x[i] = alpha.mul_add(p[i], x[i]);
-            r[i] = (-alpha).mul_add(ap[i], r[i]);
+            x[i] += alpha * p[i];
+            r[i] -= alpha * ap[i];
         }
         z = m(&r);
         let rz_new: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
         let beta = rz_new / rz;
         rz = rz_new;
         for i in 0..n {
-            p[i] = beta.mul_add(p[i], z[i]);
+            p[i] = beta * p[i] + z[i];
         }
     }
     let rel = norm(&r) / bnorm;

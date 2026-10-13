@@ -283,6 +283,6 @@ fn drape_digest_is_pinned() {
     assert!(s.x.iter().all(|p| p.is_finite()));
     assert_eq!(
         digest,
-        "6c7df4e3f0fe6f8937e17c6f57a25ada2ff1377deeabefa97cb0133ccf62e71d"
+        "a9cfecc0890cd56431aadea56962fe946f1522ac990d1f646ea6c4bb817191e1"
     );
 }

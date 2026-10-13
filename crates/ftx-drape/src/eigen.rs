@@ -38,18 +38,18 @@ pub fn jacobi_eigh(a: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
                 let s = c * t;
                 for k in 0..n {
                     let (mkp, mkq) = (m[k * n + p], m[k * n + q]);
-                    m[k * n + p] = c.mul_add(mkp, -(s * mkq));
-                    m[k * n + q] = s.mul_add(mkp, c * mkq);
+                    m[k * n + p] = c * mkp - s * mkq;
+                    m[k * n + q] = s * mkp + c * mkq;
                 }
                 for k in 0..n {
                     let (mpk, mqk) = (m[p * n + k], m[q * n + k]);
-                    m[p * n + k] = c.mul_add(mpk, -(s * mqk));
-                    m[q * n + k] = s.mul_add(mpk, c * mqk);
+                    m[p * n + k] = c * mpk - s * mqk;
+                    m[q * n + k] = s * mpk + c * mqk;
                 }
                 for k in 0..n {
                     let (vkp, vkq) = (v[k * n + p], v[k * n + q]);
-                    v[k * n + p] = c.mul_add(vkp, -(s * vkq));
-                    v[k * n + q] = s.mul_add(vkp, c * vkq);
+                    v[k * n + p] = c * vkp - s * vkq;
+                    v[k * n + q] = s * vkp + c * vkq;
                 }
             }
         }

@@ -247,7 +247,8 @@ impl Csr {
         cols.binary_search(&c).map_or(0.0, |k| vals[k])
     }
 
-    /// `y = A·x`, each row accumulated in ascending-column order with `mul_add`.
+    /// `y = A·x`, each row accumulated in ascending-column order (multiply, then add: wasm has no fused
+    /// multiply-add, and its software `fma` is ~7× slower).
     ///
     /// # Panics
     /// On mismatched lengths.
@@ -258,7 +259,7 @@ impl Csr {
             let (cols, vals) = self.row(r);
             let mut acc = 0.0f64;
             for (&c, &v) in cols.iter().zip(vals) {
-                acc = v.mul_add(x[c], acc);
+                acc += v * x[c];
             }
             *out = acc;
         }
