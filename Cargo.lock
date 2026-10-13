@@ -12,6 +12,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftx-conformance"
+version = "0.1.0"
+dependencies = [
+ "ftx-core",
+ "serde_json",
+]
+
+[[package]]
 name = "ftx-core"
 version = "0.1.0"
 dependencies = [

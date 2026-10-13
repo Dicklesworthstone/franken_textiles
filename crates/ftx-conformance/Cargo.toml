@@ -1,0 +1,17 @@
+[package]
+name = "ftx-conformance"
+description = "FrankenTextiles conformance: oracle fixtures captured from the Python reference, compared against the Rust crates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+ftx-core = { path = "../ftx-core" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

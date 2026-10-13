@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ftx-core", "crates/ftx-body"]
+members = ["crates/ftx-core", "crates/ftx-body", "crates/ftx-conformance"]
 
 # Planned workspace crates (plan §16 / AGENTS.md "Planned Workspace Crates"). A crate is
 # added to `members` when it gets real code, not before. No crate outside this list without
@@ -41,7 +41,9 @@ style = { level = "warn", priority = -1 }
 # Small, pinned allowlist (plan §15). Serialization for files and manifests only,
 # never inside a solver iteration.
 serde = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }
-serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+# `float_roundtrip`: correctly rounded float parsing. Without it serde_json may read a decimal one ULP
+# off, which flipped point-in-polygon verdicts for points on a vertex in the oracle fixtures.
+serde_json = { version = "=1.0.151", default-features = false, features = ["std", "float_roundtrip"] }
 
 [profile.release-perf]
 inherits = "release"

@@ -5,8 +5,9 @@ rounds up**. A row becomes `present` only when the fixture IDs in its last colum
 `ftx-conformance`. Spec references point into `docs/spec/`. Reference: the `fabric-pattern-creation-and-alteration`
 skill's Python implementation at revision `88e03965`; body model: `anny==0.6.1`.
 
-Last updated: 2026-10-12. `ftx-core`: F1–F6 pass as unit tests from the spec's values, not yet as captured
-oracle fixtures, so those rows stay partial. `ftx-body`: the Anny rows pass against the captured oracle
+Last updated: 2026-10-12. Pattern geometry: `tests/fixtures/oracle/pattern/geometry.json` (404 cases captured
+from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,897 numbers bit-exact, worst
+3.9e-13 relative) passes in `ftx-conformance`. `ftx-body`: the Anny rows pass against the captured oracle
 `tests/fixtures/oracle/body/anny-0.6.1-reference.json` (`crates/ftx-body/tests/anny_parity.rs`, run with
 `--include-ignored` after `tools/body-model/convert_anny.py`).
 
@@ -16,8 +17,8 @@ oracle fixtures, so those rows stay partial. `ftx-body`: the Anny rows pass agai
 |---|---|---|---|
 | `fabric-pattern/1` document read/write round trip | 01 §2 | missing | |
 | `fabric-fit/1` document | 01 §3 | missing | |
-| Curve geometry (chord-relative cubic/quadratic, sampling counts) | 01 §4 | partial | F1, F2, F3 (ftx-core unit tests) |
-| Numeric helpers (lengths, fractions, tangents, areas, widths) | 01 §5 | partial | F4, F5, F6 (ftx-core unit tests) |
+| Curve geometry (chord-relative cubic/quadratic, sampling counts) | 01 §4 | present | oracle `pattern/geometry` (abs_to_rel, rel_to_abs, curve_points, mirror/reverse_curve); F1–F3 |
+| Numeric helpers (lengths, fractions, tangents, areas, widths) | 01 §5 | present | oracle `pattern/geometry` (polyline_length, cumulative, at_fractions, tangent_at, signed_area, horizontal_width, point_in_polygon); F4–F6 |
 | Instances (mirror pairs, on-fold unfolding, edge suffixes) | 01 §6 | missing | |
 | Structure checks with the reference's messages | 01 §7 | missing | |
 | Seam sides, notch fractions, seam pair sampling | 01 §8 | missing | |
