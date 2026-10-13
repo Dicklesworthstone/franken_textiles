@@ -9,4 +9,5 @@ workspace = true
 
 [dependencies]
 ftx-core = { path = "../ftx-core" }
+serde.workspace = true
 serde_json.workspace = true

@@ -117,6 +117,7 @@ name = "ftx-measure"
 version = "0.1.0"
 dependencies = [
  "ftx-core",
+ "serde",
  "serde_json",
 ]
 
