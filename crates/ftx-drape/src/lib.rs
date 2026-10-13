@@ -23,6 +23,7 @@ pub mod elements;
 pub mod garment;
 pub mod metrics;
 pub mod nearest;
+pub mod render;
 pub mod run;
 pub mod scene;
 pub mod sparse;

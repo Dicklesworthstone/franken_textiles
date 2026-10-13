@@ -81,6 +81,7 @@ dependencies = [
  "ftx-body",
  "ftx-core",
  "ftx-pattern",
+ "miniz_oxide",
  "serde_json",
  "spade",
 ]
