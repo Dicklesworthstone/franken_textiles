@@ -8,20 +8,26 @@ skin mesh and a trimmed drape body (`drape.rs`), and part frames, landmarks and 
 placing pattern pieces (`landmarks.rs`); tape girths (`tape.rs`) and fitting the body to a wearer
 (`fit.rs`).
 
-**Tape and fitting** (FTX-09, first slice). A girth is the perimeter of the convex hull of the
-horizontal section loop around the torso axis (a tape bridges hollows); a vertex exactly at the cutting
-height counts as above it, so sections of a closed mesh are closed loops. `tape_readings` reads, on the
-posed body, stature (the rest height), chest (10 mm below the armpit), waist (at the waist loop's height),
-hip (the largest girth from 20 % of the way up from the crotch to the waist, 2 mm steps), waist height
-and crotch height. `fit_stature` bisects the height parameter to a stature. `fit_tape` runs
-Levenberg–Marquardt (central differences, step 1e-3) over the height and weight parameters and five
-`measure-*` local changes (bust, waist and hip girths, upper-leg height, waist-to-hip distance), with
-1σ = 3 mm per girth and 2 mm per length and a weak prior (1σ = 1) toward the population middle; the
-phenotype is clamped to [0, 1], local changes to [−1, 1]; age and gender are set, not fitted. Residuals
-are returned, never hidden. Gate G1b (`tests/fit_tape.rs`): measurements drawn from the model itself
-(1.5, 2.5, 4 and 30 years) are recovered within 0.03 mm (the gate asks 3 mm girths, 2 mm lengths);
-the 92 cm reference toddler's six chart values are reached within 0.1 mm in 5 iterations (0.5 s), where
-the stature-only body read 75 mm less at the chest, 66 mm at the waist and 62 mm at the hip.
+**Tape and fitting** (FTX-09). A girth is the perimeter of the convex hull of a section loop (a tape
+bridges hollows); a vertex exactly at the cutting height counts as above it, so sections of a closed
+mesh are closed loops. Torso girths are horizontal, around the torso axis; limb girths are perpendicular
+to the right leg's or arm's part-frame axis (the vertices taken into that frame), around the axis or,
+where the axis passes beside a narrow limb, the nearest loop (`girth_near`). `Slicer` buckets triangles
+by height (5 mm slabs) so a search over levels visits only nearby triangles (same loops, same order).
+`tape_readings` reads 15 measurements on the posed body (`TAPE_FIELDS`, definitions in the `fit.rs`
+table): stature, chest, waist, hip, waist and crotch heights, thigh, knee, calf, ankle, upper arm,
+wrist, arm length, knee height and back neck to waist (along the back's median line). `fit_stature`
+bisects the height parameter to a stature. `fit_tape` runs Levenberg–Marquardt (central differences,
+step 1e-3; stops when a step gains less than 1e-5 of the cost) over four phenotype parameters (height,
+weight, muscle, proportions; prior 1σ = 0.5 about 0.5) and fifteen `measure-*` local changes (prior
+1σ = 0.35 about 0: the scanned shape space explains the body before the authored blend shapes adjust
+it), with 1σ = 3 mm per girth and 2 mm per length; the phenotype is clamped to [0, 1], local changes to
+[−1, 1]; age and gender are set, not fitted. Residuals are returned, never hidden. Gate G1b
+(`tests/fit_tape.rs`): all 15 measurements drawn from the model itself (1.5, 2.5, 4 and 30 years, local
+changes up to ±0.3) are recovered within 0.43 mm (the gate asks 3 mm girths, 2 mm lengths); the 92 cm
+reference toddler's 15 chart values within 2.4 mm in 8 iterations (about 2 s), where the stature-only
+body read 75 mm less at the chest, 66 mm at the waist and 62 mm at the hip. With weak priors (1σ = 1)
+the same fit had driven `weight` to 0 and compensated with large local changes.
 `tape_targets` and `Wearer::from_measurements` read a `fabric-measurements/1` file (fused values
 whatever their provenance: the drape tests a pattern against the measurements it was drafted to).
 
@@ -88,7 +94,8 @@ non-manifold or inconsistently wound skin, a degenerate triangle), `inward_wound
 
 **No claims.** Fit quality against real people (gate G1 on held-out measurements; the fit reaches the
 targets, which says nothing about whether the shape between them is the wearer's); fitting from weight
-or BMI, from other tape measurements (thigh, neck, lengths along the body) and from photos; `MODEL_FIT`
+or BMI, from the tape measurements not read yet (neck, across back, shoulder length, total crotch
+length, outseam, head) and from photos; `MODEL_FIT`
 values with σ and `ftx-body/1` output; the shape distribution's
 weight and muscle priors (spec 05 §9.11); anything about the SMPL family or the `rig="anny"` preset.
 Poses are plain linear blend skinning without correctives: seated and squat bodies show webbing at the

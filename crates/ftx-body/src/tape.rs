@@ -13,10 +13,93 @@ use ftx_core::Vec3;
 /// that does not close (an open mesh) is left out.
 #[must_use]
 pub fn section_loops(vertices: &[Vec3], triangles: &[[usize; 3]], z: f64) -> Vec<Vec<[f64; 2]>> {
+    loops_of(vertices, triangles, 0..triangles.len(), z)
+}
+
+/// Horizontal cuts of one mesh at many heights: triangles bucketed by height, so a cut visits only the
+/// triangles near it. Its cuts equal [`section_loops`] (same triangles, same order).
+pub struct Slicer<'a> {
+    vertices: &'a [Vec3],
+    triangles: &'a [[usize; 3]],
+    z0: f64,
+    width: f64,
+    buckets: Vec<Vec<usize>>,
+}
+
+impl<'a> Slicer<'a> {
+    /// Buckets `triangles` by height in slabs of `width`.
+    #[must_use]
+    pub fn new(vertices: &'a [Vec3], triangles: &'a [[usize; 3]], width: f64) -> Self {
+        let (z0, z1) = vertices
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
+                (a.min(v.z), b.max(v.z))
+            });
+        let slab = |z: f64| ((z - z0) / width).floor() as usize;
+        let mut buckets = vec![Vec::new(); if z1 >= z0 { slab(z1) + 1 } else { 0 }];
+        for (i, t) in triangles.iter().enumerate() {
+            let (lo, hi) = t
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &v| {
+                    (a.min(vertices[v].z), b.max(vertices[v].z))
+                });
+            for b in &mut buckets[slab(lo)..=slab(hi)] {
+                b.push(i);
+            }
+        }
+        Self {
+            vertices,
+            triangles,
+            z0,
+            width,
+            buckets,
+        }
+    }
+
+    /// [`section_loops`] at height `z`.
+    #[must_use]
+    pub fn loops(&self, z: f64) -> Vec<Vec<[f64; 2]>> {
+        let b = (z - self.z0) / self.width;
+        if !(b >= 0.0 && (b as usize) < self.buckets.len()) {
+            return Vec::new();
+        }
+        loops_of(
+            self.vertices,
+            self.triangles,
+            self.buckets[b as usize].iter().copied(),
+            z,
+        )
+    }
+
+    /// [`girth`] at height `z`.
+    #[must_use]
+    pub fn girth(&self, z: f64, around: [f64; 2]) -> Option<f64> {
+        girth_of(&self.loops(z), around)
+    }
+
+    /// [`girth_near`] at height `z`.
+    #[must_use]
+    pub fn girth_near(&self, z: f64, around: [f64; 2]) -> Option<f64> {
+        near_of(&self.loops(z), around)
+    }
+
+    /// [`back_point`] at height `z`.
+    #[must_use]
+    pub fn back_point(&self, z: f64, x0: f64) -> Option<f64> {
+        back_of(&self.loops(z), x0)
+    }
+}
+
+fn loops_of(
+    vertices: &[Vec3],
+    triangles: &[[usize; 3]],
+    faces: impl IntoIterator<Item = usize>,
+    z: f64,
+) -> Vec<Vec<[f64; 2]>> {
     let above = |i: usize| vertices[i].z >= z;
     // Each cut triangle gives one segment between two cut edges (an edge is keyed by its sorted ends).
     let mut segments: Vec<[(usize, usize); 2]> = Vec::new();
-    for t in triangles {
+    for t in faces.into_iter().map(|f| &triangles[f]) {
         let mut cut = [(0, 0); 2];
         let mut n = 0;
         for k in 0..3 {
@@ -135,15 +218,82 @@ pub fn hull_perimeter(points: &[[f64; 2]]) -> f64 {
         .sum()
 }
 
+/// The vertices in a frame's coordinates: (·lat, ·front, ·up) relative to `origin`, so a section
+/// perpendicular to the frame's `up` axis is a horizontal [`section_loops`] cut.
+#[must_use]
+pub fn in_frame(vertices: &[Vec3], origin: Vec3, lat: Vec3, front: Vec3, up: Vec3) -> Vec<Vec3> {
+    vertices
+        .iter()
+        .map(|v| {
+            let d = *v - origin;
+            Vec3::new(d.dot(lat), d.dot(front), d.dot(up))
+        })
+        .collect()
+}
+
+/// The largest y at which the section at height `z` crosses the plane x = `x0` (the back-most point
+/// of the body's median line when +y is the back), or `None` when nothing crosses it.
+#[must_use]
+pub fn back_point(vertices: &[Vec3], triangles: &[[usize; 3]], z: f64, x0: f64) -> Option<f64> {
+    back_of(&section_loops(vertices, triangles, z), x0)
+}
+
+fn back_of(loops: &[Vec<[f64; 2]>], x0: f64) -> Option<f64> {
+    loops
+        .iter()
+        .flat_map(|l| {
+            let n = l.len();
+            (0..n).filter_map(move |i| {
+                let (a, b) = (l[i], l[(i + 1) % n]);
+                ((a[0] >= x0) != (b[0] >= x0))
+                    .then(|| a[1] + (x0 - a[0]) / (b[0] - a[0]) * (b[1] - a[1]))
+            })
+        })
+        .fold(None, |m: Option<f64>, y| Some(m.map_or(y, |m| m.max(y))))
+}
+
 /// The tape girth at height `z` around the axis point `around` (x, y): the hull perimeter of the
 /// outermost section loop that contains it, or `None` when no loop does.
 #[must_use]
 pub fn girth(vertices: &[Vec3], triangles: &[[usize; 3]], z: f64, around: [f64; 2]) -> Option<f64> {
-    section_loops(vertices, triangles, z)
-        .into_iter()
+    girth_of(&section_loops(vertices, triangles, z), around)
+}
+
+fn outermost_around(loops: &[Vec<[f64; 2]>], around: [f64; 2]) -> Option<&Vec<[f64; 2]>> {
+    loops
+        .iter()
         .filter(|l| contains(l, around))
         .max_by(|a, b| polygon_area(a).abs().total_cmp(&polygon_area(b).abs()))
-        .map(|l| hull_perimeter(&l))
+}
+
+fn girth_of(loops: &[Vec<[f64; 2]>], around: [f64; 2]) -> Option<f64> {
+    outermost_around(loops, around).map(|l| hull_perimeter(l))
+}
+
+/// As [`girth`], but when no loop contains `around` (an axis that passes beside a narrow limb), the loop
+/// whose vertex mean is nearest to it.
+#[must_use]
+pub fn girth_near(
+    vertices: &[Vec3],
+    triangles: &[[usize; 3]],
+    z: f64,
+    around: [f64; 2],
+) -> Option<f64> {
+    near_of(&section_loops(vertices, triangles, z), around)
+}
+
+fn near_of(loops: &[Vec<[f64; 2]>], around: [f64; 2]) -> Option<f64> {
+    let chosen = outermost_around(loops, around).or_else(|| {
+        let dist = |l: &Vec<[f64; 2]>| {
+            let n = l.len() as f64;
+            let (x, y) = l
+                .iter()
+                .fold((0.0, 0.0), |(x, y), p| (x + p[0] / n, y + p[1] / n));
+            (x - around[0]).hypot(y - around[1])
+        };
+        loops.iter().min_by(|a, b| dist(a).total_cmp(&dist(b)))
+    })?;
+    Some(hull_perimeter(chosen))
 }
 
 #[cfg(test)]
@@ -223,6 +373,46 @@ mod tests {
         assert_eq!(section_loops(&v, &t, 0.5).len(), 2);
         assert!((girth(&v, &t, 0.5, [4.0, 1.0]).unwrap() - 8.0).abs() < 1e-12);
         assert!((girth(&v, &t, 0.5, [0.5, 0.5]).unwrap() - 4.0).abs() < 1e-12);
+        // beside both: girth finds nothing, girth_near the closer body
+        assert_eq!(girth(&v, &t, 0.5, [1.4, 0.5]), None);
+        assert!((girth_near(&v, &t, 0.5, [1.4, 0.5]).unwrap() - 4.0).abs() < 1e-12);
+        assert!((girth_near(&v, &t, 0.5, [2.8, 1.0]).unwrap() - 8.0).abs() < 1e-12);
+        assert!((girth_near(&v, &t, 0.5, [4.0, 1.0]).unwrap() - 8.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_tilted_prism_measured_in_its_own_frame() {
+        // the unit-square prism turned 90° about x: its axis now runs along −y
+        let (v, t) = prism(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        let turned: Vec<Vec3> = v.iter().map(|p| Vec3::new(p.x, -p.z, p.y)).collect();
+        let f = in_frame(
+            &turned,
+            Vec3::new(0.5, 0.0, 0.5),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.0, -1.0, 0.0),
+        );
+        assert!((girth(&f, &t, 0.5, [0.0, 0.0]).unwrap() - 4.0).abs() < 1e-12);
+        // its back (+y in the original frame is the square's far side at y = 1)
+        assert!((back_point(&v, &t, 0.5, 0.5).unwrap() - 1.0).abs() < 1e-12);
+        assert_eq!(back_point(&v, &t, 0.5, 3.0), None);
+    }
+
+    #[test]
+    fn the_slicer_cuts_like_section_loops() {
+        let star: Vec<[f64; 2]> = (0..10)
+            .map(|i| {
+                let a = std::f64::consts::PI * f64::from(i) / 5.0;
+                let r = if i % 2 == 0 { 1.0 } else { 0.4 };
+                [r * a.cos(), r * a.sin()]
+            })
+            .collect();
+        let (v, t) = prism(&star);
+        let s = Slicer::new(&v, &t, 0.07);
+        for z in [-0.5, 0.0, 1e-9, 0.13, 0.5, 0.999, 1.0, 1.5] {
+            assert_eq!(s.loops(z), section_loops(&v, &t, z), "z {z}");
+        }
+        assert_eq!(s.girth(0.25, [0.0, 0.0]), girth(&v, &t, 0.25, [0.0, 0.0]));
     }
 
     #[test]

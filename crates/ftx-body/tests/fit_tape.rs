@@ -6,8 +6,8 @@
 //! `cargo test -p ftx-body --release --test fit_tape -- --include-ignored --nocapture`.
 
 use ftx_body::{
-    AnnyModel, BodyFrames, FREE, Pose, TAPE_FIELDS, TapeTarget, Wearer, default_model_path,
-    fit_tape, pose_deltas, tape_readings,
+    AnnyModel, BodyFrames, FREE, N_PHENOTYPE, N_TAPE, Pose, TAPE_FIELDS, TapeTarget, Wearer,
+    default_model_path, fit_tape, is_girth, pose_deltas, tape_readings,
 };
 
 fn model() -> AnnyModel {
@@ -15,7 +15,7 @@ fn model() -> AnnyModel {
         .expect("converted Anny model")
 }
 
-fn targets(values: &[f64; 6]) -> Vec<TapeTarget> {
+fn targets(values: &[f64; N_TAPE]) -> Vec<TapeTarget> {
     TAPE_FIELDS
         .iter()
         .zip(values)
@@ -38,11 +38,39 @@ fn synthetic_targets_are_recovered() {
         .collect();
     let pose = Pose::drape();
     // (years, gender, free parameters in FREE order)
-    let cases: [(f64, f64, [f64; 7]); 4] = [
-        (2.5, 1.0, [0.40, 0.65, 0.3, 0.4, -0.2, -0.3, 0.1]),
-        (4.0, 0.0, [0.60, 0.35, -0.2, -0.3, 0.3, 0.2, -0.2]),
-        (1.5, 0.5, [0.50, 0.50, 0.0, 0.0, 0.0, 0.0, 0.0]),
-        (30.0, 1.0, [0.55, 0.60, 0.4, 0.2, 0.3, -0.2, 0.2]),
+    let cases: [(f64, f64, [f64; 19]); 4] = [
+        (
+            2.5,
+            1.0,
+            [
+                0.40, 0.65, 0.6, 0.4, 0.3, 0.4, -0.2, -0.3, 0.1, 0.2, -0.1, 0.3, -0.2, 0.25, -0.15,
+                0.2, -0.1, 0.15, -0.2,
+            ],
+        ),
+        (
+            4.0,
+            0.0,
+            [
+                0.60, 0.35, 0.3, 0.55, -0.2, -0.3, 0.3, 0.2, -0.2, -0.25, 0.2, -0.1, 0.1, -0.2,
+                0.2, -0.15, 0.25, -0.1, 0.2,
+            ],
+        ),
+        (
+            1.5,
+            0.5,
+            [
+                0.50, 0.50, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+            ],
+        ),
+        (
+            30.0,
+            1.0,
+            [
+                0.55, 0.60, 0.45, 0.6, 0.4, 0.2, 0.3, -0.2, 0.2, 0.3, 0.1, -0.2, 0.2, 0.15, 0.1,
+                -0.2, 0.1, -0.15, 0.1,
+            ],
+        ),
     ];
     let mut fails = Vec::new();
     for (years, gender, th) in cases {
@@ -52,10 +80,11 @@ fn synthetic_targets_are_recovered() {
             age,
             height: th[0],
             weight: th[1],
-            ..ftx_body::Phenotype::default()
+            muscle: th[2],
+            proportions: th[3],
         });
-        for (j, n) in FREE[2..].iter().enumerate() {
-            p.local_changes[model.local_change_index(n).unwrap()] = th[2 + j];
+        for (j, n) in FREE[N_PHENOTYPE..].iter().enumerate() {
+            p.local_changes[model.local_change_index(n).unwrap()] = th[N_PHENOTYPE + j];
         }
         let rest = model.rest(&p).unwrap();
         let height = model.anthropometry(&rest).height;
@@ -81,11 +110,7 @@ fn synthetic_targets_are_recovered() {
             fit.free.map(|x| (x * 1000.0).round() / 1000.0)
         );
         for r in &fit.residuals {
-            let tol = if matches!(r.name.as_str(), "chest" | "waist" | "hip") {
-                3.0
-            } else {
-                2.0
-            };
+            let tol = if is_girth(&r.name) { 3.0 } else { 2.0 };
             let d = r.body_mm - r.target_mm;
             println!(
                 "  {:14} target {:7.1}  body {:7.1}  ({d:+.2})",
@@ -108,8 +133,11 @@ fn the_reference_toddler_is_fitted() {
         gender: 0.5,
         stature_mm: 920.0,
     };
-    // the reference wearer's fused values (Ottobre chart priors at 92 cm)
-    let want = [920.0, 540.0, 530.0, 580.0, 530.0, 372.5];
+    // the reference wearer's fused values (Ottobre chart priors at 92 cm), in TAPE_FIELDS order
+    let want = [
+        920.0, 540.0, 530.0, 580.0, 530.0, 372.5, 288.8, 210.6, 204.5, 146.9, 156.8, 109.8, 320.0,
+        231.0, 225.0,
+    ];
     let faces: Vec<[usize; 3]> = model
         .data()
         .faces
@@ -149,10 +177,8 @@ fn the_reference_toddler_is_fitted() {
             r.body_mm - r.target_mm
         );
     }
-    // every girth within 10 mm; the lengths are reported (a toddler's crotch can sit outside Anny's range)
+    // every measurement within 3 mm: the chart values are reachable, the priors keep the shape natural
     for r in &fit.residuals {
-        if matches!(r.name.as_str(), "chest" | "waist" | "hip") {
-            assert!((r.body_mm - r.target_mm).abs() < 10.0, "{r:?}");
-        }
+        assert!((r.body_mm - r.target_mm).abs() < 3.0, "{r:?}");
     }
 }

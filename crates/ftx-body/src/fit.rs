@@ -17,17 +17,26 @@
 //! | `chest` | girth [`CHEST_BELOW_ARMPIT_MM`] below the armpit landmark, where the arms have left the section |
 //! | `waist` | girth at the waist landmark (the mean height of Anny's waist loop) |
 //! | `hip` | the largest girth from 20 % of the way up from the crotch to the waist, in 2 mm steps ("the fullest part of the seat") |
-//! | `waist_height`, `crotch_height` | the landmarks above the floor |
+//! | `waist_height`, `crotch_height`, `knee_height` | the landmarks above the floor (the knee joint for the knee crease) |
+//! | `thigh` | the largest leg girth 5–40 mm below the crotch |
+//! | `knee` | leg girth at the knee joint |
+//! | `calf` | the largest leg girth from 30 % to 90 % of the way up the shin |
+//! | `ankle` | the smallest leg girth from 10 mm above the ankle joint to a quarter up the shin |
+//! | `upper_arm` | arm girth midway between the shoulder point and the elbow (0.55 of the arm length down) |
+//! | `wrist` | arm girth at the wrist |
+//! | `arm_length` | shoulder point to wrist along the straight arm ([`BodyFrames::arm_length`]) |
+//! | `back_neck_to_waist` | C7 down the back's median line to the waist level, along the surface |
 //!
-//! A girth is [`crate::tape::girth`] around the torso axis.
+//! A torso girth is [`crate::tape::girth`] around the torso axis; a limb girth is taken perpendicular to
+//! the right leg's or arm's axis (its part frame), around it.
 
-use ftx_core::{Refusal, RefusalCode, linalg::lstsq};
+use ftx_core::{Refusal, RefusalCode, Vec3, linalg::lstsq};
 use serde_json::Value;
 
 use crate::drape::{Pose, pose_deltas};
 use crate::landmarks::BodyFrames;
 use crate::model::{AnnyModel, BodyParams, Phenotype, PosedBody, age_parameter_for_years};
-use crate::tape::girth;
+use crate::tape::{Slicer, in_frame};
 
 /// The wearer as the measurement file states them.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -159,66 +168,155 @@ pub fn fit_stature(model: &AnnyModel, wearer: &Wearer) -> Result<(BodyParams, f6
 
 /// The measurements the tape fit reads, in the measurement files' names; [`tape_readings`] returns them
 /// in this order (mm).
-pub const TAPE_FIELDS: [&str; 6] = [
+pub const TAPE_FIELDS: [&str; 15] = [
     "stature",
     "chest",
     "waist",
     "hip",
     "waist_height",
     "crotch_height",
+    "thigh",
+    "knee",
+    "calf",
+    "ankle",
+    "upper_arm",
+    "wrist",
+    "arm_length",
+    "knee_height",
+    "back_neck_to_waist",
 ];
+
+/// Number of tape readings.
+pub const N_TAPE: usize = TAPE_FIELDS.len();
+
+/// Whether a [`TAPE_FIELDS`] measurement is a girth (else a length or height).
+#[must_use]
+pub fn is_girth(name: &str) -> bool {
+    matches!(
+        name,
+        "chest" | "waist" | "hip" | "thigh" | "knee" | "calf" | "ankle" | "upper_arm" | "wrist"
+    )
+}
 
 /// How far below the armpit landmark the chest is read (mm).
 pub const CHEST_BELOW_ARMPIT_MM: f64 = 10.0;
+/// Search step for the fullest or narrowest girth over a range of levels (mm).
+const SEARCH_STEP_MM: f64 = 2.0;
+/// Height slab of the slicers' triangle buckets (mm).
+const SLAB_MM: f64 = 5.0;
 
 /// The fit's tolerance (1σ, mm) for a girth and for a length: the accuracy gate G1b asks of it.
 pub const FIT_SIGMA_GIRTH_MM: f64 = 3.0;
 /// See [`FIT_SIGMA_GIRTH_MM`].
 pub const FIT_SIGMA_LENGTH_MM: f64 = 2.0;
 
-/// The free parameters of [`fit_tape`]: the height and weight phenotype parameters, then local changes.
-pub const FREE: [&str; 7] = [
+/// The free parameters of [`fit_tape`]: [`N_PHENOTYPE`] phenotype parameters (Anny's shape space,
+/// learned from scans), then the `measure-*` local changes (authored blend shapes, one measurement each).
+pub const FREE: [&str; 19] = [
     "height",
     "weight",
+    "muscle",
+    "proportions",
     "measure-bust-circ-incr",
     "measure-waist-circ-incr",
     "measure-hips-circ-incr",
     "measure-upperleg-height-incr",
     "measure-waisttohip-dist-incr",
+    "measure-thigh-circ-incr",
+    "measure-knee-circ-incr",
+    "measure-calf-circ-incr",
+    "measure-ankle-circ-incr",
+    "measure-upperarm-circ-incr",
+    "measure-wrist-circ-incr",
+    "measure-upperarm-length-incr",
+    "measure-lowerarm-length-incr",
+    "measure-lowerleg-height-incr",
+    "measure-napetowaist-dist-incr",
 ];
 const N_FREE: usize = FREE.len();
+/// How many of [`FREE`] are phenotype parameters.
+pub const N_PHENOTYPE: usize = 4;
 /// Phenotype parameters range over [0, 1]; local changes over [−1, 1], Anny's modelled range.
 const LOCAL_LIMIT: f64 = 1.0;
-/// Prior 1σ of every free parameter, about its population middle (0.5, or 0 for a local change).
-const PRIOR_SIGMA: f64 = 1.0;
+/// Prior 1σ of a phenotype parameter about the population middle (0.5) and of a local change about 0:
+/// the scanned shape space explains a body before the authored blend shapes adjust it.
+const PRIOR_SIGMA_PHENOTYPE: f64 = 0.5;
+/// See [`PRIOR_SIGMA_PHENOTYPE`].
+const PRIOR_SIGMA_LOCAL: f64 = 0.35;
 /// Central-difference step in the parameters.
 const FD_STEP: f64 = 1e-3;
 /// Levenberg–Marquardt iteration cap.
 const MAX_ITERATIONS: usize = 40;
+/// Stop once an accepted step lowers the cost by less than this fraction.
+const REL_GAIN_STOP: f64 = 1e-5;
 
-/// What a tape reads on `posed` (mm, in [`TAPE_FIELDS`] order), or `None` when a section around the
-/// torso axis is missing (a body far outside the model's range).
+/// The fullest (`max`) or narrowest girth `g(h)` over `lo..=hi` in [`SEARCH_STEP_MM`] steps.
+fn extreme(lo: f64, hi: f64, max: bool, g: impl Fn(f64) -> Option<f64>) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    let mut h = lo;
+    while h <= hi {
+        let v = g(h)?;
+        best = Some(best.map_or(v, |b| if max { b.max(v) } else { b.min(v) }));
+        h += SEARCH_STEP_MM;
+    }
+    best
+}
+
+/// What a tape reads on `posed` (mm, in [`TAPE_FIELDS`] order), or `None` when a section around an
+/// axis is missing (a body far outside the model's range).
 #[must_use]
 pub fn tape_readings(
     faces: &[[usize; 3]],
     rest_height_m: f64,
     posed: &PosedBody,
     frames: &BodyFrames,
-) -> Option<[f64; 6]> {
+) -> Option<[f64; N_TAPE]> {
     let lm = |n: &str| frames.landmarks.get(n).copied();
-    let axis = [
-        frames.torso.origin.x / 1000.0,
-        frames.torso.origin.y / 1000.0,
-    ];
-    let g = |h: f64| {
-        girth(&posed.vertices, faces, (frames.floor_z + h) / 1000.0, axis).map(|m| m * 1000.0)
-    };
+    let mm: Vec<Vec3> = posed.vertices.iter().map(|v| *v * 1000.0).collect();
+    // torso: horizontal sections around the torso axis
+    let axis = [frames.torso.origin.x, frames.torso.origin.y];
+    let torso = Slicer::new(&mm, faces, SLAB_MM);
+    let g = |h: f64| torso.girth(frames.floor_z + h, axis);
     let (waist_h, crotch_h, armpit_h) = (lm("waist")?, lm("crotch")?, lm("chest")?);
-    let mut hip = f64::NEG_INFINITY;
-    let mut h = crotch_h + 0.2 * (waist_h - crotch_h);
-    while h <= waist_h {
-        hip = hip.max(g(h)?);
-        h += 2.0;
+    let hip = extreme(crotch_h + 0.2 * (waist_h - crotch_h), waist_h, true, g)?;
+    // limbs: sections perpendicular to the leg and arm axes, around them
+    let frame = |f: &crate::landmarks::Frame| in_frame(&mm, f.origin, f.lat, f.front, f.up);
+    let (leg, arm) = (frame(&frames.leg_r), frame(&frames.arm_r));
+    let (legs, arms) = (
+        Slicer::new(&leg, faces, SLAB_MM),
+        Slicer::new(&arm, faces, SLAB_MM),
+    );
+    // the part axes run parallel to the limbs, not always through them (near the ankle the leg
+    // axis passes beside it): the nearest loop when none contains the axis
+    let gl = |h: f64| legs.girth_near(h, [0.0, 0.0]);
+    let ga = |h: f64| arms.girth_near(h, [0.0, 0.0]);
+    let lh = |n: &str| frames.landmark_h("leg_R", n);
+    let (crotch_l, knee_l, ankle_l) = (lh("crotch")?, lh("knee")?, lh("ankle")?);
+    let shin = knee_l - ankle_l;
+    // thigh: fullest just below the crotch; calf: fullest between 30 % and 90 % up the shin;
+    // ankle: narrowest from 10 mm above the joint to a quarter up the shin
+    let thigh = extreme(crotch_l - 40.0, crotch_l - 5.0, true, gl)?;
+    let calf = extreme(ankle_l + 0.3 * shin, knee_l - 0.1 * shin, true, gl)?;
+    let ankle = extreme(ankle_l + 10.0, ankle_l + 0.25 * shin, false, gl)?;
+    let tip = frames.tip_h;
+    // upper arm midway between the shoulder point and the elbow (0.55 of the arm down); the wrist
+    let upper_arm = ga(tip - 0.275 * frames.arm_length)?;
+    let wrist = ga(tip - frames.arm_length)?;
+    // C7 down the spine to the waist, along the back's median line
+    let c7_h = lm("c7")?;
+    let mut back = 0.0;
+    let mut prev: Option<(f64, f64)> = None;
+    let mut h = waist_h;
+    loop {
+        let y = torso.back_point(frames.floor_z + h, axis[0])?;
+        if let Some((ph, py)) = prev {
+            back += (h - ph).hypot(y - py);
+        }
+        prev = Some((h, y));
+        if h >= c7_h {
+            break;
+        }
+        h = (h + SEARCH_STEP_MM).min(c7_h);
     }
     Some([
         rest_height_m * 1000.0,
@@ -227,6 +325,15 @@ pub fn tape_readings(
         hip,
         waist_h,
         crotch_h,
+        thigh,
+        gl(knee_l)?,
+        calf,
+        ankle,
+        upper_arm,
+        wrist,
+        frames.arm_length,
+        lm("knee")?,
+        back,
     ])
 }
 
@@ -256,7 +363,7 @@ pub struct TapeFit {
     /// The body parameters.
     pub params: BodyParams,
     /// Every tape reading on the fitted body (mm, [`TAPE_FIELDS`] order), measured or not.
-    pub readings: [f64; 6],
+    pub readings: [f64; N_TAPE],
     /// The fitted measurements, target against body.
     pub residuals: Vec<TapeResidual>,
     /// The free parameters' values ([`FREE`] order).
@@ -297,14 +404,14 @@ pub fn fit_tape(
                 t.name, t.value_mm
             )));
         }
-        let sigma = if matches!(t.name.as_str(), "chest" | "waist" | "hip") {
+        let sigma = if is_girth(&t.name) {
             FIT_SIGMA_GIRTH_MM
         } else {
             FIT_SIGMA_LENGTH_MM
         };
         rows.push((k, t.value_mm, sigma));
     }
-    let lc: Vec<usize> = FREE[2..]
+    let lc: Vec<usize> = FREE[N_PHENOTYPE..]
         .iter()
         .map(|n| {
             model
@@ -334,24 +441,34 @@ pub fn fit_tape(
         let mut p = model.params(Phenotype {
             height: th[0],
             weight: th[1],
+            muscle: th[2],
+            proportions: th[3],
             ..base
         });
         for (j, &i) in lc.iter().enumerate() {
-            p.local_changes[i] = th[2 + j];
+            p.local_changes[i] = th[N_PHENOTYPE + j];
         }
         p
     };
-    let read = |th: &[f64; N_FREE]| -> Result<Option<[f64; 6]>, Refusal> {
+    let read = |th: &[f64; N_FREE]| -> Result<Option<[f64; N_TAPE]>, Refusal> {
         let rest = model.rest(&params_of(th))?;
         let height = model.anthropometry(&rest).height;
         let posed = model.pose(&rest, &pose_deltas(model, &rest, pose, 1.0)?)?;
         let frames = BodyFrames::new(model, &posed)?;
         Ok(tape_readings(&faces, height, &posed, &frames))
     };
-    let prior = |j: usize| if j < 2 { 0.5 } else { 0.0 };
+    let pheno = |j: usize| j < N_PHENOTYPE;
+    let prior = |j: usize| if pheno(j) { 0.5 } else { 0.0 };
+    let tau = |j: usize| {
+        if pheno(j) {
+            PRIOR_SIGMA_PHENOTYPE
+        } else {
+            PRIOR_SIGMA_LOCAL
+        }
+    };
     let clamp = |th: [f64; N_FREE]| -> [f64; N_FREE] {
         std::array::from_fn(|j| {
-            if j < 2 {
+            if pheno(j) {
                 th[j].clamp(0.0, 1.0)
             } else {
                 th[j].clamp(-LOCAL_LIMIT, LOCAL_LIMIT)
@@ -359,10 +476,10 @@ pub fn fit_tape(
         })
     };
     // residual vector: the measurements, then the priors
-    let resid = |th: &[f64; N_FREE], r: &[f64; 6]| -> Vec<f64> {
+    let resid = |th: &[f64; N_FREE], r: &[f64; N_TAPE]| -> Vec<f64> {
         rows.iter()
             .map(|&(k, v, s)| (r[k] - v) / s)
-            .chain((0..N_FREE).map(|j| (th[j] - prior(j)) / PRIOR_SIGMA))
+            .chain((0..N_FREE).map(|j| (th[j] - prior(j)) / tau(j)))
             .collect()
     };
     let cost = |r: &[f64]| r.iter().map(|x| x * x).sum::<f64>();
@@ -401,7 +518,7 @@ pub fn fit_tape(
             let mut a: Vec<[f64; N_FREE]> = jac.clone();
             a.extend((0..N_FREE).map(|j| {
                 let mut row = [0.0; N_FREE];
-                row[j] = 1.0 / PRIOR_SIGMA;
+                row[j] = 1.0 / tau(j);
                 row
             }));
             a.extend((0..N_FREE).map(|j| {
@@ -423,7 +540,7 @@ pub fn fit_tape(
                     let gain = c - ct;
                     (th, readings, r, c) = (trial, rt, res, ct);
                     lambda = (lambda / 3.0).max(1e-9);
-                    improved = moved > 1e-7 && gain > 1e-10 * c.max(1.0);
+                    improved = moved > 1e-7 && gain > REL_GAIN_STOP * (c + gain);
                     break;
                 }
             }
@@ -480,10 +597,15 @@ mod tests {
         let m = serde_json::json!({
             "wearer": {"age_months": 30.0, "stature_mm": 921.0},
             "fused": {"stature": {"value_mm": 920.0}, "waist": {"value_mm": 530.0},
-                      "thigh": {"value_mm": 290.0}, "hip": {"value_deg": 3.0}},
+                      "thigh": {"value_mm": 290.0}, "hip": {"value_deg": 3.0},
+                      "head": {"value_mm": 480.0}},
         });
         let t = tape_targets(&m);
         let got: Vec<(&str, f64)> = t.iter().map(|t| (t.name.as_str(), t.value_mm)).collect();
-        assert_eq!(got, [("stature", 921.0), ("waist", 530.0)]);
+        // in TAPE_FIELDS order; no value_mm (hip) or not a tape reading (head): left out
+        assert_eq!(
+            got,
+            [("stature", 921.0), ("waist", 530.0), ("thigh", 290.0)]
+        );
     }
 }

@@ -28,8 +28,8 @@ pub use drape::{
     pose_deltas, posed_skin, skin_mesh, trimmed_skin,
 };
 pub use fit::{
-    FREE, TAPE_FIELDS, TapeFit, TapeResidual, TapeTarget, Wearer, fit_stature, fit_tape,
-    tape_readings, tape_targets,
+    FREE, N_PHENOTYPE, N_TAPE, TAPE_FIELDS, TapeFit, TapeResidual, TapeTarget, Wearer, fit_stature,
+    fit_tape, is_girth, tape_readings, tape_targets,
 };
 pub use kinematics::Affine;
 pub use landmarks::{BodyFrames, Frame};
