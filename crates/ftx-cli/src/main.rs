@@ -4,9 +4,11 @@
 //! - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation (seam walk, truing,
 //!   points of measure), bit-exact with the reference.
 //! - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH]
-//!   [--json]`: an Anny body of the wearer's age, sex and stature in the drape pose, the pattern meshed,
-//!   placed, sewn and draped on it, and `sim_report.json`, `fold.pc2`, `mesh_map.json` and
-//!   `fold_viewer.html` written to DIR.
+//!   [--json]`: an Anny body fitted to the wearer's measurements in the drape pose, the pattern meshed,
+//!   placed, sewn and draped on it, and `sim_report.json`, `fold.pc2`, `mesh_map.json`,
+//!   `fold_viewer.html` and the last frame as OBJ written to DIR.
+//! - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH]
+//!   [--json]`: that body alone, as `body.obj` and `body.json` (`ftx-body/1`).
 //!
 //! Every command prints human text, or with `--json` one JSON envelope `{"schema": "ftx-cli/1",
 //! "command", "ok", "exit", "result" | "refusal"}`. Exit codes: 0 converged / no gating flags, 2 not
@@ -18,7 +20,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, FREE, Pose, TAPE_FIELDS, Wearer, default_model_path, fit_tape,
+    AnnyModel, BodyFrames, FREE, Pose, TAPE_FIELDS, TapeFit, Wearer, default_model_path, fit_tape,
     pose_deltas, skin_mesh, tape_targets, trimmed_skin,
 };
 use ftx_core::Vec3;
@@ -34,6 +36,7 @@ const VIEWER_TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template
 const USAGE: &str = "usage:
   ftx validate PATTERN --measurements M [--fit F] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH] [--json]
+  ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx --version";
 
 /// Parsed command line: the positional arguments and the `--flag value` options.
@@ -114,6 +117,165 @@ fn fit_spec(args: &Args) -> Result<Value, Refusal> {
     }
 }
 
+fn make_dir(dir: &std::path::Path) -> Result<(), Refusal> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", dir.display())))
+}
+
+/// The Anny model (`--model`, else the converted default).
+fn load_model(args: &Args) -> Result<AnnyModel, Refusal> {
+    let path = args
+        .options
+        .get("model")
+        .map(PathBuf::from)
+        .or_else(default_model_path)
+        .ok_or_else(|| {
+            Refusal::new(RefusalCode::Io, "no body model path")
+                .repair("convert Anny with tools/body-model/convert_anny.py, or pass --model")
+        })?;
+    AnnyModel::load(&path, false)
+}
+
+/// The wearer of a measurement file and the body fitted to it on the drape pose (a line on stderr).
+fn fitted_body(model: &AnnyModel, meas: &Value) -> Result<(Wearer, TapeFit), Refusal> {
+    let w = Wearer::from_measurements(meas)?;
+    let fit = fit_tape(model, &w, &tape_targets(meas), &Pose::drape())?;
+    eprintln!(
+        "body: fitted in {} iterations; {}; {:.2} kg{}",
+        fit.iterations,
+        fit.residuals
+            .iter()
+            .map(|r| format!(
+                "{} {:.1} ({:+.1})",
+                r.name,
+                r.body_mm,
+                r.body_mm - r.target_mm
+            ))
+            .collect::<Vec<_>>()
+            .join(", "),
+        fit.mass_kg,
+        w.weight_kg
+            .map_or(String::new(), |kg| format!(" (weighs {kg:.2})"))
+    );
+    Ok((w, fit))
+}
+
+/// The fitted body as `drape` reports it and `body` writes it.
+fn body_json(w: &Wearer, fit: &TapeFit) -> serde_json::Map<String, Value> {
+    let mm = |v: f64| (v * 10.0).round() / 10.0;
+    let kg = |v: f64| (v * 100.0).round() / 100.0;
+    let named =
+        |pairs: &mut dyn Iterator<Item = (String, Value)>| pairs.collect::<serde_json::Map<_, _>>();
+    let mut m = serde_json::Map::new();
+    m.insert("model".into(), json!("anny 0.6.1"));
+    m.insert("age_years".into(), json!(w.years));
+    m.insert("gender".into(), json!(w.gender));
+    m.insert(
+        "fit".into(),
+        json!({
+            "iterations": fit.iterations,
+            "tape": named(&mut fit.residuals.iter().map(|r| (r.name.clone(), json!({
+                "target_mm": r.target_mm,
+                "body_mm": mm(r.body_mm),
+            })))),
+            "free": named(&mut FREE.iter().zip(fit.free).map(|(n, v)| {
+                ((*n).to_string(), json!((v * 1e4).round() / 1e4))
+            })),
+            "weight_kg": w.weight_kg.map(|t| json!({"target_kg": t, "body_kg": kg(fit.mass_kg)})),
+        }),
+    );
+    m.insert(
+        "readings_mm".into(),
+        Value::Object(named(
+            &mut TAPE_FIELDS
+                .iter()
+                .zip(fit.readings)
+                .map(|(n, v)| ((*n).to_string(), json!(mm(v)))),
+        )),
+    );
+    m.insert("mass_kg".into(), json!(kg(fit.mass_kg)));
+    m
+}
+
+/// `ftx body`: the body fitted to a measurement file, posed, as `body.obj` and `body.json`
+/// (`ftx-body/1`: the fit, the readings, the phenotype and the local changes in use).
+fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(args, "body", &["measurements", "out", "pose", "model"])?;
+    let (meas, meas_bytes) = read_json(required(args, "measurements")?)?;
+    let out = PathBuf::from(required(args, "out")?);
+    let pose_name = args.options.get("pose").map_or("drape", String::as_str);
+    let pose = match pose_name {
+        "drape" => Pose::drape(),
+        "rest" => Pose::rest(),
+        "arms-up" => Pose::arms_up(),
+        "seated" => Pose::seated(),
+        "squat" => Pose::squat(),
+        other => {
+            return Err(bad_input(format!("--pose {other}: no such pose"))
+                .repair("--pose drape, rest, arms-up, seated or squat"));
+        }
+    };
+    make_dir(&out)?;
+    let model = load_model(args)?;
+    let (w, fit) = fitted_body(&model, &meas)?;
+    let rest = model.rest(&fit.params)?;
+    let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
+    let skin = skin_mesh(&posed.vertices, &model.data().faces)?;
+    let ph = fit.params.phenotype;
+    let labels = &model.data().header.labels.local_changes;
+    let mut doc = body_json(&w, &fit);
+    doc.insert("schema".into(), json!("ftx-body/1"));
+    doc.insert("measurements_sha256".into(), json!(sha256_hex(&meas_bytes)));
+    doc.insert("pose".into(), json!(pose_name));
+    doc.insert(
+        "phenotype".into(),
+        json!({"gender": ph.gender, "age": ph.age, "height": ph.height, "weight": ph.weight,
+               "muscle": ph.muscle, "proportions": ph.proportions}),
+    );
+    doc.insert(
+        "local_changes".into(),
+        Value::Object(
+            labels
+                .iter()
+                .zip(&fit.params.local_changes)
+                .filter(|(_, v)| **v != 0.0)
+                .map(|(n, v)| (n.clone(), json!(v)))
+                .collect(),
+        ),
+    );
+    let write = |name: &str, bytes: &[u8]| -> Result<(), Refusal> {
+        std::fs::write(out.join(name), bytes)
+            .map_err(|e| Refusal::new(RefusalCode::Io, format!("{name}: {e}")))
+    };
+    write(
+        "body.obj",
+        obj(&skin.vertices, &skin.triangles, None).as_bytes(),
+    )?;
+    let doc = Value::Object(doc);
+    write(
+        "body.json",
+        serde_json::to_string_pretty(&doc)
+            .unwrap_or_default()
+            .as_bytes(),
+    )?;
+    let text = format!(
+        "{} mm, {:.2} kg, {} tape measurements fitted (largest residual {:.1} mm); pose {pose_name}\nwrote {}",
+        (fit.readings[0] * 10.0).round() / 10.0,
+        fit.mass_kg,
+        fit.residuals.len(),
+        fit.residuals
+            .iter()
+            .map(|r| (r.body_mm - r.target_mm).abs())
+            .fold(0.0, f64::max),
+        out.display()
+    );
+    Ok((
+        json!({"out": out, "files": ["body.obj", "body.json"], "body": doc}),
+        0,
+        text,
+    ))
+}
+
 fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(args, "validate", &["measurements", "fit"])?;
     let pattern_path = args
@@ -154,39 +316,11 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 .map_err(|_| bad_input(format!("--{name} must be a whole number")))?;
         }
     }
-    let model_path = args
-        .options
-        .get("model")
-        .map(PathBuf::from)
-        .or_else(default_model_path)
-        .ok_or_else(|| {
-            Refusal::new(RefusalCode::Io, "no body model path")
-                .repair("convert Anny with tools/body-model/convert_anny.py, or pass --model")
-        })?;
-    let io = |e: std::io::Error| Refusal::new(RefusalCode::Io, format!("{}: {e}", out.display()));
     // before the minutes of draping, so an unwritable DIR refuses at once
-    std::fs::create_dir_all(&out).map_err(io)?;
-    let model = AnnyModel::load(&model_path, false)?;
-    let w = Wearer::from_measurements(&meas)?;
+    make_dir(&out)?;
+    let model = load_model(args)?;
     let pose = Pose::drape();
-    let fit = fit_tape(&model, &w, &tape_targets(&meas), &pose)?;
-    eprintln!(
-        "body: fitted in {} iterations; {}; {:.2} kg{}",
-        fit.iterations,
-        fit.residuals
-            .iter()
-            .map(|r| format!(
-                "{} {:.1} ({:+.1})",
-                r.name,
-                r.body_mm,
-                r.body_mm - r.target_mm
-            ))
-            .collect::<Vec<_>>()
-            .join(", "),
-        fit.mass_kg,
-        w.weight_kg
-            .map_or(String::new(), |kg| format!(" (weighs {kg:.2})"))
-    );
+    let (w, fit) = fitted_body(&model, &meas)?;
     let rest = model.rest(&fit.params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
     let skin = trimmed_skin(
@@ -213,33 +347,15 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "wall_s".into(),
             json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
         );
-        let mm = |v: f64| (v * 10.0).round() / 10.0;
-        o.insert(
-            "body".into(),
-            json!({
-                "model": "anny 0.6.1",
-                "age_years": w.years,
-                "gender": w.gender,
-                "fit": {
-                    "iterations": fit.iterations,
-                    "tape": fit.residuals.iter().map(|r| (r.name.clone(), json!({
-                        "target_mm": r.target_mm,
-                        "body_mm": mm(r.body_mm),
-                    }))).collect::<serde_json::Map<_, _>>(),
-                    "free": FREE.iter().zip(fit.free).map(|(n, v)| ((*n).to_string(), json!((v * 1e4).round() / 1e4))).collect::<serde_json::Map<_, _>>(),
-                    "weight_kg": w.weight_kg.map(|kg| json!({
-                        "target_kg": kg,
-                        "body_kg": (fit.mass_kg * 100.0).round() / 100.0,
-                    })),
-                },
-                "readings_mm": TAPE_FIELDS.iter().zip(fit.readings).map(|(n, v)| ((*n).to_string(), json!(mm(v)))).collect::<serde_json::Map<_, _>>(),
-                "mass_kg": (fit.mass_kg * 100.0).round() / 100.0,
-                "pose": format!(
-                    "drape: arms at {}° and straight, hands and feet left out of contact",
-                    body.arm_deg
-                ),
-            }),
+        let mut b = body_json(&w, &fit);
+        b.insert(
+            "pose".into(),
+            json!(format!(
+                "drape: arms at {}° and straight, hands and feet left out of contact",
+                body.arm_deg
+            )),
         );
+        o.insert("body".into(), Value::Object(b));
     }
     let write = |name: &str, bytes: &[u8]| -> Result<(), Refusal> {
         std::fs::write(out.join(name), bytes)
@@ -353,6 +469,7 @@ fn main() -> ExitCode {
     match args.positional.first().map(String::as_str) {
         Some("validate") => emit("validate", args.json, cmd_validate(&args)),
         Some("drape") => emit("drape", args.json, cmd_drape(&args)),
+        Some("body") => emit("body", args.json, cmd_body(&args)),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(3)

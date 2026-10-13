@@ -1,9 +1,9 @@
 # ftx-cli contract
 
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
-FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx validate` and
-`ftx drape`; `round`, `draft`, `body fit`, `measure`, `export`, `trace`, `alter`, `viewer` and `report`
-follow their subsystems.
+FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx validate`,
+`ftx drape` and `ftx body`; `round`, `draft`, `measure`, `export`, `trace`, `alter`, `viewer` and
+`report` follow their subsystems.
 
 **Commands.**
 - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation of `ftx-pattern`, the
@@ -21,6 +21,10 @@ follow their subsystems.
   per-vertex seam colours and `garment_strain.obj` with strain colours (`v x y z r g b`, spec 04 §9.4),
   and `body.obj` (the full posed skin). Exit 0 when no gating flag, 2 with gating flags. Without `--fit`, no girth landmarks
   are read.
+- `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]`:
+  the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
+  and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,
+  the phenotype and every local change in use). Exit 0; an unknown pose is refused.
 
 **Output.** Human text, or with `--json` exactly one JSON envelope on stdout:
 `{"schema": "ftx-cli/1", "command", "ok", "exit", "result"}` or, for refused input,

@@ -108,7 +108,8 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
 | `ftx validate` (the reference's `fab validate`: table, exit codes, `--json` envelope) | 04 §11, plan §14 | present | the validation fixtures (via `ftx-pattern`); CLI parsing and wearer unit tests |
-| `ftx drape` (replaces `fab sim`: Anny of the wearer's age and sex fitted to the tape, the drape, `sim_report.json`, `fold.pc2`, `mesh_map.json`, `fold_viewer.html`) | 04 §5–9, plan §14 | partial | run end to end on the drafted bolero; stills, videos and the round's other commands missing |
+| `ftx drape` (replaces `fab sim`: Anny of the wearer's age and sex fitted to the tape, the drape, `sim_report.json`, `fold.pc2`, `mesh_map.json`, `fold_viewer.html`, the last frame and body as OBJ) | 04 §5–9, plan §14 | partial | run end to end on the drafted bolero and trousers and through the skill (`fab sim`/`fab round --sim`/`fab qualify` pick it when `ftx` is installed; Blender renders the stills from the OBJs); videos and the round's other commands missing |
+| `ftx body` (the fitted body as `body.obj` + `ftx-body/1` JSON, any drape pose) | plan §9.4, §14 | partial | run on the reference toddler with a weight; `MODEL_FIT` σ for unmeasured values missing |
 | Round logic, statuses, basis, workspace layout, rounds.jsonl | 04 §11 | missing | |
 | Measurement gate, qualification, tightness gating in the round | 04 §11 | missing | |
 | Report HTML | 04 §11 | missing | |
