@@ -180,7 +180,7 @@ fn normalize(poly: &[Vec2]) -> Option<Vec<Vec2>> {
 
 /// The counter-clockwise exterior ring (open) of the largest part of the union of `polys`, or `None` when
 /// the union has no area.
-pub(crate) fn union_exterior(polys: &[Vec<Vec2>]) -> Option<Vec<Vec2>> {
+pub fn union_exterior(polys: &[Vec<Vec2>]) -> Option<Vec<Vec2>> {
     let rings: Vec<Vec<Vec2>> = polys.iter().filter_map(|p| normalize(p)).collect();
     if rings.is_empty() {
         return None;

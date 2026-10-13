@@ -2,8 +2,9 @@
 
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
 number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the
-master SVG (§7.1), the PDFs (§7.2–7.6) and their acceptance checks (§8). The DXFs, HPGL, cutter files,
-GarmentCode, DST, the manifest file and the other checks follow (FTX-17).
+master SVG (§7.1), the PDFs (§7.2–7.6), HPGL (§7.9), the cutter files (§7.10), the manifest's piece reference
+(§7.13) and their acceptance checks (§8). The DXFs, GarmentCode, DST, the manifest file and the remaining checks
+follow (FTX-17).
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
@@ -92,6 +93,19 @@ date and the producer aside); of 36,867 inflated content lines 34,672 byte-ident
 0.000 mm but for 119 union cut lines (within 0.05 mm) and 2,076 main-label text lines (ftx's own anchor and
 size).
 
+**HPGL, cutter files, manifest pieces** (`hpgl.rs`, `cutter.rs`, `ctx.rs`, `pyjson.rs`, §7.9, §7.10, §7.13).
+HPGL plots the master layout at 40 units per mm (ties to even), pen 1 (sew, internal draw, decor, grain, fold
+lines, drills, label stroke text) before pen 2 (internal cuts, notches, the cut line) per piece, optionally
+mirrored and turned. Cutter SVGs: per instance (labels naming the side), grain vertical, the cut polygon united with
+a 4 × 3 mm outward triangle per notch, 1 mm margin, with the mat report. JSON is written like Python's
+`json.dumps(indent=1)` (key order kept, ASCII, `repr` floats; `PyJson`). Against
+`tests/fixtures/oracle/export/targets.json` (TESTBODICE also rotated and mirrored, ROBUST, the 92 cm fez, bolero
+and trousers): every HPGL command and pen equal and every polyline identical but the main label's strokes (ftx's
+anchor, the same strokes) and union cut lines (within 0.05 mm); cutter titles and reports equal, outlines within
+0.05 mm as regions (where a notch triangle's base runs along a curved cut line GEOS, which grows the cut by 1e-4 mm
+first, keeps the micrometre sliver between them as a hole); the manifest's `pieces`, `hpgl` and `cutter` entries
+equal (cut perimeters within 0.05 mm).
+
 **Checks** (`checks.rs`, `xml.rs`, §8). `check_svg`: `svg.no_transform`, `svg.mm_units_viewbox`,
 `svg.piece_subgroups` (master) or `cutter.single_closed_path` (cutter), with the reference's details, reading
 the file back with a small XML reader. They pass on all 25 of ftx's and the reference's master SVGs, and the
@@ -103,6 +117,8 @@ squares (page 1, every copy-shop sheet, the projector), `pdf.projector_text_cap_
 and with the master SVG's cut vertices `pdf.restitch_matches_master` and `pdf.tiles_cover_master`. On the
 reference's 42 PDFs it gives exactly the reference checker's 294 items, details included; all 294 pass on ftx's;
 a wrong paper, master vertices 1 mm off and a master vertex off every tile each fail exactly their check.
+`check_hpgl` (same layout as the master, pen-2 bounding box against the master's) and the cutter SVG check give
+exactly the reference checker's 113 items on its HPGL and cutter files and pass on ftx's.
 
 **Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve, a seam allowance
 outline without area or a pattern traced in pixels; `out_of_range` for a projector page over 200 in.

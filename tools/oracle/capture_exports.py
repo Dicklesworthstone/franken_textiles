@@ -14,6 +14,9 @@
                            03 §7.2-7.6) as written, their manifest entries and the reference checker's items, for
                            TESTBODICE, ROBUST (also at --layout-width 300 with and without --keep-blank-pages),
                            TESTBODICE at --projector-width 1100 and the 92 cm bolero and trousers
+    OUT_DIR/targets.json   HPGL (also rotated and mirrored), the cutter SVGs and report, the manifest and the
+                           reference checker's HPGL, cutter and SVG items, for TESTBODICE, ROBUST, the 92 cm fez,
+                           bolero and trousers
     OUT_DIR/outlines.json  seam-allowance cut outlines (ring and method), sew rings and edge breaks of every
                            piece as drafted and of every instance, for the spec's fixture patterns (TESTBODICE,
                            ROBUST, the single pieces) and the drafted garments of tests/fixtures/oracle/pattern
@@ -30,6 +33,7 @@ import hashlib
 import json
 import math
 import platform
+import re
 import sys
 from pathlib import Path
 
@@ -224,7 +228,6 @@ def main(argv=None) -> int:
     print(f"wrote {len(scases)} master SVG cases to {path}")
 
     # ------------------------------------------------------------------ PDFs (files kept as they are)
-    import shutil
     pdf_root = args.out_dir / "pdf"
     by_id = dict((cid, doc) for cid, doc in svg_patterns)
     pcases = []
@@ -243,7 +246,10 @@ def main(argv=None) -> int:
             dest = pdf_root / cid
             dest.mkdir(parents=True, exist_ok=True)
             for f in files:
-                shutil.copyfile(f, dest / f.name)
+                # the reference stamps the wall clock (14 digits); the fixed date keeps recaptures byte-stable and
+                # leaves every offset as it was
+                data = re.sub(rb"/CreationDate \(D:\d{14}\)", b"/CreationDate (D:20261011120000)", f.read_bytes())
+                (dest / f.name).write_bytes(data)
             manifest = {k: v for k, v in ctx.manifest["files"].items() if k.startswith("pdf_")}
             items = [it for it in rep.items if it["check"].startswith("pdf.")]
         pcases.append({"id": cid, "input": {"pattern": doc, "options": opts, "created": "2026-10-11T12:00"},
@@ -252,6 +258,32 @@ def main(argv=None) -> int:
     path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "export", "fixture": "pdfs", "meta": meta,
                                 "cases": pcases}, separators=(",", ":"), ensure_ascii=False) + "\n")
     print(f"wrote {len(pcases)} PDF cases to {path} and their files to {pdf_root}")
+
+    # ------------------------------------------------------------------ HPGL, cutter files, manifest
+    tcases = []
+    for cid, src, opts in (("testbodice", "testbodice", {}), ("testbodice_rot_mirror", "testbodice",
+                           {"hpgl_rotate90": True, "hpgl_mirror": True}), ("testbodice_mirror", "testbodice",
+                           {"hpgl_mirror": True}), ("robust", "robust", {}), ("bolero920", "zouave_bolero-920", {}),
+                           ("trousers920", "zouave_trousers-920", {}), ("fez920", "fez-920", {})):
+        doc = by_id[src]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = X.Ctx(pm.Pattern(json.loads(json.dumps(doc))), Path(tmp), created="2026-10-11T12:00", **opts)
+            X.export_svg(ctx)
+            hp = X.export_hpgl(ctx)
+            cut = X.export_cutter(ctx)
+            mpath = ctx.save_manifest()
+            rep = X.check_dir(Path(tmp))
+            out = {"hpgl": hp.read_text(),
+                   "cutter": {f"{p.parent.name}/{p.name}": p.read_text() for p in cut},
+                   "cutter_report": (Path(tmp) / f"{ctx.style}_cutter" / "cutter_report.json").read_text(),
+                   "manifest": mpath.read_text(),
+                   "checks": [it for it in rep.items if it["check"].split(".")[0] in ("hpgl", "cutter", "svg")]}
+        tcases.append({"id": cid, "input": {"pattern": doc, "options": opts, "created": "2026-10-11T12:00"},
+                       "output": out})
+    path = args.out_dir / "targets.json"
+    path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "export", "fixture": "targets", "meta": meta,
+                                "cases": tcases}, separators=(",", ":"), ensure_ascii=False) + "\n")
+    print(f"wrote {len(tcases)} HPGL/cutter/manifest cases to {path}")
     return 0
 
 

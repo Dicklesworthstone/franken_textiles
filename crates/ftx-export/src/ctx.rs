@@ -2,13 +2,15 @@
 
 use std::cell::OnceCell;
 
-use ftx_core::{Refusal, RefusalCode};
+use ftx_core::polyline::signed_area;
+use ftx_core::{Refusal, RefusalCode, py};
 use ftx_pattern::{Instance, Pattern, Side};
 use serde_json::Value;
 
 use crate::geom::{Geom, Source, build_geom};
 use crate::layout::{Layout, shelf_layout};
-use crate::outline::DEFAULT_SA;
+use crate::outline::{DEFAULT_SA, cut_outline};
+use crate::pyjson::PyJson;
 use crate::text::{ascii_text, safe_name};
 
 /// Export options (the CLI's flags).
@@ -129,6 +131,98 @@ impl<'a> Ctx<'a> {
     /// As [`build_geom`].
     pub fn geom(&self, src: Source, text_size: f64) -> Result<Geom, Refusal> {
         build_geom(self.pattern, src, self.sa, self.opts.mitre_limit, text_size)
+    }
+
+    /// Every instance's geometry (the cutter files, flat DXF, DST): the main label's cut line names the side
+    /// (`Cut 1 (R)`, `Cut 1 (L, mirrored)`) of a mirror pair.
+    ///
+    /// # Errors
+    /// As [`build_geom`].
+    pub fn instance_geoms(&self, text_size: f64) -> Result<Vec<Geom>, Refusal> {
+        self.pattern
+            .instances
+            .iter()
+            .map(|inst| {
+                let mut g = self.geom(Source::Instance(inst), text_size)?;
+                if matches!(inst.side, Side::R | Side::L) {
+                    g.labels[0].lines[2] = (
+                        format!(
+                            "Cut 1 ({}{})",
+                            inst.side.as_str(),
+                            if inst.mirrored { ", mirrored" } else { "" }
+                        ),
+                        0.65,
+                        false,
+                    );
+                }
+                Ok(g)
+            })
+            .collect()
+    }
+
+    /// The manifest's `pieces`: per piece, keyed by its DXF block name (`safe_name(id)`, on a collision
+    /// `safe_name(id, 17)_k`), the primary instance and its sew and cut line perimeters and areas.
+    ///
+    /// # Errors
+    /// As [`cut_outline`].
+    pub fn piece_reference(&self) -> Result<PyJson, Refusal> {
+        let doc = self.pattern.doc.as_ref().ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::InvalidDocument,
+                "the pattern has no typed document",
+            )
+        })?;
+        let mut items: Vec<(String, PyJson)> = Vec::new();
+        for piece in &doc.pieces {
+            let inst = primary_instance(self.pattern, &piece.id).ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    format!("{}: no instance", piece.id),
+                )
+            })?;
+            let mut name = safe_name(&piece.id, 20);
+            let mut k = 2;
+            while items.iter().any(|(n, _)| *n == name) {
+                name = format!("{}_{k}", safe_name(&piece.id, 17));
+                k += 1;
+            }
+            let (cut, _) = cut_outline(
+                inst,
+                &doc.pieces[inst.piece_index],
+                None,
+                self.sa,
+                self.opts.mitre_limit,
+            )?;
+            let py_err =
+                |e: ftx_pattern::PyError| Refusal::new(RefusalCode::InvalidDocument, e.to_string());
+            let lengths: Vec<f64> = cut
+                .iter()
+                .zip(cut.iter().cycle().skip(1))
+                .map(|(a, b)| ((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)).sqrt())
+                .collect();
+            let perimeter = ftx_core::np::pairwise_sum(&lengths);
+            items.push((
+                name,
+                PyJson::dict(vec![
+                    ("piece", PyJson::str(&piece.id)),
+                    ("instance", PyJson::str(&inst.id)),
+                    (
+                        "sew_perimeter",
+                        PyJson::Float(py::round(inst.perimeter().map_err(py_err)?, 3)),
+                    ),
+                    (
+                        "sew_area",
+                        PyJson::Float(py::round(
+                            signed_area(&inst.outline(200).map_err(py_err)?),
+                            2,
+                        )),
+                    ),
+                    ("cut_perimeter", PyJson::Float(py::round(perimeter, 3))),
+                    ("cut_area", PyJson::Float(py::round(signed_area(&cut), 2))),
+                ]),
+            ));
+        }
+        Ok(PyJson::Dict(items))
     }
 
     /// The master layout (master SVG, tiles, copy shop, HPGL): per piece its drafted half when cut on the fold

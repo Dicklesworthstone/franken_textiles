@@ -676,3 +676,86 @@ pub fn check_pdf(
     }
     out
 }
+
+fn py_tuple(v: &[f64]) -> String {
+    let items: Vec<String> = v.iter().map(|&x| py::repr_f64(x)).collect();
+    format!("({})", items.join(", "))
+}
+
+/// The HPGL checks: the manifest's `hpgl.cut_bbox` matches the master's (when there is one), there are pen-2
+/// (cut) coordinates, and their bounding box / 40 matches the master cut bounding box flipped to y up (only its
+/// area when the plot is rotated or mirrored). `master` is the manifest's `master` entry, `hpgl` its `hpgl` entry.
+#[must_use]
+pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) -> Vec<CheckItem> {
+    let mut out = Vec::new();
+    let nums = |v: &Value| -> Vec<f64> {
+        v.as_array()
+            .map(|a| a.iter().filter_map(Value::as_f64).collect())
+            .unwrap_or_default()
+    };
+    let (bbox, height) = match master {
+        None => (
+            nums(&hpgl["cut_bbox"]),
+            nums(&hpgl["sheet_mm"]).get(1).copied().unwrap_or(0.0),
+        ),
+        Some(m) => {
+            let ok = hpgl.get("cut_bbox").is_none()
+                || nums(&hpgl["cut_bbox"])
+                    .iter()
+                    .zip(nums(&m["cut_bbox"]))
+                    .all(|(a, b)| (a - b).abs() <= 0.01);
+            out.push(CheckItem::new("hpgl.same_layout_as_master", file, ok, ""));
+            (nums(&m["cut_bbox"]), m["height_mm"].as_f64().unwrap_or(0.0))
+        }
+    };
+    let (mut pen, mut xs, mut ys) = (0i64, Vec::new(), Vec::new());
+    for cmd in text.replace('\n', "").split(';') {
+        if cmd.len() < 2 {
+            continue;
+        }
+        let (op, args) = cmd.split_at(2);
+        if op == "SP" {
+            pen = args.parse().unwrap_or(0);
+        } else if (op == "PU" || op == "PD") && !args.is_empty() && pen == 2 {
+            let v: Vec<i64> = args.split(',').filter_map(|t| t.parse().ok()).collect();
+            xs.extend(v.iter().step_by(2).copied());
+            ys.extend(v.iter().skip(1).step_by(2).copied());
+        }
+    }
+    if xs.is_empty() || bbox.len() < 4 {
+        out.push(CheckItem::new(
+            "hpgl.bbox",
+            file,
+            false,
+            "no SP2 coordinates",
+        ));
+        return out;
+    }
+    let (x0, y0, x1, y1) = (bbox[0], bbox[1], bbox[2], bbox[3]);
+    let exp = [x0, height - y1, x1, height - y0];
+    let mn = |v: &[i64]| *v.iter().min().unwrap_or(&0) as f64 / 40.0;
+    let mx = |v: &[i64]| *v.iter().max().unwrap_or(&0) as f64 / 40.0;
+    let got = [mn(&xs), mn(&ys), mx(&xs), mx(&ys)];
+    let turned = hpgl
+        .get("rotate_90")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || hpgl.get("mirror").and_then(Value::as_bool).unwrap_or(false);
+    let ok = if turned {
+        ((got[2] - got[0]) * (got[3] - got[1]) - (x1 - x0) * (y1 - y0)).abs()
+            < 0.1 * (x1 - x0 + y1 - y0)
+    } else {
+        got.iter().zip(&exp).all(|(a, b)| (a - b).abs() <= 0.1)
+    };
+    out.push(CheckItem::new(
+        "hpgl.bbox_matches_master",
+        file,
+        ok,
+        format!(
+            "plt {} vs master {}",
+            py_tuple(&got.map(|v| py::round(v, 3))),
+            py_tuple(&exp.map(|v| py::round(v, 3)))
+        ),
+    ));
+    out
+}

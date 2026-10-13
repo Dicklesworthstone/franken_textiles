@@ -7,22 +7,27 @@
 
 pub mod checks;
 pub mod ctx;
+pub mod cutter;
 pub mod geom;
+pub mod hpgl;
 pub mod layout;
 pub mod outline;
 pub mod pdf;
 pub mod pole;
+pub mod pyjson;
 pub mod svg;
 pub mod text;
-mod union;
+pub mod union;
 mod xml;
 
-pub use checks::{CheckItem, check_pdf, check_svg, pdf_objects, svg_cut_points};
+pub use checks::{CheckItem, check_hpgl, check_pdf, check_svg, pdf_objects, svg_cut_points};
 pub use ctx::{Ctx, ExportOptions, primary_instance};
+pub use cutter::{CutterFile, export_cutter};
 pub use geom::{
     Affine, CAP, Decor, FoldMode, Geom, GeomMeta, Label, Notch, Source, build_geom, grain_marks,
     grain_vertical_rotation, label_texts, main_label_fits, notch_depth,
 };
+pub use hpgl::export_hpgl;
 pub use layout::{Layout, rotation, shelf_layout};
 pub use outline::{
     DEFAULT_SA, EdgeLoop, Method, clean_ring, cut_outline, drafted_instance, edge_loops,
@@ -32,6 +37,7 @@ pub use pdf::{
     Canvas, INCH, OCG_COMMON, PT_PER_MM, Paper, PdfDoc, PdfFile, Tile, export_copyshop,
     export_projector, export_tiled, tile_grid,
 };
+pub use pyjson::PyJson;
 pub use svg::{SVG_NAMESPACE, master_svg, svg_piece_group};
 pub use text::{
     Anchor, ascii_text, column_letters, fnum, page_list, pdf_string, safe_name, stroke_text,

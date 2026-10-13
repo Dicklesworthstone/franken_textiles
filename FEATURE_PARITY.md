@@ -87,8 +87,8 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Projector light and dark | 03 §7 | present | `pdf.rs`: grain vertical, 12 mm text, calibration grid layer off, the 200 in limit refused; as above |
 | DXF-ASTM and DXF-AAMA (R12) | 03 §7 | missing | |
 | Flat DXF (R2000, stroke font) | 03 §7 | missing | |
-| HPGL | 03 §7 | missing | |
-| Cutter SVGs and report | 03 §7 | missing | |
+| HPGL | 03 §7 | present | `hpgl.rs`: commands, pens and polylines as the reference's (main-label strokes and union cut lines aside); `check_hpgl` reproduces the reference checker (`tests/export_targets.rs`) |
+| Cutter SVGs and report | 03 §7 | present | `cutter.rs`: outlines within 0.05 mm as regions, the same report and manifest entry |
 | GarmentCode JSON | 03 §7 | missing | |
 | Tajima DST embroidery files | 03 §7 | missing | |
 | Export manifest | 03 §7 | missing | |
