@@ -4,7 +4,8 @@
 //! garment's weight) and keep the waistband within 25 mm of where it was drafted; at 1.2 the elastic cannot
 //! hold the trousers up and the run says so (they then rest on the hips and crotch, so "fall" reads as an
 //! elastic that does not grip, not as trousers on the floor). The looser the elastic, the lower the
-//! waistband.
+//! waistband. The ladder runs at two body frictions, μ = 0.3 and 0.5 (the default 0.4 is UNCERTAIN until
+//! sourced), and must read the same at both.
 //!
 //! Needs the converted Anny model and takes minutes:
 //! `cargo test -p ftx-drape --release --test kat_elastic -- --include-ignored --nocapture`.
@@ -64,52 +65,59 @@ fn kat7_elastic_ladder() {
     };
     let waist = meas["fused"]["waist"]["value_mm"].as_f64().unwrap();
     let rungs = [0.85, 0.95, 1.0, 1.2];
-    let reports: Vec<Value> = std::thread::scope(|s| {
-        let runs: Vec<_> = rungs
-            .iter()
-            .map(|&frac| {
-                let mut raw = case["input"]["pattern"].clone();
-                let overlap = raw["meta"]["style"]["elastic_overlap"].as_f64().unwrap();
-                raw["meta"]["solved"]["elastic_cut_mm"] = (frac * waist + overlap).into();
-                let (body, spec) = (&body, &case["input"]["fit_spec"]);
-                s.spawn(move || {
-                    drape(
-                        &Pattern::new(raw),
-                        spec,
-                        body,
-                        &DrapeOptions::default(),
-                        |_| {},
-                    )
-                    .unwrap()
-                    .report
+    for mu in [0.3, 0.5] {
+        let mut opts = DrapeOptions::default();
+        opts.contact.mu = mu;
+        let reports: Vec<Value> = std::thread::scope(|s| {
+            let runs: Vec<_> = rungs
+                .iter()
+                .map(|&frac| {
+                    let mut raw = case["input"]["pattern"].clone();
+                    let overlap = raw["meta"]["style"]["elastic_overlap"].as_f64().unwrap();
+                    raw["meta"]["solved"]["elastic_cut_mm"] = (frac * waist + overlap).into();
+                    let (body, spec, opts) = (&body, &case["input"]["fit_spec"], &opts);
+                    s.spawn(move || {
+                        drape(&Pattern::new(raw), spec, body, opts, |_| {})
+                            .unwrap()
+                            .report
+                    })
                 })
-            })
-            .collect();
-        runs.into_iter().map(|r| r.join().unwrap()).collect()
-    });
-    let mut shifts = Vec::new();
-    for (frac, rep) in rungs.iter().zip(&reports) {
-        let e = &rep["elastic"];
-        let shift = rep["bands"]["waistband"]["shift_mm"].as_f64().unwrap();
-        println!(
-            "{frac} x waist: elastic {e}, waistband {shift:+.1} mm, gating {}",
-            rep["gating"]
-        );
-        let holds = e["holds"].as_bool().unwrap();
-        let slack_flag = rep["flags"].as_array().unwrap().iter().any(|f| {
-            f.as_str()
-                .is_some_and(|t| t.starts_with("the elastic does not grip"))
+                .collect();
+            runs.into_iter().map(|r| r.join().unwrap()).collect()
         });
-        if *frac < 1.1 {
-            assert!(holds && !slack_flag, "{frac}: the elastic should grip");
-            assert!(shift.abs() < 25.0, "{frac}: waistband {shift:+.1} mm");
-        } else {
-            assert!(!holds && slack_flag, "{frac}: the elastic should not grip");
+        let mut shifts = Vec::new();
+        for (frac, rep) in rungs.iter().zip(&reports) {
+            let e = &rep["elastic"];
+            let shift = rep["bands"]["waistband"]["shift_mm"].as_f64().unwrap();
+            println!(
+                "mu {mu}, {frac} x waist: elastic {e}, waistband {shift:+.1} mm, gating {}",
+                rep["gating"]
+            );
+            let holds = e["holds"].as_bool().unwrap();
+            let slack_flag = rep["flags"].as_array().unwrap().iter().any(|f| {
+                f.as_str()
+                    .is_some_and(|t| t.starts_with("the elastic does not grip"))
+            });
+            if *frac < 1.1 {
+                assert!(
+                    holds && !slack_flag,
+                    "mu {mu}, {frac}: the elastic should grip"
+                );
+                assert!(
+                    shift.abs() < 25.0,
+                    "mu {mu}, {frac}: waistband {shift:+.1} mm"
+                );
+            } else {
+                assert!(
+                    !holds && slack_flag,
+                    "mu {mu}, {frac}: the elastic should not grip"
+                );
+            }
+            shifts.push(shift);
         }
-        shifts.push(shift);
+        assert!(
+            shifts.windows(2).all(|w| w[1] <= w[0] + 1.0),
+            "mu {mu}: looser elastics should not sit higher: {shifts:?}"
+        );
     }
-    assert!(
-        shifts.windows(2).all(|w| w[1] <= w[0] + 1.0),
-        "looser elastics should not sit higher: {shifts:?}"
-    );
 }
