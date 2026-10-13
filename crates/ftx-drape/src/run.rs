@@ -235,6 +235,13 @@ pub fn drape(
         None => pattern,
     };
     let mesh = build_garment(pattern, opts.spacing)?;
+    if mesh.verts2d.is_empty() {
+        // a cone (fez) or a pattern whose pieces have no placement is judged flat, as `fab round` says
+        return Err(Refusal::new(
+            RefusalCode::InvalidDocument,
+            "no piece has a fold-up placement: nothing to drape (the pattern is judged flat)",
+        ));
+    }
     let fabric = Fabric::of(pattern);
     let mut scene = build_scene(
         pattern,

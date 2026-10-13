@@ -32,6 +32,15 @@ fn drafts() -> Value {
 
 /// Drapes a drafted case on the body fitted to its measurements; the report.
 fn drape_case(model: &AnnyModel, case: &Value, opts: &DrapeOptions) -> Value {
+    drape_result(model, case, opts).unwrap().report
+}
+
+/// Drapes a drafted case on the body fitted to its measurements.
+fn drape_result(
+    model: &AnnyModel,
+    case: &Value,
+    opts: &DrapeOptions,
+) -> Result<ftx_drape::run::DrapeRun, ftx_core::Refusal> {
     let meas = &case["input"]["measurements"];
     let pose = Pose::drape();
     let fit = fit_tape(
@@ -66,8 +75,30 @@ fn drape_case(model: &AnnyModel, case: &Value, opts: &DrapeOptions) -> Value {
         opts,
         |_| {},
     )
-    .unwrap()
-    .report
+}
+
+/// A pattern with no fold-up placement (a fez, or placements emptied) refuses; it used to panic computing
+/// metrics of an empty mesh.
+#[test]
+#[ignore = "needs the converted Anny model"]
+fn no_fold_up_placement_refuses() {
+    let fx = drafts();
+    let model = AnnyModel::load(&default_model_path().unwrap(), false).unwrap();
+    let mut case = fx["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "zouave_bolero-920")
+        .unwrap()
+        .clone();
+    for piece in case["input"]["pattern"]["pieces"].as_array_mut().unwrap() {
+        piece["placement"] = Value::Null;
+    }
+    let Err(err) = drape_result(&model, &case, &DrapeOptions::default()) else {
+        panic!("a pattern with no placement draped");
+    };
+    assert_eq!(err.code, ftx_core::RefusalCode::InvalidDocument);
+    assert!(err.message.contains("no piece has a fold-up placement"));
 }
 
 fn numbers(v: &Value) -> Vec<(String, f64)> {
