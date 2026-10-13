@@ -87,14 +87,17 @@ pub fn round_readiness(pattern: &Value, measurements: &Value, as_of: &str) -> Va
     }
     let (mut checks, mut blocking, mut requests, mut advisories, mut real) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut failed = None;
     for (kind, options) in kinds {
         let result = match readiness(measurements, kind, &options, as_of) {
             Ok(r) => r,
             Err(e) => {
-                return empty(format!(
+                // what was gathered so far stays, as the reference returns it
+                failed = Some(format!(
                     "{kind}: readiness could not be computed ({})",
                     e.message
                 ));
+                break;
             }
         };
         checks.push(
@@ -108,7 +111,9 @@ pub fn round_readiness(pattern: &Value, measurements: &Value, as_of: &str) -> Va
         }
         append_unique(&mut real, &result["for_real_child"]);
     }
-    let status = if checks.iter().any(|r| r["status"] == "NOT_READY") {
+    let status = if failed.is_some() {
+        "NOT_CHECKED"
+    } else if checks.iter().any(|r| r["status"] == "NOT_READY") {
         "NOT_READY"
     } else if checks.iter().all(|r| r["status"] == "READY_REFERENCE") {
         "READY_REFERENCE"
@@ -119,6 +124,9 @@ pub fn round_readiness(pattern: &Value, measurements: &Value, as_of: &str) -> Va
         "blocking":blocking, "remeasure_request":requests, "advisories":advisories});
     if !real.is_empty() {
         out["for_real_child"] = json!(real);
+    }
+    if let Some(note) = failed {
+        out["note"] = json!(note);
     }
     out
 }

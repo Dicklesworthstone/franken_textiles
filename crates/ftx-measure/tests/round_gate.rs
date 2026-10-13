@@ -113,3 +113,34 @@ fn unknown_or_failed_checks_are_never_presented_as_measured_ready() {
         assert!(format_round_readiness(&r).contains("not checked"));
     }
 }
+
+/// A garment whose check fails keeps the checks gathered before it, as the reference's
+/// `measurement_readiness` returns them (its output for this case: two READY_REFERENCE checks, nine
+/// requests for a real child, and the note).
+#[test]
+fn a_failed_check_keeps_what_was_gathered() {
+    let m = reference_wearer(920.0, Some(30.0), None, None).unwrap();
+    let mut p = pattern(&["bodice_front", "sleeve", "pant_front", "cuff"]);
+    p["meta"] = json!({"style":{"cuff_level":"mid"}});
+    let r = round_readiness(&p, &m, TODAY);
+    assert_eq!(r["status"], "NOT_CHECKED");
+    let kinds: Vec<_> = r["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["garment"].clone())
+        .collect();
+    assert_eq!(kinds, [json!("bodice"), json!("set_in_sleeve")]);
+    assert!(
+        r["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["status"] == "READY_REFERENCE")
+    );
+    assert_eq!(r["for_real_child"].as_array().unwrap().len(), 9);
+    assert_eq!(
+        r["note"],
+        "full_trousers_gathered: readiness could not be computed (cuff_level must be knee, calf or ankle)"
+    );
+}
