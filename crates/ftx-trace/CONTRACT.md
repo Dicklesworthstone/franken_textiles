@@ -5,8 +5,8 @@ a screenshot) becomes an UNSCALED `fabric-pattern/1` draft, 1 unit = 1 crop pixe
 scaled and audited, all from the reference's `vectorize.py`: the trace itself (`trace_image`: channel and
 threshold, contours, stroke centres, dashed-edge bridging, corners, edges, marks), `names.json`
 (`annotate`), the reference grammar (`measure_ref`, `resolve_side`, `twin`), `fit_scale`, the round-0
-`audit` with its label consensus, and `parse_length`. Not yet: the trace's overlay and label images, the
-audit's PNG, the adaptive threshold, JPEG and WebP input.
+`audit` with its label consensus, and `parse_length`. Native overlay, label-crop and audit PNGs are
+available in `review` (visual parity boundary below). Not yet: the adaptive threshold, JPEG and WebP input.
 
 **Units and frames.** A traced draft is in crop pixels, y up, loops counter-clockwise; `trace.to_px` maps
 piece coordinates back to source pixels and is kept current through mirroring and scaling. After scale-fit
@@ -123,3 +123,15 @@ byte as `vectorize.py trace` does, and the same mask. The reference's own grain 
 **Error model.** `PyError` (`Key` prints quoted, `Value` as is) for `measure_ref`, `resolve_side`, `twin`,
 `fit_scale`; `annotate` returns the reference's message as a `String`; `audit` reports every problem as a
 finding and never fails.
+
+**Native review images** (`review`, spec 04 §10.9/10.13). `overlay`, `label_crops` and
+`audit_image` return PNG bytes without I/O or changing a document. Source transforms, crop offsets,
+edge/corner/notch IDs, grain arrows and source-text crops are checked directly. Audits highlight
+references and retain every finding in their legend; invalid geometry can give a text-only report.
+The existing uppercase stroke font, solid clipped lines and nearest-pixel sampling deliberately
+replace OpenCV's TrueType/antialiased/cubic rendering: no pixel-parity claim. Exact IDs stay in JSON.
+Limits refuse rather than truncate (16 million source/output/aggregate crop pixels, 128 pieces,
+100,000 sampled points; bounded findings and text). Eight direct tests plus five real-CLI tests cover
+the native outputs and publication. CLI source images are explicit, never loaded from metadata;
+new artifacts are created exclusively, with primary JSON last. See `docs/native-trace-review.md`
+for controls, limits and compatibility exceptions. The numerical/oracle claims above are unchanged.
