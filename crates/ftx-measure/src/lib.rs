@@ -16,6 +16,7 @@ mod readiness;
 mod records;
 mod round;
 mod section;
+pub mod silhouette;
 pub mod triangulate;
 pub mod video;
 
