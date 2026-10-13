@@ -39,7 +39,7 @@ Drafting, alteration, the garment scene, exports, tracing, the CLI and the brows
 | Is the reference behaviour specified? | **Yes**: four behaviour specifications extracted from the Python reference by running it, and one for the Anny forward model ([`docs/spec/`](docs/spec/)), about 7,100 lines with fixture cases. The Anny spec was checked by re-implementing the model in NumPy from the text alone (agrees to 2e-15 m) |
 | Is there a Cargo workspace with code? | **Partly**: `ftx-core`, `ftx-body`, `ftx-pattern`, `ftx-drape` and `ftx-conformance` (tests pass natively and, where run, as wasm under Node); `ftx-measure`, `ftx-export`, `ftx-trace`, `ftx-cli` and `ftx-wasm` are planned |
 | Does the body model work? | **Yes, in Rust**: the Anny forward model matches the Python package on 16 reference bodies (newborn to adult, extremes, local changes, two poses) to 1e-14 m, about 0.3–0.4 ms per body against 7 ms upstream. The drape poses (A-pose 35°/50°, arms up, seated, squat, with a ramp from rest and an optional nappy) match the package to 1e-15 m, and the skin comes out as a checked, closed, outward-wound mesh for contact. Fitting it to a person's measurements is next |
-| Does the drape solver exist? | **The core and body contact, not the garment scene yet**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica). Barrier contact on the thickness-offset gap with Coulomb friction passes its own: a ring on a cylinder holds below 2πμT and slides above it, a ring on a cone slides iff tan α > μ, and tight and loose tubes settle at the predicted strain and clearance. Results are bit-identical native and in wasm. Seams, the garment scene and self-contact are next; the reference still drapes in Blender |
+| Does the drape solver exist? | **Yes, and it drapes a drafted garment on a realistic body**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica). Barrier contact on the thickness-offset gap with Coulomb friction passes its own: a ring on a cylinder holds below 2πμT and slides above it, a ring on a cone slides iff tan α > μ, and tight and loose tubes settle at the predicted strain and clearance. Results are bit-identical native and in wasm. The garment mesh and start state match the reference (all 42,003 triangles; pre-sew and relaxation to 1e-12 m), and the drafted bolero sews and drapes on an Anny toddler in about two minutes (picture below). Gathers, elastics, the metrics and flags, the animation and self-contact are next; the reference still judges fit in Blender |
 | Has anything been benchmarked? | **No**. Every number in the plan is a target or a measurement of the reference |
 
 The plan is written to be falsifiable: it names kill gates that can stop the body port or the drape solver
@@ -101,6 +101,15 @@ Everything it reads off the fitted body rather than measured is labelled `MODEL_
 
 *The reference's fold-up (Blender, analytic dress form): pieces leave the pattern board, roll up, zip together
 and drape. FrankenTextiles keeps the animation and the metrics and replaces both the body and the solver.*
+
+<div align="center">
+<img src="docs/images/bolero-on-anny-92cm.jpg" alt="The same drafted bolero sewn and draped on a realistic 92 cm toddler body, front, side and back" width="840">
+</div>
+
+*The same drafted bolero, sewn and draped by FrankenTextiles on an Anny body of the reference wearer's
+age and stature (2.5 years, 920 mm, drape pose with straightened arms): seams welded, barrier contact with
+Coulomb friction, 12 sewing and 36 draping steps of 1/24 s (`cargo run --release -p ftx-drape --example
+drape_drafted`). The body is synthetic; no real child is measured or shown in this repository.*
 
 The drape solver (plan §11) minimises an incremental potential each time step: inertia, an orthotropic
 membrane rotated to each piece's grainline, bending, a tension-only elastic, seams welded exactly, Incremental

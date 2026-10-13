@@ -1,7 +1,8 @@
 //! Drapes a drafted garment from the oracle fixtures on an Anny body of the reference wearer's stature:
 //! `cargo run --release -p ftx-drape --example drape_drafted -- OUT_DIR [case] [sew_steps] [drape_steps]`
 //! (default case `zouave_bolero-920`). Needs the converted Anny model. Writes the body, the start state
-//! and the draped garment as OBJ files.
+//! and the draped garment as OBJ files. For experiments: `FTX_STEP` (s, default 1/24), `FTX_MU` (0.4),
+//! `FTX_EPS_V` (m/s, 1e-3) and `FTX_DEBUG_STEPS` (print three steps' solver reports first).
 
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -121,8 +122,14 @@ fn main() {
         dhat: 1e-3,
         thickness: 1.5e-3,
         kappa: 100.0,
-        mu: 0.4,
-        eps_v: 1e-3,
+        mu: std::env::var("FTX_MU")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.4),
+        eps_v: std::env::var("FTX_EPS_V")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1e-3),
     };
     let t0 = Instant::now();
     let mut scene = build_scene(
@@ -157,7 +164,10 @@ fn main() {
     .unwrap();
     // Newton stops when ‖Δx‖∞/h < tol: 1e-4 m/s is 4 µm per 1/24 s step, ample for cloth.
     scene.solver.tol = 1e-4;
-    let h = 1.0 / 24.0;
+    let h = std::env::var("FTX_STEP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0 / 24.0);
     if std::env::var_os("FTX_DEBUG_STEPS").is_some() {
         for _ in 0..3 {
             let t = Instant::now();

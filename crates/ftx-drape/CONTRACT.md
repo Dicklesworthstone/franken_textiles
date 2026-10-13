@@ -65,10 +65,12 @@ frame (+u along the grain).
 - Bending: Bergou's quadratic hinges, weight `3a/(A₀+A₁)²` with each triangle's area handed to its interior
   hinges; constant PSD Hessian.
 
-**Solver.** Exact Hessian first; element blocks projected to PSD only when the LDLᵀ inertia shows a
-negative eigenvalue, and from then on for the rest of that solve (retrying the exact Hessian cost a
-second assembly and factorization nearly every iteration on a garment); steepest descent if even that is
-singular. The symbolic analysis is computed once,
+**Solver.** Exact Hessian first; when the LDLᵀ inertia shows a negative eigenvalue, element blocks are
+projected to PSD (negative eigenvalues zeroed) for the rest of that solve (retrying the exact Hessian
+cost a second assembly and factorization nearly every iteration on a garment); steepest descent if even
+that is singular. Tried on the bolero and not kept: flipping negative eigenvalues instead of zeroing them
+(more iterations), and a membrane Hessian with its stress clamped to the non-negative part instead of
+eigen-projection (cheaper iterations, 2.7× as many in the drape, slower overall). The symbolic analysis is computed once,
 ordered by AMD on the vertex graph and expanded to the free DOFs (the pattern never changes: every
 element block is always assembled). Per-DOF constraints (rollers, pins). Convergence: `‖p‖∞/h < tol`
 (step) or `‖p‖∞ < tol` (static).
