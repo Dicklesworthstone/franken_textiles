@@ -21,6 +21,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import platform
 import struct
 import sys
@@ -368,6 +369,38 @@ def main() -> int:
         wcases.append({"id": f"hull-{k}", "input": {"pts": pts.tolist()},
                        "output": {"hull": hull[:, 0, :].tolist(), "area": cv2.contourArea(hull), "approx_n": tri}})
     write(args.out_dir, "raster_draw", meta, wcases)
+
+    # ---------------------------------------------------------------- polygon buffers (GEOS)
+    from shapely import geometry
+    bcases = []
+
+    def buf(cid, ring, dist, join, extra=None):
+        poly = geometry.Polygon(ring)
+        out = poly.buffer(dist, join_style=join, mitre_limit=4.0) if join == "mitre" else poly.buffer(dist)
+        geoms = list(out.geoms) if out.geom_type == "MultiPolygon" else ([] if out.is_empty else [out])
+        bcases.append({"id": cid, "input": {"ring": np.asarray(ring, float).tolist(), "distance": dist, "join": join, **(extra or {})},
+                       "output": {"polygons": [np.asarray(g.exterior.coords).tolist() for g in geoms],
+                                  "areas": [g.area for g in geoms]}})
+    for name, enc in sheet_masks.items():
+        mask = cv2.imdecode(enc, cv2.IMREAD_GRAYSCALE)
+        for k, e in enumerate(V.find_piece_contours(mask)):
+            P = V._smooth_closed(V._resample_closed(e["contour"][:, 0, :].astype(float), 1.0), 1.2)
+            w = e["stroke_px"]
+            off = -w / 2 if e["mode"] == "ring" else 0.5 - w / 2
+            buf(f"stroke-{name}-{k}", P, off, "mitre")
+            inset = (w / 2 + 1.5) if e["mode"] == "ring" else (2.0 + w / 2)
+            centre = geometry.Polygon(P).buffer(0).buffer(off, join_style="mitre", mitre_limit=4.0)
+            if centre.geom_type == "MultiPolygon":
+                centre = max(centre.geoms, key=lambda g: g.area)
+            buf(f"inset-{name}-{k}", np.asarray(centre.exterior.coords)[:-1], -inset, "round")
+    star = [(50 + (40 if k % 2 == 0 else 15) * math.cos(k * math.pi / 5), 50 + (40 if k % 2 == 0 else 15) * math.sin(k * math.pi / 5)) for k in range(10)]
+    ell = [(0, 0), (60, 0), (60, 20), (20, 20), (20, 60), (0, 60)]
+    sliver = [(0, 0), (100, 0), (100, 3), (50, 4), (0, 3)]
+    for name, ring in (("star", star), ("ell", ell), ("sliver", sliver), ("ell-cw", ell[::-1])):
+        for dist in (-6.0, -1.5, 2.5):
+            for join in ("mitre", "round"):
+                buf(f"{name}-{join}-{dist}", ring, dist, join)
+    write(args.out_dir, "raster_buffer", meta, bcases)
     return 0
 
 

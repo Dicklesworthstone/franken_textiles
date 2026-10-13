@@ -9,6 +9,7 @@
 
 pub mod annotate;
 pub mod audit;
+pub mod buffer;
 pub mod geos;
 pub mod length;
 pub mod ordered;

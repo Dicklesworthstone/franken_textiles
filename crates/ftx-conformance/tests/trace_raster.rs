@@ -277,6 +277,88 @@ fn drawing_and_hull_match_opencv() {
     assert!(fails.is_empty(), "{}", fails.join("\n"));
 }
 
+/// `Polygon.buffer` as the trace calls it (stroke-centre mitre offsets and marks insets of the sheets'
+/// outlines; synthetic stars, ells and slivers with mitre and round joins, both ways).
+#[test]
+fn polygon_buffers_match_geos() {
+    use ftx_core::Vec2;
+    use ftx_trace::buffer::{Join, buffer_shell};
+    let fx = fixture("trace", "raster_buffer");
+    let ring = |v: &Value| -> Vec<Vec2> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| Vec2::new(p[0].as_f64().unwrap(), p[1].as_f64().unwrap()))
+            .collect()
+    };
+    let area = |r: &[Vec2]| {
+        r.windows(2)
+            .map(|w| w[0].x * w[1].y - w[1].x * w[0].y)
+            .sum::<f64>()
+            .abs()
+            / 2.0
+    };
+    let (mut exact, mut total) = (0, 0);
+    let mut fails = Vec::new();
+    for case in fx["cases"].as_array().unwrap() {
+        let (inp, out, id) = (
+            &case["input"],
+            &case["output"],
+            case["id"].as_str().unwrap(),
+        );
+        let join = if inp["join"] == "mitre" {
+            Join::Mitre(4.0)
+        } else {
+            Join::Round(16)
+        };
+        let mut got = buffer_shell(&ring(&inp["ring"]), inp["distance"].as_f64().unwrap(), join);
+        got.sort_by(|a, b| area(b).total_cmp(&area(a)));
+        let mut want: Vec<Vec<Vec2>> = out["polygons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(&ring)
+            .collect();
+        want.sort_by(|a, b| area(b).total_cmp(&area(a)));
+        total += 1;
+        if got.len() != want.len() {
+            fails.push(format!("{id}: {} polygons vs {}", got.len(), want.len()));
+            continue;
+        }
+        if let (Some(g), Some(w)) = (got.first(), want.first()) {
+            if g == w {
+                exact += 1;
+                continue;
+            }
+            // the stroke-centre offsets set the trace's resampling phase: identical rings required
+            if id.starts_with("stroke-") {
+                fails.push(format!(
+                    "{id}: not identical ({} vs {} points)",
+                    g.len(),
+                    w.len()
+                ));
+            }
+            let dev = g
+                .iter()
+                .map(|p| w.iter().map(|q| p.dist(*q)).fold(f64::INFINITY, f64::min))
+                .fold(0.0, f64::max);
+            let rel_area = (area(g) / area(w) - 1.0).abs();
+            println!(
+                "{id}: {} vs {} points, start {:?} vs {:?}, max deviation {dev:.2e}, area {rel_area:.1e}",
+                g.len(),
+                w.len(),
+                g[0],
+                w[0]
+            );
+            if dev > 0.05 || rel_area > 1e-3 {
+                fails.push(format!("{id}: deviation {dev:.3} px, area {rel_area:.2e}"));
+            }
+        }
+    }
+    println!("{exact} of {total} buffers identical");
+    assert!(fails.is_empty(), "{}", fails.join("\n"));
+}
+
 /// Chamfer distance transforms (masks 3 and 5) and 8-connected components with their stats, bit for bit.
 #[test]
 fn distance_and_components_match_opencv() {
