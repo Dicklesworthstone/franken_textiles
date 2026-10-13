@@ -325,7 +325,7 @@ pub fn fuse_one(
             bounds,
         );
         out["z_max"] = json!(py::round(z_max, 2));
-        out["notes"] = json!(format!(
+        out["notes"] = json!([format!(
             "not fused: {} {:.1}±{:.1} vs {} {:.1}±{:.1}, z={z_max:.2} > 3 — re-measure this one",
             a.provenance(),
             a.value,
@@ -333,7 +333,7 @@ pub fn fuse_one(
             b.provenance(),
             b.value,
             b.sigma
-        ));
+        )]);
         return Ok(Some(out));
     }
     let mut notes = Vec::new();
@@ -381,7 +381,7 @@ pub fn fuse_one(
         out["z_max"] = json!(py::round(z_max, 2));
     }
     if !notes.is_empty() {
-        out["notes"] = json!(notes.join("; "));
+        out["notes"] = json!(notes);
     }
     Ok(Some(out))
 }

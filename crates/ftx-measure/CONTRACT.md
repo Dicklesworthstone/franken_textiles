@@ -26,8 +26,14 @@ Staleness after 42 days is advisory, not a fit claim. blocking contains measurem
 remeasure_request contains actionable instructions.
 
 Tests pin every value/sigma/bound/method in spec 02 D.2, all five D.6 size columns, D.5 fusion
-and readiness examples, garment options, staleness boundaries and invalid inputs. These are
-specification regressions, not a full oracle parity certificate or a real-wearer fit claim.
+and readiness examples, garment options, staleness boundaries and invalid inputs. Oracle parity:
+`tests/fixtures/oracle/measure/` (`tools/oracle/capture_measurements.py`, compared in
+`ftx-conformance/tests/measurements.rs`) holds the reference's own outputs for priors across
+statures, ages and sexes, the CDC table, reference wearers, fusion of synthetic evidence, the
+schema checks and 284 readiness cases; all match key for key (numbers within 1e-9) except the
+wearer-block stature kept as evidence above, a recorded parity exception. Fused `notes` are
+lists and chart-prior sources carry the prior's note, as in the reference. None of this is a
+real-wearer fit claim.
 Photo measurement and the role-driven round gate remain separate work. JSON maps are sorted;
 numerical reductions use input order; formatting uses ftx-core's Python rounding. Invalid or
 non-finite inputs get typed refusals.

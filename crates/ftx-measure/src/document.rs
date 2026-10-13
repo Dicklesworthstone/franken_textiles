@@ -121,6 +121,8 @@ pub fn fuse(data: &Value, use_priors: bool) -> Result<Value, Refusal> {
             .map(|p| {
                 let mut p = p.clone();
                 p["auto_prior"] = json!(true);
+                // the reference's chart-prior observation carries the prior's notes into its source entry
+                p["note"] = p["notes"].clone();
                 p
             });
         let chosen = user_prior.or(chart.as_ref());
@@ -140,13 +142,9 @@ pub fn fuse(data: &Value, use_priors: bool) -> Result<Value, Refusal> {
         }
         if let Some(ex) = excluded.get(&name) {
             flags.insert("UNNORMALIZED_EXCLUDED".into());
-            let old = entry["notes"].as_str().unwrap_or("");
-            let mut notes = Vec::new();
-            if !old.is_empty() {
-                notes.push(old.to_string());
-            }
-            notes.extend(ex.clone());
-            entry["notes"] = json!(notes.join("; "));
+            let mut notes = entry["notes"].as_array().cloned().unwrap_or_default();
+            notes.extend(ex.iter().map(|n| json!(n)));
+            entry["notes"] = json!(notes);
         }
         if definition(&name).is_none() {
             flags.insert("NOT_IN_CATALOGUE".into());

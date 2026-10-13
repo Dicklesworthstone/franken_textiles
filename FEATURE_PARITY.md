@@ -50,10 +50,10 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
-| Catalogue (35 measurements), aliases, garment kinds | 02 Part A | missing | |
-| Size-chart priors and the reference wearer | 02 Part A | missing | |
-| Fusion and flags | 02 Part A | missing | |
-| Readiness gate and re-measure requests | 02 Part A | missing | |
+| Catalogue (35 measurements), aliases, garment kinds | 02 Part A | present | `ftx-measure` catalogue; aliases (`bust`, `shoulder_slope`) and garment kinds (`jacket`) exercised through `measure/fusion` and `measure/readiness`; an unknown garment kind refused |
+| Size-chart priors and the reference wearer | 02 Part A | present | oracle `measure/priors` (`tools/oracle/capture_measurements.py`; `crates/ftx-conformance/tests/measurements.rs`): priors at 7 statures × 3 ages × 3 sexes, the CDC table and its inverse, 5 reference wearers, the out-of-chart refusals: all 115 cases equal (numbers within 1e-9) |
+| Fusion and flags | 02 Part A | present | `measure/fusion`: synthetic documents with repeats, a z > 2 disagreement, a z > 3 conflict, photo, scan and garment-derived sources, an alias in degrees, an unnormalizable definition, statures beyond the charts, priors on and off, and the schema checks: all 17 equal but the wearer-stature exception |
+| Readiness gate and re-measure requests | 02 Part A | present | `measure/readiness`: 284 cases (every garment kind and option on five documents, both sides of the 42-day staleness line, refusals): all equal but the wearer-stature exception (38 cases) |
 | ChArUco sheet generation and sidecar | 02 Part A | missing | |
 | Photo scale from the ChArUco sheet | 02 Part A | missing | |
 | Plain Letter/A4 sheet detection and photo scale | 02 Part A | missing | |
@@ -142,3 +142,4 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Anny batch size | any batch, broadcast | batch 1 | Loop over bodies instead; simpler and as fast here (0.3–0.4 ms per body) |
 | PDF/DXF creation dates | wall clock | the pattern's `created` | Reproducible files |
 | Export checks on a broken directory | `check_dir` raises on a listed file that is missing; exit 1 on failure | a failed `file.missing` item; exit 2 | Every finding in one report; the CLI's gating exit code |
+| A wearer block's stature with no age, or with priors off | `wearer.stature_mm` ignored: stature MISSING (its own wearer-block rule only runs when stature is already being fused) | kept as stature evidence (σ 10 mm, `wearer.stature_mm`) | A stature the user gave is evidence; the reference's rule is unreachable in those cases (5 fused documents, 38 readiness cases in `measure/`) |

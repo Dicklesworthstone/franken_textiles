@@ -108,8 +108,9 @@ fn disagreement_and_outliers_do_not_hide_behind_the_prior() {
         .unwrap();
         assert_eq!(f["value_mm"], expected);
         assert_eq!(f["flags"], json!([flag]));
+        // notes are a list, as the reference writes them
         assert!(
-            f["notes"]
+            f["notes"][0]
                 .as_str()
                 .unwrap()
                 .contains(if flag == "REMEASURE" {
