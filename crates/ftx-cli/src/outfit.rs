@@ -8,8 +8,12 @@ use std::path::{Path, PathBuf};
 
 use ftx_core::{Refusal, RefusalCode, Vec3, det, receipt::sha256_hex};
 use ftx_drape::point_cache::PointCache;
-use ftx_drape::render::{Camera, ColouredMesh, png, read_obj, render};
+use ftx_drape::render::{Camera, ColouredMesh, fez_frustum, png, read_obj, render};
 use ftx_export::text::xml_escape;
+use ftx_pattern::{
+    Pattern,
+    draft::form::{Meas, torso_sections},
+};
 use serde_json::{Value, json};
 
 use crate::{Args, bad_input, known_options, required, workspace};
@@ -137,6 +141,7 @@ struct Garment {
 struct Outfit {
     body: ColouredMesh,
     garments: Vec<Garment>,
+    hat: Option<(ColouredMesh, Value)>,
     measurements_sha256: String,
     arm_deg: f64,
     flagged: bool,
@@ -239,15 +244,90 @@ fn assemble(paths: &[String], measurements_sha256: String, seams: bool) -> Resul
     Ok(Outfit {
         body: body.unwrap(),
         garments,
+        hat: None,
         measurements_sha256,
         arm_deg,
         flagged,
     })
 }
 
+fn add_hat(outfit: &mut Outfit, path: &Path, measurements: &Value) -> Result<(), Refusal> {
+    let (pattern, bytes) = crate::fold::document(path)?;
+    if pattern["meta"]["program"] != "drafting.fez"
+        || pattern["units"] != "mm"
+        || !Pattern::new(pattern.clone()).structure_errors().is_empty()
+    {
+        return Err(bad_input(
+            "--hat needs a valid metric pattern drafted by ftx draft fez",
+        ));
+    }
+    let solved = |key: &str| {
+        pattern["meta"]["solved"][key]
+            .as_f64()
+            .filter(|x| x.is_finite() && *x > 0.0)
+            .ok_or_else(|| bad_input(format!("fez has no positive solved {key}")))
+    };
+    let (base, top, height) = (
+        solved("base_girth_mm")?,
+        solved("top_girth_mm")?,
+        solved("height_mm")?,
+    );
+    let m = Meas(measurements);
+    let positive = |name: &str| {
+        let value = m.get(name)?;
+        if !value.is_finite() || value <= 0.0 {
+            return Err(bad_input(format!("{name} must be finite and positive")));
+        }
+        Ok(value)
+    };
+    let head_top = positive("stature")?;
+    let base_z = head_top - positive("head")? / (2.0 * std::f64::consts::PI);
+    let neck_y = torso_sections(m)?
+        .last()
+        .ok_or_else(|| bad_input("no neck placement for the schematic hat"))?
+        .3;
+    // Saved native bodies are root-relative. Shift only the schematic accessory, never the
+    // source garments; unused OBJ vertices cannot move the floor or the hat's height.
+    let floor = crate::fold::floor(&outfit.body);
+    let mesh = fez_frustum(
+        Vec3::new(0.0, neck_y * 1e-3, floor + base_z * 1e-3),
+        base / (2000.0 * std::f64::consts::PI),
+        top / (2000.0 * std::f64::consts::PI),
+        height * 1e-3,
+    )?;
+    let vertices = outfit.body.vertices.len()
+        + mesh.vertices.len()
+        + outfit
+            .garments
+            .iter()
+            .map(|g| g.mesh.vertices.len())
+            .sum::<usize>();
+    let faces = outfit.body.triangles.len()
+        + mesh.triangles.len()
+        + outfit
+            .garments
+            .iter()
+            .map(|g| g.mesh.triangles.len())
+            .sum::<usize>();
+    if vertices > MAX_VERTICES || faces > MAX_FACES {
+        return Err(budget(
+            "combined outfit including hat exceeds the mesh budget",
+        ));
+    }
+    let report = json!({"pattern":path,"pattern_sha256":sha256_hex(&bytes),
+        "base_girth_mm":base,"top_girth_mm":top,"height_mm":height,
+        "base_mm_above_floor":base_z,"top_mm_above_floor":base_z+height,
+        "head_top_mm":head_top,"floor_z_m":floor,"wall_mm":2.0,
+        "placement":"analytic measurement-based head centre and neck axis, relative to the saved body floor",
+        "no_claim":"Schematic measured frustum, not a draped or fitted hat; hat/body contact is not simulated."});
+    outfit.hat = Some((mesh, report));
+    Ok(())
+}
+
 fn shots(outfit: &Outfit, width: usize, height: usize) -> Vec<(String, Vec<u8>)> {
     let meshes: Vec<_> = std::iter::once(&outfit.body)
         .chain(outfit.garments.iter().map(|g| &g.mesh))
+        .chain(outfit.hat.iter().map(|(mesh, _)| mesh))
         .collect();
     let mut lo = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut hi = -lo;
@@ -307,6 +387,14 @@ fn review(report: &Value) -> String {
             xml_escape(&serde_json::to_string_pretty(garment).unwrap())
         );
     }
+    if !report["hat"].is_null() {
+        let _ = write!(
+            html,
+            "<article><h2>Schematic fez</h2><aside>{}</aside><pre>{}</pre></article>",
+            xml_escape(report["hat"]["no_claim"].as_str().unwrap()),
+            xml_escape(&serde_json::to_string_pretty(&report["hat"]).unwrap())
+        );
+    }
     html.push_str("</html>\n");
     html
 }
@@ -315,7 +403,7 @@ pub(super) fn cmd_outfit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "outfit",
-        &["measurements", "sim", "out", "seams", "res"],
+        &["measurements", "sim", "out", "seams", "res", "hat"],
     )?;
     if args.positional.len() != 1 {
         return Err(bad_input(
@@ -339,16 +427,19 @@ pub(super) fn cmd_outfit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let raw: Value =
         serde_json::from_slice(&evidence).map_err(|e| bad_input(format!("measurements: {e}")))?;
     crate::round::measurements(&raw)?;
-    let outfit = assemble(
+    let mut outfit = assemble(
         &args.values,
         sha256_hex(&evidence),
         args.options.contains_key("seams"),
     )?;
+    if let Some(path) = args.options.get("hat") {
+        add_hat(&mut outfit, Path::new(path), &raw)?;
+    }
     let images = shots(&outfit, width, height);
     let mut report = json!({"schema":"ftx-outfit/1","status":if outfit.flagged {"VISUALIZATION_WITH_FLAGS"}else{"VISUALIZATION_ONLY"},
         "note":NOTE,"measurements_sha256":outfit.measurements_sha256,"pose":{"arm_deg":outfit.arm_deg,"body_source":"first native drape; all body meshes checked"},
         "colour_mode":if args.options.contains_key("seams"){"seams"}else{"plain"},"garments":outfit.garments.iter().map(|g| &g.record).collect::<Vec<_>>(),
-        "width":width,"height":height,"stills":{},"report":"report.html","hat":null,"turntable":null,"inter_garment_contact":"not_simulated"});
+        "width":width,"height":height,"stills":{},"report":"report.html","hat":outfit.hat.as_ref().map(|(_,report)|report),"turntable":null,"inter_garment_contact":"not_simulated"});
     for (name, _) in VIEWS {
         report["stills"][name] = json!(format!("outfit_{name}.png"));
     }

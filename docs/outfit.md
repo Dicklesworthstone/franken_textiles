@@ -61,6 +61,35 @@ and input/geometry/rendering budgets return exit 4. The limits are 64 MiB per
 source file, 250,000 total vertices and 500,000 total triangles, plus the shared
 16-million-pixel per-view rendering budget. Budgets refuse, never truncate.
 
+## Optional measured fez
+
+```sh
+ftx outfit --measurements measurements.json \
+  --sim jacket-drape --sim trousers-drape --hat fez/pattern.json \
+  --out outfit-with-fez --json
+```
+
+`--hat` accepts a valid metric pattern produced by `ftx draft fez`. The finished
+base/top girths and height define a 64-segment frustum with an open base, a 2 mm
+inward radial wall and a 2 mm top cap. Its pattern hash, dimensions, placement
+basis and base/top heights above the floor are recorded in `outfit.json`.
+
+The hat is **schematic, not draped or fitted**; hat/body contact is not simulated.
+Placement uses the supplied measurements' analytic head centre and neck axis,
+offset by the lowest referenced vertex in the saved body. This handles native
+root-relative coordinates without moving any source garment or body vertex.
+The full measurement set needed for the analytic neck placement is required;
+a stature/head-only file is insufficient. Adding a hat cannot clear source
+simulation flags or turn exit 2 into exit 0. The gallery labels this boundary.
+
+The hat counts toward the existing combined geometry budget. Invalid dimensions
+and missing/incorrect pattern metadata refuse before any review is published.
+At least one completed garment run is still required; hat-only views are not
+implemented. Three additional CLI regressions cover finished dimensions, root
+offsets, unchanged source files, preserved flags and rejected hat inputs. A shell
+unit test checks that every triangle edge has two opposite orientations and that
+all faces have nonzero area. These checks do not certify real-wearer appearance.
+
 ## Direct drape outputs are immutable
 
 ```sh
@@ -79,8 +108,8 @@ subdirectories already follow this rule.
 
 ## Parity and verification boundary
 
-This is a supported subset, not full parity with `blender_outfit.py`: no optional
-fez frustum, tassel, turntable video, Blender `.blend` output, or joint garment
+This is a supported subset, not full parity with `blender_outfit.py`: no
+tassel, turntable video, Blender `.blend` output, or joint garment
 simulation. Only completed native drapes are accepted. The native renderer is not
 claimed pixel-identical to Blender. `--arm-deg` cannot re-pose frozen garments;
 regenerate the source drapes at the desired angle instead.

@@ -19,6 +19,7 @@
 
 mod draft;
 mod export;
+mod fold;
 mod measure;
 mod outfit;
 mod render;
@@ -59,7 +60,8 @@ const USAGE: &str = "usage:
             [--model PATH] [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx render DRAPE_DIR [--res 960x540] [--json]
-  ftx outfit --measurements M --sim DIR [--sim DIR ...] --out NEW_DIR [--seams] [--res 960x960] [--json]
+  ftx sim-points SIMDIR --pattern P --measurements M [--json]
+  ftx outfit --measurements M --sim DIR [--sim DIR ...] --out NEW_DIR [--hat P] [--seams] [--res 960x960] [--json]
   ftx alter slash-spread PATTERN --piece P --axis x|y --at MM --add MM --out OUT [--json]
   ftx alter move PATTERN --piece P --vertex V [--dx MM] [--dy MM] --out OUT [--json]
   ftx alter true-seam PATTERN --seam S [--end start|end] --out OUT [--json]
@@ -858,6 +860,7 @@ fn main() -> ExitCode {
     match args.positional.first().map(String::as_str) {
         Some("draft") => emit("draft", args.json, draft::cmd_draft(&args)),
         Some("render") => emit("render", args.json, render::cmd_render(&args)),
+        Some("sim-points") => emit("sim-points", args.json, fold::sim_points(&args)),
         Some("outfit") => emit("outfit", args.json, outfit::cmd_outfit(&args)),
         Some("validate") => emit("validate", args.json, cmd_validate(&args)),
         Some("round") => emit("round", args.json, round::cmd_round(&args)),

@@ -255,3 +255,113 @@ fn seam_mode_preserves_source_colours_and_missing_colours_refuse() {
     run(&dir, &["--out", "missing", "--seams"], 3);
     assert!(!dir.join("missing").exists());
 }
+
+fn prepare_hat(dir: &Path) -> Value {
+    let measurements = ftx_measure::reference_wearer(1000.0, Some(30.0), Some("F"), None).unwrap();
+    save(&dir.join("measurements.json"), &measurements);
+    let hash = sha256_hex(&std::fs::read(dir.join("measurements.json")).unwrap());
+    for garment in ["jacket", "trousers"] {
+        let path = dir.join(garment).join("sim_report.json");
+        let mut report = read(&path);
+        report["measurements_sha256"] = json!(hash);
+        save(&path, &report);
+    }
+    let hat = ftx_pattern::draft::fez::fez(&measurements, None).unwrap().0;
+    save(&dir.join("hat.json"), &hat);
+    hat
+}
+
+#[test]
+fn measured_fez_renders_with_dimensions_and_cannot_clear_source_flags() {
+    let dir = setup();
+    let hat = prepare_hat(&dir);
+    run(&dir, &["--out", "plain"], 0);
+    let report = run(&dir, &["--out", "hat-review", "--hat", "hat.json"], 0)["result"].clone();
+    assert_eq!(
+        report["hat"]["height_mm"],
+        hat["meta"]["solved"]["height_mm"]
+    );
+    assert_eq!(
+        report["hat"]["base_girth_mm"],
+        hat["meta"]["solved"]["base_girth_mm"]
+    );
+    assert_eq!(report["hat"]["wall_mm"], 2.0);
+    assert_eq!(report["hat"]["floor_z_m"], 0.0);
+    assert_eq!(report["garments"].as_array().unwrap().len(), 2);
+    let height = report["hat"]["top_mm_above_floor"].as_f64().unwrap()
+        - report["hat"]["base_mm_above_floor"].as_f64().unwrap();
+    assert!((height - report["hat"]["height_mm"].as_f64().unwrap()).abs() < 1e-10);
+    assert_ne!(
+        std::fs::read(dir.join("plain/outfit_front.png")).unwrap(),
+        std::fs::read(dir.join("hat-review/outfit_front.png")).unwrap()
+    );
+    let html = std::fs::read_to_string(dir.join("hat-review/report.html")).unwrap();
+    assert!(html.contains("Schematic fez") && html.contains("not a draped or fitted hat"));
+    let path = dir.join("jacket/sim_report.json");
+    let mut flagged = read(&path);
+    flagged["gating"] = json!(["synthetic source flag"]);
+    save(&path, &flagged);
+    let report = run(&dir, &["--out", "flagged-hat", "--hat", "hat.json"], 2);
+    assert_eq!(report["result"]["status"], "VISUALIZATION_WITH_FLAGS");
+    assert_eq!(report["result"]["garments"][0]["gating"], flagged["gating"]);
+}
+
+#[test]
+fn hat_placement_preserves_root_relative_source_coordinates() {
+    let dir = setup();
+    prepare_hat(&dir);
+    for garment in ["jacket", "trousers"] {
+        let path = dir.join(garment);
+        for name in ["body.obj", "garment.obj"] {
+            let file = path.join(name);
+            let mut m =
+                ftx_drape::render::read_obj(&std::fs::read_to_string(&file).unwrap()).unwrap();
+            let mut text = String::new();
+            for p in &mut m.vertices {
+                p.z -= 0.5;
+                text.push_str(&format!("v {} {} {}\n", p.x, p.y, p.z));
+            }
+            for [a, b, c] in m.triangles {
+                text.push_str(&format!("f {} {} {}\n", a + 1, b + 1, c + 1));
+            }
+            std::fs::write(&file, text).unwrap();
+            if name == "garment.obj" {
+                // The final cache is made from the precise OBJ source, not an already rounded
+                // cache: subtracting from f32 samples would introduce a different rounding.
+                std::fs::write(
+                    path.join("fold.pc2"),
+                    pc2(&[vec![Vec3::ZERO; 4], m.vertices]),
+                )
+                .unwrap();
+            }
+        }
+    }
+    let before = std::fs::read(dir.join("jacket/garment.obj")).unwrap();
+    let report = run(&dir, &["--out", "review", "--hat", "hat.json"], 0)["result"].clone();
+    assert_eq!(report["hat"]["floor_z_m"], -0.5);
+    assert_eq!(report["hat"]["head_top_mm"], 1000.0);
+    assert!(report["hat"]["base_mm_above_floor"].as_f64().unwrap() > 800.0);
+    assert_eq!(
+        before,
+        std::fs::read(dir.join("jacket/garment.obj")).unwrap()
+    );
+}
+
+#[test]
+fn invalid_hat_patterns_do_not_publish_partial_reviews() {
+    let dir = setup();
+    let original = prepare_hat(&dir);
+    for mutation in ["program", "units", "height", "girth", "missing"] {
+        let mut hat = original.clone();
+        match mutation {
+            "program" => hat["meta"]["program"] = json!("drafting.trousers"),
+            "units" => hat["units"] = json!("px"),
+            "height" => hat["meta"]["solved"]["height_mm"] = json!(-1),
+            "girth" => hat["meta"]["solved"]["top_girth_mm"] = json!(999999),
+            _ => hat["meta"]["solved"]["base_girth_mm"] = Value::Null,
+        }
+        save(&dir.join("hat.json"), &hat);
+        run(&dir, &["--out", "nope/review", "--hat", "hat.json"], 3);
+        assert!(!dir.join("nope").exists());
+    }
+}
