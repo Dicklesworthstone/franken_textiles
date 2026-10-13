@@ -14,3 +14,7 @@ The converter (`convert_anny.py`) checks that the installed package is this vers
 file matches the wheel's RECORD hashes, builds into a fresh cache, checks every array against spec 05 §8.1, and writes the
 forward-model data into a versioned `*.ftxbody` file outside the repository. Converted data is never
 committed. Moving the pin means new parity fixtures and keeping the old results.
+
+Fixtures from this pin: `capture_anny_reference.py` (forward model, 16 cases) and `capture_anny_poses.py`
+(drape poses, nappy and skin shell, 9 cases), both into `tests/fixtures/oracle/body/`. Re-running
+`capture_anny_poses.py` gave identical bytes.

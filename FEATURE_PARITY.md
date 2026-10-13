@@ -42,7 +42,8 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Tape functionals (girths as convex hulls of slices, lengths) | plan §9.3 | missing | |
 | Fitting from age/sex/height/weight/BMI | plan §9.4 | missing | |
 | Fitting from tape measurements | plan §9.4 | missing | |
-| Poses (arm angles, seated, squat, nappy volume) | plan §9.5 | missing | |
+| Poses (arm angles, seated, squat, nappy volume) | plan §9.5 | present | anny-0.6.1-poses (9 cases: A-pose 35/50°, arms up 150°, seated, squat, a ramp at t = 0.5, a nappy; poses re-implemented in NumPy by `capture_anny_poses.py`; worst 8.8e-16 m, 5.7e-14 relative) in `crates/ftx-body/tests/drape_poses.rs`; nappy size not yet calibrated to a taped `seat_over_nappy` (needs tape functionals) |
+| Skin mesh for contact (closed, outward, checked) | plan §9.5 | present | the 9 pose cases (skin shell counts, volume, area, vertex order); refusals in `drape.rs` unit tests |
 
 ## Measurement (`ftx-measure`, spec 02 Part A)
 
