@@ -215,8 +215,8 @@ fn kat10_two_starts() {
     assert!(fails.is_empty(), "{fails:?}");
 }
 
-/// KAT 9 on a fitted body: the whole pipeline (the tape fit, the scene, two sewing and two draping steps of
-/// the 92 cm bolero) pinned by the SHA-256 of the fitted parameters and the last frame's positions. The
+/// KAT 9 on a fitted body: the whole pipeline (the tape fit, the scene, three sewing and three draping steps
+/// of the 92 cm bolero, the fewest the drape's metrics accept) pinned by the SHA-256 of the fitted parameters and the last frame's positions. The
 /// same digest must come out of native debug, native release and wasm32-wasip1 (`FTX_ANNY_MODEL` naming
 /// the model file inside the WASI sandbox).
 #[test]
@@ -258,8 +258,8 @@ fn kat9_fitted_pipeline_digest() {
         arm_deg: Pose::A_POSE_DEG,
     };
     let opts = DrapeOptions {
-        sew_steps: 2,
-        drape_steps: 2,
+        sew_steps: 3,
+        drape_steps: 3,
         ..DrapeOptions::default()
     };
     let run = drape(
@@ -281,5 +281,8 @@ fn kat9_fitted_pipeline_digest() {
     let digest = ftx_core::receipt::sha256_hex(&bytes);
     println!("fitted pipeline digest {digest} ({} vertices)", last.len());
     assert!(last.iter().all(|p| p.is_finite()));
-    assert_eq!(digest, "PIN");
+    assert_eq!(
+        digest,
+        "5739b16c47d79aac124456d6e5fb6a58a9156044d6ddc626405d986e2e3ec2cf"
+    );
 }
