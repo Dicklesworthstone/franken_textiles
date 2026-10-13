@@ -32,7 +32,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[offline-tools]')
         run: |
           toolchain="$(rustup show active-toolchain | cut -d ' ' -f1)"
-          tar -czf "$RUNNER_TEMP/rust-tools.tar.gz" -C "$HOME" ".rustup/toolchains/$toolchain" .cargo/bin .cargo/registry
+          tar --exclude='*/share/doc' -czf "$RUNNER_TEMP/rust-tools.tar.gz" -C "$HOME" ".rustup/toolchains/$toolchain" .cargo/bin .cargo/registry
       - name: Preserve offline tools
         if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[offline-tools]')
         uses: actions/upload-artifact@v4
@@ -40,3 +40,4 @@ jobs:
           name: offline-tools-${{ github.sha }}
           path: ${{ runner.temp }}/rust-tools.tar.gz
           retention-days: 1
+          compression-level: 0
