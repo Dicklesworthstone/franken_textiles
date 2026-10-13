@@ -24,6 +24,7 @@ use crate::{Args, bad_input, known_options, read_json, required};
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Target {
     Vertex { index: usize },
+    Surface { face: usize, barycentric: [f64; 3] },
     BoneHead { bone: String },
     BoneTail { bone: String },
 }
@@ -66,6 +67,7 @@ struct Request {
 
 enum ResolvedTarget {
     Vertex(usize),
+    Surface([usize; 3], [f64; 3]),
     Head(usize),
     Tail(usize),
 }
@@ -95,6 +97,7 @@ struct Adapter {
     pose_axes: Vec<PoseAxis>,
     joints: Vec<(usize, Vec3, f64)>,
     targets: Vec<ResolvedTarget>,
+    selected_vertices: Vec<usize>,
     cache: RefCell<Option<Cache>>,
 }
 
@@ -141,6 +144,28 @@ fn rotation(v: Vec3) -> Mat3 {
     } else {
         Mat3::rotation(v / angle, angle)
     }
+}
+
+fn vertex_slot(selected: &mut Vec<usize>, index: usize) -> usize {
+    if let Some(slot) = selected.iter().position(|&v| v == index) {
+        slot
+    } else {
+        selected.push(index);
+        selected.len() - 1
+    }
+}
+
+// Canonical support catches a vertex expressed as a triangle corner and a shared-edge point
+// expressed on either adjacent face. Zero weights carry no geometric information.
+fn surface_identity(indices: [usize; 3], weights: [f64; 3]) -> Vec<(usize, u64)> {
+    let mut support: Vec<_> = indices
+        .into_iter()
+        .zip(weights)
+        .filter(|(_, w)| *w > 0.0)
+        .map(|(i, w)| (i, w.to_bits()))
+        .collect();
+    support.sort_unstable();
+    support
 }
 
 impl Adapter {
@@ -261,7 +286,9 @@ impl Adapter {
             pose_axes.push(axis);
         }
         let mut targets = Vec::new();
+        let mut selected_vertices = Vec::new();
         let mut locations = BTreeSet::new();
+        let mut surface_locations = BTreeSet::new();
         for (name, target) in &config.keypoints {
             if name.trim().is_empty() || name.len() > 256 {
                 return Err(bad_input("invalid keypoint name"));
@@ -271,7 +298,41 @@ impl Adapter {
                     if *index >= model.data().header.counts.vertices {
                         return Err(bad_input("vertex correspondence is out of range"));
                     }
-                    (ResolvedTarget::Vertex(*index), format!("vertex:{index}"))
+                    if !surface_locations.insert(vec![(*index, 1.0_f64.to_bits())]) {
+                        return Err(bad_input("duplicate surface correspondence"));
+                    }
+                    let slot = vertex_slot(&mut selected_vertices, *index);
+                    (ResolvedTarget::Vertex(slot), format!("vertex:{index}"))
+                }
+                Target::Surface { face, barycentric } => {
+                    let ids = model
+                        .data()
+                        .faces
+                        .get(*face)
+                        .ok_or_else(|| bad_input("surface correspondence face is out of range"))?
+                        .map(|i| i as usize);
+                    let sum: f64 = barycentric.iter().sum();
+                    if barycentric
+                        .iter()
+                        .any(|w| !w.is_finite() || !(0.0..=1.0).contains(w))
+                        || (sum - 1.0).abs() > 1e-12
+                        || ids[0] == ids[1]
+                        || ids[0] == ids[2]
+                        || ids[1] == ids[2]
+                    {
+                        return Err(bad_input(
+                            "surface correspondence needs a triangle and nonnegative barycentric weights summing to one (1e-12 tolerance); weights are not normalized",
+                        ));
+                    }
+                    if !surface_locations.insert(surface_identity(ids, *barycentric)) {
+                        return Err(bad_input("duplicate surface correspondence"));
+                    }
+                    let slots = ids.map(|i| vertex_slot(&mut selected_vertices, i));
+                    // The physical identity is checked above, including aliases on neighboring faces.
+                    (
+                        ResolvedTarget::Surface(slots, *barycentric),
+                        format!("surface:{name}"),
+                    )
                 }
                 Target::BoneHead { bone } | Target::BoneTail { bone } => {
                     let i = model
@@ -316,6 +377,7 @@ impl Adapter {
             pose_axes,
             joints,
             targets,
+            selected_vertices,
             cache: RefCell::new(None),
         })
     }
@@ -410,12 +472,19 @@ impl BodyModel for Adapter {
                 t: Vec3::ZERO,
             };
         }
-        let posed = self.model.pose(rest, &deltas)?;
+        let posed = self
+            .model
+            .pose_selected(rest, &deltas, &self.selected_vertices)?;
         Ok(self
             .targets
             .iter()
             .map(|target| match target {
                 ResolvedTarget::Vertex(i) => posed.vertices[*i],
+                ResolvedTarget::Surface(ids, w) => {
+                    posed.vertices[ids[0]] * w[0]
+                        + posed.vertices[ids[1]] * w[1]
+                        + posed.vertices[ids[2]] * w[2]
+                }
                 ResolvedTarget::Head(i) => posed.bone_poses[*i].t,
                 ResolvedTarget::Tail(i) => posed.transforms[*i].apply(rest.bone_tails[*i]),
             })

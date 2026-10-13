@@ -46,7 +46,12 @@ fn synthetic_model() -> Vec<u8> {
         data.extend(bytes);
     };
     add("template_vertices", "f64", vec![10, 3], xyz(&template));
-    add("faces", "u32", vec![0, 3], vec![]);
+    add(
+        "faces",
+        "u32",
+        vec![3, 3],
+        u32_bytes([0, 1, 2, 1, 3, 2, 1, 8, 9]),
+    );
     add("blendshape_row_ptr", "u32", vec![3], u32_bytes([0, 10, 20]));
     add(
         "blendshape_vertex",
@@ -122,7 +127,7 @@ fn synthetic_model() -> Vec<u8> {
     ];
     components.extend((0..22).map(|i| json!(["race", format!("r{i}")])));
     let header = json!({"schema":"ftxbody/1","model":"anny","anny_version":"0.6.1","configuration":"synthetic-test-only",
-        "licence":"synthetic numerical test","package_sha256":{},"counts":{"vertices":10,"faces":0,"bones":2,"blendshapes":2,"phenotype_blendshapes":2,"local_changes":0,"influences":1},
+        "licence":"synthetic numerical test","package_sha256":{},"counts":{"vertices":10,"faces":3,"bones":2,"blendshapes":2,"phenotype_blendshapes":2,"local_changes":0,"influences":1},
         "phenotype":{"features":["height","weight","race"],"components":components,"anchors":{"height":[0,1],"weight":[0,1]},"exposed":["height","weight"],"fixed_value":0.5},
         "y_axis":[0,1,0],"degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],"labels":{"blendshapes":["height-high","weight-high"],"bones":["root","arm"],"bone_parents":[-1,0],"local_changes":[]},"waist_loop_final":[],"arrays":arrays});
     let mut h = serde_json::to_vec(&header).unwrap();
@@ -325,4 +330,88 @@ fn model_identity_correspondence_and_parameter_typos_refuse_before_output() {
     }
     save(&dir, &base);
     run(&dir, &["--iteratoins", "5"], 3);
+}
+
+#[test]
+fn surface_landmarks_fit_the_posed_triangle_not_a_blended_rest_point() {
+    let dir = setup();
+    let (bytes, mut input) = fixture();
+    let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true).unwrap()).unwrap();
+    let rest = model
+        .rest(&model.params(Phenotype {
+            height: 0.6,
+            weight: 0.45,
+            ..Phenotype::default()
+        }))
+        .unwrap();
+    let poses = [
+        [0.0, 0.1, 0.05, 0.04, -0.05, 0.02, -0.4],
+        [0.2, -0.1, 0.08, -0.03, 0.06, -0.02, 0.5],
+    ];
+    input["model"]["keypoints"]["p8"] =
+        json!({"kind":"surface","face":2,"barycentric":[0.2,0.3,0.5]});
+    for (frame, p) in input["fit"]["frames"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(poses)
+    {
+        let rv = Vec3::new(p[3], p[4], p[5]);
+        let deltas = [
+            Affine {
+                m: Mat3::rotation(rv.normalized(), rv.norm()),
+                t: Vec3::new(p[0], p[1], p[2]),
+            },
+            Affine {
+                m: Mat3::rotation(Vec3::new(1.0, 0.0, 0.0), p[6]),
+                t: Vec3::ZERO,
+            },
+        ];
+        let posed = model.pose(&rest, &deltas).unwrap();
+        // Vertices carry different bone weights; interpolate AFTER skinning, BEFORE projection.
+        let point = posed.vertices[1] * 0.2 + posed.vertices[8] * 0.3 + posed.vertices[9] * 0.5;
+        let camera: Camera = serde_json::from_value(frame["camera"].clone()).unwrap();
+        frame["keypoints"][8]["pixel_px"] = json!(camera.project(point).unwrap());
+    }
+    save(&dir, &input);
+    let v = run(&dir, &[], 0);
+    assert!((v["result"]["solution"]["shape"][0].as_f64().unwrap() - 0.6).abs() < 1e-5);
+    assert!(
+        (v["result"]["solution"]["poses"][1]["values"][6]
+            .as_f64()
+            .unwrap()
+            - 0.5)
+            .abs()
+            < 1e-5
+    );
+    let again = run(&dir, &[], 0);
+    assert_eq!(v, again);
+}
+
+#[test]
+fn surface_aliases_and_invalid_weights_are_not_extra_evidence() {
+    let dir = setup();
+    let base = fixture().1;
+    for target in [
+        json!({"kind":"surface","face":99,"barycentric":[0.2,0.3,0.5]}),
+        json!({"kind":"surface","face":0,"barycentric":[-0.1,0.6,0.5]}),
+        json!({"kind":"surface","face":0,"barycentric":[0.1,0.2,0.5]}),
+        json!({"kind":"surface","face":0,"barycentric":[0,0,0]}),
+        // p0 already names this corner as a vertex.
+        json!({"kind":"surface","face":0,"barycentric":[1,0,0]}),
+    ] {
+        let mut input = base.clone();
+        input["model"]["keypoints"]["p8"] = target;
+        save(&dir, &input);
+        run(&dir, &["--out", "invalid.json"], 3);
+        assert!(!dir.join("invalid.json").exists());
+    }
+    let mut input = base;
+    input["model"]["keypoints"]["p8"] =
+        json!({"kind":"surface","face":0,"barycentric":[0,0.25,0.75]});
+    input["model"]["keypoints"]["p9"] =
+        json!({"kind":"surface","face":1,"barycentric":[0.25,0,0.75]});
+    save(&dir, &input);
+    run(&dir, &["--out", "alias.json"], 3);
+    assert!(!dir.join("alias.json").exists());
 }
