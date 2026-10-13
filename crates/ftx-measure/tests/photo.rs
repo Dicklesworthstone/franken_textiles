@@ -254,3 +254,155 @@ fn invalid_measurements_and_unstable_calibration_are_atomic_refusals() {
         .is_err()
     );
 }
+
+fn charuco_reference(noise: bool) -> Value {
+    let corners: Vec<Value> = (0..35)
+        .map(|id| {
+            let x = (id % 5 + 1) as f64 * 22.0;
+            let y = (id / 5 + 1) as f64 * 22.0;
+            let jitter = if noise {
+                (id % 7) as f64 * 0.11 - 0.33
+            } else {
+                0.0
+            };
+            json!({"id":id,"point_px":[200.0 + 2.0 * x + jitter, 300.0 + 2.0 * y - jitter]})
+        })
+        .collect();
+    json!({"schema":"ftx-photo-reference/1", "reference":"charuco", "image_size_px":[1500,2000],
+        "board":{"squares_x":6,"squares_y":8,"square_mm":22.0,"origin_mm":[12.0,20.0]},
+        "corners":corners,"markers_detected":24})
+}
+
+#[test]
+fn imported_charuco_rejects_outliers_and_measures_with_inlier_bootstrap() {
+    let mut reference = charuco_reference(true);
+    for id in [3, 15, 22, 29] {
+        reference["corners"][id]["point_px"] = json!([1200.0 + id as f64, 1800.0]);
+    }
+    reference["blur_sigma_px_estimate"] = json!(2.8);
+    let scale = analyze_reference(&reference).unwrap();
+    assert_eq!(scale.report()["ok"], true, "{}", scale.report());
+    assert_eq!(scale.report()["inliers"], 31);
+    assert_eq!(scale.report()["outlier_ids"], json!([3, 15, 22, 29]));
+    assert!(scale.report()["max_residual_mm"].as_f64().unwrap() < 0.3);
+    assert!(scale.report()["reprojection_rms_px"].as_f64().unwrap() < 0.5);
+    assert_eq!(
+        scale.report()["board_origin_on_paper_mm"],
+        json!([12.0, 20.0])
+    );
+    assert!(
+        scale.report()["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().starts_with("BLURRY"))
+    );
+    let points = json!({"length":[[250.0,450.0],[750.0,450.0]]});
+    let measured = measure_photo(&scale, &points, &PhotoOptions::default()).unwrap();
+    let r = &measured["records"][0];
+    assert!(
+        (r["value_mm"].as_f64().unwrap() - 250.0).abs() <= 0.2,
+        "{r}"
+    );
+    assert!(
+        r["method"]
+            .as_str()
+            .unwrap()
+            .starts_with("photo ? ChArUco sheet-plane homography")
+    );
+    assert_eq!(r["provenance"], "PHOTO_ESTIMATED");
+    assert!(r["sigma_terms_mm"]["homography"].as_f64().unwrap() > 0.0);
+    assert!(r["bootstrap_accepted"].as_u64().unwrap() >= 160);
+    // External detector ordering cannot alter RANSAC, inlier order or the random stream.
+    reference["corners"].as_array_mut().unwrap().reverse();
+    let reversed = analyze_reference(&reference).unwrap();
+    assert_eq!(scale.report(), reversed.report());
+    assert_eq!(
+        measured,
+        measure_photo(&reversed, &points, &PhotoOptions::default()).unwrap()
+    );
+}
+
+#[test]
+fn exact_charuco_projection_and_invalid_identifiers() {
+    let reference = charuco_reference(false);
+    let scale = analyze_reference(&reference).unwrap();
+    assert_eq!(scale.report()["mm_per_px"], 0.5);
+    assert_eq!(scale.report()["inliers"], 35);
+    assert_eq!(scale.report()["reprojection_rms_mm"], 0.0);
+    let m = measure_photo(
+        &scale,
+        &json!({"length":[[100,900],[900,900]]}),
+        &PhotoOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(m["records"][0]["value_mm"], 400.0);
+    assert_eq!(m["records"][0]["sigma_terms_mm"]["homography"], 0.0);
+    for (key, value) in [
+        ("id", json!(35)),
+        ("id", json!(-1)),
+        ("id", json!(1)),
+        ("id", json!(2.5)),
+        ("point_px", json!([0, -1])),
+        ("unexpected", json!(1)),
+    ] {
+        let mut bad = reference.clone();
+        bad["corners"][0][key] = value;
+        assert!(analyze_reference(&bad).is_err(), "{bad}");
+    }
+    let mut bad = reference.clone();
+    bad["board"]["squares_x"] = json!(2);
+    assert!(analyze_reference(&bad).is_err());
+    bad = reference;
+    bad["blur_sigma_px_estimate"] = json!(-1);
+    assert!(analyze_reference(&bad).is_err());
+}
+
+#[test]
+fn inadequate_charuco_consensus_is_not_a_usable_scale() {
+    let mut reference = charuco_reference(false);
+    reference["corners"].as_array_mut().unwrap().truncate(5);
+    let scale = analyze_reference(&reference).unwrap();
+    assert_eq!(scale.report()["ok"], false);
+    assert!(
+        scale.report()["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("BOARD_NOT_FOUND")
+    );
+    assert!(
+        measure_photo(
+            &scale,
+            &json!({"length":[[100,900],[900,900]]}),
+            &PhotoOptions::default()
+        )
+        .is_err()
+    );
+    let mut reference = charuco_reference(false);
+    for (i, c) in reference["corners"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        c["point_px"] = json!([100.0 + i as f64, 300.0]);
+    }
+    let scale = analyze_reference(&reference).unwrap();
+    assert_eq!(scale.report()["ok"], false);
+    assert!(scale.report().get("homography_px_to_board_mm").is_none());
+    // Six well-spread corners may calibrate, but too few diverse bootstrap draws must refuse
+    // measurement rather than silently substituting zero homography uncertainty.
+    let mut reference = charuco_reference(false);
+    let all = reference["corners"].as_array().unwrap().clone();
+    reference["corners"] = json!([all[0], all[4], all[10], all[14], all[30], all[34]]);
+    let scale = analyze_reference(&reference).unwrap();
+    assert_eq!(scale.report()["ok"], true);
+    assert!(
+        measure_photo(
+            &scale,
+            &json!({"length":[[100,900],[900,900]]}),
+            &PhotoOptions::default()
+        )
+        .is_err()
+    );
+}

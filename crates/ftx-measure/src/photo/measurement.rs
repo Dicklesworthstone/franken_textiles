@@ -5,7 +5,7 @@ use ftx_core::{Refusal, RefusalCode, det, py};
 use serde_json::{Value, json};
 
 use super::geometry::{Homography, Point, convex_clockwise, fit, plane_scale, rectangle};
-use super::{Calibration, PhotoScale, invalid, known, number, point, round_point};
+use super::{Calibration, PhotoScale, Samples, invalid, known, number, point, round_point};
 
 /// Measurement uncertainty and coordinate-frame controls. Lengths are mm, angles degrees,
 /// pixel values refer to the full-resolution oriented image. No system clock or ambient RNG.
@@ -44,11 +44,11 @@ impl Default for PhotoOptions {
     }
 }
 
-struct Random {
-    state: u64,
+pub(super) struct Random {
+    pub(super) state: u64,
 }
 impl Random {
-    fn uniform(&mut self) -> f64 {
+    pub(super) fn uniform(&mut self) -> f64 {
         self.state = self.state.wrapping_add(0x9e3779b97f4a7c15);
         let mut x = self.state;
         x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
@@ -68,14 +68,32 @@ fn bootstrap(c: &Calibration, options: &PhotoOptions) -> Result<Vec<Homography>,
     };
     let mut out = Vec::with_capacity(options.bootstrap);
     for _ in 0..options.bootstrap {
-        let corners = c
-            .corners
-            .map(|p| p.map(|v| v + c.corner_sigma_px * rng.normal()));
-        let size = c.size.map(|v| v + 0.5 * rng.normal());
-        if !convex_clockwise(&corners) || size.iter().any(|&x| x <= 0.0) {
-            continue;
-        }
-        if let Ok(h) = fit(&corners, &rectangle(size))
+        let (trial, size) = match &c.samples {
+            Samples::Manual { corners, sigma } => {
+                let corners = corners.map(|p| p.map(|v| v + sigma * rng.normal()));
+                let size = c.size.map(|v| v + 0.5 * rng.normal());
+                if !convex_clockwise(&corners) || size.iter().any(|&x| x <= 0.0) {
+                    continue;
+                }
+                (fit(&corners, &rectangle(size)), size)
+            }
+            Samples::Charuco { pixels, board } => {
+                let n = pixels.len();
+                let ids: Vec<usize> = (0..n)
+                    .map(|_| (rng.uniform() * n as f64) as usize)
+                    .collect();
+                let mut unique = ids.clone();
+                unique.sort_unstable();
+                unique.dedup();
+                if unique.len() < 6 {
+                    continue;
+                }
+                let p: Vec<_> = ids.iter().map(|&i| pixels[i]).collect();
+                let q: Vec<_> = ids.iter().map(|&i| board[i]).collect();
+                (fit(&p, &q), c.size)
+            }
+        };
+        if let Ok(h) = trial
             && plane_scale(&h, size).is_ok()
         {
             out.push(h);
@@ -86,7 +104,7 @@ fn bootstrap(c: &Calibration, options: &PhotoOptions) -> Result<Vec<Homography>,
             RefusalCode::NotConverged,
             "too few usable photo bootstrap draws; reference geometry is unstable",
         )
-        .repair("mark a larger, less tilted sheet and check corner uncertainty"));
+        .repair("mark a larger, less tilted sheet; for ChArUco expose at least twelve well-spread corners"));
     }
     Ok(out)
 }
@@ -182,10 +200,12 @@ pub fn measure_photo(
     let hs = bootstrap(c, options)?;
     let centre = plane_scale(&c.h, c.size)?.centre;
     let factor = c.image[0] / options.points_from_width.unwrap_or(c.image[0]);
-    let paper = if scale.report["paper"] == "letter" {
-        "Letter"
+    let reference_name = if matches!(c.samples, Samples::Charuco { .. }) {
+        "ChArUco"
+    } else if scale.report["paper"] == "letter" {
+        "plain Letter"
     } else {
-        "A4"
+        "plain A4"
     };
     let mut records = Vec::with_capacity(entries.len());
     for (key, spec) in entries {
@@ -298,7 +318,7 @@ pub fn measure_photo(
             "photo measurement sigma",
             det::hypot(det::hypot(sa, sb), sc),
         )?;
-        let mut method = format!("photo {view} plain {paper} sheet-plane homography");
+        let mut method = format!("photo {view} {reference_name} sheet-plane homography");
         if let Some(tag) = tag {
             method.push_str(&format!(" [{tag}]"));
         }
@@ -354,8 +374,16 @@ pub fn measure_photo(
         records.push(record);
     }
     let mut report = scale.report.clone();
+    let bootstrap_method = match c.samples {
+        Samples::Manual { .. } => {
+            "manual-corner Gaussian perturbation and 0.5 mm paper-side sigma; SplitMix64/Box-Muller"
+        }
+        Samples::Charuco { .. } => {
+            "resample identified inlier corners with replacement; at least six unique points per draw; SplitMix64"
+        }
+    };
     report["bootstrap"] = json!({"requested":options.bootstrap, "calibrations":hs.len(), "seed":options.seed,
-        "method":"manual-corner Gaussian perturbation and 0.5 mm paper-side sigma; SplitMix64/Box-Muller"});
+        "method":bootstrap_method});
     report["measure_warnings"] = if options.depth_offset_mm == 0.0 {
         json!([
             "depth offset 0 assumed: valid only for landmarks in the sheet's plane (sheet beside the child, centre over the same floor line; 03 §3.1). Otherwise pass --depth-offset-mm."

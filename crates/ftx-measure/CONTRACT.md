@@ -57,3 +57,15 @@ not zero-sigma/partial results. The unrounded matrix is retained for calculation
 
 Known-answer tests recover spec D.7 exact-camera residuals/focal search and analytic distances,
 angles and uncertainty terms. No automatic detector, image-oracle or real-wearer fit claim.
+
+**Imported ChArUco.** The same input schema accepts `reference: charuco`, board dimensions
+(`squares_x`, `squares_y`, `square_mm`, optional `origin_mm`) and identified image corners
+`corners: [{id, point_px}]`. IDs are row-major internal corners. Fixed-seed RANSAC (512 trials,
+2 mm threshold) followed by normalized algebraic least squares requires six consistent
+inliers; reports retain excluded IDs and residuals. Detector ordering cannot alter results.
+Bootstrap resamples only inliers and requires six unique points per draw; the 80% usable-draw
+gate can refuse a sparse board despite successful calibration. At least twelve well-spread
+corners are recommended. Duplicate/invalid IDs, excessive input, invalid coordinates and
+unstable consensus are explicit errors. Blur, if supplied, is external metadata, not a
+computed image diagnostic. No claim of OpenCV RANSAC/noisy-fit or NumPy RNG parity.
+Runnable CLI and input examples are in `docs/photo-measurement.md`.

@@ -3,6 +3,7 @@
 //! This boundary does not detect a sheet in an image. Coordinates must already be in the
 //! full-resolution, EXIF-oriented image frame. A homography measures only the sheet's plane.
 
+mod charuco;
 mod geometry;
 mod measurement;
 
@@ -32,8 +33,19 @@ struct Calibration {
     h: Homography,
     size: Point,
     image: Point,
-    corners: [Point; 4],
-    corner_sigma_px: f64,
+    samples: Samples,
+}
+
+#[derive(Clone, Debug)]
+enum Samples {
+    Manual {
+        corners: [Point; 4],
+        sigma: f64,
+    },
+    Charuco {
+        pixels: Vec<Point>,
+        board: Vec<Point>,
+    },
 }
 
 impl PhotoScale {
@@ -156,7 +168,12 @@ fn paper_fit(corners: &[Point; 4], paper: &str, image: Point) -> Result<PaperFit
 /// A rectangle/aspect check is mandatory: four arbitrary points alone are not evidence of scale.
 /// A wrong or ambiguous paper produces `ok: false`, not a usable homography. No automatic image
 /// detection, blur estimation or EXIF processing is performed at this coordinate-only boundary.
+/// Imported detector output can instead use `reference: "charuco"`, `board` dimensions, and
+/// `corners: [{id, point_px}]`; at least six identified corners must support a single homography.
 pub fn analyze_reference(reference: &Value) -> Result<PhotoScale, Refusal> {
+    if reference["reference"] == "charuco" {
+        return charuco::analyze(reference);
+    }
     known(
         reference,
         &[
@@ -273,8 +290,7 @@ pub fn analyze_reference(reference: &Value) -> Result<PhotoScale, Refusal> {
         h: best.h.clone(),
         size: best.size,
         image,
-        corners,
-        corner_sigma_px: sigma,
+        samples: Samples::Manual { corners, sigma },
     });
     Ok(PhotoScale {
         report,
