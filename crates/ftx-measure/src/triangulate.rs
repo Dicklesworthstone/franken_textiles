@@ -143,8 +143,19 @@ fn text_present(text: &str) -> bool {
 }
 
 fn check_capture(input: &TriangulationInput) -> Result<(), Refusal> {
-    let streams: BTreeSet<_> = input.observations.iter().map(|v| &v.frame.stream).collect();
-    match &input.capture {
+    check_frames(
+        &input.capture,
+        &input
+            .observations
+            .iter()
+            .map(|v| &v.frame)
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub(crate) fn check_frames(capture: &Capture, frames: &[&FrameId]) -> Result<(), Refusal> {
+    let streams: BTreeSet<_> = frames.iter().map(|f| &f.stream).collect();
+    match capture {
         Capture::StillWindow {
             start_us,
             end_us,
@@ -155,10 +166,9 @@ fn check_capture(input: &TriangulationInput) -> Result<(), Refusal> {
                     "still_window needs evidence, ordered bounds and exactly one stream",
                 ));
             }
-            if input
-                .observations
+            if frames
                 .iter()
-                .any(|v| v.frame.timestamp_us < *start_us || v.frame.timestamp_us > *end_us)
+                .any(|f| f.timestamp_us < *start_us || f.timestamp_us > *end_us)
             {
                 return Err(invalid("observation is outside the reviewed still window"));
             }
@@ -167,21 +177,13 @@ fn check_capture(input: &TriangulationInput) -> Result<(), Refusal> {
             max_skew_us,
             evidence,
         } => {
-            if !text_present(evidence) || streams.len() != input.observations.len() {
+            if !text_present(evidence) || streams.len() != frames.len() {
                 return Err(invalid(
                     "synchronized capture needs evidence and one frame per stream",
                 ));
             }
-            let first = input
-                .observations
-                .iter()
-                .map(|v| v.frame.timestamp_us)
-                .min();
-            let last = input
-                .observations
-                .iter()
-                .map(|v| v.frame.timestamp_us)
-                .max();
+            let first = frames.iter().map(|f| f.timestamp_us).min();
+            let last = frames.iter().map(|f| f.timestamp_us).max();
             if let (Some(first), Some(last)) = (first, last)
                 && last - first > *max_skew_us
             {

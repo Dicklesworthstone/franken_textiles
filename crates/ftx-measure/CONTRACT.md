@@ -110,3 +110,25 @@ inconsistent or behind-camera geometry publishes diagnostics with no usable poin
 inputs produce typed refusals. Reports retain the full input receipt and distinguish fitted
 from held-out errors. No measurement sigma, fused record, READY status or body-fit claim is
 created. See `docs/triangulation.md` for the CLI, schema and remaining FTX-20 work.
+
+**Anchored joint bundle refinement (FTX-20).** `bundle::adjust` jointly refines all camera
+extrinsics and free landmark positions against sigma-weighted fit pixel residuals. Fixed
+metric controls define the gauge and absolute scale; intrinsics and lens distortion remain
+fixed. This initial slice requires at least four distinct fit controls per camera, 2–8 cameras,
+1–32 free landmarks and at most 2048 observations. It is for a caller-reviewed still window
+or synchronized acquisition of stationary landmarks, not a moving child's cross-frame shape.
+
+Assembly is canonical and uses analytic pose/point derivatives, a normalized metric frame,
+column-scaled dense Levenberg–Marquardt and strict objective descent. An undamped normalized
+Hessian Cholesky-pivot check (floor 1e-10) rejects rank loss or severe ill-conditioning before
+damping; this is a conservative numerical gate, not a statistical observability certificate.
+Held-out observations never enter assembly, convergence or rank checks. Both observed and
+reconstructed free-point parallax must reach 3 degrees after refinement, and every observation
+must project within its lens domain and 3 pixels, regardless of sigma. Budget stops, rank loss,
+nonconvergence and failed held-out checks publish diagnostics but no optimized geometry.
+
+Synthetic tests cover joint metric recovery, nine-coordinate derivative differences, noisy
+overdetermined fitting, fixed intrinsics, held-out independence, gauge/order invariance,
+collinear controls, missing fit information, strict schemas and budget-stop atomicity.
+No external numerical dependency. No estimated reference-scale parameter, joint intrinsic
+calibration, covariance, global-minimum guarantee, body fit or real-wearer accuracy claim.
