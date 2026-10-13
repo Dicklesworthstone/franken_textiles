@@ -17,8 +17,9 @@ use ftx_drape::animation::{
     FOLD_FRAMES, FoldUp, ViewerExtras, ZIP_FRAMES, board_layout, fold_frames, mesh_map, pc2,
     viewer_html, viewer_payload, zip_frames,
 };
-use ftx_drape::scene::{Fabric, build_scene, run_phase};
-use ftx_drape::{ContactParams, build_garment};
+use ftx_drape::metrics::{MetricsInput, metrics};
+use ftx_drape::scene::{Fabric, PartFrames, build_scene, run_phase};
+use ftx_drape::{ContactParams, NearestTree, build_garment};
 use ftx_pattern::Pattern;
 use serde_json::Value;
 
@@ -106,12 +107,12 @@ fn main() {
         skin.report.volume * 1e3,
         full.report.volume * 1e3
     );
-    let frames = BodyFrames::new(&model, &posed).unwrap_or_else(|r| panic!("{r}"));
+    let frames_body = BodyFrames::new(&model, &posed).unwrap_or_else(|r| panic!("{r}"));
     println!(
         "body: {years:.1} y, stature {:.1} mm (height parameter {:.3}); landmarks (mm above floor): {:?}",
         height_of(0.5 * (lo + hi)),
         0.5 * (lo + hi),
-        frames
+        frames_body
             .landmarks
             .iter()
             .map(|(k, v)| format!("{k} {v:.0}"))
@@ -140,7 +141,7 @@ fn main() {
     let mut scene = build_scene(
         &pattern,
         mesh,
-        &frames,
+        &frames_body,
         &skin.vertices,
         &skin.triangles,
         fabric,
@@ -184,12 +185,10 @@ fn main() {
     let board = board_layout(&scene.mesh);
     let mut frames = fold_frames(&scene.mesh, &scene.placements, &board, FOLD_FRAMES);
     frames.extend(zip_frames(&scene.start.wrapped, &scene.start.relaxed));
-    let mut last_speed = 0.0;
     for (name, steps, g) in [("sew", sew_steps, 0.0), ("drape", drape_steps, 9.81)] {
         let t = Instant::now();
         let rep = run_phase(&mut scene, steps, h, g, |_, x| frames.push(x.to_vec()))
             .unwrap_or_else(|r| panic!("{r}"));
-        last_speed = rep.max_speed;
         println!(
             "{name}: {} steps, {} Newton iterations, {} unconverged, max speed {:.4} m/s, cloth offset \
              {:.2} mm, {:.1} s",
@@ -215,6 +214,80 @@ fn main() {
         .unwrap_or(f64::INFINITY);
     println!("min cloth-body gap after the drape: {:.3} mm", gap * 1e3);
 
+    // The fit verdict: the reference's metrics and flags on the baked frames, against the body the cloth
+    // collided with (as the reference measures against its form): the hands and feet are not in it, so
+    // a sleeve lying over a hand is a length question, not penetration.
+    let seq = &frames[FOLD_FRAMES + ZIP_FRAMES..];
+    let true_body = NearestTree::new(skin.vertices.clone(), skin.triangles.clone())
+        .unwrap_or_else(|r| panic!("{r}"));
+    let raw = pattern.raw();
+    let level_y = |inst: &str, landmark: &str| -> Option<f64> {
+        let i = pattern.instance(inst)?;
+        let pl = &raw["pieces"][i.piece_index]["placement"];
+        let part = pl["part"].as_str().unwrap_or("torso");
+        let key = if part == "torso" {
+            part.to_string()
+        } else {
+            format!("{part}_R")
+        };
+        let anchor = pl["y0_landmark"].as_str().unwrap_or("waist");
+        Some(
+            PartFrames::landmark_h(&frames_body, &key, landmark)?
+                - PartFrames::landmark_h(&frames_body, &key, anchor)?
+                + pl["y0"].as_f64().unwrap_or(0.0),
+        )
+    };
+    let report = metrics(
+        &scene.mesh,
+        &MetricsInput {
+            pattern: &pattern,
+            seq,
+            sew_end: sew_steps,
+            wrapped: &scene.start.wrapped,
+            body: &true_body,
+            level_y: &level_y,
+            fit_spec: &case["input"]["fit_spec"],
+            spacing: 12.0,
+            arm_deg: Pose::A_POSE_DEG,
+        },
+    );
+    std::fs::write(
+        out.join("sim_report.json"),
+        serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
+    let strings = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let (gating, all) = (strings(&report["gating"]), strings(&report["flags"]));
+    let advisory: Vec<String> = all
+        .iter()
+        .filter(|f| !gating.contains(f))
+        .cloned()
+        .collect();
+    println!(
+        "fit: {} gating, {} advisory, settled {}",
+        gating.len(),
+        advisory.len(),
+        report["settled"]
+    );
+    for f in &all {
+        println!(
+            "  {} {f}",
+            if gating.contains(f) {
+                "GATING"
+            } else {
+                "advisory"
+            }
+        );
+    }
+
     let fold = FoldUp {
         frames,
         fold: FOLD_FRAMES,
@@ -228,7 +301,6 @@ fn main() {
         serde_json::to_string_pretty(&mesh_map(&scene.mesh, &fold)).unwrap(),
     )
     .unwrap();
-    let raw = pattern.raw();
     let style = raw["style"].as_str().unwrap_or("");
     let title = raw["meta"]["title"].as_str().unwrap_or(style);
     let payload = viewer_payload(
@@ -238,12 +310,9 @@ fn main() {
             title: if title.is_empty() { "fold-up" } else { title },
             style,
             body: (&full.vertices, &full.triangles),
-            gating: vec![
-                "fit metrics not computed yet: this is a FrankenTextiles drape preview, not a fit verdict"
-                    .to_string(),
-            ],
-            advisory: Vec::new(),
-            settled: last_speed < 0.005,
+            gating,
+            advisory,
+            settled: report["settled"].as_bool().unwrap_or(false),
             arm_deg: Pose::A_POSE_DEG,
         },
         150,

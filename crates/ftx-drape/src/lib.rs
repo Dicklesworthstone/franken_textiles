@@ -7,8 +7,7 @@
 //! - The garment ([`garment`], [`start`], [`nearest`], [`scene`]): the reference's mesh and start state,
 //!   then welded seams, placement on a body and the sew and drape schedule.
 //! - The fold-up animation and its files ([`animation`]): board, roll-up, zip, PC2, the viewer payload.
-//!
-//! Metrics and flags come next (FTX-13).
+//! - Metrics and flags with the reference's texts ([`metrics`]).
 //!
 //! Units: metres, kilograms, seconds; z up.
 #![forbid(unsafe_code)]
@@ -21,6 +20,7 @@ pub mod distance;
 pub mod eigen;
 pub mod elements;
 pub mod garment;
+pub mod metrics;
 pub mod nearest;
 pub mod scene;
 pub mod sparse;

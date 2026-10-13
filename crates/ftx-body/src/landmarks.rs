@@ -11,10 +11,12 @@
 //! | floor | lowest skin point |
 //! | waist | mean height of Anny's 46-vertex waist loop |
 //! | crotch | lowest torso vertex within 4 mm of the sagittal plane |
-//! | hip | hip-joint height (`upperleg01` head) |
-//! | knee, ankle | `lowerleg01`, `foot` heads; calf = knee − 0.3·(knee − ankle) |
+//! | hip | crotch + 0.45·(waist − crotch), the reference's seat level |
+//! | knee, ankle | `lowerleg01`, `foot` heads; calf = ankle + 0.6·(knee − ankle), as the reference |
+//! | chest | the armpit: the lowest upper-arm vertex within one arm radius of the torso's side (the reference's C7 − armscye depth) |
+//! | across_back | midway between chest and shoulder, as the reference |
 //! | shoulder | shoulder tip: the arm frame origin plus `tip_h` along the arm |
-//! | snp | `neck01` head; head_top = highest skin point |
+//! | snp | `neck01` head; c7 = snp + 5 mm (the reference form's snp = C7 − 5); head_top = highest skin point |
 //! | torso frame | origin (0, y_c, floor) with y_c the waist loop's mid-depth; up +Z, front −Y, lat +X |
 //! | arm_R frame | origin the `upperarm01.R` head, up from elbow to shoulder, front −Y made orthogonal |
 //! | upper-arm radius r | median distance of upper-arm vertices from the arm axis; `tip_h = 0.8·r` as the reference |
@@ -201,6 +203,20 @@ impl BodyFrames {
         radii.sort_by(f64::total_cmp);
         let upper_arm_radius = radii[radii.len() / 2];
         let tip_h = 0.8 * upper_arm_radius;
+        // Armpit: the lowest upper-arm vertex within one arm radius of the torso's side (|x| below the
+        // shoulder joint's).
+        let armpit_z = (0..mm.len())
+            .filter(|&v| {
+                let row = &data.vertex_bone_weights[v * k..(v + 1) * k];
+                let best = (0..k).fold(0, |b, j| if row[j] > row[b] { j } else { b });
+                upper.contains(&(data.vertex_bone_indices[v * k + best] as usize))
+                    && mm[v].x.abs() < shoulder.x.abs() + upper_arm_radius
+            })
+            .map(|v| mm[v].z)
+            .fold(f64::INFINITY, f64::min);
+        if !armpit_z.is_finite() {
+            return Err(none("armpit"));
+        }
         let arm_length = (head("wrist.R")? - shoulder).norm() + tip_h;
         // Leg.
         let hip = head("upperleg01.R")?;
@@ -215,16 +231,21 @@ impl BodyFrames {
             lat: Vec3::new(1.0, 0.0, 0.0),
         };
         let knee_z = head("lowerleg01.R")?.z;
+        let shoulder_z = (shoulder + arm.up * tip_h).z;
+        let snp_z = head("neck01")?.z;
         let landmarks: BTreeMap<String, f64> = [
             ("floor", floor_z),
             ("ankle", ankle.z),
-            ("calf", knee_z - 0.3 * (knee_z - ankle.z)),
+            ("calf", ankle.z + 0.6 * (knee_z - ankle.z)),
             ("knee", knee_z),
             ("crotch", crotch_z),
-            ("hip", hip.z),
+            ("hip", crotch_z + 0.45 * (waist_z - crotch_z)),
             ("waist", waist_z),
-            ("shoulder", (shoulder + arm.up * tip_h).z),
-            ("snp", head("neck01")?.z),
+            ("chest", armpit_z),
+            ("across_back", 0.5 * (armpit_z + shoulder_z)),
+            ("shoulder", shoulder_z),
+            ("snp", snp_z),
+            ("c7", snp_z + 5.0),
             ("head_top", top_z),
         ]
         .into_iter()

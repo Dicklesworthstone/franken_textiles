@@ -105,8 +105,19 @@ identity to the rotation onto its k = 0 roll, centroid on a raised path) then th
 frames. Rotations use Horn's quaternion method with the deterministic Jacobi solver where the reference
 uses numpy's SVD Kabsch. Written as `fold.pc2` (float32 point cache), `mesh_map.json`, seam and strain
 colours, and the `fabric-fold-viewer/1` payload embedded in `assets/fold_viewer_template.html` (the
-skill's page, unchanged; SHA-256 `7de25b18…a878`). Until the metrics exist the viewer's report carries one
-gating entry saying they are not computed, so the page never shows an unearned "no gating flags".
+skill's page, unchanged; SHA-256 `7de25b18…a878`). The page's verdict line shows the run's own gating
+and advisory flags from `metrics`.
+
+**Metrics and flags** (`metrics.rs`; spec 04 §6). From the baked frames, the wrapped start and the true
+body: seam gaps after sewing and at the end, seam strain; ring strain, contact and clearance at each
+fit-spec girth level (TIGHT, SNUG or EASY); contact, penetration and corner slip per piece; hem heights,
+rises and balance; band shifts; drift-based settledness; global strain; with the reference's exact flag
+texts, their order and the gating, advisory and tightness-gating split. Against
+`tests/fixtures/oracle/drape/metrics.json` (the reference's `metrics()` on four synthetic sequences built
+from the exact start states, rebuilt bit for bit in the test): 443 numbers bit-exact, all 51 flags
+identical. On a body other than the reference's dress form the level heights come from `BodyFrames`
+(`examples/drape_drafted.rs`), and the true body is the drape body the cloth collided with (no hands
+or feet).
 
 **Meshes.** Use `hex_grid` (near-equilateral) for anything that bends: hinge bending on it is isotropic
 (cylinder energy 0.98–1.02 of theory at 0°/30°/45°/90°). Right-triangle grids (`grid`) have a zig-zag mode

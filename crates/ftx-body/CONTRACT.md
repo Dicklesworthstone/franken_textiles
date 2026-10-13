@@ -24,12 +24,15 @@ bones and their descendants (the drape uses the wrists and feet: no garment in s
 `examples/posed_skins.rs` writes the poses as OBJ for a look.
 
 **Frames and landmarks** (`BodyFrames`, definitions in the `landmarks.rs` table). On the posed body, in
-mm: floor, waist (Anny's waist loop), crotch, hip, knee, calf, ankle, shoulder tip, side neck point and
-head top; torso, right-arm and right-leg frames in the reference's convention (spec 04 §3.2); section
-radii from the vertices of each region (by dominant skinning bone). On the 92 cm reference toddler: waist
-525 mm (taped 530), crotch 394 (372.5), knee 248 (231). These are read off the body, not fitted to the
-tape; FTX-09 replaces the heuristics (the shoulder tip as 0.8 × upper-arm radius along the arm, calf at
-0.3 of knee-to-ankle) with tape functionals.
+mm: floor, waist (Anny's waist loop), crotch, chest (the armpit), across back, hip, knee, calf, ankle,
+shoulder tip, side neck point, C7 and head top, with the reference's formulas where it derives one from
+others (hip = crotch + 0.45 × (waist − crotch), calf = ankle + 0.6 × (knee − ankle), across back midway
+between chest and shoulder); torso, right-arm and right-leg frames in the reference's convention (spec 04
+§3.2); section radii from the vertices of each region (by dominant skinning bone). On the 92 cm
+reference toddler: waist 525 mm (taped 530), crotch 394 (372.5), knee 248 (231), chest 617 (the
+reference's formula on the tape gives 635). These are read off the body, not fitted to the tape; FTX-09
+replaces the heuristics (the armpit as the lowest upper-arm vertex by the torso, the shoulder tip as
+0.8 × upper-arm radius along the arm) with tape functionals.
 
 **Data.** `tools/body-model/convert_anny.py` builds the model from the pinned package into a fresh cache,
 checks the installed files against the wheel's RECORD and every array against spec 05 §8.1, and writes a
