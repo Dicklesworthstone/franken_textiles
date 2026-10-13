@@ -76,6 +76,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ftx-measure"
+version = "0.1.0"
+dependencies = [
+ "ftx-core",
+ "serde_json",
+]
+
+[[package]]
 name = "ftx-pattern"
 version = "0.1.0"
 dependencies = [
