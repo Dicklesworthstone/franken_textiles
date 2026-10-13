@@ -2,10 +2,9 @@
 //! line (`BufferCurveSetBuilder` with its erosion and inversion checks → `OffsetCurveBuilder::
 //! computeRingBufferCurve`: `BufferInputLineSimplifier`, `OffsetSegmentGenerator` with mitre,
 //! limited-mitre, bevel and round joins, `LineIntersector`, the double-double `CGAlgorithmsDD::
-//! intersection`, `Angle::sinCosSnap`), then GEOS's noding and polygon building ([`crate::buffer_graph`]).
-//! Also shapely's `LineString.distance` / `project(normalized=True)` for points.
+//! intersection` and `orientationIndex`, `Angle::sinCosSnap`), then GEOS's noding and polygon building
+//! ([`crate::buffer_graph`]). Also shapely's `LineString.distance` / `project(normalized=True)` for points.
 
-use ftx_core::exact::{Sign, orient2d};
 use ftx_core::{Vec2, det};
 
 pub use crate::buffer_graph::Polygon;
@@ -20,12 +19,32 @@ pub enum Join {
     Mitre(f64),
 }
 
-/// GEOS `Orientation::index` (exact): 1 left, −1 right, 0 collinear.
+/// GEOS `Orientation::index` (`CGAlgorithmsDD::orientationIndex`): Ozaki's filter, then the determinant in
+/// double-double, which is not exact (a tiny determinant can come out 0, so nearly collinear points count as
+/// collinear exactly where GEOS's do) and never overflows a certified range. 1 left, −1 right, 0 collinear.
 pub(crate) fn orientation(p1: Vec2, p2: Vec2, q: Vec2) -> i32 {
-    match orient2d([p1.x, p1.y], [p2.x, p2.y], [q.x, q.y]) {
-        Sign::Positive => 1,
-        Sign::Negative => -1,
-        Sign::Zero => 0,
+    if !q.is_finite() {
+        return 0; // GEOS throws; a non-finite point never reaches here (inputs are filtered)
+    }
+    let detleft = (p1.x - q.x) * (p2.y - q.y);
+    let detright = (p1.y - q.y) * (p2.x - q.x);
+    let det = detleft - detright;
+    let error = (detleft + detright).abs() * 3.330_669_062_177_372_4e-16;
+    if det.abs() >= error {
+        return i32::from(det > 0.0) - i32::from(det < 0.0);
+    }
+    let dx1 = Dd(p2.x, 0.0).add(-p1.x, 0.0);
+    let dy1 = Dd(p2.y, 0.0).add(-p1.y, 0.0);
+    let dx2 = Dd(q.x, 0.0).add(-p2.x, 0.0);
+    let dy2 = Dd(q.y, 0.0).add(-p2.y, 0.0);
+    let d = dx1.mul(dy2).sub(dy1.mul(dx2));
+    // `DD::operator<` / `>` against zero: the high part, then the low part
+    if d.0 < 0.0 || (d.0 == 0.0 && d.1 < 0.0) {
+        -1
+    } else if d.0 > 0.0 || (d.0 == 0.0 && d.1 > 0.0) {
+        1
+    } else {
+        0
     }
 }
 
@@ -346,9 +365,10 @@ struct SegGen {
 
 impl SegGen {
     fn new(d: f64, join: Join, left: bool) -> Self {
+        // shapely's quad_segs (16 unless given): round joins, and a point's circle under any join
         let quad = match join {
             Join::Round(q) => q.max(1),
-            Join::Mitre(_) => 8,
+            Join::Mitre(_) => 16,
         };
         let closing_factor = if matches!(join, Join::Round(q) if q >= 8) {
             80.0
@@ -685,6 +705,22 @@ fn ring_curve(ring: &[Vec2], distance: f64, hole: bool, join: Join) -> Option<Cu
     let delta = if hole == ccw { -1 } else { 1 };
     let pts = if distance == 0.0 {
         ring.to_vec()
+    } else if ring.len() == 1 {
+        // `getRingCurve` → `getLineCurve` → `computePointCurve`: a round cap is the point's circle
+        // (`createCircle`, clockwise from due east), whichever side and sign
+        let mut g = SegGen::new(distance.abs(), join, true);
+        let p = ring[0];
+        g.add(Vec2::new(p.x + distance.abs(), p.y));
+        g.fillet_angles(p, 0.0, 2.0 * PI, true);
+        let mut pts = g.pts;
+        if let Some(&f) = pts.first()
+            && pts.last() != Some(&f)
+        {
+            pts.push(f); // `closeRing`
+        }
+        pts
+    } else if ring.len() == 2 {
+        return None; // an unclosed two-point ring cannot come from a closed shell or hole
     } else {
         // a hole is offset to the other side
         raw_ring_curve(ring, if hole { -distance } else { distance }, join)
@@ -699,8 +735,14 @@ fn ring_curve(ring: &[Vec2], distance: f64, hole: bool, join: Join) -> Option<Cu
 /// # Errors
 /// A non-finite shell, or a topology GEOS would refuse at full precision.
 pub fn buffer(polygons: &[Polygon], distance: f64, join: Join) -> Result<Vec<Polygon>, String> {
+    if !distance.is_finite() {
+        return Err("buffer: distance must be a finite value".into());
+    }
     let mut curves = Vec::new();
     for poly in polygons {
+        if poly.shell.is_empty() {
+            continue; // an empty geometry adds no curve
+        }
         let shell = closed(&poly.shell);
         if distance < 0.0 && ring_fully_eroded(&shell, false, distance) {
             continue;
@@ -727,13 +769,22 @@ pub fn buffer(polygons: &[Polygon], distance: f64, join: Join) -> Result<Vec<Pol
     buffer_graph::polygons(&curves)
 }
 
-/// `RepeatedPointRemover::removeRepeatedAndInvalidPoints`.
+/// `RepeatedPointRemover::removeRepeatedAndInvalidPoints` (`RepeatedInvalidPointFilter`, tolerance 0): a
+/// non-finite point, or one whose squared distance to the last kept point is not positive (equal, or so
+/// close the square underflows), is dropped.
 fn without_repeats(ring: &[Vec2]) -> Vec<Vec2> {
     let mut out: Vec<Vec2> = Vec::with_capacity(ring.len());
     for &p in ring {
-        if p.is_finite() && out.last() != Some(&p) {
-            out.push(p);
+        if !p.is_finite() {
+            continue;
         }
+        if let Some(&q) = out.last() {
+            let (dx, dy) = (p.x - q.x, p.y - q.y);
+            if p == q || dx * dx + dy * dy <= 0.0 {
+                continue;
+            }
+        }
+        out.push(p);
     }
     out
 }
@@ -796,5 +847,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// GEOS refuses a non-finite distance; an empty shell adds nothing.
+    #[test]
+    fn non_finite_distances_refuse_and_empty_shells_vanish() {
+        let sq = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(0.0, 1.0),
+        ];
+        for d in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(buffer(&[Polygon::new(sq.clone())], d, Join::Mitre(4.0)).is_err());
+        }
+        assert_eq!(
+            buffer(&[Polygon::new(Vec::new())], 1.0, Join::Round(16)),
+            Ok(Vec::new())
+        );
     }
 }

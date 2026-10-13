@@ -1004,8 +1004,13 @@ pub(crate) fn polygons(curves: &[Curve]) -> Result<Vec<Polygon>, String> {
         let (oriented, right) = rightmost(&g, &dir_edges)?;
         subgraphs.push((oriented, right, nodes, dir_edges));
     }
-    // shells before the holes they contain
-    subgraphs.sort_by(|a, b| b.1.x.total_cmp(&a.1.x));
+    // shells before the holes they contain: `std::sort` with `BufferSubgraphGT` (rightmost x strictly
+    // greater; −0.0 ties 0.0), so ties land where libc++'s introsort puts them
+    let mut order: Vec<usize> = (0..subgraphs.len()).collect();
+    crate::libcxx::sort(&mut order, |&a, &b| subgraphs[a].1.x > subgraphs[b].1.x);
+    let mut slots: Vec<_> = subgraphs.into_iter().map(Some).collect();
+    let subgraphs: Vec<(usize, Vec2, Vec<usize>, Vec<usize>)> =
+        order.iter().filter_map(|&k| slots[k].take()).collect();
     let mut shells: Vec<usize> = Vec::new();
     let mut built: Vec<&[usize]> = Vec::new();
     for (oriented, right, nodes, dir_edges) in &subgraphs {

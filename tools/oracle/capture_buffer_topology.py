@@ -3,11 +3,13 @@
     OUT_DIR/buffer_topology.json   offset curves that cross themselves (where the result ring starts), insets
                                    that split or vanish (a dumbbell, an eroded triangle), the distance-0
                                    clean-up (a spike, a pinch, a bowtie, the trace's own outlines with a
-                                   one-pixel leader), holes, multipolygons, and traced stroke outlines offset
-                                   to their centres; each with the polygons in GEOS's order, rings as GEOS
+                                   one-pixel leader), holes, multipolygons, traced stroke outlines offset to
+                                   their centres, and where GEOS's own arithmetic and sort decide (tied
+                                   subgraphs, a near-collinear spike, point rings, huge and underflowing
+                                   coordinates, -0.0); each with the polygons in GEOS's order, rings as GEOS
                                    starts them, and whether GEOS needed its reduced-precision retry
-                                   (`BufferOp::bufferReducedPrecision`: every result coordinate on the 1e-9
-                                   grid its 12 digits imply, the input's not).
+                                   (`BufferOp::bufferReducedPrecision`: every result coordinate exactly as
+                                   `makePrecise` leaves it at one of the retries' scales, the input's not).
 Usage:
     python capture_buffer_topology.py --reference SKILL/scripts OUT_DIR
 Needs the reference's requirements (numpy, opencv-python-headless, shapely). Deterministic.
@@ -29,8 +31,17 @@ SCHEMA = "ftx-oracle/1"
 FILES = ("vectorize.py",)
 
 
-def on_grid(values, scale=1e9) -> bool:
-    return all(abs(v * scale - round(v * scale)) < 1e-4 for v in values)
+def retry_scales(polys, dist):
+    """`BufferOp::precisionScaleFactor` for every precision GEOS's retries try (12 digits down to 0)."""
+    vals = [abs(v) for p in polys for r in [p["shell"], *(p.get("holes") or [])] for c in r for v in c]
+    env_max = max(vals) + 2 * max(dist, 0.0)
+    digits = int(math.log(env_max) / math.log(10.0) + 1.0) if env_max > 0 else 0
+    return [10.0 ** (d - digits) for d in range(12, -1, -1)]
+
+
+def on_grid(values, scale) -> bool:
+    """Every value as `PrecisionModel::makePrecise` leaves it at this scale."""
+    return all(v == round(v * scale) / scale for v in values)
 
 
 def main() -> int:
@@ -62,7 +73,7 @@ def main() -> int:
                for p in parts]
         inp = [v for p in polys for c in p["shell"] for v in c]
         got = [v for p in res for c in p["shell"] for v in c]
-        retried = bool(got) and on_grid(got) and not on_grid(inp)
+        retried = bool(got) and any(on_grid(got, s) and not on_grid(inp, s) for s in retry_scales(polys, dist))
         cases.append({"id": cid, "input": {"polys": polys, "distance": dist, "join": join},
                       "output": {"polygons": res, "reduced_precision": retried}})
 
@@ -93,6 +104,26 @@ def main() -> int:
         buf(f"holed-{d}", [{"shell": sq(0, 0, 40), "holes": [sq(10, 10, 15)]}], d, "mitre")
         buf(f"multi-{d}", [{"shell": sq(0, 0, 20)}, {"shell": sq(26, 3, 12)}, {"shell": sq(60, 0, 30), "holes": [sq(68, 8, 10)]}],
             d, "round")
+    # where GEOS's own arithmetic and ordering decide: tied subgraphs past libc++'s 24-element insertion sort,
+    # an orientation the double-double predicate calls collinear, point rings (their circle), coordinates
+    # beyond any exact predicate's range, -0.0 against 0.0, spacing whose square underflows
+    cw_sq = lambda x, y, s: ring([[x, y], [x, y + s], [x + s, y + s], [x + s, y]])  # noqa: E731
+    for n in (23, 40):
+        buf(f"tied-holes-{n}", [{"shell": ring([[0, 0], [5, 0], [5, 3 * n + 3], [0, 3 * n + 3]]),
+                                 "holes": [cw_sq(2, 2 + 3 * i, 1) for i in range(n)]}], 0.0, "round")
+    spike = ring([[2.7311612583605475e-22, 1.61274461118884e-22], [1.4332798284876052, 0.8463485312861381],
+                  [3.6848089140722215e-22, 2.175871417785786e-22], [0, -1]])
+    buf("near-collinear-spike-0", [{"shell": spike}], 0.0, "round")
+    buf("near-collinear-spike-0.01", [{"shell": spike}], 0.01, "mitre")
+    pt = [[1.0, 1.0]] * 4
+    buf("point-circle-mitre", [{"shell": pt}], 0.5, "mitre")
+    buf("point-hole", [{"shell": sq(0, 0, 10), "holes": [[[5.0, 5.0]] * 4]}], 0.5, "mitre")
+    buf("point-hole-grow", [{"shell": sq(0, 0, 10), "holes": [[[5.0, 5.0]] * 4]}], -1.0, "mitre")
+    buf("huge-coordinates", [{"shell": ring([[-1e155, -1e155], [0, -1e155], [0, 0], [-1e155, 0]])}], 0.0, "round")
+    buf("huge-distance", [{"shell": sq(0, 0, 10)}], 1e160, "mitre")
+    buf("negative-zero-tie", [{"shell": ring([[-1, 0], [-0.0, 0], [-0.0, 1], [-1, 1]])},
+                              {"shell": ring([[-1, 5], [0, 5], [0, 6], [-1, 6]])}], 0.0, "round")
+    buf("underflowing-spacing", [{"shell": sq(0, 0, 1e-170)}], 0.001, "round")
     # stars both ways round, offsets both ways
     for k in range(12):
         s = ring(star(random.randint(4, 8), random.uniform(30, 60), random.uniform(5, 25), 100, 100, 0.3))
