@@ -39,17 +39,22 @@ onmessage = async (ev) => {
       const blobs = {};
       if (res.zip) blobs.zip = round.zip();
       for (const f of res.files || []) blobs[f.name] = round.file(f.name);
-      docs = res.status === "BLOCKED" ? null : {
-        pattern: text(round.file("pattern.json")),
-        measurements: text(round.file("measurements.json")),
-        fit: text(round.file("fit_spec.json")),
-      };
+      docs = null;
+      const pattern = text(round.file("pattern.json"));
+      const data = pattern && !res.errors ? JSON.parse(pattern) : null;
+      // a fold-up needs a pattern that validates, is to scale and has a piece with a fold-up placement
+      const foldable = !!data && res.status !== "BLOCKED" && (data.meta || {}).scale_status !== "UNSCALED"
+        && (data.pieces || []).some((p) => p.placement && p.sim !== false);
+      if (foldable) {
+        docs = { pattern, measurements: text(round.file("measurements.json")), fit: text(round.file("fit_spec.json")) };
+      }
       round.free();
-      return postMessage({ type: "result", res, blobs }, Object.values(blobs).map((b) => b.buffer));
+      return postMessage({ type: "result", res, blobs, foldable }, Object.values(blobs).map((b) => b.buffer));
     }
     if (msg.type === "body") {
+      const parsed = new ftx.WebBody(new Uint8Array(msg.bytes)); // a bad file throws and keeps the loaded one
       if (body) body.free();
-      body = new ftx.WebBody(new Uint8Array(msg.bytes));
+      body = parsed;
       return postMessage({ type: "bodyReady" });
     }
     if (msg.type === "fold") {
