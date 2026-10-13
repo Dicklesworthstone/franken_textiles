@@ -32,10 +32,17 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   `--to PIECE/EDGE`): the reference's `alter.py` (spec 01 §10.7) on `ftx_pattern::alter`. Writes OUT even
   with structure errors and prints the op's history sentence; exit 0, or 2 with the structure errors
   listed (the reference exits 1); a reference error (missing piece or vertex, a `.L` side) is a refusal.
+  OUT must be a new path: existing files (including the input itself or an alias of it) are never
+  overwritten. Serialization completes before file creation; the write is flushed before success.
+  This intentional no-clobber exception preserves previous pattern revisions. Impossible seam/cap
+  targets are refused before any output is created, not saved as saturated adjustments.
 
 **Output.** Human text, or with `--json` exactly one JSON envelope on stdout:
 `{"schema": "ftx-cli/1", "command", "ok", "exit", "result"}` or, for refused input,
 `{..., "ok": false, "exit": 3, "refusal": {code, message, repairs}}`. Progress lines go to stderr.
+Malformed option syntax and unknown commands also use that envelope when `--json` is requested.
+Duplicate valued options, a flag in place of an option value, and extra alteration positionals are
+refused rather than silently changing the requested edit. Negative numeric values remain valid.
 
 **Error model.** Every failure is a `Refusal` printed with its repairs, exit 3: an option the command
 does not take (`invalid_document`, so a misspelt `--fit` cannot silently drop the fit spec), unreadable

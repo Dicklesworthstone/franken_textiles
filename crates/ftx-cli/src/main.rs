@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -60,7 +61,12 @@ fn parse(argv: &[String]) -> Result<Args, String> {
             json = true;
         } else if let Some(name) = a.strip_prefix("--") {
             let value = it.next().ok_or_else(|| format!("--{name} needs a value"))?;
-            options.insert(name.to_string(), value.clone());
+            if value.starts_with("--") {
+                return Err(format!("--{name} needs a value, got {value}"));
+            }
+            if options.insert(name.to_string(), value.clone()).is_some() {
+                return Err(format!("--{name} was supplied more than once"));
+            }
         } else {
             positional.push(a.clone());
         }
@@ -299,6 +305,11 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
     };
     known_options(args, "alter", allowed)?;
+    if args.positional.len() != 3 {
+        return Err(bad_input(format!(
+            "ftx alter {op} needs exactly one pattern file"
+        )));
+    }
     let pattern_path = args
         .positional
         .get(2)
@@ -357,8 +368,21 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
     }?;
     let errors = Pattern::new(result.clone()).structure_errors();
-    let body = serde_json::to_string_pretty(&result).unwrap_or_default() + "\n";
-    std::fs::write(&out, body)
+    // Finish serialization before touching the filesystem. create_new is an atomic no-clobber
+    // check, including symlinks/hard links: a mistaken --out must not destroy the source pattern.
+    let body = serde_json::to_string_pretty(&result)
+        .map_err(|e| bad_input(format!("cannot serialize altered pattern: {e}")))?
+        + "\n";
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&out)
+        .map_err(|e| {
+            Refusal::new(RefusalCode::Io, format!("{}: {e}", out.display()))
+                .repair("choose a new --out path; existing pattern files are never overwritten")
+        })?;
+    file.write_all(body.as_bytes())
+        .and_then(|()| file.sync_all())
         .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", out.display())))?;
     let why = result["meta"]["history"]
         .as_array()
@@ -571,8 +595,11 @@ fn main() -> ExitCode {
     let args = match parse(&argv) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("{e}\n{USAGE}");
-            return ExitCode::from(3);
+            return emit(
+                argv.first().map_or("ftx", String::as_str),
+                argv.iter().any(|a| a == "--json"),
+                Err(bad_input(e).repair(USAGE)),
+            );
         }
     };
     match args.positional.first().map(String::as_str) {
@@ -580,10 +607,11 @@ fn main() -> ExitCode {
         Some("drape") => emit("drape", args.json, cmd_drape(&args)),
         Some("body") => emit("body", args.json, cmd_body(&args)),
         Some("alter") => emit("alter", args.json, cmd_alter(&args)),
-        _ => {
-            eprintln!("{USAGE}");
-            ExitCode::from(3)
-        }
+        other => emit(
+            other.unwrap_or("ftx"),
+            args.json,
+            Err(bad_input("unknown or missing command").repair(USAGE)),
+        ),
     }
 }
 
