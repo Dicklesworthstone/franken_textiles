@@ -21,6 +21,7 @@ pub mod fit;
 pub mod kinematics;
 pub mod landmarks;
 pub mod model;
+mod selected;
 pub mod tape;
 
 pub use data::{AnnyData, default_model_path};
@@ -38,3 +39,4 @@ pub use model::{
     AnnyModel, Anthropometry, BodyParams, Phenotype, PosedBody, RestBody, age_parameter_for_years,
     anchor_weights,
 };
+pub use selected::SelectedPose;
