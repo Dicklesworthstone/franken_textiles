@@ -85,11 +85,22 @@ optimization and multi-frame body fitting remain separate unfinished work.
 
 ## Geometry gates and interpretation
 
-Only fit rays enter the equal-weight perpendicular-ray-distance least-squares solve. The
-solve uses the existing deterministic Jacobi SVD in a translated/baseline-normalized world.
+Only fit rays enter the initial perpendicular-ray-distance least-squares solve. The
+initialization uses the existing deterministic Jacobi SVD in a translated/baseline-normalized world.
 Both observed fit rays and reconstructed fit rays must have a pair with at least **3° acute
 parallax**, from distinct camera centers. Opposed rays are not treated as a good baseline.
 Coincident centers, parallel rays and insufficient fitting views are unobservable.
+
+The point is then refined against **equal-weight squared pixel residuals in fit views only**,
+with analytic camera derivatives and at most 30 Gauss–Newton steps. Each accepted step must
+strictly reduce the objective while remaining inside every fit camera's valid projection
+domain. The fixed cameras and metric scale are never optimized. A column-normalized gradient
+or near-zero pixel residual must establish convergence; a tiny backtracking step alone cannot.
+Nonconvergence publishes no usable point. The report's `refinement` retains initial/final sums
+of squared pixel residuals, accepted-step count and convergence status, or is null if the
+geometry/projection could not be refined. These are optimization diagnostics, not uncertainties.
+This corrects the ray-distance initializer's objective when focal lengths or depths differ;
+it is point refinement, not joint camera/landmark bundle adjustment or a global-minimum guarantee.
 
 The candidate must project in front of every camera, remain inside every declared lens
 domain, and have **≤3 pixels reprojection error in every view**, including held-out views.

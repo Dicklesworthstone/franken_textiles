@@ -97,8 +97,13 @@ metric frame, unique decoded stream/timestamp identities, explicit fit/held-out 
 and a caller-reviewed still-window or synchronized-capture assertion. It does not detect
 stillness, synchronize clocks or establish calibration/scale accuracy itself.
 
-Equal-weight ray-distance fitting uses the existing SVD with origin/baseline normalization
-and canonical frame ordering. Fit geometry must have at least 3-degree acute parallax before
+Ray-distance initialization uses the existing SVD with origin/baseline normalization
+and canonical frame ordering. Bounded Gauss–Newton then minimizes equal-weight fit-view pixel
+residuals using analytic projection derivatives, fixed cameras and strict objective descent.
+Nonconvergence publishes no point; initial/final cost and convergence diagnostics are retained.
+Closed-form unequal-focal stereo, noisy distorted-camera stationarity, metric-frame invariance
+and held-out independence are covered by `tests/pixel_refinement.rs`.
+Fit geometry must have at least 3-degree acute parallax before
 and after solving. Every fit and held-out view must project in front of its camera, inside its
 lens domain and within 3 pixels. Held-out views never fit or rescue weak geometry. Weak,
 inconsistent or behind-camera geometry publishes diagnostics with no usable point; malformed

@@ -1,6 +1,6 @@
 //! Metric triangulation of one landmark (plan §10.2), conditional on supplied cameras and capture
 //! evidence. No motion is inferred: a reviewed still window or synchronized exposure is required.
-//! Fit rays alone determine the point; every observation, including held-out views, must pass.
+//! Fit views alone determine the point; every observation, including held-out views, must pass.
 
 use std::collections::BTreeSet;
 
@@ -94,6 +94,19 @@ pub struct Reprojection {
     pub failure: Option<String>,
 }
 
+/// Pixel-space optimization diagnostics, conditional on fixed cameras and metric scale.
+#[derive(Clone, Debug, Serialize)]
+pub struct Refinement {
+    /// Sum of squared pixel residuals in fit views before refinement (not an RMS).
+    pub initial_cost_px2: f64,
+    /// The same objective after refinement; held-out pixels never contribute.
+    pub final_cost_px2: f64,
+    /// Number of accepted, strictly objective-decreasing Gauss–Newton steps.
+    pub iterations: usize,
+    /// Whether the fit reached the residual/gradient stopping criterion within its bounds.
+    pub converged: bool,
+}
+
 /// Diagnostic result. A gated or unobservable estimate never publishes a usable point.
 #[derive(Clone, Debug, Serialize)]
 pub struct TriangulationReport {
@@ -113,6 +126,8 @@ pub struct TriangulationReport {
     pub observed_max_angle_deg: f64,
     /// The same angle at the candidate point; absent when no finite candidate could be formed.
     pub fitted_max_angle_deg: Option<f64>,
+    /// Absent if ray geometry or projection prevented pixel-space optimization.
+    pub refinement: Option<Refinement>,
     /// Checks in canonical frame order; empty when geometry was unobservable before solving.
     pub reprojection: Vec<Reprojection>,
     /// Hard gate failures, never silently trimmed as outliers.
@@ -193,9 +208,102 @@ fn max_angle(centers: &[Vec3], rays: &[Vec3]) -> f64 {
     angle
 }
 
-/// Fit a point to calibrated rays in a normalized metric frame, then enforce the plan's fixed
-/// 3-degree parallax and 3-pixel per-view reprojection gates. No view is dropped. Least squares
-/// minimizes equal-weight perpendicular ray distances, not a claimed maximum-likelihood pixel loss.
+struct PixelSystem {
+    jacobian: Vec<[f64; 3]>,
+    residual: Vec<f64>,
+    cost: f64,
+}
+
+fn pixel_system(views: &[(Camera, Vec2)], point: Vec3) -> Result<PixelSystem, Refusal> {
+    let mut system = PixelSystem {
+        jacobian: Vec::with_capacity(2 * views.len()),
+        residual: Vec::with_capacity(2 * views.len()),
+        cost: 0.0,
+    };
+    for (camera, observed) in views {
+        let (pixel, j) = camera.project_with_jacobian(point)?;
+        let r = pixel - *observed;
+        system.cost += r.norm2();
+        system.jacobian.extend(j);
+        system.residual.extend([r.x, r.y]);
+    }
+    if !system.cost.is_finite() {
+        return Err(invalid("non-finite pixel refinement objective"));
+    }
+    Ok(system)
+}
+
+// Cameras and the starting point use the same normalized metric frame, avoiding a large world
+// origin inside the iterative projection. Intrinsics, rotations and ALL fit views remain fixed.
+fn refine(views: &[(Camera, Vec2)], mut point: Vec3) -> Result<(Vec3, Refinement), Refusal> {
+    let mut system = pixel_system(views, point)?;
+    let mut report = Refinement {
+        initial_cost_px2: system.cost,
+        final_cost_px2: system.cost,
+        iterations: 0,
+        converged: false,
+    };
+    for _ in 0..=30 {
+        // Column-normalized stationarity is invariant to the metric unit. A short line-search
+        // step alone is NOT convergence: at a lens boundary it could hide a nonzero gradient.
+        let mut stationary = true;
+        for k in 0..3 {
+            let norm = system
+                .jacobian
+                .iter()
+                .map(|j| j[k] * j[k])
+                .sum::<f64>()
+                .sqrt();
+            let gradient: f64 = system
+                .jacobian
+                .iter()
+                .zip(&system.residual)
+                .map(|(j, r)| j[k] * r)
+                .sum();
+            if !norm.is_finite() || norm == 0.0 || !gradient.is_finite() {
+                return Err(invalid("unusable pixel refinement Jacobian"));
+            }
+            stationary &= gradient.abs() / norm <= 1e-8 * system.cost.sqrt().max(1.0);
+        }
+        if stationary || system.cost <= 1e-16 {
+            report.converged = true;
+            break;
+        }
+        if report.iterations == 30 {
+            break;
+        }
+        let rhs: Vec<_> = system.residual.iter().map(|r| -r).collect();
+        let step = Vec3::from(lstsq(&system.jacobian, &rhs));
+        if !step.is_finite() {
+            return Err(invalid("non-finite pixel refinement step"));
+        }
+        let mut accepted = None;
+        let mut alpha = 1.0;
+        for _ in 0..24 {
+            let trial = point + step * alpha;
+            if let Ok(next) = pixel_system(views, trial)
+                && next.cost < system.cost
+            {
+                accepted = Some((trial, next));
+                break;
+            }
+            alpha *= 0.5;
+        }
+        let Some((next_point, next_system)) = accepted else {
+            break;
+        };
+        point = next_point;
+        system = next_system;
+        report.iterations += 1;
+        report.final_cost_px2 = system.cost;
+    }
+    Ok((point, report))
+}
+
+/// Initialize from calibrated rays in a normalized metric frame, then minimize equal-weight
+/// squared pixel residuals using only fit views. Cameras and metric scale remain fixed; this is
+/// point refinement, not joint bundle adjustment or a calibration-uncertainty estimate.
+/// The fixed 3-degree parallax and 3-pixel per-view gates still apply, and no view is dropped.
 ///
 /// Invalid documents/calibrations return a typed refusal. Valid but weak or inconsistent geometry
 /// returns a diagnostic report with `point_m: null`. Uncertainty in cameras, synchronization and
@@ -241,6 +349,7 @@ pub fn triangulate(input: &TriangulationInput) -> Result<TriangulationReport, Re
         held_out_views: input.observations.len() - fit.len(),
         observed_max_angle_deg: 0.0,
         fitted_max_angle_deg: None,
+        refinement: None,
         reprojection: Vec::new(),
         flags: Vec::new(),
         advisories: Vec::new(),
@@ -295,10 +404,44 @@ pub fn triangulate(input: &TriangulationInput) -> Result<TriangulationReport, Re
         rows.extend([[0.0, -d.z, d.y], [d.z, 0.0, -d.x], [-d.y, d.x, 0.0]]);
         rhs.extend(<[f64; 3]>::from(d.cross(center)));
     }
-    let normalized = Vec3::from(lstsq(&rows, &rhs));
+    let mut normalized = Vec3::from(lstsq(&rows, &rhs));
     let point = origin + normalized * scale;
     if !point.is_finite() || !normalized.is_finite() {
         report.flags.push("No finite triangulation solution".into());
+        return Ok(report);
+    }
+    let views: Vec<_> = fit
+        .iter()
+        .zip(&centers)
+        .map(|(view, &center)| {
+            (
+                Camera {
+                    center_m: center,
+                    ..view.camera
+                },
+                view.pixel_px,
+            )
+        })
+        .collect();
+    match refine(&views, normalized) {
+        Ok((candidate, refinement)) => {
+            normalized = candidate;
+            if !refinement.converged {
+                report
+                    .flags
+                    .push("Pixel refinement did not converge; no usable point".into());
+            }
+            report.refinement = Some(refinement);
+        }
+        Err(error) => report
+            .flags
+            .push(format!("Pixel refinement unavailable: {error}")),
+    }
+    let point = origin + normalized * scale;
+    if !point.is_finite() {
+        report
+            .flags
+            .push("Refined world position cannot be represented finitely".into());
         return Ok(report);
     }
     let predicted: Vec<_> = centers
