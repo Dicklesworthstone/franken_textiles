@@ -1,0 +1,30 @@
+name: Rust checks
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record source under test
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/source.tar.gz" HEAD
+      - name: Preserve the exact source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-${{ github.sha }}
+          path: ${{ runner.temp }}/source.tar.gz
+          retention-days: 1
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Check lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
