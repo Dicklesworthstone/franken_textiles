@@ -107,11 +107,13 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
+| `ftx validate` (the reference's `fab validate`: table, exit codes, `--json` envelope) | 04 §11, plan §14 | present | the validation fixtures (via `ftx-pattern`); CLI parsing and wearer unit tests |
+| `ftx drape` (replaces `fab sim`: Anny of the wearer's age, sex and stature, the drape, `sim_report.json`, `fold.pc2`, `mesh_map.json`, `fold_viewer.html`) | 04 §5–9, plan §14 | partial | run end to end on the drafted bolero; stills, videos and the round's other commands missing |
 | Round logic, statuses, basis, workspace layout, rounds.jsonl | 04 §11 | missing | |
 | Measurement gate, qualification, tightness gating in the round | 04 §11 | missing | |
 | Report HTML | 04 §11 | missing | |
 | Browser page (replaces the Pyodide page) | 04 §12 | missing | |
-| 3D fold-up viewer data | 04 §9 | partial | written by `examples/drape_drafted.rs` (`fold_viewer.html`); the report line carries the run's own gating and advisory flags |
+| 3D fold-up viewer data | 04 §9 | partial | written by `ftx drape` and `examples/drape_drafted.rs` (`fold_viewer.html`); the report line carries the run's own gating and advisory flags |
 
 ## Excluded by decision (plan §23)
 

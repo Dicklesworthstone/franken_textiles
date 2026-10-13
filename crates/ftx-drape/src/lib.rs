@@ -8,6 +8,7 @@
 //!   then welded seams, placement on a body and the sew and drape schedule.
 //! - The fold-up animation and its files ([`animation`]): board, roll-up, zip, PC2, the viewer payload.
 //! - Metrics and flags with the reference's texts ([`metrics`]).
+//! - One run end to end, as `ftx drape` calls it ([`run`]).
 //!
 //! Units: metres, kilograms, seconds; z up.
 #![forbid(unsafe_code)]
@@ -22,6 +23,7 @@ pub mod elements;
 pub mod garment;
 pub mod metrics;
 pub mod nearest;
+pub mod run;
 pub mod scene;
 pub mod sparse;
 pub mod start;
