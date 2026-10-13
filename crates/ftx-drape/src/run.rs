@@ -2,7 +2,6 @@
 //! pattern, place and start it on a body, sew and drape it, record the fold-up, and read the metrics and
 //! flags into a `sim_report.json`-shaped report (spec 04 §6.11).
 
-use ftx_body::BodyFrames;
 use ftx_core::np::percentile;
 use ftx_core::py::round;
 use ftx_core::{Refusal, RefusalCode, Vec3};
@@ -29,7 +28,7 @@ pub const GRAVITY: f64 = 9.81;
 /// The body a run drapes on.
 pub struct DrapeBody<'a> {
     /// Part frames, landmarks and section radii.
-    pub frames: &'a BodyFrames,
+    pub frames: &'a (dyn PartFrames + Sync),
     /// The surface the cloth collides with and the metrics measure against (vertices in m, triangles).
     pub collision: (&'a [Vec3], &'a [[usize; 3]]),
     /// The surface the viewer shows.
