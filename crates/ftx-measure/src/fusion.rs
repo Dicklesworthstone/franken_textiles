@@ -384,3 +384,4 @@ pub fn fuse_one(
         out["notes"] = json!(notes.join("; "));
     }
     Ok(Some(out))
+}
