@@ -18,8 +18,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, Pose, Wearer, default_model_path, fit_stature, pose_deltas, skin_mesh,
-    trimmed_skin,
+    AnnyModel, BodyFrames, FREE, Pose, TAPE_FIELDS, Wearer, default_model_path, fit_tape,
+    pose_deltas, skin_mesh, tape_targets, trimmed_skin,
 };
 use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
@@ -96,28 +96,6 @@ fn fit_spec(args: &Args) -> Result<Value, Refusal> {
     }
 }
 
-/// The wearer: age from `wearer.age_months`, stature from `wearer.stature_mm` or the fused stature, sex
-/// from `wearer.sex`.
-fn wearer(meas: &Value) -> Result<Wearer, Refusal> {
-    let w = &meas["wearer"];
-    let months = w["age_months"].as_f64().ok_or_else(|| {
-        bad_input("the measurement file has no wearer.age_months")
-            .repair("add the wearer's age in months")
-    })?;
-    let stature = w["stature_mm"]
-        .as_f64()
-        .or_else(|| meas["fused"]["stature"]["value_mm"].as_f64())
-        .ok_or_else(|| {
-            bad_input("the measurement file has no stature (wearer.stature_mm or a fused stature)")
-                .repair("measure the stature, or fuse a stature prior")
-        })?;
-    Ok(Wearer {
-        years: months / 12.0,
-        gender: Wearer::gender_of(w["sex"].as_str()),
-        stature_mm: stature,
-    })
-}
-
 fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(args, "validate", &["measurements", "fit"])?;
     let pattern_path = args
@@ -171,10 +149,24 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     // before the minutes of draping, so an unwritable DIR refuses at once
     std::fs::create_dir_all(&out).map_err(io)?;
     let model = AnnyModel::load(&model_path, false)?;
-    let w = wearer(&meas)?;
-    let (params, stature) = fit_stature(&model, &w)?;
-    let rest = model.rest(&params)?;
+    let w = Wearer::from_measurements(&meas)?;
     let pose = Pose::drape();
+    let fit = fit_tape(&model, &w, &tape_targets(&meas), &pose)?;
+    eprintln!(
+        "body: fitted in {} iterations; {}",
+        fit.iterations,
+        fit.residuals
+            .iter()
+            .map(|r| format!(
+                "{} {:.1} ({:+.1})",
+                r.name,
+                r.body_mm,
+                r.body_mm - r.target_mm
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let rest = model.rest(&fit.params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
     let skin = trimmed_skin(
         &model,
@@ -200,13 +192,22 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "wall_s".into(),
             json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
         );
+        let mm = |v: f64| (v * 10.0).round() / 10.0;
         o.insert(
             "body".into(),
             json!({
                 "model": "anny 0.6.1",
                 "age_years": w.years,
                 "gender": w.gender,
-                "stature_mm": (stature * 10.0).round() / 10.0,
+                "fit": {
+                    "iterations": fit.iterations,
+                    "tape": fit.residuals.iter().map(|r| (r.name.clone(), json!({
+                        "target_mm": r.target_mm,
+                        "body_mm": mm(r.body_mm),
+                    }))).collect::<serde_json::Map<_, _>>(),
+                    "free": FREE.iter().zip(fit.free).map(|(n, v)| ((*n).to_string(), json!((v * 1e4).round() / 1e4))).collect::<serde_json::Map<_, _>>(),
+                },
+                "readings_mm": TAPE_FIELDS.iter().zip(fit.readings).map(|(n, v)| ((*n).to_string(), json!(mm(v)))).collect::<serde_json::Map<_, _>>(),
                 "pose": format!(
                     "drape: arms at {}° and straight, hands and feet left out of contact",
                     body.arm_deg
@@ -338,16 +339,5 @@ mod tests {
         assert!(r.message.contains("--measurment"), "{}", r.message);
         let ok = parse(&["validate", "p.json", "--fit", "f.json"].map(String::from)).unwrap();
         assert!(known_options(&ok, "validate", &["measurements", "fit"]).is_ok());
-    }
-
-    #[test]
-    fn wearer_from_a_measurement_file() {
-        let m = json!({"wearer": {"age_months": 30.0, "stature_mm": 920.0, "sex": "girl"}});
-        let w = wearer(&m).unwrap();
-        assert_eq!((w.years, w.gender, w.stature_mm), (2.5, 1.0, 920.0));
-        let fused =
-            json!({"wearer": {"age_months": 24.0}, "fused": {"stature": {"value_mm": 870.0}}});
-        assert_eq!(wearer(&fused).unwrap().stature_mm, 870.0);
-        assert!(wearer(&json!({"wearer": {}})).is_err());
     }
 }

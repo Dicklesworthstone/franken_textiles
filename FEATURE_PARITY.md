@@ -39,12 +39,12 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Anny forward model (phenotypes, local changes, skeleton, skinning) | 05 §2–5 | present | anny-0.6.1-reference cases 0–15 (worst 1.05e-14 m) |
 | Anny anthropometry (height, waist, volume, mass, BMI) | 05 §6 | present | anny-0.6.1-reference cases 0–15 (worst 1.1e-13 relative) |
 | Anny reference cases (16 phenotype, local-change and pose cases) | 05 §8 | present | anny-0.6.1-reference cases 0–15 |
-| Tape functionals (girths as convex hulls of slices, lengths) | plan §9.3 | missing | |
-| Fitting from age/sex/height/weight/BMI | plan §9.4 | missing | |
-| Fitting from tape measurements | plan §9.4 | missing | |
+| Tape functionals (girths as convex hulls of slices, lengths) | plan §9.3 | partial | `ftx_body::tape` (sections, hull girth around an axis; unit tests on prisms, a star, two bodies) and `tape_readings` (stature, chest, waist, hip, waist and crotch heights); lengths along the body, thigh and neck girths missing; not yet compared with the reference's slicing on fixture meshes |
+| Fitting from age/sex/height/weight/BMI | plan §9.4 | partial | `fit_stature` (age, sex, stature; height parameter bisected); weight and BMI missing |
+| Fitting from tape measurements | plan §9.4 | partial | `fit_tape` (Levenberg–Marquardt over height, weight and five `measure-*` changes, residuals returned); G1b in `crates/ftx-body/tests/fit_tape.rs`: synthetic targets at 1.5–30 years recovered within 0.03 mm, the 92 cm reference toddler within 0.1 mm; `MODEL_FIT` σ and `ftx-body/1` missing |
 | Poses (arm angles, seated, squat, nappy volume) | plan §9.5 | present | anny-0.6.1-poses (10 cases: A-pose 35/50°, arms up 150°, seated, squat, a ramp at t = 0.5, a nappy, the straight-armed drape pose; poses re-implemented in NumPy by `capture_anny_poses.py`; worst 8.8e-16 m, 5.7e-14 relative) in `crates/ftx-body/tests/drape_poses.rs`; nappy size not yet calibrated to a taped `seat_over_nappy` (needs tape functionals) |
 | Skin mesh for contact (closed, outward, checked) | plan §9.5 | present | the 10 pose cases (skin shell counts, volume, area, vertex order); refusals in `drape.rs` unit tests; `trimmed_skin` (hands and feet left out, openings capped) checked the same way |
-| Part frames, landmarks, section radii on the body (placement) | 04 §3.2 on Anny | partial | `ftx_body::BodyFrames` (heuristics on the posed skeleton and skin, documented in `landmarks.rs`); 92 cm toddler waist 525 mm vs taped 530; no oracle (the reference uses its dress form) |
+| Part frames, landmarks, section radii on the body (placement) | 04 §3.2 on Anny | partial | `ftx_body::BodyFrames` (heuristics on the posed skeleton and skin, documented in `landmarks.rs`); on the tape-fitted 92 cm toddler waist and crotch heights equal the taped 530 and 372.5 mm; no oracle (the reference uses its dress form) |
 
 ## Measurement (`ftx-measure`, spec 02 Part A)
 
@@ -108,7 +108,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
 | `ftx validate` (the reference's `fab validate`: table, exit codes, `--json` envelope) | 04 §11, plan §14 | present | the validation fixtures (via `ftx-pattern`); CLI parsing and wearer unit tests |
-| `ftx drape` (replaces `fab sim`: Anny of the wearer's age, sex and stature, the drape, `sim_report.json`, `fold.pc2`, `mesh_map.json`, `fold_viewer.html`) | 04 §5–9, plan §14 | partial | run end to end on the drafted bolero; stills, videos and the round's other commands missing |
+| `ftx drape` (replaces `fab sim`: Anny of the wearer's age and sex fitted to the tape, the drape, `sim_report.json`, `fold.pc2`, `mesh_map.json`, `fold_viewer.html`) | 04 §5–9, plan §14 | partial | run end to end on the drafted bolero; stills, videos and the round's other commands missing |
 | Round logic, statuses, basis, workspace layout, rounds.jsonl | 04 §11 | missing | |
 | Measurement gate, qualification, tightness gating in the round | 04 §11 | missing | |
 | Report HTML | 04 §11 | missing | |

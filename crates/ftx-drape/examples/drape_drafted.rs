@@ -1,5 +1,5 @@
-//! Drapes a drafted garment from the oracle fixtures on an Anny body of the reference wearer's age and
-//! stature: `cargo run --release -p ftx-drape --example drape_drafted -- OUT_DIR [case] [sew_steps]
+//! Drapes a drafted garment from the oracle fixtures on an Anny body fitted to the reference wearer's
+//! age and tape measurements: `cargo run --release -p ftx-drape --example drape_drafted -- OUT_DIR [case] [sew_steps]
 //! [drape_steps]` (default case `zouave_bolero-920`). Needs the converted Anny model. Writes the body,
 //! the start state and the draped garment as OBJ files, `sim_report.json`, and the fold-up as `fold.pc2`,
 //! `mesh_map.json` and a self-contained `fold_viewer.html`. For experiments: `FTX_STEP` (s, default
@@ -9,8 +9,8 @@ use std::fmt::Write as _;
 use std::time::Instant;
 
 use ftx_body::{
-    AnnyModel, BodyFrames, Pose, Wearer, default_model_path, fit_stature, pose_deltas, skin_mesh,
-    trimmed_skin,
+    AnnyModel, BodyFrames, Pose, Wearer, default_model_path, fit_tape, pose_deltas, skin_mesh,
+    tape_targets, trimmed_skin,
 };
 use ftx_core::Vec3;
 use ftx_drape::animation::{mesh_map, pc2};
@@ -69,22 +69,17 @@ fn main() {
         .iter()
         .find(|c| c["id"] == case_id)
         .unwrap_or_else(|| panic!("no case {case_id}"));
-    let wearer = &case["input"]["measurements"]["wearer"];
+    let meas = &case["input"]["measurements"];
 
-    // An Anny body of that age (sexes averaged, as the reference wearer) and stature, in the drape pose.
+    // An Anny body of that age (sexes averaged, as the reference wearer) fitted to its tape measurements,
+    // in the drape pose.
     let model = AnnyModel::load(&default_model_path().expect("model path"), false)
         .unwrap_or_else(|r| panic!("{r}"));
-    let (params, stature) = fit_stature(
-        &model,
-        &Wearer {
-            years: wearer["age_months"].as_f64().unwrap() / 12.0,
-            gender: Wearer::gender_of(wearer["sex"].as_str()),
-            stature_mm: wearer["stature_mm"].as_f64().unwrap(),
-        },
-    )
-    .unwrap_or_else(|r| panic!("{r}"));
-    let rest = model.rest(&params).unwrap();
+    let wearer = Wearer::from_measurements(meas).unwrap_or_else(|r| panic!("{r}"));
     let pose = Pose::drape();
+    let fit =
+        fit_tape(&model, &wearer, &tape_targets(meas), &pose).unwrap_or_else(|r| panic!("{r}"));
+    let rest = model.rest(&fit.params).unwrap();
     let posed = model
         .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
         .unwrap();
@@ -97,7 +92,13 @@ fn main() {
     let full = skin_mesh(&posed.vertices, &model.data().faces).unwrap_or_else(|r| panic!("{r}"));
     let frames = BodyFrames::new(&model, &posed).unwrap_or_else(|r| panic!("{r}"));
     println!(
-        "body: stature {stature:.1} mm; landmarks (mm above floor): {:?}",
+        "body: fitted in {} iterations ({}); landmarks (mm above floor): {:?}",
+        fit.iterations,
+        fit.residuals
+            .iter()
+            .map(|r| format!("{} {:.1} for {:.1}", r.name, r.body_mm, r.target_mm))
+            .collect::<Vec<_>>()
+            .join(", "),
         frames
             .landmarks
             .iter()

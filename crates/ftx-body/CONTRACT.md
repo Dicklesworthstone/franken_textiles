@@ -5,7 +5,25 @@ configuration of `docs/spec/05` §0) evaluated in Rust: phenotype and local-chan
 and skeleton, local-bone forward kinematics, linear blend skinning, anthropometry, and the WHO
 years-to-age-parameter map; and the body as the drape needs it: poses, pose ramps, a nappy, the checked
 skin mesh and a trimmed drape body (`drape.rs`), and part frames, landmarks and section radii for
-placing pattern pieces (`landmarks.rs`). Fitting and tape functionals come next (FTX-09).
+placing pattern pieces (`landmarks.rs`); tape girths (`tape.rs`) and fitting the body to a wearer
+(`fit.rs`).
+
+**Tape and fitting** (FTX-09, first slice). A girth is the perimeter of the convex hull of the
+horizontal section loop around the torso axis (a tape bridges hollows); a vertex exactly at the cutting
+height counts as above it, so sections of a closed mesh are closed loops. `tape_readings` reads, on the
+posed body, stature (the rest height), chest (10 mm below the armpit), waist (at the waist loop's height),
+hip (the largest girth from 20 % of the way up from the crotch to the waist, 2 mm steps), waist height
+and crotch height. `fit_stature` bisects the height parameter to a stature. `fit_tape` runs
+Levenberg–Marquardt (central differences, step 1e-3) over the height and weight parameters and five
+`measure-*` local changes (bust, waist and hip girths, upper-leg height, waist-to-hip distance), with
+1σ = 3 mm per girth and 2 mm per length and a weak prior (1σ = 1) toward the population middle; the
+phenotype is clamped to [0, 1], local changes to [−1, 1]; age and gender are set, not fitted. Residuals
+are returned, never hidden. Gate G1b (`tests/fit_tape.rs`): measurements drawn from the model itself
+(1.5, 2.5, 4 and 30 years) are recovered within 0.03 mm (the gate asks 3 mm girths, 2 mm lengths);
+the 92 cm reference toddler's six chart values are reached within 0.1 mm in 5 iterations (0.5 s), where
+the stature-only body read 75 mm less at the chest, 66 mm at the waist and 62 mm at the hip.
+`tape_targets` and `Wearer::from_measurements` read a `fabric-measurements/1` file (fused values
+whatever their provenance: the drape tests a pattern against the measurements it was drafted to).
 
 **Drape poses** (definition in the `drape.rs` module notes). A joint turns its bone about its head by φ
 about an axis in the rest pose's world frame; its local-bone delta is `φ·R_restᵀ·a`. Arms
@@ -29,10 +47,10 @@ shoulder tip, side neck point, C7 and head top, with the reference's formulas wh
 others (hip = crotch + 0.45 × (waist − crotch), calf = ankle + 0.6 × (knee − ankle), across back midway
 between chest and shoulder); torso, right-arm and right-leg frames in the reference's convention (spec 04
 §3.2); section radii from the vertices of each region (by dominant skinning bone). On the 92 cm
-reference toddler: waist 525 mm (taped 530), crotch 394 (372.5), knee 248 (231), chest 617 (the
-reference's formula on the tape gives 635). These are read off the body, not fitted to the tape; FTX-09
-replaces the heuristics (the armpit as the lowest upper-arm vertex by the torso, the shoulder tip as
-0.8 × upper-arm radius along the arm) with tape functionals.
+reference toddler fitted to stature only: waist 525 mm (taped 530), crotch 394 (372.5), knee 248 (231),
+chest 617 (the reference's formula on the tape gives 635); fitted to the tape, waist and crotch land on
+the taped heights. The armpit (lowest upper-arm vertex by the torso) and the shoulder tip (0.8 ×
+upper-arm radius along the arm) stay heuristics.
 
 **Data.** `tools/body-model/convert_anny.py` builds the model from the pinned package into a fresh cache,
 checks the installed files against the wheel's RECORD and every array against spec 05 §8.1, and writes a
@@ -68,7 +86,10 @@ bone or local change), `non_finite` (a parameter, delta or vertex), `out_of_rang
 an abduction outside 0–180°, a ramp outside 0–1, a negative nappy), `degenerate_geometry` (an open,
 non-manifold or inconsistently wound skin, a degenerate triangle), `inward_wound` (negative volume).
 
-**No claims.** Fit quality against real people (that is FTX-09 and gate G1); the shape distribution's
+**No claims.** Fit quality against real people (gate G1 on held-out measurements; the fit reaches the
+targets, which says nothing about whether the shape between them is the wearer's); fitting from weight
+or BMI, from other tape measurements (thigh, neck, lengths along the body) and from photos; `MODEL_FIT`
+values with σ and `ftx-body/1` output; the shape distribution's
 weight and muscle priors (spec 05 §9.11); anything about the SMPL family or the `rig="anny"` preset.
 Poses are plain linear blend skinning without correctives: seated and squat bodies show webbing at the
 crotch and lose 4–6 % of their volume (2.5-year-old: −4.4 % seated, −5.4 % squat), and the skin is not
