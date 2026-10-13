@@ -183,6 +183,82 @@ def main() -> int:
         ch, known = V.make_channel(sample, "auto", bg)
         ccases.append({"id": f"auto-{bg}", "input": {"bg": list(bg)}, "output": {"channel": ch.reshape(-1).tolist()}})
     write(args.out_dir, "raster_color", meta, ccases)
+
+    # ---------------------------------------------------------------- thresholds and morphology
+    def gray(a):
+        return {"w": int(a.shape[1]), "h": int(a.shape[0]), "data": a.reshape(-1).tolist()}
+    imgs = {
+        "uniform": rng.integers(0, 256, (48, 64), dtype=np.uint8),
+        "bimodal": np.clip(np.where(rng.random((48, 64)) < 0.3, rng.normal(60, 15, (48, 64)),
+                                    rng.normal(190, 20, (48, 64))), 0, 255).astype(np.uint8),
+        "constant": np.full((20, 30), 77, np.uint8),
+        "two-level": np.where(rng.random((20, 30)) < 0.5, 10, 240).astype(np.uint8),
+        "sparse": np.where(rng.random((40, 50)) < 0.02, 255, 3).astype(np.uint8),
+        "ramp": np.tile(np.arange(256, dtype=np.uint8), (5, 1)),
+    }
+    tcases = []
+    for name, a in imgs.items():
+        t, m = cv2.threshold(a, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        tcases.append({"id": f"otsu-{name}", "input": gray(a), "output": {"t": float(t), "mask": m.reshape(-1).tolist()}})
+    binimg = (rng.random((48, 64)) < 0.45).astype(np.uint8) * 255
+    for k in range(2, 10):
+        se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        tcases.append({"id": f"ellipse-{k}", "input": {"k": k}, "output": {"se": se.reshape(-1).tolist()}})
+        for op, name in ((cv2.MORPH_CLOSE, "close"), (cv2.MORPH_OPEN, "open")):
+            tcases.append({"id": f"{name}-{k}", "input": {**gray(binimg), "k": k},
+                           "output": {"out": cv2.morphologyEx(binimg, op, se).reshape(-1).tolist()}})
+    g = imgs["uniform"]
+    tcases.append({"id": "gradient-3x3", "input": gray(g),
+                   "output": {"out": cv2.morphologyEx(g, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8)).reshape(-1).tolist()}})
+    se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 3))
+    tcases.append({"id": "dilate-5x3", "input": gray(g), "output": {"out": cv2.dilate(g, se).reshape(-1).tolist()}})
+    tcases.append({"id": "erode-5x3", "input": gray(g), "output": {"out": cv2.erode(g, se).reshape(-1).tolist()}})
+    write(args.out_dir, "raster_binarize", meta, tcases)
+
+    # ---------------------------------------------------------------- contours
+    sys.path.insert(0, str(ref / "tests"))
+    import test_vectorize as T
+
+    def contour_info(mask, mode):
+        cs, hier = cv2.findContours(mask, mode, cv2.CHAIN_APPROX_NONE)
+        rows = []
+        for c in cs:
+            m = cv2.moments(c)
+            ap = cv2.approxPolyDP(c, 0.7, True)
+            rows.append({"pts": c[:, 0, :].tolist(), "area": cv2.contourArea(c), "arc": cv2.arcLength(c, True),
+                         "approx": ap[:, 0, :].tolist(), "approx_arc": cv2.arcLength(ap, True),
+                         "m": [m["m00"], m["m10"], m["m01"]], "rect": list(cv2.boundingRect(c))})
+        return {"contours": rows, "hierarchy": [] if hier is None else hier[0].tolist()}
+
+    kcases = []
+    blobs = np.zeros((60, 80), np.uint8)
+    for k in range(25):
+        cx, cy, r = int(rng.integers(0, 80)), int(rng.integers(0, 60)), int(rng.integers(1, 12))
+        cv2.circle(blobs, (cx, cy), r, 255, -1)
+        if k % 3 == 0:
+            cv2.circle(blobs, (cx, cy), max(r - 3, 0), 0, -1)
+    blobs[5, 5] = 255
+    blobs[50:52, 3:40] = 255
+    nested = np.zeros((40, 40), np.uint8)
+    for r, v in ((18, 255), (14, 0), (10, 255), (6, 0), (2, 255)):
+        cv2.rectangle(nested, (20 - r, 20 - r), (20 + r, 20 + r), v, -1)
+    noise = ((rng.random((50, 70)) < 0.35) * 255).astype(np.uint8)
+    for name, img in (("blobs", blobs), ("nested", nested), ("noise", noise), ("full", np.full((9, 7), 255, np.uint8)),
+                      ("empty", np.zeros((9, 7), np.uint8))):
+        for mode, mname in ((cv2.RETR_CCOMP, "ccomp"), (cv2.RETR_EXTERNAL, "external")):
+            kcases.append({"id": f"{name}-{mname}", "input": {**gray(img), "mode": mname}, "output": contour_info(img, mode)})
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, kw in (("plain", {}), ("navy", {"fg": (255, 255, 255), "bg": (25, 35, 80)}),
+                         ("filled", {"fg": (30, 20, 20), "fill": (175, 30, 35)})):
+            sheet = T.render_sheet(Path(tmp) / f"{name}.png", **kw)
+            img, _ = V.load_image(str(sheet))
+            ch, known = V.make_channel(img, "auto", V.estimate_background(img))
+            mask, diag = V.binarize(ch, fg_bright_known=known)
+            ok, enc = cv2.imencode(".png", mask)
+            kcases.append({"id": f"sheet-{name}", "input": {"mask_png": base64.b64encode(enc.tobytes()).decode(),
+                                                            "mode": "ccomp"},
+                           "output": contour_info(mask, cv2.RETR_CCOMP)})
+    write(args.out_dir, "raster_contours", meta, kcases)
     return 0
 
 

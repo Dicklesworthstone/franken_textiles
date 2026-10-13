@@ -2,7 +2,11 @@
 //! numpy 2.5) and checked against oracle captures (`tools/oracle/capture_raster.py`).
 
 pub mod color;
+pub mod contours;
 pub mod image;
+pub mod morph;
+pub mod threshold;
 
 pub use color::{bgr_saturation, bgr_to_gray, bgr_to_lab, lab, lab_distance};
 pub use image::{Bgr, Gray, load_png};
+pub use morph::Kernel;
