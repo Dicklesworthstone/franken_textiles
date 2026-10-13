@@ -20,6 +20,7 @@
 mod draft;
 mod export;
 mod measure;
+mod workspace;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -42,6 +43,7 @@ const VIEWER_TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template
 
 const USAGE: &str = "usage:
   ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]
+  ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
   ftx validate PATTERN --measurements M [--fit F] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N]
             [--model PATH] [--self-contact-mm MM] [--self-mu MU] [--json]
@@ -81,7 +83,10 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         if a == "--json" {
             json = true;
         } else if let Some(name) = a.strip_prefix("--") {
-            if measure::BOOLEAN_OPTIONS.contains(&name) || export::BOOLEAN_OPTIONS.contains(&name) {
+            if measure::BOOLEAN_OPTIONS.contains(&name)
+                || export::BOOLEAN_OPTIONS.contains(&name)
+                || name == "update-measurements"
+            {
                 if options
                     .insert(name.to_string(), "true".to_string())
                     .is_some()
@@ -626,7 +631,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let html = viewer(&run, &pattern, &body, VIEWER_TEMPLATE).map_err(bad_input)?;
     write("fold_viewer.html", html.as_bytes())?;
     // the last frame and the body as OBJ, for renders outside (the skill's Blender stills): the
-    // garment once with its seam colours and once with its strain colours (spec 04 §9.4)
+    // garment once with its seam colours and once with its strain colours (`v x y z r g b`)
     let mesh = &run.scene.mesh;
     let last = run.fold.frames.last().map_or(&[][..], Vec::as_slice);
     let style = pattern.raw()["style"].as_str().unwrap_or("");

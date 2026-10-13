@@ -70,7 +70,7 @@ fn utc_date() -> Result<String, Refusal> {
     }
     Err(bad_input("clock out of range"))
 }
-fn date(args: &Args, key: &str) -> Result<String, Refusal> {
+pub(super) fn date(args: &Args, key: &str) -> Result<String, Refusal> {
     let date = option(args, key)
         .map(str::to_string)
         .map_or_else(utc_date, Ok)?;
