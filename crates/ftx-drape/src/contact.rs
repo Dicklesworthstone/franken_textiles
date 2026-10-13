@@ -20,6 +20,9 @@ use crate::distance::{
     squared_distance_f64, squared_distance_grad,
 };
 
+mod motion;
+pub use motion::MotionBound;
+
 /// Contact and friction parameters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContactParams {
@@ -685,6 +688,8 @@ struct FrictionPair {
     beta: [f64; 4],
     tangent: [Vec3; 2],
     lambda: f64,
+    // Fixed for this lag solve, using the SAME material weights at both body endpoints.
+    body_slip: Option<Vec3>,
 }
 
 /// Contribution of contact to the solver: energy (∞ if penetrating), and per-pair local gradients and
@@ -1178,6 +1183,16 @@ impl Contact {
     /// Freezes the friction pairs (normal forces, tangent bases, contact weights) at `x` for a step of
     /// size `h` starting at `x_start` (IPC lagged friction).
     pub(crate) fn update_lag(&mut self, x_start: &[Vec3], x: &[Vec3], h: f64) {
+        self.update_lag_motion(x_start, x, h, None);
+    }
+
+    pub(crate) fn update_lag_motion(
+        &mut self,
+        x_start: &[Vec3],
+        x: &[Vec3],
+        h: f64,
+        body_start: Option<&[Vec3]>,
+    ) {
         self.lag.clear();
         self.lag_x = x_start.to_vec();
         self.lag_h = h;
@@ -1220,6 +1235,12 @@ impl Contact {
                 beta,
                 tangent: tangent_basis(n),
                 lambda,
+                body_slip: body_start.filter(|_| !pair.is_self_contact()).map(|start| {
+                    let d = motion::body_delta(pair, start, &self.body.vertices, &self.body);
+                    (0..4)
+                        .map(|i| d[i] * beta[i])
+                        .fold(Vec3::ZERO, |a, b| a + b)
+                }),
             });
         }
     }
@@ -1228,9 +1249,12 @@ impl Contact {
     fn friction_local(&self, f: &FrictionPair, x: &[Vec3]) -> (f64, [f64; 12], Box<[f64; 144]>) {
         let st_now = stencil(f.pair, x, &self.body, &self.cloth);
         let st_lag = stencil(f.pair, &self.lag_x, &self.body, &self.cloth);
-        let rel: Vec3 = (0..4)
+        let mut rel: Vec3 = (0..4)
             .map(|i| (st_now.pts[i] - st_lag.pts[i]) * f.beta[i])
             .fold(Vec3::ZERO, |a, b| a + b);
+        if let Some(slip) = f.body_slip {
+            rel += slip;
+        }
         let u = [f.tangent[0].dot(rel), f.tangent[1].dot(rel)];
         let y = (u[0] * u[0] + u[1] * u[1]).sqrt();
         let params = self.pair_params(f.pair);
