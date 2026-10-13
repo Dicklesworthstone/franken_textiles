@@ -104,6 +104,27 @@ fn folded_strip_repeated_runs_are_bit_identical() {
     }
 }
 
+/// The folded strip after twelve steps, pinned by its SHA-256: the same on every target (native
+/// debug, native release and wasm32-wasip1), self-contact barrier, CCD and friction included.
+#[test]
+fn folded_strip_digest_is_pinned() {
+    let mut s = folded_strip();
+    for _ in 0..12 {
+        assert!(s.step(0.005).unwrap().converged);
+    }
+    let bytes: Vec<u8> =
+        s.x.iter()
+            .flat_map(|p| [p.x, p.y, p.z])
+            .flat_map(f64::to_le_bytes)
+            .collect();
+    let digest = ftx_core::receipt::sha256_hex(&bytes);
+    println!("self-contact digest {digest}");
+    assert_eq!(
+        digest,
+        "4ba9868318408e1615df8a1cd22907196ca03d49cb8dd8d9c724ef6e28bdff5a"
+    );
+}
+
 #[test]
 fn body_clearance_and_self_clearance_use_separate_offsets() {
     let vertices = vec![

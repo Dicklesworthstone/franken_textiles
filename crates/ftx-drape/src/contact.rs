@@ -458,6 +458,31 @@ pub struct ClothTopology {
     pub edges: Vec<[usize; 2]>,
     /// Rest length of each edge (m).
     pub edge_rest: Vec<f64>,
+    /// Each vertex's neighbours along cloth edges, sorted.
+    pub neighbours: Vec<Vec<usize>>,
+}
+
+impl ClothTopology {
+    /// Whether two cloth vertices are joined by a cloth edge.
+    fn joined(&self, v: usize, w: usize) -> bool {
+        self.neighbours
+            .get(v)
+            .is_some_and(|n| n.binary_search(&w).is_ok())
+    }
+
+    /// Whether a self-contact pair's features are one ring apart (joined by a cloth edge).
+    fn one_ring(&self, pair: Pair) -> bool {
+        match pair {
+            Pair::SelfVertexTri { cv, ct } => {
+                self.triangles[ct].iter().any(|&w| self.joined(cv, w))
+            }
+            Pair::SelfEdgeEdge { a, b } => {
+                let (ea, eb) = (self.edges[a], self.edges[b]);
+                ea.iter().any(|&i| eb.iter().any(|&j| self.joined(i, j)))
+            }
+            _ => false,
+        }
+    }
 }
 
 /// A pair's four points: positions, which are fixed (body), and the cloth vertex behind each free one.
@@ -616,6 +641,9 @@ pub struct Contact {
     /// Cloth triangles and edges.
     pub cloth: ClothTopology,
     self_params: Option<ContactParams>,
+    /// Start creases: one-ring cloth pairs already inside the thickness when self-contact was
+    /// enabled, with their own offset (half their start distance), sorted by pair.
+    creases: Vec<(Pair, f64)>,
     lag: Vec<FrictionPair>,
     lag_x: Vec<Vec3>,
     lag_h: f64,
@@ -702,6 +730,13 @@ impl Contact {
     ) -> Self {
         let edges = edges_of(&triangles);
         let rest = edges.iter().map(|&[a, b]| edge_rest(a, b)).collect();
+        let n = triangles.iter().flatten().max().map_or(0, |&m| m + 1);
+        let mut neighbours = vec![Vec::new(); n];
+        for &[a, b] in &edges {
+            neighbours[a].push(b);
+            neighbours[b].push(a);
+        }
+        neighbours.iter_mut().for_each(|v| v.sort_unstable());
         Self {
             body,
             params,
@@ -709,16 +744,21 @@ impl Contact {
                 triangles,
                 edges,
                 edge_rest: rest,
+                neighbours,
             },
             self_params: None,
             lag: Vec::new(),
             lag_x: Vec::new(),
             lag_h: 1.0,
+            creases: Vec::new(),
         }
     }
 
     /// Enables cloth self-contact after auditing the start, with independent friction and full
-    /// cloth–cloth thickness. Incident features (including welded seam vertices) are excluded.
+    /// cloth–cloth thickness. Incident features (including welded seam vertices) are excluded. A start
+    /// crease, a pair joined by a cloth edge that already sits inside the thickness (where a welded
+    /// seam meets at a sharp angle, or a gathered seam creases a band), keeps its barrier at half its
+    /// start distance instead: it cannot cross, and no motion is needed to satisfy it.
     ///
     /// # Errors
     /// Invalid parameters or geometry, non-finite positions, or [`RefusalCode::IntersectingStart`]
@@ -726,8 +766,35 @@ impl Contact {
     pub fn with_self_contact(mut self, x: &[Vec3], params: ContactParams) -> Result<Self, Refusal> {
         params.validate()?;
         self.self_params = Some(params);
+        self.creases.clear();
+        if x.iter().all(|v| v.is_finite()) {
+            self.creases = self.find_start_creases(x, &params);
+        }
         self.audit_self_contact(x)?;
         Ok(self)
+    }
+
+    /// The start creases' count and smallest offset (m).
+    #[must_use]
+    pub fn start_creases(&self) -> (usize, Option<f64>) {
+        let min = self.creases.iter().map(|c| c.1).reduce(f64::min);
+        (self.creases.len(), min)
+    }
+
+    fn find_start_creases(&self, x: &[Vec3], p: &ContactParams) -> Vec<(Pair, f64)> {
+        let mut out: Vec<(Pair, f64)> = self
+            .self_candidates(x, None, p.thickness + p.dhat)
+            .into_iter()
+            .filter(|&pair| self.cloth.one_ring(pair))
+            .filter_map(|pair| {
+                let st = stencil(pair, x, &self.body, &self.cloth);
+                let (kind, _) = classify(pair, &st.pts);
+                let d = squared_distance_f64(st.pts, kind).sqrt();
+                (d <= p.thickness && d > 0.0).then_some((pair, 0.5 * d))
+            })
+            .collect();
+        out.sort_unstable_by_key(|c| c.0);
+        out
     }
 
     /// The independently configured cloth–cloth parameters, or `None` when self-contact is disabled.
@@ -736,12 +803,16 @@ impl Contact {
         self.self_params
     }
 
-    fn pair_params(&self, pair: Pair) -> &ContactParams {
-        if pair.is_self_contact() {
-            self.self_params.as_ref().unwrap_or(&self.params)
-        } else {
-            &self.params
+    /// A pair's parameters: the body's, or the cloth–cloth ones with a start crease's own offset.
+    fn pair_params(&self, pair: Pair) -> ContactParams {
+        if !pair.is_self_contact() {
+            return self.params;
         }
+        let mut p = self.self_params.unwrap_or(self.params);
+        if let Ok(i) = self.creases.binary_search_by(|(q, _)| q.cmp(&pair)) {
+            p.thickness = self.creases[i].1;
+        }
+        p
     }
 
     fn activation_range(&self) -> f64 {
@@ -801,7 +872,7 @@ impl Contact {
         for pair in self.self_candidates(x, None, p.thickness + p.dhat) {
             let st = stencil(pair, x, &self.body, &self.cloth);
             let (kind, _) = classify(pair, &st.pts);
-            let gap = pair_gap(&st, kind, &p);
+            let gap = pair_gap(&st, kind, &self.pair_params(pair));
             if !gap.is_finite() || gap <= 0.0 {
                 return Err(Refusal::new(
                     RefusalCode::IntersectingStart,
@@ -910,7 +981,8 @@ impl Contact {
     }
 
     /// Smallest cloth–cloth gap within `range` (m), or `None` when self-contact is disabled or no
-    /// pair's boxes are nearby. This uses the full cloth–cloth thickness, independent of the body.
+    /// pair's boxes are nearby. This uses the cloth–cloth thickness (a start crease's own offset),
+    /// independent of the body.
     #[must_use]
     pub fn min_self_gap(&self, x: &[Vec3], range: f64) -> Option<f64> {
         let p = self.self_params?;
@@ -919,7 +991,7 @@ impl Contact {
             .map(|pair| {
                 let st = stencil(pair, x, &self.body, &self.cloth);
                 let (kind, _) = classify(pair, &st.pts);
-                pair_gap(&st, kind, &p)
+                pair_gap(&st, kind, &self.pair_params(pair))
             })
             .reduce(f64::min)
     }
@@ -939,7 +1011,7 @@ impl Contact {
                     .flatten()
                     .next()
                     .map_or(Vec3::ZERO, |&v| x[v]);
-                (pair_gap(&st, kind, self.pair_params(pair)), pair, at)
+                (pair_gap(&st, kind, &self.pair_params(pair)), pair, at)
             })
             .reduce(|a, b| if b.0 < a.0 { b } else { a })
     }
@@ -1023,7 +1095,7 @@ impl Contact {
             blocks: Vec::new(),
         };
         for pair in self.candidates(x, None, self.activation_range()) {
-            let p = self.pair_params(pair);
+            let p = &self.pair_params(pair);
             let st = stencil(pair, x, &self.body, &self.cloth);
             let (kind, _) = classify(pair, &st.pts);
             if !with_derivatives {
@@ -1099,7 +1171,7 @@ impl Contact {
         // Normal forces, tangents and contact weights from `x` (the latest iterate); slip is measured
         // from the start of the step.
         for pair in self.candidates(x, None, self.activation_range()) {
-            let p = *self.pair_params(pair);
+            let p = self.pair_params(pair);
             if p.mu <= 0.0 {
                 continue;
             }
@@ -1533,6 +1605,69 @@ mod tests {
             vec![[0, 1, 2], [3, 4, 5]],
             |a, b| (x[a] - x[b]).norm(),
         )
+    }
+
+    /// A crease: two triangles joined along an edge and folded nearly flat, the folded vertex closer
+    /// than the thickness to its neighbour triangle. It is not two layers: it keeps a barrier at half
+    /// its start distance, which bounds a step pressing it flat; a fold that starts apart keeps the
+    /// full thickness, and a separate triangle as close is still refused.
+    #[test]
+    fn a_crease_is_not_two_layers() {
+        let folded = |z: f64| {
+            vec![
+                Vec3::new(-0.01, 0.0, 0.0),
+                Vec3::new(0.0, -0.01, 0.0),
+                Vec3::new(0.0, 0.01, 0.0),
+                Vec3::new(-0.008, 0.0, z),
+            ]
+        };
+        let crease = folded(0.0003);
+        let tris = vec![[0, 1, 2], [1, 3, 2]];
+        let c = Contact::new(Body::empty(), params(), tris.clone(), |a, b| {
+            (crease[a] - crease[b]).norm()
+        });
+        // inside the thickness at the start: a crease, with its own offset, half the start distance
+        let creased = c.clone().with_self_contact(&crease, params()).unwrap();
+        let (n, offset) = creased.start_creases();
+        assert!(n >= 1);
+        let offset = offset.unwrap();
+        assert!(offset > 0.0 && offset <= 0.5 * 0.0003 + 1e-12, "{offset}");
+        let gap = creased.min_self_gap(&crease, params().dhat).unwrap();
+        assert!(gap > 0.0, "{gap}");
+        // the crease cannot close further than its offset: pressed flat, the step is bounded
+        let flatten: Vec<Vec3> = (0..4)
+            .map(|i| {
+                if i == 3 {
+                    Vec3::new(0.0, 0.0, -0.0006)
+                } else {
+                    Vec3::ZERO
+                }
+            })
+            .collect();
+        let alpha = creased.step_bound(&crease, &flatten);
+        assert!(alpha < 1.0, "{alpha}");
+        // a fold that starts apart keeps the full thickness
+        let open = folded(0.002);
+        assert_eq!(
+            c.with_self_contact(&open, params())
+                .unwrap()
+                .start_creases()
+                .0,
+            0
+        );
+        let mut x = crease.clone();
+        x.extend([
+            Vec3::new(-0.008, -0.002, 0.0003),
+            Vec3::new(-0.002, -0.002, 0.0003),
+            Vec3::new(-0.005, 0.003, 0.0003),
+        ]);
+        let mut separate = tris;
+        separate.push([4, 5, 6]);
+        let c = Contact::new(Body::empty(), params(), separate, |a, b| {
+            (x[a] - x[b]).norm()
+        });
+        let err = c.with_self_contact(&x, params()).unwrap_err();
+        assert_eq!(err.code, RefusalCode::IntersectingStart);
     }
 
     #[test]

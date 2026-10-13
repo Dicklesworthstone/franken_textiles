@@ -491,6 +491,8 @@ fn self_contact_report(contact: Option<&Contact>, x: &[Vec3]) -> Value {
             "activation_mm": p.dhat * 1000.0,
             "nearby_min_final_gap_mm": c.min_self_gap(x, p.dhat).map(|g| g * 1000.0),
             "gap_query_range_mm": p.dhat * 1000.0,
+            "start_creases": c.start_creases().0,
+            "start_crease_min_offset_mm": c.start_creases().1.map(|o| o * 1000.0),
         }),
         None => json!({"enabled": false, "audit": "not_simulated"}),
     }

@@ -187,6 +187,19 @@ uses relative motion on both sides. Self-contact has its own thickness (the sum 
 half-thicknesses), coefficient of friction and smoothing. Body `min_gap` / `closest_pair` stay body-only;
 `min_self_gap` uses the cloth–cloth offset, unaffected by the body's offset ramp.
 
+**Start creases.** A garment's start has pairs one edge apart that already sit inside the thickness:
+where a welded seam meets at a sharp angle (a back vertex 0.57 mm from the sleeve triangles at the
+armhole) or where a gathered hem pulls a cuff into a crease (both trouser cuffs). Their barrier could not
+be satisfied, and ignoring them outright let a seam crease fold through itself while sewing. So a
+one-ring pair (joined by a cloth edge, not sharing a vertex) inside the thickness when self-contact is
+enabled keeps its barrier at half its start distance: it cannot cross and needs no motion. Every other
+pair keeps the full thickness, and the exact crossing audit covers every non-incident pair. On the
+92 cm toddler at 2 mm (Blender's `self_distance_min` in the reference): the bolero has 14 start creases
+(the smallest offset 0.007 mm), settles with no flag and every solver-state audit passed, closest final
+cloth–cloth gap 1.8 mm, 21.8 CPU-seconds (9.8 without self-contact); the trousers 62 creases, settled,
+no flag, audits passed, closest gap 0.09 mm, 56 s (37 without). `sim_report.json`'s `self_contact`
+records `start_creases` and `start_crease_min_offset_mm`.
+
 Self-contact assemblies use triplets; symbolic LDLᵀ analysis and the contact-aware vertex ordering
 are rebuilt when the actual sparse pattern changes. Body-only runs keep the original fixed-pattern
 assembly. Enabling self-contact audits the start for exact edge-through-triangle crossings and
@@ -277,8 +290,10 @@ multiply-adds, which its correctly rounded functions need.
 `intersecting_start` (the cloth starts on or through the body or another cloth layer). A step that does not converge is reported
 (`SolveReport`), not refused.
 
-**No claims.** Garment-scale self-contact qualification or self-contact native/wasm digest parity;
+Self-contact's digest (the folded strip after twelve steps, `tests/self_contact.rs`) is identical native
+debug, native release and wasm32-wasip1.
+
+**No claims.** Self-contact matching Blender's self-collision response (only its distance is mirrored);
 a moving body; an elastic's own mass or its friction in the casing; fabric parameters (they are inputs;
-plan §11, research 07 §2.7); performance
-targets (§11.7; contact re-queries the grid each iteration, and cached candidates are the planned
-speed-up).
+plan §11, research 07 §2.7). The §11.7 budgets are measured above, on one machine (native and node's
+wasm), not on a browser's.
