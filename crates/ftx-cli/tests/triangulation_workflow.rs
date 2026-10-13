@@ -112,7 +112,11 @@ fn invalid_input_or_options_do_not_create_output() {
     let dir = Scratch::new();
     let path = dir.0.join("input.json");
     let before = std::fs::read(&path).unwrap();
-    run(&dir.0, &["--min-angle-deg", "0", "--out", "new/point.json"], 3);
+    run(
+        &dir.0,
+        &["--min-angle-deg", "0", "--out", "new/point.json"],
+        3,
+    );
     assert!(!dir.0.join("new").exists());
     assert_eq!(std::fs::read(&path).unwrap(), before);
     let mut input = read(&path);

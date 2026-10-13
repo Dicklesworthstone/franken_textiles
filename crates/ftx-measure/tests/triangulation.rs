@@ -2,7 +2,9 @@
 
 use ftx_core::{Mat3, Vec2, Vec3};
 use ftx_measure::camera::{Camera, Distortion, Intrinsics};
-use ftx_measure::triangulate::{Capture, FrameId, Observation, Partition, TriangulationInput, triangulate};
+use ftx_measure::triangulate::{
+    Capture, FrameId, Observation, Partition, TriangulationInput, triangulate,
+};
 
 fn camera(x: f64) -> Camera {
     Camera {
@@ -27,13 +29,19 @@ fn request() -> TriangulationInput {
         },
         observations: vec![
             Observation {
-                frame: FrameId { stream: "synthetic".into(), timestamp_us: 1_000_000 },
+                frame: FrameId {
+                    stream: "synthetic".into(),
+                    timestamp_us: 1_000_000,
+                },
                 camera: camera(-0.4),
                 pixel_px: Vec2::new(620.0, 310.0),
                 partition: Partition::Fit,
             },
             Observation {
-                frame: FrameId { stream: "synthetic".into(), timestamp_us: 1_010_000 },
+                frame: FrameId {
+                    stream: "synthetic".into(),
+                    timestamp_us: 1_010_000,
+                },
                 camera: camera(0.4),
                 pixel_px: Vec2::new(380.0, 310.0),
                 partition: Partition::Fit,
@@ -44,7 +52,10 @@ fn request() -> TriangulationInput {
 
 fn held_out(input: &mut TriangulationInput, error_px: f64) {
     input.observations.push(Observation {
-        frame: FrameId { stream: "synthetic".into(), timestamp_us: 1_020_000 },
+        frame: FrameId {
+            stream: "synthetic".into(),
+            timestamp_us: 1_020_000,
+        },
         camera: camera(0.0),
         pixel_px: Vec2::new(500.0 + error_px, 310.0),
         partition: Partition::HeldOut,
@@ -63,7 +74,10 @@ fn analytic_stereo_recovery_and_canonical_order() {
     assert_eq!(out.held_out_views, 0);
     assert_eq!(out.advisories.len(), 1);
     input.observations.reverse();
-    assert_eq!(serde_json::to_value(&out).unwrap(), serde_json::to_value(triangulate(&input).unwrap()).unwrap());
+    assert_eq!(
+        serde_json::to_value(&out).unwrap(),
+        serde_json::to_value(triangulate(&input).unwrap()).unwrap()
+    );
 }
 
 #[test]
@@ -95,9 +109,16 @@ fn held_out_pixels_do_not_move_the_fit_and_use_the_exact_gate() {
         let out = triangulate(&input).unwrap();
         assert_eq!(out.held_out_views, 1);
         assert!(out.advisories.is_empty());
-        assert!(out.reprojection[..2].iter().all(|r| r.error_px.unwrap() < 1e-10));
+        assert!(
+            out.reprojection[..2]
+                .iter()
+                .all(|r| r.error_px.unwrap() < 1e-10)
+        );
         assert!((out.reprojection[2].error_px.unwrap() - error).abs() < 1e-10);
-        assert_eq!(out.status, if error < 3.0 { "ACCEPTED" } else { "REJECTED" });
+        assert_eq!(
+            out.status,
+            if error < 3.0 { "ACCEPTED" } else { "REJECTED" }
+        );
         assert_eq!(out.point_m.is_some(), error < 3.0);
     }
 }

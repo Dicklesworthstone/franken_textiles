@@ -130,26 +130,49 @@ fn text_present(text: &str) -> bool {
 fn check_capture(input: &TriangulationInput) -> Result<(), Refusal> {
     let streams: BTreeSet<_> = input.observations.iter().map(|v| &v.frame.stream).collect();
     match &input.capture {
-        Capture::StillWindow { start_us, end_us, evidence } => {
+        Capture::StillWindow {
+            start_us,
+            end_us,
+            evidence,
+        } => {
             if !text_present(evidence) || start_us > end_us || streams.len() != 1 {
-                return Err(invalid("still_window needs evidence, ordered bounds and exactly one stream"));
+                return Err(invalid(
+                    "still_window needs evidence, ordered bounds and exactly one stream",
+                ));
             }
-            if input.observations.iter().any(|v| {
-                v.frame.timestamp_us < *start_us || v.frame.timestamp_us > *end_us
-            }) {
+            if input
+                .observations
+                .iter()
+                .any(|v| v.frame.timestamp_us < *start_us || v.frame.timestamp_us > *end_us)
+            {
                 return Err(invalid("observation is outside the reviewed still window"));
             }
         }
-        Capture::Synchronized { max_skew_us, evidence } => {
+        Capture::Synchronized {
+            max_skew_us,
+            evidence,
+        } => {
             if !text_present(evidence) || streams.len() != input.observations.len() {
-                return Err(invalid("synchronized capture needs evidence and one frame per stream"));
+                return Err(invalid(
+                    "synchronized capture needs evidence and one frame per stream",
+                ));
             }
-            let first = input.observations.iter().map(|v| v.frame.timestamp_us).min();
-            let last = input.observations.iter().map(|v| v.frame.timestamp_us).max();
+            let first = input
+                .observations
+                .iter()
+                .map(|v| v.frame.timestamp_us)
+                .min();
+            let last = input
+                .observations
+                .iter()
+                .map(|v| v.frame.timestamp_us)
+                .max();
             if let (Some(first), Some(last)) = (first, last)
                 && last - first > *max_skew_us
             {
-                return Err(invalid("exposure timestamps exceed the declared synchronization skew"));
+                return Err(invalid(
+                    "exposure timestamps exceed the declared synchronization skew",
+                ));
             }
         }
     }
@@ -183,7 +206,9 @@ pub fn triangulate(input: &TriangulationInput) -> Result<TriangulationReport, Re
         || input.observations.is_empty()
         || input.observations.len() > 128
     {
-        return Err(invalid("triangulation needs schema /1, a metric-scale source and 1..128 views"));
+        return Err(invalid(
+            "triangulation needs schema /1, a metric-scale source and 1..128 views",
+        ));
     }
     let mut input = input.clone();
     input.observations.sort_by(|a, b| a.frame.cmp(&b.frame));
@@ -193,14 +218,20 @@ pub fn triangulate(input: &TriangulationInput) -> Result<TriangulationReport, Re
             || view.frame.stream.len() > 256
             || previous == Some(&view.frame)
         {
-            return Err(invalid("each view needs a nonempty stream and a unique decoded timestamp"));
+            return Err(invalid(
+                "each view needs a nonempty stream and a unique decoded timestamp",
+            ));
         }
         view.camera.validate()?;
         view.camera.ray(view.pixel_px)?;
         previous = Some(&view.frame);
     }
     check_capture(&input)?;
-    let fit: Vec<_> = input.observations.iter().filter(|v| v.partition == Partition::Fit).collect();
+    let fit: Vec<_> = input
+        .observations
+        .iter()
+        .filter(|v| v.partition == Partition::Fit)
+        .collect();
     let mut report = TriangulationReport {
         schema: "ftx-triangulation/1",
         status: "UNOBSERVABLE",
@@ -216,26 +247,44 @@ pub fn triangulate(input: &TriangulationInput) -> Result<TriangulationReport, Re
         no_claim: "Conditional on supplied calibration, metric scale and capture evidence; not a body fit or an uncertainty certificate.",
     };
     if report.held_out_views == 0 {
-        report.advisories.push("No held-out views: reprojection is checked only on fitted observations".into());
+        report
+            .advisories
+            .push("No held-out views: reprojection is checked only on fitted observations".into());
     }
     if fit.len() < 2 {
-        report.flags.push("At least two fit views are required; held-out views cannot supply fitting geometry".into());
+        report.flags.push(
+            "At least two fit views are required; held-out views cannot supply fitting geometry"
+                .into(),
+        );
         return Ok(report);
     }
     let origin = fit[0].camera.center_m;
-    let scale = fit.iter().map(|v| (v.camera.center_m - origin).norm()).fold(0.0, f64::max);
+    let scale = fit
+        .iter()
+        .map(|v| (v.camera.center_m - origin).norm())
+        .fold(0.0, f64::max);
     if !scale.is_finite() || scale == 0.0 {
-        report.flags.push("No finite nonzero metric camera baseline".into());
+        report
+            .flags
+            .push("No finite nonzero metric camera baseline".into());
         return Ok(report);
     }
-    let centers: Vec<_> = fit.iter().map(|v| (v.camera.center_m - origin) / scale).collect();
+    let centers: Vec<_> = fit
+        .iter()
+        .map(|v| (v.camera.center_m - origin) / scale)
+        .collect();
     if centers.iter().any(|v| !v.is_finite()) {
         return Err(invalid("camera baseline cannot be represented finitely"));
     }
-    let rays: Vec<_> = fit.iter().map(|v| v.camera.ray(v.pixel_px)).collect::<Result<_, _>>()?;
+    let rays: Vec<_> = fit
+        .iter()
+        .map(|v| v.camera.ray(v.pixel_px))
+        .collect::<Result<_, _>>()?;
     report.observed_max_angle_deg = max_angle(&centers, &rays);
     if report.observed_max_angle_deg < 3.0 {
-        report.flags.push("Fit-ray angle is below 3 degrees; increase the camera baseline".into());
+        report
+            .flags
+            .push("Fit-ray angle is below 3 degrees; increase the camera baseline".into());
         return Ok(report);
     }
     // Stack d x X = d x C. The existing Jacobi SVD avoids squared conditioning. Parallax
@@ -252,16 +301,25 @@ pub fn triangulate(input: &TriangulationInput) -> Result<TriangulationReport, Re
         report.flags.push("No finite triangulation solution".into());
         return Ok(report);
     }
-    let predicted: Vec<_> = centers.iter().map(|&c| (normalized - c).normalized()).collect();
+    let predicted: Vec<_> = centers
+        .iter()
+        .map(|&c| (normalized - c).normalized())
+        .collect();
     let angle = max_angle(&centers, &predicted);
     report.fitted_max_angle_deg = Some(angle);
     report.status = "REJECTED";
     if angle < 3.0 {
         report.status = "UNOBSERVABLE";
-        report.flags.push("Reconstructed parallax is below 3 degrees".into());
+        report
+            .flags
+            .push("Reconstructed parallax is below 3 degrees".into());
     }
     for view in &input.observations {
-        let depth = view.camera.world_to_camera.mul_vec(point - view.camera.center_m).z;
+        let depth = view
+            .camera
+            .world_to_camera
+            .mul_vec(point - view.camera.center_m)
+            .z;
         let projected = view.camera.project(point);
         let mut check = Reprojection {
             frame: view.frame.clone(),
@@ -277,12 +335,18 @@ pub fn triangulate(input: &TriangulationInput) -> Result<TriangulationReport, Re
                     check.error_px = Some(error);
                 }
                 if !error.is_finite() || error > 3.0 {
-                    report.flags.push(format!("{} at {} us: reprojection exceeds 3 pixels", view.frame.stream, view.frame.timestamp_us));
+                    report.flags.push(format!(
+                        "{} at {} us: reprojection exceeds 3 pixels",
+                        view.frame.stream, view.frame.timestamp_us
+                    ));
                 }
             }
             Err(error) => {
                 check.failure = Some(error.to_string());
-                report.flags.push(format!("{} at {} us: projection unavailable", view.frame.stream, view.frame.timestamp_us));
+                report.flags.push(format!(
+                    "{} at {} us: projection unavailable",
+                    view.frame.stream, view.frame.timestamp_us
+                ));
             }
         }
         report.reprojection.push(check);

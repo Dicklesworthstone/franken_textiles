@@ -2,7 +2,9 @@
 
 use ftx_core::{Mat3, Vec2, Vec3};
 use ftx_measure::camera::{Camera, Distortion, Intrinsics};
-use ftx_measure::triangulate::{Capture, FrameId, Observation, Partition, TriangulationInput, triangulate};
+use ftx_measure::triangulate::{
+    Capture, FrameId, Observation, Partition, TriangulationInput, triangulate,
+};
 
 #[test]
 fn stationary_sheet_cameras_recover_an_off_sheet_landmark() {
@@ -38,7 +40,11 @@ fn stationary_sheet_cameras_recover_an_off_sheet_landmark() {
             },
             camera,
             pixel_px: known.project(point).unwrap(),
-            partition: if i == 2 { Partition::HeldOut } else { Partition::Fit },
+            partition: if i == 2 {
+                Partition::HeldOut
+            } else {
+                Partition::Fit
+            },
         });
     }
     let input = TriangulationInput {
