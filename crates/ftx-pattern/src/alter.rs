@@ -220,6 +220,7 @@ pub fn transfer_curve(
         .map_err(|e| invalid(e.to_string()))?;
     let p0 = points[0];
     let p1 = points[points.len() - 1];
+    Refusal::finite("source chord squared length", (p1 - p0).norm2())?;
     // Check even a straight source: its empty control list must not hide a zero-length chord.
     abs_to_rel(p0, p1, p0)
         .map_err(|e| Refusal::new(RefusalCode::DegenerateGeometry, e.to_string()))?;
@@ -235,7 +236,8 @@ pub fn transfer_curve(
     let edge = piece_mut(&mut out, pid)?
         .get_mut("edges")
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| invalid("edges must be an array"))?
+        .ok_or_else(|| invalid("edges must be an array"))?;
+    let edge = edge
         .iter_mut()
         .find(|e| e["id"].as_str() == Some(dst_edge))
         .ok_or_else(|| invalid(format!("{pid}: no edge '{dst_edge}'")))?;
@@ -251,17 +253,31 @@ pub fn transfer_curve(
     Ok(out)
 }
 
-/// The reference's bisection (spec 01 §10.1): 60 halvings keeping the end whose sign matches `f(lo)`.
-/// There is no bracket check: without a sign change it converges to `hi`, as the reference does.
+/// The reference's 60 halvings, with the plan's deliberate NoRoot exception: impossible adjustments
+/// are refusals, never silently saturated bounds presented as successfully trued geometry.
 fn bisect(
     mut f: impl FnMut(f64) -> Result<f64, Refusal>,
     mut lo: f64,
     mut hi: f64,
 ) -> Result<f64, Refusal> {
-    let mut flo = f(lo)?;
+    let mut flo = Refusal::finite("lower-bound residual", f(lo)?)?;
+    let fhi = Refusal::finite("upper-bound residual", f(hi)?)?;
+    if flo == 0.0 {
+        return Ok(lo);
+    }
+    if fhi == 0.0 {
+        return Ok(hi);
+    }
+    if (flo > 0.0) == (fhi > 0.0) {
+        return Err(Refusal::new(
+            RefusalCode::NoRoot,
+            format!("no bracketed alteration root in [{lo}, {hi}] (residuals {flo}, {fhi})"),
+        )
+        .repair("change the target ratio, or use slash-spread/move before solving again"));
+    }
     for _ in 0..60 {
         let mid = 0.5 * (lo + hi);
-        let fm = f(mid)?;
+        let fm = Refusal::finite("alteration residual", f(mid)?)?;
         if (fm > 0.0) == (flo > 0.0) {
             lo = mid;
             flo = fm;
@@ -269,7 +285,26 @@ fn bisect(
             hi = mid;
         }
     }
-    Ok(0.5 * (lo + hi))
+    let root = 0.5 * (lo + hi);
+    let residual = Refusal::finite("solved residual", f(root)?)?;
+    if residual.abs() > 1e-8 {
+        return Err(Refusal::new(
+            RefusalCode::NotConverged,
+            format!("alteration residual {residual} after 60 bisections"),
+        ));
+    }
+    Ok(root)
+}
+
+fn positive(name: &str, value: f64) -> Result<f64, Refusal> {
+    Refusal::finite(name, value)?;
+    if value <= 0.0 {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("{name} must be positive"),
+        ));
+    }
+    Ok(value)
 }
 
 fn query<T>(r: Result<T, crate::PyError>) -> Result<T, Refusal> {
@@ -288,7 +323,7 @@ fn drafted_vertex(doc: &Value, pid: &str, vid: &str) -> Result<Vec2, Refusal> {
 ///
 /// # Errors
 /// An unknown seam, an `end` other than start/end, side b on a mirrored (`.L`) copy, unknown pieces,
-/// edges or vertices, non-finite results.
+/// edges or vertices, invalid ratios/bands, non-finite results, or no bracketed root within ±60 mm.
 pub fn true_seam(doc: &Value, seam_id: &str, end: &str) -> Result<Value, Refusal> {
     if !matches!(end, "start" | "end") {
         return Err(Refusal::new(
@@ -297,6 +332,15 @@ pub fn true_seam(doc: &Value, seam_id: &str, end: &str) -> Result<Value, Refusal
         ));
     }
     let pattern = built(doc)?;
+    if pattern
+        .seams()
+        .iter()
+        .filter(|s| s.id() == Some(seam_id))
+        .count()
+        > 1
+    {
+        return Err(invalid(format!("duplicate seam id '{seam_id}'")));
+    }
     let seam = pattern
         .seams()
         .iter()
@@ -312,8 +356,19 @@ pub fn true_seam(doc: &Value, seam_id: &str, end: &str) -> Result<Value, Refusal
         Some(b) => {
             let xs: Vec<f64> = b
                 .as_array()
-                .map(|a| a.iter().filter_map(Value::as_f64).collect())
-                .unwrap_or_default();
+                .filter(|a| a.len() == 2)
+                .ok_or_else(|| invalid("ratio_band must be [lo, hi]"))?
+                .iter()
+                .map(|v| {
+                    v.as_f64()
+                        .ok_or_else(|| invalid("ratio_band must contain numbers"))
+                })
+                .collect::<Result<_, _>>()?;
+            positive("ratio band lower", xs[0])?;
+            positive("ratio band upper", xs[1])?;
+            if xs[0] > xs[1] {
+                return Err(invalid("ratio_band must be ordered [lo, hi]"));
+            }
             ftx_core::np::pairwise_sum(&xs) / xs.len() as f64
         }
         None => match m.get("ratio") {
@@ -323,11 +378,13 @@ pub fn true_seam(doc: &Value, seam_id: &str, end: &str) -> Result<Value, Refusal
                 .ok_or_else(|| invalid(format!("seam {seam_id}: ratio must be a number")))?,
         },
     };
+    positive("seam ratio", ratio)?;
     let side = |k: &str| {
         seam.side_ref(k)
             .ok_or_else(|| invalid(format!("seam {seam_id} has no side {k}")))
     };
-    let (a, b) = (side("a")?, side("b")?);
+    let (a, b) = (side("a"), side("b"));
+    let (a, b) = (a?, b?);
     let (inst, eids) = query(pattern.side(b))?;
     if inst.mirrored || inst.side == crate::Side::L || eids.iter().any(|e| e.ends_with(".L")) {
         return Err(invalid(
@@ -348,14 +405,14 @@ pub fn true_seam(doc: &Value, seam_id: &str, end: &str) -> Result<Value, Refusal
     } else {
         dense[0] - dense[1]
     };
-    let norm = (t.x * t.x + t.y * t.y).sqrt();
+    let norm = positive("seam end tangent length", (t.x * t.x + t.y * t.y).sqrt())?;
     let t = Vec2::new(t.x / norm, t.y / norm);
-    let target = query(pattern.side_length(a))? / ratio;
+    let target = positive("target seam length", query(pattern.side_length(a))? / ratio)?;
     let d = bisect(
         |d| {
             let mut trial = doc.clone();
             *vertex_mut(piece_mut(&mut trial, &pid)?, &vid)? =
-                json!([base.x + d * t.x, base.y + d * t.y]);
+                point_value(Vec2::new(base.x + d * t.x, base.y + d * t.y))?;
             Ok(query(Pattern::new(trial).side_length(b))? - target)
         },
         -60.0,
@@ -383,11 +440,22 @@ pub fn true_seam(doc: &Value, seam_id: &str, end: &str) -> Result<Value, Refusal
 /// halves are not kept equal (spec 01 §17).
 ///
 /// # Errors
-/// Unknown piece, no seam of `pid` among `seams`, unknown sides, a non-finite target or result.
+/// Unknown/duplicate seams or piece, ambiguous cap refs, non-positive or non-finite target, malformed
+/// geometry, or no bracketed root within 0.3–3 × cap height.
 pub fn cap_ease(doc: &Value, pid: &str, seams: &[String], target: f64) -> Result<Value, Refusal> {
-    Refusal::finite("target", target)?;
+    positive("target", target)?;
     let pattern = built(doc)?;
     piece_mut(&mut doc.clone(), pid)?;
+    for id in seams {
+        let count = pattern
+            .seams()
+            .iter()
+            .filter(|s| s.id() == Some(id.as_str()))
+            .count();
+        if count != 1 {
+            return Err(invalid(format!("expected one seam '{id}', found {count}")));
+        }
+    }
     let (mut caps, mut arms) = (Vec::new(), Vec::new());
     for s in pattern.seams() {
         let Some(id) = s.id() else { continue };
@@ -399,13 +467,22 @@ pub fn cap_ease(doc: &Value, pid: &str, seams: &[String], target: f64) -> Result
                 .ok_or_else(|| invalid(format!("seam {id} has no side {k}")))
         };
         let (a, b) = (side("a")?, side("b")?);
-        let head = a.split('/').next().unwrap_or("");
-        if head.split('.').next().unwrap_or("") == pid {
-            caps.push(a.to_string());
-            arms.push(b.to_string());
-        } else {
-            caps.push(b.to_string());
-            arms.push(a.to_string());
+        let (ia, _) = query(pattern.side(a))?;
+        let (ib, _) = query(pattern.side(b))?;
+        match (ia.piece == pid, ib.piece == pid) {
+            (true, false) => {
+                caps.push(a.to_string());
+                arms.push(b.to_string());
+            }
+            (false, true) => {
+                caps.push(b.to_string());
+                arms.push(a.to_string());
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "seam {id} must join {pid} to another piece"
+                )));
+            }
         }
     }
     let first = caps
@@ -421,6 +498,14 @@ pub fn cap_ease(doc: &Value, pid: &str, seams: &[String], target: f64) -> Result
     let mut y_ua = f64::INFINITY;
     for r in &caps {
         let (cap, eids) = query(pattern.side(r))?;
+        if cap.id != inst.id {
+            return Err(invalid("cap-ease seams must use one cap instance"));
+        }
+        if eids.iter().any(|e| e.ends_with(".L")) {
+            return Err(invalid(
+                "use drafted (.R) cap edges; the mirrored copy follows",
+            ));
+        }
         for e in &eids {
             let edge = query(cap.edge(e))?;
             y_ua = y_ua.min(y_of(&edge.from)?).min(y_of(&edge.to)?);
@@ -430,6 +515,8 @@ pub fn cap_ease(doc: &Value, pid: &str, seams: &[String], target: f64) -> Result
     for r in &arms {
         arm += query(pattern.side_length(r))?;
     }
+    positive("armhole length", arm)?;
+    Refusal::finite("underarm height", y_ua)?;
     let lift = |k: f64| {
         move |p: Vec2| {
             if p.y > y_ua {
@@ -462,7 +549,7 @@ pub fn cap_ease(doc: &Value, pid: &str, seams: &[String], target: f64) -> Result
     for r in &caps {
         old += query(pattern.side_length(r))?;
     }
-    let old = old / arm - 1.0;
+    let old = Refusal::finite("original cap ease", old / arm - 1.0)?;
     history(
         &mut out,
         "cap-ease",

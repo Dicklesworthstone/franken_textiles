@@ -50,7 +50,7 @@ listed as missing.
 transfer-curve return a new raw JSON document, preserve unedited fields and append `meta.history` with
 `origin = VECTOR_EDIT`. Coordinate changes use the reference's ties-to-even rounding. Grain/internal/
 decor/trace marks follow slash-spread and cap-ease; drills, notches and placement do not. true-seam and
-cap-ease use the reference's 60-step bisection without a bracket check (±60 mm; 0.3–3 × cap height),
+cap-ease use the reference's 60-step bisection (±60 mm; 0.3–3 × cap height),
 a band's mean by numpy's pairwise sum, and its sentences (`:+.1f`, `:.3f`). Direct regressions use the
 spec's published F33–F36 and F39–F40 values. Oracle: `tests/fixtures/oracle/alter/alterations.json`
 (`tools/oracle/capture_alterations.py`): 21 cases (the drafted bolero and trousers at 80, 92 and 116 cm,
@@ -60,3 +60,10 @@ naming the same thing. Malformed input and non-finite results are typed refusals
 nulls; invalid axes or ends, zero-length source chords and a side b on a mirrored (`.L`) copy are
 refused, as are the unknown seam, missing cap seam and missing destination edge the reference crashes on.
 These operations alone establish neither structural validity nor garment fit.
+
+Plan safety deviations, covered by `tests/alter_safety.rs`: unbracketed targets return `NoRoot`, not a
+silently saturated bound; non-finite residuals, zero tangents/armholes, non-positive ratios,
+malformed/reversed bands and duplicate/unknown seam ids are refused. Cap refs must actually join the
+requested piece to another piece and use a single cap instance; unfolded mirrored cap edges are
+refused rather than applied in the wrong frame. All 21 captured oracle cases still match bit for bit,
+unchanged.
