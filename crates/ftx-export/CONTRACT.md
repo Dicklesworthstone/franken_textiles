@@ -2,9 +2,9 @@
 
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
 number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the
-master SVG (§7.1), the PDFs (§7.2–7.6), the DXFs (§7.7–7.8), HPGL (§7.9), the cutter files (§7.10), the
-manifest's piece reference (§7.13) and their acceptance checks (§8). GarmentCode, DST, the manifest file and
-the remaining checks follow (FTX-17).
+master SVG (§7.1), the PDFs (§7.2–7.6), the DXFs (§7.7–7.8), HPGL (§7.9), the cutter files (§7.10),
+GarmentCode (§7.11), the manifest's piece reference (§7.13) and their acceptance checks (§8). The DST files,
+the manifest file and the remaining checks follow (FTX-17).
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
@@ -119,6 +119,13 @@ and per block and layer the same entities within the 2 dp rounding (union cut li
 0.05 mm; piece texts that hang off the main label compared by string); the same modelspace; flat files entity
 for entity (main-label strokes at ftx's anchor). `check_dxf` and `check_flat_dxf` (a small DXF reader) give
 exactly the reference checker's 268 items on its files and pass on ftx's.
+
+**GarmentCode** (`gc.rs`, §7.11). Panels of every simulated instance (net sew lines in cm, relative-curvature
+Béziers, poly edges as straight sub-edges, placement from `placement3d`) and 1:1 stitches after splitting each
+seam's sides at matched arclength points (notch knots, candidates merged within 0.05 mm; Béziers split by de
+Casteljau at the parameter of an 801-sample arclength table), `right_wrong` for unreversed seams, warnings for
+unresolvable or excluded seams. All five reference files (`targets.json`) come out byte-identical; the manifest
+entries are equal; `check_garmentcode` reproduces the reference checker's items.
 
 **Checks** (`checks.rs`, `xml.rs`, §8). `check_svg`: `svg.no_transform`, `svg.mm_units_viewbox`,
 `svg.piece_subgroups` (master) or `cutter.single_closed_path` (cutter), with the reference's details, reading

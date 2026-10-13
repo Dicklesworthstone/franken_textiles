@@ -15,8 +15,8 @@
                            TESTBODICE, ROBUST (also at --layout-width 300 with and without --keep-blank-pages),
                            TESTBODICE at --projector-width 1100 and the 92 cm bolero and trousers
     OUT_DIR/targets.json   HPGL (also rotated and mirrored), the cutter SVGs and report, the ASTM, AAMA and
-                           flat DXFs (clocks and random ids fixed), the manifest and the reference checker's HPGL,
-                           cutter, SVG and DXF items, for TESTBODICE, ROBUST, the 92 cm fez,
+                           flat DXFs (clocks and random ids fixed), GarmentCode, the manifest and the reference checker's HPGL,
+                           cutter, SVG, DXF and GarmentCode items, for TESTBODICE, ROBUST, the 92 cm fez,
                            bolero and trousers
     OUT_DIR/outlines.json  seam-allowance cut outlines (ring and method), sew rings and edge breaks of every
                            piece as drafted and of every instance, for the spec's fixture patterns (TESTBODICE,
@@ -283,6 +283,7 @@ def main(argv=None) -> int:
             hp = X.export_hpgl(ctx)
             cut = X.export_cutter(ctx)
             dxfs = [X.export_dxf_astm(ctx, "astm"), X.export_dxf_astm(ctx, "aama"), X.export_flat_dxf(ctx)]
+            gc = X.export_garmentcode(ctx)
             mpath = ctx.save_manifest()
             rep = X.check_dir(Path(tmp))
             out = {"hpgl": hp.read_text(),
@@ -291,8 +292,9 @@ def main(argv=None) -> int:
                    "manifest": mpath.read_text(),
                    # the DXFs do not depend on the HPGL options
                    "dxf": {p.name: stable_dxf(p.read_text()) for p in dxfs} if not opts and cid != "fez920" else {},
+                   "garmentcode": gc.read_text() if not opts else "",
                    "checks": [it for it in rep.items
-                              if it["check"].split(".")[0] in ("hpgl", "cutter", "svg", "dxf", "flatdxf")]}
+                              if it["check"].split(".")[0] in ("hpgl", "cutter", "svg", "dxf", "flatdxf", "gc")]}
         tcases.append({"id": cid, "input": {"pattern": doc, "options": opts, "created": "2026-10-11T12:00"},
                        "output": out})
     path = args.out_dir / "targets.json"

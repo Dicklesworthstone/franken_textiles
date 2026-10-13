@@ -1119,3 +1119,59 @@ pub fn check_flat_dxf(text: &str, file: &str) -> Vec<CheckItem> {
         ),
     ]
 }
+
+/// The GarmentCode checks: centimetres with relative curvature, closed edge loops, and stitches naming existing
+/// panel edges, none twice.
+#[must_use]
+pub fn check_garmentcode(text: &str, file: &str) -> Vec<CheckItem> {
+    let spec: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+    let props = &spec["properties"];
+    let mut out = vec![CheckItem::new(
+        "gc.units_cm_relative",
+        file,
+        props["units_in_meter"].as_i64() == Some(100) && props["curvature_coords"] == "relative",
+        "",
+    )];
+    let empty = serde_json::Map::new();
+    let panels = spec["pattern"]["panels"].as_object().unwrap_or(&empty);
+    let closed = panels.values().all(|p| {
+        let e = p["edges"].as_array().map(Vec::as_slice).unwrap_or_default();
+        (0..e.len()).all(|i| e[i]["endpoints"][1] == e[(i + 1) % e.len()]["endpoints"][0])
+    });
+    out.push(CheckItem::new("gc.edge_loops_closed", file, closed, ""));
+    let stitches = spec["pattern"]["stitches"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut used = BTreeSet::new();
+    let mut ok = true;
+    for st in stitches {
+        for side in st
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .take(2)
+        {
+            let (p, e) = (
+                side["panel"].as_str().unwrap_or(""),
+                side["edge"].as_i64().unwrap_or(-1),
+            );
+            let n = panels
+                .get(p)
+                .and_then(|q| q["edges"].as_array())
+                .map_or(0, Vec::len) as i64;
+            ok &= panels.contains_key(p)
+                && (0..n).contains(&e)
+                && !used.contains(&(p.to_string(), e));
+            used.insert((p.to_string(), e));
+        }
+    }
+    out.push(CheckItem::new(
+        "gc.stitches_valid_unique",
+        file,
+        ok,
+        format!("{} stitches", stitches.len()),
+    ));
+    out
+}
