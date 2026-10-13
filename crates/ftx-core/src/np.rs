@@ -38,6 +38,38 @@ pub fn arange(start: f64, stop: f64, step: f64) -> Vec<f64> {
     y
 }
 
+/// numpy `percentile(values, p)` with the default linear method: virtual index
+/// `(n·q + (1 − q)) − 1` for `q = p/100`, then numpy's two-sided lerp between the neighbouring order
+/// statistics (`a + (b − a)·γ`, or `b − (b − a)·(1 − γ)` when γ ≥ 0.5). NaN for an empty slice; NaNs
+/// in `values` sort last, as in numpy.
+#[must_use]
+pub fn percentile(values: &[f64], p: f64) -> f64 {
+    let n = values.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    let mut v = values.to_vec();
+    v.sort_by(f64::total_cmp);
+    let q = p / 100.0;
+    // numpy: n·q + (α + q·(1 − α − β)) − 1 with α = β = 1; 1 + q·(−1) is exactly 1 − q.
+    let virtual_index = (n as f64 * q + (1.0 - q)) - 1.0;
+    if virtual_index >= (n - 1) as f64 {
+        return v[n - 1];
+    }
+    if virtual_index < 0.0 {
+        return v[0];
+    }
+    let below = virtual_index.floor();
+    let gamma = virtual_index - below;
+    let (a, b) = (v[below as usize], v[below as usize + 1]);
+    let diff = b - a;
+    if gamma >= 0.5 {
+        b - diff * (1.0 - gamma)
+    } else {
+        a + diff * gamma
+    }
+}
+
 /// numpy's pairwise summation (`np.sum` / `add.reduce` on a contiguous float64 array): plain
 /// accumulation below 8 elements, eight interleaved accumulators up to 128, recursive halving
 /// (rounded down to a multiple of 8) above. Matches `np.sum` bit for bit.
@@ -131,6 +163,21 @@ pub fn interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Values from numpy 2.5.4 `np.percentile` (linear method).
+    #[test]
+    fn percentile_matches_numpy() {
+        let a = [0.3, 0.1, 0.7, 0.2, 0.9, 0.05, 0.33, 0.41, 0.12, 0.6, 0.27];
+        assert_eq!(percentile(&a, 95.0), 0.8);
+        assert_eq!(percentile(&a, 50.0), 0.3);
+        assert_eq!(percentile(&a, 5.0), 0.075_000_000_000_000_01);
+        assert_eq!(percentile(&a, 100.0), 0.9);
+        assert_eq!(percentile(&a, 0.0), 0.05);
+        assert_eq!(percentile(&[1.0, 2.0], 75.0), 1.75);
+        let x: Vec<f64> = (0..37).map(|i| f64::from(i) * 0.1).collect();
+        assert_eq!(percentile(&x, 95.0), 3.42);
+        assert!(percentile(&[], 50.0).is_nan());
+    }
 
     /// Values from numpy 2.5.4 `np.arange`; in the hex-row case 30 of 33 differ from `start + i·step`.
     #[test]

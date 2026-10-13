@@ -19,6 +19,19 @@ ranges, sewing pairs, seam records, corners and index lists exact; vertices 99.0
 refused (`degenerate_geometry`); exactly coincident points merge (the reference merges within 1e-6 mm).
 The digest of a two-piece mesh is identical native and wasm.
 
+**Start state** (`start.rs`, `nearest.rs`; spec 04 §3–4). Isometric wrap per instance from a
+`WrapPlacement` (part frame, anchor height, radius, anchor column; mirrored instances and the leg
+own-side rule), gather weights, sewing groups, pre-sew (group means pushed 8 mm outside the body,
+harmonic spreading, push-out to 4.8 mm) and blockwise relaxation to p95 plain-edge strain ≤ 12 %, against
+any body given as a `NearestTree` (an AABB tree; equidistant crease triangles resolve to the
+best-aligned normal). Against `tests/fixtures/oracle/drape/start_state.json` (92 cm bolero and trousers,
+the reference's dress form as triangles): the wrap with the reference's frames and gather weights to
+1.1e-15 relative (91 % bit-exact); pre-sew, relaxation and the whole start state agree with the
+reference's own functions run in float64 with an exact nearest-point query to 1e-14–1.9e-12 m, with the
+same relaxation blocks. Blender's float32 BVH (the reference as shipped) breaks crease ties its own way
+(2 of 128 bolero groups, 5 of 295 trouser groups); there the start differs by up to 19 mm and the bolero
+relaxes for two blocks instead of one. Part frames on a posed Anny body come next.
+
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
 

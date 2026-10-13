@@ -65,7 +65,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
 | Garment mesh (spacing, seam pairs, instance ranges) | 04 §2 | present | drape/garment_mesh (7 garments: bolero and trousers at 80/92/116 cm, bolero at 8 mm; structure exact, vertices 99.0 % bit-exact, worst 3.8e-15; all 42,003 triangles identical to Blender's CDT) |
-| Placement and start shape (wrap, pre-sew) | 04 §3–4 | missing | |
+| Placement and start shape (wrap, pre-sew) | 04 §3–4 | partial | drape/start_state (92 cm bolero and trousers): wrap with the reference's recorded frames, gather weights, sewing groups exact; pre-sew and relaxation to 1e-12 m against the reference's code with exact geometry; Blender's float32 BVH differs at crease ties (documented). Missing: part frames and landmarks on Anny (the reference's dress-form frames are not ported), inferred placement (§3.5), roll (§3.6) |
 | Dynamics contract | 04 §5 | partial | implicit Euler on the incremental potential with body contact (IPC barrier on the ξ-offset gap, additive CCD, lagged Coulomb friction, start-intersection audit; `ftx-drape` CONTRACT); pre-sew, seams and flags pending; no self-contact |
 | Metrics and flags with the reference's text and gating split | 04 §6 | missing | |
 | Qualification bands and tightness gating | 04 §7 | missing | |
