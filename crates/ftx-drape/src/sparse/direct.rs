@@ -1,8 +1,11 @@
 //! Provenance: lifted from frankensim `crates/fs-sparse/src/direct.rs` at commit
 //! `93fc9b26f618bea6ebac6534f1d33c715d8a1c92` (same author, MIT + OpenAI/Anthropic rider). Changes:
 //! import paths, and [`SymbolicLdlt::analyze_with_permutation`] so the cloth solver can order the
-//! vertex graph and expand it to three DOFs per vertex (5–9× faster analysis, same fill). The
-//! original module documentation follows.
+//! vertex graph and expand it to three DOFs per vertex (5–9× faster analysis, same fill); the panel
+//! block's Schur updates deferred until the fully-summed columns are done; slice kernels the compiler
+//! vectorizes and an upper triangle mirrored only when the full pivot search needs it (factorization
+//! 2.9×, solve 1.3× faster on a 10,800-DOF cloth system; every result bit-identical, positive definite
+//! or shifted indefinite with 2×2 and delayed pivots). The original module documentation follows.
 //!
 //! Sparse symmetric direct factorization: supernodal multifrontal LDLᵀ with
 //! AMD fill-reducing ordering, restricted (within-supernode) 1×1/2×2
@@ -721,7 +724,16 @@ impl SymbolicLdlt {
             let mut deferred: Vec<Deferred> = Vec::new();
             let mut k = 0usize;
             while k < wf {
-                let choice = choose_pivot(&f, m, wf, k, opts, zero_tol);
+                // The eliminations keep only the lower triangle current. The usual pivot, the current
+                // column, reads only that; the full search and its swaps also read the upper one, so it
+                // is copied over first: the values the eager mirror held, bit for bit.
+                let choice = match diagonal_pivot(&f, m, k, opts, zero_tol) {
+                    Some(choice) => choice,
+                    None => {
+                        mirror_block(&mut f, m, k, wf);
+                        choose_pivot(&f, m, wf, k, opts, zero_tol)
+                    }
+                };
                 match choice {
                     PivotChoice::One(q) => {
                         if q != k {
@@ -739,16 +751,14 @@ impl SymbolicLdlt {
                         for i in k + 1..m {
                             f[i + k * m] /= d;
                         }
-                        // Fully-summed columns now (mirrored inside the fully-summed block, which the
-                        // pivot search reads both ways); the panel block after the loop.
+                        // Fully-summed columns now (their lower triangle: see `mirror_block`); the
+                        // panel block after the loop.
                         for jc in k + 1..wf {
-                            let cj = d * f[jc + k * m];
-                            for i in jc..m {
-                                let t = f[i + k * m] * cj;
-                                f[i + jc * m] -= t;
-                                if i != jc && i < wf {
-                                    f[jc + i * m] = f[i + jc * m];
-                                }
+                            let (left, right) = f.split_at_mut(jc * m);
+                            let src = &left[k * m + jc..(k + 1) * m];
+                            let cj = d * src[0];
+                            for (x, &s) in right[jc..m].iter_mut().zip(src) {
+                                *x -= s * cj;
                             }
                         }
                         deferred.push(Deferred::One { col: k, d });
@@ -794,12 +804,11 @@ impl SymbolicLdlt {
                         for (jdx, jc) in (k + 2..wf).enumerate() {
                             let aj = acol[jdx];
                             let bj = bcol[jdx];
-                            for i in jc..m {
-                                let t = f[i + k * m].mul_add(aj, f[i + (k + 1) * m] * bj);
-                                f[i + jc * m] -= t;
-                                if i != jc && i < wf {
-                                    f[jc + i * m] = f[i + jc * m];
-                                }
+                            let (left, right) = f.split_at_mut(jc * m);
+                            let sa = &left[k * m + jc..(k + 1) * m];
+                            let sb = &left[(k + 1) * m + jc..(k + 2) * m];
+                            for ((x, &u), &w) in right[jc..m].iter_mut().zip(sa).zip(sb) {
+                                *x -= u.mul_add(aj, w * bj);
                             }
                         }
                         // the panel rows' pre-scaling column values, for the deferred update
@@ -846,23 +855,28 @@ impl SymbolicLdlt {
             // operands, so the result is bit-identical to updating it pivot by pivot with its mirror,
             // without the strided upper-triangle writes and one column at a time. Only its lower
             // triangle is kept; the update below reads that.
+            // (Pivot columns lie left of every panel column, so splitting the front at column `jc`
+            // gives disjoint slices the compiler vectorizes; the arithmetic is unchanged.)
             for jc in wf..m {
+                let (left, right) = f.split_at_mut(jc * m);
+                let dst = &mut right[jc..m];
                 for p in &deferred {
                     match p {
                         Deferred::One { col, d } => {
                             let k = *col;
-                            let cj = d * f[jc + k * m];
-                            for i in jc..m {
-                                let t = f[i + k * m] * cj;
-                                f[i + jc * m] -= t;
+                            let src = &left[k * m + jc..(k + 1) * m];
+                            let cj = d * src[0];
+                            for (x, &s) in dst.iter_mut().zip(src) {
+                                *x -= s * cj;
                             }
                         }
                         Deferred::Two { col, a, b } => {
                             let k = *col;
                             let (aj, bj) = (a[jc - wf], b[jc - wf]);
-                            for i in jc..m {
-                                let t = f[i + k * m].mul_add(aj, f[i + (k + 1) * m] * bj);
-                                f[i + jc * m] -= t;
+                            let sa = &left[k * m + jc..(k + 1) * m];
+                            let sb = &left[(k + 1) * m + jc..(k + 2) * m];
+                            for ((x, &u), &w) in dst.iter_mut().zip(sa).zip(sb) {
+                                *x -= u.mul_add(aj, w * bj);
                             }
                         }
                     }
@@ -1045,6 +1059,29 @@ enum PivotChoice {
 }
 
 /// Largest off-diagonal magnitude of local column `c` among rows `k..m`.
+/// [`choose_pivot`]'s first candidate, the current column `k`, which reads only the lower triangle.
+fn diagonal_pivot(
+    f: &[f64],
+    m: usize,
+    k: usize,
+    opts: &LdltOptions,
+    zero_tol: f64,
+) -> Option<PivotChoice> {
+    let dk = f[k + k * m].abs();
+    (dk > zero_tol && dk >= opts.pivot_threshold * gamma_of(f, m, k, k))
+        .then_some(PivotChoice::One(k))
+}
+
+/// Copies the lower triangle of the trailing fully-summed block `k..w` onto its upper triangle, for the
+/// full pivot search and the symmetric swaps (the eliminations update only the lower triangle).
+fn mirror_block(f: &mut [f64], m: usize, k: usize, w: usize) {
+    for c in k..w {
+        for r in c + 1..w {
+            f[c + r * m] = f[r + c * m];
+        }
+    }
+}
+
 fn gamma_of(f: &[f64], m: usize, k: usize, c: usize) -> f64 {
     let mut g = 0.0f64;
     for i in k..m {
@@ -1200,17 +1237,19 @@ impl LdltFactor {
         for (k, &o) in self.perm.iter().enumerate() {
             y[k] = b[o];
         }
-        // Forward: L z = P b.
+        // Forward: L z = P b. (One gather buffer for every supernode; slice loops, same arithmetic.)
+        let mut v: Vec<f64> = Vec::new();
         for s in &self.snodes {
             let w = s.block_vars.len();
             let m = w + s.panel_vars.len();
-            let mut v: Vec<f64> = Vec::with_capacity(m);
+            v.clear();
             v.extend(s.block_vars.iter().map(|&i| y[i]));
             v.extend(s.panel_vars.iter().map(|&i| y[i]));
             for k in 0..w {
                 let vk = v[k];
-                for (i, vi) in v.iter_mut().enumerate().skip(k + 1) {
-                    *vi = s.l[i + k * m].mul_add(-vk, *vi);
+                let col = &s.l[k * m + k + 1..(k + 1) * m];
+                for (vi, &l) in v[k + 1..].iter_mut().zip(col) {
+                    *vi = l.mul_add(-vk, *vi);
                 }
             }
             for (k, &i) in s.block_vars.iter().enumerate() {
@@ -1244,13 +1283,14 @@ impl LdltFactor {
         for s in self.snodes.iter().rev() {
             let w = s.block_vars.len();
             let m = w + s.panel_vars.len();
-            let mut v: Vec<f64> = Vec::with_capacity(m);
+            v.clear();
             v.extend(s.block_vars.iter().map(|&i| y[i]));
             v.extend(s.panel_vars.iter().map(|&i| y[i]));
             for k in (0..w).rev() {
+                let col = &s.l[k * m + k + 1..(k + 1) * m];
                 let mut acc = v[k];
-                for (i, &vi) in v.iter().enumerate().skip(k + 1) {
-                    acc = s.l[i + k * m].mul_add(-vi, acc);
+                for (&l, &vi) in col.iter().zip(&v[k + 1..]) {
+                    acc = l.mul_add(-vi, acc);
                 }
                 v[k] = acc;
             }

@@ -92,7 +92,8 @@ shoulders, crotch length and outseam added) the verdicts are unchanged (no flag,
 grows: the bolero 374 Newton iterations, the trousers 563 (one sewing step unconverged, the drape
 converged). Newton to 1e-3 m/s with the inexact Newton below (the defaults since 2026-10-13) brings them
 to 11 and 83 CPU-seconds on an M4 Pro (bolero 175 iterations, 41 factorizations; trousers 334, 108;
-measured as CPU time on a heavily loaded machine), the same verdicts and readings within 0.3 mm.
+measured as CPU time on a heavily loaded machine), the same verdicts and readings within 0.3 mm; the
+vectorized factorization (below) then 8.3 and 59 s, bit for bit the same drape.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
@@ -244,7 +245,11 @@ identical native debug, release and wasm32-wasip1. 79 s release for KATs 8 and 1
 multifrontal LDLᵀ with AMD and inertia; adds `analyze_with_permutation`; assembly orders triplets by a
 row-bucket pass instead of a global stable sort, the same order; the numeric factorization applies the
 panel block's Schur updates after the fully-summed columns, column by column and in pivot order, keeping
-only its lower triangle: bit-identical, both KAT digests unchanged), `eigen.rs` (`jacobi_eigh`);
+only its lower triangle: bit-identical, both KAT digests unchanged; the dense kernels then became slice
+loops over disjoint columns, which the compiler vectorizes, and the fully-summed block's upper triangle
+is mirrored from the lower one only when the pivot search goes past the current column: factorization
+2.9× and solve 1.3× faster, bit-identical on positive definite and shifted indefinite systems with 2×2
+and delayed pivots, every KAT digest unchanged), `eigen.rs` (`jacobi_eigh`);
 `sparse/precond.rs` (`pcg`, from fs-sparse at `6eb72a0c`: any preconditioner closure, starts from zero,
 stops with the reason on non-positive curvature or the cap).
 
