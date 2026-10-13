@@ -18,6 +18,7 @@ pub mod layout;
 pub mod outline;
 pub mod pdf;
 pub mod pole;
+pub mod preview;
 pub mod pyjson;
 pub mod svg;
 pub mod text;
@@ -51,6 +52,7 @@ pub use pdf::{
     Canvas, INCH, OCG_COMMON, PT_PER_MM, Paper, PdfDoc, PdfFile, Tile, export_copyshop,
     export_projector, export_tiled, tile_grid,
 };
+pub use preview::diagnostic_svg;
 pub use pyjson::PyJson;
 pub use svg::{SVG_NAMESPACE, master_svg, svg_piece_group};
 pub use text::{
