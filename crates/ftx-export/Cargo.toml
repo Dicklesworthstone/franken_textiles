@@ -12,6 +12,7 @@ homepage.workspace = true
 ftx-core = { path = "../ftx-core" }
 ftx-pattern = { path = "../ftx-pattern" }
 serde_json.workspace = true
+miniz_oxide.workspace = true
 
 [lints]
 workspace = true

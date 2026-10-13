@@ -9,6 +9,11 @@
     OUT_DIR/master_svg.json the master SVG (spec 03 §6, §7.1) and its manifest entry for every pattern (and the
                            NOTE piece), plus --unfold and --layout-width 300 for TESTBODICE, ROBUST and the 92 cm
                            bolero and trousers
+    OUT_DIR/pdfs.json, OUT_DIR/pdf/<case>/*.pdf
+                           the tiled Letter and A4, copy-shop A0 and 36x48in and projector light and dark PDFs (spec
+                           03 §7.2-7.6) as written, their manifest entries and the reference checker's items, for
+                           TESTBODICE, ROBUST (also at --layout-width 300 with and without --keep-blank-pages),
+                           TESTBODICE at --projector-width 1100 and the 92 cm bolero and trousers
     OUT_DIR/outlines.json  seam-allowance cut outlines (ring and method), sew rings and edge breaks of every
                            piece as drafted and of every instance, for the spec's fixture patterns (TESTBODICE,
                            ROBUST, the single pieces) and the drafted garments of tests/fixtures/oracle/pattern
@@ -217,6 +222,36 @@ def main(argv=None) -> int:
     path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "export", "fixture": "master_svg", "meta": meta,
                                 "cases": scases}, separators=(",", ":"), ensure_ascii=False) + "\n")
     print(f"wrote {len(scases)} master SVG cases to {path}")
+
+    # ------------------------------------------------------------------ PDFs (files kept as they are)
+    import shutil
+    pdf_root = args.out_dir / "pdf"
+    by_id = dict((cid, doc) for cid, doc in svg_patterns)
+    pcases = []
+    for cid, src, opts in (("testbodice", "testbodice", {}), ("robust", "robust", {}),
+                           ("robust_width300", "robust", {"layout_width": 300.0}),
+                           ("robust_width300_keep", "robust", {"layout_width": 300.0, "keep_blank": True}),
+                           ("testbodice_projector1100", "testbodice", {"projector_width": 1100.0}),
+                           ("bolero920", "zouave_bolero-920", {}), ("trousers920", "zouave_trousers-920", {})):
+        doc = by_id[src]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = X.Ctx(pm.Pattern(json.loads(json.dumps(doc))), Path(tmp), created="2026-10-11T12:00", **opts)
+            X.export_svg(ctx)
+            files = [*X.export_tiled(ctx), *X.export_copyshop(ctx), *X.export_projector(ctx)]
+            ctx.save_manifest()
+            rep = X.check_dir(Path(tmp))
+            dest = pdf_root / cid
+            dest.mkdir(parents=True, exist_ok=True)
+            for f in files:
+                shutil.copyfile(f, dest / f.name)
+            manifest = {k: v for k, v in ctx.manifest["files"].items() if k.startswith("pdf_")}
+            items = [it for it in rep.items if it["check"].startswith("pdf.")]
+        pcases.append({"id": cid, "input": {"pattern": doc, "options": opts, "created": "2026-10-11T12:00"},
+                       "output": {"files": [f.name for f in files], "manifest": manifest, "checks": items}})
+    path = args.out_dir / "pdfs.json"
+    path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "export", "fixture": "pdfs", "meta": meta,
+                                "cases": pcases}, separators=(",", ":"), ensure_ascii=False) + "\n")
+    print(f"wrote {len(pcases)} PDF cases to {path} and their files to {pdf_root}")
     return 0
 
 

@@ -82,9 +82,9 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Piece geometry (notches, grain, fold, internal, drills, decor, labels) | 03 §5 | present | `geom.rs`, `pole.rs`: 376 geometries, 38,422 numbers within 1e-9 mm incl. default grains (GEOS's inscribed circle: exact for convex triangles and quadrilaterals, else its branch and bound); main labels where the largest block fits (all fit; never > 5 % smaller unless the reference's overlaps) (`tests/export_geoms.rs`) |
 | Layouts | 03 §6 | present | `layout.rs` `shelf_layout` (rotate to grain, y down/up, top offset); the master layout in `ctx.rs`; equal placements in every master SVG fixture |
 | Master SVG | 03 §7 | present | `svg.rs`: 25 SVGs (fixtures, `--unfold`, `--layout-width 300`), 2,080 of 2,479 lines byte-identical, the rest union cut lines within 0.05 mm and main-label lines (`tests/export_svg.rs`); no `ftx export` command yet (FTX-18) |
-| Tiled Letter and A4 PDFs | 03 §7 | missing | |
-| Copy-shop A0 and 36 × 48 in | 03 §7 | missing | |
-| Projector light and dark | 03 §7 | missing | |
+| Tiled Letter and A4 PDFs | 03 §7 | present | `pdf.rs` (hand-written writer, FlateDecode via `miniz_oxide`, dates from `created`): same objects and content as the reference's files but for union cut lines (0.05 mm) and main-label lines (`tests/export_pdfs.rs`) |
+| Copy-shop A0 and 36 × 48 in | 03 §7 | present | `pdf.rs`: orientation with fewer sheets, band with squares and scale bars; as above |
+| Projector light and dark | 03 §7 | present | `pdf.rs`: grain vertical, 12 mm text, calibration grid layer off, the 200 in limit refused; as above |
 | DXF-ASTM and DXF-AAMA (R12) | 03 §7 | missing | |
 | Flat DXF (R2000, stroke font) | 03 §7 | missing | |
 | HPGL | 03 §7 | missing | |
@@ -92,7 +92,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | GarmentCode JSON | 03 §7 | missing | |
 | Tajima DST embroidery files | 03 §7 | missing | |
 | Export manifest | 03 §7 | missing | |
-| Acceptance checks (51) | 03 §8 | partial | the SVG checks (`checks.rs`): pass on ftx's and the reference's master SVGs, catch the spec's transform mutation, a missing sub-group and a wrong viewBox |
+| Acceptance checks (51) | 03 §8 | partial | the SVG and PDF checks (`checks.rs`): pass on ftx's files; on the reference's PDFs the PDF checker gives exactly its 294 items; mutations fail exactly their check; DXF, HPGL, cutter, GarmentCode and DST checks to come (FTX-17) |
 
 ## Tracing (`ftx-trace`, spec 04 §10)
 

@@ -26,6 +26,9 @@ pub struct ExportOptions {
     pub keep_blank: bool,
     /// Seam allowance override (mm).
     pub sa: Option<f64>,
+    /// Creation time (`YYYY-MM-DDTHH:MM`) for file dates and the manifest; the pattern's `meta.created` when
+    /// `None`.
+    pub created: Option<String>,
 }
 
 impl Default for ExportOptions {
@@ -37,6 +40,7 @@ impl Default for ExportOptions {
             layout_width: None,
             keep_blank: false,
             sa: None,
+            created: None,
         }
     }
 }
@@ -53,6 +57,8 @@ pub struct Ctx<'a> {
     pub sa: f64,
     /// The options.
     pub opts: ExportOptions,
+    /// Creation time (`YYYY-MM-DDTHH:MM`; empty when neither the options nor the pattern give one).
+    pub created: String,
     master: OnceCell<Layout>,
 }
 
@@ -101,8 +107,14 @@ impl<'a> Ctx<'a> {
             .sa
             .or_else(|| meta.get("sa_mm").and_then(Value::as_f64))
             .unwrap_or(DEFAULT_SA);
+        let created = opts
+            .created
+            .clone()
+            .or_else(|| meta["created"].as_str().map(str::to_string))
+            .unwrap_or_default();
         Ok(Self {
             pattern,
+            created,
             style: safe_name(&style, 20),
             size: if size.is_empty() { "base".into() } else { size },
             sa,

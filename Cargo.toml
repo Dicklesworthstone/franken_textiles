@@ -49,6 +49,11 @@ serde_json = { version = "=1.0.151", default-features = false, features = ["std"
 # inner-face iteration are used (deterministic for a fixed insertion order); its hash sets serve the
 # flood fill, which we do not call.
 spade = { version = "=2.15.1", default-features = false, features = ["std"] }
+# DEFLATE for PDF content streams (written FlateDecode, read back by the export checks; spec 03 §7.2, §8.3).
+# 0.8.9 with its default `with-alloc`; pulls only adler2. Pure Rust, builds for wasm32. Used:
+# deflate::compress_to_vec_zlib and inflate::decompress_to_vec_zlib. It also sits under the PNG decoding
+# the plan allows for tracing.
+miniz_oxide = { version = "=0.8.9" }
 
 [profile.release-perf]
 inherits = "release"

@@ -2,8 +2,8 @@
 
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
 number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the
-master SVG (§7.1) and its acceptance checks (§8). The PDFs, DXFs, HPGL, cutter files, GarmentCode, DST, the
-manifest and the other checks follow (FTX-16, FTX-17).
+master SVG (§7.1), the PDFs (§7.2–7.6) and their acceptance checks (§8). The DXFs, HPGL, cutter files,
+GarmentCode, DST, the manifest file and the other checks follow (FTX-17).
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
@@ -73,14 +73,40 @@ entry. Against `tests/fixtures/oracle/export/master_svg.json` (every fixture pat
 other line equal but for the cut line of a union outline (within 0.05 mm) and the main label's lines (its own
 anchor and size); manifest entries within 0.002 mm.
 
+**PDFs** (`pdf.rs`, §7.2–7.6). The reference's hand-written writer: one content-stream line per operator group
+(`fnum` numbers), the two standard fonts, the six layers (`Size …`, notches, seam lines, grainlines & labels,
+placement marks, soutache; the projector's calibration grid off), FlateDecode streams (`miniz_oxide`, level 9:
+valid, not zlib's bytes), `/PrintScaling /None`, `/FPTile` page dictionaries. The creation date comes from
+`created` (the options' or the pattern's `meta.created`), so every file is reproducible; the producer is
+FrankenTextiles. Targets: tiled Letter and A4 (information page with the test squares, instructions, 1 in square and
+tile map; tiles with watermark, clipped content 5 mm past the frame, join half-diamonds, footer), copy-shop A0 and
+36 × 48 in (the orientation with fewer printed sheets, the band with squares and scale bars), projector light and
+dark (every piece once, unfolded, grain vertical, text at least 12 mm high, test squares, calibration grid); each
+with its manifest entry. A tile is blank when no cut line reaches it (shrunk by 0.01 mm); a piece is drawn on a
+tile when its cut line comes within 1 mm of the tile's bleed box.
+
+Against the reference's own files (`tests/fixtures/oracle/export/pdf/`: TESTBODICE, ROBUST also at
+`--layout-width 300` with and without `--keep-blank-pages`, TESTBODICE at `--projector-width 1100`, the 92 cm bolero
+and trousers; 42 PDFs): the same files and manifest entries; the same objects and dictionaries (lengths, the
+date and the producer aside); of 36,867 inflated content lines 34,672 byte-identical, every other number equal to
+0.000 mm but for 119 union cut lines (within 0.05 mm) and 2,076 main-label text lines (ftx's own anchor and
+size).
+
 **Checks** (`checks.rs`, `xml.rs`, §8). `check_svg`: `svg.no_transform`, `svg.mm_units_viewbox`,
 `svg.piece_subgroups` (master) or `cutter.single_closed_path` (cutter), with the reference's details, reading
 the file back with a small XML reader. They pass on all 25 of ftx's and the reference's master SVGs, and the
 reference's own mutation (a `transform` before the title), a piece without its fold group and a wrong viewBox
-each fail exactly their check.
+each fail exactly their check. `check_pdf` reads PDFs back as the reference does (objects, inflated streams,
+OCG names, pages; a content interpreter for the CTM, tags, rectangles, tagged cut points and font sizes):
+`pdf.print_scaling_none`, `pdf.ocg_unique`, `pdf.mediabox_exact`, `pdf.ocg_identical_across_pages`, the test
+squares (page 1, every copy-shop sheet, the projector), `pdf.projector_text_cap_12mm`, `pdf.projector_under_200in`,
+and with the master SVG's cut vertices `pdf.restitch_matches_master` and `pdf.tiles_cover_master`. On the
+reference's 42 PDFs it gives exactly the reference checker's 294 items, details included; all 294 pass on ftx's;
+a wrong paper, master vertices 1 mm off and a master vertex off every tile each fail exactly their check.
 
-**Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve or a seam allowance
-outline without area.
+**Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve, a seam allowance
+outline without area or a pattern traced in pixels; `out_of_range` for a projector page over 200 in.
 
 **No claims.** GEOS's exact vertex lists for union outlines (its ring starts where its overlay starts and
-its sliver clean moves points by up to 1e-4 mm); the reference's main label anchors; the targets after §7.1, the manifest file and the other checks.
+its sliver clean moves points by up to 1e-4 mm); the reference's main label anchors; zlib's compressed bytes; the targets after §7.6, the manifest file and the
+other checks.
