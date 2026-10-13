@@ -77,8 +77,8 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
-| Text and number helpers (ascii_text, safe_name, formatting) | 03 §2 | missing | |
-| Seam-allowance cut outline | 03 §4 | missing | |
+| Text and number helpers (ascii_text, safe_name, formatting) | 03 §2 | present | `ftx-export` `text.rs`: fnum, ascii_text (NFKD from a table generated with the reference's Python), safe_name, text_width, wrap, stroke font, column letters, page lists; 524 oracle values byte-exact (`tests/export_helpers.rs`) |
+| Seam-allowance cut outline | 03 §4 | present | `outline.rs`, `union.rs` (own overlay in place of GEOS): 102 outlines of the spec's fixtures and the drafted garments, methods equal, mitre within 1.2e-13 mm, union within 4.9e-6 mm Hausdorff (`tests/export_outlines.rs`) |
 | Piece geometry (notches, grain, fold, internal, drills, decor, labels) | 03 §5 | missing | |
 | Layouts | 03 §6 | missing | |
 | Master SVG | 03 §7 | missing | |

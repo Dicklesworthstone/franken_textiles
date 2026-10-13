@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 ftx-core = { path = "../ftx-core" }
 ftx-drape = { path = "../ftx-drape" }
+ftx-export = { path = "../ftx-export" }
 ftx-pattern = { path = "../ftx-pattern" }
 serde_json.workspace = true
 

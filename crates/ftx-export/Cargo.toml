@@ -1,0 +1,17 @@
+[package]
+name = "ftx-export"
+description = "FrankenTextiles exports: seam-allowance outlines, piece geometry, layouts and every deliverable of a pattern"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+ftx-core = { path = "../ftx-core" }
+ftx-pattern = { path = "../ftx-pattern" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

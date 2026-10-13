@@ -53,6 +53,7 @@ version = "0.1.0"
 dependencies = [
  "ftx-core",
  "ftx-drape",
+ "ftx-export",
  "ftx-pattern",
  "serde_json",
 ]
@@ -74,6 +75,15 @@ dependencies = [
  "ftx-pattern",
  "serde_json",
  "spade",
+]
+
+[[package]]
+name = "ftx-export"
+version = "0.1.0"
+dependencies = [
+ "ftx-core",
+ "ftx-pattern",
+ "serde_json",
 ]
 
 [[package]]
