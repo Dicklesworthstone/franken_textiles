@@ -145,11 +145,6 @@ fn traces_match_the_reference() {
                 }
             }
             (Ok(_), Some(_)) => fails.push(format!("{id}: traced; the reference refused")),
-            (Err(e), None) if opts.threshold == "adaptive" => {
-                // the adaptive threshold is not ported: refused, recorded in the contract
-                assert!(e.contains("adaptive"), "{id}: {e}");
-                println!("{id}: refused (adaptive threshold not ported)");
-            }
             (Err(e), None) => fails.push(format!("{id}: {e}")),
             (Ok(t), None) => {
                 if t.mask != gray(get(out, "mask_png")) {
@@ -181,6 +176,10 @@ fn traces_match_the_reference() {
     println!("{identical} of {total} traces byte-identical");
     assert!(fails.is_empty(), "{}", fails.join("\n"));
     cmp.finish("trace drafts");
+    assert_eq!(
+        identical, total,
+        "every captured trace must remain byte-identical"
+    );
 
     // the comparison is not vacuous: a slightly different smoothing gives another draft
     let case = items(get(&doc, "cases"))

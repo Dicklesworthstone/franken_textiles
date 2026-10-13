@@ -79,7 +79,7 @@ fn trace_reproduces_the_reference() {
         .join("../../tests/fixtures/oracle/trace/raster_trace.json");
     let doc = PyJson::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
     let dir = scratch();
-    let flags: [(&str, &[&str]); 4] = [
+    let flags: [(&str, &[&str]); 5] = [
         ("outlines", &[]),
         (
             "crop-erase",
@@ -87,6 +87,7 @@ fn trace_reproduces_the_reference() {
         ),
         ("panel-retry", &[]),
         ("dashed-fold-off", &["--no-dashes"]),
+        ("adaptive", &["--threshold", "adaptive"]),
     ];
     for (id, extra) in flags {
         let c = case(&doc, id);
@@ -148,7 +149,7 @@ fn trace_reproduces_the_reference() {
     assert_eq!(
         retries.as_array().unwrap().len(),
         0,
-        "dashed-fold-off has no panel"
+        "the synthetic sheet has no panel"
     );
 
     // refusals
@@ -171,7 +172,7 @@ fn trace_reproduces_the_reference() {
             "--out",
             "x",
             "--threshold",
-            "adaptive",
+            "not-a-method",
         ],
         3,
     );
@@ -179,7 +180,7 @@ fn trace_reproduces_the_reference() {
         r["refusal"]["message"]
             .as_str()
             .unwrap()
-            .contains("adaptive")
+            .contains("threshold must be")
     );
     let r = run(
         &dir,
@@ -205,4 +206,170 @@ fn trace_reproduces_the_reference() {
         r["refusal"]["message"].as_str().unwrap().contains("PNG"),
         "{r}"
     );
+}
+
+/// Two independently drawn rectangular outlines under a strong left-to-right lighting ramp.
+/// Their local contrast exceeds 10 levels, but the left background is darker than the right ink.
+fn shadow_sheet() -> ftx_trace::raster::Gray {
+    let (w, h) = (360, 260);
+    let mut image = ftx_trace::raster::Gray::filled(w, h, 0);
+    for y in 0..h {
+        for x in 0..w {
+            let mut value = (80 + 160 * x / (w - 1)) as u8;
+            for (left, top, right, bottom, ink) in
+                [(30, 35, 150, 200, 20), (210, 50, 325, 215, 125)]
+            {
+                if (left - 2..=right + 2).contains(&x)
+                    && (top - 2..=bottom + 2).contains(&y)
+                    && (x <= left + 2 || x >= right - 2 || y <= top + 2 || y >= bottom - 2)
+                {
+                    value = ink;
+                }
+            }
+            image.data[y * w + x] = value;
+        }
+    }
+    image
+}
+
+#[test]
+fn adaptive_recovers_shadowed_outlines_and_exports_still_require_scale() {
+    use ftx_trace::raster::image::encode_png_gray;
+    let dir = scratch();
+    std::fs::write(dir.join("shadow.png"), encode_png_gray(&shadow_sheet())).unwrap();
+    let default = run(
+        &dir,
+        &[
+            "trace",
+            "shadow.png",
+            "--channel",
+            "dark",
+            "--out",
+            "default",
+        ],
+        0,
+    );
+    let explicit = run(
+        &dir,
+        &[
+            "trace",
+            "shadow.png",
+            "--channel",
+            "dark",
+            "--threshold",
+            "otsu",
+            "--out",
+            "otsu",
+        ],
+        0,
+    );
+    assert_eq!(default["result"]["pieces"], explicit["result"]["pieces"]);
+    assert_eq!(
+        std::fs::read(dir.join("default/mask.png")).unwrap(),
+        std::fs::read(dir.join("otsu/mask.png")).unwrap()
+    );
+    // This global-threshold result mistakes the shadow for a border-connected filled piece.
+    assert_eq!(default["result"]["pieces"][0]["touches_border"], true);
+    let adaptive = run(
+        &dir,
+        &[
+            "trace",
+            "shadow.png",
+            "--channel",
+            "dark",
+            "--threshold",
+            "adaptive",
+            "--out",
+            "adaptive",
+        ],
+        0,
+    );
+    let pieces = adaptive["result"]["pieces"].as_array().unwrap();
+    assert_eq!(pieces.len(), 2);
+    for p in pieces {
+        assert_eq!(p["mode"], "ring");
+        assert_eq!(p["touches_border"], false);
+        assert_eq!(p["vertices"], 4);
+    }
+    let raw = std::fs::read_to_string(dir.join("adaptive/draft.pattern.json")).unwrap();
+    let draft: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(draft["meta"]["scale_status"], "UNSCALED");
+    assert_eq!(draft["meta"]["trace"]["threshold"]["method"], "adaptive");
+    let refusal = run(
+        &dir,
+        &[
+            "export",
+            "svg",
+            "adaptive/draft.pattern.json",
+            "--out",
+            "unscaled-export",
+        ],
+        3,
+    );
+    assert_eq!(refusal["refusal"]["code"], "unscaled");
+    run(
+        &dir,
+        &[
+            "scale-fit",
+            "adaptive/draft.pattern.json",
+            "--target",
+            "p1:width=120mm",
+            "--out",
+            "scaled.json",
+        ],
+        0,
+    );
+    run(
+        &dir,
+        &["export", "svg", "scaled.json", "--out", "scaled-export"],
+        0,
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("adaptive/draft.pattern.json")).unwrap(),
+        raw
+    );
+}
+
+#[test]
+fn adaptive_inverts_the_channel_before_filtering_and_keeps_polarity_receipt() {
+    use ftx_trace::raster::image::encode_png_gray;
+    let dir = scratch();
+    let mut image = shadow_sheet();
+    std::fs::write(dir.join("dark.png"), encode_png_gray(&image)).unwrap();
+    image.data.iter_mut().for_each(|p| *p = 255 - *p);
+    std::fs::write(dir.join("light.png"), encode_png_gray(&image)).unwrap();
+    for (image, channel, flag, out) in [
+        ("dark.png", "dark", "--no-invert", "dark"),
+        ("dark.png", "gray", "--invert", "inverted"),
+        ("light.png", "light", "--no-invert", "light"),
+    ] {
+        run(
+            &dir,
+            &[
+                "trace",
+                image,
+                "--channel",
+                channel,
+                "--threshold",
+                "adaptive",
+                flag,
+                "--out",
+                out,
+            ],
+            0,
+        );
+        assert_eq!(
+            std::fs::read(dir.join(out).join("mask.png")).unwrap(),
+            std::fs::read(dir.join("dark/mask.png")).unwrap()
+        );
+        let draft: Value = serde_json::from_slice(
+            &std::fs::read(dir.join(out).join("draft.pattern.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            draft["meta"]["trace"]["threshold"]["flipped"],
+            out == "inverted"
+        );
+        assert_eq!(draft["meta"]["trace"]["threshold"]["method"], "adaptive");
+    }
 }

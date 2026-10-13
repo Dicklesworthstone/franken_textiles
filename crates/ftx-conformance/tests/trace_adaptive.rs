@@ -9,7 +9,7 @@ use ftx_trace::raster::{image::Gray, threshold::adaptive_gaussian};
 fn adaptive_masks_match_independent_opencv_pixels() {
     let data = fixture("trace", "adaptive_opencv413");
     let cases = data["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 24);
+    assert_eq!(cases.len(), 36);
     for case in cases {
         let w = case["width"].as_u64().unwrap() as usize;
         let h = case["height"].as_u64().unwrap() as usize;

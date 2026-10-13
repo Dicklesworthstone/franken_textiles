@@ -61,7 +61,8 @@ pub fn otsu_binary(img: &Gray) -> (f64, Gray) {
 }
 
 /// Gaussian adaptive foreground mask for tracing (spec 04 §10.2): odd block size
-/// `max(15, min(width, height) / 20 | 1)`, binary comparison and C = -10.
+/// `max(15, round(min(width, height) / 20) | 1)`, binary comparison and C = -10.
+/// Window rounding is nearest-even before making the result odd, as in the reference's `_odd`.
 /// The caller must invert the channel first when foreground is dark.
 ///
 /// Uses replicated borders, separable float32 convolution and nearest-even conversion of
@@ -79,7 +80,7 @@ pub fn adaptive_gaussian(img: &Gray) -> Result<Gray, String> {
     if img.data.len() > 40_000_000 {
         return Err("adaptive threshold exceeds the 40000000-pixel image budget".into());
     }
-    let block = ((img.w.min(img.h) / 20) | 1).max(15);
+    let block = (((img.w.min(img.h) as f64 / 20.0).round_ties_even() as usize) | 1).max(15);
     let radius = block / 2;
     // The standard default Gaussian sigma is 0.15 * block + 0.35. Build symmetric
     // coefficients from the outside inward, then normalize once in double precision.

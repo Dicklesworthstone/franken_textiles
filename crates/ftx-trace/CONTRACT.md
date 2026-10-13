@@ -6,7 +6,7 @@ scaled and audited, all from the reference's `vectorize.py`: the trace itself (`
 threshold, contours, stroke centres, dashed-edge bridging, corners, edges, marks), `names.json`
 (`annotate`), the reference grammar (`measure_ref`, `resolve_side`, `twin`), `fit_scale`, the round-0
 `audit` with its label consensus, and `parse_length`. Native overlay, label-crop and audit PNGs are
-available in `review` (visual parity boundary below). Not yet: the adaptive threshold, JPEG and WebP input.
+available in `review` (visual parity boundary below). Not yet: JPEG and WebP input.
 
 **Units and frames.** A traced draft is in crop pixels, y up, loops counter-clockwise; `trace.to_px` maps
 piece coordinates back to source pixels and is kept current through mirroring and scaling. After scale-fit
@@ -67,6 +67,15 @@ hierarchy), `contourArea`, `arcLength`, `moments`, `boundingRect`, `approxPolyDP
 it), `fillPoly`, filled `drawContours` and thick lines are bit-identical to OpenCV 5.0 on the three noisy
 benchmark sheets and synthetic cases (33 binarize, 13 contour, 12 distance, 6 Hough, 58 drawing cases).
 
+**Adaptive Gaussian** (`raster/threshold.rs`, spec 04 §10.2). Local float32 separable filtering with
+replicated borders, nearest-even u8 means and C = -10. The window follows `_odd(min(H,W)/20, 15)`:
+round nearest-even before making it odd. Otsu still decides automatic polarity; explicit inversion
+applies to the channel before filtering. The original OpenCV 5 adaptive trace matches exactly, and
+36 independently captured OpenCV 4.13 masks cover narrow images, textures, ramps, impulses and window
+rounding boundaries. This does not emulate every accelerated HAL's last-bit behavior. No runtime
+OpenCV or new dependency; malformed rasters and the 40-million-pixel ceiling are checked. See
+`docs/adaptive-tracing.md` for the CLI and unchanged unscaled-export boundary.
+
 **Buffer** (`buffer.rs`, `buffer_graph.rs`). shapely's `buffer` of polygons and multipolygons with holes
 (`buffer(polygons, distance, join)` → polygons): GEOS 3.14.1's curve set line for line
 (`BufferCurveSetBuilder`: the fully-eroded and triangle in-centre tests, ring sides and labels by
@@ -93,7 +102,7 @@ attempt did and the trace refuses (the skill then runs `vectorize.py`). Plus `Li
 
 **Trace** (`trace.rs`, spec 04 §10.2–10.9). `trace_image` in the reference's order: crop, erase (painted
 with the background), the channel (`auto`/`bgdist` Lab distance from the frame's modal colour, `dark`,
-`light`, `gray`, `sat`, `r`/`g`/`b`, `edge`), Otsu with the frame deciding polarity and a closing, the pieces
+`light`, `gray`, `sat`, `r`/`g`/`b`, `edge`), Otsu or adaptive Gaussian with Otsu's frame deciding polarity and a closing, the pieces
 (`RETR_CCOMP` outer contours above the area floor, ring or fill by ink fraction, the stroke width from the
 hole's area or the distance transform's ridge, each solid opened then closed), dashed runs bridged
 additively, the panel retry (a contour over 60 % of the crop re-estimates the background inside it), the
@@ -113,9 +122,9 @@ The draft is a `PyJson` written as the reference's `json.dump(indent=1)`.
 **Trace parity.** `tests/fixtures/oracle/trace/raster_trace.json` (22 cases: outlines on white and navy,
 fills, a panel retry, a dashed fold with and without bridging, crop and erase, every channel, a forced
 invert, a given background and stroke, changed knobs, a border piece, the Hough grain fallback, the
-adaptive threshold and a bad channel; and the three noisy benchmark sheets from their masks): 21 drafts
-and diagnostics byte-identical with identical masks, the adaptive case refused (`ftx-conformance/tests/
-trace_image.rs`). `ftx trace` on the rendered noisy sheets themselves writes `draft.pattern.json` byte for
+adaptive threshold and a bad channel; and the three noisy benchmark sheets from their masks): all 22 cases
+match exactly, including the adaptive draft. Successful drafts, diagnostics and masks are byte-identical;
+refusals retain the reference's text (`ftx-conformance/tests/trace_image.rs`). `ftx trace` on the rendered noisy sheets themselves writes `draft.pattern.json` byte for
 byte as `vectorize.py trace` does, and the same mask. The reference's own grain fallback raised on OpenCV
 5 (it indexed `HoughLinesP`'s old `(N, 1, 4)` layout), dropping every mark of the piece; fixed in the skill
 (`vectorize.py`, with a regression test) before this port and the oracle.

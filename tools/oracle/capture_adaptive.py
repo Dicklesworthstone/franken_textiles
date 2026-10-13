@@ -18,7 +18,8 @@ if cv2.__version__ != "4.13.0":
     raise SystemExit("capture requires opencv-python 4.13.0; do not silently move the oracle")
 
 cases = []
-for width, height in [(1, 1), (1, 37), (43, 1), (3, 2), (47, 39), (360, 260), (343, 341), (623, 621)]:
+for width, height in [(1, 1), (1, 37), (43, 1), (3, 2), (47, 39), (360, 260), (343, 341), (623, 621),
+                      (310, 309), (311, 310), (351, 349), (351, 350)]:
     y, x = np.indices((height, width), dtype=np.int64)
     for kind in ["texture", "ramp", "impulse"]:
         if kind == "texture":
@@ -30,7 +31,8 @@ for width, height in [(1, 1), (1, 37), (43, 1), (3, 2), (47, 39), (360, 260), (3
             pixels[0, 0] = 255
             pixels[height // 2, width // 2] = 255
         pixels = pixels.astype(np.uint8)
-        block = max(15, (min(width, height) // 20) | 1)
+        # The reference's _odd first rounds ties to even, then raises an even result by one.
+        block = max(15, round(min(width, height) / 20) | 1)
         mask = cv2.adaptiveThreshold(pixels, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                      cv2.THRESH_BINARY, block, -10)
         cases.append({"id": f"{kind}-{width}x{height}", "width": width, "height": height,

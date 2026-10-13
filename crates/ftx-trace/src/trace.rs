@@ -47,7 +47,7 @@ pub struct TraceOptions {
     pub channel: String,
     /// Force (`Some(true)`) or forbid (`Some(false)`) flipping the mask; `None` decides from the frame.
     pub invert: Option<bool>,
-    /// `"otsu"` (`"adaptive"` is refused: not ported).
+    /// `"otsu"` (global) or `"adaptive"` (local Gaussian foreground threshold).
     pub threshold: String,
     /// Background `R, G, B` (overrides the frame estimate).
     pub bg_rgb: Option<[f64; 3]>,
@@ -306,10 +306,11 @@ pub fn make_channel(img: &Bgr, channel: &str, bg: [f64; 3]) -> Result<(Gray, boo
     })
 }
 
-/// `binarize`: the Otsu mask (255 = ink / piece), flipped when the frame says so, then closed.
+/// `binarize`: an Otsu or adaptive mask (255 = ink / piece), with Otsu's frame deciding
+/// polarity in both modes, then closed.
 ///
 /// # Errors
-/// `adaptive` (not ported) or an unknown method.
+/// A malformed raster or an unknown method.
 pub fn binarize(
     ch: &Gray,
     method: &str,
@@ -317,6 +318,9 @@ pub fn binarize(
     invert: Option<bool>,
     close_px: i64,
 ) -> Result<(Gray, PyJson), String> {
+    if ch.w == 0 || ch.h == 0 || ch.w.checked_mul(ch.h) != Some(ch.data.len()) {
+        return Err("binarize needs a nonempty, correctly sized grayscale raster".into());
+    }
     let (t, mut m) = threshold::otsu_binary(ch);
     let (w, h) = (m.w, m.h);
     let (bh, bw) = (2.min(h), 2.min(w));
@@ -342,11 +346,18 @@ pub fn binarize(
             }
         }
         "adaptive" => {
-            return Err(
-                "threshold 'adaptive' is not ported yet (OpenCV's fixed-point Gaussian adaptive \
-                        threshold); use 'otsu'"
-                    .into(),
-            );
+            let inverted;
+            let source = if flip {
+                inverted = Gray {
+                    w,
+                    h,
+                    data: ch.data.iter().map(|v| 255 - v).collect(),
+                };
+                &inverted
+            } else {
+                ch
+            };
+            m = threshold::adaptive_gaussian(source)?;
         }
         _ => return Err("threshold must be 'otsu' or 'adaptive'".into()),
     }
@@ -1435,7 +1446,7 @@ fn paint(img: &mut Bgr, erased: &[bool], bg: [f64; 3]) {
 /// image's resolved path when it came from a file (`meta.source.image`, and the draft's name).
 ///
 /// # Errors
-/// An unknown channel, the adaptive threshold, an empty crop, a degenerate piece, or a traced draft that
+/// An unknown channel or threshold, an empty crop, a degenerate piece, or a traced draft that
 /// fails the structure checks.
 #[allow(clippy::too_many_lines)]
 pub fn trace_image(full: &Bgr, source: Option<&str>, opts: &TraceOptions) -> Result<Trace, String> {

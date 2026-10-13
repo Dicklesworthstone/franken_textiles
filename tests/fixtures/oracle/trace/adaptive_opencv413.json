@@ -6,7 +6,7 @@
     "opencv": "4.13.0",
     "optimized": true,
     "build_sha256": "135d485f88966de24cd6773e6ce441e76cc29a16d334673798e7a2c8bae92a77",
-    "capture_sha256": "07ee1bad5d2d0b24ea9a74bb4424d2345d5f83af9538ce6cf03de5fd2d8f78f5",
+    "capture_sha256": "a3ff5195877d2b2c016e35ce57fa580b345458449ffbbe123a8be776c6fd42ab",
     "boundary": "Supplemental pixel oracle, not a replacement for pinned OpenCV 5 whole-trace parity."
   },
   "cases": [
@@ -248,6 +248,126 @@
       "block": 31,
       "input_sha256": "1e24cb913daa5f4a9541e2bf2e7c4516e1ea48db4b8b1a8e226297b4bc8b1674",
       "mask_sha256": "1e24cb913daa5f4a9541e2bf2e7c4516e1ea48db4b8b1a8e226297b4bc8b1674",
+      "foreground_pixels": 2
+    },
+    {
+      "id": "texture-310x309",
+      "width": 310,
+      "height": 309,
+      "kind": "texture",
+      "block": 15,
+      "input_sha256": "c4d3c1cd0cb34c793b81a8ddb2dc07d5e4019ca4cee3e5421012d7232cf46b5b",
+      "mask_sha256": "096ac957689281904b1f0cb9c1acf04e27ae4336f59bc54e592537a046bd1163",
+      "foreground_pixels": 43776
+    },
+    {
+      "id": "ramp-310x309",
+      "width": 310,
+      "height": 309,
+      "kind": "ramp",
+      "block": 15,
+      "input_sha256": "ad3c50914a71a0afeb620975929745ec66497cb09157e0f2347e822846c75d6c",
+      "mask_sha256": "953231d66cdfc903a7346bf626616ee85f99041de67552e0c93d4fa984ed9c70",
+      "foreground_pixels": 0
+    },
+    {
+      "id": "impulse-310x309",
+      "width": 310,
+      "height": 309,
+      "kind": "impulse",
+      "block": 15,
+      "input_sha256": "f92eb0b90b893598ed37ca6cb7f086d1e3592b3dbb94e770f4e8c2233fee1fe6",
+      "mask_sha256": "f92eb0b90b893598ed37ca6cb7f086d1e3592b3dbb94e770f4e8c2233fee1fe6",
+      "foreground_pixels": 2
+    },
+    {
+      "id": "texture-311x310",
+      "width": 311,
+      "height": 310,
+      "kind": "texture",
+      "block": 17,
+      "input_sha256": "74f983fc50ac0ea0da98e4e2d9a9a70620474030892cc11a3df96e9893417cd7",
+      "mask_sha256": "e2e741e3461a9842edc52aa228c81cf4ef9bcf22948e6604fba2f4382f1a20b8",
+      "foreground_pixels": 44077
+    },
+    {
+      "id": "ramp-311x310",
+      "width": 311,
+      "height": 310,
+      "kind": "ramp",
+      "block": 17,
+      "input_sha256": "7af056c595b6684bd16bec80aaee41a98881b4fb2793e374a527a8643e050ea6",
+      "mask_sha256": "28d939f9cef04b4da9edda714cd01c88e888b9c72220babc86c634753ee620f8",
+      "foreground_pixels": 0
+    },
+    {
+      "id": "impulse-311x310",
+      "width": 311,
+      "height": 310,
+      "kind": "impulse",
+      "block": 17,
+      "input_sha256": "ec524356c37e1339ca181cbb2178e467dbdf38cadd20eab50ea54a02e64c2361",
+      "mask_sha256": "ec524356c37e1339ca181cbb2178e467dbdf38cadd20eab50ea54a02e64c2361",
+      "foreground_pixels": 2
+    },
+    {
+      "id": "texture-351x349",
+      "width": 351,
+      "height": 349,
+      "kind": "texture",
+      "block": 17,
+      "input_sha256": "5e8fe4831885aa49af4b49e54c354c8db264d88c0b441db22191c7b6c842a9ce",
+      "mask_sha256": "3d613178c53b182c8f24087cea1c9c28d9452aaa7546fcd6cd9ffb6d8b78e398",
+      "foreground_pixels": 56008
+    },
+    {
+      "id": "ramp-351x349",
+      "width": 351,
+      "height": 349,
+      "kind": "ramp",
+      "block": 17,
+      "input_sha256": "804bd2ae794586d29a6ca0cb798a311565dde8fa98b0993a76a24bce055081c6",
+      "mask_sha256": "45486bea246cecf61ce5f1853fa23a30779e900c20e4dcc01256066e85a245a3",
+      "foreground_pixels": 0
+    },
+    {
+      "id": "impulse-351x349",
+      "width": 351,
+      "height": 349,
+      "kind": "impulse",
+      "block": 17,
+      "input_sha256": "c868299d0f041d99a01c7680e1efb61dfb3f6de081d46ee1cd6b2facf34533b8",
+      "mask_sha256": "c868299d0f041d99a01c7680e1efb61dfb3f6de081d46ee1cd6b2facf34533b8",
+      "foreground_pixels": 2
+    },
+    {
+      "id": "texture-351x350",
+      "width": 351,
+      "height": 350,
+      "kind": "texture",
+      "block": 19,
+      "input_sha256": "931c2f75afda65a69b0d6d7cd5a638061b618bafe932683d8b2b9df10feeecf5",
+      "mask_sha256": "e29b7f6c1b69ed0814e06496eeb09efb79e5aa39737cc055d4e55f0b0a5fe621",
+      "foreground_pixels": 56276
+    },
+    {
+      "id": "ramp-351x350",
+      "width": 351,
+      "height": 350,
+      "kind": "ramp",
+      "block": 19,
+      "input_sha256": "e920b5d5ac2099e2d8f9314f2109ec3b8022a3b05050fb23be89fe4b1d6f2bfc",
+      "mask_sha256": "3f8f596d223ddf58e9bfde38a05603b48a5e1622ce87401d1ddabe28104762a7",
+      "foreground_pixels": 0
+    },
+    {
+      "id": "impulse-351x350",
+      "width": 351,
+      "height": 350,
+      "kind": "impulse",
+      "block": 19,
+      "input_sha256": "a03d4808687f1d213743c07098848695dd8a3db536fa4ff171009748f91841f9",
+      "mask_sha256": "a03d4808687f1d213743c07098848695dd8a3db536fa4ff171009748f91841f9",
       "foreground_pixels": 2
     }
   ]
