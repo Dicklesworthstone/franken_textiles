@@ -415,3 +415,49 @@ fn surface_aliases_and_invalid_weights_are_not_extra_evidence() {
     run(&dir, &["--out", "alias.json"], 3);
     assert!(!dir.join("alias.json").exists());
 }
+
+#[test]
+fn model_evaluation_limit_is_global_and_cannot_publish_a_partial_fit() {
+    let dir = setup();
+    let stopped = run(
+        &dir,
+        &["--max-evaluations", "1", "--out", "evaluation-stop.json"],
+        4,
+    );
+    let v = &stopped["result"];
+    assert_eq!(v["status"], "BUDGET_STOP");
+    assert_eq!(v["model_evaluations"], 1);
+    assert_eq!(v["options"]["max_model_evaluations"], 1);
+    assert_eq!(v["attempts"][0]["model_evaluations"], 1);
+    assert_eq!(v["attempts"][1]["model_evaluations"], 0);
+    assert_eq!(v["attempts"][1]["status"], "BUDGET_STOP");
+    assert!(v["solution"].is_null());
+    for limit in ["0", "1000001", "-1", "bad"] {
+        run(
+            &dir,
+            &["--max-evaluations", limit, "--out", "invalid-limit.json"],
+            3,
+        );
+        assert!(!dir.join("invalid-limit.json").exists());
+    }
+    let complete = run(&dir, &[], 0);
+    let total = complete["result"]["model_evaluations"].as_u64().unwrap();
+    let final_stop = run(&dir, &["--max-evaluations", &(total - 1).to_string()], 4);
+    assert!(final_stop["result"]["solution"].is_null());
+    assert!(
+        final_stop["result"]["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["status"] == "CONVERGED")
+    );
+    let exact = run(&dir, &["--max-evaluations", &total.to_string()], 0);
+    assert_eq!(exact["result"]["solution"], complete["result"]["solution"]);
+    assert_eq!(
+        exact["result"]["pose_spread_fraction"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}

@@ -493,7 +493,11 @@ impl BodyModel for Adapter {
 }
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(args, "measure fit-body", &["model", "out", "iterations"])?;
+    known_options(
+        args,
+        "measure fit-body",
+        &["model", "out", "iterations", "max-evaluations"],
+    )?;
     let file = single(args, "fit-body")?;
     let (value, input_bytes) = read_json(file)?;
     let request: Request = serde_json::from_value(value)
@@ -511,6 +515,16 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if !(1..=100).contains(&iterations) {
         return Err(bad_input("--iterations must be 1..100"));
     }
+    let max_model_evaluations = option(args, "max-evaluations")
+        .map(|s| {
+            s.parse::<usize>()
+                .map_err(|_| bad_input("--max-evaluations must be 1..1000000"))
+        })
+        .transpose()?
+        .unwrap_or(FitOptions::default().max_model_evaluations);
+    if !(1..=1_000_000).contains(&max_model_evaluations) {
+        return Err(bad_input("--max-evaluations must be 1..1000000"));
+    }
     let path = Path::new(required(args, "model")?);
     let bytes = std::fs::read(path)
         .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display())))?;
@@ -525,6 +539,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         &adapter,
         &FitOptions {
             iterations,
+            max_model_evaluations,
             ..FitOptions::default()
         },
     )?;
@@ -534,16 +549,20 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         _ => 2,
     };
     let mut text = format!(
-        "BODY FIT: {} ({} frames, {} starts)",
+        "BODY FIT: {} ({} frames, {} starts, {} model calls)",
         report.status,
         report.input.frames.len(),
-        report.attempts.len()
+        report.attempts.len(),
+        report.model_evaluations
     );
     for (i, a) in report.attempts.iter().enumerate() {
         text.push_str(&format!("\n  start {i}: {}", a.status));
         for flag in &a.flags {
             text.push_str(&format!("\n    {flag}"));
         }
+    }
+    for flag in &report.flags {
+        text.push_str(&format!("\n  {flag}"));
     }
     text.push_str(&format!("\n{}", report.no_claim));
     let mut value = serde_json::to_value(&report).map_err(|e| bad_input(e.to_string()))?;
