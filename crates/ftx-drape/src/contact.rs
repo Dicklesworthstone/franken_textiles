@@ -752,12 +752,32 @@ impl Contact {
     pub fn with_self_contact(mut self, x: &[Vec3], params: ContactParams) -> Result<Self, Refusal> {
         params.validate()?;
         self.self_params = Some(params);
-        self.creases.clear();
-        if x.iter().all(|v| v.is_finite()) {
-            self.creases = self.find_start_creases(x, &params);
-        }
+        // the creases' search reads every triangle, so the mesh is checked first
+        self.check_cloth(x)?;
+        self.creases = self.find_start_creases(x, &params);
         self.audit_self_contact(x)?;
         Ok(self)
+    }
+
+    /// Finite positions and non-degenerate triangles with valid vertex indices.
+    fn check_cloth(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        if x.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "non-finite cloth position",
+            ));
+        }
+        for t in &self.cloth.triangles {
+            if t.iter().any(|&i| i >= x.len())
+                || (x[t[1]] - x[t[0]]).cross(x[t[2]] - x[t[0]]).norm2() == 0.0
+            {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    "self-contact needs non-degenerate triangles with valid vertex indices",
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// The start creases' count and smallest offset (m).
@@ -821,22 +841,7 @@ impl Contact {
         let Some(p) = self.self_params else {
             return Ok(());
         };
-        if x.iter().any(|v| !v.is_finite()) {
-            return Err(Refusal::new(
-                RefusalCode::NonFinite,
-                "non-finite cloth position",
-            ));
-        }
-        for t in &self.cloth.triangles {
-            if t.iter().any(|&i| i >= x.len())
-                || (x[t[1]] - x[t[0]]).cross(x[t[2]] - x[t[0]]).norm2() == 0.0
-            {
-                return Err(Refusal::new(
-                    RefusalCode::DegenerateGeometry,
-                    "self-contact needs non-degenerate triangles with valid vertex indices",
-                ));
-            }
-        }
+        self.check_cloth(x)?;
         let boxes = |ids: &[usize]| swept_box(ids, x, None);
         let edges: Vec<_> = self.cloth.edges.iter().map(|e| boxes(e)).collect();
         let tris: Vec<_> = self.cloth.triangles.iter().map(|t| boxes(t)).collect();
@@ -1653,6 +1658,19 @@ mod tests {
         });
         let err = c.with_self_contact(&x, params()).unwrap_err();
         assert_eq!(err.code, RefusalCode::IntersectingStart);
+    }
+
+    #[test]
+    fn self_contact_refuses_a_bad_triangle_before_searching_creases() {
+        let x = layers(0.002);
+        let c = Contact::new(
+            Body::empty(),
+            params(),
+            vec![[0, 1, 2], [3, 4, 99]],
+            |_, _| 0.01,
+        );
+        let err = c.with_self_contact(&x, params()).unwrap_err();
+        assert_eq!(err.code, RefusalCode::DegenerateGeometry);
     }
 
     #[test]
