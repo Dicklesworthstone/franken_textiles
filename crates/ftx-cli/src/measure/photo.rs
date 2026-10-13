@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use ftx_core::{Refusal, RefusalCode};
+use ftx_measure::camera::Camera;
 use ftx_measure::photo::{PhotoOptions, analyze_reference, measure_photo};
 use serde_json::{Value, json};
 
@@ -20,7 +21,7 @@ fn integer<T: std::str::FromStr>(args: &Args, key: &str, default: T) -> Result<T
 }
 
 pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
-    let names: &[&str] = if command == "photo-scale" {
+    let names: &[&str] = if command == "photo-scale" || command == "sheet-pose" {
         &["reference", "out"]
     } else {
         &[
@@ -41,6 +42,11 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
     known_options(args, command, names)?;
     no_files(args, command)?;
     let reference = read_json(required(args, "reference")?)?.0;
+    if command == "sheet-pose" {
+        let report = Camera::sheet_pose_report(&reference)?;
+        let code = if report["ok"] == true { 0 } else { 3 };
+        return Ok((report, code));
+    }
     let scale = analyze_reference(&reference)?;
     if command == "photo-scale" {
         let mut report = scale.report().clone();

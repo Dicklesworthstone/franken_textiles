@@ -187,7 +187,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let value = match command {
         "triangulate" => return triangulate::run(args),
         "girth-from-section" => section::run(args)?,
-        "photo-scale" | "measure-photo" => {
+        "photo-scale" | "measure-photo" | "sheet-pose" => {
             let (value, status) = photo::run(args, command)?;
             code = status;
             value
@@ -383,7 +383,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         _ => {
             return Err(bad_input(format!(
-                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, photo-scale, measure-photo, girth-from-section or triangulate"
+                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, photo-scale, measure-photo, sheet-pose, girth-from-section or triangulate"
             )));
         }
     };
@@ -425,7 +425,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if let Some(path) = output {
         if matches!(
             command,
-            "photo-scale" | "measure-photo" | "girth-from-section"
+            "photo-scale" | "measure-photo" | "sheet-pose" | "girth-from-section"
         ) {
             photo::save(path, &value)?;
         } else {

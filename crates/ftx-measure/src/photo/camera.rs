@@ -2,11 +2,36 @@
 //! A stationary sheet supplies the common metric gauge, not an independently movable frame.
 
 use ftx_core::{Mat3, Refusal, RefusalCode, Vec2, Vec3};
+use serde::Deserialize;
+use serde_json::{Value, json};
 
 pub use crate::camera::Camera;
 use crate::camera::Intrinsics;
 
 use super::geometry;
+use crate::invalid;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SheetPoint {
+    sheet_xz_m: Vec2,
+    pixel_px: Vec2,
+    #[serde(default)]
+    held_out: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SheetInput {
+    schema: String,
+    reference_id: String,
+    intrinsics: Intrinsics,
+    image_size_px: [u32; 2],
+    rotation_applied_degrees: u16,
+    #[serde(default)]
+    image: Option<String>,
+    points: Vec<SheetPoint>,
+}
 
 fn geometry_error(message: &str) -> Refusal {
     Refusal::new(RefusalCode::DegenerateGeometry, message)
@@ -14,6 +39,97 @@ fn geometry_error(message: &str) -> Refusal {
 }
 
 impl Camera {
+    /// Calibrate an `ftx-sheet-pose-input/1` document for the CLI or a browser caller.
+    /// Explicit held-out correspondences never enter the pose fit. A failed held-out check
+    /// returns all diagnostics with `ok: false` and `camera: null`, never a usable calibration.
+    /// See `docs/sheet-pose.md` for the oriented-pixel, stationary-reference and unit contract.
+    pub fn sheet_pose_report(reference: &Value) -> Result<Value, Refusal> {
+        let input: SheetInput = serde_json::from_value(reference.clone())
+            .map_err(|e| invalid(format!("invalid sheet-pose input: {e}")))?;
+        if input.schema != "ftx-sheet-pose-input/1"
+            || input.reference_id.trim().is_empty()
+            || input.reference_id.len() > 256
+            || !(4..=512).contains(&input.points.len())
+        {
+            return Err(invalid(
+                "sheet pose needs schema /1, a reference_id and 4–512 points",
+            ));
+        }
+        if input
+            .image_size_px
+            .iter()
+            .any(|n| !(2..=1_000_000).contains(n))
+            || ![0, 90, 180, 270].contains(&input.rotation_applied_degrees)
+            || input
+                .image
+                .as_ref()
+                .is_some_and(|s| s.trim().is_empty() || s.len() > 4096)
+        {
+            return Err(invalid(
+                "invalid oriented image dimensions, rotation record or image label",
+            ));
+        }
+        let mut sheet = Vec::new();
+        let mut pixels = Vec::new();
+        for (i, point) in input.points.iter().enumerate() {
+            if !point.sheet_xz_m.is_finite()
+                || !point.pixel_px.is_finite()
+                || point.pixel_px.x < 0.0
+                || point.pixel_px.y < 0.0
+                || point.pixel_px.x > (input.image_size_px[0] - 1) as f64
+                || point.pixel_px.y > (input.image_size_px[1] - 1) as f64
+            {
+                return Err(invalid(format!(
+                    "sheet point {i} needs finite coordinates inside the oriented image"
+                )));
+            }
+            if input.points[..i].iter().any(|previous| {
+                point.sheet_xz_m == previous.sheet_xz_m || point.pixel_px == previous.pixel_px
+            }) {
+                return Err(invalid(
+                    "sheet correspondences must be distinct, including held-out points",
+                ));
+            }
+            if !point.held_out {
+                sheet.push(point.sheet_xz_m);
+                pixels.push(point.pixel_px);
+            }
+        }
+        let camera = Self::from_sheet(input.intrinsics, &sheet, &pixels)?;
+        let mut flags = Vec::new();
+        let mut checks = Vec::new();
+        for (i, point) in input.points.iter().enumerate() {
+            let projected = camera.project(Vec3::new(point.sheet_xz_m.x, 0.0, point.sheet_xz_m.y));
+            let (error, failure) = match projected {
+                Ok(p) => (Some(p.dist(point.pixel_px)), None),
+                Err(e) => (None, Some(e.to_string())),
+            };
+            if error.is_none_or(|e| !e.is_finite() || e > 3.0) {
+                flags.push(format!(
+                    "sheet point {i}: projection unavailable or residual exceeds 3 px"
+                ));
+            }
+            checks.push(json!({"point":i, "held_out":point.held_out,
+                "error_px":error, "failure":failure}));
+        }
+        let mut advisories = vec![
+            "Calibration, reference flatness and metric-scale uncertainty are not estimated."
+                .to_string(),
+        ];
+        if sheet.len() == input.points.len() {
+            advisories.push("No independent held-out sheet points were supplied.".to_string());
+        }
+        let ok = flags.is_empty();
+        Ok(json!({"schema":"ftx-sheet-pose/1", "ok":ok,
+            "camera":if ok {serde_json::to_value(camera).map_err(|e| invalid(e.to_string()))?} else {Value::Null},
+            "reference_id":input.reference_id,
+            "world_frame":"metres; z up; stationary sheet at y=0, coordinates (x,z)",
+            "fit_points":sheet.len(), "held_out_points":input.points.len()-sheet.len(),
+            "reprojection":checks, "flags":flags, "advisories":advisories,
+            "input":reference,
+            "no_claim":"Conditional on supplied intrinsics and a correctly identified stationary metric reference. No image detection, orientation verification, calibration uncertainty, synchronization, stillness or real-wearer accuracy claim."}))
+    }
+
     /// Recover a metric pose from known intrinsics and 4–512 paired sheet points.
     /// `sheet_xz_m` defines the SAME stationary sheet frame in every image: world (x, 0, z),
     /// with x right and z up. Image points may be distorted; they are undistorted before fitting.
