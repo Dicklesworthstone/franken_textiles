@@ -96,6 +96,20 @@ fn requirements(kind: &str) -> (Vec<&str>, Vec<&str>, &str) {
     }
 }
 
+/// Base requirements before applying garment options, for interactive measurement guidance.
+pub fn garment_catalogue(kind: &str) -> Result<Value, Refusal> {
+    let kind = garment_kind(kind)?;
+    let (must, should, basis) = requirements(kind);
+    let overrides = if kind == "full_trousers_gathered" {
+        json!({"waist":30.0,"hip":20.0,"thigh":20.0})
+    } else {
+        json!({})
+    };
+    Ok(
+        json!({"garment":kind,"must":must,"should":should,"basis":basis,"targets_override":overrides}),
+    )
+}
+
 fn fmt(value: f64, u: &str, precision: usize) -> String {
     if u == "deg" {
         format!("{value:.precision$}°")

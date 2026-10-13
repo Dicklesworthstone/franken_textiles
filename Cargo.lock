@@ -42,6 +42,7 @@ dependencies = [
  "ftx-body",
  "ftx-core",
  "ftx-drape",
+ "ftx-measure",
  "ftx-pattern",
  "serde_json",
 ]

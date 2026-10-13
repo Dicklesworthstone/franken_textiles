@@ -17,6 +17,8 @@
 //! result's to stdout.
 #![forbid(unsafe_code)]
 
+mod measure;
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -46,27 +48,49 @@ const USAGE: &str = "usage:
   ftx alter true-seam PATTERN --seam S [--end start|end] --out OUT [--json]
   ftx alter cap-ease PATTERN --piece P --seams S1,S2 --target RATIO --out OUT [--json]
   ftx alter transfer-curve PATTERN --from SRC.json:INSTANCE/EDGE --to PIECE/EDGE --out OUT [--json]
+  ftx measure catalogue [--garment KIND] [--out FILE] [--json]
+  ftx measure prior|reference --stature-mm MM [--age-months N] [--sex M|F] [--out FILE] [--json]
+  ftx measure init --label NICKNAME --out FILE [--stature 92cm] [--age-months N] [--taken-on DATE] [--json]
+  ftx measure add FILE --name NAME --value 55cm [--value 55.5cm] [--sigma 1cm] [--provenance SOURCE] [--out FILE] [--json]
+  ftx measure validate FILE [--json]
+  ftx measure fuse FILES... [--no-priors] [--out FILE] [--json]
+  ftx measure ready FILES... --garment KIND [--as-of DATE] [--no-priors] [--closed-cuff] [--passes-hip]
+      [--nappies|--no-nappies] [--elastic-waist] [--cuff-level knee|calf|ankle] [--cuff-opening] [--out FILE] [--json]
   ftx --version";
 
 /// Parsed command line: the positional arguments and the `--flag value` options.
 struct Args {
     positional: Vec<String>,
     options: BTreeMap<String, String>,
+    values: Vec<String>,
     json: bool,
 }
 
 fn parse(argv: &[String]) -> Result<Args, String> {
-    let (mut positional, mut options, mut json) = (Vec::new(), BTreeMap::new(), false);
+    let (mut positional, mut options, mut values, mut json) =
+        (Vec::new(), BTreeMap::new(), Vec::new(), false);
     let mut it = argv.iter();
     while let Some(a) = it.next() {
         if a == "--json" {
             json = true;
         } else if let Some(name) = a.strip_prefix("--") {
+            if measure::BOOLEAN_OPTIONS.contains(&name) {
+                if options
+                    .insert(name.to_string(), "true".to_string())
+                    .is_some()
+                {
+                    return Err(format!("--{name} was supplied more than once"));
+                }
+                continue;
+            }
             let value = it.next().ok_or_else(|| format!("--{name} needs a value"))?;
             if value.starts_with("--") {
                 return Err(format!("--{name} needs a value, got {value}"));
             }
-            if options.insert(name.to_string(), value.clone()).is_some() {
+            if name == "value" {
+                values.push(value.clone());
+            }
+            if options.insert(name.to_string(), value.clone()).is_some() && name != "value" {
                 return Err(format!("--{name} was supplied more than once"));
             }
         } else {
@@ -76,6 +100,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
     Ok(Args {
         positional,
         options,
+        values,
         json,
     })
 }
@@ -653,6 +678,7 @@ fn main() -> ExitCode {
         Some("drape") => emit("drape", args.json, cmd_drape(&args)),
         Some("body") => emit("body", args.json, cmd_body(&args)),
         Some("alter") => emit("alter", args.json, cmd_alter(&args)),
+        Some("measure") => emit("measure", args.json, measure::run(&args)),
         other => emit(
             other.unwrap_or("ftx"),
             args.json,

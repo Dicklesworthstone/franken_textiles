@@ -2,8 +2,8 @@
 
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
 FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx validate`,
-`ftx drape`, `ftx body` and `ftx alter`; `round`, `draft`, `measure`, `export`, `trace`, `viewer` and
-`report` follow their subsystems.
+`ftx drape`, `ftx body`, `ftx alter` and `ftx measure`; `round`, `draft`, `export`, `trace`,
+`viewer` and `report` follow their subsystems.
 
 **Commands.**
 - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation of `ftx-pattern`, the
@@ -50,8 +50,9 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
 `{"schema": "ftx-cli/1", "command", "ok", "exit", "result"}` or, for refused input,
 `{..., "ok": false, "exit": 3, "refusal": {code, message, repairs}}`. Progress lines go to stderr.
 Malformed option syntax and unknown commands also use that envelope when `--json` is requested.
-Duplicate valued options, a flag in place of an option value, and extra alteration positionals are
-refused rather than silently changing the requested edit. Negative numeric values remain valid.
+Duplicate options (except repeated measurement `--value` readings), a flag in place of an option
+value, and extra alteration positionals are refused rather than silently changing the requested
+edit. Negative numeric values remain valid.
 
 **Error model.** Every failure is a `Refusal` printed with its repairs, exit 3: an option the command
 does not take (`invalid_document`, so a misspelt `--fit` cannot silently drop the fit spec), unreadable
@@ -62,3 +63,13 @@ at that age (`out_of_range`; other measurements out of reach stay residuals in `
 **No claims.** The round and its statuses; stills and videos (the skill renders stills from the OBJs);
 a body that matches the wearer anywhere but the fitted measurements; speed (a drape takes from about
 half a minute to a few minutes).
+
+## Measurement evidence commands
+
+`measure catalogue|prior|init|add|validate|fuse|ready|reference` delegates calculations to
+`ftx-measure`; details and examples are in `MEASUREMENTS.md`. Files written by `--out` are
+raw domain JSON, while stdout `--json` remains the CLI envelope. The CLI supplies UTC today
+unless an explicit date is given; the library is clock-free. Repeated --value readings are
+preserved. Invalid edits never replace the input; successful writes use same-directory atomic
+rename and mode 0600 on Unix. Exit 3 includes invalid measurement documents and NOT_READY.
+The evidence gate distinguishes READY_REFERENCE from ordinary readiness and makes no fit claim.
