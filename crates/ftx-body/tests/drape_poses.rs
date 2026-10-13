@@ -1,4 +1,4 @@
-//! Drape poses, the nappy and the skin mesh against the pinned Anny package: the nine cases of
+//! Drape poses, the nappy and the skin mesh against the pinned Anny package: the ten cases of
 //! `tests/fixtures/oracle/body/anny-0.6.1-poses.json` (`tools/body-model/capture_anny_poses.py`, which
 //! implements the pose definition again in NumPy and runs the package with it).
 //!
@@ -89,6 +89,7 @@ fn drape_poses_match_the_package() {
                 "squat" => Legs::Squat,
                 other => panic!("unknown legs {other}"),
             },
+            straight_arms: inp["straight_arms"].as_bool().unwrap_or(false),
         };
         let t = inp["ramp_t"].as_f64().unwrap();
         let rest = m.rest(&params).unwrap();

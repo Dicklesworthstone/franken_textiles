@@ -12,7 +12,9 @@ pose's world frame; its local-bone delta is the rotation vector phi * R_rest^T a
 frame). Arms (upperarm01.L/R): d = R_rest[:, 1] (the bone's +Y), theta0 = acos(-d_z),
 a = normalize(d x (0, 0, -1)), phi = theta0 - theta for an abduction theta from vertical. Legs, about
 (1, 0, 0): seated = upperleg01.L/R -90, lowerleg01.L/R +90; squat = upperleg01.L/R -100,
-lowerleg01.L/R +110, foot.L/R -10 (degrees). A ramp t scales every phi. Nappy of size s:
+lowerleg01.L/R +110, foot.L/R -10 (degrees). Straight arms (optional): upperarm02 onto upperarm01's rest
+direction and lowerarm01 onto upperarm02's, each the minimal rotation a = normalize(d x d'),
+phi = acos(d.d'), left arm then right. A ramp t scales every phi. Nappy of size s:
 buttocks-volume-incr += s, hip-scale-depth-incr += s / 2.
 
 Usage:
@@ -53,17 +55,19 @@ LEGS = {
     ],
 }
 
-# name, description, phenotype, nappy size, arm abduction (deg or None), legs, ramp t
+# name, description, phenotype, nappy size, arm abduction (deg or None), legs, ramp t, straight arms
 CASES = [
-    ("girl_2_5y_a35", "2.5 y girl, A-pose 35 deg", ref.GIRL_2_5Y, 0.0, A_POSE_DEG, "standing", 1.0),
-    ("girl_2_5y_a50", "2.5 y girl, arms at 50 deg", ref.GIRL_2_5Y, 0.0, 50.0, "standing", 1.0),
-    ("girl_2_5y_arms_up", "2.5 y girl, arms up (150 deg)", ref.GIRL_2_5Y, 0.0, ARMS_UP_DEG, "standing", 1.0),
-    ("girl_2_5y_seated", "2.5 y girl, seated, A-pose", ref.GIRL_2_5Y, 0.0, A_POSE_DEG, "seated", 1.0),
-    ("girl_2_5y_squat", "2.5 y girl, squat, A-pose", ref.GIRL_2_5Y, 0.0, A_POSE_DEG, "squat", 1.0),
-    ("girl_2_5y_nappy_a35", "2.5 y girl wearing a size-1 nappy, A-pose", ref.GIRL_2_5Y, 1.0, A_POSE_DEG, "standing", 1.0),
-    ("boy_6y_a35", "6 y boy, A-pose 35 deg", ref.BOY_6Y, 0.0, A_POSE_DEG, "standing", 1.0),
-    ("woman_seated", "adult woman, seated, A-pose", ref.ADULT_WOMAN, 0.0, A_POSE_DEG, "seated", 1.0),
-    ("man_squat_half", "adult man, squat ramp at t = 0.5", ref.ADULT_MAN, 0.0, A_POSE_DEG, "squat", 0.5),
+    ("girl_2_5y_a35", "2.5 y girl, A-pose 35 deg", ref.GIRL_2_5Y, 0.0, A_POSE_DEG, "standing", 1.0, False),
+    ("girl_2_5y_a50", "2.5 y girl, arms at 50 deg", ref.GIRL_2_5Y, 0.0, 50.0, "standing", 1.0, False),
+    ("girl_2_5y_arms_up", "2.5 y girl, arms up (150 deg)", ref.GIRL_2_5Y, 0.0, ARMS_UP_DEG, "standing", 1.0, False),
+    ("girl_2_5y_seated", "2.5 y girl, seated, A-pose", ref.GIRL_2_5Y, 0.0, A_POSE_DEG, "seated", 1.0, False),
+    ("girl_2_5y_squat", "2.5 y girl, squat, A-pose", ref.GIRL_2_5Y, 0.0, A_POSE_DEG, "squat", 1.0, False),
+    ("girl_2_5y_nappy_a35", "2.5 y girl wearing a size-1 nappy, A-pose", ref.GIRL_2_5Y, 1.0, A_POSE_DEG, "standing", 1.0, False),
+    ("boy_6y_a35", "6 y boy, A-pose 35 deg", ref.BOY_6Y, 0.0, A_POSE_DEG, "standing", 1.0, False),
+    ("woman_seated", "adult woman, seated, A-pose", ref.ADULT_WOMAN, 0.0, A_POSE_DEG, "seated", 1.0, False),
+    ("man_squat_half", "adult man, squat ramp at t = 0.5", ref.ADULT_MAN, 0.0, A_POSE_DEG, "squat", 0.5, False),
+    ("girl_2_5y_drape", "2.5 y girl, the drape pose: A-pose 35 deg, straight arms", ref.GIRL_2_5Y, 0.0, A_POSE_DEG,
+     "standing", 1.0, True),
 ]
 
 
@@ -76,7 +80,7 @@ def rodrigues(r: np.ndarray) -> np.ndarray:
     return np.eye(3) + math.sin(theta) * kx + (1.0 - math.cos(theta)) * (kx @ kx)
 
 
-def joints(labels: list[str], rest_frames: np.ndarray, abduction, legs: str) -> list[dict]:
+def joints(labels: list[str], rest_frames: np.ndarray, abduction, legs: str, straight: bool) -> list[dict]:
     out = []
     if abduction is not None:
         for name in ("upperarm01.L", "upperarm01.R"):
@@ -86,6 +90,17 @@ def joints(labels: list[str], rest_frames: np.ndarray, abduction, legs: str) -> 
             theta0 = math.acos(max(-1.0, min(1.0, -d[2])))
             a = np.cross(d, np.array([0.0, 0.0, -1.0]))
             out.append(dict(bone=name, axis=a / np.linalg.norm(a), angle=theta0 - math.radians(abduction)))
+    if straight:
+        for side in ("L", "R"):
+            def unit(name):
+                d = rest_frames[labels.index(f"{name}.{side}"), :3, 1]
+                return d / np.linalg.norm(d)
+            d1, d2, d3 = unit("upperarm01"), unit("upperarm02"), unit("lowerarm01")
+            for name, a, b in (("upperarm02", d2, d1), ("lowerarm01", d3, d2)):
+                axis = np.cross(a, b)
+                if np.linalg.norm(axis) > 1e-12:
+                    out.append(dict(bone=f"{name}.{side}", axis=axis / np.linalg.norm(axis),
+                                    angle=math.acos(max(-1.0, min(1.0, float(a @ b))))))
     for name, deg in LEGS[legs]:
         out.append(dict(bone=name, axis=np.array([1.0, 0.0, 0.0]), angle=math.radians(deg)))
     return out
@@ -154,13 +169,13 @@ def main(argv=None) -> int:
     faces = model.faces.numpy()
 
     cases = []
-    for name, description, phenotype, nappy, abduction, legs, t in CASES:
+    for name, description, phenotype, nappy, abduction, legs, t, straight in CASES:
         local_changes = {}
         if nappy:
             local_changes = {"buttocks-volume-incr": nappy, "hip-scale-depth-incr": 0.5 * nappy}
         rest_out, _, _ = ref.run_forward(model, phenotype, local_changes, {})
         rest_frames = rest_out["rest_bone_poses"][0].numpy()
-        js = joints(labels, rest_frames, abduction, legs)
+        js = joints(labels, rest_frames, abduction, legs, straight)
         deltas = torch.eye(4, dtype=dtype).repeat(1, len(labels), 1, 1)
         recorded = []
         for j in js:
@@ -187,6 +202,7 @@ def main(argv=None) -> int:
                     "arm_abduction_deg": abduction,
                     "legs": legs,
                     "ramp_t": t,
+                    "straight_arms": straight,
                 },
                 "joints": recorded,
                 "posed_vertices": {

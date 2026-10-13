@@ -15,6 +15,7 @@ pub mod eigen;
 pub mod elements;
 pub mod garment;
 pub mod nearest;
+pub mod scene;
 pub mod sparse;
 pub mod start;
 

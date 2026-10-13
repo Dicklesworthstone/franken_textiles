@@ -3,8 +3,10 @@
 //! Provenance: `Coo` and `Csr` are lifted from frankensim `crates/fs-sparse/src/lib.rs` at commit
 //! `93fc9b26f618bea6ebac6534f1d33c715d8a1c92` (MIT + rider), without the BSR/SELL formats, the x86 FMA
 //! dispatch (the portable loop is bit-identical) or the interop features; [`direct`] is that crate's
-//! LDLᵀ. Assembly is a stable sort by (row, col), duplicates summed in insertion order, so the matrix is
-//! a pure function of the logical insertion sequence.
+//! LDLᵀ. Assembly orders triplets as a stable sort by (row, col) would, duplicates summed in insertion
+//! order, so the matrix is a pure function of the logical insertion sequence. (Changed from the lift:
+//! the global stable sort is a row-bucket pass plus a stable sort of each row by column, the same order
+//! at a fraction of the cost; a garment's assembly spent a quarter of its time sorting.)
 
 pub mod direct;
 
@@ -62,8 +64,24 @@ impl Coo {
     #[must_use]
     pub fn assemble(&self) -> Csr {
         let nnz_staged = self.vals.len();
-        let mut order: Vec<usize> = (0..nnz_staged).collect();
-        order.sort_by_key(|&i| (self.rows[i], self.cols[i]));
+        // Bucket by row in insertion order, then sort each row stably by column: the order of a
+        // stable sort by (row, col).
+        let mut start = vec![0usize; self.nrows + 1];
+        for &r in &self.rows {
+            start[r + 1] += 1;
+        }
+        for r in 0..self.nrows {
+            start[r + 1] += start[r];
+        }
+        let mut fill = start.clone();
+        let mut order = vec![0usize; nnz_staged];
+        for (i, &r) in self.rows.iter().enumerate() {
+            order[fill[r]] = i;
+            fill[r] += 1;
+        }
+        for r in 0..self.nrows {
+            order[start[r]..start[r + 1]].sort_by_key(|&i| self.cols[i]);
+        }
         let mut row_ptr = vec![0usize; self.nrows + 1];
         let mut col_idx = Vec::new();
         let mut vals = Vec::new();

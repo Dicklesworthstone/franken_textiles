@@ -49,6 +49,13 @@ pub struct Body {
     tri_grid: BTreeMap<[i64; 3], Vec<usize>>,
     vert_grid: BTreeMap<[i64; 3], Vec<usize>>,
     edge_grid: BTreeMap<[i64; 3], Vec<usize>>,
+    tri_box: Vec<(Vec3, Vec3)>,
+    edge_box: Vec<(Vec3, Vec3)>,
+}
+
+/// Whether two axis-aligned boxes overlap (touching counts).
+fn overlaps(a: (Vec3, Vec3), lo: Vec3, hi: Vec3) -> bool {
+    !(a.1.x < lo.x || a.0.x > hi.x || a.1.y < lo.y || a.0.y > hi.y || a.1.z < lo.z || a.0.z > hi.z)
 }
 
 fn cell_range(lo: Vec3, hi: Vec3, cell: f64) -> ([i64; 3], [i64; 3]) {
@@ -168,10 +175,13 @@ impl Body {
             tri_grid: BTreeMap::new(),
             vert_grid: BTreeMap::new(),
             edge_grid: BTreeMap::new(),
+            tri_box: Vec::new(),
+            edge_box: Vec::new(),
         };
         for (i, t) in body.triangles.iter().enumerate() {
             let (lo, hi) = aabb(&t.map(|v| body.vertices[v]));
             insert(&mut body.tri_grid, i, lo, hi, cell);
+            body.tri_box.push((lo, hi));
         }
         for (i, v) in body.vertices.iter().enumerate() {
             insert(&mut body.vert_grid, i, *v, *v, cell);
@@ -179,6 +189,7 @@ impl Body {
         for (i, e) in body.edges.iter().enumerate() {
             let (lo, hi) = aabb(&e.map(|v| body.vertices[v]));
             insert(&mut body.edge_grid, i, lo, hi, cell);
+            body.edge_box.push((lo, hi));
         }
         Ok(body)
     }
@@ -535,20 +546,33 @@ impl Contact {
             let (lo, hi) = aabb(&pts);
             (lo - Vec3::new(pad, pad, pad), hi + Vec3::new(pad, pad, pad))
         };
+        // Grid cells give a superset; the exact box test keeps the pairs whose boxes come within `pad`.
         for cv in 0..x.len() {
             let (lo, hi) = span(&[cv]);
             query(&b.tri_grid, lo, hi, b.cell, &mut buf);
-            out.extend(buf.iter().map(|&bt| Pair::VertexTri { cv, bt }));
+            out.extend(
+                buf.iter()
+                    .filter(|&&bt| overlaps(b.tri_box[bt], lo, hi))
+                    .map(|&bt| Pair::VertexTri { cv, bt }),
+            );
         }
         for (ct, t) in self.cloth.triangles.iter().enumerate() {
             let (lo, hi) = span(t);
             query(&b.vert_grid, lo, hi, b.cell, &mut buf);
-            out.extend(buf.iter().map(|&bv| Pair::TriVertex { ct, bv }));
+            out.extend(
+                buf.iter()
+                    .filter(|&&bv| overlaps((b.vertices[bv], b.vertices[bv]), lo, hi))
+                    .map(|&bv| Pair::TriVertex { ct, bv }),
+            );
         }
         for (ce, e) in self.cloth.edges.iter().enumerate() {
             let (lo, hi) = span(e);
             query(&b.edge_grid, lo, hi, b.cell, &mut buf);
-            out.extend(buf.iter().map(|&be| Pair::EdgeEdge { ce, be }));
+            out.extend(
+                buf.iter()
+                    .filter(|&&be| overlaps(b.edge_box[be], lo, hi))
+                    .map(|&be| Pair::EdgeEdge { ce, be }),
+            );
         }
         out
     }
@@ -556,14 +580,67 @@ impl Contact {
     /// Smallest gap (distance − ξ) over all candidate pairs within `range` (m), or `None` if none.
     #[must_use]
     pub fn min_gap(&self, x: &[Vec3], range: f64) -> Option<f64> {
+        self.closest_pair(x, range).map(|(g, _, _)| g)
+    }
+
+    /// The pair with the smallest gap within `range` (m): its gap, the pair and the cloth point of it
+    /// (the cloth vertex, or the first cloth vertex of the cloth triangle or edge).
+    #[must_use]
+    pub fn closest_pair(&self, x: &[Vec3], range: f64) -> Option<(f64, Pair, Vec3)> {
         self.candidates(x, None, range + self.params.thickness)
             .into_iter()
             .map(|pair| {
                 let st = stencil(pair, x, &self.body, &self.cloth);
                 let (kind, _) = classify(pair, &st.pts);
-                pair_gap(&st, kind, &self.params)
+                let at = st
+                    .cloth
+                    .iter()
+                    .flatten()
+                    .next()
+                    .map_or(Vec3::ZERO, |&v| x[v]);
+                (pair_gap(&st, kind, &self.params), pair, at)
             })
-            .reduce(f64::min)
+            .reduce(|a, b| if b.0 < a.0 { b } else { a })
+    }
+
+    /// Up to `limit` crossings of the cloth at `x` with the body (exact predicates), in a fixed order: each
+    /// cloth edge through a body triangle (the first such triangle), then each cloth triangle pierced by
+    /// a body edge (the first such edge).
+    ///
+    /// # Panics
+    /// On a non-finite position.
+    #[must_use]
+    pub fn crossings(&self, x: &[Vec3], limit: usize) -> Vec<Intersection> {
+        let b = &self.body;
+        let mut out = Vec::new();
+        let mut buf = Vec::new();
+        for (ce, e) in self.cloth.edges.iter().enumerate() {
+            if out.len() >= limit {
+                return out;
+            }
+            let (lo, hi) = aabb(&e.map(|i| x[i]));
+            query(&b.tri_grid, lo, hi, b.cell, &mut buf);
+            if let Some(&bt) = buf.iter().find(|&&bt| {
+                segment_meets_triangle(x[e[0]], x[e[1]], b.triangles[bt].map(|i| b.vertices[i]))
+            }) {
+                out.push(Intersection::ClothEdge { ce, bt });
+            }
+        }
+        for (ct, t) in self.cloth.triangles.iter().enumerate() {
+            if out.len() >= limit {
+                return out;
+            }
+            let tri = t.map(|i| x[i]);
+            let (lo, hi) = aabb(&tri);
+            query(&b.edge_grid, lo, hi, b.cell, &mut buf);
+            if let Some(&be) = buf.iter().find(|&&be| {
+                let [p, q] = b.edges[be].map(|i| b.vertices[i]);
+                segment_meets_triangle(p, q, tri)
+            }) {
+                out.push(Intersection::BodyEdge { ct, be });
+            }
+        }
+        out
     }
 
     /// The first way the cloth at `x` crosses the body, or `None` when it is intersection-free: an edge
@@ -574,28 +651,10 @@ impl Contact {
     /// On a non-finite position (check first, as [`crate::Solver::with_contact`] does).
     #[must_use]
     pub fn first_intersection(&self, x: &[Vec3]) -> Option<Intersection> {
+        if let Some(&i) = self.crossings(x, 1).first() {
+            return Some(i);
+        }
         let b = &self.body;
-        let mut buf = Vec::new();
-        for (ce, e) in self.cloth.edges.iter().enumerate() {
-            let (lo, hi) = aabb(&e.map(|i| x[i]));
-            query(&b.tri_grid, lo, hi, b.cell, &mut buf);
-            if let Some(&bt) = buf.iter().find(|&&bt| {
-                segment_meets_triangle(x[e[0]], x[e[1]], b.triangles[bt].map(|i| b.vertices[i]))
-            }) {
-                return Some(Intersection::ClothEdge { ce, bt });
-            }
-        }
-        for (ct, t) in self.cloth.triangles.iter().enumerate() {
-            let tri = t.map(|i| x[i]);
-            let (lo, hi) = aabb(&tri);
-            query(&b.edge_grid, lo, hi, b.cell, &mut buf);
-            if let Some(&be) = buf.iter().find(|&&be| {
-                let [p, q] = b.edges[be].map(|i| b.vertices[i]);
-                segment_meets_triangle(p, q, tri)
-            }) {
-                return Some(Intersection::BodyEdge { ct, be });
-            }
-        }
         if b.closed {
             // Nothing crosses, so each piece is wholly inside or outside: test one vertex per piece.
             let mut root: Vec<usize> = (0..x.len()).collect();

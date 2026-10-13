@@ -10,6 +10,11 @@
 //!   vertical (about 43° on Anny); abduction θ turns it in the plane of `d` and the vertical:
 //!   `a = normalize(d × (0, 0, −1))`, φ = θ₀ − θ. The drape's A-pose is 35°; 50° and arms up (150°) are
 //!   for ride-up checks.
+//! - **Straight arms** (optional; [`Pose::drape`]): Anny's rest elbow is bent about 46° with the forearm
+//!   pointing forward, and `upperarm02` sits about 10° off `upperarm01`, so no straight sleeve tube
+//!   contains the arm. `upperarm02` turns onto `upperarm01`'s rest direction and `lowerarm01` onto
+//!   `upperarm02`'s (each the minimal rotation, `a = normalize(d × d′)`, φ = acos(d·d′)); composed, the
+//!   whole arm lies along `upperarm01`.
 //! - **Legs** (about the world +X axis, the body's left): seated = hips (`upperleg01.L/R`) −90°, knees
 //!   (`lowerleg01.L/R`) +90°; squat (upright trunk) = hips −100°, knees +110°, feet (`foot.L/R`) −10° so
 //!   the soles stay level.
@@ -48,6 +53,8 @@ pub struct Pose {
     pub arm_abduction_deg: Option<f64>,
     /// Leg posture.
     pub legs: Legs,
+    /// Straighten both elbows (and the upper arm's twist segment) onto the upper arm's line.
+    pub straight_arms: bool,
 }
 
 impl Pose {
@@ -62,6 +69,7 @@ impl Pose {
         Self {
             arm_abduction_deg: None,
             legs: Legs::Standing,
+            straight_arms: false,
         }
     }
 
@@ -71,6 +79,7 @@ impl Pose {
         Self {
             arm_abduction_deg: Some(deg),
             legs: Legs::Standing,
+            straight_arms: false,
         }
     }
 
@@ -86,6 +95,7 @@ impl Pose {
         Self {
             arm_abduction_deg: Some(Self::A_POSE_DEG),
             legs: Legs::Seated,
+            straight_arms: false,
         }
     }
 
@@ -95,6 +105,16 @@ impl Pose {
         Self {
             arm_abduction_deg: Some(Self::A_POSE_DEG),
             legs: Legs::Squat,
+            straight_arms: false,
+        }
+    }
+
+    /// The drape's pose: standing, arms at [`Pose::A_POSE_DEG`] and straight.
+    #[must_use]
+    pub fn drape() -> Self {
+        Self {
+            straight_arms: true,
+            ..Self::a_pose(Self::A_POSE_DEG)
         }
     }
 }
@@ -136,7 +156,8 @@ fn bone(model: &AnnyModel, label: &str) -> Result<usize, Refusal> {
     })
 }
 
-/// The joint rotations of `pose` on this rest body, in a fixed order (arms L, R, then legs).
+/// The joint rotations of `pose` on this rest body, in a fixed order (arms L, R; straightening L,
+/// R; then legs).
 ///
 /// # Errors
 /// [`RefusalCode::OutOfRange`] for an abduction outside 0–180°; [`RefusalCode::InvalidDocument`] when
@@ -163,6 +184,26 @@ pub fn joint_rotations(
                 axis: d.cross(Vec3::new(0.0, 0.0, -1.0)).normalized(),
                 angle: theta0 - deg.to_radians(),
             });
+        }
+    }
+    if pose.straight_arms {
+        for side in ["L", "R"] {
+            let dir = |label: &str| -> Result<(usize, Vec3), Refusal> {
+                let b = bone(model, &format!("{label}.{side}"))?;
+                Ok((b, rest.bone_frames[b].m.col(1).normalized()))
+            };
+            let ((_, d1), (b2, d2), (b3, d3)) =
+                (dir("upperarm01")?, dir("upperarm02")?, dir("lowerarm01")?);
+            for (b, from, to) in [(b2, d2, d1), (b3, d3, d2)] {
+                let axis = from.cross(to);
+                if axis.norm() > 1e-12 {
+                    out.push(JointRotation {
+                        bone: b,
+                        axis: axis.normalized(),
+                        angle: det::acos(from.dot(to).clamp(-1.0, 1.0)),
+                    });
+                }
+            }
         }
     }
     let legs: &[(&str, f64)] = match pose.legs {
@@ -409,6 +450,104 @@ pub fn skin_mesh(vertices: &[Vec3], faces: &[[u32; 3]]) -> Result<SkinMesh, Refu
             min_triangle_area: min_area,
         },
     })
+}
+
+/// The skin without the regions skinned mostly to the given bones and their descendants (the hands and
+/// feet, which no garment in scope covers and whose thin fingers and toes a coarse garment mesh cannot
+/// clear), each opening closed by a fan around its centroid; checked as [`skin_mesh`].
+///
+/// # Errors
+/// [`RefusalCode::InvalidDocument`] for an unknown bone; [`RefusalCode::DegenerateGeometry`] when an
+/// opening is not a simple loop; and as [`skin_mesh`].
+pub fn trimmed_skin(
+    model: &AnnyModel,
+    vertices: &[Vec3],
+    roots: &[&str],
+) -> Result<SkinMesh, Refusal> {
+    let data = model.data();
+    let parents = &data.header.labels.bone_parents;
+    let mut cut = vec![false; parents.len()];
+    for label in roots {
+        let r = bone(model, label)?;
+        cut[r] = true;
+        for j in r + 1..parents.len() {
+            if let Ok(p) = usize::try_from(parents[j])
+                && cut[p]
+            {
+                cut[j] = true;
+            }
+        }
+    }
+    let k = data.header.counts.influences;
+    let dropped: Vec<bool> = (0..vertices.len())
+        .map(|v| {
+            let row = &data.vertex_bone_weights[v * k..(v + 1) * k];
+            let best = (0..k).fold(0, |b, j| if row[j] > row[b] { j } else { b });
+            cut[data.vertex_bone_indices[v * k + best] as usize]
+        })
+        .collect();
+    let skin = skin_mesh(vertices, &data.faces)?;
+    let keep = |t: &[usize; 3]| t.iter().all(|&i| !dropped[skin.source_vertex[i]]);
+    let mut tris: Vec<[usize; 3]> = skin.triangles.iter().filter(|t| keep(t)).copied().collect();
+    let mut verts = skin.vertices.clone();
+    // Openings: directed edges without their reverse, chained into loops.
+    let mut directed: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    for t in &tris {
+        for e in 0..3 {
+            *directed.entry((t[e], t[(e + 1) % 3])).or_default() += 1;
+        }
+    }
+    let mut next: BTreeMap<usize, usize> = BTreeMap::new();
+    for &(a, b) in directed.keys() {
+        if !directed.contains_key(&(b, a)) && next.insert(b, a).is_some() {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                format!("the trimmed skin has a pinched opening at vertex {b}"),
+            ));
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for &s in next.keys() {
+        if !seen.insert(s) {
+            continue;
+        }
+        let mut ring = vec![s];
+        let mut v = next[&s];
+        while v != s {
+            if !seen.insert(v) || ring.len() > next.len() {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    "the trimmed skin has an opening that is not a simple loop",
+                ));
+            }
+            ring.push(v);
+            v = *next.get(&v).ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    "the trimmed skin has an open boundary chain",
+                )
+            })?;
+        }
+        // `next` runs along the reversed boundary, so (ring[i], ring[i+1], centre) winds outward.
+        let c = verts.len();
+        let centre = ring.iter().fold(Vec3::ZERO, |a, &i| a + verts[i]) / ring.len() as f64;
+        verts.push(centre);
+        for i in 0..ring.len() {
+            tris.push([ring[i], ring[(i + 1) % ring.len()], c]);
+        }
+    }
+    let faces: Vec<[u32; 3]> = tris
+        .iter()
+        .map(|t| t.map(|i| u32::try_from(i).unwrap_or(u32::MAX)))
+        .collect();
+    let mut out = skin_mesh(&verts, &faces)?;
+    // Source indices of the original mesh (cap centres get usize::MAX).
+    out.source_vertex = out
+        .source_vertex
+        .iter()
+        .map(|&i| skin.source_vertex.get(i).copied().unwrap_or(usize::MAX))
+        .collect();
+    Ok(out)
 }
 
 /// The posed skin of a body: rest shape from `params`, `pose` a fraction `t` of the way from rest.

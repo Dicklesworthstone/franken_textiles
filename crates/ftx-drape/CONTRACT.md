@@ -30,7 +30,28 @@ the reference's dress form as triangles): the wrap with the reference's frames a
 reference's own functions run in float64 with an exact nearest-point query to 1e-14–1.9e-12 m, with the
 same relaxation blocks. Blender's float32 BVH (the reference as shipped) breaks crease ties its own way
 (2 of 128 bolero groups, 5 of 295 trouser groups); there the start differs by up to 19 mm and the bolero
-relaxes for two blocks instead of one. Part frames on a posed Anny body come next.
+relaxes for two blocks instead of one.
+
+**Scene** (`scene.rs`; plan §11.3–11.4). A pattern meshed, placed with a body's part frames (any
+`PartFrames`; `ftx_body::BodyFrames` reads them off a posed Anny body), started (wrap, pre-sew, relax
+against the drape body), untangled, welded and handed to the solver with contact over the body:
+- Rest coordinates per piece in metres with the grainline along +u; welding merges each sewing group into
+  one vertex and keeps every triangle's own rest coordinates, so eased and gathered seams are strained,
+  not rewritten. Fabric from `pattern.fabric` over the reference's defaults (spec 04 §5.3); membrane
+  E1 = E2 = tensile, ν = 0, G = 0.2·tensile, compression softened to a given fraction.
+- Untangling: crossings the exact audit still finds after relaxation are removed by moving the crossing
+  cloth edge's ends (or the pierced cloth triangle) 2 mm above the crossed body triangle (or ridge), in
+  rounds of up to 50; a piece wholly inside the body is refused.
+- Offset ramp: when an edge of the start passes closer to the body than the cloth offset ξ, contact
+  starts at half the smallest distance and `run_phase` raises ξ by 0.25 mm a step while every gap stays
+  above ĝ/10.
+- `run_phase` runs implicit steps under a gravity (the reference's sew then drape).
+The drape body (`ftx_body::trimmed_skin`) leaves out the hands and feet; with Anny's bent elbows a
+straight sleeve crossed the forearm, so the drape pose straightens the arms (`Pose::drape`). The drafted
+92 cm bolero builds a clean start on the 92 cm Anny toddler (no crossings, 600 relaxation iterations,
+p95 strain 0.115). Speed is the open problem: about 0.2 s per Newton iteration and 80–110 projected
+iterations per 1/24 s step for its 5,800 DOFs (factorization 40 %, PSD projection 19 %, contact 8 % of
+the time before the assembly sort was replaced).
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
@@ -45,7 +66,9 @@ frame (+u along the grain).
   hinges; constant PSD Hessian.
 
 **Solver.** Exact Hessian first; element blocks projected to PSD only when the LDLᵀ inertia shows a
-negative eigenvalue; steepest descent if even that is singular. The symbolic analysis is computed once,
+negative eigenvalue, and from then on for the rest of that solve (retrying the exact Hessian cost a
+second assembly and factorization nearly every iteration on a garment); steepest descent if even that is
+singular. The symbolic analysis is computed once,
 ordered by AMD on the vertex graph and expanded to the free DOFs (the pattern never changes: every
 element block is always assembled). Per-DOF constraints (rollers, pins). Convergence: `‖p‖∞/h < tol`
 (step) or `‖p‖∞ < tol` (static).
@@ -61,7 +84,7 @@ Hessian's pattern never changes.
   against a plane) for ordinary pairs; the full Hessian (second-order forward AD, `Jet<12>`) for
   mollified pairs, projected to PSD per block.
 - Broad phase: a uniform grid in `BTreeMap`s (cell ≈ the body's mean edge length), queried per cloth
-  primitive with sorted, deduplicated results; no BVH.
+  primitive with sorted, deduplicated results, then an exact box-overlap test; no BVH.
 - CCD: additive CCD (Li et al. 2021, Algorithm 1) caps each Newton step so no gap falls below a tenth of
   its value (C-IPC's s = 0.1).
 - Friction: IPC's smoothed Coulomb `μλ f₀(|u|)`, ε = ε_v·h, with normal forces, tangent bases and
@@ -95,7 +118,8 @@ unoptimised). Bodies and bands are built with `det::sin_cos`: the platform's `si
 digest differ.
 
 **Lifted code** (frankensim `93fc9b26`, MIT + rider, provenance headers): `sparse/` (CSR assembly and the
-multifrontal LDLᵀ with AMD and inertia; adds `analyze_with_permutation`), `eigen.rs` (`jacobi_eigh`).
+multifrontal LDLᵀ with AMD and inertia; adds `analyze_with_permutation`; assembly orders triplets by a
+row-bucket pass instead of a global stable sort, the same order), `eigen.rs` (`jacobi_eigh`).
 
 **Error model.** `Refusal`: `degenerate_geometry` (bad triangles, non-manifold edges), `out_of_range`
 (non-positive density or step), `non_finite` (state blew up), `not_converged` (symbolic analysis failed),

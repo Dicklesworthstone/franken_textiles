@@ -9,7 +9,7 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 
-use crate::contact::{Body, Contact, ContactParams};
+use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::eigen::project_psd;
 use crate::elements::{Hinge, Membrane, MembraneElement};
 use crate::sparse::{Coo, Csr, LdltOptions, SymbolicLdlt, amd_order};
@@ -329,23 +329,43 @@ impl Solver {
         let contact = Contact::new(body, params, tris, |a, b| {
             lengths.get(&(a.min(b), a.max(b))).copied().unwrap_or(1e-3)
         });
-        if let Some(g) = contact.min_gap(&self.x, params.dhat)
+        if let Some((g, pair, at)) = contact.closest_pair(&self.x, params.dhat)
             && (g.is_nan() || g <= 0.0)
         {
             return Err(Refusal::new(
                 RefusalCode::IntersectingStart,
                 format!(
-                    "the cloth starts {:.3} mm inside the body's offset surface",
-                    -g * 1e3
+                    "the cloth starts {:.3} mm inside the body's offset surface ({pair:?} near \
+                     ({:.1}, {:.1}, {:.1}) mm)",
+                    -g * 1e3,
+                    at.x * 1e3,
+                    at.y * 1e3,
+                    at.z * 1e3
                 ),
             )
             .repair("place the pieces further out (a larger push-out or clearance)")
             .repair("reduce the cloth thickness offset"));
         }
         if let Some(i) = contact.first_intersection(&self.x) {
+            let at = match i {
+                Intersection::ClothEdge { ce, .. } => {
+                    let [a, b] = contact.cloth.edges[ce];
+                    (self.x[a] + self.x[b]) * 0.5
+                }
+                Intersection::BodyEdge { ct, .. } => {
+                    let t = contact.cloth.triangles[ct];
+                    (self.x[t[0]] + self.x[t[1]] + self.x[t[2]]) / 3.0
+                }
+                Intersection::Inside { cv } => self.x[cv],
+            };
             return Err(Refusal::new(
                 RefusalCode::IntersectingStart,
-                format!("the cloth crosses the body at the start: {i:?}"),
+                format!(
+                    "the cloth crosses the body at the start: {i:?} near ({:.1}, {:.1}, {:.1}) mm",
+                    at.x * 1e3,
+                    at.y * 1e3,
+                    at.z * 1e3
+                ),
             )
             .repair("place the pieces outside the body (a larger push-out or clearance)"));
         }
@@ -527,12 +547,21 @@ impl Solver {
             return Ok(rep);
         }
         let scale = inertia.map_or(1.0, |(_, h)| h);
+        // Once a solve has met negative inertia it keeps projecting: retrying the exact Hessian first
+        // cost a second assembly and factorization on almost every iteration of a garment.
+        let mut projecting = false;
         for it in 0..self.max_newton {
             // Exact Hessian first (quadratic convergence near a minimum); element blocks projected to
             // PSD only when the factorization reports negative inertia (plan §11.2).
-            let (mut g, a) = self.assemble(&self.x, inertia, false);
-            let mut p = self.newton_direction(&a, &g)?;
+            let (mut g, mut p) = if projecting {
+                (Vec::new(), None)
+            } else {
+                let (g, a) = self.assemble(&self.x, inertia, false);
+                let p = self.newton_direction(&a, &g)?;
+                (g, p)
+            };
             if p.is_none() {
+                projecting = true;
                 rep.projected_iterations += 1;
                 let (g2, a2) = self.assemble(&self.x, inertia, true);
                 g = g2;

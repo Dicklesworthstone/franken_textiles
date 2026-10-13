@@ -277,6 +277,6 @@ fn contact_digest_is_pinned() {
     assert!(s.contact.as_ref().unwrap().min_gap(&s.x, 1e-3).unwrap() > 0.0);
     assert_eq!(
         digest,
-        "c51df2cd4918758aca30ecc46f69e8f80ad1903feb1811cafe66a7ce8aac5dd4"
+        "62e5d4da5055a5175c727d50998386f1b07efd045ead4361ef1cb70caedccdae"
     );
 }

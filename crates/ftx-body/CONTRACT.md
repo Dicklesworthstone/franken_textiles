@@ -3,18 +3,33 @@
 **Purpose.** The Anny parametric body model (anny 0.6.1, the `create_fullbody_model` default
 configuration of `docs/spec/05` §0) evaluated in Rust: phenotype and local-change coefficients, rest shape
 and skeleton, local-bone forward kinematics, linear blend skinning, anthropometry, and the WHO
-years-to-age-parameter map; and the body as the drape needs it (`drape.rs`): poses, pose ramps, a nappy
-and the checked skin mesh. Fitting and tape functionals come next (FTX-09).
+years-to-age-parameter map; and the body as the drape needs it: poses, pose ramps, a nappy, the checked
+skin mesh and a trimmed drape body (`drape.rs`), and part frames, landmarks and section radii for
+placing pattern pieces (`landmarks.rs`). Fitting and tape functionals come next (FTX-09).
 
 **Drape poses** (definition in the `drape.rs` module notes). A joint turns its bone about its head by φ
 about an axis in the rest pose's world frame; its local-bone delta is `φ·R_restᵀ·a`. Arms
 (`upperarm01.L/R`): abduction θ from vertical in the plane of the rest arm and the vertical (rest ≈ 43°;
 A-pose 35°, also 50° and arms up 150°). Legs about +X: seated = hips −90°, knees +90°; squat = hips −100°,
-knees +110°, feet −10° (trunk upright). A ramp scales every φ by t. Nappy of size s:
+knees +110°, feet −10° (trunk upright). Straight arms (`Pose::drape`, A-pose 35° with them): Anny's rest
+elbow is bent about 46° with the forearm forward, so `upperarm02` turns onto `upperarm01`'s line and
+`lowerarm01` onto `upperarm02`'s, and a straight sleeve can contain the arm (a bent-elbow start crossed the
+forearm). A ramp scales every φ by t. Nappy of size s:
 `buttocks-volume-incr` += s, `hip-scale-depth-incr` += s/2 (s = 1 adds about 113 mm to a 2.5-year-old's
 torso seat girth). The skin is the closed shell enclosing the most volume (the mesh also holds two eyes
 and a tongue), refused unless every edge has exactly two oppositely wound triangles, no triangle is
-degenerate and the volume is positive. `examples/posed_skins.rs` writes the poses as OBJ for a look.
+degenerate and the volume is positive. `trimmed_skin` leaves out the regions skinned mostly to given
+bones and their descendants (the drape uses the wrists and feet: no garment in scope covers them, and a
+12 mm garment mesh cannot clear a thumb) and closes each opening with a fan, checked the same way.
+`examples/posed_skins.rs` writes the poses as OBJ for a look.
+
+**Frames and landmarks** (`BodyFrames`, definitions in the `landmarks.rs` table). On the posed body, in
+mm: floor, waist (Anny's waist loop), crotch, hip, knee, calf, ankle, shoulder tip, side neck point and
+head top; torso, right-arm and right-leg frames in the reference's convention (spec 04 §3.2); section
+radii from the vertices of each region (by dominant skinning bone). On the 92 cm reference toddler: waist
+525 mm (taped 530), crotch 394 (372.5), knee 248 (231). These are read off the body, not fitted to the
+tape; FTX-09 replaces the heuristics (the shoulder tip as 0.8 × upper-arm radius along the arm, calf at
+0.3 of knee-to-ankle) with tape functionals.
 
 **Data.** `tools/body-model/convert_anny.py` builds the model from the pinned package into a fresh cache,
 checks the installed files against the wheel's RECORD and every array against spec 05 §8.1, and writes a
@@ -35,9 +50,9 @@ beyond ±1 and are absolute offsets authored on the adult mesh (spec 05 §3). Ba
 extremes, out-of-range, local changes beyond ±1, two poses). `tests/anny_parity.rs` compares selected
 vertices, bounding boxes, checksums, bone frames and poses, coefficients and anthropometry (1e-9 m and
 1e-10 relative; measured 1.05e-14 m and 1.1e-13), and re-hashes every loaded array to the package's bytes.
-`tests/fixtures/oracle/body/anny-0.6.1-poses.json` (9 cases from `tools/body-model/capture_anny_poses.py`,
+`tests/fixtures/oracle/body/anny-0.6.1-poses.json` (10 cases from `tools/body-model/capture_anny_poses.py`,
 which implements the pose definition again in NumPy and runs the package with it): `tests/drape_poses.rs`
-compares joint axes, angles and local rotation vectors (worst 3.8e-15), posed vertices (8.8e-16 m),
+compares joint axes, angles and local rotation vectors (worst 6.0e-15), posed vertices (8.8e-16 m),
 checksums, and the skin shell's counts, vertex order, volume and area (5.7e-14 relative).
 These tests are `#[ignore]`d without the converted model; run them with `--include-ignored`.
 
@@ -53,5 +68,6 @@ non-manifold or inconsistently wound skin, a degenerate triangle), `inward_wound
 **No claims.** Fit quality against real people (that is FTX-09 and gate G1); the shape distribution's
 weight and muscle priors (spec 05 §9.11); anything about the SMPL family or the `rig="anny"` preset.
 Poses are plain linear blend skinning without correctives: seated and squat bodies show webbing at the
-crotch and lose 4–6 % of their volume (2.5-year-old: −4.4 % seated, −5.4 % squat), and the skin is not checked for self-intersection there. The
-nappy is a shape proxy, not a garment.
+crotch and lose 4–6 % of their volume (2.5-year-old: −4.4 % seated, −5.4 % squat), and the skin is not
+checked for self-intersection there. The nappy is a shape proxy, not a garment. Landmarks are heuristics
+on the body (see above), not measurements.

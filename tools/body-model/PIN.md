@@ -16,5 +16,5 @@ forward-model data into a versioned `*.ftxbody` file outside the repository. Con
 committed. Moving the pin means new parity fixtures and keeping the old results.
 
 Fixtures from this pin: `capture_anny_reference.py` (forward model, 16 cases) and `capture_anny_poses.py`
-(drape poses, nappy and skin shell, 9 cases), both into `tests/fixtures/oracle/body/`. Re-running
+(drape poses, nappy and skin shell, 10 cases), both into `tests/fixtures/oracle/body/`. Re-running
 `capture_anny_poses.py` gave identical bytes.

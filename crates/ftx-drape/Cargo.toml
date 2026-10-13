@@ -9,6 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+ftx-body = { path = "../ftx-body" }
 ftx-core = { path = "../ftx-core" }
 ftx-pattern = { path = "../ftx-pattern" }
 serde_json.workspace = true

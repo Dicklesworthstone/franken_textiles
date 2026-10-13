@@ -57,6 +57,7 @@ dependencies = [
 name = "ftx-drape"
 version = "0.1.0"
 dependencies = [
+ "ftx-body",
  "ftx-core",
  "ftx-pattern",
  "serde_json",
