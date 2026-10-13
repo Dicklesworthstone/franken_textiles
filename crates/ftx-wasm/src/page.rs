@@ -352,9 +352,11 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
         if !PROGRAMS.contains(&program.as_str()) {
             return Err(format!("unknown program {}", py::repr_str(&program)));
         }
+        // `dict(req.get("style") or {})`: nothing (or anything falsy) is no override; a non-mapping refuses
         let mut style = match field("style").to_value() {
             Value::Object(o) => o,
-            _ => serde_json::Map::new(),
+            v if !truthy(&v) => serde_json::Map::new(),
+            v => return Err(format!("style must be an object of overrides, not {v}")),
         };
         if truthy(&body.get("nappies").map_or(Value::Null, PyJson::to_value))
             && style_defaults(&program).get("nappy").is_some()

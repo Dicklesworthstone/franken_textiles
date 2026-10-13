@@ -677,10 +677,11 @@ fn ring_curve_inverted(ring: &[Vec2], distance: f64, curve: &[Vec2]) -> bool {
 /// `BufferCurveSetBuilder::addPolygonRingSide`: a ring's raw curve and its depth delta. A clockwise
 /// shell has the polygon on its right (delta −1), a hole on its left; counter-clockwise rings swap.
 fn ring_curve(ring: &[Vec2], distance: f64, hole: bool, join: Join) -> Option<Curve> {
-    if distance == 0.0 && ring.len() < 4 {
+    // GEOS 3.14's `LinearRing::MINIMUM_VALID_SIZE` is 3
+    if distance == 0.0 && ring.len() < 3 {
         return None;
     }
-    let ccw = ring.len() >= 4 && ring_signed_area(ring) < 0.0;
+    let ccw = ring.len() >= 3 && ring_signed_area(ring) < 0.0;
     let delta = if hole == ccw { -1 } else { 1 };
     let pts = if distance == 0.0 {
         ring.to_vec()
