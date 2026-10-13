@@ -24,6 +24,7 @@ pub mod elements;
 pub mod garment;
 pub mod metrics;
 pub mod nearest;
+pub mod point_cache;
 pub mod render;
 pub mod run;
 pub mod scene;
