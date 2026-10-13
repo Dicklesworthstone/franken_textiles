@@ -51,8 +51,9 @@ pub fn percentile(values: &[f64], p: f64) -> f64 {
     let mut v = values.to_vec();
     v.sort_by(f64::total_cmp);
     let q = p / 100.0;
-    // numpy: n·q + (α + q·(1 − α − β)) − 1 with α = β = 1; 1 + q·(−1) is exactly 1 − q.
-    let virtual_index = (n as f64 * q + (1.0 - q)) - 1.0;
+    // numpy's `linear` method has its own virtual index, (n − 1)·q (not the α = β = 1 general formula,
+    // which can differ in the last bit)
+    let virtual_index = (n - 1) as f64 * q;
     if virtual_index >= (n - 1) as f64 {
         return v[n - 1];
     }
@@ -320,7 +321,7 @@ pub fn median_f32(values: &[f32]) -> f32 {
 }
 
 /// numpy `percentile` of a float32 array (linear method), which numpy 2 computes in float32 throughout:
-/// `q = p / float32(100)`, the virtual index `n·q + (1 − q) − 1` and the two-sided lerp all in float32.
+/// `q = p / float32(100)`, the virtual index `(n − 1)·q` and the two-sided lerp all in float32.
 #[must_use]
 pub fn percentile_f32(values: &[f32], p: f32) -> f32 {
     let n = values.len();
@@ -330,8 +331,8 @@ pub fn percentile_f32(values: &[f32], p: f32) -> f32 {
     let mut v = values.to_vec();
     v.sort_by(f32::total_cmp);
     let q = p / 100.0f32;
-    // numpy: n·q + (α + q·(1 − α − β)) − 1 with α = β = 1; 1 + q·(−1) is exactly 1 − q
-    let virtual_index = (n as f32 * q + (1.0f32 - q)) - 1.0f32;
+    // numpy's `linear` method: (n − 1)·q
+    let virtual_index = (n - 1) as f32 * q;
     if virtual_index >= (n - 1) as f32 {
         return v[n - 1];
     }
@@ -420,6 +421,39 @@ mod tests {
         let x: Vec<f64> = (0..37).map(|i| f64::from(i) * 0.1).collect();
         assert_eq!(percentile(&x, 95.0), 3.42);
         assert!(percentile(&[], 50.0).is_nan());
+        // where the general α = β = 1 index formula differs from `linear`'s (n − 1)·q in the last bit
+        let b = [
+            37.61117091846387,
+            28.348893722645613,
+            46.053983864146495,
+            10.288752411450941,
+            42.54505622958257,
+            8.449365566354311,
+            48.21788604471398,
+            31.184636405307586,
+        ];
+        assert_eq!(percentile(&b, 10.0), 9.736936357921952);
+        let c = [
+            0.9800209275804772,
+            26.387496660675165,
+            10.261624622504396,
+            37.06287615971844,
+            19.434861520836836,
+            19.02365820664012,
+        ];
+        assert_eq!(percentile(&c, 33.0), 15.956946452192618);
+        assert_eq!(percentile_f32(&[15.930_443, 8.089_892], 95.0), 15.538_415);
+        let d = [
+            38.032_135f32,
+            3.318_774,
+            12.209_677,
+            41.810_36,
+            47.902_237,
+            22.208_376,
+            38.653_07,
+            19.365_04,
+        ];
+        assert_eq!(percentile_f32(&d, 33.0), 20.246_475);
     }
 
     /// Values from numpy 2.5.4 `np.arange`; in the hex-row case 30 of 33 differ from `start + i·step`.
