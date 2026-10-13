@@ -3,6 +3,7 @@
 mod photo;
 mod section;
 mod triangulate;
+mod video;
 
 use super::{Args, bad_input, known_options, read_json, required};
 use ftx_core::{Refusal, RefusalCode};
@@ -182,6 +183,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .get(1)
         .map(String::as_str)
         .ok_or_else(|| bad_input("give a measure subcommand"))?;
+    if command == "video-select" {
+        return video::run(args);
+    }
     let mut output = option(args, "out");
     let mut code = 0;
     let value = match command {
@@ -383,7 +387,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         _ => {
             return Err(bad_input(format!(
-                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, photo-scale, measure-photo, sheet-pose, girth-from-section or triangulate"
+                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate or video-select"
             )));
         }
     };
