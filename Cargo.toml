@@ -44,6 +44,11 @@ serde = { version = "=1.0.229", default-features = false, features = ["std", "de
 # `float_roundtrip`: correctly rounded float parsing. Without it serde_json may read a decimal one ULP
 # off, which flipped point-in-polygon verdicts for points on a vertex in the oracle fixtures.
 serde_json = { version = "=1.0.151", default-features = false, features = ["std", "float_roundtrip"] }
+# Constrained Delaunay for garment meshing (plan §11.4, on the allowlist). 2.15.1 with `std`; pulls
+# hashbrown, num-traits, robust (adaptive exact predicates) and smallvec. Only the CDT insertion and
+# inner-face iteration are used (deterministic for a fixed insertion order); its hash sets serve the
+# flood fill, which we do not call.
+spade = { version = "=2.15.1", default-features = false, features = ["std"] }
 
 [profile.release-perf]
 inherits = "release"

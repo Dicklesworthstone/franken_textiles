@@ -10,6 +10,9 @@ homepage.workspace = true
 
 [dependencies]
 ftx-core = { path = "../ftx-core" }
+ftx-pattern = { path = "../ftx-pattern" }
+serde_json.workspace = true
+spade.workspace = true
 
 [lints]
 workspace = true

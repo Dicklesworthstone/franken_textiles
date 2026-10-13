@@ -3,8 +3,21 @@
 **Purpose.** The cloth solver that replaces Blender's (plan §11): an orthotropic Green-strain membrane
 rotated to the grain, quadratic hinge bending, lumped inertia, and implicit Euler solved by Newton on a
 sparse LDLᵀ with an Armijo line search; a static solve; and contact with a static body (IPC barrier on the
-thickness-offset gap, additive CCD, lagged smoothed Coulomb friction). Seams, the garment scene and the
-reference's metrics come next (FTX-13); cloth self-contact is not implemented.
+thickness-offset gap, additive CCD, lagged smoothed Coulomb friction); and the garment mesh of spec 04 §2
+(`garment.rs`). Placement, pre-sew, the drape schedule and the reference's metrics come next (FTX-13);
+cloth self-contact is not implemented.
+
+**Garment mesh** (`build_garment`, spec 04 §2). Simulated instances (`sim` not false, a placement),
+matched seam samples at `spacing` (12 mm), boundary samples, the hex interior, constrained Delaunay inside
+the outline, sewing pairs, seam records, corner and edge-index maps, then `sim_scale`. Triangulation is
+`spade` 2.15.1 (allowlisted; closure hashbrown, foldhash, allocator-api2, equivalent, num-traits, robust,
+smallvec; builds for wasm32-unknown-unknown); faces are kept by constraint parity from the outer face,
+not by centroid (centroids of slivers along straight edges round onto the line). Against the reference
+(Blender's `delaunay_2d_cdt`; `tests/fixtures/oracle/drape/garment_mesh.json`, seven garments): owners,
+ranges, sewing pairs, seam records, corners and index lists exact; vertices 99.0 % bit-exact, worst
+3.8e-15 relative (cubic samples, ftx-core); all 42,003 triangles identical. A self-crossing outline is
+refused (`degenerate_geometry`); exactly coincident points merge (the reference merges within 1e-6 mm).
+The digest of a two-piece mesh is identical native and wasm.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).

@@ -17,6 +17,27 @@ pub fn linspace(start: f64, stop: f64, n: usize) -> Vec<f64> {
     }
 }
 
+/// numpy `arange(start, stop, step)` for float64: `⌈(stop − start)/step⌉` values (none when that is not
+/// positive); element 1 is `start + step` and element i ≥ 2 is `start + i·d` with
+/// `d = (start + step) − start`, numpy's `DOUBLE_fill`, which can differ from `start + i·step` by an ULP.
+#[must_use]
+pub fn arange(start: f64, stop: f64, step: f64) -> Vec<f64> {
+    let n = ((stop - start) / step).ceil();
+    if n.is_nan() || n <= 0.0 {
+        return Vec::new();
+    }
+    let n = n as usize;
+    let mut y = Vec::with_capacity(n);
+    y.push(start);
+    if n > 1 {
+        let second = start + step;
+        y.push(second);
+        let d = second - start;
+        y.extend((2..n).map(|i| start + i as f64 * d));
+    }
+    y
+}
+
 /// numpy's pairwise summation (`np.sum` / `add.reduce` on a contiguous float64 array): plain
 /// accumulation below 8 elements, eight interleaved accumulators up to 128, recursive halving
 /// (rounded down to a multiple of 8) above. Matches `np.sum` bit for bit.
@@ -110,6 +131,26 @@ pub fn interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Values from numpy 2.5.4 `np.arange`; in the hex-row case 30 of 33 differ from `start + i·step`.
+    #[test]
+    fn arange_matches_numpy_fill() {
+        let a = arange(0.1, 1.0, 0.1);
+        assert_eq!(a.len(), 9);
+        assert_eq!(a[6], 0.700_000_000_000_000_1);
+        let h = arange(-125.300_000_000_000_01, 212.7, 10.392);
+        assert_eq!(h.len(), 33);
+        assert_eq!(
+            h[30..],
+            [
+                186.459_999_999_999_87,
+                196.851_999_999_999_86,
+                207.243_999_999_999_86
+            ]
+        );
+        assert!(arange(3.0, 3.0, 1.0).is_empty());
+        assert_eq!(arange(0.0, 0.3, 0.1), vec![0.0, 0.1, 0.2]);
+    }
 
     #[test]
     fn interp_matches_numpy_cases() {

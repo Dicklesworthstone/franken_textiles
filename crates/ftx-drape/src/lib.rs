@@ -13,8 +13,10 @@ pub mod contact;
 pub mod distance;
 pub mod eigen;
 pub mod elements;
+pub mod garment;
 pub mod sparse;
 
 pub use cloth::{ClothModel, SettleReport, SolveReport, Solver, Tube, grid, hex_grid, hex_tube};
 pub use contact::{Body, Contact, ContactParams, Intersection};
 pub use elements::{Hinge, Membrane, MembraneElement};
+pub use garment::{GarmentMesh, SeamRecord, build_garment};
