@@ -45,6 +45,11 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   record with provenance `MODEL_FIT` and the population spread as σ (the chart prior's at the wearer's
   stature and age, else the catalogue's 12 mm), so it can be added to the file as a model value, never
   as a measurement (`tests/body_model_fit.rs`, which needs the model).
+- `ftx render DRAPE_DIR [--res WxH] [--json]` (default 960x540, each side 16 to 8192): the six stills of an
+  `ftx drape` run (`ftx_drape::render`) from its `body.obj`, `garment.obj` and `garment_strain.obj`, written
+  into DRAPE_DIR as `still_{front,side,back,three_quarter,strain_front,strain_back}.png`, printing
+  `{"stills": {view: path}}` as the reference's `blender_sew.py --stills-from` does; no Blender. A missing
+  or unreadable OBJ is refused (`io`, `invalid_document`).
 - `ftx alter OP PATTERN --out OUT [...]` with OP `slash-spread` (`--piece --axis x|y --at --add`), `move`
   (`--piece --vertex [--dx] [--dy]`), `true-seam` (`--seam [--end start|end]`), `cap-ease` (`--piece
   --seams S1,S2 --target`) or `transfer-curve` (`--from SRC.json:INSTANCE/EDGE`, split at the last `:`,
