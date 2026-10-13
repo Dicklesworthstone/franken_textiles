@@ -13,7 +13,7 @@
 //!
 //! Every command prints human text, or with `--json` one JSON envelope `{"schema": "ftx-cli/1",
 //! "command", "ok", "exit", "result" | "refusal"}`. Exit codes: 0 converged / no gating flags, 2 not
-//! converged / gating flags, 3 refused input or (validate) BLOCKED. A refusal's text goes to stderr, a
+//! converged / gating flags, 3 refused input or (validate) BLOCKED, 4 budget exceeded. A refusal's text goes to stderr, a
 //! result's to stdout.
 #![forbid(unsafe_code)]
 
@@ -64,6 +64,11 @@ const USAGE: &str = "usage:
   ftx measure init --label NICKNAME --out FILE [--stature 92cm] [--age-months N] [--taken-on DATE] [--json]
   ftx measure add FILE --name NAME --value 55cm [--value 55.5cm] [--sigma 1cm] [--provenance SOURCE] [--out FILE] [--json]
   ftx measure validate FILE [--json]
+  ftx measure photo-scale --image PNG [--paper letter|a4|auto] [--out FILE] [--json]
+  ftx measure photo-scale --reference JSON [--out FILE] [--json]
+  ftx measure measure-photo --image PNG|--reference JSON --points JSON [--paper letter|a4|auto]
+      [--camera-distance-mm MM] [--depth-offset-mm MM] [--click-px PX] [--bootstrap N] [--seed N]
+      [--taken-on DATE] [--out FILE] [--json]
   ftx measure fuse FILES... [--no-priors] [--out FILE] [--json]
   ftx measure ready FILES... --garment KIND [--as-of DATE] [--no-priors] [--closed-cuff] [--passes-hip]
       [--nappies|--no-nappies] [--elastic-waist] [--cuff-level knee|calf|ankle] [--cuff-opening] [--out FILE] [--json]
@@ -722,12 +727,19 @@ fn emit(command: &str, json_out: bool, outcome: Result<(Value, i32, String), Ref
             text,
             false,
         ),
-        Err(r) => (
-            json!({"schema": "ftx-cli/1", "command": command, "ok": false, "exit": 3, "refusal": r}),
-            3,
-            format!("{r}"),
-            true,
-        ),
+        Err(r) => {
+            let code = if r.code == RefusalCode::BudgetExceeded {
+                4
+            } else {
+                3
+            };
+            (
+                json!({"schema": "ftx-cli/1", "command": command, "ok": false, "exit": code, "refusal": r}),
+                code,
+                format!("{r}"),
+                true,
+            )
+        }
     };
     if json_out {
         println!("{envelope}");

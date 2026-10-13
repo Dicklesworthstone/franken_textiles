@@ -1,9 +1,36 @@
 # Photo landmarks to measurement evidence
 
-The photo commands turn **explicitly identified reference coordinates and landmark clicks**
-into `fabric-measurements/1` records, for the existing fusion and readiness commands. They
-run locally and do not open or upload the image. They do not detect paper or markers, apply
-EXIF orientation, infer body landmarks, or establish garment fit.
+The photo commands turn **a reference sheet and landmark clicks** into `fabric-measurements/1`
+records for the existing fusion and readiness commands. They run locally without uploading
+images. Supply an oriented PNG for automatic plain-paper detection, or explicit reference
+coordinates. Neither path infers body landmarks, applies EXIF orientation, or establishes fit.
+
+## Detect a sheet directly from a PNG
+
+Show a whole, flat Letter or A4 sheet on a darker background. Apply the photograph's orientation
+before export, then click landmarks on that same image. Use an opaque 8-bit grayscale or RGB PNG,
+without EXIF metadata. JPEG/HEIC/WebP, transparency, palette/16-bit images and animation require
+conversion first; the command refuses them rather than silently changing measurement pixels.
+
+```bash
+ftx measure photo-scale --image oriented.png --paper letter --out scale.json --json
+ftx measure measure-photo --image oriented.png --paper letter --points points.json \
+  --camera-distance-mm 2500 --click-px 3 --bootstrap 200 --seed 0 \
+  --out photo-measurements.json --json
+```
+
+The `points.json` format and uncertainty controls below also apply to this path. `--paper`
+accepts `letter`, `a4`, or `auto` (default). `--image` and `--reference` are mutually exclusive;
+coordinate documents specify their own paper. An image is limited to 16 million pixels and
+64 MiB encoded; exceeding a budget returns exit 4 before large decoded allocations. Nothing
+is silently resized. Ordinary malformed inputs and rejected calibrations return exit 3.
+
+The report retains detected corners, straight-edge support, blur and perspective diagnostics.
+`image_input` records the image path, SHA-256, dimensions and stored-pixel orientation convention,
+not the image itself. Measurement uses the unrounded calibration and bootstraps detected edge
+samples, rather than treating detected corners as manual clicks. Review warnings and the detected
+outline: a bright rectangle is not proof of nominal paper size, and scale applies only in the
+sheet's plane. A failed detector can emit a diagnostic scale report, never measurement records.
 
 ## Plain Letter or A4 paper
 
@@ -112,9 +139,10 @@ coordinates are errors. This is not a claim of identical OpenCV RANSAC choices o
 
 ## Uncertainty and failure behavior
 
-Plain-sheet bootstrap perturbs the manual corner clicks and nominal paper dimensions
-(0.5 mm sigma on each side). ChArUco bootstrap resamples inlier correspondences with
-replacement, keeping draws with at least six unique points. Both use an explicit seed,
+Plain-sheet bootstrap resamples detected edge points for image input, or perturbs manual corner
+clicks for coordinate input, and perturbs nominal paper dimensions (0.5 mm sigma on each side).
+ChArUco bootstrap resamples inlier correspondences with replacement, keeping draws with at least
+six unique points. All use an explicit seed,
 with a bounded 20–2000 draws and a minimum of 80% usable draws. Insufficient draws, rank
 loss, or a landmark across the projective horizon is a refusal, never zero uncertainty.
 The random stream is deliberately not NumPy-stream parity.
@@ -136,6 +164,6 @@ Failed measurement requests create no measurement output. With `--out`, the file
 domain JSON; `--json` stdout contains the existing `ftx-cli/1` envelope. Without `--json`, a
 successful write reports `wrote FILE` on stderr and leaves stdout empty.
 
-The commands accept `--reference`, **not** the reference Python program's image-detection
-`--image`/`--sheet`/`--paper` interface. Automatic image detection and calibration-sheet
-generation remain separate, unfinished portions of FTX-19.
+Automatic ChArUco marker detection and calibration-sheet generation remain unfinished portions
+of FTX-19. The PNG detector is tested against synthetic scenes; OpenCV image-oracle parity and
+real-wearer measurement accuracy have not been established.
