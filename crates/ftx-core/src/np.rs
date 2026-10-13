@@ -122,7 +122,9 @@ pub fn cumsum(a: &[f64]) -> Vec<f64> {
 /// `xp` must be non-decreasing. The bracketing index is the last `j` with `xp[j] ≤ x`, so at a
 /// repeated abscissa the value is the last of the repeated samples (`interp(1, [0,1,1,2],
 /// [0,5,7,9]) = 7`). An exact hit returns `fp[j]`; otherwise `slope·(x − xp[j]) + fp[j]`, retried
-/// from the right end if that is NaN, as numpy does.
+/// from the right end if that is NaN, as numpy does. The multiply-add is fused: the reference's
+/// numpy (arm64, clang's default `-ffp-contract=on`) compiles `slope*(x - dx[j]) + dy[j]` to an FMA,
+/// which 3000 of 3000 random cases confirm (the unfused form matches 2539).
 ///
 /// # Panics
 /// If `xp` is empty or `xp` and `fp` differ in length.
@@ -148,11 +150,11 @@ pub fn interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
         return fp[j];
     }
     let slope = (fp[j + 1] - fp[j]) / (xp[j + 1] - xp[j]);
-    let r = slope * (x - xp[j]) + fp[j];
+    let r = slope.mul_add(x - xp[j], fp[j]);
     if !r.is_nan() {
         return r;
     }
-    let r = slope * (x - xp[j + 1]) + fp[j + 1];
+    let r = slope.mul_add(x - xp[j + 1], fp[j + 1]);
     if r.is_nan() && fp[j] == fp[j + 1] {
         fp[j]
     } else {

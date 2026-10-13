@@ -246,7 +246,9 @@ gating flag, settled, every hem within ±15 mm of its drafted level (the 80 cm f
 its back, an advisory: the belly lifts it); KAT 10 two starts, the 92 cm bolero sewn in 12 and in 18 steps:
 the same minimum, every hem, clearance and seam strain equal at the report's precision; KAT 9 the whole
 pipeline (tape fit, scene, three sewing and three draping steps at the shipped settings) by one SHA-256,
-identical native debug, release and wasm32-wasip1. 79 s release for KATs 8 and 10.
+identical native debug, release and wasm32-wasip1 (re-pinned when `ftx_core::np::interp` became a fused
+multiply-add, as the reference's numpy computes it: the garment mesh moved to 99.9 % bit-exact). 79 s
+release for KATs 8 and 10.
 
 **Lifted code** (frankensim `93fc9b26`, MIT + rider, provenance headers): `sparse/` (CSR assembly and the
 multifrontal LDLᵀ with AMD and inertia; adds `analyze_with_permutation`; assembly orders triplets by a
