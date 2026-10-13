@@ -8,6 +8,7 @@
 
 pub mod alter;
 pub mod doc;
+pub mod draft;
 pub mod instance;
 pub mod pattern;
 pub mod validate;

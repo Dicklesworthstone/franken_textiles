@@ -1,4 +1,4 @@
-//! The exact 3D orientation predicate (Shewchuk 1997): the sign of the orientation determinant, exact
+//! The exact 3D and 2D orientation predicates (Shewchuk 1997): the sign of the orientation determinant, exact
 //! for finite inputs, so a geometric audit ("does this edge pass through that triangle?") never flips on
 //! rounding. A floating-point filter with a proven error bound decides general-position cases; the rest
 //! go to exact expansion arithmetic.
@@ -118,6 +118,49 @@ pub fn orient3d(pa: [f64; 3], pb: [f64; 3], pc: [f64; 3], pd: [f64; 3]) -> Sign 
     let t =
         fast_expansion_sum_zeroelim(&expansion_product(&az, &m_a), &expansion_product(&bz, &m_b));
     let det_e = fast_expansion_sum_zeroelim(&t, &expansion_product(&cz, &m_c));
+    Sign::of_i32(expansion_sign(&det_e))
+}
+
+const CCWERRBOUND_A: f64 = (3.0 + 16.0 * EPS) * EPS;
+
+/// Exact sign of the 2D orientation determinant `det[a − c; b − c]`: positive iff `a, b, c` turn
+/// counterclockwise (`c` left of the directed line `a → b`), Shewchuk's stage-A filter then the exact
+/// expansion.
+///
+/// # Panics
+/// On a non-finite coordinate or when the arithmetic leaves the finite range.
+#[must_use]
+pub fn orient2d(pa: [f64; 2], pb: [f64; 2], pc: [f64; 2]) -> Sign {
+    assert!(
+        [pa, pb, pc].iter().flatten().all(|x| x.is_finite()),
+        "orient2d requires finite coordinates"
+    );
+    let detleft = (pa[0] - pc[0]) * (pb[1] - pc[1]);
+    let detright = (pa[1] - pc[1]) * (pb[0] - pc[0]);
+    let det = detleft - detright;
+    assert_finite(&[detleft, detright, det]);
+    let detsum = if detleft > 0.0 {
+        if detright <= 0.0 {
+            return Sign::of(det);
+        }
+        detleft + detright
+    } else if detleft < 0.0 {
+        if detright >= 0.0 {
+            return Sign::of(det);
+        }
+        -detleft - detright
+    } else {
+        return Sign::of(det);
+    };
+    let errbound = CCWERRBOUND_A * detsum;
+    if det >= errbound || -det >= errbound {
+        return Sign::of(det);
+    }
+    let ax = diff_expansion(pa[0], pc[0]);
+    let ay = diff_expansion(pa[1], pc[1]);
+    let bx = diff_expansion(pb[0], pc[0]);
+    let by = diff_expansion(pb[1], pc[1]);
+    let det_e = expansion_diff(&expansion_product(&ax, &by), &expansion_product(&ay, &bx));
     Sign::of_i32(expansion_sign(&det_e))
 }
 
@@ -320,6 +363,31 @@ mod tests {
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
         ((*seed >> 24).cast_signed() % 41) - 20 // a small lattice forces degeneracies
+    }
+
+    /// orient2d on a lattice against an i128 oracle, and on nearly collinear points the filter cannot
+    /// decide (c on the line a→b, then nudged by one ulp).
+    #[test]
+    fn orient2d_matches_the_oracle_and_resolves_near_collinear_points() {
+        let mut seed = 0x0217_2D00_0000_0011u64;
+        for _ in 0..4000 {
+            let mut p = || [lcg(&mut seed), lcg(&mut seed)];
+            let (a, b, c) = (p(), p(), p());
+            let want = i128::from(a[0] - c[0]) * i128::from(b[1] - c[1])
+                - i128::from(a[1] - c[1]) * i128::from(b[0] - c[0]);
+            let f = |q: [i64; 2]| [q[0] as f64, q[1] as f64];
+            assert_eq!(
+                orient2d(f(a), f(b), f(c)),
+                Sign::of_i32(want.signum() as i32)
+            );
+        }
+        let (a, b) = ([0.1, 0.1], [0.7, 0.7]);
+        let c = [0.3, 0.3];
+        assert_eq!(orient2d(a, b, c), Sign::Zero);
+        let up = [0.3, f64::from_bits(0.3f64.to_bits() + 1)];
+        let down = [0.3, f64::from_bits(0.3f64.to_bits() - 1)];
+        assert_eq!(orient2d(a, b, up), Sign::Positive);
+        assert_eq!(orient2d(a, b, down), Sign::Negative);
     }
 
     /// Lifted battery: on a small integer lattice the sign equals an i128 oracle's; every other

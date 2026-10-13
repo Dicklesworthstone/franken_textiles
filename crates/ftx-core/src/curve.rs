@@ -164,7 +164,8 @@ pub fn abs_to_rel(p0: Vec2, p1: Vec2, q: Vec2) -> Result<[f64; 2], CurveError> {
 /// Bézier of degree `ctrl.len() − 1` sampled at numpy's `linspace(0, 1, n)`, summed in Bernstein
 /// form term by term like the reference (`comb(k,i)·tⁱ·(1−t)^(k−i)·P_i`). Powers 2 are products,
 /// as in numpy; power 3 is the correctly rounded [`det::cube`] (numpy calls the platform `pow`).
-fn bezier(ctrl: &[Vec2], n: usize) -> Vec<Vec2> {
+#[must_use]
+pub fn bezier(ctrl: &[Vec2], n: usize) -> Vec<Vec2> {
     let k = ctrl.len() - 1;
     let pow = |x: f64, e: usize| match e {
         0 => 1.0,

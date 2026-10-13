@@ -1,11 +1,17 @@
 # ftx-cli contract
 
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
-FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx validate`,
-`ftx drape`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export` and `ftx check`; `round`, `draft`, `trace`,
+FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx draft`, `ftx validate`,
+`ftx drape`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export` and `ftx check`; `round`, `trace`,
 `viewer` and `report` follow their subsystems.
 
 **Commands.**
+- `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
+  reference's `drafting.py` on `ftx_pattern::draft`. Writes `DIR/pattern.json` and `DIR/fit_spec.json`
+  (replacing them, as the reference does; Python's number formatting, keys sorted) and prints
+  `{pattern, fit_spec, structure_errors, solved}`; exit 0, or 2 with structure errors (the reference exits
+  1). An unknown program or style key, a fez style out of range and a missing measurement are refusals
+  (exit 3) and write nothing.
 - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation of `ftx-pattern`, the
   reference's text table, exit 0 CONVERGED, 2 NOT_CONVERGED, 3 BLOCKED.
 - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--model PATH]

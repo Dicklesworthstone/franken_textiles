@@ -3,7 +3,7 @@
 **Purpose.** The `fabric-pattern/1` document and what every later stage reads from it: instances (mirror
 pairs, on-fold unfolding), the structure checks with the reference's messages, seam sides, notch fractions
 and notch-piecewise seam sampling (`docs/spec/01` §2, §6–8). Validation (FTX-04, `validate.rs`) and the
-alteration ops (FTX-05, `alter.rs`) build on it; drafting comes next.
+alteration ops (FTX-05, `alter.rs`) and the drafting programs (FTX-07, `draft/`) build on it.
 
 **Units and frames.** Millimetres, 2D, x right, y up, loops counter-clockwise; every piece is the
 wearer's right side seen from its public side. `.L` instances are mirrored about x = 0.
@@ -67,3 +67,26 @@ malformed/reversed bands and duplicate/unknown seam ids are refused. Cap refs mu
 requested piece to another piece and use a single cap instance; unfolded mirrored cap edges are
 refused rather than applied in the wrong frame. All 21 captured oracle cases still match bit for bit,
 unchanged.
+
+**Drafting** (`draft`, spec 02 Parts B–C): `draft(program, measurements, style) → (pattern, fit spec)` for
+`zouave_bolero` (with the soutache layout), `zouave_trousers` and `fez`, on a `fabric-measurements/1` document
+or a flat name → value object. `draft::form` is the reference's analytic body (`body.py`: landmarks, the
+girth-matched torso sections with the crotch ring solved to the total crotch length, part frames, section
+radii, landmark heights; the stable default form), which the programs read for levels and placements. The
+programs keep the reference's solvers step for step (60-step bisections for the neck scale, armhole scoop,
+cap height, cap balance and back crotch extension; the damped 2×2 Newton that trues the trouser legs; 200-
+and 400-sample lengths) and its rounding of stored geometry. The soutache border goes through
+`draft::geos`, GEOS 3.14.1's own offset-curve construction ported line for line (the buffer-input
+simplifier with its middle-vertex sampling, the segment generator's mitres, inside-turn crossings and
+closing segments, the vertex snap), with the loops at inside corners cut where the curve crosses itself,
+then clipped to the piece. Oracle: `tests/fixtures/oracle/draft/` (`tools/oracle/capture_drafting.py`):
+the body for three reference wearers and a flat dict (804 numbers within 1e-9), 21 drafts (three programs
+at 80, 92 and 116 cm, belly room, no soutache, no motifs, a roomy bolero, nappy, knee and ankle cuffs, a
+tall fez, a four-arc fez, flat dicts with a custom size label): of about 15,000 numbers all but 40 are
+bit-identical (those within 1.2e-13), every vertex, curve control and braid point included; shapely's
+offset curves and clipped borders reproduced point for point (1.7e-12 mm). Refusals: an unknown style
+key (`unknown_parameter`, the reference's message), a fez style out of range (`out_of_range`), a missing
+measurement (`invalid_document` naming it, the reference's `KeyError`). No claims: the dress-form mesh
+and the simulator's placement helpers (spec 02 B.6–B.7; the drape places pieces on Anny); the fez's
+taper refusal, which the style ranges make unreachable (the widest allowed sector is 314°); a braid line
+that comes back within twice its inset of itself (the curve would then need the buffer's other side).

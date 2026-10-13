@@ -25,16 +25,16 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Validation: seam walk, truing, points of measure, status, table | 01 §9 | present | oracle `validate/validation`: 9 drafted garments, M1–M12, F12–F32 (48 reports bit-exact, 48 tables identical) |
 | Default fit spec by role | 01 §9 | present | oracle `validate/default_fit_spec` (9 garments) |
 | Alteration: slash-spread, move, true-seam, cap-ease, transfer-curve | 01 §10 | present | alter/alterations (21 cases: drafted bolero and trousers at 80/92/116 cm, a mutated bolero, error paths; 27,437 numbers bit-exact, history sentences and structure errors identical) in `crates/ftx-conformance/tests/alterations.rs`; CLI `ftx alter` (exit 2 where the reference exits 1) |
-| Drafting: Zouave bolero (incl. soutache layout) | 02 Part C | missing | |
-| Drafting: Zouave trousers | 02 Part C | missing | |
-| Drafting: fez | 02 Part C | missing | |
-| Style parameter validation (unknown keys refused) | 02 Part C | missing | |
+| Drafting: Zouave bolero (incl. soutache layout) | 02 Part C | present | `ftx_pattern::draft` against `draft/programs` (80/92/116 cm, belly room, no soutache, no motifs, roomy, a flat dict): bit-identical vertices, controls and braid points; the soutache border through a line-for-line port of GEOS 3.14.1's offset curve, shapely's points to 1.7e-12 mm (`tests/drafting.rs`); CLI `ftx draft` |
+| Drafting: Zouave trousers | 02 Part C | present | `draft/programs` (80/92/116 cm, nappy, knee and ankle cuffs): bit-identical except 8 unrounded numbers within 7e-15 |
+| Drafting: fez | 02 Part C | present | `draft/programs` (80/92/116 cm, tall, four arcs, the widest sector, a flat dict with the custom label): within 1.2e-13 |
+| Style parameter validation (unknown keys refused) | 02 Part C | present | misspelt bolero and trouser keys and the three fez ranges refused with the reference's messages |
 
 ## Bodies (`ftx-body`, plan §9)
 
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
-| Analytic landmarks and sections (compatibility with drafted values) | 02 Part B | partial | landmark heights (torso, arm, leg frames) in `ftx_pattern::Measurements`, exercised by every girth and width point of `validate/validation`; dress-form sections not ported |
+| Analytic landmarks and sections (compatibility with drafted values) | 02 Part B | present | `ftx_pattern::draft::form` (the reference's `body.py`: landmarks, torso sections with the solved crotch ring, part frames, section radii, landmark heights) against `draft/body` (three reference wearers and a flat dict without a crotch length, 804 numbers within 1e-9); the dress-form mesh itself is not ported (Anny replaces it) |
 | Anny data conversion at the pin | 05 §1, §8.1 | present | package array and label hashes (converter); `loaded_arrays_hash_to_the_package_values` |
 | Anny forward model (phenotypes, local changes, skeleton, skinning) | 05 §2–5 | present | anny-0.6.1-reference cases 0–15 (worst 1.05e-14 m) |
 | Anny anthropometry (height, waist, volume, mass, BMI) | 05 §6 | present | anny-0.6.1-reference cases 0–15 (worst 1.1e-13 relative) |
@@ -107,6 +107,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
+| `ftx draft PROGRAM` (the reference's `drafting.py`: `pattern.json`, `fit_spec.json`, the printed summary) | 02 §C.0 | present | `crates/ftx-cli/tests/draft_workflow.rs`: the three programs at 92 cm equal to the oracle's drafts, then `ftx validate` CONVERGED and `ftx export all` passing every check; unknown programs and style keys refused (exit 3; structure errors exit 2 where the reference exits 1) |
 | `ftx validate` (the reference's `fab validate`: table, exit codes, `--json` envelope) | 04 §11, plan §14 | present | the validation fixtures (via `ftx-pattern`); CLI parsing and wearer unit tests |
 | `ftx drape` (replaces `fab sim`: Anny of the wearer's age and sex fitted to the tape, the drape, `sim_report.json`, `fold.pc2`, `mesh_map.json`, `fold_viewer.html`, the last frame and body as OBJ) | 04 §5–9, plan §14 | partial | run end to end on the drafted bolero and trousers and through the skill (`fab sim`/`fab round --sim`/`fab qualify` pick it when `ftx` is installed; Blender renders the stills from the OBJs); videos and the round's other commands missing |
 | `ftx body` (the fitted body as `body.obj` + `ftx-body/1` JSON, any drape pose) | plan §9.4, §14 | partial | run on the reference toddler with a weight; `MODEL_FIT` σ for unmeasured values missing |

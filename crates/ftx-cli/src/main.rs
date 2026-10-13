@@ -17,6 +17,7 @@
 //! result's to stdout.
 #![forbid(unsafe_code)]
 
+mod draft;
 mod export;
 mod measure;
 
@@ -40,6 +41,7 @@ use serde_json::{Value, json};
 const VIEWER_TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template.html");
 
 const USAGE: &str = "usage:
+  ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]
   ftx validate PATTERN --measurements M [--fit F] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N]
             [--model PATH] [--self-contact-mm MM] [--self-mu MU] [--json]
@@ -679,6 +681,7 @@ fn main() -> ExitCode {
         }
     };
     match args.positional.first().map(String::as_str) {
+        Some("draft") => emit("draft", args.json, draft::cmd_draft(&args)),
         Some("validate") => emit("validate", args.json, cmd_validate(&args)),
         Some("drape") => emit("drape", args.json, cmd_drape(&args)),
         Some("body") => emit("body", args.json, cmd_body(&args)),
