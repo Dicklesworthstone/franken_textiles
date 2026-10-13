@@ -14,8 +14,8 @@
 #![forbid(unsafe_code)]
 
 pub mod ad;
-mod bvh;
 pub mod animation;
+mod bvh;
 pub mod cloth;
 pub mod contact;
 pub mod distance;

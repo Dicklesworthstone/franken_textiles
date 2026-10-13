@@ -25,8 +25,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Check lints
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
+        if: ${{ !cancelled() }}
         run: cargo test --workspace --locked
       - name: Package pinned tools for offline reproduction
         if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[offline-tools]')

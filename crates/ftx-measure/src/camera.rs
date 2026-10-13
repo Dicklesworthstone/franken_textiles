@@ -43,7 +43,9 @@ impl Distortion {
                 .chain(self.tangential.iter())
                 .any(|x| !x.is_finite())
         {
-            return Err(invalid("invalid lens coefficients or radius (expected 0 < radius <= 10)"));
+            return Err(invalid(
+                "invalid lens coefficients or radius (expected 0 < radius <= 10)",
+            ));
         }
         // Radial Jacobian eigenvalues are R and R+2r²R'. Dropping positive terms bounds both
         // from below on the entire disk, not just at sampled radii. The tangential Jacobian
@@ -138,7 +140,9 @@ impl Distortion {
                 invalid("lens inverse stalled or lies outside calibration; no ray was published")
             })?;
         }
-        Err(invalid("lens inverse did not converge; no ray was published"))
+        Err(invalid(
+            "lens inverse did not converge; no ray was published",
+        ))
     }
 }
 
@@ -163,7 +167,9 @@ impl Intrinsics {
             || self.focal_px.y <= 0.0
             || !self.principal_px.is_finite()
         {
-            return Err(invalid("camera needs finite positive focal lengths and a finite principal point"));
+            return Err(invalid(
+                "camera needs finite positive focal lengths and a finite principal point",
+            ));
         }
         self.distortion.validate()
     }
@@ -174,7 +180,9 @@ impl Intrinsics {
         if !point.is_finite() || point.z <= 0.0 {
             return Err(invalid("point must be finite and in front of the camera"));
         }
-        let q = self.distortion.distort(Vec2::new(point.x / point.z, point.y / point.z))?;
+        let q = self
+            .distortion
+            .distort(Vec2::new(point.x / point.z, point.y / point.z))?;
         let pixel = Vec2::new(
             self.focal_px.x * q.x + self.principal_px.x,
             self.focal_px.y * q.y + self.principal_px.y,
@@ -213,7 +221,12 @@ impl Camera {
     pub fn validate(&self) -> Result<(), Refusal> {
         self.intrinsics.validate()?;
         if !self.center_m.is_finite()
-            || self.world_to_camera.rows.iter().flatten().any(|x| !x.is_finite())
+            || self
+                .world_to_camera
+                .rows
+                .iter()
+                .flatten()
+                .any(|x| !x.is_finite())
         {
             return Err(invalid("camera pose must be finite"));
         }
@@ -227,7 +240,9 @@ impl Camera {
             }
         }
         if (self.world_to_camera.det() - 1.0).abs() > 1e-8 {
-            return Err(invalid("camera rotation must be right-handed (determinant +1)"));
+            return Err(invalid(
+                "camera rotation must be right-handed (determinant +1)",
+            ));
         }
         Ok(())
     }
@@ -235,13 +250,18 @@ impl Camera {
     /// Project a metric world point into the oriented image.
     pub fn project(&self, point_m: Vec3) -> Result<Vec2, Refusal> {
         self.validate()?;
-        self.intrinsics.project(self.world_to_camera.mul_vec(point_m - self.center_m))
+        self.intrinsics
+            .project(self.world_to_camera.mul_vec(point_m - self.center_m))
     }
 
     /// Unit world-space ray from this camera's optical center through an oriented pixel.
     pub fn ray(&self, pixel: Vec2) -> Result<Vec3, Refusal> {
         self.validate()?;
-        Ok(self.world_to_camera.transpose().mul_vec(self.intrinsics.bearing(pixel)?).normalized())
+        Ok(self
+            .world_to_camera
+            .transpose()
+            .mul_vec(self.intrinsics.bearing(pixel)?)
+            .normalized())
     }
 }
 
@@ -267,7 +287,9 @@ mod tests {
         let point = Vec3::new(0.3, 0.0, 1.6);
         let pixel = camera.project(point).unwrap();
         assert!((pixel - Vec2::new(400.0, 60.0)).norm() < 1e-12);
-        assert!((camera.ray(pixel).unwrap() - (point - camera.center_m).normalized()).norm() < 1e-12);
+        assert!(
+            (camera.ray(pixel).unwrap() - (point - camera.center_m).normalized()).norm() < 1e-12
+        );
         assert!(camera.project(Vec3::new(0.0, -4.0, 1.0)).is_err());
     }
 
@@ -301,19 +323,32 @@ mod tests {
         assert!((value - Vec2::new(0.20053, -0.10024)).norm() < 1e-14);
         let h = 1e-6;
         let dx = (lens.evaluate(point + Vec2::new(h, 0.0)).0
-            - lens.evaluate(point - Vec2::new(h, 0.0)).0) / (2.0 * h);
+            - lens.evaluate(point - Vec2::new(h, 0.0)).0)
+            / (2.0 * h);
         let dy = (lens.evaluate(point + Vec2::new(0.0, h)).0
-            - lens.evaluate(point - Vec2::new(0.0, h)).0) / (2.0 * h);
+            - lens.evaluate(point - Vec2::new(0.0, h)).0)
+            / (2.0 * h);
         assert!((dx - Vec2::new(a, b)).norm() < 1e-9);
         assert!((dy - Vec2::new(b, c)).norm() < 1e-9);
     }
 
     #[test]
     fn malformed_and_ambiguous_calibrations_fail_closed() {
-        let folding = Distortion { radial: [-1.0, 0.0, 0.0], ..Distortion::default() };
+        let folding = Distortion {
+            radial: [-1.0, 0.0, 0.0],
+            ..Distortion::default()
+        };
         assert!(folding.undistort(Vec2::ZERO).is_err());
-        assert!(Distortion::default().undistort(Vec2::new(3.0, 0.0)).is_err());
-        assert!(Distortion::default().distort(Vec2::new(f64::NAN, 0.0)).is_err());
+        assert!(
+            Distortion::default()
+                .undistort(Vec2::new(3.0, 0.0))
+                .is_err()
+        );
+        assert!(
+            Distortion::default()
+                .distort(Vec2::new(f64::NAN, 0.0))
+                .is_err()
+        );
         let mut camera = Camera {
             intrinsics: intrinsics(),
             world_to_camera: Mat3::IDENTITY,
