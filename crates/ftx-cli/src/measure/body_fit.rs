@@ -24,6 +24,8 @@ use serde_json::{Value, json};
 use super::{option, photo, single};
 use crate::{Args, bad_input, known_options, read_json, required};
 
+mod review;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Target {
@@ -595,8 +597,18 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "iterations",
             "max-evaluations",
             "silhouettes",
+            "mesh-out",
         ],
     )?;
+    let mesh_out = option(args, "mesh-out").map(Path::new);
+    if let Some(path) = mesh_out {
+        if option(args, "out").is_some() {
+            return Err(bad_input(
+                "--mesh-out includes fit.json; use either --mesh-out or --out",
+            ));
+        }
+        review::preflight(path)?;
+    }
     let file = single(args, "fit-body")?;
     let (value, input_bytes) = read_json(file)?;
     let mut request: Request = serde_json::from_value(value)
@@ -680,6 +692,16 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         value["solution"]["anny_parameters"] = json!({"provenance":"MODEL_FIT",
             "phenotype":{"gender":h.gender,"age":h.age,"muscle":h.muscle,"weight":h.weight,"height":h.height,"proportions":h.proportions},
             "local_changes":p.local_changes});
+    }
+    if let Some(path) = mesh_out {
+        if report.solution.is_some() {
+            let bundle = review::prepare(&adapter, &report)?;
+            value["mesh_review"] = bundle.manifest.clone();
+            bundle.publish(path, &value)?;
+            text.push_str(&format!("\nmesh review: {}/fit.json", path.display()));
+        } else {
+            text.push_str("\nmesh review skipped: no accepted solution");
+        }
     }
     if let Some(path) = option(args, "out") {
         photo::save(path, &value)?;

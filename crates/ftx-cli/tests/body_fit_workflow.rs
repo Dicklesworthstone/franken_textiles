@@ -625,6 +625,37 @@ fn surface_landmarks_fit_the_posed_triangle_not_a_blended_rest_point() {
     );
     let again = run(&dir, &[], 0);
     assert_eq!(v, again);
+    let review = run(&dir, &["--mesh-out", "surface-review"], 0);
+    for frame in review["result"]["mesh_review"]["frames"]
+        .as_array()
+        .unwrap()
+    {
+        let folder = dir.join("surface-review");
+        let obj =
+            std::fs::read_to_string(folder.join(frame["mesh"]["file"].as_str().unwrap())).unwrap();
+        let vertices: Vec<Vec3> = obj
+            .lines()
+            .filter_map(|l| l.strip_prefix("v "))
+            .map(|l| {
+                let p: Vec<f64> = l.split_whitespace().map(|x| x.parse().unwrap()).collect();
+                Vec3::new(p[0], p[1], p[2])
+            })
+            .collect();
+        let points: Value = serde_json::from_slice(
+            &std::fs::read(folder.join(frame["reprojections"]["file"].as_str().unwrap())).unwrap(),
+        )
+        .unwrap();
+        let p8 = points["keypoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "p8")
+            .unwrap();
+        let expected = vertices[1] * 0.2 + vertices[8] * 0.3 + vertices[9] * 0.5;
+        assert_eq!(p8["world_m"], json!(expected));
+        let camera: Camera = serde_json::from_value(points["camera"].clone()).unwrap();
+        assert_eq!(p8["predicted_px"], json!(camera.project(expected).unwrap()));
+    }
 }
 
 #[test]
@@ -653,6 +684,332 @@ fn surface_aliases_and_invalid_weights_are_not_extra_evidence() {
     save(&dir, &input);
     run(&dir, &["--out", "alias.json"], 3);
     assert!(!dir.join("alias.json").exists());
+}
+
+#[test]
+fn accepted_mesh_bundle_replays_each_pose_without_grounding_or_refitting() {
+    let dir = setup();
+    let result = run(&dir, &["--mesh-out", "meshes"], 0);
+    let report = &result["result"];
+    let plain = run(&dir, &[], 0);
+    let mut without_mesh = report.clone();
+    without_mesh.as_object_mut().unwrap().remove("mesh_review");
+    assert_eq!(without_mesh, plain["result"]);
+    let bundle = dir.join("meshes");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(bundle.join("fit.json")).unwrap()).unwrap(),
+        *report
+    );
+    let (bytes, _) = fixture();
+    let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true).unwrap()).unwrap();
+    let shape = &report["solution"]["shape"];
+    let rest = model
+        .rest(&model.params(Phenotype {
+            height: shape[0].as_f64().unwrap(),
+            weight: shape[1].as_f64().unwrap(),
+            ..Phenotype::default()
+        }))
+        .unwrap();
+    let entries = report["mesh_review"]["frames"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    for (i, entry) in entries.iter().enumerate() {
+        assert_eq!(entry["frame"], report["solution"]["poses"][i]["frame"]);
+        let p: Vec<f64> =
+            serde_json::from_value(report["solution"]["poses"][i]["values"].clone()).unwrap();
+        let rv = Vec3::new(p[3], p[4], p[5]);
+        let body = model
+            .pose(
+                &rest,
+                &[
+                    Affine {
+                        m: Mat3::rotation(rv.normalized(), rv.norm()),
+                        t: Vec3::new(p[0], p[1], p[2]),
+                    },
+                    Affine {
+                        m: Mat3::rotation(Vec3::new(1., 0., 0.), p[6]),
+                        t: Vec3::ZERO,
+                    },
+                ],
+            )
+            .unwrap();
+        let raw = std::fs::read(bundle.join(entry["mesh"]["file"].as_str().unwrap())).unwrap();
+        assert_eq!(entry["mesh"]["sha256"], sha256_hex(&raw));
+        assert_eq!(entry["mesh"]["bytes"], raw.len());
+        let text = std::str::from_utf8(&raw).unwrap();
+        let vertices: Vec<Vec3> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("v "))
+            .map(|l| {
+                let v: Vec<f64> = l.split_whitespace().map(|s| s.parse().unwrap()).collect();
+                Vec3::new(v[0], v[1], v[2])
+            })
+            .collect();
+        assert_eq!(vertices, body.vertices);
+        let faces: Vec<[u32; 3]> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("f "))
+            .map(|l| {
+                let v: Vec<u32> = l
+                    .split_whitespace()
+                    .map(|s| s.parse::<u32>().unwrap() - 1)
+                    .collect();
+                [v[0], v[1], v[2]]
+            })
+            .collect();
+        assert_eq!(faces, model.data().faces);
+    }
+    // Bundle paths are not used in numerical results or the deterministic files.
+    let again = run(&dir, &["--mesh-out", "again"], 0);
+    assert_eq!(again, result);
+    for entry in entries {
+        let name = entry["mesh"]["file"].as_str().unwrap();
+        assert_eq!(
+            std::fs::read(bundle.join(name)).unwrap(),
+            std::fs::read(dir.join("again").join(name)).unwrap()
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&bundle).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(bundle.join("fit.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+}
+
+#[test]
+fn failed_body_fit_never_creates_a_mesh_bundle() {
+    let dir = setup();
+    let calls = run(&dir, &["--max-evaluations", "1", "--mesh-out", "calls"], 4);
+    assert_eq!(calls["result"]["model_evaluations"], 1);
+    assert!(calls["result"]["solution"].is_null());
+    assert!(!dir.join("calls").exists());
+    let complete = run(&dir, &[], 0);
+    let total = complete["result"]["model_evaluations"].as_u64().unwrap();
+    let last = run(
+        &dir,
+        &[
+            "--max-evaluations",
+            &(total - 1).to_string(),
+            "--mesh-out",
+            "last",
+        ],
+        4,
+    );
+    assert!(last["result"]["solution"].is_null());
+    assert!(
+        last["result"]["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["status"] == "CONVERGED")
+    );
+    assert!(!dir.join("last").exists());
+    let exact = run(
+        &dir,
+        &[
+            "--max-evaluations",
+            &total.to_string(),
+            "--mesh-out",
+            "exact",
+        ],
+        0,
+    );
+    assert_eq!(exact["result"]["solution"], complete["result"]["solution"]);
+    assert_eq!(exact["result"]["model_evaluations"], total);
+    assert_eq!(exact["result"]["mesh_review"]["export_pose_evaluations"], 2);
+    let budget = run(&dir, &["--iterations", "1", "--mesh-out", "budget"], 4);
+    assert!(budget["result"]["solution"].is_null());
+    assert!(!dir.join("budget").exists());
+    let mut input = fixture().1;
+    let x = input["fit"]["frames"][0]["keypoints"][3]["pixel_px"][0]
+        .as_f64()
+        .unwrap();
+    input["fit"]["frames"][0]["keypoints"][3]["pixel_px"][0] = json!(x + 10.0);
+    save(&dir, &input);
+    let rejected = run(&dir, &["--mesh-out", "rejected"], 2);
+    assert!(rejected["result"]["solution"].is_null());
+    assert!(!dir.join("rejected").exists());
+}
+
+#[test]
+fn mesh_output_preflight_preserves_files_directories_and_links() {
+    let dir = setup();
+    let original = std::fs::read(dir.join("input.json")).unwrap();
+    for output in ["input.json", "model.ftxbody", ".", "missing/parent"] {
+        run(&dir, &["--mesh-out", output], 3);
+    }
+    std::fs::create_dir(dir.join("existing")).unwrap();
+    std::fs::write(dir.join("existing/sentinel"), b"previous evidence").unwrap();
+    run(&dir, &["--mesh-out", "existing"], 3);
+    run(&dir, &["--mesh-out", "new", "--out", "report.json"], 3);
+    assert!(!dir.join("new").exists());
+    assert!(!dir.join("report.json").exists());
+    assert_eq!(std::fs::read(dir.join("input.json")).unwrap(), original);
+    assert_eq!(
+        std::fs::read(dir.join("existing/sentinel")).unwrap(),
+        b"previous evidence"
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("existing", dir.join("alias")).unwrap();
+        std::os::unix::fs::symlink("not-created", dir.join("dangling")).unwrap();
+        for output in ["alias", "dangling"] {
+            run(&dir, &["--mesh-out", output], 3);
+            assert!(
+                std::fs::symlink_metadata(dir.join(output))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        }
+        assert!(!dir.join("not-created").exists());
+    }
+}
+
+#[test]
+fn silhouette_fits_export_without_refitting_and_keep_held_out_failures_closed() {
+    let dir = setup();
+    let mut masks = mask_manifest(&dir);
+    let plain = run(&dir, &["--silhouettes", "masks/manifest.json"], 0);
+    let exported = run(
+        &dir,
+        &[
+            "--silhouettes",
+            "masks/manifest.json",
+            "--mesh-out",
+            "silhouette-review",
+        ],
+        0,
+    );
+    let mut result = exported["result"].clone();
+    result.as_object_mut().unwrap().remove("mesh_review");
+    assert_eq!(result, plain["result"]);
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("silhouette-review/fit.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved, exported["result"]);
+    assert_eq!(
+        saved["silhouette_input"]["masks"][0]["decoded_mask_sha256"],
+        sha256_hex(&masks[0].data)
+    );
+    let row = &mut masks[0].data[480 * 1280..481 * 1280];
+    let last = row.iter().rposition(|&v| v == 255).unwrap();
+    row[last + 1..=last + 10].fill(255);
+    std::fs::write(dir.join("masks/mask-0.png"), encode_png_gray(&masks[0])).unwrap();
+    let rejected = run(
+        &dir,
+        &[
+            "--silhouettes",
+            "masks/manifest.json",
+            "--mesh-out",
+            "silhouette-rejected",
+        ],
+        2,
+    );
+    assert!(rejected["result"]["solution"].is_null());
+    assert!(!dir.join("silhouette-rejected").exists());
+    for (a, b) in plain["result"]["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(rejected["result"]["attempts"].as_array().unwrap())
+    {
+        assert_eq!(a["cost_history"], b["cost_history"]);
+    }
+}
+
+#[test]
+fn mesh_review_retains_observations_and_escapes_untrusted_labels() {
+    let dir = setup();
+    let mut input = fixture().1;
+    let name = "<script>alert('landmark')</script>&\"";
+    let stream = "<script>alert('stream')</script>&\"";
+    let target = input["model"]["keypoints"]
+        .as_object_mut()
+        .unwrap()
+        .remove("p9")
+        .unwrap();
+    input["model"]["keypoints"][name] = target;
+    for frame in input["fit"]["frames"].as_array_mut().unwrap() {
+        frame["frame"]["stream"] = json!(stream);
+        frame["keypoints"][9]["name"] = json!(name);
+    }
+    for start in input["fit"]["starts"].as_array_mut().unwrap() {
+        for pose in start["poses"].as_array_mut().unwrap() {
+            pose["frame"]["stream"] = json!(stream);
+        }
+    }
+    save(&dir, &input);
+    let r = run(&dir, &["--mesh-out", "review"], 0);
+    let report = &r["result"];
+    let folder = dir.join("review");
+    for (entry, frame) in report["mesh_review"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(report["input"]["frames"].as_array().unwrap())
+    {
+        assert_eq!(entry["frame"], frame["frame"]);
+        let raw =
+            std::fs::read(folder.join(entry["reprojections"]["file"].as_str().unwrap())).unwrap();
+        assert_eq!(entry["reprojections"]["sha256"], sha256_hex(&raw));
+        let points: Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(points["camera"], frame["camera"]);
+        assert_eq!(points["image_size_px"], frame["image_size_px"]);
+        assert_eq!(points["rotation_cw_deg"], frame["rotation_cw_deg"]);
+        for (p, observation) in points["keypoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(frame["keypoints"].as_array().unwrap())
+        {
+            assert_eq!(p["name"], observation["name"]);
+            assert_eq!(p["partition"], observation["partition"]);
+            assert_eq!(p["observed_px"], observation["pixel_px"]);
+            assert_eq!(p["sigma_px"], observation["sigma_px"]);
+            let world: Vec3 = serde_json::from_value(p["world_m"].clone()).unwrap();
+            let camera: Camera = serde_json::from_value(points["camera"].clone()).unwrap();
+            assert_eq!(p["predicted_px"], json!(camera.project(world).unwrap()));
+            assert!(p["residual_px"].as_f64().unwrap() < 1e-3);
+        }
+        let svg = std::fs::read_to_string(
+            folder.join(entry["reprojection_svg"]["file"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert!(!svg.contains("<script>"));
+        assert!(svg.contains("&lt;script&gt;"));
+        assert!(svg.contains("held_out"));
+        assert_eq!(
+            entry["reprojection_svg"]["sha256"],
+            sha256_hex(svg.as_bytes())
+        );
+    }
+    let page = std::fs::read_to_string(folder.join("index.html")).unwrap();
+    assert!(!page.contains("<script>"));
+    assert!(page.contains("&lt;script&gt;"));
+    assert!(page.contains("default-src 'none'"));
+    assert!(page.contains("No photograph is embedded or loaded"));
+    assert_eq!(
+        report["mesh_review"]["viewer"]["sha256"],
+        sha256_hex(page.as_bytes())
+    );
+    let input_before = std::fs::read(dir.join("input.json")).unwrap();
+    run(&dir, &["--mesh-out", "review"], 3);
+    assert_eq!(
+        std::fs::read_to_string(folder.join("index.html")).unwrap(),
+        page
+    );
+    assert_eq!(std::fs::read(dir.join("input.json")).unwrap(), input_before);
 }
 
 #[test]
