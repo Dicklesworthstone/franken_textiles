@@ -3,10 +3,12 @@
 //! This boundary does not detect a sheet in an image. Coordinates must already be in the
 //! full-resolution, EXIF-oriented image frame. A homography measures only the sheet's plane.
 
+mod camera;
 mod charuco;
 mod geometry;
 mod measurement;
 
+pub use camera::Camera;
 pub use measurement::{PhotoOptions, measure_photo};
 
 use ftx_core::{Refusal, RefusalCode, py};

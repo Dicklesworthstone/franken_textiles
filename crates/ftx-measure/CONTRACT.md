@@ -78,3 +78,13 @@ observation. Published D.5 values and prior-section round trips are covered by d
 The CLI emits PHOTO_ESTIMATED records and accepts `--from` only for consistent photo-derived
 width/depth evidence, recomputed from source records. It does not relabel charts or model
 predictions as photo evidence. See `docs/section-girth.md` for commands and independence limits.
+
+**Calibrated sheet poses (FTX-20).** The shared `camera::Camera` (also exported as
+`photo::Camera`) supports `from_sheet` and `project_with_jacobian`. Sheet pose recovery uses
+known intrinsics and metric `(x,z)` points on the common stationary plane `y=0`; it rejects
+non-rigid homographies and residuals above 3 px. Metres and z-up world coordinates are distinct
+from x-right/y-down/z-forward camera coordinates. Projection derivatives follow the shared
+Brown–Conrady calibration and its certified lens domain. Exact synthetic pose/scale recovery,
+off-plane held-out projection and analytic-Jacobian finite differences are tested in
+`photo::camera::tests`. This is an algebraic calibrated-pose slice, not unknown-focal
+calibration, image detection, noisy-PnP parity, bundle adjustment or a real-wearer fit claim.
