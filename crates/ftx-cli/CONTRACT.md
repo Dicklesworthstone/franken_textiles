@@ -40,7 +40,11 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
 - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]`:
   the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,
-  the phenotype and every local change in use). Exit 0; an unknown pose is refused.
+  the phenotype and every local change in use). Exit 0; an unknown pose is refused. Both reports carry
+  `model_fit`: every tape reading the file lacks, read off the fitted body, as a `fabric-measurements/1`
+  record with provenance `MODEL_FIT` and the population spread as σ (the chart prior's at the wearer's
+  stature and age, else the catalogue's 12 mm), so it can be added to the file as a model value, never
+  as a measurement (`tests/body_model_fit.rs`, which needs the model).
 - `ftx alter OP PATTERN --out OUT [...]` with OP `slash-spread` (`--piece --axis x|y --at --add`), `move`
   (`--piece --vertex [--dx] [--dy]`), `true-seam` (`--seam [--end start|end]`), `cap-ease` (`--piece
   --seams S1,S2 --target`) or `transfer-curve` (`--from SRC.json:INSTANCE/EDGE`, split at the last `:`,

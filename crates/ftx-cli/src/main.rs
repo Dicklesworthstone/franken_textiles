@@ -240,7 +240,55 @@ fn body_json(w: &Wearer, fit: &TapeFit) -> serde_json::Map<String, Value> {
         )),
     );
     m.insert("mass_kg".into(), json!(kg(fit.mass_kg)));
+    m.insert("model_fit".into(), Value::Array(model_fit_records(w, fit)));
     m
+}
+
+/// The body's readings of every [`TAPE_FIELDS`] measurement the fit was not given, as `fabric-measurements/1`
+/// records with provenance `MODEL_FIT` (plan §9.4: read off the fitted body, never passed off as measured)
+/// and the population spread as σ: the chart prior's σ at the wearer's stature and age, or the catalogue's
+/// `MODEL_FIT` default (12 mm) outside the charts.
+fn model_fit_records(w: &Wearer, fit: &TapeFit) -> Vec<Value> {
+    let sex = if w.gender == 0.0 {
+        Some("M")
+    } else if w.gender == 1.0 {
+        Some("F")
+    } else {
+        None
+    };
+    let priors = ftx_measure::priors_for(w.stature_mm, Some(w.years * 12.0), sex).ok();
+    let method = format!(
+        "ftx body: Anny 0.6.1 fitted to {} tape measurements",
+        fit.residuals.len()
+    );
+    TAPE_FIELDS
+        .iter()
+        .zip(fit.readings)
+        .filter(|(n, _)| !fit.residuals.iter().any(|r| r.name == **n))
+        .filter_map(|(n, v)| {
+            let chart = priors.as_ref().and_then(|p| p[*n]["sigma_mm"].as_f64());
+            let (sigma, note) = match chart {
+                Some(s) => (
+                    s,
+                    "σ = the population spread at this stature and age (chart prior)",
+                ),
+                None => (
+                    12.0,
+                    "σ = the catalogue's MODEL_FIT default (no chart prior here)",
+                ),
+            };
+            ftx_measure::make_record(
+                n,
+                (v * 10.0).round() / 10.0,
+                sigma,
+                "MODEL_FIT",
+                &method,
+                None,
+                note,
+            )
+            .ok()
+        })
+        .collect()
 }
 
 /// `ftx body`: the body fitted to a measurement file, posed, as `body.obj` and `body.json`
