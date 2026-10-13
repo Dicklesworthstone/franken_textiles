@@ -5,7 +5,7 @@
 //! PNG only for now: JPEG and WebP decoders that match libjpeg-turbo and libwebp bit for bit are not here, so
 //! those files are refused with a repair (convert to PNG).
 
-use miniz_oxide::inflate::decompress_to_vec_zlib;
+use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
 
 /// A single-channel 8-bit image, row-major.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -211,6 +211,13 @@ fn over_white(r: u8, g: u8, b: u8, a: u8) -> [u8; 3] {
 /// # Errors
 /// Not a PNG (JPEG and WebP named, with the repair), a damaged file or an unsupported variant.
 pub fn load_png(bytes: &[u8]) -> Result<Bgr, String> {
+    load_png_with_limit(bytes, 40_000_000)
+}
+
+/// Decode with a caller's pixel budget, enforced before decompression and raster allocation.
+/// The inflated byte count must exactly match the scanlines declared by IHDR (including Adam7).
+/// This preserves [`load_png`]'s colour semantics; it never resizes or truncates an image.
+pub fn load_png_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
     if bytes.starts_with(&[0xff, 0xd8, 0xff])
         || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
     {
@@ -223,9 +230,14 @@ pub fn load_png(bytes: &[u8]) -> Result<Bgr, String> {
     }
     let (mut ihdr, mut plte, mut trns, mut idat) = (None, Vec::new(), None, Vec::new());
     let mut pos = 8;
-    while pos + 12 <= bytes.len() {
+    while bytes.len() - pos >= 12 {
         let len = be32(&bytes[pos..]) as usize;
         let kind = &bytes[pos + 4..pos + 8];
+        let end = pos
+            .checked_add(12)
+            .and_then(|n| n.checked_add(len))
+            .filter(|&n| n <= bytes.len())
+            .ok_or("truncated PNG chunk")?;
         let data = bytes
             .get(pos + 8..pos + 8 + len)
             .ok_or("truncated PNG chunk")?;
@@ -239,14 +251,19 @@ pub fn load_png(bytes: &[u8]) -> Result<Bgr, String> {
             ));
         }
         match kind {
-            b"IHDR" => ihdr = Some(data.to_vec()),
+            b"IHDR" => {
+                if pos != 8 || ihdr.is_some() {
+                    return Err("PNG header must occur once, before image data".into());
+                }
+                ihdr = Some(data.to_vec());
+            }
             b"PLTE" => plte = data.to_vec(),
             b"tRNS" => trns = Some(data.to_vec()),
             b"IDAT" => idat.extend_from_slice(data),
             b"IEND" => break,
             _ => {}
         }
-        pos += 12 + len;
+        pos = end;
     }
     let ihdr = ihdr
         .filter(|h| h.len() == 13)
@@ -265,17 +282,17 @@ pub fn load_png(bytes: &[u8]) -> Result<Bgr, String> {
         3 => matches!(depth, 1 | 2 | 4 | 8),
         _ => matches!(depth, 8 | 16),
     };
-    if !ok_depth || w == 0 || h == 0 || interlace > 1 {
+    if !ok_depth || w == 0 || h == 0 || interlace > 1 || ihdr[10] != 0 || ihdr[11] != 0 {
         return Err(format!(
             "unsupported PNG (bit depth {depth}, colour type {color}, interlace {interlace})"
         ));
     }
-    let raw =
-        decompress_to_vec_zlib(&idat).map_err(|e| format!("broken PNG image data ({e:?})"))?;
+    let pixels = w
+        .checked_mul(h)
+        .filter(|&n| n <= max_pixels)
+        .ok_or_else(|| format!("PNG exceeds the {max_pixels} pixel decoding budget"))?;
     let bits = usize::from(depth) * ch;
     let bpp = bits.div_ceil(8).max(1);
-    // every pixel's samples, in raster order
-    let mut px: Vec<u16> = vec![0; w * h * ch];
     let passes: &[(usize, usize, usize, usize)] = if interlace == 1 {
         &[
             (0, 0, 8, 8),
@@ -289,6 +306,28 @@ pub fn load_png(bytes: &[u8]) -> Result<Bgr, String> {
     } else {
         &[(0, 0, 1, 1)]
     };
+    let mut expected = 0usize;
+    for &(x0, y0, dx, dy) in passes {
+        if x0 < w && y0 < h {
+            let (pw, ph) = ((w - x0).div_ceil(dx), (h - y0).div_ceil(dy));
+            let stride = pw
+                .checked_mul(bits)
+                .ok_or("PNG row size overflow")?
+                .div_ceil(8);
+            expected = stride
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(ph))
+                .and_then(|n| expected.checked_add(n))
+                .ok_or("PNG scanline size overflow")?;
+        }
+    }
+    let raw = decompress_to_vec_zlib_with_limit(&idat, expected)
+        .map_err(|e| format!("broken or oversized PNG image data ({e:?})"))?;
+    if raw.len() != expected {
+        return Err("PNG scanline byte count does not match its header".into());
+    }
+    // Every pixel's samples, in raster order, allocated only after validating the compressed data.
+    let mut px: Vec<u16> = vec![0; pixels.checked_mul(ch).ok_or("PNG sample count overflow")?];
     let mut off = 0;
     for &(x0, y0, dx, dy) in passes {
         if x0 >= w || y0 >= h {
@@ -358,4 +397,99 @@ pub fn load_png(bytes: &[u8]) -> Result<Bgr, String> {
         data.extend_from_slice(&[b, g, r]);
     }
     Ok(Bgr { w, h, data })
+}
+
+#[cfg(test)]
+mod decode_budget_tests {
+    use super::*;
+
+    fn png(w: u32, h: u32, interlace: u8, raw: &[u8]) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut header = Vec::new();
+        header.extend(w.to_be_bytes());
+        header.extend(h.to_be_bytes());
+        header.extend([8, 0, 0, 0, interlace]);
+        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(raw, 6);
+        for (kind, data) in [
+            (b"IHDR", header.as_slice()),
+            (b"IDAT", compressed.as_slice()),
+            (b"IEND", &[][..]),
+        ] {
+            bytes.extend((data.len() as u32).to_be_bytes());
+            bytes.extend(kind);
+            bytes.extend(data);
+            bytes.extend(crc32(&[kind, data]).to_be_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn bounded_decode_preserves_pixels_at_exact_budget() {
+        let gray = Gray {
+            w: 2,
+            h: 2,
+            data: vec![0, 80, 160, 255],
+        };
+        let bytes = encode_png_gray(&gray);
+        let got = load_png_with_limit(&bytes, 4).unwrap();
+        assert_eq!(
+            got.data,
+            vec![0, 0, 0, 80, 80, 80, 160, 160, 160, 255, 255, 255]
+        );
+        assert_eq!(got, load_png(&bytes).unwrap());
+        assert!(
+            load_png_with_limit(&bytes, 3)
+                .unwrap_err()
+                .contains("pixel decoding budget")
+        );
+    }
+
+    #[test]
+    fn tiny_header_cannot_expand_unbounded_data() {
+        assert!(load_png_with_limit(&png(1, 1, 0, &[0; 4096]), 1).is_err());
+        assert!(load_png_with_limit(&png(1, 1, 0, &[0]), 1).is_err());
+        assert_eq!(
+            load_png_with_limit(&png(1, 1, 0, &[0, 73]), 1)
+                .unwrap()
+                .data,
+            [73; 3]
+        );
+    }
+
+    #[test]
+    fn huge_headers_and_malformed_chunk_lengths_do_not_allocate() {
+        assert!(load_png_with_limit(&png(u32::MAX, u32::MAX, 0, &[]), 16_000_000).is_err());
+        let mut bytes = encode_png_gray(&Gray::filled(2, 2, 80));
+        bytes[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(load_png_with_limit(&bytes, 4).is_err());
+    }
+
+    #[test]
+    fn adam7_budget_counts_every_pass_filter_and_packed_row() {
+        let mut raw = Vec::new();
+        for (x0, y0, dx, dy) in [
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        ] {
+            for y in (y0..5).step_by(dy) {
+                raw.push(0);
+                for x in (x0..5).step_by(dx) {
+                    raw.push((y * 5 + x) as u8);
+                }
+            }
+        }
+        let bytes = png(5, 5, 1, &raw);
+        let image = load_png_with_limit(&bytes, 25).unwrap();
+        assert_eq!(
+            image.data,
+            (0u8..25).flat_map(|v| [v; 3]).collect::<Vec<_>>()
+        );
+        raw.push(0);
+        assert!(load_png_with_limit(&png(5, 5, 1, &raw), 25).is_err());
+    }
 }
