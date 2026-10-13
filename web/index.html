@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pattern Workbench</title>
+<meta name="description" content="Draft, check and print a measured sewing pattern in the browser (FrankenTextiles, Rust compiled to WebAssembly).">
+<style>
+:root {
+  --bg: #f6f4ef; --panel: #ffffff; --fg: #1d1c1a; --mut: #6a665e; --line: #dcd7cc; --accent: #23407a;
+  --accent-fg: #ffffff; --ok: #1d7a3a; --bad: #b3261e; --warn: #8a5a00; --chip: #ece8de; --sheet: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161514; --panel: #1f1e1c; --fg: #ece9e2; --mut: #a39e93; --line: #3a3733; --accent: #8fb0ef;
+    --accent-fg: #10131a; --ok: #6cc788; --bad: #f08a80; --warn: #e5b45a; --chip: #2a2825; --sheet: #f4f2ec;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161514; --panel: #1f1e1c; --fg: #ece9e2; --mut: #a39e93; --line: #3a3733; --accent: #8fb0ef;
+  --accent-fg: #10131a; --ok: #6cc788; --bad: #f08a80; --warn: #e5b45a; --chip: #2a2825; --sheet: #f4f2ec;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 20px 16px 48px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; }
+h2 { font-size: 1.05rem; margin: 0 0 10px; }
+p { margin: 0 0 10px; }
+small, .mut { color: var(--mut); }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 14px 0; }
+label { display: block; }
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.row > label { flex: 1 1 140px; }
+input[type=number], input[type=text], select, textarea {
+  width: 100%; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 7px 9px;
+}
+textarea { font-family: ui-monospace, Menlo, monospace; font-size: 13px; min-height: 160px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.seg label { flex: 1 1 160px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; cursor: pointer; background: var(--bg); }
+.seg input { margin-right: 6px; }
+.seg label:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); color: var(--fg); padding: 8px 14px; cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; padding: 10px 18px; }
+button:disabled { opacity: .55; cursor: wait; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.scroll { overflow-x: auto; }
+.tape td:first-child { width: 42%; }
+.tape input { max-width: 120px; }
+.must { color: var(--bad); font-weight: 600; }
+.pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-weight: 700; background: var(--chip); }
+.CONVERGED, .PASS, .IN_BAND, .READY, .READY_REFERENCE { color: var(--ok); }
+.NOT_CONVERGED, .BLOCKED, .FAIL, .LOW, .HIGH, .NOT_READY, .MEASUREMENTS_NOT_READY, .EXPORT_CHECKS_FAILED, .UNSCALED { color: var(--bad); }
+.WARN { color: var(--warn); }
+.sheet { background: var(--sheet); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.sheet img { display: block; max-width: 100%; max-height: 65vh; width: auto; height: auto; margin: 0 auto; }   /* the whole layout */
+ul { margin: 6px 0 10px; padding-left: 20px; }
+.files a { display: inline-block; margin: 0 8px 6px 0; }
+.err { border-color: var(--bad); }
+details > summary { cursor: pointer; color: var(--accent); margin: 4px 0; }
+#status { min-height: 1.5em; }
+.hidden { display: none; }
+code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pattern Workbench</h1>
+  <p class="mut">Draft a sewing pattern from measurements, check every seam and fit point, and download print-at-home
+    PDFs and cutter files. It runs FrankenTextiles in this page (Rust compiled to WebAssembly, about 2 MB), so
+    nothing you type leaves your browser. The fold-up check on a fitted body and tracing AI pattern sheets need
+    the command line (<code>ftx</code>, or the skill's <code>fab</code>).</p>
+
+  <section>
+    <h2>1. Garment</h2>
+    <div class="seg" id="programs"></div>
+    <div id="auditBox" class="hidden">
+      <div class="row">
+        <label>pattern.json <input type="file" id="patternFile" accept=".json,application/json"></label>
+        <label>fit_spec.json (optional) <input type="file" id="fitFile" accept=".json,application/json"></label>
+      </div>
+      <small>Without a fit spec the checks use role-based defaults.</small>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Body</h2>
+    <div class="seg" id="bodyModes">
+      <label><input type="radio" name="bodyMode" value="chart" checked>Size-chart demo <small>(no child needed)</small></label>
+      <label><input type="radio" name="bodyMode" value="tape">My tape measurements</label>
+      <label><input type="radio" name="bodyMode" value="file">Measurements file <small>(<code>fab measure fuse</code>)</small></label>
+    </div>
+    <div id="personBox">
+      <div class="row">
+        <label>Height (cm) <input type="number" id="stature" value="92" min="50" max="220" step="0.1"></label>
+        <label>Age (months, optional) <input type="number" id="age" value="30" min="0" max="240" step="1"></label>
+        <label>Sex (optional) <select id="sex"><option value="">not given</option><option value="F">girl</option><option value="M">boy</option></select></label>
+        <label id="nappyBox"><input type="checkbox" id="nappies"> wears nappies <small>(seat and rise drafted over them)</small></label>
+      </div>
+    </div>
+    <div id="tapeBox" class="hidden">
+      <p class="mut">Tape measurements in cm (degrees where marked). <span class="must">●</span> = needed for this
+        garment; the rest improve it. Empty boxes fall back to the size chart for this height, shown greyed, and the
+        check below says which ones still need measuring.</p>
+      <div class="scroll"><table class="tape"><tbody id="tapeRows"></tbody></table></div>
+    </div>
+    <div id="fileBox" class="hidden"><label>measurements.json <input type="file" id="measFile" accept=".json,application/json"></label></div>
+  </section>
+
+  <section id="styleSection">
+    <details>
+      <summary>3. Style (optional)</summary>
+      <p class="mut">The drafting program's style parameters (ease, lengths, proportions). Edit the values; the
+        result is checked against the same fit contract.</p>
+      <textarea id="style" spellcheck="false"></textarea>
+      <p><button id="resetStyle" type="button">Reset to defaults</button></p>
+    </details>
+  </section>
+
+  <p class="row"><button class="primary" id="go" disabled>Loading…</button><span id="status" class="mut"></span></p>
+
+  <section id="results" class="hidden" aria-live="polite">
+    <h2 id="resTitle"></h2>
+    <p><span id="resStatus" class="pill"></span></p>
+    <p id="resBasis" class="mut"></p>
+    <div id="resGate"></div>
+    <div id="resFiles" class="files"></div>
+    <div class="sheet"><img id="resPreview" alt="the pattern pieces as exported (master SVG)"></div>
+    <h2 style="margin-top:14px">Finished measurements</h2>
+    <div class="scroll"><table id="resPoints"></table></div>
+    <details><summary>Seam walk and truing</summary><div class="scroll"><table id="resSeams"></table></div></details>
+    <details><summary>Export checks</summary><div id="resChecks"></div></details>
+    <details><summary>Solved drafting values</summary><pre id="resSolved"></pre></details>
+  </section>
+  <section id="errorBox" class="hidden err"><h2>Something went wrong</h2><pre id="errorText" style="white-space:pre-wrap"></pre>
+    <details id="errorDetailBox" class="hidden"><summary>Details</summary><pre id="errorDetail" style="white-space:pre-wrap;font-size:12px"></pre></details></section>
+</main>
+
+<script>
+(() => {
+  const PKG = new URL("pkg/", location.href).href;          // wasm-bindgen output (tools/build_web.sh)
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem("fab-wb-" + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem("fab-wb-" + k, JSON.stringify(v)); } catch (e) { /* private window */ } },
+  };
+  let info = {}, program = store.get("program", "zouave_bolero"), fields = [], urls = [], ready = false;
+  const worker = new Worker(new URL("worker.js", location.href), { type: "module" });
+  const status = (t) => { $("status").textContent = t; };
+  const human = (n) => n.replace(/_deg$/, "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+  function bodyMode() { return document.querySelector("input[name=bodyMode]:checked").value; }
+  const nappyGarment = () => program === "zouave_trousers" || program === "audit";   // trousers, or maybe trousers
+  function showBodyMode() {
+    const m = bodyMode();
+    $("tapeBox").classList.toggle("hidden", m !== "tape");
+    $("fileBox").classList.toggle("hidden", m !== "file");
+    $("personBox").classList.toggle("hidden", m === "file");
+    $("nappyBox").classList.toggle("hidden", m !== "tape" || !nappyGarment());   // seat over the nappy
+    store.set("bodyMode", m);
+  }
+  function renderPrograms() {
+    const entries = Object.entries(info).map(([k, v]) => [k, v.label]).concat([["audit", "Check my own pattern.json"]]);
+    $("programs").innerHTML = entries.map(([k, label]) =>
+      `<label><input type="radio" name="program" value="${esc(k)}"${k === program ? " checked" : ""}>${esc(label)}</label>`).join("");
+    $("programs").querySelectorAll("input").forEach((el) => el.addEventListener("change", () => { program = el.value; onProgram(); }));
+  }
+  function onProgram() {
+    store.set("program", program);
+    showBodyMode();
+    const audit = program === "audit";
+    $("auditBox").classList.toggle("hidden", !audit);
+    $("styleSection").classList.toggle("hidden", audit);
+    if (!audit) {
+      // a saved style keeps its values for the keys this version still has (an old key would now be an error)
+      const defaults = info[program].style;
+      let saved = {};
+      try { saved = JSON.parse(store.get("style-" + program, null) || "{}"); } catch (e) { saved = {}; }
+      const kept = Object.fromEntries(Object.entries(saved || {}).filter(([k]) => k in defaults));
+      $("style").value = JSON.stringify({ ...defaults, ...kept }, null, 1);
+    }
+    requestFields();
+  }
+  function requestFields() {
+    if (!ready) return;                                  // the worker has no module until "ready"
+    worker.postMessage({ type: "fields", args: { program, stature_cm: +$("stature").value || 92, age_months: +$("age").value || null,
+                                                 nappies: $("nappies").checked && nappyGarment() } });
+  }
+  function renderFields() {
+    const saved = store.get("tape", {});
+    $("tapeRows").innerHTML = fields.map((f) => `<tr><td>${f.role === "must" ? '<span class="must">●</span> ' : ""}${esc(human(f.name))}
+      <details><summary class="mut" style="font-size:12px">how</summary><small>${esc(f.how)}</small></details></td>
+      <td><input type="number" step="0.1" min="0" data-name="${esc(f.name)}" value="${esc(saved[f.name] ?? "")}"
+        placeholder="${f.chart == null ? "" : esc(f.chart)}" aria-label="${esc(human(f.name))} (${f.unit})"> ${f.unit}</td></tr>`).join("");
+    $("tapeRows").querySelectorAll("input").forEach((el) => el.addEventListener("input", () => {
+      const t = store.get("tape", {}); t[el.dataset.name] = el.value; store.set("tape", t);
+    }));
+  }
+  async function readJson(input, what) {
+    const f = input.files && input.files[0];
+    if (!f) throw new Error("choose a " + what + " file");
+    try { return JSON.parse(await f.text()); } catch (e) { throw new Error(what + ": not valid JSON (" + e.message + ")"); }
+  }
+  async function buildRequest() {
+    const m = bodyMode();
+    const body = { mode: m };
+    if (m === "file") body.measurements = await readJson($("measFile"), "measurements.json");
+    else {
+      body.stature_cm = +$("stature").value;
+      if ($("age").value) body.age_months = +$("age").value;
+      if ($("sex").value) body.sex = $("sex").value;
+      if (m === "tape") {
+        body.nappies = $("nappies").checked && nappyGarment();
+        body.tape = {};
+        $("tapeRows").querySelectorAll("input").forEach((el) => { if (el.value !== "") body.tape[el.dataset.name] = +el.value; });
+      }
+    }
+    if (program === "audit") {
+      const req = { body, pattern: await readJson($("patternFile"), "pattern.json") };
+      if ($("fitFile").files.length) req.fit_spec = await readJson($("fitFile"), "fit_spec.json");
+      return req;
+    }
+    let style;
+    try { style = JSON.parse($("style").value || "{}"); } catch (e) { throw new Error("style: not valid JSON (" + e.message + ")"); }
+    store.set("style-" + program, $("style").value);
+    return { body, program, style };
+  }
+  function blobLink(bytes, name, label, mime) {
+    const u = URL.createObjectURL(new Blob([bytes], { type: mime })); urls.push(u);
+    return `<a href="${u}" download="${esc(name)}">${esc(label)}</a>`;
+  }
+  function renderResult(res, blobs) {
+    urls.forEach((u) => URL.revokeObjectURL(u)); urls = [];
+    $("errorBox").classList.add("hidden");
+    $("results").classList.remove("hidden");
+    if (res.errors) {
+      $("resTitle").textContent = "The pattern file has structure errors";
+      $("resStatus").textContent = res.status; $("resStatus").className = "pill " + res.status;
+      $("resBasis").textContent = ""; $("resGate").innerHTML = "<ul>" + res.errors.map((e) => `<li>${esc(e)}</li>`).join("") + "</ul>";
+      ["resFiles", "resPoints", "resSeams", "resChecks", "resSolved"].forEach((id) => { $(id).innerHTML = ""; });
+      $("resPreview").removeAttribute("src");
+      return;
+    }
+    $("resTitle").textContent = res.title;
+    $("resStatus").textContent = res.status; $("resStatus").className = "pill " + res.status;
+    $("resBasis").textContent = Object.entries(res.basis).map(([k, v]) => `${k}: ${v}`).join(" · ");
+    const rd = res.readiness || {};
+    let gate = "";
+    if (rd.status === "NOT_READY") gate += `<p class="NOT_READY"><b>Measure these before cutting cloth:</b></p><ul>${rd.remeasure_request.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
+    else if (rd.status === "READY_REFERENCE") gate += `<p class="mut">A size-chart body: the pattern fits the chart for this height, not a particular child. Use "My tape measurements" for a real wearer.</p>`;
+    if ((rd.advisories || []).length) gate += `<details${rd.advisories.some((a) => /outside the chart/.test(a)) ? " open" : ""}><summary>Measurement notes (${rd.advisories.length})</summary><ul>${rd.advisories.map((a) => `<li class="${/outside the chart/.test(a) ? "WARN" : ""}">${esc(a)}</li>`).join("")}</ul></details>`;
+    $("resGate").innerHTML = gate;
+    let files = "";
+    if (blobs.zip) files += `<p>${blobLink(blobs.zip, res.zip.split("/").pop(), "Download everything (.zip)", "application/zip")} <small>pattern, fit contract, measurements, every export</small></p>`;
+    files += "<p>" + (res.files || []).map((f) => blobLink(blobs[f.name], f.name, f.label,
+      f.name.endsWith(".pdf") ? "application/pdf" : f.name.endsWith(".svg") ? "image/svg+xml" : "application/octet-stream")).join(" · ") + "</p>";
+    files += `<p class="mut"><small>Print the PDFs at 100 % / Actual size and check the test square with a ruler before cutting.</small></p>`;
+    $("resFiles").innerHTML = files;
+    if (res.preview_svg) {
+      const u = URL.createObjectURL(new Blob([res.preview_svg], { type: "image/svg+xml" })); urls.push(u);
+      $("resPreview").src = u;
+    } else $("resPreview").removeAttribute("src");
+    const v = res.validation || {};
+    $("resPoints").innerHTML = "<tr><th>Point of measure</th><th>Body</th><th>Finished</th><th>Ease</th><th>Target</th><th></th></tr>" +
+      (v.points || []).map((p) => `<tr><td>${esc(p.label)}</td><td>${p.body_mm ?? ""}</td><td>${p.finished_mm ?? ""}</td><td>${p.ease_mm ?? ""}</td>
+        <td>${(p.target_mm || []).map((x) => Math.round(x)).join(" / ")}</td><td class="${esc(p.status)}">${esc(p.status)}</td></tr>`).join("") +
+      `<tr><td colspan="6"><small class="mut">mm; ease = finished − body; target = min / nominal / max</small></td></tr>`;
+    $("resSeams").innerHTML = "<tr><th>Seam</th><th>a mm</th><th>b mm</th><th>ratio</th><th>target</th><th></th></tr>" +
+      (v.seams || []).map((s) => `<tr><td>${esc(s.seam)}</td><td>${s.len_a_mm ?? ""}</td><td>${s.len_b_mm ?? ""}</td><td>${s.ratio ?? ""}</td>
+        <td>${esc(s.target_ratio)}</td><td class="${esc(s.status)}">${esc(s.status)}</td></tr>`).join("") +
+      (v.truing || []).filter((t) => t.status !== "PASS").map((t) => `<tr><td colspan="5">truing ${esc(t.seam)} ${esc(t.end)}: ${t.angle_sum_deg}° ${esc(t.message)}</td><td class="${esc(t.status)}">${esc(t.status)}</td></tr>`).join("");
+    const ex = res.exports;
+    $("resChecks").innerHTML = ex ? `<p class="${ex.pass ? "PASS" : "FAIL"}">${esc(ex.checks)}</p>` +
+      (ex.failures.length || ex.skipped.length ? "<ul>" + ex.failures.concat(ex.skipped).map((f) => `<li>${esc(f)}</li>`).join("") + "</ul>" : "") : "<p>not run</p>";
+    $("resSolved").textContent = JSON.stringify(res.solved || {}, null, 1);
+    $("results").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  function showError(message, detail) {
+    $("errorBox").classList.remove("hidden");
+    $("errorText").textContent = message;
+    $("errorDetail").textContent = detail && detail !== message ? detail : "";
+    $("errorDetailBox").classList.toggle("hidden", !(detail && detail !== message));
+    finished();
+  }
+  function finished() { document.body.dataset.runs = String((+document.body.dataset.runs || 0) + 1); }   // for tests
+
+  worker.onmessage = (ev) => {
+    const msg = ev.data;
+    if (msg.type === "progress") status(msg.text);
+    else if (msg.type === "ready") {
+      info = msg.info; ready = true;
+      if (!(program in info) && program !== "audit") program = "zouave_bolero";
+      renderPrograms(); onProgram();
+      $("go").disabled = false; $("go").textContent = "Draft and check";
+      status(`Ready (${msg.version}; ${msg.dxf}).`);
+    } else if (msg.type === "fields") { if (msg.program === program) { fields = msg.rows; renderFields(); } }
+    else if (msg.type === "result") {
+      $("go").disabled = false; status("Done.");
+      renderResult(msg.res, msg.blobs);
+      finished();
+    } else if (msg.type === "error") {
+      status("");
+      if (ready) $("go").disabled = false;
+      else $("go").textContent = "Could not load";             // no module to run: keep it disabled
+      showError(msg.message, msg.detail);
+    }
+  };
+  worker.onerror = (e) => {
+    status(""); $("go").textContent = ready ? "Draft and check" : "Could not load";
+    showError(e.message || "the worker failed to start");
+  };
+
+  document.querySelectorAll("input[name=bodyMode]").forEach((el) => {
+    if (el.value === store.get("bodyMode", "chart")) el.checked = true;
+    el.addEventListener("change", showBodyMode);
+  });
+  for (const id of ["stature", "age", "sex"]) {
+    const v = store.get(id, null);
+    if (v !== null) $(id).value = v;
+    $(id).addEventListener("change", () => { store.set(id, $(id).value); requestFields(); });
+  }
+  $("nappies").checked = !!store.get("nappies", false);
+  $("nappies").addEventListener("change", () => { store.set("nappies", $("nappies").checked); requestFields(); });
+  showBodyMode();
+  $("resetStyle").addEventListener("click", () => { $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); });
+  $("go").addEventListener("click", async () => {
+    // disable first: reading an uploaded file is async, and a second click would start a second run
+    $("go").disabled = true;
+    $("results").classList.add("hidden"); $("errorBox").classList.add("hidden");
+    try {
+      const req = await buildRequest();
+      status("Drafting, checking and exporting…");
+      worker.postMessage({ type: "run", req });
+    } catch (e) { $("go").disabled = false; showError(e.message); }
+  });
+  worker.postMessage({ type: "init", pkg: PKG });
+})();
+</script>
+</body>
+</html>

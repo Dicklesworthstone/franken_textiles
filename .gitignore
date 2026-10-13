@@ -16,9 +16,10 @@ perf.data
 perf.data.old
 flamegraph.svg
 
-# Wasm build output (wasm-pack / wasm-bindgen)
+# Wasm build output (wasm-pack / wasm-bindgen; the page's module: tools/build_web.sh)
 /pkg/
 /crates/*/pkg/
+/web/pkg/
 *.wasm
 
 # === FrankenTextiles specific ===

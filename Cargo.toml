@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ftx-core", "crates/ftx-body", "crates/ftx-pattern", "crates/ftx-measure", "crates/ftx-drape", "crates/ftx-export", "crates/ftx-trace", "crates/ftx-cli", "crates/ftx-conformance"]
+members = ["crates/ftx-core", "crates/ftx-body", "crates/ftx-pattern", "crates/ftx-measure", "crates/ftx-drape", "crates/ftx-export", "crates/ftx-trace", "crates/ftx-cli", "crates/ftx-wasm", "crates/ftx-conformance"]
 
 # Planned workspace crates (plan §16 / AGENTS.md "Planned Workspace Crates"). A crate is
 # added to `members` when it gets real code, not before. No crate outside this list without
@@ -54,6 +54,11 @@ spade = { version = "=2.15.1", default-features = false, features = ["std"] }
 # deflate::compress_to_vec_zlib and inflate::decompress_to_vec_zlib. It also sits under the PNG decoding
 # the plan allows for tracing.
 miniz_oxide = { version = "=0.8.9" }
+# The browser boundary, in ftx-wasm only and only for wasm32 (plan §15–16): #[wasm_bindgen] on functions
+# taking and returning strings, a struct returning Vec<u8>, and JsError. Pinned to the installed
+# wasm-bindgen CLI (0.2.128), which must match it exactly; pulls wasm-bindgen-macro/-shared/-backend and
+# once_cell. Native builds do not compile it.
+wasm-bindgen = { version = "=0.2.128" }
 
 [profile.release-perf]
 inherits = "release"

@@ -116,7 +116,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Round logic, statuses, basis, workspace layout, rounds.jsonl | 04 §11 | missing | |
 | Measurement gate, qualification, tightness gating in the round | 04 §11 | missing | |
 | Report HTML | 04 §11 | missing | |
-| Browser page (replaces the Pyodide page) | 04 §12 | missing | |
+| Browser page (replaces the Pyodide page) | 04 §12 | partial | `ftx-wasm` (`page` = the reference's `webapp.py` round in memory, `web` = the wasm-bindgen boundary) and `web/` (the skill's page with a module worker on `web/pkg`, `tools/build_web.sh`, 2.1 MB): oracle `web/webapp` 25 cases (program info, form fields, chart/tape/file bodies, all programs, someone else's pattern, BLOCKED, UNSCALED, refusals) every page field and document equal (`ftx-wasm/tests/page.rs`); in headless Chromium a bolero round takes about a second. Missing: the fold-up on a fitted body in the page (the body model is not fetched yet), the viewer |
 | 3D fold-up viewer data | 04 §9 | partial | written by `ftx drape` and `examples/drape_drafted.rs` (`fold_viewer.html`); the report line carries the run's own gating and advisory flags |
 
 ## Excluded by decision (plan §23)
