@@ -98,6 +98,16 @@ Hessian's pattern never changes.
   gap check), or a cloth piece wholly inside a closed body (winding number above ½ at one vertex per
   piece).
 
+**Fold-up animation and files** (`animation.rs`; spec 04 §9). The pattern board (instances left to
+right, 40 mm apart, on y = −0.55 m); per instance a staggered rigid flight off the board (slerp from the
+identity to the rotation onto its k = 0 roll, centroid on a raised path) then the isometric roll-up
+(`start::roll_points`, §3.6) to its wrap; the 18-frame zip from wrap to the sewn start; then the solver's
+frames. Rotations use Horn's quaternion method with the deterministic Jacobi solver where the reference
+uses numpy's SVD Kabsch. Written as `fold.pc2` (float32 point cache), `mesh_map.json`, seam and strain
+colours, and the `fabric-fold-viewer/1` payload embedded in `assets/fold_viewer_template.html` (the
+skill's page, unchanged; SHA-256 `7de25b18…a878`). Until the metrics exist the viewer's report carries one
+gating entry saying they are not computed, so the page never shows an unearned "no gating flags".
+
 **Meshes.** Use `hex_grid` (near-equilateral) for anything that bends: hinge bending on it is isotropic
 (cylinder energy 0.98–1.02 of theory at 0°/30°/45°/90°). Right-triangle grids (`grid`) have a zig-zag mode
 along clamped edges that made a cantilever ~25 % too soft; they are fine for in-plane tests.

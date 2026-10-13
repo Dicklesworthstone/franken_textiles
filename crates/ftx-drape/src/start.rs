@@ -68,20 +68,65 @@ pub struct WrapPlacement {
 /// The isometric wrap of one instance's 2D points (mm) into metres (spec 04 §3.3–3.4).
 #[must_use]
 pub fn wrap_points(points: &[Vec2], p: &WrapPlacement) -> Vec<Vec3> {
+    wrap_drafted(&drafted(points, p), p)
+        .into_iter()
+        .map(|mut v| {
+            if p.own_side {
+                v.x = v.x.min(-1.0);
+            }
+            if p.mirrored {
+                v.x = -v.x;
+            }
+            v * MM
+        })
+        .collect()
+}
+
+/// The instance's points in the drafted (wearer's-right) frame: x mirrored for a mirrored instance.
+pub(crate) fn drafted(points: &[Vec2], p: &WrapPlacement) -> Vec<Vec2> {
+    points
+        .iter()
+        .map(|q| Vec2::new(if p.mirrored { -q.x } else { q.x }, q.y))
+        .collect()
+}
+
+/// The reference's `body.wrap` of drafted-frame points, in mm (no own-side rule, no mirroring).
+pub(crate) fn wrap_drafted(points: &[Vec2], p: &WrapPlacement) -> Vec<Vec3> {
     let f = &p.frame;
     let theta0 = p.theta_deg.to_radians();
     points
         .iter()
         .map(|q| {
-            let x = if p.mirrored { -q.x } else { q.x };
             let h = p.h0 + q.y;
-            let th = theta0 + (x - p.x0) / p.radius;
+            let th = theta0 + (q.x - p.x0) / p.radius;
             let (s, c) = (ftx_core::det::sin(th), ftx_core::det::cos(th));
             let r = f.lat * s + f.front * c;
-            let mut v = f.origin + f.up * h + r * p.radius;
-            if p.own_side {
-                v.x = v.x.min(-1.0);
-            }
+            f.origin + f.up * h + r * p.radius
+        })
+        .collect()
+}
+
+/// The isometric roll between the flat piece (k = 0, a sheet tangent to the wrap at the anchor column)
+/// and its wrap (k = 1), in metres, with the own-side rule and mirroring at k ≥ 1 as the wrap (spec 04
+/// §3.6; the animation's roll-up).
+#[must_use]
+pub fn roll_points(points: &[Vec2], p: &WrapPlacement, k: f64) -> Vec<Vec3> {
+    if k >= 1.0 {
+        return wrap_points(points, p);
+    }
+    let pts = drafted(points, p);
+    let f = &p.frame;
+    let kk = k.max(1e-6) / p.radius;
+    let column: Vec<Vec2> = pts.iter().map(|q| Vec2::new(p.x0, q.y)).collect();
+    let flat = wrap_drafted(&column, p);
+    let (s0, c0) = ftx_core::det::sin_cos(p.theta_deg.to_radians());
+    let tangent = f.lat * c0 - f.front * s0;
+    let normal_in = -(f.lat * s0 + f.front * c0);
+    pts.iter()
+        .zip(flat)
+        .map(|(q, base)| {
+            let (s, c) = ftx_core::det::sin_cos(kk * (q.x - p.x0));
+            let mut v = base + tangent * (s / kk) + normal_in * ((1.0 - c) / kk);
             if p.mirrored {
                 v.x = -v.x;
             }

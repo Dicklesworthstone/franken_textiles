@@ -1,7 +1,8 @@
 //! Drapes a drafted garment from the oracle fixtures on an Anny body of the reference wearer's stature:
 //! `cargo run --release -p ftx-drape --example drape_drafted -- OUT_DIR [case] [sew_steps] [drape_steps]`
 //! (default case `zouave_bolero-920`). Needs the converted Anny model. Writes the body, the start state
-//! and the draped garment as OBJ files. For experiments: `FTX_STEP` (s, default 1/24), `FTX_MU` (0.4),
+//! and the draped garment as OBJ files, and the fold-up as `fold.pc2`, `mesh_map.json` and a
+//! self-contained `fold_viewer.html` (spec 04 §9). For experiments: `FTX_STEP` (s, default 1/24), `FTX_MU` (0.4),
 //! `FTX_EPS_V` (m/s, 1e-3) and `FTX_DEBUG_STEPS` (print three steps' solver reports first).
 
 use std::fmt::Write as _;
@@ -12,6 +13,10 @@ use ftx_body::{
     pose_deltas, skin_mesh, trimmed_skin,
 };
 use ftx_core::Vec3;
+use ftx_drape::animation::{
+    FOLD_FRAMES, FoldUp, ViewerExtras, ZIP_FRAMES, board_layout, fold_frames, mesh_map, pc2,
+    viewer_html, viewer_payload, zip_frames,
+};
 use ftx_drape::scene::{Fabric, build_scene, run_phase};
 use ftx_drape::{ContactParams, build_garment};
 use ftx_pattern::Pattern;
@@ -175,9 +180,16 @@ fn main() {
             println!("debug step: {:.1} s, {r:?}", t.elapsed().as_secs_f64());
         }
     }
+    // The fold-up: board, fold, zip, then the solver's frames.
+    let board = board_layout(&scene.mesh);
+    let mut frames = fold_frames(&scene.mesh, &scene.placements, &board, FOLD_FRAMES);
+    frames.extend(zip_frames(&scene.start.wrapped, &scene.start.relaxed));
+    let mut last_speed = 0.0;
     for (name, steps, g) in [("sew", sew_steps, 0.0), ("drape", drape_steps, 9.81)] {
         let t = Instant::now();
-        let rep = run_phase(&mut scene, steps, h, g, |_, _| {}).unwrap_or_else(|r| panic!("{r}"));
+        let rep = run_phase(&mut scene, steps, h, g, |_, x| frames.push(x.to_vec()))
+            .unwrap_or_else(|r| panic!("{r}"));
+        last_speed = rep.max_speed;
         println!(
             "{name}: {} steps, {} Newton iterations, {} unconverged, max speed {:.4} m/s, cloth offset \
              {:.2} mm, {:.1} s",
@@ -202,4 +214,51 @@ fn main() {
         .min_gap(&scene.solver.x, 0.01)
         .unwrap_or(f64::INFINITY);
     println!("min cloth-body gap after the drape: {:.3} mm", gap * 1e3);
+
+    let fold = FoldUp {
+        frames,
+        fold: FOLD_FRAMES,
+        zip: ZIP_FRAMES,
+        sew: sew_steps,
+        drape: drape_steps,
+    };
+    std::fs::write(out.join("fold.pc2"), pc2(&fold.frames)).unwrap();
+    std::fs::write(
+        out.join("mesh_map.json"),
+        serde_json::to_string_pretty(&mesh_map(&scene.mesh, &fold)).unwrap(),
+    )
+    .unwrap();
+    let raw = pattern.raw();
+    let style = raw["style"].as_str().unwrap_or("");
+    let title = raw["meta"]["title"].as_str().unwrap_or(style);
+    let payload = viewer_payload(
+        &scene.mesh,
+        &fold,
+        &ViewerExtras {
+            title: if title.is_empty() { "fold-up" } else { title },
+            style,
+            body: (&full.vertices, &full.triangles),
+            gating: vec![
+                "fit metrics not computed yet: this is a FrankenTextiles drape preview, not a fit verdict"
+                    .to_string(),
+            ],
+            advisory: Vec::new(),
+            settled: last_speed < 0.005,
+            arm_deg: Pose::A_POSE_DEG,
+        },
+        150,
+    );
+    let template = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/fold_viewer_template.html"
+    ));
+    let html = viewer_html(template, &payload).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(out.join("fold_viewer.html"), &html).unwrap();
+    println!(
+        "fold-up: {} frames ({} fold, {} zip, {sew_steps} sew, {drape_steps} drape); viewer {:.1} MB",
+        fold.frames.len(),
+        FOLD_FRAMES,
+        ZIP_FRAMES,
+        html.len() as f64 / 1e6
+    );
 }

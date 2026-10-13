@@ -1,13 +1,20 @@
-//! FrankenTextiles drape (plan §11): an implicit cloth solver for sewing patterns onto bodies. This
-//! stage has the cloth without contact: an orthotropic Green-strain membrane rotated to the grain,
-//! quadratic bending, lumped inertia, and projected Newton on a sparse LDLᵀ with a line search, checked
-//! by known-answer tests (membrane anisotropy, the Peirce cantilever). Contact, friction, seams and the
-//! garment scene come next (FTX-12, FTX-13).
+//! FrankenTextiles drape (plan §11): an implicit cloth solver for sewing patterns onto bodies.
+//!
+//! - The cloth ([`cloth`], [`elements`]): an orthotropic Green-strain membrane rotated to the grain,
+//!   quadratic bending, lumped inertia, projected Newton on a sparse LDLᵀ with a line search.
+//! - Contact with a static body ([`contact`], [`distance`], [`ad`]): the IPC barrier on the
+//!   thickness-offset gap, additive CCD, lagged Coulomb friction, an exact start audit.
+//! - The garment ([`garment`], [`start`], [`nearest`], [`scene`]): the reference's mesh and start state,
+//!   then welded seams, placement on a body and the sew and drape schedule.
+//! - The fold-up animation and its files ([`animation`]): board, roll-up, zip, PC2, the viewer payload.
+//!
+//! Metrics and flags come next (FTX-13).
 //!
 //! Units: metres, kilograms, seconds; z up.
 #![forbid(unsafe_code)]
 
 pub mod ad;
+pub mod animation;
 pub mod cloth;
 pub mod contact;
 pub mod distance;

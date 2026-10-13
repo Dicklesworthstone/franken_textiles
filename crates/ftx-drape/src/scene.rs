@@ -220,6 +220,8 @@ fn grain_rest(pattern: &Pattern, mesh: &GarmentMesh) -> Vec<Vec2> {
 pub struct Scene {
     /// The garment mesh.
     pub mesh: GarmentMesh,
+    /// Each instance's wrap placement.
+    pub placements: Vec<WrapPlacement>,
     /// The kinematic start state.
     pub start: StartState,
     /// Welded index of each mesh vertex.
@@ -330,6 +332,7 @@ pub fn build_scene(
         .with_contact(body, start_contact)?;
     Ok(Scene {
         mesh,
+        placements: places,
         start,
         weld,
         collapsed,

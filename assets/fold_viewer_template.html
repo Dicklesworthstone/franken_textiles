@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fold-up Viewer</title>
+<meta name="description" content="The sewing pattern folding up around the measured dress form, frame by frame (from the Blender fold-up).">
+<style>
+:root { --bg: #f6f4ef; --panel: #ffffff; --fg: #1d1c1a; --mut: #6a665e; --line: #dcd7cc; --accent: #23407a;
+        --accent-fg: #ffffff; --stage: #e9e6df; --ok: #1d7a3a; --bad: #b3261e; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #161514; --panel: #1f1e1c; --fg: #ece9e2; --mut: #a39e93; --line: #3a3733;
+                                     --accent: #8fb0ef; --accent-fg: #10131a; --stage: #24221f; --ok: #6cc788; --bad: #f08a80;
+                                     color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #161514; --panel: #1f1e1c; --fg: #ece9e2; --mut: #a39e93; --line: #3a3733;
+                           --accent: #8fb0ef; --accent-fg: #10131a; --stage: #24221f; --ok: #6cc788; --bad: #f08a80;
+                           color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 1.4rem; margin: 0 0 2px; }
+p { margin: 4px 0 10px; }
+.mut { color: var(--mut); }
+#stage { position: relative; width: 100%; height: min(70vh, 720px); background: var(--stage); border: 1px solid var(--line);
+         border-radius: 10px; overflow: hidden; touch-action: none; }
+#stage canvas { display: block; width: 100%; height: 100%; }
+#phase { position: absolute; left: 12px; top: 10px; padding: 3px 10px; border-radius: 999px; background: var(--panel);
+         border: 1px solid var(--line); font-size: 13px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 10px 0; }
+.controls input[type=range] { flex: 1 1 240px; min-width: 0; accent-color: var(--accent); }
+button, select { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+                 padding: 6px 12px; cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); min-width: 84px; }
+label { white-space: nowrap; }
+.ok { color: var(--ok); } .bad { color: var(--bad); }
+#error { color: var(--bad); }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+</head>
+<body>
+<main>
+  <h1 id="title">Fold-up</h1>
+  <p id="verdict" class="mut"></p>
+  <div id="stage"><span id="phase"></span></div>
+  <div class="controls">
+    <button id="play" class="primary" type="button">Pause</button>
+    <input id="frame" type="range" min="0" value="0" aria-label="frame">
+    <span id="count" class="mut"></span>
+  </div>
+  <div class="controls">
+    <label><input type="radio" name="colour" value="seam_rgb" checked> seam colours</label>
+    <label><input type="radio" name="colour" value="strain_rgb"> strain at the end</label>
+    <label><input type="checkbox" id="showBody" checked> dress form</label>
+    <label>speed <select id="speed"><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
+  </div>
+  <p class="mut">Drag to turn, scroll or pinch to zoom. Seam colours match the flat pattern (the same colour on both
+    sides of a seam). Strain is the cloth at the end of the drape: red stretched, blue compressed (±3 %). This
+    is the simulation, judged by the flags above; the muslin is the truth.</p>
+  <p id="error"></p>
+</main>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const D = /*__FOLD_DATA__*/null;
+const $ = (id) => document.getElementById(id);
+const bytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+try {
+  $("title").textContent = D.title + " — fold-up";
+  const r = D.report || {};
+  const gate = (r.gating || []).length;
+  $("verdict").innerHTML = (gate ? `<span class="bad">${gate} gating flag(s)</span>` : `<span class="ok">no gating flags</span>`) +
+    ` · ${(r.advisory || []).length} advisory · ${r.settled ? "settled" : "not settled"}` + (r.arm_deg ? ` · arms at ${r.arm_deg}°` : "");
+  $("verdict").title = [...(r.gating || []), ...(r.advisory || [])].join("\n");
+
+  const V = D.vertices, F = D.frames;
+  const Q = new Uint16Array(bytes(D.positions).buffer);
+  const lo = D.lo, sc = D.hi.map((h, i) => (h - lo[i]) / 65535);
+  const pos = new Float32Array(V * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(bytes(D.triangles).buffer), 1));
+  const colours = Object.fromEntries(Object.entries(D.colours).map(([k, s]) => [k, new THREE.BufferAttribute(bytes(s), 3, true)]));
+  geo.setAttribute("color", colours.seam_rgb || Object.values(colours)[0]);
+  const cloth = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.85 }));
+
+  const scene = new THREE.Scene();
+  scene.add(cloth);
+  let body = null;
+  if (D.body.vertices) {                                   // Blender is z-up, three.js y-up: (x, y, z) -> (x, z, -y)
+    const bv = new Float32Array(bytes(D.body.vertices).buffer), b2 = new Float32Array(bv.length);
+    for (let i = 0; i < bv.length; i += 3) { b2[i] = bv[i]; b2[i + 1] = bv[i + 2]; b2[i + 2] = -bv[i + 1]; }
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute("position", new THREE.BufferAttribute(b2, 3));
+    bg.setIndex(new THREE.BufferAttribute(new Uint32Array(bytes(D.body.triangles).buffer), 1));
+    bg.computeVertexNormals();
+    body = new THREE.Mesh(bg, new THREE.MeshStandardMaterial({ color: 0xd2ad94, roughness: 0.7 }));
+    scene.add(body);
+  }
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8478, 1.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+  sun.position.set(1.2, 2.5, 2.0);
+  scene.add(sun);
+
+  const stage = $("stage");
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  stage.prepend(renderer.domElement);
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 50);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  // frame the whole fold (board included) and the form
+  const box = new THREE.Box3(new THREE.Vector3(lo[0], lo[2], -D.hi[1]), new THREE.Vector3(D.hi[0], D.hi[2], -lo[1]));
+  if (body) box.union(new THREE.Box3().setFromObject(body));
+  const centre = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+  controls.target.copy(centre);
+  camera.position.set(centre.x + 0.3 * size.length(), centre.y + 0.12 * size.length(), centre.z + 1.0 * size.length());
+
+  function theme() { scene.background = new THREE.Color(getComputedStyle(document.body).getPropertyValue("--stage").trim()); }
+  theme();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", theme);
+  function resize() {
+    const w = stage.clientWidth, h = stage.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(stage);
+  resize();
+
+  let frame = 0;
+  function setFrame(f) {
+    frame = Math.max(0, Math.min(F - 1, Math.round(f)));
+    const o = frame * V * 3;
+    for (let i = 0; i < V * 3; i += 3) {
+      const x = lo[0] + Q[o + i] * sc[0], y = lo[1] + Q[o + i + 1] * sc[1], z = lo[2] + Q[o + i + 2] * sc[2];
+      pos[i] = x; pos[i + 1] = z; pos[i + 2] = -y;
+    }
+    geo.attributes.position.needsUpdate = true;
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+    $("frame").value = frame;
+    $("phase").textContent = D.phase[frame];
+    $("count").textContent = `${frame + 1} / ${F}`;
+  }
+  $("frame").max = F - 1;
+  $("frame").addEventListener("input", (e) => { playing = false; $("play").textContent = "Play"; setFrame(+e.target.value); });
+  // reduced motion: open paused on the board, the visitor presses Play
+  let playing = !matchMedia("(prefers-reduced-motion: reduce)").matches, clock = 0, hold = 0, last = performance.now();
+  $("play").textContent = playing ? "Pause" : "Play";
+  $("play").addEventListener("click", () => {
+    playing = !playing;
+    $("play").textContent = playing ? "Pause" : "Play";
+    if (playing && frame >= F - 1) { setFrame(0); clock = 0; }
+  });
+  document.querySelectorAll("input[name=colour]").forEach((el) => el.addEventListener("change", () => {
+    geo.setAttribute("color", colours[el.value] || colours.seam_rgb);
+  }));
+  $("showBody").addEventListener("change", (e) => { if (body) body.visible = e.target.checked; });
+  setFrame(0);
+
+  function loop(now) {
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    if (playing) {
+      if (frame >= F - 1) {                               // rest on the draped result, then start again
+        hold += dt;
+        if (hold > 2.5) { hold = 0; clock = 0; setFrame(0); }
+      } else {
+        clock += dt * 24 * +$("speed").value;
+        if (clock >= 1) { setFrame(frame + Math.floor(clock)); clock -= Math.floor(clock); }
+      }
+    }
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+  window.__fold = { frames: F, setFrame, pause: () => { playing = false; $("play").textContent = "Play"; } };   // for tests
+  document.body.dataset.ready = "1";
+} catch (e) {
+  $("error").textContent = "Could not show the fold-up: " + e.message;
+  document.body.dataset.ready = "error";
+}
+</script>
+</body>
+</html>

@@ -71,7 +71,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Metrics and flags with the reference's text and gating split | 04 §6 | missing | |
 | Qualification bands and tightness gating | 04 §7 | missing | |
 | Known-answer tests (plan §11.9) | 04 §8 | partial | KAT 2 (anisotropy, compression law), KAT 3 (Peirce cantilever vs exact elastica), KAT 9 (drape digest equal native/wasm) in `crates/ftx-drape/tests/kat.rs`; KAT 1 (barrier calculus vs AD and differences, unit test), KAT 4 (ring on a cylinder, 2πμT), KAT 5 (ring on a cone, tan α vs μ), KAT 6 (ease sweep), KAT 9 (contact digest equal native/wasm) in `tests/kat_contact.rs`; KAT 7 (elastic ladder), 8 (armpit wedge) and 10 (two-start spread) need elastics, seams, the garment scene and fitted bodies (FTX-09, FTX-13) |
-| Output formats (fold.pc2, mesh_map.json, report, viewer data) | 04 §9 | missing | |
+| Output formats (fold.pc2, mesh_map.json, report, viewer data) | 04 §9 | partial | `animation.rs`: board layout, fold kinematics (rigid flight with Horn rotations instead of SVD Kabsch, isometric roll-up, §3.6 roll), zip, PC2, mesh map, seam and strain colours, the `fabric-fold-viewer/1` payload and page (`assets/fold_viewer_template.html`, the skill's template byte for byte); unit tests (roll isometry within 1 %, last fold frame = wrap). No oracle yet; `sim_report.json` waits for the metrics |
 
 ## Exports (`ftx-export`, spec 03)
 
@@ -111,7 +111,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Measurement gate, qualification, tightness gating in the round | 04 §11 | missing | |
 | Report HTML | 04 §11 | missing | |
 | Browser page (replaces the Pyodide page) | 04 §12 | missing | |
-| 3D fold-up viewer data | 04 §9 | missing | |
+| 3D fold-up viewer data | 04 §9 | partial | written by `examples/drape_drafted.rs` (`fold_viewer.html`); the report line carries an explicit "fit metrics not computed yet" gating entry until §6 is ported |
 
 ## Excluded by decision (plan §23)
 
