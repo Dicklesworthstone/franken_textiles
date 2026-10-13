@@ -20,6 +20,7 @@
 mod draft;
 mod export;
 mod measure;
+mod round;
 mod workspace;
 
 use std::collections::BTreeMap;
@@ -45,6 +46,8 @@ const USAGE: &str = "usage:
   ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]
   ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
   ftx validate PATTERN --measurements M [--fit F] [--json]
+  ftx round WS [--pattern P] [--measurements M] [--fit F] [--export]
+            [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N]
             [--model PATH] [--self-contact-mm MM] [--self-mu MU] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
@@ -85,7 +88,7 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         } else if let Some(name) = a.strip_prefix("--") {
             if measure::BOOLEAN_OPTIONS.contains(&name)
                 || export::BOOLEAN_OPTIONS.contains(&name)
-                || name == "update-measurements"
+                || round::BOOLEAN_OPTIONS.contains(&name)
             {
                 if options
                     .insert(name.to_string(), "true".to_string())
@@ -736,6 +739,7 @@ fn main() -> ExitCode {
     match args.positional.first().map(String::as_str) {
         Some("draft") => emit("draft", args.json, draft::cmd_draft(&args)),
         Some("validate") => emit("validate", args.json, cmd_validate(&args)),
+        Some("round") => emit("round", args.json, round::cmd_round(&args)),
         Some("drape") => emit("drape", args.json, cmd_drape(&args)),
         Some("body") => emit("body", args.json, cmd_body(&args)),
         Some("alter") => emit("alter", args.json, cmd_alter(&args)),

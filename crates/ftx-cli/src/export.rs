@@ -20,7 +20,7 @@ pub(super) const BOOLEAN_OPTIONS: &[&str] =
 const TARGET_NAMES: &str = "svg, pdf, letter, a4, copyshop, projector, dxf, astm, aama, flat-dxf, hpgl, cutter, garmentcode, embroidery, all, check";
 
 /// Now in UTC as `YYYY-MM-DDTHH:MM` (the reference uses local time; `--created` pins it).
-fn utc_minute() -> Result<String, Refusal> {
+pub(super) fn utc_minute() -> Result<String, Refusal> {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| bad_input("clock precedes 1970; pass --created"))?
