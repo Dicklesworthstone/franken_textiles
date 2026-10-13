@@ -132,3 +132,12 @@ overdetermined fitting, fixed intrinsics, held-out independence, gauge/order inv
 collinear controls, missing fit information, strict schemas and budget-stop atomicity.
 No external numerical dependency. No estimated reference-scale parameter, joint intrinsic
 calibration, covariance, global-minimum guarantee, body fit or real-wearer accuracy claim.
+
+**Sampled body silhouettes (FTX-21).** Optional frame silhouettes participate in the shared
+shape/per-frame pose fitter through `BodyModel::surface`. Rectified mesh triangle unions are
+compared on fixed horizontal/vertical image lines; limb gaps and overlapping surfaces retain
+their projected coverage. Fit-only edge/coverage residuals and symmetric 3-pixel gates preserve
+the existing multistart, rank and held-out rules. Binary-mask sampling retains half-pixel
+boundaries and refuses clipping, soft evidence and excess components. No full-mask, segmentation
+accuracy, covariance or real-wearer fit claim. See `BODY_FIT.md` and
+`docs/multi-frame-body-fit.md` for exact input conventions, limits and failure behavior.

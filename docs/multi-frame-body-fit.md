@@ -3,7 +3,8 @@
 `ftx measure fit-body` fits one Anny shape to named 2D correspondences across independently
 posed images, optionally constrained by independent tape measurements. Unlike triangulation
 or a stationary bundle, it does not assume the body stayed still between decoded frames.
-This is FTX-21's keypoint/tape fitting slice, not its silhouette or real-photo acceptance gate.
+Optional sampled silhouettes constrain surface shape in addition to keypoints and tape.
+This is not full-mask fitting or FTX-21's real-photo acceptance gate.
 
 ```sh
 ftx measure fit-body observations.json --model /path/to/anny-0.6.1-default.ftxbody \
@@ -93,6 +94,74 @@ and `arm_length`. Stature is the rest mesh's z extent; other functionals reuse t
 body tape implementation at its standard 35-degree A-pose. They do not change as image poses
 move. Give actual independent tape evidence, not a size-chart guess masquerading as tape.
 
+## Silhouettes from rectified masks
+
+```sh
+ftx measure fit-body observations.json --model /path/to/anny-0.6.1-default.ftxbody \
+    --silhouettes masks/manifest.json --out silhouette-fit.json --json
+```
+
+The mask manifest has this structure; frame identities must match the fitting request exactly:
+
+```json
+{
+  "schema": "ftx-body-silhouettes/1",
+  "evidence": "Reviewed segmentation and rectification receipt; describe clothing/occluders",
+  "frames": [
+    {
+      "frame": {"stream": "camera-1", "timestamp_us": 133333},
+      "mask": "body-133333.png",
+      "samples": [
+        {"axis": "horizontal", "index": 420, "sigma_px": 1.0, "partition": "fit"},
+        {"axis": "horizontal", "index": 480, "sigma_px": 1.0, "partition": "held_out"},
+        {"axis": "vertical", "index": 640, "sigma_px": 1.0, "partition": "fit"}
+      ]
+    }
+  ]
+}
+```
+
+Mask paths are relative to the manifest, not the working directory. A mask must be an opaque
+8-bit grayscale PNG containing only 0 (background) and 255 (body), with the frame's exact
+oriented dimensions. Transparency, animation, EXIF metadata, soft masks, mismatched dimensions
+and foreground touching an image border are refused. No resizing, threshold guessing,
+segmentation inference or coordinate rotation is performed. Pixel centers are integer indices;
+a foreground run at centers `i..j` has boundaries `i-0.5` and `j+0.5`.
+
+**Rectify the mask, keypoints and camera calibration together before using silhouettes.**
+The camera must have zero distortion coefficients. Otherwise projected triangle edges are
+curved and cannot be represented by this straight-edge scanline implementation. Merely zeroing
+coefficients without rectifying the evidence invalidates the measurement assumptions.
+
+Choose fit/held-out rows and columns before fitting. Up to 64 distinct slices and eight
+foreground intervals per slice are supported, in both the observation and prediction;
+excess components are refused, not dropped.
+Empty sampled rows/columns explicitly assert background, but at least one line must contain
+foreground. Sampling does not establish what happens between the requested lines. Use both
+orientations and appropriate coverage for the dimensions being fitted.
+
+The actual posed Anny triangles are projected and unioned: gaps between limbs remain gaps,
+overlapping surfaces do not create duplicate boundaries, and internal mesh edges do not become
+silhouette evidence. The fitting objective adds signed boundary distances in both directions and
+the signed foreground-length difference on fit lines only. Sixteen reverse-boundary slots are
+zero-padded to keep residual dimensions fixed; missing/extra coverage remains diagnostic data.
+Every line, including held-out lines, must pass a 3-pixel
+symmetric boundary-displacement gate; an empty/nonempty mismatch always fails. A model that does
+not intersect a foreground fit slice has no finite contour residual and needs a better start.
+Silhouette topology changes can also prevent convergence; no failed attempt publishes a body.
+
+Alternatively, supply `silhouette` directly inside a fit frame as
+`{"evidence":"...", "lines":[{"axis":"horizontal", "at_px":420,
+"intervals_px":[[560.5,719.5]], "sigma_px":1.0, "partition":"fit"}]}`.
+Intervals must be ordered and disjoint. A mask cannot overwrite inline silhouette evidence.
+The report retains the derived intervals, partitions and per-line checks. Mask imports also
+retain the manifest, its byte digest, image dimensions and SHA-256 of each decoded row-major
+grayscale buffer (not a hash of the PNG encoding). Original inputs/masks are never modified.
+
+Contour sigmas are fitting weights, not a validated independent-noise model; neighboring
+mask boundaries may be strongly correlated. Segmentation, loose clothing and occluders can
+produce a self-consistent but wrong body estimate. Those systematic errors are not inferred.
+
 ## Observability, acceptance and output
 
 Known cameras alone do not generally fix body scale when each pose has a free distance to
@@ -108,6 +177,10 @@ must be within three declared sigmas. Every initialization must converge and pas
 Successful shared-shape estimates must agree within 1% of each parameter's declared range.
 Distinct fitting shapes produce AMBIGUOUS rather than an arbitrarily chosen body. Agreement
 between a few starts is not proof of global shape or pose uniqueness.
+Per-frame pose parameters must also agree within 1% of their declared ranges; pose ambiguity
+cannot be hidden by shared-shape agreement. `--max-evaluations` bounds all model calls across
+starts, derivatives, trials, surface comparisons and final checks (default 100,000; 1–1,000,000).
+Exhaustion returns exit 4 without a solution, even when earlier starts converged.
 
 `result` in the usual JSON envelope contains `ftx-body-fit/1`, full canonical input, the verified
 model ID/configuration, raw input digest, numerical policy, every attempt's objective history,
@@ -126,6 +199,6 @@ The core's hard budgets and algorithm are in `crates/ftx-measure/BODY_FIT.md`. I
 tests exercise actual shape-depth degeneracy and multiple shape minima. The CLI tests execute
 the real loader, forward model, skinning, fitter and file writes using a tiny synthetic
 Anny-format two-bone model. They do not use production model assets or real-person photographs.
-Silhouette residuals, automatic keypoint inference, camera/tape systematic uncertainty,
+Full-mask validation, automatic keypoint inference, camera/tape/segmentation systematic uncertainty,
 production-asset fitting qualification and a ruler-in-frame real-photo check remain unverified
 or outside this slice. No real-wearer or garment-fit claim follows from accepted geometry.

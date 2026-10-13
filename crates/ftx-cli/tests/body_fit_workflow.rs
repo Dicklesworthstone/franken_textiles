@@ -2,6 +2,7 @@
 use ftx_body::{Affine, AnnyData, AnnyModel, Phenotype};
 use ftx_core::{Mat3, Vec2, Vec3, receipt::sha256_hex};
 use ftx_measure::camera::{Camera, Distortion, Intrinsics};
+use ftx_trace::raster::image::{Gray, encode_png_gray};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -49,8 +50,11 @@ fn synthetic_model() -> Vec<u8> {
     add(
         "faces",
         "u32",
-        vec![3, 3],
-        u32_bytes([0, 1, 2, 1, 3, 2, 1, 8, 9]),
+        vec![13, 3],
+        u32_bytes([
+            0, 1, 2, 1, 3, 2, 1, 8, 9, 4, 6, 7, 4, 7, 5, 0, 4, 5, 0, 5, 1, 2, 3, 7, 2, 7, 6, 0, 2,
+            6, 0, 6, 4, 1, 5, 7, 1, 7, 3,
+        ]),
     );
     add("blendshape_row_ptr", "u32", vec![3], u32_bytes([0, 10, 20]));
     add(
@@ -127,7 +131,7 @@ fn synthetic_model() -> Vec<u8> {
     ];
     components.extend((0..22).map(|i| json!(["race", format!("r{i}")])));
     let header = json!({"schema":"ftxbody/1","model":"anny","anny_version":"0.6.1","configuration":"synthetic-test-only",
-        "licence":"synthetic numerical test","package_sha256":{},"counts":{"vertices":10,"faces":3,"bones":2,"blendshapes":2,"phenotype_blendshapes":2,"local_changes":0,"influences":1},
+        "licence":"synthetic numerical test","package_sha256":{},"counts":{"vertices":10,"faces":13,"bones":2,"blendshapes":2,"phenotype_blendshapes":2,"local_changes":0,"influences":1},
         "phenotype":{"features":["height","weight","race"],"components":components,"anchors":{"height":[0,1],"weight":[0,1]},"exposed":["height","weight"],"fixed_value":0.5},
         "y_axis":[0,1,0],"degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],"labels":{"blendshapes":["height-high","weight-high"],"bones":["root","arm"],"bone_parents":[-1,0],"local_changes":[]},"waist_loop_final":[],"arrays":arrays});
     let mut h = serde_json::to_vec(&header).unwrap();
@@ -330,6 +334,241 @@ fn model_identity_correspondence_and_parameter_typos_refuse_before_output() {
     }
     save(&dir, &base);
     run(&dir, &["--iteratoins", "5"], 3);
+}
+
+// An independent integer-pixel raster of the synthetic convex torso. This does not use the
+// candidate's scanline projection, interval union, residuals or mask sampler to construct evidence.
+fn mask_manifest(dir: &Path) -> Vec<Gray> {
+    let input = fixture().1;
+    std::fs::create_dir(dir.join("masks")).unwrap();
+    let mut frames = Vec::new();
+    let mut masks = Vec::new();
+    for (i, frame) in input["fit"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let pixels: Vec<Vec2> = frame["keypoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| serde_json::from_value(p["pixel_px"].clone()).unwrap())
+            .collect();
+        let faces = [
+            [0, 1, 2],
+            [1, 3, 2],
+            [1, 8, 9],
+            [4, 6, 7],
+            [4, 7, 5],
+            [0, 4, 5],
+            [0, 5, 1],
+            [2, 3, 7],
+            [2, 7, 6],
+            [0, 2, 6],
+            [0, 6, 4],
+            [1, 5, 7],
+            [1, 7, 3],
+        ];
+        let mut mask = Gray::filled(1280, 960, 0);
+        let xmin = pixels.iter().map(|p| p.x.floor() as usize).min().unwrap();
+        let xmax = pixels.iter().map(|p| p.x.ceil() as usize).max().unwrap();
+        let ymin = pixels.iter().map(|p| p.y.floor() as usize).min().unwrap();
+        let ymax = pixels.iter().map(|p| p.y.ceil() as usize).max().unwrap();
+        for y in ymin..=ymax {
+            for x in xmin..=xmax {
+                let p = Vec2::new(x as f64, y as f64);
+                if faces.iter().any(|t| {
+                    let [a, b, c] = t.map(|k| pixels[k]);
+                    let area = (b - a).cross(c - a);
+                    if area.abs() < 1e-10 {
+                        return false;
+                    }
+                    let signs = [
+                        (b - a).cross(p - a),
+                        (c - b).cross(p - b),
+                        (a - c).cross(p - c),
+                    ];
+                    signs.iter().all(|v| *v >= 0.) || signs.iter().all(|v| *v <= 0.)
+                }) {
+                    mask.data[y * mask.w + x] = 255;
+                }
+            }
+        }
+        std::fs::write(
+            dir.join(format!("masks/mask-{i}.png")),
+            encode_png_gray(&mask),
+        )
+        .unwrap();
+        frames.push(
+            json!({"frame":frame["frame"],"mask":format!("mask-{i}.png"),"samples":[
+                {"axis":"horizontal","index":420,"sigma_px":1.0,"partition":"fit"},
+                {"axis":"horizontal","index":480,"sigma_px":1.0,"partition":"held_out"},
+                {"axis":"horizontal","index":540,"sigma_px":1.0,"partition":"fit"}
+            ]}),
+        );
+        masks.push(mask);
+    }
+    let manifest = json!({"schema":"ftx-body-silhouettes/1","evidence":"synthetic posed torso raster; no photographs","frames":frames});
+    std::fs::write(
+        dir.join("masks/manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    masks
+}
+
+#[test]
+fn png_silhouettes_fit_the_actual_anny_surface_and_preserve_evidence() {
+    let dir = setup();
+    let masks = mask_manifest(&dir);
+    let r = run(
+        &dir,
+        &[
+            "--silhouettes",
+            "masks/manifest.json",
+            "--out",
+            "silhouette-fit.json",
+        ],
+        0,
+    );
+    let report = &r["result"];
+    assert_eq!(
+        report["input"]["frames"][0]["silhouette"]["lines"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        report["silhouette_input"]["masks"][0]["decoded_mask_sha256"],
+        sha256_hex(&masks[0].data)
+    );
+    let shape = &report["solution"]["shape"];
+    assert!((shape[0].as_f64().unwrap() - 0.6).abs() < 0.02);
+    assert!((shape[1].as_f64().unwrap() - 0.45).abs() < 0.02);
+    assert!(report["attempts"].as_array().unwrap().iter().all(|a| {
+        a["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["name"].as_str().unwrap().starts_with("silhouette:"))
+            .count()
+            == 6
+    }));
+    let original = std::fs::read(dir.join("masks/mask-0.png")).unwrap();
+    run(
+        &dir,
+        &[
+            "--silhouettes",
+            "masks/manifest.json",
+            "--out",
+            "masks/mask-0.png",
+        ],
+        3,
+    );
+    assert_eq!(
+        std::fs::read(dir.join("masks/mask-0.png")).unwrap(),
+        original
+    );
+    run(
+        &dir,
+        &[
+            "--silhouettes",
+            "masks/manifest.json",
+            "--out",
+            "masks/manifest.json",
+        ],
+        3,
+    );
+    run(
+        &dir,
+        &[
+            "--silhouettes",
+            "masks/manifest.json",
+            "--out",
+            "silhouette-fit.json",
+        ],
+        3,
+    );
+}
+
+#[test]
+fn a_bad_held_out_mask_row_rejects_the_fit_without_changing_its_objective() {
+    let dir = setup();
+    let mut masks = mask_manifest(&dir);
+    let first = run(&dir, &["--silhouettes", "masks/manifest.json"], 0);
+    let row = &mut masks[0].data[480 * 1280..481 * 1280];
+    let last = row.iter().rposition(|&v| v == 255).unwrap();
+    row[last + 1..=last + 10].fill(255);
+    std::fs::write(dir.join("masks/mask-0.png"), encode_png_gray(&masks[0])).unwrap();
+    let rejected = run(
+        &dir,
+        &[
+            "--silhouettes",
+            "masks/manifest.json",
+            "--out",
+            "silhouette-rejected.json",
+        ],
+        2,
+    );
+    assert_eq!(rejected["result"]["status"], "REJECTED");
+    assert!(rejected["result"]["solution"].is_null());
+    for (a, b) in first["result"]["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(rejected["result"]["attempts"].as_array().unwrap())
+    {
+        assert_eq!(a["cost_history"], b["cost_history"]);
+    }
+}
+
+#[test]
+fn conflicting_mask_identity_dimensions_and_soft_pixels_are_refused() {
+    let dir = setup();
+    let mut masks = mask_manifest(&dir);
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("masks/manifest.json")).unwrap()).unwrap();
+    for mutate in [
+        |v: &mut Value| v["frames"][1]["frame"] = v["frames"][0]["frame"].clone(),
+        |v: &mut Value| v["frames"][0]["frame"]["timestamp_us"] = json!(17),
+        |v: &mut Value| v["frames"][0]["samples"][0]["partiton"] = json!("fit"),
+        |v: &mut Value| v["frames"][0]["samples"][1] = v["frames"][0]["samples"][0].clone(),
+    ] {
+        let mut v = original.clone();
+        mutate(&mut v);
+        std::fs::write(
+            dir.join("masks/manifest.json"),
+            serde_json::to_vec(&v).unwrap(),
+        )
+        .unwrap();
+        run(
+            &dir,
+            &[
+                "--silhouettes",
+                "masks/manifest.json",
+                "--out",
+                "invalid-mask.json",
+            ],
+            3,
+        );
+        assert!(!dir.join("invalid-mask.json").exists());
+    }
+    std::fs::write(
+        dir.join("masks/manifest.json"),
+        serde_json::to_vec(&original).unwrap(),
+    )
+    .unwrap();
+    masks[0].data[1280 + 1] = 127;
+    std::fs::write(dir.join("masks/mask-0.png"), encode_png_gray(&masks[0])).unwrap();
+    run(&dir, &["--silhouettes", "masks/manifest.json"], 3);
+    std::fs::write(
+        dir.join("masks/mask-0.png"),
+        encode_png_gray(&Gray::filled(100, 100, 0)),
+    )
+    .unwrap();
+    run(&dir, &["--silhouettes", "masks/manifest.json"], 3);
 }
 
 #[test]

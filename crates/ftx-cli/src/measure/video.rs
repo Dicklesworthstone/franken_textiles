@@ -60,7 +60,7 @@ fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, Refusal> {
     Ok(bytes)
 }
 
-fn load(base: &Path, name: &str, mask: bool) -> Result<Gray, Refusal> {
+pub(super) fn load(base: &Path, name: &str, mask: bool) -> Result<Gray, Refusal> {
     if name.trim().is_empty() || name.len() > 4096 {
         return Err(bad_input(
             "image and mask paths must be nonempty and at most 4096 bytes",

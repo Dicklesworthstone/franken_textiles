@@ -14,6 +14,10 @@ use ftx_core::{Mat3, Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_measure::body_fit::{
     BodyFitInput, BodyModel, FitOptions, ModelLayout, Parameter, fit_body,
 };
+use ftx_measure::{
+    silhouette::{MaskSample, SurfaceMesh, require_rectified, sample_mask},
+    triangulate::FrameId,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -63,6 +67,76 @@ struct Request {
     schema: String,
     model: Configuration,
     fit: BodyFitInput,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaskFrame {
+    frame: FrameId,
+    mask: String,
+    samples: Vec<MaskSample>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaskManifest {
+    schema: String,
+    evidence: String,
+    frames: Vec<MaskFrame>,
+}
+
+fn import_masks(path: &str, fit: &mut BodyFitInput) -> Result<Value, Refusal> {
+    let (value, bytes) = read_json(path)?;
+    let manifest: MaskManifest = serde_json::from_value(value.clone())
+        .map_err(|e| bad_input(format!("invalid silhouette mask manifest: {e}")))?;
+    if manifest.schema != "ftx-body-silhouettes/1"
+        || manifest.evidence.trim().is_empty()
+        || manifest.evidence.len() > 3000
+        || !(1..=8).contains(&manifest.frames.len())
+    {
+        return Err(bad_input(
+            "silhouettes need schema ftx-body-silhouettes/1, evidence and 1..8 frames",
+        ));
+    }
+    let source = std::fs::canonicalize(path)
+        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
+    let base = source
+        .parent()
+        .ok_or_else(|| bad_input("mask manifest needs a parent directory"))?;
+    let mut ids = BTreeSet::new();
+    let mut receipts = Vec::new();
+    for entry in manifest.frames {
+        if !ids.insert(entry.frame.clone()) {
+            return Err(bad_input("duplicate silhouette frame identity"));
+        }
+        let frame = fit
+            .frames
+            .iter_mut()
+            .find(|f| f.frame == entry.frame)
+            .ok_or_else(|| bad_input("silhouette frame is absent from the body-fit request"))?;
+        if frame.silhouette.is_some() {
+            return Err(bad_input(
+                "cannot replace inline silhouette evidence with a mask",
+            ));
+        }
+        require_rectified(&frame.camera)?;
+        let mask = super::video::load(base, &entry.mask, true)?;
+        if [mask.w, mask.h] != frame.image_size_px.map(|v| v as usize) {
+            return Err(bad_input(
+                "silhouette mask dimensions differ from the oriented fit image; no resampling is performed",
+            ));
+        }
+        let hash = sha256_hex(&mask.data);
+        frame.silhouette = Some(sample_mask(
+            frame.image_size_px,
+            &mask.data,
+            &entry.samples,
+            &format!("{}; decoded_mask_sha256:{hash}", manifest.evidence),
+        )?);
+        receipts.push(json!({"frame":entry.frame,"mask":entry.mask,
+            "image_size_px":frame.image_size_px,"decoded_mask_sha256":hash}));
+    }
+    Ok(json!({"manifest":value,"manifest_sha256":sha256_hex(&bytes),"masks":receipts}))
 }
 
 enum ResolvedTarget {
@@ -437,20 +511,7 @@ impl Adapter {
         }));
         Ok(())
     }
-}
-
-impl BodyModel for Adapter {
-    fn layout(&self) -> &ModelLayout {
-        &self.layout
-    }
-    fn measurements(&self, shape: &[f64]) -> Result<Vec<f64>, Refusal> {
-        self.prepare(shape)?;
-        Ok(self.cache.borrow().as_ref().unwrap().metrics.clone())
-    }
-    fn points(&self, shape: &[f64], pose: &[f64]) -> Result<Vec<Vec3>, Refusal> {
-        self.prepare(shape)?;
-        let cache = self.cache.borrow();
-        let rest = &cache.as_ref().unwrap().rest;
+    fn deltas(&self, pose: &[f64]) -> Vec<Affine> {
         let mut t: [f64; 3] = self.config.root_translation_m.into();
         let mut r: [f64; 3] = self.config.root_rotation_rad.into();
         let mut angles: Vec<_> = self.joints.iter().map(|j| j.2).collect();
@@ -472,9 +533,25 @@ impl BodyModel for Adapter {
                 t: Vec3::ZERO,
             };
         }
+        deltas
+    }
+}
+
+impl BodyModel for Adapter {
+    fn layout(&self) -> &ModelLayout {
+        &self.layout
+    }
+    fn measurements(&self, shape: &[f64]) -> Result<Vec<f64>, Refusal> {
+        self.prepare(shape)?;
+        Ok(self.cache.borrow().as_ref().unwrap().metrics.clone())
+    }
+    fn points(&self, shape: &[f64], pose: &[f64]) -> Result<Vec<Vec3>, Refusal> {
+        self.prepare(shape)?;
+        let cache = self.cache.borrow();
+        let rest = &cache.as_ref().unwrap().rest;
         let posed = self
             .model
-            .pose_selected(rest, &deltas, &self.selected_vertices)?;
+            .pose_selected(rest, &self.deltas(pose), &self.selected_vertices)?;
         Ok(self
             .targets
             .iter()
@@ -490,17 +567,39 @@ impl BodyModel for Adapter {
             })
             .collect())
     }
+    fn surface(&self, shape: &[f64], pose: &[f64]) -> Result<SurfaceMesh, Refusal> {
+        self.prepare(shape)?;
+        let cache = self.cache.borrow();
+        let rest = &cache.as_ref().unwrap().rest;
+        let posed = self.model.pose(rest, &self.deltas(pose))?;
+        Ok(SurfaceMesh {
+            vertices_m: posed.vertices,
+            triangles: self
+                .model
+                .data()
+                .faces
+                .iter()
+                .map(|t| t.map(|k| k as usize))
+                .collect(),
+        })
+    }
 }
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "measure fit-body",
-        &["model", "out", "iterations", "max-evaluations"],
+        &[
+            "model",
+            "out",
+            "iterations",
+            "max-evaluations",
+            "silhouettes",
+        ],
     )?;
     let file = single(args, "fit-body")?;
     let (value, input_bytes) = read_json(file)?;
-    let request: Request = serde_json::from_value(value)
+    let mut request: Request = serde_json::from_value(value)
         .map_err(|e| bad_input(format!("invalid Anny body-fit request: {e}")))?;
     if request.schema != "ftx-anny-body-fit-input/1" {
         return Err(bad_input("expected ftx-anny-body-fit-input/1"));
@@ -534,6 +633,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true)?)?;
     let adapter = Adapter::new(model, request.model, &hash)?;
+    let masks = option(args, "silhouettes")
+        .map(|path| import_masks(path, &mut request.fit))
+        .transpose()?;
     let report = fit_body(
         &request.fit,
         &adapter,
@@ -569,6 +671,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     value["anny_configuration"] =
         serde_json::to_value(&adapter.config).map_err(|e| bad_input(e.to_string()))?;
     value["input_sha256"] = json!(sha256_hex(&input_bytes));
+    if let Some(masks) = masks {
+        value["silhouette_input"] = masks;
+    }
     if let Some(solution) = &report.solution {
         let p = adapter.parameters(&solution.shape);
         let h = p.phenotype;
