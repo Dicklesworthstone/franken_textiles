@@ -8,7 +8,8 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
 **Commands.**
 - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation of `ftx-pattern`, the
   reference's text table, exit 0 CONVERGED, 2 NOT_CONVERGED, 3 BLOCKED.
-- `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH] [--json]`:
+- `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH]
+  [--self-contact-mm MM] [--self-mu MU] [--json]`:
   an Anny body of the wearer's age (`wearer.age_months`) and sex (`wearer.sex`; unknown = sexes
   averaged), fitted on the drape pose to whichever of the 15 tape measurements of
   `ftx_body::TAPE_FIELDS` the file has fused values for (the stature from `wearer.stature_mm` first) and
@@ -21,7 +22,14 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   `fold_viewer.html`, and the last frame as OBJ for renders elsewhere (metres, z up): `garment.obj` with
   per-vertex seam colours and `garment_strain.obj` with strain colours (`v x y z r g b`, spec 04 §9.4),
   and `body.obj` (the full posed skin). Exit 0 when no gating flag, 2 with gating flags. Without `--fit`, no girth landmarks
-  are read.
+  are read. `--self-contact-mm` opts into cloth–cloth contact on the welded solver mesh, with MM
+  the sum of the layers' half-thicknesses (0 is allowed). `--self-mu` sets its independent friction
+  coefficient (default 0.4); it is refused unless self-contact is enabled. Numerical options are
+  validated before file IO or body fitting. Starts with crossing/touching cloth layers are refused,
+  not silently untangled. Without the option, body-only behavior is preserved and output explicitly
+  says self-contact was not simulated. Both `sim_report.json` and the CLI result contain a
+  `self_contact` object with enabled/audit status, parameters and nearby final gap when enabled.
+  This audit covers sewing/draping solver states, not the kinematic fold/zip animation or fit accuracy.
 - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]`:
   the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,

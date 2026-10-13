@@ -4,8 +4,8 @@
 rotated to the grain, quadratic hinge bending, lumped inertia, and implicit Euler solved by Newton on a
 sparse LDLᵀ with an Armijo line search; a static solve; and contact with a static body (IPC barrier on the
 thickness-offset gap, additive CCD, lagged smoothed Coulomb friction); and the garment mesh of spec 04 §2
-(`garment.rs`). Placement, pre-sew, the drape schedule and the reference's metrics come next (FTX-13);
-cloth self-contact is not implemented.
+(`garment.rs`). Placement, pre-sew, the drape schedule and the reference's metrics are described below.
+Optional cloth self-contact adds moving cloth–cloth barriers and independent friction.
 
 **Garment mesh** (`build_garment`, spec 04 §2). Simulated instances (`sim` not false, a placement),
 matched seam samples at `spacing` (12 mm), boundary samples, the hex interior, constrained Delaunay inside
@@ -94,7 +94,7 @@ negative softening term σᵢφᵢ''. Projecting those had only rebuilt them fro
 rounding-level negative eigenvalue: the change moved the bolero's positions by at most 9e-13 m, left its
 report identical and re-pinned the contact digest (native and wasm agree). Tried on the bolero and not kept: flipping negative eigenvalues instead of zeroing them
 (more iterations), and a membrane Hessian with its stress clamped to the non-negative part instead of
-eigen-projection (cheaper iterations, 2.7× as many in the drape, slower overall). The symbolic analysis is computed once,
+eigen-projection (cheaper iterations, 2.7× as many in the drape, slower overall). For body-only contact the symbolic analysis is computed once,
 ordered by AMD on the vertex graph and expanded to the free DOFs (the pattern never changes: every
 element block is always assembled). Per-DOF constraints (rollers, pins). Convergence: `‖p‖∞/h < tol`
 (step) or `‖p‖∞ < tol` (static).
@@ -121,6 +121,30 @@ Hessian's pattern never changes.
   triangle of the other (exact orientation predicates, `ftx_core::exact`; coplanar cases fall to the
   gap check), or a cloth piece wholly inside a closed body (winding number above ½ at one vertex per
   piece).
+
+**Self-contact** (`Solver::with_self_contact`, `DrapeOptions::self_contact`; FTX-12b / `ftx-d0h`).
+Non-incident cloth vertex–triangle and edge–edge pairs use the same barrier and mollifier, with all
+four vertices moving. A deterministic sweep-and-prune over swept boxes includes both surfaces'
+trajectories; shared vertices (including welded seams) are excluded, edge pairs are unique, and CCD
+uses relative motion on both sides. Self-contact has its own thickness (the sum of both layers'
+half-thicknesses), coefficient of friction and smoothing. Body `min_gap` / `closest_pair` stay body-only;
+`min_self_gap` uses the cloth–cloth offset, unaffected by the body's offset ramp.
+
+Self-contact assemblies use triplets; symbolic LDLᵀ analysis and the contact-aware vertex ordering
+are rebuilt when the actual sparse pattern changes. Body-only runs keep the original fixed-pattern
+assembly. Enabling self-contact audits the start for exact edge-through-triangle crossings and
+non-positive thickness gaps (including coplanar overlaps). Every implicit/static solve audits before
+and after; a failed solve/audit restores positions before returning a refusal. There is no automatic
+cloth–cloth untangler. Self-contact-only simulations use `Body::empty()` through the solver API.
+
+`ftx drape --self-contact-mm MM [--self-mu MU]` enables it on the welded solver mesh. It is off by
+default, preserving body-only behavior for existing placements. The report explicitly distinguishes
+`self_contact.audit = not_simulated` from an enabled, audited run, and records thickness, friction and
+nearby final clearance. The kinematic fold/zip animation is outside that audit. Synthetic tests cover
+brute-force candidate equivalence, two moving layers, force balance and relative friction, dynamic
+couplings, cloth-on-cloth support, invalid starts and a connected guided folded strip (which crosses
+in the no-contact control). Repeated folded-strip runs are bit-identical on the same build. These are
+mechanics regressions, not calibrated fabric, real-garment fit, cross-target digest or performance evidence.
 
 **Fold-up animation and files** (`animation.rs`; spec 04 §9). The pattern board (instances left to
 right, 40 mm apart, on y = −0.55 m); per instance a staggered rigid flight off the board (slerp from the
@@ -172,10 +196,11 @@ only its lower triangle: bit-identical, both KAT digests unchanged), `eigen.rs` 
 
 **Error model.** `Refusal`: `degenerate_geometry` (bad triangles, non-manifold edges), `out_of_range`
 (non-positive density or step), `non_finite` (state blew up), `not_converged` (symbolic analysis failed),
-`intersecting_start` (the cloth starts on or through the body). A step that does not converge is reported
+`intersecting_start` (the cloth starts on or through the body or another cloth layer). A step that does not converge is reported
 (`SolveReport`), not refused.
 
-**No claims.** Cloth self-contact; a moving body; elastic grip (as in the reference, a casing is simulated
+**No claims.** Garment-scale self-contact qualification or self-contact native/wasm digest parity;
+a moving body; elastic grip (as in the reference, a casing is simulated
 at its finished size, `sim_scale`, and whether the elastic holds is a flat check); fabric parameters (they are inputs; plan §11, research 07 §2.7); performance
 targets (§11.7; contact re-queries the grid each iteration, and cached candidates are the planned
 speed-up).

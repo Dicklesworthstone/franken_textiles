@@ -13,15 +13,12 @@ use crate::animation::{
     FOLD_FRAMES, FoldUp, SEAM_COLORS, ViewerExtras, ZIP_FRAMES, board_layout, fold_frames,
     viewer_html, viewer_payload, zip_frames,
 };
-use crate::contact::ContactParams;
+use crate::contact::{Contact, ContactParams};
 use crate::garment::build_garment;
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{Fabric, PartFrames, PhaseReport, Scene, build_scene, run_phase};
 use crate::start::{edge_strain, face_edges};
-
-/// Most steps a run takes (1/24 s each: about 40 minutes of simulated time).
-pub const MAX_STEPS: usize = 60_000;
 
 /// The body a run drapes on.
 pub struct DrapeBody<'a> {
@@ -54,8 +51,12 @@ pub struct DrapeOptions {
     /// Friction lag rounds per step (re-solves with the normal forces and contacts of the step's end)
     /// while sewing and while draping.
     pub lag_rounds: [usize; 2],
-    /// Contact and friction.
+    /// Body contact and friction.
     pub contact: ContactParams,
+    /// Optional cloth–cloth contact: independent friction and the sum of both half-thicknesses.
+    /// Starts with intersecting layers are refused. `None` preserves body-only draping and is
+    /// explicitly reported as self-contact not simulated.
+    pub self_contact: Option<ContactParams>,
 }
 
 impl Default for DrapeOptions {
@@ -79,7 +80,63 @@ impl Default for DrapeOptions {
                 mu: 0.4,
                 eps_v: 1e-3,
             },
+            self_contact: None,
         }
+    }
+}
+
+impl DrapeOptions {
+    /// Validates the run before meshing or body fitting.
+    ///
+    /// # Errors
+    /// Non-finite or out-of-range numerical settings, insufficient frames for metrics, or a frame
+    /// count that overflows the animation budget.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        self.contact.validate()?;
+        if let Some(p) = self.self_contact {
+            p.validate()?;
+        }
+        for (name, value) in [
+            ("mesh spacing", self.spacing),
+            ("time step", self.step),
+            ("Newton tolerance", self.tol),
+            ("compression factor", self.compression),
+        ] {
+            Refusal::finite(name, value)?;
+            if value <= 0.0 {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("{name} must be positive"),
+                ));
+            }
+        }
+        if self.compression > 1.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "compression factor must be at most 1",
+            ));
+        }
+        let total = self
+            .sew_steps
+            .checked_add(self.drape_steps)
+            .filter(|n| n.checked_add(FOLD_FRAMES + ZIP_FRAMES).is_some())
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "animation frame count overflows",
+                )
+            })?;
+        if total < MIN_FRAMES {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "{} sewing and {} draping steps: the fit metrics need at least {MIN_FRAMES} in all \
+                     (settledness compares the means of the last frames)",
+                    self.sew_steps, self.drape_steps
+                ),
+            ).repair(format!("ask for at least {MIN_FRAMES} steps (--sew, --drape)")));
+        }
+        Ok(())
     }
 }
 
@@ -130,8 +187,7 @@ fn strings(v: &Value) -> Vec<String> {
 /// Drapes `pattern` on `body`, calling `progress` with a line per stage.
 ///
 /// # Errors
-/// [`RefusalCode::OutOfRange`] for fewer than [`MIN_FRAMES`] or more than [`MAX_STEPS`] steps in all;
-/// refusals from meshing,
+/// [`RefusalCode::OutOfRange`] for fewer than [`MIN_FRAMES`] steps in all; refusals from meshing,
 /// placement, the start state, the cloth model, contact or the solver.
 pub fn drape(
     pattern: &Pattern,
@@ -140,20 +196,7 @@ pub fn drape(
     opts: &DrapeOptions,
     mut progress: impl FnMut(&str),
 ) -> Result<DrapeRun, Refusal> {
-    let total = opts.sew_steps.checked_add(opts.drape_steps);
-    if !total.is_some_and(|n| (MIN_FRAMES..=MAX_STEPS).contains(&n)) {
-        return Err(Refusal::new(
-            RefusalCode::OutOfRange,
-            format!(
-                "{} sewing and {} draping steps: the fit metrics need at least {MIN_FRAMES} in all \
-                 (settledness compares the means of the last frames), and a run at most {MAX_STEPS}",
-                opts.sew_steps, opts.drape_steps
-            ),
-        )
-        .repair(format!(
-            "ask for {MIN_FRAMES} to {MAX_STEPS} steps in all (--sew, --drape)"
-        )));
-    }
+    opts.validate()?;
     let mesh = build_garment(pattern, opts.spacing)?;
     let fabric = Fabric::of(pattern);
     let mut scene = build_scene(
@@ -166,6 +209,10 @@ pub fn drape(
         opts.compression,
         opts.contact,
     )?;
+    if let Some(p) = opts.self_contact {
+        scene.solver = scene.solver.with_self_contact(p)?;
+        progress("self-contact: start audit passed; cloth–cloth contact enabled");
+    }
     scene.solver.tol = opts.tol;
     progress(&format!(
         "start: {} vertices ({} after welding), relaxed {} iterations to p95 strain {:.3}",
@@ -335,6 +382,26 @@ fn add_run_fields(
         json!(round(opts.contact.thickness * 1000.0, 2)),
     );
     o.insert("style".into(), json!(style));
+    o.insert(
+        "self_contact".into(),
+        self_contact_report(scene.solver.contact.as_ref(), &scene.solver.x),
+    );
+}
+
+fn self_contact_report(contact: Option<&Contact>, x: &[Vec3]) -> Value {
+    match contact.and_then(|c| c.self_contact_params().map(|p| (c, p))) {
+        Some((c, p)) => json!({
+            "enabled": true,
+            "audit": "passed",
+            "scope": "welded solver mesh, sewing and draping states (not the fold-up animation)",
+            "thickness_mm": p.thickness * 1000.0,
+            "friction_mu": p.mu,
+            "activation_mm": p.dhat * 1000.0,
+            "nearby_min_final_gap_mm": c.min_self_gap(x, p.dhat).map(|g| g * 1000.0),
+            "gap_query_range_mm": p.dhat * 1000.0,
+        }),
+        None => json!({"enabled": false, "audit": "not_simulated"}),
+    }
 }
 
 /// The fold-up viewer page of a run (`template` is `assets/fold_viewer_template.html`).
@@ -365,4 +432,73 @@ pub fn viewer(
         150,
     );
     viewer_html(template, &payload)
+}
+
+#[cfg(test)]
+mod self_contact_tests {
+    use super::*;
+    use crate::contact::Body;
+
+    #[test]
+    fn options_validate_before_geometry_work() {
+        let default = DrapeOptions::default();
+        default.validate().unwrap();
+        assert!(default.self_contact.is_none());
+        for opts in [
+            DrapeOptions {
+                spacing: f64::NAN,
+                ..default
+            },
+            DrapeOptions {
+                step: 0.0,
+                ..default
+            },
+            DrapeOptions {
+                compression: 1.1,
+                ..default
+            },
+            DrapeOptions {
+                sew_steps: 0,
+                drape_steps: 0,
+                ..default
+            },
+            DrapeOptions {
+                sew_steps: usize::MAX,
+                ..default
+            },
+            DrapeOptions {
+                self_contact: Some(ContactParams {
+                    mu: -0.1,
+                    ..default.contact
+                }),
+                ..default
+            },
+        ] {
+            assert!(opts.validate().is_err(), "{opts:?}");
+        }
+    }
+
+    #[test]
+    fn report_distinguishes_unchecked_from_enabled_self_contact() {
+        assert_eq!(
+            self_contact_report(None, &[]),
+            json!({"enabled": false, "audit": "not_simulated"})
+        );
+        let x = vec![
+            Vec3::ZERO,
+            Vec3::new(0.02, 0.0, 0.0),
+            Vec3::new(0.0, 0.02, 0.0),
+        ];
+        let p = DrapeOptions::default().contact;
+        let c = Contact::new(Body::empty(), p, vec![[0, 1, 2]], |a, b| {
+            (x[a] - x[b]).norm()
+        });
+        assert_eq!(self_contact_report(Some(&c), &x)["audit"], "not_simulated");
+        let c = c.with_self_contact(&x, p).unwrap();
+        let report = self_contact_report(Some(&c), &x);
+        assert_eq!(report["enabled"], true);
+        assert_eq!(report["audit"], "passed");
+        assert_eq!(report["thickness_mm"], 1.5);
+        assert!(report["nearby_min_final_gap_mm"].is_null());
+    }
 }

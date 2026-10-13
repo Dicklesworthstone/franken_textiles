@@ -4,7 +4,7 @@
 //! - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation (seam walk, truing,
 //!   points of measure), bit-exact with the reference.
 //! - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH]
-//!   [--json]`: an Anny body fitted to the wearer's measurements in the drape pose, the pattern meshed,
+//!   [--self-contact-mm MM] [--self-mu MU] [--json]`: an Anny body fitted to the wearer's measurements in the drape pose, the pattern meshed,
 //!   placed, sewn and draped on it, and `sim_report.json`, `fold.pc2`, `mesh_map.json`,
 //!   `fold_viewer.html` and the last frame as OBJ written to DIR.
 //! - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH]
@@ -37,7 +37,8 @@ const VIEWER_TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template
 
 const USAGE: &str = "usage:
   ftx validate PATTERN --measurements M [--fit F] [--json]
-  ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH] [--json]
+  ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH]
+            [--self-contact-mm MM] [--self-mu MU] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx alter slash-spread PATTERN --piece P --axis x|y --at MM --add MM --out OUT [--json]
   ftx alter move PATTERN --piece P --vertex V [--dx MM] [--dy MM] --out OUT [--json]
@@ -419,21 +420,8 @@ fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
     Ok((result, rep.exit_code(), format_table(&rep)))
 }
 
-fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(
-        args,
-        "drape",
-        &["measurements", "out", "fit", "sew", "drape", "model"],
-    )?;
-    let pattern_path = args
-        .positional
-        .get(1)
-        .ok_or_else(|| bad_input("ftx drape needs a pattern file"))?;
-    let (pat, _) = read_json(pattern_path)?;
-    let meas_path = required(args, "measurements")?;
-    let (meas, meas_bytes) = read_json(meas_path)?;
-    let out = PathBuf::from(required(args, "out")?);
-    let spec = fit_spec(args)?;
+/// Validate settings before reading files, fitting the body or creating outputs.
+fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
     let mut opts = DrapeOptions::default();
     for (name, slot) in [
         ("sew", &mut opts.sew_steps),
@@ -445,6 +433,51 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 .map_err(|_| bad_input(format!("--{name} must be a whole number")))?;
         }
     }
+    if let Some(mm) = args.options.get("self-contact-mm") {
+        let mut p = opts.contact;
+        p.thickness = mm
+            .parse::<f64>()
+            .map_err(|_| bad_input("--self-contact-mm must be a distance in millimetres"))?
+            * 1e-3;
+        if let Some(mu) = args.options.get("self-mu") {
+            p.mu = mu
+                .parse()
+                .map_err(|_| bad_input("--self-mu must be a non-negative number"))?;
+        }
+        opts.self_contact = Some(p);
+    } else if args.options.contains_key("self-mu") {
+        return Err(bad_input("--self-mu requires --self-contact-mm")
+            .repair("specify the sum of the cloth layers' half-thicknesses in millimetres"));
+    }
+    opts.validate()?;
+    Ok(opts)
+}
+
+fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(
+        args,
+        "drape",
+        &[
+            "measurements",
+            "out",
+            "fit",
+            "sew",
+            "drape",
+            "model",
+            "self-contact-mm",
+            "self-mu",
+        ],
+    )?;
+    let opts = drape_options(args)?;
+    let pattern_path = args
+        .positional
+        .get(1)
+        .ok_or_else(|| bad_input("ftx drape needs a pattern file"))?;
+    let (pat, _) = read_json(pattern_path)?;
+    let meas_path = required(args, "measurements")?;
+    let (meas, meas_bytes) = read_json(meas_path)?;
+    let out = PathBuf::from(required(args, "out")?);
+    let spec = fit_spec(args)?;
     // before the minutes of draping, so an unwritable DIR refuses at once
     make_dir(&out)?;
     let model = load_model(args)?;
@@ -539,6 +572,11 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     for f in &advisory {
         text.push_str(&format!("  advisory {f}\n"));
     }
+    text.push_str(if opts.self_contact.is_some() {
+        "self-contact: enabled; solver-state audits passed\n"
+    } else {
+        "self-contact: not simulated\n"
+    });
     text.push_str(&format!("wrote {}", out.display()));
     let code = if gating.is_empty() { 0 } else { 2 };
     Ok((
@@ -547,6 +585,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "gating": gating,
             "advisory": advisory,
             "settled": report["settled"],
+            "self_contact": report["self_contact"],
             "files": ["sim_report.json", "fold.pc2", "mesh_map.json", "fold_viewer.html",
                       "garment.obj", "garment_strain.obj", "body.obj"],
         }),
@@ -618,6 +657,45 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drape_self_contact_units_and_friction_are_independent() {
+        let args =
+            parse(&["drape", "--self-contact-mm", "0.6", "--self-mu", "0.2"].map(String::from))
+                .unwrap();
+        let opts = drape_options(&args).unwrap();
+        let self_params = opts.self_contact.unwrap();
+        assert!((self_params.thickness - 0.0006).abs() < 1e-15);
+        assert_eq!(self_params.mu, 0.2);
+        assert_eq!(opts.contact, DrapeOptions::default().contact);
+        let default = drape_options(&parse(&["drape".into()]).unwrap()).unwrap();
+        assert!(default.self_contact.is_none());
+    }
+
+    #[test]
+    fn bad_drape_settings_refuse_before_file_io() {
+        for options in [
+            vec!["--self-contact-mm", "NaN"],
+            vec!["--self-contact-mm", "inf"],
+            vec!["--self-contact-mm", "-1"],
+            vec!["--self-contact-mm", "cloth"],
+            vec!["--self-contact-mm", "1", "--self-mu", "-0.1"],
+            vec!["--self-contact-mm", "1", "--self-mu", "NaN"],
+            vec!["--self-mu", "0.4"],
+            vec!["--sew", "0", "--drape", "0"],
+        ] {
+            let mut argv = vec!["drape", "file-that-does-not-exist.json"];
+            argv.extend(options);
+            let args = parse(&argv.into_iter().map(String::from).collect::<Vec<_>>()).unwrap();
+            let err = cmd_drape(&args).unwrap_err();
+            assert_ne!(err.code, RefusalCode::Io, "{}", err.message);
+        }
+        let args = parse(&["drape".into(), "--sew".into(), usize::MAX.to_string()]).unwrap();
+        assert_eq!(
+            drape_options(&args).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+    }
 
     #[test]
     fn options_and_flags_parse() {
