@@ -48,6 +48,17 @@ pub fn fold_up(
     mut progress: impl FnMut(&str),
 ) -> Result<Fold, String> {
     let m = |r: ftx_core::Refusal| r.message;
+    // the page's own words, before the body is fitted (the library would refuse later, in its terms)
+    let placed = pattern["pieces"].as_array().is_some_and(|ps| {
+        ps.iter()
+            .any(|p| crate::page::truthy(&p["placement"]) && p["sim"] != false)
+    });
+    if !placed {
+        return Err("no piece has a fold-up placement: the pattern is judged flat".into());
+    }
+    if !measurements["wearer"]["age_months"].is_number() {
+        return Err("the fold-up fits a body of the wearer's age: fill in the age (months)".into());
+    }
     let wearer = Wearer::from_measurements(measurements).map_err(m)?;
     let pose = Pose::drape();
     let fit = fit_tape(model, &wearer, &tape_targets(measurements), &pose).map_err(m)?;

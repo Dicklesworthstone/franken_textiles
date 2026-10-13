@@ -160,7 +160,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     set(k, v) { try { localStorage.setItem("fab-wb-" + k, JSON.stringify(v)); } catch (e) { /* private window */ } },
   };
   let info = {}, program = store.get("program", "zouave_bolero"), fields = [], urls = [], ready = false;
-  let foldable = false, bodyLoaded = false;
+  let foldable = false, bodyLoaded = false, folding = false, dead = false;
   const worker = new Worker(new URL("worker.js", location.href), { type: "module" });
   const status = (t) => { $("status").textContent = t; };
   const human = (n) => n.replace(/_deg$/, "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
@@ -297,9 +297,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("errorText").textContent = message;
     $("errorDetail").textContent = detail && detail !== message ? detail : "";
     $("errorDetailBox").classList.toggle("hidden", !(detail && detail !== message));
-    finished();
   }
-  function finished() { document.body.dataset.runs = String((+document.body.dataset.runs || 0) + 1); }   // for tests
+  // a round or a fold-up has finished (successfully or not): tests wait on this counter
+  function finished() { document.body.dataset.runs = String((+document.body.dataset.runs || 0) + 1); }
+  function foldButton() { $("foldGo").disabled = dead || folding || !(foldable && bodyLoaded); }
+  let foldUrls = [];
+  function dropFold() {                                     // the last fold-up's viewer, links and their URLs
+    $("foldLog").textContent = ""; $("foldSummary").textContent = "";
+    $("foldView").classList.add("hidden"); $("foldView").removeAttribute("src");
+    foldUrls.forEach((u) => URL.revokeObjectURL(u)); foldUrls = [];
+  }
 
   worker.onmessage = (ev) => {
     const msg = ev.data;
@@ -315,34 +322,44 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       $("go").disabled = false; status("Done.");
       renderResult(msg.res, msg.blobs);
       // a new round's pattern: the last fold-up (its links revoked above) belongs to another one
-      $("foldLog").textContent = ""; $("foldSummary").textContent = "";
-      $("foldView").classList.add("hidden"); $("foldView").removeAttribute("src");
+      dropFold();
       // a validated, to-scale garment with fold-up placements can be draped once the body model is loaded
       foldable = msg.foldable;
       $("foldBox").classList.toggle("hidden", !foldable);
-      $("foldGo").disabled = !(foldable && bodyLoaded);
+      foldButton();
       finished();
     } else if (msg.type === "bodyReady") {
-      bodyLoaded = true; $("foldGo").disabled = !foldable; status("Body model loaded.");
+      bodyLoaded = true; foldButton(); status("Body model loaded.");
+      $("errorBox").classList.add("hidden");
     } else if (msg.type === "foldProgress") {
       $("foldLog").textContent += msg.text + "\n"; $("foldLog").scrollTop = $("foldLog").scrollHeight;
     } else if (msg.type === "folded") {
-      $("foldGo").disabled = false; status("Folded.");
+      folding = false; foldButton(); status("Folded.");
+      $("errorBox").classList.add("hidden");
       const r = msg.report, gating = r.gating || [], advisory = (r.flags || []).filter((f) => !gating.includes(f));
       $("foldSummary").innerHTML = `<b>${gating.length ? "Gating flags" : r.settled ? "Settled, no gating flag" : "Not settled"}</b>`
         + (gating.length ? "<br>" + gating.map(esc).join("<br>") : "")
         + (advisory.length ? `<br><span class="mut">${advisory.map(esc).join("<br>")}</span>` : "");
-      const u = URL.createObjectURL(new Blob([msg.viewer], { type: "text/html" })); urls.push(u);
-      const ru = URL.createObjectURL(new Blob([JSON.stringify(r, null, 2)], { type: "application/json" })); urls.push(ru);
+      const u = URL.createObjectURL(new Blob([msg.viewer], { type: "text/html" }));
+      const ru = URL.createObjectURL(new Blob([JSON.stringify(r, null, 2)], { type: "application/json" }));
+      foldUrls.push(u, ru);
       $("foldSummary").innerHTML += `<br><a download="fold_viewer.html" href="${u}">fold_viewer.html</a> · <a download="sim_report.json" href="${ru}">sim_report.json</a>`;
       $("foldView").src = u; $("foldView").classList.remove("hidden");
       finished();
     } else if (msg.type === "error") {
-      status("");
-      if (ready) $("go").disabled = false;
-      else $("go").textContent = "Could not load";             // no module to run: keep it disabled
-      $("foldGo").disabled = !(foldable && bodyLoaded);
+      if (!folding || msg.op === "fold") status("");     // a stray field error keeps the fold's status
+      if (msg.fatal) {                                  // the module trapped: nothing in it can be trusted now
+        dead = true; ready = false;
+        $("go").disabled = true; $("go").textContent = "Reload the page";
+      } else if (!ready) {
+        $("go").textContent = "Could not load";         // no module to run: keep it disabled
+      } else if (msg.op === "run") {
+        $("go").disabled = false;
+      }
+      if (msg.op === "fold") folding = false;
+      foldButton();
       showError(msg.message, msg.detail);
+      if (msg.op === "run" || msg.op === "fold") finished();
     }
   };
   worker.onerror = (e) => {
@@ -371,7 +388,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       const req = await buildRequest();
       status("Drafting, checking and exporting…");
       worker.postMessage({ type: "run", req });
-    } catch (e) { $("go").disabled = false; showError(e.message); }
+    } catch (e) { $("go").disabled = false; showError(e.message); finished(); }
   });
   $("bodyFile").addEventListener("change", async () => {
     const f = $("bodyFile").files[0];
@@ -381,7 +398,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     worker.postMessage({ type: "body", bytes: buf }, [buf]);
   });
   $("foldGo").addEventListener("click", () => {
-    $("foldGo").disabled = true; $("foldLog").textContent = ""; $("foldSummary").textContent = "";
+    folding = true; foldButton(); dropFold();
+    $("errorBox").classList.add("hidden");
     status("Fitting the body, sewing and draping…");
     worker.postMessage({ type: "fold", selfContactMm: $("selfContact").checked ? 2 : 0 });
   });

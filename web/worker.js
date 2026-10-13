@@ -17,9 +17,16 @@ function clock() {
 self.ftxProgress = (line) => postMessage({ type: "foldProgress", text: line });
 
 const text = (bytes) => (bytes ? new TextDecoder().decode(bytes) : null);
+// Python truthiness, as webapp.py's has_fold_up reads a placement: {} and [] are false
+const truthy = (v) => !(v === null || v === undefined || v === false || v === 0 || v === ""
+  || (Array.isArray(v) && v.length === 0) || (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0));
+let dead = false; // set when the module traps: its memory and handles can no longer be trusted
 
 onmessage = async (ev) => {
   const msg = ev.data;
+  if (dead) {
+    return postMessage({ type: "error", op: msg.type, fatal: true, message: "the module stopped after an internal error: reload the page" });
+  }
   try {
     if (msg.type === "init") {
       postMessage({ type: "progress", text: "Loading FrankenTextiles…" });
@@ -44,7 +51,7 @@ onmessage = async (ev) => {
       const data = pattern && !res.errors ? JSON.parse(pattern) : null;
       // a fold-up needs a pattern that validates, is to scale and has a piece with a fold-up placement
       const foldable = !!data && res.status !== "BLOCKED" && (data.meta || {}).scale_status !== "UNSCALED"
-        && (data.pieces || []).some((p) => p.placement && p.sim !== false);
+        && (data.pieces || []).some((p) => truthy(p.placement) && p.sim !== false);
       if (foldable) {
         docs = { pattern, measurements: text(round.file("measurements.json")), fit: text(round.file("fit_spec.json")) };
       }
@@ -67,6 +74,13 @@ onmessage = async (ev) => {
     }
   } catch (e) {
     const full = String((e && e.message) || e).trim();
-    postMessage({ type: "error", message: full.split("\n").pop(), detail: full });
+    // a trap (a Rust panic: "unreachable") leaves the module's handles borrowed and its memory suspect
+    const fatal = e instanceof WebAssembly.RuntimeError;
+    if (fatal) dead = true;
+    postMessage({
+      type: "error", op: msg.type, fatal,
+      message: fatal ? "the module stopped after an internal error: reload the page" : full.split("\n").pop(),
+      detail: full,
+    });
   }
 };

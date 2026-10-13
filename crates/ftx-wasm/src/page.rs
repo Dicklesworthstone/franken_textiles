@@ -59,7 +59,8 @@ fn msg(r: ftx_core::Refusal) -> String {
     r.message
 }
 
-fn truthy(v: &Value) -> bool {
+/// Python truthiness of a JSON value.
+pub(crate) fn truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Bool(b) => *b,
@@ -356,6 +357,18 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
         let mut style = match field("style").to_value() {
             Value::Object(o) => o,
             v if !truthy(&v) => serde_json::Map::new(),
+            // `dict([[key, value], …])`
+            Value::Array(pairs)
+                if pairs.iter().all(|p| {
+                    p.as_array()
+                        .is_some_and(|kv| kv.len() == 2 && kv[0].is_string())
+                }) =>
+            {
+                pairs
+                    .iter()
+                    .map(|p| (p[0].as_str().unwrap_or_default().to_string(), p[1].clone()))
+                    .collect()
+            }
             v => return Err(format!("style must be an object of overrides, not {v}")),
         };
         if truthy(&body.get("nappies").map_or(Value::Null, PyJson::to_value))
@@ -415,8 +428,10 @@ pub fn run(req_text: &str, today: &str, created: &str) -> Result<Round, String> 
             Some("skipped (pattern UNSCALED: true-size files need `vectorize scale-fit` first)"),
         )
     } else {
+        // `created or meta.get("created") or now`: an empty stamp falls through to the clock
         let stamp = data["meta"]["created"]
             .as_str()
+            .filter(|s| !s.is_empty())
             .unwrap_or(created)
             .to_string();
         let ctx = Ctx::new(
