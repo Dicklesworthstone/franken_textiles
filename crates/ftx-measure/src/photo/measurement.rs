@@ -1,5 +1,5 @@
 //! Conditional uncertainty in the sheet plane. Manual-corner bootstrap includes corner clicks
-//! and nominal paper-size error; it is not the reference detector's straight-edge bootstrap.
+//! and nominal paper-size error. Detected sheets bootstrap their supported straight-edge samples.
 
 use ftx_core::{Refusal, RefusalCode, det, py};
 use serde_json::{Value, json};
@@ -91,6 +91,29 @@ fn bootstrap(c: &Calibration, options: &PhotoOptions) -> Result<Vec<Homography>,
                 let p: Vec<_> = ids.iter().map(|&i| pixels[i]).collect();
                 let q: Vec<_> = ids.iter().map(|&i| board[i]).collect();
                 (fit(&p, &q), c.size)
+            }
+            Samples::Edges { points } => {
+                let lines: Option<Vec<_>> = points
+                    .iter()
+                    .map(|edge| {
+                        let sample: Vec<_> = (0..edge.len())
+                            .map(|_| edge[(rng.uniform() * edge.len() as f64) as usize])
+                            .collect();
+                        super::detect::line_fit(&sample)
+                    })
+                    .collect();
+                let Some(lines) = lines else {
+                    continue;
+                };
+                let lines = lines.try_into().expect("four sheet sides");
+                let Some(corners) = super::detect::corners_of(&lines) else {
+                    continue;
+                };
+                let size = c.size.map(|v| v + 0.5 * rng.normal());
+                if size.iter().any(|&v| v <= 0.0) {
+                    continue;
+                }
+                (fit(&corners, &rectangle(size)), size)
             }
         };
         if let Ok(h) = trial
@@ -380,6 +403,9 @@ pub fn measure_photo(
         }
         Samples::Charuco { .. } => {
             "resample identified inlier corners with replacement; at least six unique points per draw; SplitMix64"
+        }
+        Samples::Edges { .. } => {
+            "resample detected inlier edge points, TLS lines, intersect corners and 0.5 mm paper-side sigma; SplitMix64/Box-Muller"
         }
     };
     report["bootstrap"] = json!({"requested":options.bootstrap, "calibrations":hs.len(), "seed":options.seed,

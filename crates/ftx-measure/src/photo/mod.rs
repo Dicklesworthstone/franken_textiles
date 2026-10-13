@@ -1,14 +1,16 @@
-//! Photo scale from explicit reference coordinates (spec 02 A.10–12).
+//! Photo scale from reference coordinates or detected plain-paper edges (spec 02 A.10–12).
 //!
-//! This boundary does not detect a sheet in an image. Coordinates must already be in the
-//! full-resolution, EXIF-oriented image frame. A homography measures only the sheet's plane.
+//! Coordinates and pixels must already use the full-resolution, EXIF-oriented image frame.
+//! Image decoding stays with the caller. A homography measures only the sheet's plane.
 
 mod camera;
 mod charuco;
+mod detect;
 mod geometry;
 mod measurement;
 
 pub use camera::Camera;
+pub use detect::{MAX_PHOTO_PIXELS, analyze_plain_sheet};
 pub use measurement::{PhotoOptions, measure_photo};
 
 use ftx_core::{Refusal, RefusalCode, py};
@@ -47,6 +49,9 @@ enum Samples {
     Charuco {
         pixels: Vec<Point>,
         board: Vec<Point>,
+    },
+    Edges {
+        points: [Vec<Point>; 4],
     },
 }
 
