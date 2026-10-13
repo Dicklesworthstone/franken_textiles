@@ -1,0 +1,38 @@
+{
+  "schema": "ftx-bundle-input/1",
+  "metric_scale_source": "Synthetic stationary grid, metres, z up",
+  "capture": {"kind": "still_window", "start_us": 0, "end_us": 100000, "evidence": "Analytically stationary synthetic scene"},
+  "views": [
+    {"frame": {"stream": "synthetic", "timestamp_us": 0}, "camera": {"intrinsics": {"focal_px": [1000,1000], "principal_px": [640,480]}, "world_to_camera": {"rows": [[1,0,0],[0,0,-1],[0,1,0]]}, "center_m": [-0.48,-2.02,1.01]}},
+    {"frame": {"stream": "synthetic", "timestamp_us": 50000}, "camera": {"intrinsics": {"focal_px": [1000,1000], "principal_px": [640,480]}, "world_to_camera": {"rows": [[1,0,0],[0,0,-1],[0,1,0]]}, "center_m": [0.01,-1.98,0.99]}},
+    {"frame": {"stream": "synthetic", "timestamp_us": 100000}, "camera": {"intrinsics": {"focal_px": [1000,1000], "principal_px": [640,480]}, "world_to_camera": {"rows": [[1,0,0],[0,0,-1],[0,1,0]]}, "center_m": [0.52,-2.01,1.02]}}
+  ],
+  "controls": [
+    {"id": "c0", "position_m": [-0.4,0,0.6]},
+    {"id": "c1", "position_m": [0.4,0,0.6]},
+    {"id": "c2", "position_m": [0.4,0,1.4]},
+    {"id": "c3", "position_m": [-0.4,0,1.4]},
+    {"id": "c4", "position_m": [0,0,1]}
+  ],
+  "landmarks": [{"id": "p", "position_m": [0.03,-0.37,1.18]}],
+  "observations": [
+    {"frame": {"stream": "synthetic", "timestamp_us": 0}, "point": "c0", "pixel_px": [690,680], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 0}, "point": "c1", "pixel_px": [1090,680], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 0}, "point": "c2", "pixel_px": [1090,280], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 0}, "point": "c3", "pixel_px": [690,280], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 0}, "point": "c4", "pixel_px": [890,480], "partition": "held_out", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 0}, "point": "p", "pixel_px": [952.5,355], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 50000}, "point": "c0", "pixel_px": [440,680], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 50000}, "point": "c1", "pixel_px": [840,680], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 50000}, "point": "c2", "pixel_px": [840,280], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 50000}, "point": "c3", "pixel_px": [440,280], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 50000}, "point": "c4", "pixel_px": [640,480], "partition": "held_out", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 50000}, "point": "p", "pixel_px": [640,355], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 100000}, "point": "c0", "pixel_px": [190,680], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 100000}, "point": "c1", "pixel_px": [590,680], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 100000}, "point": "c2", "pixel_px": [590,280], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 100000}, "point": "c3", "pixel_px": [190,280], "partition": "fit", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 100000}, "point": "c4", "pixel_px": [390,480], "partition": "held_out", "sigma_px": 1},
+    {"frame": {"stream": "synthetic", "timestamp_us": 100000}, "point": "p", "pixel_px": [327.5,355], "partition": "held_out", "sigma_px": 1}
+  ]
+}
