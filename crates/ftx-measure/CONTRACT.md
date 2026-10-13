@@ -34,6 +34,26 @@ schema checks and 284 readiness cases; all match key for key (numbers within 1e-
 wearer-block stature kept as evidence above, a recorded parity exception. Fused `notes` are
 lists and chart-prior sources carry the prior's note, as in the reference. None of this is a
 real-wearer fit claim.
-Photo measurement and the role-driven round gate remain separate work. JSON maps are sorted;
+Coordinate-based photo measurement is available in `photo` (spec 02 A.10–12; boundary below).
+Automatic sheet detection remains separate work. JSON maps are sorted;
 numerical reductions use input order; formatting uses ftx-core's Python rounding. Invalid or
 non-finite inputs get typed refusals.
+
+**Photo coordinate boundary.** `photo::analyze_reference` reads `ftx-photo-reference/1`:
+`reference: plain_sheet`, `paper: letter|a4|auto`, `image_size_px: [width,height]`, four
+`corners_px` clockwise on screen, optional `corner_sigma_px` (default 3) and `image` label.
+These are full-resolution EXIF-oriented coordinates, supplied by the caller; the library does
+not read, orient, detect or verify the image. It enforces convexity and the spec's rectangle
+check, refusing to calibrate wrong/ambiguous paper. A rejected scale has `ok: false` and no
+usable matrix. Manual coordinates cannot prove that the object actually is the named paper.
+
+`photo::measure_photo` maps pairs to distances/angles, with Jacobian click uncertainty, depth
+uncertainty and sheet-level uncertainty for angles, producing only PHOTO_ESTIMATED records.
+Its manual-corner bootstrap perturbs each coordinate by the declared sigma and each sheet
+side by 0.5 mm (rather than resampling detected edge pixels). SplitMix64/Box–Muller is seeded,
+clock-free and deliberately not NumPy-stream parity. Bootstrap draws are bounded to 20–2000;
+fewer than 80% usable draws, rank loss, projective horizons and malformed inputs are refusals,
+not zero-sigma/partial results. The unrounded matrix is retained for calculations.
+
+Known-answer tests recover spec D.7 exact-camera residuals/focal search and analytic distances,
+angles and uncertainty terms. No automatic detector, image-oracle or real-wearer fit claim.

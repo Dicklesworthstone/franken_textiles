@@ -7,6 +7,7 @@
 mod catalogue;
 mod document;
 mod fusion;
+pub mod photo;
 mod priors;
 mod readiness;
 mod records;
