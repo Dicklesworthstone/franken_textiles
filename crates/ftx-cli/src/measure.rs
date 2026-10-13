@@ -1,6 +1,7 @@
 //! Measurement evidence workflow. Library computations are clock-free; the CLI defaults to UTC today.
 
 mod bundle;
+mod calibration;
 mod photo;
 mod section;
 mod triangulate;
@@ -191,6 +192,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mut code = 0;
     let value = match command {
         "bundle-adjust" => return bundle::run(args),
+        "calib-sheet" => return calibration::run(args),
         "triangulate" => return triangulate::run(args),
         "girth-from-section" => section::run(args)?,
         "photo-scale" | "measure-photo" | "sheet-pose" => {
@@ -389,7 +391,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         _ => {
             return Err(bad_input(format!(
-                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust or video-select"
+                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, calib-sheet, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust or video-select"
             )));
         }
     };
