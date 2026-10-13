@@ -3,9 +3,9 @@
 //! CCD (Li et al. 2021) to cap each Newton step, and lagged smoothed Coulomb friction.
 //!
 //! Pairs: a cloth vertex against a body triangle, a body vertex against a cloth triangle, and a cloth
-//! edge against a body edge. Each touches only cloth vertices that already share an element, so contact
-//! never changes the Hessian's sparsity pattern. Energies are evaluated on [`Jet`]s for exact gradients
-//! and Hessians.
+//! edge against a body edge. Optional self-contact adds non-incident cloth vertex–triangle and
+//! edge–edge pairs; all four vertices move and the solver must rebuild its symbolic analysis when
+//! their couplings change. Energies are evaluated on [`Jet`]s for exact gradients and Hessians.
 
 use std::collections::BTreeMap;
 
@@ -32,6 +32,39 @@ pub struct ContactParams {
     pub mu: f64,
     /// Friction smoothing: slip speeds below this (m/s) are treated as sticking.
     pub eps_v: f64,
+}
+
+impl ContactParams {
+    /// Checks contact parameters before a solve. For self-contact, `thickness` is the sum of the two
+    /// cloth half-thicknesses, not the cloth–body offset.
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`] for non-finite values; [`RefusalCode::OutOfRange`] unless distances,
+    /// stiffness and smoothing are positive, and thickness and friction are non-negative.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        for (name, value) in [
+            ("contact activation distance", self.dhat),
+            ("contact thickness", self.thickness),
+            ("contact stiffness", self.kappa),
+            ("contact friction", self.mu),
+            ("friction smoothing speed", self.eps_v),
+        ] {
+            Refusal::finite(name, value)?;
+        }
+        if self.dhat <= 0.0
+            || self.kappa <= 0.0
+            || self.eps_v <= 0.0
+            || self.thickness < 0.0
+            || self.mu < 0.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "contact requires positive activation distance, stiffness and smoothing; \
+                 thickness and friction must be non-negative",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// A static body: a triangle mesh (metres), closed (a whole body) or open (a test surface).
@@ -76,6 +109,50 @@ fn aabb(points: &[Vec3]) -> (Vec3, Vec3) {
             )
         },
     )
+}
+
+/// A swept primitive contains both endpoints of every vertex trajectory, not just its start shape.
+fn swept_box(ids: &[usize], x: &[Vec3], p: Option<&[Vec3]>) -> (Vec3, Vec3) {
+    let mut pts: Vec<Vec3> = ids.iter().map(|&i| x[i]).collect();
+    if let Some(p) = p {
+        pts.extend(ids.iter().map(|&i| x[i] + p[i]));
+    }
+    aabb(&pts)
+}
+
+/// Deterministic bipartite sweep-and-prune. Both sides can move. Unlike a swept uniform grid, this
+/// does not enumerate a potentially enormous number of cells for a long Newton displacement.
+/// Every overlapping pair is retained; no truncation or heuristic neighbor limit.
+fn box_pairs(a: &[(Vec3, Vec3)], b: &[(Vec3, Vec3)], pad: f64) -> Vec<(usize, usize)> {
+    let d = Vec3::new(pad * 0.5, pad * 0.5, pad * 0.5);
+    let a: Vec<_> = a.iter().map(|&(lo, hi)| (lo - d, hi + d)).collect();
+    let b: Vec<_> = b.iter().map(|&(lo, hi)| (lo - d, hi + d)).collect();
+    let boxes = [&a, &b];
+    let mut events: Vec<_> = boxes
+        .iter()
+        .enumerate()
+        .flat_map(|(side, bs)| {
+            bs.iter()
+                .enumerate()
+                .map(move |(id, (lo, _))| (lo.x, side, id))
+        })
+        .collect();
+    events.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut active: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+    let mut out = Vec::new();
+    for (left, side, id) in events {
+        let (lo, hi) = boxes[side][id];
+        let other = 1 - side;
+        active[other].retain(|&j| boxes[other][j].1.x >= left);
+        for &j in &active[other] {
+            if overlaps(boxes[other][j], lo, hi) {
+                out.push(if side == 0 { (id, j) } else { (j, id) });
+            }
+        }
+        active[side].push(id);
+    }
+    out.sort_unstable();
+    out
 }
 
 fn insert(grid: &mut BTreeMap<[i64; 3], Vec<usize>>, id: usize, lo: Vec3, hi: Vec3, cell: f64) {
@@ -129,6 +206,24 @@ pub fn edges_of(triangles: &[[usize; 3]]) -> Vec<[usize; 2]> {
 }
 
 impl Body {
+    /// No body collider, for a cloth self-contact-only simulation. This has no interior; it does not
+    /// relax [`Body::new`]'s checks on supplied meshes.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            vertices: Vec::new(),
+            triangles: Vec::new(),
+            edges: Vec::new(),
+            closed: false,
+            cell: 1.0,
+            tri_grid: BTreeMap::new(),
+            vert_grid: BTreeMap::new(),
+            edge_grid: BTreeMap::new(),
+            tri_box: Vec::new(),
+            edge_box: Vec::new(),
+        }
+    }
+
     /// Builds the body and its broad-phase grids (cell size about the mean edge length, at least `min_cell`).
     ///
     /// # Errors
@@ -287,6 +382,26 @@ pub enum Pair {
         /// Body edge.
         be: usize,
     },
+    /// Non-incident cloth vertex against cloth triangle.
+    SelfVertexTri {
+        /// Cloth vertex.
+        cv: usize,
+        /// Cloth triangle.
+        ct: usize,
+    },
+    /// Two non-incident cloth edges, in increasing edge-index order.
+    SelfEdgeEdge {
+        /// First cloth edge.
+        a: usize,
+        /// Second cloth edge.
+        b: usize,
+    },
+}
+
+impl Pair {
+    fn is_self_contact(self) -> bool {
+        matches!(self, Self::SelfVertexTri { .. } | Self::SelfEdgeEdge { .. })
+    }
 }
 
 /// The cloth side of contact: its triangles and edges (with rest lengths for the mollifier).
@@ -344,16 +459,37 @@ fn stencil(pair: Pair, x: &[Vec3], body: &Body, cloth: &ClothTopology) -> Stenci
                 mollifier_eps: Some(1e-3 * lc * lb),
             }
         }
+        Pair::SelfVertexTri { cv, ct } => {
+            let t = cloth.triangles[ct];
+            let ids = [cv, t[0], t[1], t[2]];
+            Stencil {
+                pts: ids.map(|i| x[i]),
+                fixed: [false; 4],
+                cloth: ids.map(Some),
+                mollifier_eps: None,
+            }
+        }
+        Pair::SelfEdgeEdge { a, b } => {
+            let (ea, eb) = (cloth.edges[a], cloth.edges[b]);
+            let ids = [ea[0], ea[1], eb[0], eb[1]];
+            let (la, lb) = (cloth.edge_rest[a], cloth.edge_rest[b]);
+            Stencil {
+                pts: ids.map(|i| x[i]),
+                fixed: [false; 4],
+                cloth: ids.map(Some),
+                mollifier_eps: Some(1e-3 * la * la * lb * lb),
+            }
+        }
     }
 }
 
 fn classify(pair: Pair, pts: &[Vec3; 4]) -> (Closest, [f64; 4]) {
     match pair {
-        Pair::VertexTri { .. } | Pair::TriVertex { .. } => {
+        Pair::VertexTri { .. } | Pair::TriVertex { .. } | Pair::SelfVertexTri { .. } => {
             let (w, k) = point_triangle_closest(pts[0], pts[1], pts[2], pts[3]);
             (k, [1.0, -w[0], -w[1], -w[2]])
         }
-        Pair::EdgeEdge { .. } => {
+        Pair::EdgeEdge { .. } | Pair::SelfEdgeEdge { .. } => {
             let ((s, t), k) = edge_edge_closest(pts[0], pts[1], pts[2], pts[3]);
             (k, [1.0 - s, s, -(1.0 - t), -t])
         }
@@ -433,6 +569,7 @@ pub struct Contact {
     pub params: ContactParams,
     /// Cloth triangles and edges.
     pub cloth: ClothTopology,
+    self_params: Option<ContactParams>,
     lag: Vec<FrictionPair>,
     lag_x: Vec<Vec3>,
     lag_h: f64,
@@ -527,16 +664,158 @@ impl Contact {
                 edges,
                 edge_rest: rest,
             },
+            self_params: None,
             lag: Vec::new(),
             lag_x: Vec::new(),
             lag_h: 1.0,
         }
     }
 
+    /// Enables cloth self-contact after auditing the start, with independent friction and full
+    /// cloth–cloth thickness. Incident features (including welded seam vertices) are excluded.
+    ///
+    /// # Errors
+    /// Invalid parameters or geometry, non-finite positions, or [`RefusalCode::IntersectingStart`]
+    /// for crossing or touching layers. An intersecting start is refused, never pushed apart silently.
+    pub fn with_self_contact(mut self, x: &[Vec3], params: ContactParams) -> Result<Self, Refusal> {
+        params.validate()?;
+        self.self_params = Some(params);
+        self.audit_self_contact(x)?;
+        Ok(self)
+    }
+
+    /// The independently configured cloth–cloth parameters, or `None` when self-contact is disabled.
+    #[must_use]
+    pub fn self_contact_params(&self) -> Option<ContactParams> {
+        self.self_params
+    }
+
+    fn pair_params(&self, pair: Pair) -> &ContactParams {
+        if pair.is_self_contact() {
+            self.self_params.as_ref().unwrap_or(&self.params)
+        } else {
+            &self.params
+        }
+    }
+
+    fn activation_range(&self) -> f64 {
+        let body = self.params.dhat + self.params.thickness;
+        self.self_params
+            .map_or(body, |p| body.max(p.dhat + p.thickness))
+    }
+
+    pub(crate) fn has_friction(&self) -> bool {
+        self.params.mu > 0.0 || self.self_params.is_some_and(|p| p.mu > 0.0)
+    }
+
+    /// Checks a self-contact-enabled state: finite, non-degenerate triangles, positive thickness
+    /// gaps, and no non-incident edge passing through a triangle (exact orientation predicates).
+    ///
+    /// # Errors
+    /// [`RefusalCode::NonFinite`], [`RefusalCode::DegenerateGeometry`] or
+    /// [`RefusalCode::IntersectingStart`]. With self-contact disabled there is nothing to audit.
+    pub fn audit_self_contact(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        let Some(p) = self.self_params else {
+            return Ok(());
+        };
+        if x.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "non-finite cloth position",
+            ));
+        }
+        for t in &self.cloth.triangles {
+            if t.iter().any(|&i| i >= x.len())
+                || (x[t[1]] - x[t[0]]).cross(x[t[2]] - x[t[0]]).norm2() == 0.0
+            {
+                return Err(Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    "self-contact needs non-degenerate triangles with valid vertex indices",
+                ));
+            }
+        }
+        let boxes = |ids: &[usize]| swept_box(ids, x, None);
+        let edges: Vec<_> = self.cloth.edges.iter().map(|e| boxes(e)).collect();
+        let tris: Vec<_> = self.cloth.triangles.iter().map(|t| boxes(t)).collect();
+        for (ce, ct) in box_pairs(&edges, &tris, 0.0) {
+            let e = self.cloth.edges[ce];
+            let t = self.cloth.triangles[ct];
+            if !e.iter().any(|i| t.contains(i))
+                && segment_meets_triangle(x[e[0]], x[e[1]], t.map(|i| x[i]))
+            {
+                return Err(Refusal::new(
+                    RefusalCode::IntersectingStart,
+                    format!("cloth edge {ce} crosses cloth triangle {ct}"),
+                )
+                .repair("separate the overlapping cloth layers before enabling self-contact"));
+            }
+        }
+        // Coplanar overlaps and touching features are caught by their distance, even when every
+        // orientation in the edge-through-triangle test is zero.
+        for pair in self.self_candidates(x, None, p.thickness + p.dhat) {
+            let st = stencil(pair, x, &self.body, &self.cloth);
+            let (kind, _) = classify(pair, &st.pts);
+            let gap = pair_gap(&st, kind, &p);
+            if !gap.is_finite() || gap <= 0.0 {
+                return Err(Refusal::new(
+                    RefusalCode::IntersectingStart,
+                    format!("cloth layers touch or overlap at {pair:?} (gap {gap} m)"),
+                )
+                .repair("separate the layers by more than their combined half-thicknesses"));
+            }
+        }
+        Ok(())
+    }
+
+    fn self_candidates(&self, x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> Vec<Pair> {
+        let verts: Vec<_> = (0..x.len()).map(|i| swept_box(&[i], x, p)).collect();
+        let tris: Vec<_> = self
+            .cloth
+            .triangles
+            .iter()
+            .map(|t| swept_box(t, x, p))
+            .collect();
+        let edges: Vec<_> = self
+            .cloth
+            .edges
+            .iter()
+            .map(|e| swept_box(e, x, p))
+            .collect();
+        let mut pairs = Vec::new();
+        for (cv, ct) in box_pairs(&verts, &tris, pad) {
+            if !self.cloth.triangles[ct].contains(&cv) {
+                pairs.push(Pair::SelfVertexTri { cv, ct });
+            }
+        }
+        for (a, b) in box_pairs(&edges, &edges, pad) {
+            if a < b
+                && !self.cloth.edges[a]
+                    .iter()
+                    .any(|i| self.cloth.edges[b].contains(i))
+            {
+                pairs.push(Pair::SelfEdgeEdge { a, b });
+            }
+        }
+        pairs.sort_unstable();
+        pairs.dedup();
+        pairs
+    }
+
     /// Candidate pairs whose primitives' boxes (from `x` to `x + p`, if given) come within `pad` of each other.
     pub(crate) fn candidates(&self, x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> Vec<Pair> {
+        let mut out = self.body_candidates(x, p, pad);
+        if self.self_params.is_some() {
+            out.extend(self.self_candidates(x, p, pad));
+        }
+        out
+    }
+
+    fn body_candidates(&self, x: &[Vec3], p: Option<&[Vec3]>, pad: f64) -> Vec<Pair> {
         let b = &self.body;
         let mut out = Vec::new();
+        if b.triangles.is_empty() {
+            return out;
+        }
         let mut buf = Vec::new();
         let span = |ids: &[usize]| -> (Vec3, Vec3) {
             let mut pts: Vec<Vec3> = ids.iter().map(|&i| x[i]).collect();
@@ -577,17 +856,33 @@ impl Contact {
         out
     }
 
-    /// Smallest gap (distance − ξ) over all candidate pairs within `range` (m), or `None` if none.
+    /// Smallest cloth–body gap (distance − ξ) within `range` (m), or `None` if none. Self-contact
+    /// does not affect body-clearance measurements or the body's thickness ramp.
     #[must_use]
     pub fn min_gap(&self, x: &[Vec3], range: f64) -> Option<f64> {
         self.closest_pair(x, range).map(|(g, _, _)| g)
+    }
+
+    /// Smallest cloth–cloth gap within `range` (m), or `None` when self-contact is disabled or no
+    /// pair's boxes are nearby. This uses the full cloth–cloth thickness, independent of the body.
+    #[must_use]
+    pub fn min_self_gap(&self, x: &[Vec3], range: f64) -> Option<f64> {
+        let p = self.self_params?;
+        self.self_candidates(x, None, range + p.thickness)
+            .into_iter()
+            .map(|pair| {
+                let st = stencil(pair, x, &self.body, &self.cloth);
+                let (kind, _) = classify(pair, &st.pts);
+                pair_gap(&st, kind, &p)
+            })
+            .reduce(f64::min)
     }
 
     /// The pair with the smallest gap within `range` (m): its gap, the pair and the cloth point of it
     /// (the cloth vertex, or the first cloth vertex of the cloth triangle or edge).
     #[must_use]
     pub fn closest_pair(&self, x: &[Vec3], range: f64) -> Option<(f64, Pair, Vec3)> {
-        self.candidates(x, None, range + self.params.thickness)
+        self.body_candidates(x, None, range + self.params.thickness)
             .into_iter()
             .map(|pair| {
                 let st = stencil(pair, x, &self.body, &self.cloth);
@@ -598,7 +893,7 @@ impl Contact {
                     .flatten()
                     .next()
                     .map_or(Vec3::ZERO, |&v| x[v]);
-                (pair_gap(&st, kind, &self.params), pair, at)
+                (pair_gap(&st, kind, self.pair_params(pair)), pair, at)
             })
             .reduce(|a, b| if b.0 < a.0 { b } else { a })
     }
@@ -677,12 +972,12 @@ impl Contact {
 
     /// Barrier (and, during a time step, friction) energy and its derivative blocks at `x`.
     pub(crate) fn terms(&self, x: &[Vec3], with_derivatives: bool, friction: bool) -> ContactTerms {
-        let p = &self.params;
         let mut terms = ContactTerms {
             energy: 0.0,
             blocks: Vec::new(),
         };
-        for pair in self.candidates(x, None, p.dhat + p.thickness) {
+        for pair in self.candidates(x, None, self.activation_range()) {
+            let p = self.pair_params(pair);
             let st = stencil(pair, x, &self.body, &self.cloth);
             let (kind, _) = classify(pair, &st.pts);
             if !with_derivatives {
@@ -731,7 +1026,7 @@ impl Contact {
                 .blocks
                 .push(compact(st.cloth, &grad, |i, j| b2 * dg[i] * dg[j], true));
         }
-        if friction && p.mu > 0.0 {
+        if friction && self.has_friction() {
             for f in &self.lag {
                 let (e, g, h) = self.friction_local(f, x);
                 terms.energy += e;
@@ -752,13 +1047,16 @@ impl Contact {
         self.lag.clear();
         self.lag_x = x_start.to_vec();
         self.lag_h = h;
-        if self.params.mu <= 0.0 {
+        if !self.has_friction() {
             return;
         }
-        let p = self.params;
         // Normal forces, tangents and contact weights from `x` (the latest iterate); slip is measured
         // from the start of the step.
-        for pair in self.candidates(x, None, p.dhat + p.thickness) {
+        for pair in self.candidates(x, None, self.activation_range()) {
+            let p = *self.pair_params(pair);
+            if p.mu <= 0.0 {
+                continue;
+            }
             let st = stencil(pair, x, &self.body, &self.cloth);
             let (kind, beta) = classify(pair, &st.pts);
             let d2 = squared_distance_f64(st.pts, kind);
@@ -801,8 +1099,9 @@ impl Contact {
             .fold(Vec3::ZERO, |a, b| a + b);
         let u = [f.tangent[0].dot(rel), f.tangent[1].dot(rel)];
         let y = (u[0] * u[0] + u[1] * u[1]).sqrt();
-        let eps = self.params.eps_v * self.lag_h;
-        let c = self.params.mu * f.lambda;
+        let params = self.pair_params(f.pair);
+        let eps = params.eps_v * self.lag_h;
+        let c = params.mu * f.lambda;
         let (f0, f1_over_y, hess_coef) = if y < eps {
             (
                 -y * y * y / (3.0 * eps * eps) + y * y / eps + eps / 3.0,
@@ -846,10 +1145,19 @@ impl Contact {
     /// CCD: no gap closes below a tenth of its current value).
     pub(crate) fn step_bound(&self, x: &[Vec3], p: &[Vec3]) -> f64 {
         let mut alpha: f64 = 1.0;
-        for pair in self.candidates(x, Some(p), self.params.thickness) {
+        let thickness = self.self_params.map_or(self.params.thickness, |s| {
+            self.params.thickness.max(s.thickness)
+        });
+        for pair in self.candidates(x, Some(p), thickness) {
             let st = stencil(pair, x, &self.body, &self.cloth);
             let dp: [Vec3; 4] = std::array::from_fn(|i| st.cloth[i].map_or(Vec3::ZERO, |v| p[v]));
-            alpha = alpha.min(accd(pair, st.pts, dp, self.params.thickness, alpha));
+            alpha = alpha.min(accd(
+                pair,
+                st.pts,
+                dp,
+                self.pair_params(pair).thickness,
+                alpha,
+            ));
         }
         alpha
     }
@@ -863,8 +1171,10 @@ pub fn accd(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f
     let mean = dp.iter().fold(Vec3::ZERO, |a, b| a + *b) / 4.0;
     let rel: [Vec3; 4] = dp.map(|d| d - mean);
     let (ga, gb): (&[Vec3], &[Vec3]) = match pair {
-        Pair::VertexTri { .. } | Pair::TriVertex { .. } => (&rel[..1], &rel[1..]),
-        Pair::EdgeEdge { .. } => (&rel[..2], &rel[2..]),
+        Pair::VertexTri { .. } | Pair::TriVertex { .. } | Pair::SelfVertexTri { .. } => {
+            (&rel[..1], &rel[1..])
+        }
+        Pair::EdgeEdge { .. } | Pair::SelfEdgeEdge { .. } => (&rel[..2], &rel[2..]),
     };
     let lp = ga.iter().map(|v| v.norm()).fold(0.0, f64::max)
         + gb.iter().map(|v| v.norm()).fold(0.0, f64::max);
@@ -977,6 +1287,7 @@ mod tests {
                 Pair::VertexTri { .. } => 0,
                 Pair::TriVertex { .. } => 1,
                 Pair::EdgeEdge { .. } => 2,
+                _ => unreachable!("self-contact is disabled in this body-contact test"),
             });
             let gscale = e.g.iter().fold(1e-12f64, |m, g| m.max(g.abs()));
             if st
@@ -1154,5 +1465,223 @@ mod tests {
             1.0,
         );
         assert_eq!(t, 1.0);
+    }
+
+    fn layers(z: f64) -> Vec<Vec3> {
+        [0.0, z]
+            .into_iter()
+            .flat_map(|z| {
+                [
+                    Vec3::new(-0.01, -0.01, z),
+                    Vec3::new(0.01, -0.01, z),
+                    Vec3::new(0.0, 0.01, z),
+                ]
+            })
+            .collect()
+    }
+
+    fn self_layers(x: &[Vec3]) -> Contact {
+        Contact::new(
+            Body::empty(),
+            params(),
+            vec![[0, 1, 2], [3, 4, 5]],
+            |a, b| (x[a] - x[b]).norm(),
+        )
+    }
+
+    #[test]
+    fn self_sweep_matches_brute_force_and_excludes_incident_features() {
+        let mut x = layers(0.002);
+        x.extend(
+            layers(0.004)
+                .iter()
+                .map(|p| *p + Vec3::new(0.03, 0.01, 0.02)),
+        );
+        let c = Contact::new(
+            Body::empty(),
+            params(),
+            vec![[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]],
+            |a, b| (x[a] - x[b]).norm(),
+        );
+        let p: Vec<_> = x
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                Vec3::new(
+                    0.01 * (i % 3) as f64,
+                    0.0,
+                    if i % 2 == 0 { 0.03 } else { -0.03 },
+                )
+            })
+            .collect();
+        for motion in [None, Some(p.as_slice())] {
+            let pad = 0.001;
+            let d = Vec3::new(pad, pad, pad);
+            let mut expected = Vec::new();
+            for cv in 0..x.len() {
+                let (lo, hi) = swept_box(&[cv], &x, motion);
+                for (ct, t) in c.cloth.triangles.iter().enumerate() {
+                    if !t.contains(&cv) && overlaps(swept_box(t, &x, motion), lo - d, hi + d) {
+                        expected.push(Pair::SelfVertexTri { cv, ct });
+                    }
+                }
+            }
+            for (a, ea) in c.cloth.edges.iter().enumerate() {
+                let (lo, hi) = swept_box(ea, &x, motion);
+                for (b, eb) in c.cloth.edges.iter().enumerate().skip(a + 1) {
+                    if !ea.iter().any(|i| eb.contains(i))
+                        && overlaps(swept_box(eb, &x, motion), lo - d, hi + d)
+                    {
+                        expected.push(Pair::SelfEdgeEdge { a, b });
+                    }
+                }
+            }
+            expected.sort_unstable();
+            let actual = c.self_candidates(&x, motion, pad);
+            assert_eq!(actual, expected);
+            assert!(actual.windows(2).all(|w| w[0] < w[1]));
+        }
+        // A welded, flat two-triangle patch is not in collision with itself.
+        let x = vec![
+            Vec3::ZERO,
+            Vec3::new(0.01, 0.0, 0.0),
+            Vec3::new(0.0, 0.01, 0.0),
+            Vec3::new(0.01, 0.01, 0.0),
+        ];
+        Contact::new(
+            Body::empty(),
+            params(),
+            vec![[0, 1, 2], [1, 3, 2]],
+            |a, b| (x[a] - x[b]).norm(),
+        )
+        .with_self_contact(&x, params())
+        .unwrap();
+    }
+
+    #[test]
+    fn self_audit_refuses_crossings_coplanar_overlap_and_bad_parameters() {
+        let x = layers(0.0);
+        assert_eq!(
+            self_layers(&x)
+                .with_self_contact(&x, params())
+                .unwrap_err()
+                .code,
+            RefusalCode::IntersectingStart
+        );
+        // Large triangles can cross even while all vertex–triangle and edge–edge gaps are positive.
+        let x = vec![
+            Vec3::new(-0.02, -0.02, 0.0),
+            Vec3::new(0.02, -0.02, 0.0),
+            Vec3::new(0.0, 0.02, 0.0),
+            Vec3::new(0.0, -0.01, -0.02),
+            Vec3::new(0.0, -0.01, 0.02),
+            Vec3::new(0.0, 0.03, 0.02),
+        ];
+        let err = self_layers(&x).with_self_contact(&x, params()).unwrap_err();
+        assert_eq!(err.code, RefusalCode::IntersectingStart);
+        assert!(err.message.contains("crosses"));
+        let x = layers(0.002);
+        for bad in [
+            ContactParams {
+                mu: -1.0,
+                ..params()
+            },
+            ContactParams {
+                dhat: 0.0,
+                ..params()
+            },
+            ContactParams {
+                eps_v: 0.0,
+                ..params()
+            },
+        ] {
+            assert_eq!(
+                self_layers(&x).with_self_contact(&x, bad).unwrap_err().code,
+                RefusalCode::OutOfRange
+            );
+        }
+        assert_eq!(
+            self_layers(&x)
+                .with_self_contact(
+                    &x,
+                    ContactParams {
+                        thickness: f64::NAN,
+                        ..params()
+                    }
+                )
+                .unwrap_err()
+                .code,
+            RefusalCode::NonFinite
+        );
+    }
+
+    #[test]
+    fn self_ccd_accounts_for_motion_of_both_layers() {
+        let x = layers(0.01);
+        let c = self_layers(&x).with_self_contact(&x, params()).unwrap();
+        let p: Vec<_> = (0..6)
+            .map(|i| Vec3::new(0.0, 0.0, if i < 3 { 0.02 } else { -0.02 }))
+            .collect();
+        let t = c.step_bound(&x, &p);
+        assert!(t > 0.0 && t < (0.01 - params().thickness) / 0.04, "{t}");
+        let trial: Vec<_> = x.iter().zip(&p).map(|(x, p)| *x + *p * t).collect();
+        c.audit_self_contact(&trial).unwrap();
+        assert_eq!(
+            c.step_bound(&x, &vec![Vec3::new(1.0, 2.0, 3.0); x.len()]),
+            1.0
+        );
+    }
+
+    #[test]
+    fn self_barrier_and_friction_move_both_sides() {
+        let x = layers(0.001);
+        let mut c = self_layers(&x).with_self_contact(&x, params()).unwrap();
+        let pair = Pair::SelfVertexTri { cv: 3, ct: 0 };
+        let st = stencil(pair, &x, &c.body, &c.cloth);
+        assert_eq!(st.fixed, [false; 4]);
+        let (kind, _) = classify(pair, &st.pts);
+        let PairEnergy::Active(e) = pair_energy(&st, kind, &params()) else {
+            panic!("the pair must be active");
+        };
+        for axis in 0..3 {
+            let force: f64 = (0..4).map(|v| e.g[3 * v + axis]).sum();
+            assert!(force.abs() < 1e-12, "internal forces must balance");
+        }
+        // Difference the energy on all four moving vertices, not just the point.
+        for (v, id) in st.cloth.iter().enumerate() {
+            let id = id.unwrap();
+            let h = 1e-9;
+            let energy = |delta: f64| {
+                let mut y = x.clone();
+                y[id].z += delta;
+                let s = stencil(pair, &y, &c.body, &c.cloth);
+                let (k, _) = classify(pair, &s.pts);
+                match pair_energy_value(&s, k, &params()) {
+                    PairEnergy::Value(v) => v,
+                    _ => panic!("perturbation left the barrier"),
+                }
+            };
+            let fd = (energy(h) - energy(-h)) / (2.0 * h);
+            assert!((fd - e.g[3 * v + 2]).abs() < 1e-7);
+        }
+        // Body friction can be disabled while cloth–cloth friction remains enabled.
+        c.params.mu = 0.0;
+        c.update_lag(&x, &x, 0.01);
+        assert!(!c.lag.is_empty());
+        let rigid: Vec<_> = x
+            .iter()
+            .map(|p| *p + Vec3::new(0.001, 0.002, 0.0))
+            .collect();
+        for f in &c.lag {
+            let (e0, _, _) = c.friction_local(f, &x);
+            let (e1, g, _) = c.friction_local(f, &rigid);
+            assert!(
+                (e0 - e1).abs() < 1e-12,
+                "rigid translation cannot cause friction"
+            );
+            for axis in 0..3 {
+                assert!((0..4).map(|v| g[3 * v + axis]).sum::<f64>().abs() < 1e-12);
+            }
+        }
     }
 }

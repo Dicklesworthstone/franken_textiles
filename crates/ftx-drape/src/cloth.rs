@@ -1,9 +1,10 @@
-//! The cloth model and its Newton solver (plan §11.2–11.3, without contact yet).
+//! The cloth model and its contact-constrained Newton solver (plan §11.2–11.4).
 //!
 //! Each time step minimises the incremental potential
 //! `E(x) = ½h⁻²(x − x̃)ᵀM(x − x̃) + Ψ_membrane(x) + Ψ_bend(x)` with `x̃ = xₙ + h vₙ + h² g` and lumped mass,
 //! by projected Newton: element Hessians projected to positive semidefinite, a sparse LDLᵀ solve whose
-//! symbolic analysis (ordered on the vertex graph) is computed once, and an Armijo backtracking line
+//! symbolic analysis (ordered on the vertex graph) is reused while contact couplings stay unchanged,
+//! and an Armijo backtracking line
 //! search, so the potential never rises and a strained start relaxes instead of exploding. A static
 //! solve minimises `Ψ − Σ mᵢ g·xᵢ` the same way. Units: metres, kilograms, seconds.
 
@@ -194,7 +195,7 @@ impl ClothModel {
     /// draw the cloth up.
     ///
     /// # Errors
-    /// [`RefusalCode::OutOfRange`] unless there is one factor per element, each in [0, 1].
+    /// [`RefusalCode::OutOfRange`] unless there is one factor per element, each in (0, 1].
     pub fn set_compression(&mut self, per_element: &[f64]) -> Result<(), Refusal> {
         if per_element.len() != self.membranes.len() {
             return Err(Refusal::new(
@@ -206,11 +207,10 @@ impl ClothModel {
                 ),
             ));
         }
-        // 0 is a tension-only membrane, as `Membrane::compression` allows
-        if let Some(c) = per_element.iter().find(|c| !(0.0..=1.0).contains(*c)) {
+        if let Some(c) = per_element.iter().find(|c| !(**c > 0.0 && **c <= 1.0)) {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                format!("compression factor {c} must be in [0, 1]"),
+                format!("compression factor {c} must be in (0, 1]"),
             ));
         }
         self.compression = per_element.iter().map(|&c| [c, c]).collect();
@@ -293,14 +293,14 @@ pub struct Solver {
     pub tol: f64,
     /// Newton iteration cap per solve.
     pub max_newton: usize,
-    /// Contact with a static body, if any.
+    /// Contact with a static body and/or other cloth surfaces, if enabled.
     pub contact: Option<Contact>,
     /// Friction lag rounds per step after the first solve (IPC; 1 is usually enough).
     pub friction_rounds: usize,
     free: Vec<Option<usize>>,
     nfree: usize,
     symbolic: Option<SymbolicLdlt>,
-    /// The Hessian's pattern, fixed once the symbolic analysis is done.
+    /// The Hessian pattern used by the current symbolic analysis.
     pattern: Option<Csr>,
 }
 
@@ -374,6 +374,8 @@ impl Solver {
     /// mesh passes through the other, or a piece lies inside a closed body;
     /// [`RefusalCode::NonFinite`] for a non-finite position.
     pub fn with_contact(mut self, body: Body, params: ContactParams) -> Result<Self, Refusal> {
+        params.validate()?;
+        let self_params = self.contact.as_ref().and_then(Contact::self_contact_params);
         if self.x.iter().any(|p| !p.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
@@ -436,8 +438,50 @@ impl Solver {
             )
             .repair("place the pieces outside the body (a larger push-out or clearance)"));
         }
-        self.contact = Some(contact);
+        self.contact = Some(match self_params {
+            Some(p) => contact.with_self_contact(&self.x, p)?,
+            None => contact,
+        });
+        self.symbolic = None;
+        self.pattern = None;
         Ok(self)
+    }
+
+    /// Enables cloth–cloth contact, with or without a body collider. `params.thickness` is the sum
+    /// of the two cloth half-thicknesses; body and self-contact friction remain independent. All
+    /// non-incident point–triangle and edge–edge pairs participate, including across separate pieces.
+    ///
+    /// # Errors
+    /// Invalid parameters, non-finite geometry, or [`RefusalCode::IntersectingStart`] when the
+    /// initial cloth layers intersect or touch their thickness offsets.
+    pub fn with_self_contact(mut self, params: ContactParams) -> Result<Self, Refusal> {
+        params.validate()?;
+        if self.contact.is_none() {
+            self = self.with_contact(Body::empty(), params)?;
+        }
+        let contact = self.contact.take().ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::InvalidDocument,
+                "missing cloth contact topology",
+            )
+        })?;
+        self.contact = Some(contact.with_self_contact(&self.x, params)?);
+        self.symbolic = None;
+        self.pattern = None;
+        Ok(self)
+    }
+
+    fn dynamic_contact(&self) -> bool {
+        self.contact
+            .as_ref()
+            .is_some_and(|c| c.self_contact_params().is_some())
+    }
+
+    fn audit_self_contact(&self) -> Result<(), Refusal> {
+        match &self.contact {
+            Some(c) => c.audit_self_contact(&self.x),
+            None => Ok(()),
+        }
     }
 
     /// Free degrees of freedom.
@@ -476,9 +520,12 @@ impl Solver {
         project: bool,
     ) -> (Vec<f64>, Csr) {
         let mut g = vec![0.0; self.nfree];
-        let mut sink = match &self.pattern {
-            Some(p) => Sink::Fill(CsrFill::new(p)),
-            None => Sink::Coo(Coo::new(self.nfree, self.nfree)),
+        // Cloth–cloth contact can couple previously unrelated elements. Never scatter those blocks
+        // into a stale fixed pattern (CsrFill rejects missing entries). Body-only solves keep the
+        // existing allocation-free fill path and numerical ordering.
+        let mut sink = match (&self.pattern, self.dynamic_contact()) {
+            (Some(p), false) => Sink::Fill(CsrFill::new(p)),
+            _ => Sink::Coo(Coo::new(self.nfree, self.nfree)),
         };
         // Elements whose Hessian is PSD by construction (every hinge; membranes without compression
         // or a negative stress) are not projected: it would change nothing but rounding.
@@ -531,8 +578,8 @@ impl Solver {
         }
         if let Some(c) = &self.contact {
             // Mollified edge pairs carry their full, indefinite Hessian and are projected here; the
-            // Gauss–Newton barrier and friction blocks are PSD already. A block's cloth vertices share
-            // an element, so the pattern does not change.
+            // Gauss–Newton barrier and friction blocks are PSD already. Self-contact blocks may
+            // couple all four moving vertices across previously unrelated elements.
             for mut block in c.terms(x, true, inertia.is_some()).blocks {
                 let m = block.dofs.len();
                 if !block.psd {
@@ -555,6 +602,14 @@ impl Solver {
     }
 
     fn symbolic(&mut self, a: &Csr) -> Result<&SymbolicLdlt, Refusal> {
+        if self.dynamic_contact()
+            && self.pattern.as_ref().is_some_and(|p| {
+                p.nrows() != a.nrows() || (0..a.nrows()).any(|r| p.row(r).0 != a.row(r).0)
+            })
+        {
+            self.symbolic = None;
+            self.pattern = None;
+        }
         if self.symbolic.is_none() {
             // Order the vertex graph, then expand each free vertex's DOFs in place.
             let n = self.model.rest.len();
@@ -568,6 +623,20 @@ impl Solver {
             };
             self.model.membranes.iter().for_each(|e| link(&e.v));
             self.model.hinges.iter().for_each(|h| link(&h.v));
+            if self.dynamic_contact() {
+                // Order the actual contact graph too, not only the rest-mesh adjacency.
+                let mut vertex = vec![0; self.nfree];
+                for (dof, free) in self.free.iter().enumerate() {
+                    if let Some(f) = free {
+                        vertex[*f] = dof / 3;
+                    }
+                }
+                for r in 0..a.nrows() {
+                    for &c in a.row(r).0 {
+                        vcoo.push(vertex[r], vertex[c], 1.0);
+                    }
+                }
+            }
             for i in 0..n {
                 vcoo.push(i, i, 1.0);
             }
@@ -584,7 +653,7 @@ impl Solver {
                 )
             })?;
             self.symbolic = Some(s);
-            // every later assembly fills this pattern in place
+            // Body-only assemblies fill this in place; self-contact compares the next pattern.
             self.pattern = Some(a.clone());
         }
         self.symbolic
@@ -660,7 +729,7 @@ impl Solver {
                 rep.converged = true;
                 break;
             }
-            // Never step through the body: cap α by additive CCD along the Newton direction.
+            // Never step through the body or another cloth layer: cap α by additive CCD.
             let mut alpha = match &self.contact {
                 Some(c) => c.step_bound(&self.x, &self.displacement(&p)),
                 None => 1.0,
@@ -707,12 +776,13 @@ impl Solver {
     /// [`RefusalCode::OutOfRange`] for a non-positive step; [`RefusalCode::NonFinite`] when the state
     /// becomes non-finite; a failed symbolic analysis.
     pub fn step(&mut self, h: f64) -> Result<SolveReport, Refusal> {
-        if h.is_nan() || h <= 0.0 {
+        if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                format!("time step {h} s must be positive"),
+                format!("time step {h} s must be finite and positive"),
             ));
         }
+        self.audit_self_contact()?;
         let x0 = self.x.clone();
         let xt: Vec<Vec3> = x0
             .iter()
@@ -735,16 +805,28 @@ impl Solver {
         if let Some(c) = &mut self.contact {
             c.update_lag(&x0, &x0, h); // friction pairs frozen at the start of the step
         }
-        let mut rep = self.minimize(Some((&xt, h)))?;
+        let mut rep = match self.minimize(Some((&xt, h))) {
+            Ok(rep) => rep,
+            Err(e) => {
+                self.x = x0;
+                return Err(e);
+            }
+        };
         // Lag rounds (IPC): refresh normal forces and contact sets at the new iterate and re-solve,
         // so a contact made during the step has friction within the same step.
         for _ in 0..self.friction_rounds {
             let Some(c) = &mut self.contact else { break };
-            if c.params.mu <= 0.0 {
+            if !c.has_friction() {
                 break;
             }
             c.update_lag(&x0, &self.x, h);
-            let again = self.minimize(Some((&xt, h)))?;
+            let again = match self.minimize(Some((&xt, h))) {
+                Ok(rep) => rep,
+                Err(e) => {
+                    self.x = x0;
+                    return Err(e);
+                }
+            };
             rep.iterations += again.iterations;
             rep.projected_iterations += again.projected_iterations;
             rep.line_search_failures += again.line_search_failures;
@@ -754,10 +836,15 @@ impl Solver {
             rep.last_step = again.last_step;
         }
         if self.x.iter().any(|p| !p.is_finite()) {
+            self.x = x0;
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
                 "the cloth state became non-finite",
             ));
+        }
+        if let Err(e) = self.audit_self_contact() {
+            self.x = x0;
+            return Err(e);
         }
         self.v = self.x.iter().zip(&x0).map(|(a, b)| (*a - *b) / h).collect();
         Ok(rep)
@@ -805,12 +892,25 @@ impl Solver {
     /// # Errors
     /// As [`Solver::step`].
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
-        let rep = self.minimize(None)?;
+        self.audit_self_contact()?;
+        let x0 = self.x.clone();
+        let rep = match self.minimize(None) {
+            Ok(rep) => rep,
+            Err(e) => {
+                self.x = x0;
+                return Err(e);
+            }
+        };
         if self.x.iter().any(|p| !p.is_finite()) {
+            self.x = x0;
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
                 "the cloth state became non-finite",
             ));
+        }
+        if let Err(e) = self.audit_self_contact() {
+            self.x = x0;
+            return Err(e);
         }
         self.v = vec![Vec3::ZERO; self.x.len()];
         Ok(rep)
@@ -952,4 +1052,119 @@ pub fn grid(w: f64, h: f64, nx: usize, ny: usize, origin: Vec2) -> (Vec<Vec2>, V
         }
     }
     (rest, tris)
+}
+
+#[cfg(test)]
+mod self_contact_tests {
+    use super::*;
+
+    fn layers(pinned_bottom: bool) -> Solver {
+        let rest: Vec<_> = (0..2)
+            .flat_map(|_| {
+                [
+                    Vec2::new(-0.01, -0.01),
+                    Vec2::new(0.01, -0.01),
+                    Vec2::new(0.0, 0.01),
+                ]
+            })
+            .collect();
+        let x: Vec<_> = rest
+            .iter()
+            .enumerate()
+            .map(|(i, p)| Vec3::new(p.x, p.y, if i < 3 { 0.0 } else { 0.006 }))
+            .collect();
+        let model = ClothModel::new(
+            rest,
+            &[[0, 1, 2], [3, 4, 5]],
+            Membrane::orthotropic(1000.0, 1000.0, 0.0, 100.0, 0.05),
+            1e-5,
+            0.2,
+        )
+        .unwrap();
+        let fixed: Vec<_> = (0..6)
+            .map(|i| [true, true, pinned_bottom && i < 3])
+            .collect();
+        let mut solver = Solver::new(model, x, &fixed, Vec3::ZERO)
+            .with_self_contact(ContactParams {
+                dhat: 0.001,
+                thickness: 0.0005,
+                kappa: 100.0,
+                mu: 0.0,
+                eps_v: 0.001,
+            })
+            .unwrap();
+        solver.tol = 1e-7;
+        solver.max_newton = 200;
+        solver
+    }
+
+    #[test]
+    fn moving_layers_add_new_hessian_couplings_without_crossing() {
+        let mut s = layers(false);
+        for (i, v) in s.v.iter_mut().enumerate() {
+            v.z = if i < 3 { 0.3 } else { -0.3 };
+        }
+        let rep = s.step(0.002).unwrap();
+        assert!(rep.converged, "{rep:?}");
+        assert!(!s.pattern.as_ref().unwrap().row(0).0.iter().any(|&v| v >= 3));
+        let mut coupled = false;
+        for _ in 0..12 {
+            let rep = s.step(0.002).unwrap();
+            assert!(rep.converged, "{rep:?}");
+            s.audit_self_contact().unwrap();
+            assert!(s.x[..3].iter().all(|p| p.z < s.x[3].z - 0.0005));
+            let centroid = s.x.iter().map(|p| p.z).sum::<f64>() / 6.0;
+            assert!(
+                (centroid - 0.003).abs() < 1e-9,
+                "unbalanced self-contact force"
+            );
+            coupled |= s.pattern.as_ref().unwrap().row(0).0.iter().any(|&v| v >= 3);
+        }
+        assert!(
+            coupled,
+            "contact must add off-diagonal couplings between separate pieces"
+        );
+    }
+
+    #[test]
+    fn upper_layer_settles_on_cloth_without_a_body_collider() {
+        let mut s = layers(true);
+        s.gravity.z = -9.81;
+        for _ in 0..30 {
+            let rep = s.step(0.01).unwrap();
+            assert!(rep.converged, "{rep:?}");
+            s.audit_self_contact().unwrap();
+        }
+        let rep = s.static_solve().unwrap();
+        assert!(rep.converged, "{rep:?}");
+        for p in &s.x[3..] {
+            assert!(p.z > 0.0005 && p.z < 0.0015, "layer height {}", p.z);
+        }
+        assert!(s.x[..3].iter().all(|p| p.z == 0.0));
+        assert!(s.v.iter().all(|v| *v == Vec3::ZERO));
+    }
+
+    #[test]
+    fn self_contact_rejects_invalid_mutated_state_before_advancing() {
+        let mut s = layers(false);
+        for p in &mut s.x[3..] {
+            p.z = 0.0;
+        }
+        let x = s.x.clone();
+        let v = s.v.clone();
+        assert_eq!(
+            s.step(0.01).unwrap_err().code,
+            RefusalCode::IntersectingStart
+        );
+        assert_eq!(s.x, x);
+        assert_eq!(s.v, v);
+        assert_eq!(
+            s.static_solve().unwrap_err().code,
+            RefusalCode::IntersectingStart
+        );
+        assert_eq!(
+            s.step(f64::INFINITY).unwrap_err().code,
+            RefusalCode::OutOfRange
+        );
+    }
 }
