@@ -1,0 +1,131 @@
+{
+  "schema": "ftx-textiles/1",
+  "materials": [
+    {
+      "id": "dharma_cotton_muslin_35", "name": "Dharma cotton muslin 3.5 oz", "form": "woven",
+      "composition": {"cotton": 1.0}, "identity_source": "supplier",
+      "construction": {"weave": "muslin", "variant": "45 inch width"},
+      "properties": {
+        "areal_mass": {"value": 3.5, "range": [3.0, 3.5], "unit": "oz/yd2", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier grade; reported 3-3.5 oz per square yard."},
+        "width": {"value": 45, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Approximate width."},
+        "warp_count": {"value": 78, "unit": "threads/in", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier thread count; not a stiffness measurement."},
+        "weft_count": {"value": 76, "unit": "threads/in", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier thread count; not a stiffness measurement."}
+      },
+      "sources": {"supplier": {"locator": "https://www.dharmatrading.com/collections/cotton-muslin-sheeting/products/cotton-muslin-3-5oz", "title": "Dharma cotton muslin product specifications", "accessed": "2026-10-13"}},
+      "notes": ["Mechanical, thermal and fire-test properties are not supplied by this record."]
+    },
+    {
+      "id": "fs_il019_natural", "name": "Fabrics-store IL019 Natural linen", "form": "woven",
+      "composition": {"linen_flax": 1.0}, "identity_source": "supplier",
+      "construction": {"weave": "plain", "variant": "IL019 Natural middle weight"},
+      "properties": {
+        "areal_mass": {"value": 5.3, "unit": "oz/yd2", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal product weight."},
+        "width": {"value": 58, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal product width."},
+        "warp_count": {"value": 46, "unit": "threads/in", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier warp count."},
+        "weft_count": {"value": 37, "unit": "threads/in", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier weft count."}
+      },
+      "sources": {"supplier": {"locator": "https://fabrics-store.com/fabrics/linen-fabric-IL019-natural-middle", "title": "Fabrics-store IL019 Natural technical specifications", "accessed": "2026-10-13"}},
+      "notes": ["Finish and lot matter; this is not a universal linen material law."]
+    },
+    {
+      "id": "dharma_habotai_8_momme", "name": "Dharma silk habotai 8 momme", "form": "woven",
+      "composition": {"silk": 1.0}, "identity_source": "supplier",
+      "construction": {"weave": "habotai", "grade": "A", "variant": "36 inch width"},
+      "properties": {
+        "silk_weight_grade": {"value": 8, "unit": "momme", "source": "supplier", "evidence": "manufacturer", "conditions": "Product label 8mm denotes momme, NOT millimetre thickness."},
+        "width": {"value": 36, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Selected width variant; other widths are separate products."}
+      },
+      "sources": {"supplier": {"locator": "https://www.dharmatrading.com/collections/habotai-silks/products/habotai-silk-8mm", "title": "Dharma Habotai Silk 8mm", "accessed": "2026-10-13"}},
+      "notes": ["No thickness is inferred from the momme label."]
+    },
+    {
+      "id": "rbtr_ripstop_nylon_11_uncalendered", "name": "Ripstop by the Roll 1.1 oz nylon, uncalendered", "form": "woven",
+      "composition": {"nylon": 1.0}, "identity_source": "supplier",
+      "construction": {"weave": "ripstop", "finish": "uncalendered"},
+      "properties": {
+        "areal_mass": {"value": 1.1, "unit": "oz/yd2", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal product weight."},
+        "width": {"value": 60, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Uncalendered variant; calendered width differs."}
+      },
+      "sources": {"supplier": {"locator": "https://ripstopbytheroll.com/products/1-1-oz-ripstop-nylon", "title": "RBTR 1.1 oz Ripstop Nylon specifications", "accessed": "2026-10-13"}},
+      "notes": ["Nylon polymer grade and mechanical test curves are unknown here."]
+    },
+    {
+      "id": "vuori_dreamknit_ponto_185", "name": "Vuori DreamKnit Ponto 185 gsm", "form": "knit",
+      "composition": {"recycled_polyester": 0.89, "elastane": 0.11}, "identity_source": "supplier",
+      "construction": {"knit": "jersey", "finish": "brushed", "application": "Ponto Performance Pant"},
+      "properties": {
+        "areal_mass": {"value": 185, "unit": "g/m2", "source": "supplier", "evidence": "manufacturer", "conditions": "Ponto DreamKnit specification; not every Vuori fabric."}
+      },
+      "sources": {"supplier": {"locator": "https://help.vuoriclothing.com/en_us/vuori-mens-pants-collection-B1IezBB71x", "title": "Vuori Men's Pants Collection: Ponto Performance Pant", "accessed": "2026-10-13"}},
+      "notes": ["Proprietary yarn/loop architecture, modulus, friction and thermal properties are not published in this source. No constitutive response inferred from marketing stretch claims."]
+    },
+    {
+      "id": "nf_bamboo_viscose_jersey_240", "name": "Nature's Fabrics natural bamboo-viscose/cotton/spandex jersey", "form": "knit",
+      "composition": {"bamboo_viscose": 0.66, "organic_cotton": 0.28, "elastane": 0.06}, "identity_source": "supplier",
+      "construction": {"knit": "jersey", "color": "natural", "fiber_process": "regenerated bamboo viscose, not bamboo bast"},
+      "properties": {
+        "areal_mass": {"value": 240, "unit": "g/m2", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal product weight."},
+        "width": {"value": 64, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Natural color; other color variants may differ."},
+        "stretch_width": {"value": 0.75, "unit": "1", "source": "supplier", "evidence": "manufacturer", "conditions": "Approximate extension; load, recovery and test method unspecified. NOT modulus."},
+        "stretch_length": {"value": 0.25, "unit": "1", "source": "supplier", "evidence": "manufacturer", "conditions": "Approximate extension; load, recovery and test method unspecified. NOT modulus."}
+      },
+      "sources": {"supplier": {"locator": "https://naturesfabrics.com/products/natural-bamboo-spandex-jersey-240-gsm", "title": "Nature's Fabrics natural bamboo/spandex jersey 240 GSM", "accessed": "2026-10-13"}},
+      "notes": ["Blend fractions do not determine loop-scale mechanics."]
+    },
+    {
+      "id": "tandy_cow_garment_9114_71", "name": "Tandy black cow garment leather 9114-71", "form": "leather",
+      "composition": {}, "identity_source": "supplier",
+      "construction": {"animal": "cow", "tanning": "chrome", "grain": "top grain", "surface": "pebble grain", "sku": "9114-71"},
+      "properties": {
+        "thickness": {"value": 0.7, "range": [0.6, 0.8], "unit": "mm", "source": "supplier", "evidence": "estimated", "conditions": "Midpoint of supplier 0.6-0.8 mm interval, not a measured nominal."}
+      },
+      "sources": {"supplier": {"locator": "https://tandyleather.com/products/garment-leather", "title": "Tandy Garment Side Black, SKU 9114-71", "accessed": "2026-10-13"}},
+      "notes": ["Leather ounce grade is thickness, NOT oz/yd2. Hide area and anisotropy vary spatially. Chemical composition and areal mass are not established by animal identity."]
+    },
+    {
+      "id": "felt_f51_3_32", "name": "The Felt Company F-51 pressed wool felt 3/32 inch", "form": "nonwoven",
+      "composition": {}, "identity_source": "supplier",
+      "construction": {"process": "pressed felt", "grade": "F-51 / 16R3X", "color": "gray", "composition_limit": "minimum 95% wool; remaining fraction unspecified"},
+      "properties": {
+        "thickness": {"value": 0.0937, "range": [0.0843, 0.1031], "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal and stated thickness limits."},
+        "areal_mass": {"value": 1.3, "range": [1.1, 1.5], "unit": "lb/yd2", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal and stated mass limits."},
+        "width": {"value": 60, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal width."}
+      },
+      "sources": {"supplier": {"locator": "https://www.thefeltcompany.com/f-51-sae-wool-felt-3-32-thick-x-60-wide-industrial-wool-felt/", "title": "F-51 SAE wool felt 3/32 inch specifications", "accessed": "2026-10-13"}},
+      "notes": ["A minimum wool content is not an exact blend fraction. Industrial grade is not apparel safety certification."]
+    },
+    {
+      "id": "lion_247_cotton_yarn", "name": "Lion Brand 24/7 mercerized cotton yarn", "form": "yarn",
+      "composition": {"cotton": 1.0}, "identity_source": "supplier",
+      "construction": {"finish": "mercerized", "yarn_class": "worsted"},
+      "properties": {
+        "skein_mass": {"value": 100, "unit": "g", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal skein."},
+        "skein_length": {"value": 170, "unit": "m", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal skein; no yarn elasticity or twist measurement."}
+      },
+      "sources": {"supplier": {"locator": "https://www.lionbrand.com/community/blog/get-know-247-cotton/", "title": "Lion Brand: Get To Know 24/7 Cotton", "accessed": "2026-10-13"}},
+      "notes": ["A yarn record cannot be used as a fabric without construction characterization."]
+    },
+    {
+      "id": "rbtr_apex_25", "name": "Climashield APEX 2.5 oz continuous-filament insulation", "form": "fill",
+      "composition": {}, "identity_source": "supplier",
+      "construction": {"process": "continuous filament", "scrim": "none", "manufacturer": "Harvest CI"},
+      "properties": {
+        "areal_mass": {"value": 2.5, "unit": "oz/yd2", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal product weight."},
+        "thickness": {"value": 0.6, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Listed loft, compression/preload unspecified."},
+        "width": {"value": 60, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal width."}
+      },
+      "sources": {"supplier": {"locator": "https://ripstopbytheroll.com/collections/climashield-insulation/products/climashield-apex-2-5-oz-sq-yd", "title": "RBTR Climashield APEX 2.5 oz specifications", "accessed": "2026-10-13"}},
+      "notes": ["Source dry-clo row has ambiguous units; deliberately NOT interpreted as absolute thermal resistance. Wet clo unspecified. This fill is not a load-bearing sheet."]
+    },
+    {
+      "id": "allied_hyperdry_goose_850", "name": "Allied HyperDRY 850 FP goose down", "form": "fill",
+      "composition": {"goose_down": 1.0}, "identity_source": "supplier",
+      "construction": {"treatment": "HyperDRY water-resistant", "manufacturer": "Allied Feather and Down"},
+      "properties": {
+        "fill_power": {"value": 850, "unit": "FP", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier rating; test conditioning/protocol unspecified. Not a garment warmth or temperature rating."}
+      },
+      "sources": {"supplier": {"locator": "https://ripstopbytheroll.com/collections/all-products-except-full-rolls/products/hyperdry-850-fp-dwr-goose-down", "title": "RBTR HyperDRY 850 FP Goose Down specifications", "accessed": "2026-10-13"}},
+      "notes": ["Requires fill mass, chamber volume, compression and moisture characterization before thermal simulation."]
+    }
+  ]
+}

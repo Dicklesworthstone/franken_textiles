@@ -24,6 +24,7 @@ pub mod polyline;
 pub mod py;
 pub mod receipt;
 pub mod refusal;
+pub mod textile;
 pub mod vec;
 
 pub use curve::{Curve, CurveError, CurveKind};
