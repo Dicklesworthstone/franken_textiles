@@ -19,7 +19,7 @@ pub use fusion::{fuse_one, normalize_record};
 pub use priors::{age_from_stature, cdc_stature, priors_for};
 pub use readiness::{ReadinessOptions, garment_catalogue, garment_kind, readiness};
 pub use records::{date_day, make_record, parse_value, validate};
-pub use round::{format_round_readiness, round_readiness};
+pub use round::{format_round_readiness, garment_checks, round_readiness};
 
 use ftx_core::{Refusal, RefusalCode};
 

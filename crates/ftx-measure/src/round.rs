@@ -12,12 +12,11 @@ fn append_unique(out: &mut Vec<Value>, values: &Value) {
     }
 }
 
-/// Select garment checks from pattern piece roles, including closed cuffs and nappy/elastic-waist
-/// requirements. This function is clock-free and does not depend on pattern or browser types.
-/// Legacy flat measurement maps have unknown provenance and return `NOT_CHECKED`, not `READY`.
-/// A failed readiness computation is likewise explicit, never silently promoted to evidence.
+/// The measurement gates a pattern needs, from its piece roles, each with its own options (spec 04
+/// §11.6, the reference's `readiness_checks`): a sleeve's closed cuff, trousers' elastic waist, a
+/// gathered cuff's level and nappies.
 #[must_use]
-pub fn round_readiness(pattern: &Value, measurements: &Value, as_of: &str) -> Value {
+pub fn garment_checks(pattern: &Value) -> Vec<(&'static str, ReadinessOptions<'_>)> {
     let roles: Vec<&str> = pattern["pieces"]
         .as_array()
         .into_iter()
@@ -26,53 +25,87 @@ pub fn round_readiness(pattern: &Value, measurements: &Value, as_of: &str) -> Va
         .collect();
     let has = |role| roles.contains(&role);
     let style = &pattern["meta"]["style"];
-    let mut kinds = Vec::new();
+    let elastic_waist = has("waistband");
+    let mut out = Vec::new();
     if has("bodice_front") || has("bodice_back") {
-        kinds.push("bodice");
+        out.push(("bodice", ReadinessOptions::default()));
     }
     if has("sleeve") {
-        kinds.push("set_in_sleeve");
+        out.push((
+            "set_in_sleeve",
+            ReadinessOptions {
+                closed_cuff: true,
+                ..Default::default()
+            },
+        ));
     }
     if has("pant_front") || has("pant_back") {
-        kinds.push(if has("cuff") {
-            "full_trousers_gathered"
+        out.push(if has("cuff") {
+            (
+                "full_trousers_gathered",
+                ReadinessOptions {
+                    elastic_waist,
+                    cuff_level: style["cuff_level"].as_str().unwrap_or("calf"),
+                    nappies: (style["nappy"] == true).then_some(true),
+                    ..Default::default()
+                },
+            )
         } else {
-            "trousers"
+            (
+                "trousers",
+                ReadinessOptions {
+                    elastic_waist,
+                    ..Default::default()
+                },
+            )
         });
     }
     if has("hat_crown") || has("hat_tip") {
-        kinds.push("hat_fez");
+        out.push(("hat_fez", ReadinessOptions::default()));
     }
+    out
+}
+
+/// Select garment checks from pattern piece roles ([`garment_checks`]). This function is clock-free
+/// and does not depend on pattern or browser types. Legacy flat measurement maps have unknown
+/// provenance and return `NOT_CHECKED`, not `READY`. A failed readiness computation is likewise
+/// explicit, never silently promoted to evidence.
+#[must_use]
+pub fn round_readiness(pattern: &Value, measurements: &Value, as_of: &str) -> Value {
+    let kinds = garment_checks(pattern);
     let empty = |note: String| {
         json!({"schema":"fabric-round-readiness/1", "status":"NOT_CHECKED",
         "checks":[], "blocking":[], "remeasure_request":[], "advisories":[], "note":note})
     };
     if kinds.is_empty() {
-        return empty("no garment roles in the pattern".into());
+        return empty("no piece roles: cannot tell which measurements this garment needs".into());
     }
     if measurements.get("records").is_none() {
-        return empty("measurements have no records; provenance is unknown".into());
+        return empty(
+            "the measurements file has no records (plain name -> value): provenance unknown".into(),
+        );
     }
-    let options = ReadinessOptions {
-        closed_cuff: true,
-        elastic_waist: has("waistband"),
-        cuff_level: style["cuff_level"].as_str().unwrap_or("calf"),
-        nappies: (style["nappy"] == true).then_some(true),
-        ..Default::default()
-    };
     let (mut checks, mut blocking, mut requests, mut advisories, mut real) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for kind in kinds {
+    for (kind, options) in kinds {
         let result = match readiness(measurements, kind, &options, as_of) {
             Ok(r) => r,
-            Err(e) => return empty(format!("measurement readiness failed: {}", e.message)),
+            Err(e) => {
+                return empty(format!(
+                    "{kind}: readiness could not be computed ({})",
+                    e.message
+                ));
+            }
         };
         checks.push(
-            json!({"garment":kind, "status":result["status"], "blocking":result["blocking"]}),
+            json!({"garment":result["garment"], "status":result["status"], "blocking":result["blocking"]}),
         );
         append_unique(&mut blocking, &result["blocking"]);
         append_unique(&mut requests, &result["remeasure_request"]);
-        append_unique(&mut advisories, &result["advisories"]);
+        // a reference body's advisories are about its priors, not a wearer
+        if result["status"] != "READY_REFERENCE" {
+            append_unique(&mut advisories, &result["advisories"]);
+        }
         append_unique(&mut real, &result["for_real_child"]);
     }
     let status = if checks.iter().any(|r| r["status"] == "NOT_READY") {
@@ -84,12 +117,8 @@ pub fn round_readiness(pattern: &Value, measurements: &Value, as_of: &str) -> Va
     };
     let mut out = json!({"schema":"fabric-round-readiness/1", "status":status, "checks":checks,
         "blocking":blocking, "remeasure_request":requests, "advisories":advisories});
-    if status == "READY_REFERENCE" {
-        out["advisories"] = json!([]);
+    if !real.is_empty() {
         out["for_real_child"] = json!(real);
-        out["note"] = json!(
-            "Reference wearer built from public size charts; this is not measured evidence for a real wearer."
-        );
     }
     out
 }
