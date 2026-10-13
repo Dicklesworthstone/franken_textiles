@@ -111,6 +111,44 @@ impl Coo {
     }
 }
 
+/// A fixed CSR pattern filled in place. Each value goes straight to its slot; a slot starts at −0.0
+/// (the identity of IEEE addition: −0.0 + v = v for every v) and sums its contributions in insertion
+/// order, so the result equals [`Coo::assemble`] of the same insertion sequence bit for bit, without
+/// staging or sorting triplets. Every slot of the pattern must receive at least one contribution for
+/// that equality (an untouched slot stays −0.0 where `Coo` would have no entry).
+#[derive(Debug, Clone)]
+pub struct CsrFill {
+    csr: Csr,
+}
+
+impl CsrFill {
+    /// The pattern of `pattern`, every value −0.0.
+    #[must_use]
+    pub fn new(pattern: &Csr) -> CsrFill {
+        let mut csr = pattern.clone();
+        csr.vals.fill(-0.0);
+        CsrFill { csr }
+    }
+
+    /// Adds `val` at (row, col).
+    ///
+    /// # Panics
+    /// When (row, col) is not in the pattern (a mis-indexed element is a programmer error).
+    pub fn add(&mut self, row: usize, col: usize, val: f64) {
+        let (lo, hi) = (self.csr.row_ptr[row], self.csr.row_ptr[row + 1]);
+        let k = self.csr.col_idx[lo..hi]
+            .binary_search(&col)
+            .unwrap_or_else(|_| panic!("csr fill: ({row},{col}) is not in the pattern"));
+        self.csr.vals[lo + k] += val;
+    }
+
+    /// The filled matrix.
+    #[must_use]
+    pub fn finish(self) -> Csr {
+        self.csr
+    }
+}
+
 /// Compressed sparse row; within each row, column indices are strictly ascending.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Csr {
@@ -271,6 +309,36 @@ pub(crate) mod tests {
             }
         }
         coo.assemble()
+    }
+
+    #[test]
+    fn fill_equals_coo_bit_for_bit() {
+        // duplicates in an awkward order, signed zeros and values whose sum depends on the order
+        let pushes: [(usize, usize, f64); 9] = [
+            (1, 0, 1e16),
+            (0, 0, -0.0),
+            (1, 0, 1.0),
+            (0, 1, 0.1),
+            (1, 0, -1e16),
+            (0, 1, 0.2),
+            (1, 1, -0.0),
+            (1, 1, -0.0),
+            (0, 1, 0.3),
+        ];
+        let mut coo = Coo::new(2, 2);
+        for &(r, c, v) in &pushes {
+            coo.push(r, c, v);
+        }
+        let want = coo.assemble();
+        let mut fill = CsrFill::new(&want);
+        for &(r, c, v) in &pushes {
+            fill.add(r, c, v);
+        }
+        let got = fill.finish();
+        assert_eq!(got.row_ptr, want.row_ptr);
+        assert_eq!(got.col_idx, want.col_idx);
+        let bits = |c: &Csr| c.vals.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&got), bits(&want), "{:?} vs {:?}", got.vals, want.vals);
     }
 
     #[test]

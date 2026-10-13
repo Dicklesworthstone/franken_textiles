@@ -41,7 +41,7 @@ fixtures). Drafting, alteration, exports, tracing, the round and the browser bui
 | Is there a Cargo workspace with code? | **Partly**: `ftx-core`, `ftx-body`, `ftx-pattern`, `ftx-drape`, `ftx-cli` and `ftx-conformance` (tests pass natively and, where run, as wasm under Node); `ftx-measure`, `ftx-export`, `ftx-trace` and `ftx-wasm` are planned |
 | Can I run it? | **Yes, two commands**: `ftx validate PATTERN --measurements M --fit F` (the reference's validation table and exit codes) and `ftx drape PATTERN --measurements M --fit F --out DIR` (an Anny body of the wearer's age and sex fitted to their tape measurements, the drape, the fit flags, and a self-contained 3D fold-up page). Both take `--json` |
 | Does the body model work? | **Yes, in Rust**: the Anny forward model matches the Python package on 16 reference bodies (newborn to adult, extremes, local changes, two poses) to 1e-14 m, about 0.3–0.4 ms per body against 7 ms upstream. The drape poses (A-pose 35°/50°, arms up, seated, squat, with a ramp from rest and an optional nappy) match the package to 1e-15 m, and the skin comes out as a checked, closed, outward-wound mesh for contact. It is fitted to a wearer's tape measurements (stature, chest, waist, hip, waist and crotch heights, read the way a tape reads them: convex hulls of body sections) by Levenberg–Marquardt in about half a second; measurements drawn from the model itself are recovered within 0.03 mm. A body fitted to stature alone was 62–75 mm too small round the chest, waist and hip of the 92 cm reference toddler |
-| Does the drape solver exist? | **Yes, and it drapes a drafted garment on a realistic body**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica). Barrier contact on the thickness-offset gap with Coulomb friction passes its own: a ring on a cylinder holds below 2πμT and slides above it, a ring on a cone slides iff tan α > μ, and tight and loose tubes settle at the predicted strain and clearance. Results are bit-identical native and in wasm. The garment mesh and start state match the reference (all 42,003 triangles; pre-sew and relaxation to 1e-12 m), and the drafted bolero sews and drapes on an Anny toddler in about two and a half minutes (picture below) with no fit flag. The metrics and flags match the reference's to the bit on recorded drapes, and the fold-up animation plays in a self-contained page. The drafted trousers drape too, but their waistband slides down: elastics, gathers as a material field and self-contact are next, and the reference still judges fit in Blender |
+| Does the drape solver exist? | **Yes, and it drapes a drafted garment on a realistic body**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica). Barrier contact on the thickness-offset gap with Coulomb friction passes its own: a ring on a cylinder holds below 2πμT and slides above it, a ring on a cone slides iff tan α > μ, and tight and loose tubes settle at the predicted strain and clearance. Results are bit-identical native and in wasm. The garment mesh and start state match the reference (all 42,003 triangles; pre-sew and relaxation to 1e-12 m), and the drafted bolero and trousers sew and drape on an Anny toddler fitted to the wearer's tape (about 1 and 8 minutes on a laptop; pictures below) with no fit flag. Compression is as stiff as tension except in gather zones, as in the reference. The metrics and flags match the reference's to the bit on recorded drapes, and the fold-up animation plays in a self-contained page. Self-contact and more speed are next, and the reference still judges fit in Blender |
 | Has anything been benchmarked? | **No**. Every number in the plan is a target or a measurement of the reference |
 
 The plan is written to be falsifiable: it names kill gates that can stop the body port or the drape solver
@@ -106,12 +106,17 @@ and drape. FrankenTextiles keeps the animation and the metrics and replaces both
 
 <div align="center">
 <img src="docs/images/bolero-on-anny-92cm.jpg" alt="The same drafted bolero sewn and draped on a realistic 92 cm toddler body, front, side and back" width="840">
+<img src="docs/images/trousers-on-anny-92cm.jpg" alt="The drafted zouave trousers sewn and draped on the same toddler body: gathered waistband, full legs, gathered cuffs below the knee" width="840">
 </div>
 
-*The same drafted bolero, sewn and draped by FrankenTextiles on an Anny body of the reference wearer's
-age and stature (2.5 years, 920 mm, drape pose with straightened arms): seams welded, barrier contact with
-Coulomb friction, 12 sewing and 36 draping steps of 1/24 s (`cargo run --release -p ftx-drape --example
-drape_drafted`). The body is synthetic; no real child is measured or shown in this repository.*
+*The same drafted bolero and the zouave trousers, sewn and draped by FrankenTextiles on an Anny body of the
+reference wearer's age fitted to the wearer's tape (2.5 years; stature, chest, waist, hip, waist and crotch
+heights within 0.1 mm; drape pose with straightened arms): seams welded, barrier contact with Coulomb
+friction, 12 sewing and 36 draping steps of 1/24 s (`cargo run --release -p ftx-drape --example
+drape_drafted -- OUT zouave_trousers-920`). Neither raises a fit flag; the trousers' waistband and cuffs
+end within 6 mm of where they were drafted to sit. On a body fitted to stature alone (62–75 mm smaller
+round the chest, waist and hip) the same trousers slid 63 mm down. The body is synthetic; no real child is
+measured or shown in this repository.*
 
 The drape solver (plan §11) minimises an incremental potential each time step: inertia, an orthotropic
 membrane rotated to each piece's grainline, bending, a tension-only elastic, seams welded exactly, Incremental

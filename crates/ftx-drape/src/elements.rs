@@ -65,6 +65,9 @@ pub struct Local<const N: usize, const NN: usize> {
     pub grad: [f64; N],
     /// Hessian, row-major.
     pub hess: [f64; NN],
+    /// The Hessian is positive semidefinite by construction (exactly, before rounding), so projecting
+    /// it would change nothing but rounding: projected Newton skips it.
+    pub psd: bool,
 }
 
 impl MembraneElement {
@@ -193,10 +196,20 @@ impl MembraneElement {
                 }
             }
         }
+        // PSD by construction when the geometric part's 2 × 2 stress matrix M = [[σ₁φ₁', σ₁₂], [σ₁₂,
+        // σ₂φ₂']] is (it enters as G·M·Gᵀ ⊗ I₃) and no softening curvature term σᵢφᵢ'' is negative; the
+        // material part A·BᵀQB is PSD for PSD Q.
+        let (m11, m22) = (sigma[0] * dphi[0], sigma[1] * dphi[1]);
+        let psd = m11 >= 0.0
+            && m22 >= 0.0
+            && m11 * m22 >= sigma[2] * sigma[2]
+            && sigma[0] * ddphi[0] >= 0.0
+            && sigma[1] * ddphi[1] >= 0.0;
         Local {
             energy: 0.5 * self.area * (eff[0] * sigma[0] + eff[1] * sigma[1] + eff[2] * sigma[2]),
             grad,
             hess,
+            psd,
         }
     }
 }
@@ -309,6 +322,8 @@ impl Hinge {
             energy: 0.5 * c * s.norm2(),
             grad,
             hess,
+            // B·w·(k kᵀ ⊗ I₃): a Gram matrix
+            psd: c >= 0.0,
         }
     }
 }
@@ -364,6 +379,63 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Whenever an element says its Hessian is PSD by construction, its eigenvalues are ≥ −rounding;
+    /// and both answers occur over the sample (stretched and compressed states).
+    #[test]
+    fn psd_by_construction_holds() {
+        let mat = Membrane::orthotropic(800.0, 400.0, 0.2, 60.0, 0.05);
+        let rest = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.012, 0.001),
+            Vec2::new(0.003, 0.010),
+        ];
+        let e = MembraneElement::new([0, 1, 2], rest).unwrap();
+        let mut seed = 7u64;
+        let (mut yes, mut no) = (0, 0);
+        for _ in 0..400 {
+            let s = 1.0 + 0.2 * lcg(&mut seed);
+            let x: Vec<Vec3> = rest
+                .iter()
+                .map(|r| {
+                    Vec3::new(
+                        s * r.x + 0.002 * lcg(&mut seed),
+                        s * r.y + 0.002 * lcg(&mut seed),
+                        0.002 * lcg(&mut seed),
+                    )
+                })
+                .collect();
+            let l = e.local(&x, &mat);
+            let (vals, _) = crate::eigen::jacobi_eigh(&l.hess, 9);
+            let scale = vals.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            if l.psd {
+                yes += 1;
+                assert!(vals[0] >= -1e-10 * scale, "{vals:?}");
+            } else {
+                no += 1;
+            }
+        }
+        assert!(yes > 20 && no > 20, "{yes} PSD, {no} not");
+        let hinge = Hinge::new(
+            [0, 1, 2, 3],
+            [
+                Vec2::new(0.0, 0.0),
+                Vec2::new(0.01, 0.0),
+                Vec2::new(0.004, 0.008),
+                Vec2::new(0.006, -0.009),
+            ],
+        )
+        .unwrap();
+        let x = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.01, 0.0, 0.0),
+            Vec3::new(0.004, 0.008, 0.003),
+            Vec3::new(0.006, -0.009, 0.002),
+        ];
+        let l = hinge.local(&x, 1e-5);
+        let (vals, _) = crate::eigen::jacobi_eigh(&l.hess, 12);
+        assert!(l.psd && vals[0] >= -1e-12 * vals[11], "{vals:?}");
     }
 
     #[test]

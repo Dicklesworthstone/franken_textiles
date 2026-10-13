@@ -718,6 +718,7 @@ impl SymbolicLdlt {
             // Factor the fully-summed block with restricted pivoting.
             let mut local2var = front_local;
             let mut dblocks: Vec<DBlock> = Vec::new();
+            let mut deferred: Vec<Deferred> = Vec::new();
             let mut k = 0usize;
             while k < wf {
                 let choice = choose_pivot(&f, m, wf, k, opts, zero_tol);
@@ -738,16 +739,19 @@ impl SymbolicLdlt {
                         for i in k + 1..m {
                             f[i + k * m] /= d;
                         }
-                        for jc in k + 1..m {
+                        // Fully-summed columns now (mirrored inside the fully-summed block, which the
+                        // pivot search reads both ways); the panel block after the loop.
+                        for jc in k + 1..wf {
                             let cj = d * f[jc + k * m];
                             for i in jc..m {
                                 let t = f[i + k * m] * cj;
                                 f[i + jc * m] -= t;
-                                if i != jc {
+                                if i != jc && i < wf {
                                     f[jc + i * m] = f[i + jc * m];
                                 }
                             }
                         }
+                        deferred.push(Deferred::One { col: k, d });
                         stats.flops += ((m - k) as u64) * ((m - k) as u64);
                         k += 1;
                     }
@@ -787,17 +791,23 @@ impl SymbolicLdlt {
                             f[i + k * m] = l1;
                             f[i + (k + 1) * m] = l2;
                         }
-                        for (jdx, jc) in (k + 2..m).enumerate() {
+                        for (jdx, jc) in (k + 2..wf).enumerate() {
                             let aj = acol[jdx];
                             let bj = bcol[jdx];
                             for i in jc..m {
                                 let t = f[i + k * m].mul_add(aj, f[i + (k + 1) * m] * bj);
                                 f[i + jc * m] -= t;
-                                if i != jc {
+                                if i != jc && i < wf {
                                     f[jc + i * m] = f[i + jc * m];
                                 }
                             }
                         }
+                        // the panel rows' pre-scaling column values, for the deferred update
+                        deferred.push(Deferred::Two {
+                            col: k,
+                            a: acol[wf - (k + 2)..].to_vec(),
+                            b: bcol[wf - (k + 2)..].to_vec(),
+                        });
                         stats.flops += 2 * ((m - k) as u64) * ((m - k) as u64);
                         // The intra-pair coupling lives in D, not L: the
                         // 2×2 block is eliminated jointly, so L's strict
@@ -830,6 +840,35 @@ impl SymbolicLdlt {
             let delayed_here = wf - k_elim;
             stats.pivots_delayed += delayed_here;
 
+            // The panel block's Schur updates, deferred from the pivots above. Nothing read the
+            // block during the elimination (the pivot search and the swaps stay in the fully-summed
+            // columns) and each entry still receives its updates in pivot order with the same
+            // operands, so the result is bit-identical to updating it pivot by pivot with its mirror,
+            // without the strided upper-triangle writes and one column at a time. Only its lower
+            // triangle is kept; the update below reads that.
+            for jc in wf..m {
+                for p in &deferred {
+                    match p {
+                        Deferred::One { col, d } => {
+                            let k = *col;
+                            let cj = d * f[jc + k * m];
+                            for i in jc..m {
+                                let t = f[i + k * m] * cj;
+                                f[i + jc * m] -= t;
+                            }
+                        }
+                        Deferred::Two { col, a, b } => {
+                            let k = *col;
+                            let (aj, bj) = (a[jc - wf], b[jc - wf]);
+                            for i in jc..m {
+                                let t = f[i + k * m].mul_add(aj, f[i + (k + 1) * m] * bj);
+                                f[i + jc * m] -= t;
+                            }
+                        }
+                    }
+                }
+            }
+
             // Harvest L: unit-diagonal dense trapezoid, col-major m×k_elim.
             let mut l = vec![0.0f64; m * k_elim];
             for c in 0..k_elim {
@@ -852,7 +891,9 @@ impl SymbolicLdlt {
                 let mut data = vec![0.0f64; remaining * remaining];
                 for cj in 0..remaining {
                     for ri in 0..remaining {
-                        data[ri + cj * remaining] = f[(k_elim + ri) + (k_elim + cj) * m];
+                        // from the lower triangle: above it the panel columns are not kept
+                        let (r, c) = (k_elim + ri.max(cj), k_elim + ri.min(cj));
+                        data[ri + cj * remaining] = f[r + c * m];
                     }
                 }
                 live_update_bytes += data.len() * 8;
@@ -1091,6 +1132,18 @@ fn swap_sym(f: &mut [f64], m: usize, a: usize, b: usize) {
 struct Update {
     vars: Vec<usize>,
     data: Vec<f64>,
+}
+
+/// A pivot's update of the panel block, applied after the fully-summed columns are eliminated.
+enum Deferred {
+    /// 1×1 pivot at local column `col` with value `d` (L's column holds the scaled entries).
+    One { col: usize, d: f64 },
+    /// 2×2 pivot at `col`, `col + 1`: the panel rows' entries of both columns before scaling.
+    Two {
+        col: usize,
+        a: Vec<f64>,
+        b: Vec<f64>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -18,6 +18,10 @@ use crate::start::{MM, edge_strain, face_edges};
 /// Frames averaged for the final shape (collision jitter).
 pub const AVG_FRAMES: usize = 15;
 
+/// Fewest frames the metrics can judge: settledness compares the mean of the last w frames with the
+/// mean of the w before the previous w, w ≥ 2.
+pub const MIN_FRAMES: usize = 6;
+
 /// What the metrics read besides the mesh.
 pub struct MetricsInput<'a> {
     /// The pattern (instances' edges, placements and roles).
@@ -82,7 +86,7 @@ fn fraction(flags: impl Iterator<Item = bool>) -> f64 {
 /// The report (`sim_report.json`'s metric fields, flags, gating and tightness gating).
 ///
 /// # Panics
-/// When `seq` has fewer frames than `sew_end` or is empty (a caller bug).
+/// When `seq` has fewer than [`MIN_FRAMES`] frames or fewer than `sew_end` (a caller bug).
 #[must_use]
 #[allow(clippy::too_many_lines)] // one pass, in the reference's order
 pub fn metrics(mesh: &GarmentMesh, input: &MetricsInput) -> Value {

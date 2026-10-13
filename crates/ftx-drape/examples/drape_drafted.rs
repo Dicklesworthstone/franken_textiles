@@ -3,7 +3,7 @@
 //! [drape_steps]` (default case `zouave_bolero-920`). Needs the converted Anny model. Writes the body,
 //! the start state and the draped garment as OBJ files, `sim_report.json`, and the fold-up as `fold.pc2`,
 //! `mesh_map.json` and a self-contained `fold_viewer.html`. For experiments: `FTX_STEP` (s, default
-//! 1/24), `FTX_MU` (0.4) and `FTX_EPS_V` (m/s, 1e-3). `ftx drape` does the same for any pattern.
+//! 1/24), `FTX_MU` (0.4), `FTX_EPS_V` (m/s, 1e-3) and `FTX_COMPRESSION` (1). `ftx drape` does the same for any pattern.
 
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -53,6 +53,7 @@ fn main() {
     opts.step = env("FTX_STEP", opts.step);
     opts.contact.mu = env("FTX_MU", opts.contact.mu);
     opts.contact.eps_v = env("FTX_EPS_V", opts.contact.eps_v);
+    opts.compression = env("FTX_COMPRESSION", opts.compression);
     std::fs::create_dir_all(&out).expect("output directory");
 
     let drafts: Value = serde_json::from_str(

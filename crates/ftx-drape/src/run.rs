@@ -5,7 +5,7 @@
 use ftx_body::BodyFrames;
 use ftx_core::np::percentile;
 use ftx_core::py::round;
-use ftx_core::{Refusal, Vec3};
+use ftx_core::{Refusal, RefusalCode, Vec3};
 use ftx_pattern::Pattern;
 use serde_json::{Value, json};
 
@@ -15,7 +15,7 @@ use crate::animation::{
 };
 use crate::contact::ContactParams;
 use crate::garment::build_garment;
-use crate::metrics::{MetricsInput, metrics};
+use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{Fabric, PartFrames, PhaseReport, Scene, build_scene, run_phase};
 use crate::start::{edge_strain, face_edges};
@@ -45,15 +45,17 @@ pub struct DrapeOptions {
     pub step: f64,
     /// Newton tolerance on ‖Δx‖∞/h (m/s).
     pub tol: f64,
-    /// Compression stiffness as a fraction of tension.
+    /// Compression stiffness as a fraction of tension, outside gather zones (inside them it falls to
+    /// [`crate::start::GATHER_COMPRESSION`] at the gathered seam).
     pub compression: f64,
     /// Contact and friction.
     pub contact: ContactParams,
 }
 
 impl Default for DrapeOptions {
-    /// 12 mm mesh, 12 sewing and 36 draping steps of 1/24 s, Newton to 1e-4 m/s, 5 % compression
-    /// stiffness, ĝ 1 mm, the cloth's mid-surface 1.5 mm off the body, μ 0.4.
+    /// 12 mm mesh, 12 sewing and 36 draping steps of 1/24 s, Newton to 1e-4 m/s, compression as stiff
+    /// as tension outside gather zones (the reference's `tension = compression = E_t·L`, spec 04 §5.3),
+    /// ĝ 1 mm, the cloth's mid-surface 1.5 mm off the body, μ 0.4.
     fn default() -> Self {
         Self {
             spacing: 12.0,
@@ -61,7 +63,7 @@ impl Default for DrapeOptions {
             drape_steps: 36,
             step: 1.0 / 24.0,
             tol: 1e-4,
-            compression: 0.05,
+            compression: 1.0,
             contact: ContactParams {
                 dhat: 1e-3,
                 thickness: 1.5e-3,
@@ -120,7 +122,8 @@ fn strings(v: &Value) -> Vec<String> {
 /// Drapes `pattern` on `body`, calling `progress` with a line per stage.
 ///
 /// # Errors
-/// Refusals from meshing, placement, the start state, the cloth model, contact or the solver.
+/// [`RefusalCode::OutOfRange`] for fewer than [`MIN_FRAMES`] steps in all; refusals from meshing,
+/// placement, the start state, the cloth model, contact or the solver.
 pub fn drape(
     pattern: &Pattern,
     fit_spec: &Value,
@@ -128,6 +131,19 @@ pub fn drape(
     opts: &DrapeOptions,
     mut progress: impl FnMut(&str),
 ) -> Result<DrapeRun, Refusal> {
+    if opts.sew_steps + opts.drape_steps < MIN_FRAMES {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "{} sewing and {} draping steps: the fit metrics need at least {MIN_FRAMES} in all \
+                 (settledness compares the means of the last frames)",
+                opts.sew_steps, opts.drape_steps
+            ),
+        )
+        .repair(format!(
+            "ask for at least {MIN_FRAMES} steps (--sew, --drape)"
+        )));
+    }
     let mesh = build_garment(pattern, opts.spacing)?;
     let fabric = Fabric::of(pattern);
     let mut scene = build_scene(

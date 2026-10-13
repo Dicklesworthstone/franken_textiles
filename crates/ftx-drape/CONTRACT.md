@@ -38,7 +38,15 @@ against the drape body), untangled, welded and handed to the solver with contact
 - Rest coordinates per piece in metres with the grainline along +u; welding merges each sewing group into
   one vertex and keeps every triangle's own rest coordinates, so eased and gathered seams are strained,
   not rewritten. Fabric from `pattern.fabric` over the reference's defaults (spec 04 §5.3); membrane
-  E1 = E2 = tensile, ν = 0, G = 0.2·tensile, compression softened to a given fraction.
+  E1 = E2 = tensile, ν = 0, G = 0.2·tensile; compression as stiff as tension by default (the reference's
+  `tension = compression = E_t·L`, spec 04 §5.3) and in gather zones softer, down to 3 % at a gathered
+  seam (the reference's `GATHER_COMPRESSION`), linearly in each element's mean gather weight
+  (`ClothModel::set_compression`, the reference's vertex-weighted structural stiffness). An earlier
+  default softened compression to 5 % everywhere: against it, on the tape-fitted toddler, the bolero
+  took 436 Newton iterations instead of 808 (none unconverged) with every fit reading within 3 mm and the
+  same verdict, and the trousers 838 instead of 924 with their bands within 3 mm and the two crotch-seam
+  "distorted" advisories gone (p90 strain 4.8–4.9 % instead of 9–10 %: crowding of near-free
+  compression).
 - Untangling: crossings the exact audit still finds after relaxation are removed by moving the crossing
   cloth edge's ends (or the pierced cloth triangle) 2 mm above the crossed body triangle (or ridge), in
   rounds of up to 50; a piece wholly inside the body is refused.
@@ -49,9 +57,15 @@ against the drape body), untangled, welded and handed to the solver with contact
 The drape body (`ftx_body::trimmed_skin`) leaves out the hands and feet; with Anny's bent elbows a
 straight sleeve crossed the forearm, so the drape pose straightens the arms (`Pose::drape`). The drafted
 92 cm bolero builds a clean start on the 92 cm Anny toddler (no crossings, 600 relaxation iterations,
-p95 strain 0.115). Speed is the open problem: about 0.2 s per Newton iteration and 80–110 projected
-iterations per 1/24 s step for its 5,800 DOFs (factorization 40 %, PSD projection 19 %, contact 8 % of
-the time before the assembly sort was replaced).
+p95 strain 0.115). Speed is the open problem. The first sewing steps take up to 100 projected Newton
+iterations per solve (full steps creeping through soft wrinkle modes after the CCD-bounded first
+twenty); profiled on 4 sewing steps, the numeric factorization took 36 % of the time, the Jacobi
+eigendecompositions of the PSD projection 31 %, contact queries 8 % and assembly 9 %. Two changes
+since, measured interleaved against the previous build on 6 sewing steps of the bolero (same 347
+iterations): skipping the projection of element Hessians that are PSD by construction (66–75 s → 56 s)
+and deferring the factorization's panel updates (→ 45–50 s); assembly now fills the fixed pattern in
+place (bit-identical, no triplet sort). With compression at the reference's stiffness (above) the whole
+bolero drape takes about 70 s and the trousers about 7.5 minutes.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
@@ -68,7 +82,11 @@ frame (+u along the grain).
 **Solver.** Exact Hessian first; when the LDLᵀ inertia shows a negative eigenvalue, element blocks are
 projected to PSD (negative eigenvalues zeroed) for the rest of that solve (retrying the exact Hessian
 cost a second assembly and factorization nearly every iteration on a garment); steepest descent if even
-that is singular. Tried on the bolero and not kept: flipping negative eigenvalues instead of zeroing them
+that is singular. A block that is PSD by construction is not projected (`Local::psd`): every hinge (a
+Gram matrix), and a membrane whose geometric stress matrix [[σ₁φ₁', σ₁₂], [σ₁₂, σ₂φ₂']] is PSD with no
+negative softening term σᵢφᵢ''. Projecting those had only rebuilt them from Jacobi eigenvectors after a
+rounding-level negative eigenvalue: the change moved the bolero's positions by at most 9e-13 m, left its
+report identical and re-pinned the contact digest (native and wasm agree). Tried on the bolero and not kept: flipping negative eigenvalues instead of zeroing them
 (more iterations), and a membrane Hessian with its stress clamped to the non-negative part instead of
 eigen-projection (cheaper iterations, 2.7× as many in the drape, slower overall). The symbolic analysis is computed once,
 ordered by AMD on the vertex graph and expanded to the free DOFs (the pattern never changes: every
@@ -142,13 +160,16 @@ digest differ.
 
 **Lifted code** (frankensim `93fc9b26`, MIT + rider, provenance headers): `sparse/` (CSR assembly and the
 multifrontal LDLᵀ with AMD and inertia; adds `analyze_with_permutation`; assembly orders triplets by a
-row-bucket pass instead of a global stable sort, the same order), `eigen.rs` (`jacobi_eigh`).
+row-bucket pass instead of a global stable sort, the same order; the numeric factorization applies the
+panel block's Schur updates after the fully-summed columns, column by column and in pivot order, keeping
+only its lower triangle: bit-identical, both KAT digests unchanged), `eigen.rs` (`jacobi_eigh`).
 
 **Error model.** `Refusal`: `degenerate_geometry` (bad triangles, non-manifold edges), `out_of_range`
 (non-positive density or step), `non_finite` (state blew up), `not_converged` (symbolic analysis failed),
 `intersecting_start` (the cloth starts on or through the body). A step that does not converge is reported
 (`SolveReport`), not refused.
 
-**No claims.** Cloth self-contact; a moving body; seams, gathers and elastics; fabric parameters (they are inputs; plan §11, research 07 §2.7); performance
-targets (§11.7; assembly re-sorts triplets and contact re-queries the grid each iteration, a precomputed
-scatter map and cached candidates are the planned speed-ups).
+**No claims.** Cloth self-contact; a moving body; elastic grip (as in the reference, a casing is simulated
+at its finished size, `sim_scale`, and whether the elastic holds is a flat check); fabric parameters (they are inputs; plan §11, research 07 §2.7); performance
+targets (§11.7; contact re-queries the grid each iteration, and cached candidates are the planned
+speed-up).

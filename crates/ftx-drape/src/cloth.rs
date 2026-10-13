@@ -12,7 +12,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::eigen::project_psd;
 use crate::elements::{Hinge, Membrane, MembraneElement};
-use crate::sparse::{Coo, Csr, LdltOptions, SymbolicLdlt, amd_order};
+use crate::sparse::{Coo, Csr, CsrFill, LdltOptions, SymbolicLdlt, amd_order};
 
 /// Edge (lo, hi) → its uses as (edge start, edge end, opposite vertex, triangle).
 type EdgeUses = std::collections::BTreeMap<(usize, usize), Vec<(usize, usize, usize, usize)>>;
@@ -30,6 +30,9 @@ pub struct ClothModel {
     pub mass: Vec<f64>,
     /// Membrane material.
     pub membrane: Membrane,
+    /// Compression factor of each membrane element, per direction (`membrane.compression` unless set by
+    /// [`ClothModel::set_compression`]); [`ClothModel::material`] combines the two.
+    pub compression: Vec<[f64; 2]>,
     /// Bending stiffness B (N·m, flexural rigidity per unit width).
     pub bending: f64,
 }
@@ -178,6 +181,7 @@ impl ClothModel {
         }
         Ok(Self {
             rest: rest.into_iter().map(Option::unwrap_or_default).collect(),
+            compression: vec![membrane.compression; membranes.len()],
             membranes,
             hinges,
             mass,
@@ -186,13 +190,49 @@ impl ClothModel {
         })
     }
 
+    /// Sets each membrane element's compression factor (both directions), e.g. softer where gathers
+    /// draw the cloth up.
+    ///
+    /// # Errors
+    /// [`RefusalCode::OutOfRange`] unless there is one factor per element, each in (0, 1].
+    pub fn set_compression(&mut self, per_element: &[f64]) -> Result<(), Refusal> {
+        if per_element.len() != self.membranes.len() {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "{} compression factors for {} membrane elements",
+                    per_element.len(),
+                    self.membranes.len()
+                ),
+            ));
+        }
+        if let Some(c) = per_element.iter().find(|c| !(**c > 0.0 && **c <= 1.0)) {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!("compression factor {c} must be in (0, 1]"),
+            ));
+        }
+        self.compression = per_element.iter().map(|&c| [c, c]).collect();
+        Ok(())
+    }
+
+    /// The membrane material of element `e` (its own compression factor).
+    #[must_use]
+    pub fn material(&self, e: usize) -> Membrane {
+        Membrane {
+            compression: self.compression[e],
+            ..self.membrane
+        }
+    }
+
     /// Elastic energy Ψ (membrane + bending) at positions `x`.
     #[must_use]
     pub fn elastic_energy(&self, x: &[Vec3]) -> f64 {
         let m: f64 = self
             .membranes
             .iter()
-            .map(|e| e.energy(x, &self.membrane))
+            .enumerate()
+            .map(|(i, e)| e.energy(x, &self.material(i)))
             .sum();
         let b: f64 = self.hinges.iter().map(|h| h.energy(x, self.bending)).sum();
         m + b
@@ -259,6 +299,31 @@ pub struct Solver {
     free: Vec<Option<usize>>,
     nfree: usize,
     symbolic: Option<SymbolicLdlt>,
+    /// The Hessian's pattern, fixed once the symbolic analysis is done.
+    pattern: Option<Csr>,
+}
+
+/// Where an assembly's entries go: straight into the fixed pattern once it is known, else a triplet
+/// buffer (the first assembly). Both give the same matrix bit for bit ([`CsrFill`]).
+enum Sink {
+    Fill(CsrFill),
+    Coo(Coo),
+}
+
+impl Sink {
+    fn push(&mut self, row: usize, col: usize, val: f64) {
+        match self {
+            Sink::Fill(f) => f.add(row, col, val),
+            Sink::Coo(c) => c.push(row, col, val),
+        }
+    }
+
+    fn finish(self) -> Csr {
+        match self {
+            Sink::Fill(f) => f.finish(),
+            Sink::Coo(c) => c.assemble(),
+        }
+    }
 }
 
 impl Solver {
@@ -296,6 +361,7 @@ impl Solver {
             free,
             nfree,
             symbolic: None,
+            pattern: None,
         }
     }
 
@@ -409,32 +475,41 @@ impl Solver {
         project: bool,
     ) -> (Vec<f64>, Csr) {
         let mut g = vec![0.0; self.nfree];
-        let mut coo = Coo::new(self.nfree, self.nfree);
-        let scatter =
-            |dofs: &[usize], grad: &[f64], hess: &mut [f64], coo: &mut Coo, g: &mut [f64]| {
-                let n = 3 * dofs.len();
-                if project {
-                    project_psd(hess, n);
-                }
-                for a in 0..n {
-                    let Some(fa) = self.free[3 * dofs[a / 3] + a % 3] else {
-                        continue;
-                    };
-                    g[fa] += grad[a];
-                    for b in 0..n {
-                        if let Some(fb) = self.free[3 * dofs[b / 3] + b % 3] {
-                            coo.push(fa, fb, hess[a * n + b]);
-                        }
+        let mut sink = match &self.pattern {
+            Some(p) => Sink::Fill(CsrFill::new(p)),
+            None => Sink::Coo(Coo::new(self.nfree, self.nfree)),
+        };
+        // Elements whose Hessian is PSD by construction (every hinge; membranes without compression
+        // or a negative stress) are not projected: it would change nothing but rounding.
+        let scatter = |dofs: &[usize],
+                       grad: &[f64],
+                       hess: &mut [f64],
+                       psd: bool,
+                       sink: &mut Sink,
+                       g: &mut [f64]| {
+            let n = 3 * dofs.len();
+            if project && !psd {
+                project_psd(hess, n);
+            }
+            for a in 0..n {
+                let Some(fa) = self.free[3 * dofs[a / 3] + a % 3] else {
+                    continue;
+                };
+                g[fa] += grad[a];
+                for b in 0..n {
+                    if let Some(fb) = self.free[3 * dofs[b / 3] + b % 3] {
+                        sink.push(fa, fb, hess[a * n + b]);
                     }
                 }
-            };
-        for e in &self.model.membranes {
-            let mut l = e.local(x, &self.model.membrane);
-            scatter(&e.v, &l.grad, &mut l.hess, &mut coo, &mut g);
+            }
+        };
+        for (i, e) in self.model.membranes.iter().enumerate() {
+            let mut l = e.local(x, &self.model.material(i));
+            scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for h in &self.model.hinges {
             let mut l = h.local(x, self.model.bending);
-            scatter(&h.v, &l.grad, &mut l.hess, &mut coo, &mut g);
+            scatter(&h.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for (i, &m) in self.model.mass.iter().enumerate() {
             for k in 0..3 {
@@ -444,11 +519,11 @@ impl Solver {
                 match inertia {
                     Some((xt, h)) => {
                         g[f] += m * (x[i][k] - xt[i][k]) / (h * h);
-                        coo.push(f, f, m / (h * h));
+                        sink.push(f, f, m / (h * h));
                     }
                     None => {
                         g[f] -= m * self.gravity[k];
-                        coo.push(f, f, 0.0);
+                        sink.push(f, f, 0.0);
                     }
                 }
             }
@@ -469,13 +544,13 @@ impl Solver {
                     g[fa] += block.grad[ia];
                     for (ib, &(vb, kb)) in block.dofs.iter().enumerate() {
                         if let Some(fb) = self.free[3 * vb + kb] {
-                            coo.push(fa, fb, block.hess[ia * m + ib]);
+                            sink.push(fa, fb, block.hess[ia * m + ib]);
                         }
                     }
                 }
             }
         }
-        (g, coo.assemble())
+        (g, sink.finish())
     }
 
     fn symbolic(&mut self, a: &Csr) -> Result<&SymbolicLdlt, Refusal> {
@@ -508,6 +583,8 @@ impl Solver {
                 )
             })?;
             self.symbolic = Some(s);
+            // every later assembly fills this pattern in place
+            self.pattern = Some(a.clone());
         }
         self.symbolic
             .as_ref()
@@ -742,8 +819,8 @@ impl Solver {
     #[must_use]
     pub fn elastic_forces(&self) -> Vec<Vec3> {
         let mut f = vec![Vec3::ZERO; self.x.len()];
-        for e in &self.model.membranes {
-            let l = e.local(&self.x, &self.model.membrane);
+        for (i, e) in self.model.membranes.iter().enumerate() {
+            let l = e.local(&self.x, &self.model.material(i));
             for (a, &vi) in e.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }

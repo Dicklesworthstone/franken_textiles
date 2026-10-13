@@ -19,7 +19,9 @@ use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::elements::Membrane;
 use crate::garment::GarmentMesh;
 use crate::nearest::NearestTree;
-use crate::start::{PartFrame, StartState, WrapPlacement, start_state, wrap_points};
+use crate::start::{
+    GATHER_COMPRESSION, PartFrame, StartState, WrapPlacement, start_state, wrap_points,
+};
 
 /// Fabric parameters (spec 04 §5.3).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -286,6 +288,10 @@ pub fn build_scene(
     }
     let rest = grain_rest(pattern, &mesh);
     let (mut tris, mut tri_rest, mut collapsed) = (Vec::new(), Vec::new(), 0);
+    // Gather zones (the reference's vertex-weighted structural stiffness): compression drops from the
+    // cloth's factor to GATHER_COMPRESSION at a gathered seam, linearly in the element's mean weight.
+    let mut tri_compression = Vec::new();
+    let low = GATHER_COMPRESSION.min(compression);
     for f in &mesh.faces {
         let t = f.map(|v| weld[v]);
         if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
@@ -294,8 +300,10 @@ pub fn build_scene(
         }
         tris.push(t);
         tri_rest.push(f.map(|v| rest[v]));
+        let w = f.iter().map(|&v| start.gather_weights[v]).sum::<f64>() / 3.0;
+        tri_compression.push(low + w * (compression - low));
     }
-    let model = ClothModel::from_triangles(
+    let mut model = ClothModel::from_triangles(
         next,
         &tris,
         &tri_rest,
@@ -303,6 +311,7 @@ pub fn build_scene(
         fabric.bending_nm,
         fabric.areal_kg_m2,
     )?;
+    model.set_compression(&tri_compression)?;
     let body = Body::new(skin_vertices.to_vec(), skin_triangles.to_vec(), 5e-3)?;
     let untangled = untangle(&mut x, &tris, &body, &tree)?;
     // The relaxed start keeps every vertex 4.8 mm out, but an edge between two of them can pass close to

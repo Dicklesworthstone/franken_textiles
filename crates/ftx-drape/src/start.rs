@@ -30,6 +30,9 @@ pub const RELAX_TARGET_P95: f64 = 0.12;
 pub const RELAX_MAX_ITERS: usize = 1600;
 /// How far from a gathered seam the cloth may draw up in its own plane (mm).
 pub const GATHER_ZONE_MM: f64 = 50.0;
+/// Compression stiffness at a gathered seam, as a fraction of the tensile stiffness (the reference's
+/// `GATHER_COMPRESSION`); it rises linearly with the gather weight to the cloth's own factor.
+pub const GATHER_COMPRESSION: f64 = 0.03;
 
 /// A body-part frame (spec 04 §3.2), in mm: `h` runs along `up`, θ = 0 faces `front`, +90° faces
 /// `lat = up × front`.

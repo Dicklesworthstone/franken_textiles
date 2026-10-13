@@ -275,8 +275,13 @@ fn contact_digest_is_pinned() {
     let digest = ftx_core::receipt::sha256_hex(&bytes);
     println!("contact digest {digest}");
     assert!(s.contact.as_ref().unwrap().min_gap(&s.x, 1e-3).unwrap() > 0.0);
+    // Re-pinned when projected Newton stopped projecting element Hessians that are PSD by construction
+    // (hinges always, membranes without compression or negative stress): Jacobi had rebuilt some from
+    // eigenvectors after a rounding-level negative eigenvalue (the old digest, 62e5d4da…, held that
+    // rounding). Native and wasm32-wasip1 agree on the new value; on the bolero the positions after six
+    // sewing steps moved by at most 9e-13 m.
     assert_eq!(
         digest,
-        "62e5d4da5055a5175c727d50998386f1b07efd045ead4361ef1cb70caedccdae"
+        "9bb8ddf72c586513af914f2fde6fbbf9dcc357381c759a02c5f2bbe884a8a84f"
     );
 }
