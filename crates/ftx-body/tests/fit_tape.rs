@@ -93,17 +93,28 @@ fn synthetic_targets_are_recovered() {
             .unwrap();
         let frames = BodyFrames::new(&model, &posed).unwrap();
         let want = tape_readings(&faces, height, &posed, &frames).expect("sections");
+        let mass = model.anthropometry(&rest).mass;
         let fit = fit_tape(
             &model,
             &Wearer {
                 years,
                 gender,
                 stature_mm: want[0],
+                weight_kg: Some(mass),
             },
             &targets(&want),
             &pose,
         )
         .unwrap();
+        let dm = fit.mass_kg / mass - 1.0;
+        println!(
+            "  weight         target {mass:7.2}  body {:7.2}  ({:+.2} %)",
+            fit.mass_kg,
+            dm * 100.0
+        );
+        if dm.abs() > 0.01 {
+            fails.push(format!("{years} y weight: {:+.2} %", dm * 100.0));
+        }
         println!(
             "{years} y, gender {gender}: {} iterations, free {:?}",
             fit.iterations,
@@ -132,6 +143,7 @@ fn the_reference_toddler_is_fitted() {
         years: 2.5,
         gender: 0.5,
         stature_mm: 920.0,
+        weight_kg: None,
     };
     // the reference wearer's fused values (Ottobre chart priors at 92 cm), in TAPE_FIELDS order
     let want = [
@@ -181,4 +193,56 @@ fn the_reference_toddler_is_fitted() {
     for r in &fit.residuals {
         assert!((r.body_mm - r.target_mm).abs() < 3.0, "{r:?}");
     }
+}
+
+/// Fitting from little (plan §9.4): stature and weight only. Synthetic children and an adult of known
+/// stature and mass are reached within 2 mm and 1 %, and a heavier wearer of the same stature gets a
+/// heavier body (larger girths), not just a heavier number.
+#[test]
+#[ignore = "needs the converted Anny model"]
+fn stature_and_weight_alone() {
+    let model = model();
+    let pose = Pose::drape();
+    let stature_only = |stature: f64| {
+        vec![TapeTarget {
+            name: "stature".to_string(),
+            value_mm: stature,
+        }]
+    };
+    let mut waists = Vec::new();
+    for (years, gender, stature, kg) in [
+        (2.5, 0.5, 920.0, 12.0),
+        (2.5, 0.5, 920.0, 15.5),
+        (6.0, 0.0, 1160.0, 21.0),
+        (35.0, 1.0, 1650.0, 62.0),
+    ] {
+        let fit = fit_tape(
+            &model,
+            &Wearer {
+                years,
+                gender,
+                stature_mm: stature,
+                weight_kg: Some(kg),
+            },
+            &stature_only(stature),
+            &pose,
+        )
+        .unwrap();
+        println!(
+            "{years} y {stature} mm {kg} kg: body {:.1} mm {:.2} kg, waist {:.1} mm, free {:?}",
+            fit.readings[0],
+            fit.mass_kg,
+            fit.readings[2],
+            &fit.free[..4]
+        );
+        assert!((fit.readings[0] - stature).abs() < 2.0, "{years} y stature");
+        assert!((fit.mass_kg / kg - 1.0).abs() < 0.01, "{years} y weight");
+        if years == 2.5 {
+            waists.push(fit.readings[2]);
+        }
+    }
+    assert!(
+        waists[1] > waists[0] + 20.0,
+        "a heavier toddler has a larger waist: {waists:?}"
+    );
 }

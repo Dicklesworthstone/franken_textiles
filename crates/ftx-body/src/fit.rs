@@ -47,6 +47,8 @@ pub struct Wearer {
     pub gender: f64,
     /// Stature (mm).
     pub stature_mm: f64,
+    /// Body weight (kg), when known: [`fit_tape`] fits Anny's mass to it.
+    pub weight_kg: Option<f64>,
 }
 
 impl Wearer {
@@ -65,10 +67,12 @@ impl Wearer {
     }
 
     /// The wearer of a measurement file (`fabric-measurements/1`): age from `wearer.age_months`, stature
-    /// from `wearer.stature_mm` or else the fused stature, sex from `wearer.sex`.
+    /// from `wearer.stature_mm` or else the fused stature, sex from `wearer.sex`, weight from
+    /// `wearer.weight_kg` or else `wearer.bmi` × stature².
     ///
     /// # Errors
-    /// [`RefusalCode::InvalidDocument`] without an age or a stature.
+    /// [`RefusalCode::InvalidDocument`] without an age or a stature, or with a weight or BMI that is not
+    /// a positive number.
     pub fn from_measurements(meas: &Value) -> Result<Self, Refusal> {
         let bad = |m: &str| Refusal::new(RefusalCode::InvalidDocument, m);
         let w = &meas["wearer"];
@@ -83,10 +87,24 @@ impl Wearer {
                 bad("the measurement file has no stature (wearer.stature_mm or a fused stature)")
                     .repair("measure the stature, or fuse a stature prior")
             })?;
+        let positive = |key: &str| -> Result<Option<f64>, Refusal> {
+            match &w[key] {
+                Value::Null => Ok(None),
+                v => match v.as_f64() {
+                    Some(x) if x.is_finite() && x > 0.0 => Ok(Some(x)),
+                    _ => Err(bad(&format!("wearer.{key} must be a positive number"))),
+                },
+            }
+        };
+        let weight_kg = match positive("weight_kg")? {
+            Some(kg) => Some(kg),
+            None => positive("bmi")?.map(|bmi| bmi * (stature / 1000.0).powi(2)),
+        };
         Ok(Self {
             years: months / 12.0,
             gender: Self::gender_of(w["sex"].as_str()),
             stature_mm: stature,
+            weight_kg,
         })
     }
 }
@@ -123,6 +141,7 @@ pub fn fit_stature(model: &AnnyModel, wearer: &Wearer) -> Result<(BodyParams, f6
         years,
         gender,
         stature_mm,
+        ..
     } = *wearer;
     if !(years.is_finite() && years >= 0.0 && stature_mm.is_finite() && stature_mm > 0.0) {
         return Err(Refusal::new(
@@ -238,6 +257,10 @@ const N_FREE: usize = FREE.len();
 pub const N_PHENOTYPE: usize = 4;
 /// Phenotype parameters range over [0, 1]; local changes over [−1, 1], Anny's modelled range.
 const LOCAL_LIMIT: f64 = 1.0;
+/// The fit's tolerance for the weight: 1 % of it (a scale reads that well), at least 0.1 kg.
+const WEIGHT_SIGMA_FRACTION: f64 = 0.01;
+/// See [`WEIGHT_SIGMA_FRACTION`].
+const WEIGHT_SIGMA_MIN_KG: f64 = 0.1;
 /// Prior 1σ of a phenotype parameter about the population middle (0.5) and of a local change about 0:
 /// the scanned shape space explains a body before the authored blend shapes adjust it.
 const PRIOR_SIGMA_PHENOTYPE: f64 = 0.5;
@@ -364,6 +387,8 @@ pub struct TapeFit {
     pub params: BodyParams,
     /// Every tape reading on the fitted body (mm, [`TAPE_FIELDS`] order), measured or not.
     pub readings: [f64; N_TAPE],
+    /// The fitted body's mass (kg; Anny's 980 kg/m³ × volume), fitted when the wearer's weight is known.
+    pub mass_kg: f64,
     /// The fitted measurements, target against body.
     pub residuals: Vec<TapeResidual>,
     /// The free parameters' values ([`FREE`] order).
@@ -411,6 +436,17 @@ pub fn fit_tape(
         };
         rows.push((k, t.value_mm, sigma));
     }
+    // the weight: a row on the mass, read in the extra slot after the tape readings
+    if let Some(kg) = wearer.weight_kg {
+        if !(kg.is_finite() && kg > 0.0) {
+            return Err(bad(format!("weight {kg} kg must be finite and positive")));
+        }
+        rows.push((
+            N_TAPE,
+            kg,
+            (WEIGHT_SIGMA_FRACTION * kg).max(WEIGHT_SIGMA_MIN_KG),
+        ));
+    }
     let lc: Vec<usize> = FREE[N_PHENOTYPE..]
         .iter()
         .map(|n| {
@@ -450,12 +486,14 @@ pub fn fit_tape(
         }
         p
     };
-    let read = |th: &[f64; N_FREE]| -> Result<Option<[f64; N_TAPE]>, Refusal> {
+    // the tape readings, then the mass (kg)
+    let read = |th: &[f64; N_FREE]| -> Result<Option<[f64; N_TAPE + 1]>, Refusal> {
         let rest = model.rest(&params_of(th))?;
-        let height = model.anthropometry(&rest).height;
+        let anthro = model.anthropometry(&rest);
         let posed = model.pose(&rest, &pose_deltas(model, &rest, pose, 1.0)?)?;
         let frames = BodyFrames::new(model, &posed)?;
-        Ok(tape_readings(&faces, height, &posed, &frames))
+        Ok(tape_readings(&faces, anthro.height, &posed, &frames)
+            .map(|t| std::array::from_fn(|k| if k < N_TAPE { t[k] } else { anthro.mass })))
     };
     let pheno = |j: usize| j < N_PHENOTYPE;
     let prior = |j: usize| if pheno(j) { 0.5 } else { 0.0 };
@@ -476,7 +514,7 @@ pub fn fit_tape(
         })
     };
     // residual vector: the measurements, then the priors
-    let resid = |th: &[f64; N_FREE], r: &[f64; N_TAPE]| -> Vec<f64> {
+    let resid = |th: &[f64; N_FREE], r: &[f64; N_TAPE + 1]| -> Vec<f64> {
         rows.iter()
             .map(|&(k, v, s)| (r[k] - v) / s)
             .chain((0..N_FREE).map(|j| (th[j] - prior(j)) / tau(j)))
@@ -552,6 +590,7 @@ pub fn fit_tape(
     }
     let residuals = rows
         .iter()
+        .filter(|&&(k, _, _)| k < N_TAPE)
         .map(|&(k, v, _)| TapeResidual {
             name: TAPE_FIELDS[k].to_string(),
             target_mm: v,
@@ -560,7 +599,8 @@ pub fn fit_tape(
         .collect();
     Ok(TapeFit {
         params: params_of(&th),
-        readings,
+        readings: std::array::from_fn(|k| readings[k]),
+        mass_kg: readings[N_TAPE],
         residuals,
         free: th,
         iterations,
@@ -587,9 +627,28 @@ mod tests {
             serde_json::json!({"wearer": {"age_months": 30.0, "stature_mm": 920.0, "sex": "girl"}});
         let w = Wearer::from_measurements(&m).unwrap();
         assert_eq!((w.years, w.gender, w.stature_mm), (2.5, 1.0, 920.0));
+        assert_eq!(w.weight_kg, None);
         let fused = serde_json::json!({"wearer": {"age_months": 24.0}, "fused": {"stature": {"value_mm": 870.0}}});
         assert_eq!(Wearer::from_measurements(&fused).unwrap().stature_mm, 870.0);
         assert!(Wearer::from_measurements(&serde_json::json!({"wearer": {}})).is_err());
+        // weight, else BMI × stature²; a weight wins over a BMI; nonsense is refused
+        let with = |extra: serde_json::Value| {
+            let mut m = serde_json::json!({"wearer": {"age_months": 30.0, "stature_mm": 1000.0}});
+            m["wearer"]
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            Wearer::from_measurements(&m)
+        };
+        let kg = |extra| with(extra).unwrap().weight_kg;
+        assert_eq!(kg(serde_json::json!({"weight_kg": 13.5})), Some(13.5));
+        assert_eq!(kg(serde_json::json!({"bmi": 15.5})), Some(15.5));
+        assert_eq!(
+            kg(serde_json::json!({"weight_kg": 13.5, "bmi": 99.0})),
+            Some(13.5)
+        );
+        assert!(with(serde_json::json!({"weight_kg": -2.0})).is_err());
+        assert!(with(serde_json::json!({"bmi": "high"})).is_err());
     }
 
     #[test]

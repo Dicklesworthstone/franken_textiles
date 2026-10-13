@@ -27,9 +27,14 @@ it), with 1σ = 3 mm per girth and 2 mm per length; the phenotype is clamped to 
 changes up to ±0.3) are recovered within 0.43 mm (the gate asks 3 mm girths, 2 mm lengths); the 92 cm
 reference toddler's 15 chart values within 2.4 mm in 8 iterations (about 2 s), where the stature-only
 body read 75 mm less at the chest, 66 mm at the waist and 62 mm at the hip. With weak priors (1σ = 1)
-the same fit had driven `weight` to 0 and compensated with large local changes.
+the same fit had driven `weight` to 0 and compensated with large local changes. A known body weight
+(`Wearer::weight_kg`) adds a row on Anny's mass (980 kg/m³ × volume) with 1σ = 1 % of it, at least
+0.1 kg: with the stature alone it is the plan's "fit from little" (`tests/fit_tape.rs`: 2.5-, 6- and
+35-year-olds reached within 2 mm and 1 %; a 15.5 kg toddler of 920 mm gets a 616 mm waist where a 12 kg
+one gets 491 mm), with the tape it is one more measurement (synthetic masses within 0.3 %).
 `tape_targets` and `Wearer::from_measurements` read a `fabric-measurements/1` file (fused values
-whatever their provenance: the drape tests a pattern against the measurements it was drafted to).
+whatever their provenance: the drape tests a pattern against the measurements it was drafted to; the
+weight from `wearer.weight_kg`, else `wearer.bmi` × stature²).
 
 **Drape poses** (definition in the `drape.rs` module notes). A joint turns its bone about its head by φ
 about an axis in the rest pose's world frame; its local-bone delta is `φ·R_restᵀ·a`. Arms
@@ -93,9 +98,9 @@ an abduction outside 0–180°, a ramp outside 0–1, a negative nappy), `degene
 non-manifold or inconsistently wound skin, a degenerate triangle), `inward_wound` (negative volume).
 
 **No claims.** Fit quality against real people (gate G1 on held-out measurements; the fit reaches the
-targets, which says nothing about whether the shape between them is the wearer's); fitting from weight
-or BMI, from the tape measurements not read yet (neck, across back, shoulder length, total crotch
-length, outseam, head) and from photos; `MODEL_FIT`
+targets, which says nothing about whether the shape between them is the wearer's); the WHO-calibrated
+age prior of plan §9.4 (the priors here are the population middle); fitting from the tape measurements
+not read yet (neck, across back, shoulder length, total crotch length, outseam, head) and from photos; `MODEL_FIT`
 values with σ and `ftx-body/1` output; the shape distribution's
 weight and muscle priors (spec 05 §9.11); anything about the SMPL family or the `rig="anny"` preset.
 Poses are plain linear blend skinning without correctives: seated and squat bodies show webbing at the

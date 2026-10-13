@@ -171,7 +171,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let pose = Pose::drape();
     let fit = fit_tape(&model, &w, &tape_targets(&meas), &pose)?;
     eprintln!(
-        "body: fitted in {} iterations; {}",
+        "body: fitted in {} iterations; {}; {:.2} kg{}",
         fit.iterations,
         fit.residuals
             .iter()
@@ -182,7 +182,10 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 r.body_mm - r.target_mm
             ))
             .collect::<Vec<_>>()
-            .join(", ")
+            .join(", "),
+        fit.mass_kg,
+        w.weight_kg
+            .map_or(String::new(), |kg| format!(" (weighs {kg:.2})"))
     );
     let rest = model.rest(&fit.params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
@@ -224,8 +227,13 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
                         "body_mm": mm(r.body_mm),
                     }))).collect::<serde_json::Map<_, _>>(),
                     "free": FREE.iter().zip(fit.free).map(|(n, v)| ((*n).to_string(), json!((v * 1e4).round() / 1e4))).collect::<serde_json::Map<_, _>>(),
+                    "weight_kg": w.weight_kg.map(|kg| json!({
+                        "target_kg": kg,
+                        "body_kg": (fit.mass_kg * 100.0).round() / 100.0,
+                    })),
                 },
                 "readings_mm": TAPE_FIELDS.iter().zip(fit.readings).map(|(n, v)| ((*n).to_string(), json!(mm(v)))).collect::<serde_json::Map<_, _>>(),
+                "mass_kg": (fit.mass_kg * 100.0).round() / 100.0,
                 "pose": format!(
                     "drape: arms at {}° and straight, hands and feet left out of contact",
                     body.arm_deg
