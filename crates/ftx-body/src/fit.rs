@@ -592,11 +592,19 @@ pub fn fit_tape(
             up[j] += FD_STEP;
             dn[j] -= FD_STEP;
             let (up, dn) = (clamp(up), clamp(dn));
-            let (Some(ru), Some(rd)) = (read(&up)?, read(&dn)?) else {
-                continue;
+            // a probe whose body lacks a section falls back to the one-sided difference from the current
+            // point; only when both fail does the column stay zero (the parameter rests this iteration)
+            let (hi, lo, xh, xl) = match (read(&up)?, read(&dn)?) {
+                (Some(ru), Some(rd)) => (ru, rd, up[j], dn[j]),
+                (Some(ru), None) => (ru, readings, up[j], th[j]),
+                (None, Some(rd)) => (readings, rd, th[j], dn[j]),
+                (None, None) => continue,
             };
+            if xh == xl {
+                continue;
+            }
             for (i, &(k, _, s)) in rows.iter().enumerate() {
-                jac[i][j] = (ru[k] - rd[k]) / ((up[j] - dn[j]) * s);
+                jac[i][j] = (hi[k] - lo[k]) / ((xh - xl) * s);
             }
         }
         let mut improved = false;
