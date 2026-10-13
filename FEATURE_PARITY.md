@@ -15,13 +15,13 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
-| `fabric-pattern/1` document read/write round trip | 01 §2 | missing | |
+| `fabric-pattern/1` document read/write round trip | 01 §2 | present | oracle `pattern/drafts` (9 drafted garments, semantic equality) |
 | `fabric-fit/1` document | 01 §3 | missing | |
 | Curve geometry (chord-relative cubic/quadratic, sampling counts) | 01 §4 | present | oracle `pattern/geometry` (abs_to_rel, rel_to_abs, curve_points, mirror/reverse_curve); F1–F3 |
 | Numeric helpers (lengths, fractions, tangents, areas, widths) | 01 §5 | present | oracle `pattern/geometry` (polyline_length, cumulative, at_fractions, tangent_at, signed_area, horizontal_width, point_in_polygon); F4–F6 |
-| Instances (mirror pairs, on-fold unfolding, edge suffixes) | 01 §6 | missing | |
-| Structure checks with the reference's messages | 01 §7 | missing | |
-| Seam sides, notch fractions, seam pair sampling | 01 §8 | missing | |
+| Instances (mirror pairs, on-fold unfolding, edge suffixes) | 01 §6 | present | oracle `pattern/instances` (F7–F10, curved pairs), `pattern/drafts` |
+| Structure checks with the reference's messages | 01 §7 | present | oracle `pattern/structure` (24 F11 cases) |
+| Seam sides, notch fractions, seam pair sampling | 01 §8 | present | oracle `pattern/seams` (F12–F21, F26, F27), `pattern/drafts` |
 | Validation: seam walk, truing, points of measure, status, table | 01 §9 | missing | |
 | Default fit spec by role | 01 §9 | missing | |
 | Alteration: slash-spread, move, true-seam, cap-ease, transfer-curve | 01 §10 | missing | |
@@ -127,7 +127,9 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Behaviour | Reference | Port | Reason |
 |---|---|---|---|
 | Bisection with no root | returns the upper bound silently | typed refusal | Fail closed |
-| Malformed inputs that crash the reference | exception | structure error with a message | Fail closed |
+| Malformed inputs that crash the reference | exception | structure error with a message | Fail closed (piece without id, `cut: null`, wrong Bézier control count, seam ref without `/`, zero-length side with notches; `ftx-pattern` CONTRACT) |
+| `cut.qty` 2.7 or `"2"` | truncated or parsed to 2 | structure error | Only the integers 1 and 2 mean anything |
+| Rewritten documents | insertion order, `"curve": null` kept | canonical key order, null curve dropped | Semantic equality is the bar (spec 01 §14.6) |
 | DXF extents | ±1e20 placeholders | real extents | Correct values; no check reads them |
 | Cubic Bézier samples | x³ via the platform `pow` (not correctly rounded, varies by platform) | correctly rounded x³ | Deterministic; ≤ 1 ULP from numpy, which disagrees with itself across platforms |
 | Anny batch size | any batch, broadcast | batch 1 | Loop over bodies instead; simpler and as fast here (0.3–0.4 ms per body) |

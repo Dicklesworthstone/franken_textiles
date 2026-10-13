@@ -1,0 +1,17 @@
+//! FrankenTextiles patterns (`docs/spec/01`): the `fabric-pattern/1` document, instances (mirror pairs
+//! and on-fold unfolding), structure checks with the reference's messages, seam sides, notch fractions
+//! and seam sampling. Validation, alteration and drafting build on this.
+//!
+//! Frame: millimetres, 2D, x right, y up, loops counter-clockwise; every piece is drafted as the
+//! wearer's right side seen from its public side.
+#![forbid(unsafe_code)]
+
+pub mod doc;
+pub mod instance;
+pub mod pattern;
+
+pub use doc::{
+    Cut, Edge, Grain, Mark, Notch, PatternDoc, Piece, Placement, SCHEMA, Seam, Vertices, truthy,
+};
+pub use instance::{InstEdge, Instance, PyError, Side, piece_instances};
+pub use pattern::{Pattern, SeamPairs, piece_definition_errors, py_repr_value};

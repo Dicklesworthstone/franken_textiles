@@ -1,0 +1,17 @@
+[package]
+name = "ftx-pattern"
+description = "FrankenTextiles patterns: the fabric-pattern/1 model, instances, structure checks, seam sides and seam sampling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+ftx-core = { path = "../ftx-core" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -16,6 +16,7 @@ name = "ftx-conformance"
 version = "0.1.0"
 dependencies = [
  "ftx-core",
+ "ftx-pattern",
  "serde_json",
 ]
 
@@ -23,6 +24,15 @@ dependencies = [
 name = "ftx-core"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ftx-pattern"
+version = "0.1.0"
+dependencies = [
+ "ftx-core",
  "serde",
  "serde_json",
 ]
