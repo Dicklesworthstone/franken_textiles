@@ -5,8 +5,9 @@
 //! dispatch (the portable loop is bit-identical) or the interop features; [`direct`] is that crate's
 //! LDLᵀ. Assembly orders triplets as a stable sort by (row, col) would, duplicates summed in insertion
 //! order, so the matrix is a pure function of the logical insertion sequence. (Changed from the lift:
-//! the global stable sort is a row-bucket pass plus a stable sort of each row by column, the same order
-//! at a fraction of the cost; a garment's assembly spent a quarter of its time sorting.)
+//! the global stable sort is two stable counting passes, by column then by row, the same order in linear
+//! time; a garment's assembly spent a quarter of its time sorting, and with self-contact the pattern
+//! changes almost every Newton iteration.)
 
 pub mod direct;
 pub mod precond;
@@ -65,24 +66,10 @@ impl Coo {
     #[must_use]
     pub fn assemble(&self) -> Csr {
         let nnz_staged = self.vals.len();
-        // Bucket by row in insertion order, then sort each row stably by column: the order of a
-        // stable sort by (row, col).
-        let mut start = vec![0usize; self.nrows + 1];
-        for &r in &self.rows {
-            start[r + 1] += 1;
-        }
-        for r in 0..self.nrows {
-            start[r + 1] += start[r];
-        }
-        let mut fill = start.clone();
-        let mut order = vec![0usize; nnz_staged];
-        for (i, &r) in self.rows.iter().enumerate() {
-            order[fill[r]] = i;
-            fill[r] += 1;
-        }
-        for r in 0..self.nrows {
-            order[start[r]..start[r + 1]].sort_by_key(|&i| self.cols[i]);
-        }
+        // A stable counting pass by column, then one by row: the order of a stable sort by (row, col),
+        // in linear time.
+        let by_col = counting_pass(&self.cols, self.ncols, 0..nnz_staged);
+        let order = counting_pass(&self.rows, self.nrows, by_col.iter().copied());
         let mut row_ptr = vec![0usize; self.nrows + 1];
         let mut col_idx = Vec::new();
         let mut vals = Vec::new();
@@ -110,6 +97,27 @@ impl Coo {
             vals,
         }
     }
+}
+
+/// The staged indices of `input`, stably reordered by `keys[i]` (each `< nkeys`).
+fn counting_pass(
+    keys: &[usize],
+    nkeys: usize,
+    input: impl ExactSizeIterator<Item = usize> + Clone,
+) -> Vec<usize> {
+    let mut next = vec![0usize; nkeys + 1];
+    for i in input.clone() {
+        next[keys[i] + 1] += 1;
+    }
+    for k in 0..nkeys {
+        next[k + 1] += next[k];
+    }
+    let mut out = vec![0usize; input.len()];
+    for i in input {
+        out[next[keys[i]]] = i;
+        next[keys[i]] += 1;
+    }
+    out
 }
 
 /// A fixed CSR pattern filled in place. Each value goes straight to its slot; a slot starts at −0.0

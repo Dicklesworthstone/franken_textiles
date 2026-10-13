@@ -181,7 +181,8 @@ Hessian's pattern never changes.
 
 **Self-contact** (`Solver::with_self_contact`, `DrapeOptions::self_contact`; FTX-12b / `ftx-d0h`).
 Non-incident cloth vertex–triangle and edge–edge pairs use the same barrier and mollifier, with all
-four vertices moving. A deterministic sweep-and-prune over swept boxes includes both surfaces'
+four vertices moving. A bounding-volume hierarchy over swept boxes (lifted from frankensim fs-query;
+every overlapping pair, sorted, so the tree's shape never reaches the result) includes both surfaces'
 trajectories; shared vertices (including welded seams) are excluded, edge pairs are unique, and CCD
 uses relative motion on both sides. Self-contact has its own thickness (the sum of both layers'
 half-thicknesses), coefficient of friction and smoothing. Body `min_gap` / `closest_pair` stay body-only;

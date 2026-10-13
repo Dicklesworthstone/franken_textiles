@@ -1,6 +1,7 @@
 //! Contact between the cloth and a static body (plan §11.2, §11.5): the IPC log barrier on the
-//! thickness-offset gap, the edge–edge mollifier, a deterministic spatial-hash broad phase, additive
-//! CCD (Li et al. 2021) to cap each Newton step, and lagged smoothed Coulomb friction.
+//! thickness-offset gap, the edge–edge mollifier, deterministic broad phases (a grid for the body, a BVH
+//! for self-contact), additive CCD (Li et al. 2021) to cap each Newton step, and lagged smoothed Coulomb
+//! friction.
 //!
 //! Pairs: a cloth vertex against a body triangle, a body vertex against a cloth triangle, and a cloth
 //! edge against a body edge. Optional self-contact adds non-incident cloth vertex–triangle and
@@ -13,6 +14,7 @@ use ftx_core::exact::{Sign, orient3d};
 use ftx_core::{Refusal, RefusalCode, Vec3};
 
 use crate::ad::Jet;
+use crate::bvh::Bvh;
 use crate::distance::{
     Closest, edge_cross_squared, edge_edge_closest, point_triangle_closest, squared_distance,
     squared_distance_f64, squared_distance_grad,
@@ -119,39 +121,23 @@ fn swept_box(ids: &[usize], x: &[Vec3], p: Option<&[Vec3]>) -> (Vec3, Vec3) {
     aabb(&pts)
 }
 
-/// Deterministic bipartite sweep-and-prune. Both sides can move. Unlike a swept uniform grid, this
-/// does not enumerate a potentially enormous number of cells for a long Newton displacement.
-/// Every overlapping pair is retained; no truncation or heuristic neighbor limit.
-fn box_pairs(a: &[(Vec3, Vec3)], b: &[(Vec3, Vec3)], pad: f64) -> Vec<(usize, usize)> {
+/// Each box grown by half of `pad` on every side, so two boxes overlap iff they come within `pad`.
+fn padded(boxes: &[(Vec3, Vec3)], pad: f64) -> Vec<(Vec3, Vec3)> {
     let d = Vec3::new(pad * 0.5, pad * 0.5, pad * 0.5);
-    let a: Vec<_> = a.iter().map(|&(lo, hi)| (lo - d, hi + d)).collect();
-    let b: Vec<_> = b.iter().map(|&(lo, hi)| (lo - d, hi + d)).collect();
-    let boxes = [&a, &b];
-    let mut events: Vec<_> = boxes
-        .iter()
-        .enumerate()
-        .flat_map(|(side, bs)| {
-            bs.iter()
-                .enumerate()
-                .map(move |(id, (lo, _))| (lo.x, side, id))
-        })
-        .collect();
-    events.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    let mut active: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
-    let mut out = Vec::new();
-    for (left, side, id) in events {
-        let (lo, hi) = boxes[side][id];
-        let other = 1 - side;
-        active[other].retain(|&j| boxes[other][j].1.x >= left);
-        for &j in &active[other] {
-            if overlaps(boxes[other][j], lo, hi) {
-                out.push(if side == 0 { (id, j) } else { (j, id) });
-            }
-        }
-        active[side].push(id);
-    }
-    out.sort_unstable();
-    out
+    boxes.iter().map(|&(lo, hi)| (lo - d, hi + d)).collect()
+}
+
+/// Every `(i, j)` whose boxes `a[i]` and `b[j]` come within `pad`, sorted (a BVH per side; both sides can
+/// move). Unlike a swept uniform grid, this does not enumerate a potentially enormous number of cells for a
+/// long Newton displacement. Every overlapping pair is retained; no truncation or heuristic neighbor limit.
+fn box_pairs(a: &[(Vec3, Vec3)], b: &[(Vec3, Vec3)], pad: f64) -> Vec<(usize, usize)> {
+    let (a, b) = (padded(a, pad), padded(b, pad));
+    Bvh::build(&a).pairs(&Bvh::build(&b))
+}
+
+/// Every `(i, j)`, `i < j`, whose boxes come within `pad`, sorted.
+fn box_self_pairs(a: &[(Vec3, Vec3)], pad: f64) -> Vec<(usize, usize)> {
+    Bvh::build(&padded(a, pad)).self_pairs()
 }
 
 /// A dense broad-phase grid over the cells the items' boxes touch, in CSR form: cell `c` holds
@@ -904,11 +890,10 @@ impl Contact {
                 pairs.push(Pair::SelfVertexTri { cv, ct });
             }
         }
-        for (a, b) in box_pairs(&edges, &edges, pad) {
-            if a < b
-                && !self.cloth.edges[a]
-                    .iter()
-                    .any(|i| self.cloth.edges[b].contains(i))
+        for (a, b) in box_self_pairs(&edges, pad) {
+            if !self.cloth.edges[a]
+                .iter()
+                .any(|i| self.cloth.edges[b].contains(i))
             {
                 pairs.push(Pair::SelfEdgeEdge { a, b });
             }
