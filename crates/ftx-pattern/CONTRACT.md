@@ -2,8 +2,8 @@
 
 **Purpose.** The `fabric-pattern/1` document and what every later stage reads from it: instances (mirror
 pairs, on-fold unfolding), the structure checks with the reference's messages, seam sides, notch fractions
-and notch-piecewise seam sampling (`docs/spec/01` §2, §6–8). Validation, alteration and drafting build on
-it (FTX-04, FTX-05).
+and notch-piecewise seam sampling (`docs/spec/01` §2, §6–8). Validation (FTX-04, `validate.rs`) and the
+alteration ops (FTX-05, `alter.rs`) build on it; drafting comes next.
 
 **Units and frames.** Millimetres, 2D, x right, y up, loops counter-clockwise; every piece is the
 wearer's right side seen from its public side. `.L` instances are mirrored about x = 0.
@@ -46,10 +46,17 @@ the reference's dictionary semantics. Oracle: `tests/fixtures/oracle/validate/` 
 measurement entry without a value counts as missing; a point without `body` is UNMEASURABLE and not
 listed as missing.
 
-**Alteration** (`alter`, spec 01 §10): slash-spread, vertex movement and transfer-curve return a new
-raw JSON document, preserve unedited fields and append `meta.history` with `origin = VECTOR_EDIT`.
-Coordinate changes use the reference's ties-to-even rounding. Grain/internal/decor/trace marks follow
-slash-spread; drills, notches and placement do not. Direct regressions use the spec's published
-F33–F36 and F39–F40 values; a captured alteration oracle is still pending. Malformed input and
-non-finite results are typed refusals, not panics or JSON nulls; invalid axes and zero-length source
-chords are refused. These operations alone establish neither structural validity nor garment fit.
+**Alteration** (`alter`, spec 01 §10): slash-spread, vertex movement, true-seam, cap-ease and
+transfer-curve return a new raw JSON document, preserve unedited fields and append `meta.history` with
+`origin = VECTOR_EDIT`. Coordinate changes use the reference's ties-to-even rounding. Grain/internal/
+decor/trace marks follow slash-spread and cap-ease; drills, notches and placement do not. true-seam and
+cap-ease use the reference's 60-step bisection without a bracket check (±60 mm; 0.3–3 × cap height),
+a band's mean by numpy's pairwise sum, and its sentences (`:+.1f`, `:.3f`). Direct regressions use the
+spec's published F33–F36 and F39–F40 values. Oracle: `tests/fixtures/oracle/alter/alterations.json`
+(`tools/oracle/capture_alterations.py`): 21 cases (the drafted bolero and trousers at 80, 92 and 116 cm,
+a mutated bolero, error paths); `crates/ftx-conformance/tests/alterations.rs` matches all 27,437 numbers
+bit for bit, every history sentence and every structure error, and each reference error is a refusal
+naming the same thing. Malformed input and non-finite results are typed refusals, not panics or JSON
+nulls; invalid axes or ends, zero-length source chords and a side b on a mirrored (`.L`) copy are
+refused, as are the unknown seam, missing cap seam and missing destination edge the reference crashes on.
+These operations alone establish neither structural validity nor garment fit.

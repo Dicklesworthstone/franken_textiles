@@ -24,7 +24,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Seam sides, notch fractions, seam pair sampling | 01 §8 | present | oracle `pattern/seams` (F12–F21, F26, F27), `pattern/drafts` |
 | Validation: seam walk, truing, points of measure, status, table | 01 §9 | present | oracle `validate/validation`: 9 drafted garments, M1–M12, F12–F32 (48 reports bit-exact, 48 tables identical) |
 | Default fit spec by role | 01 §9 | present | oracle `validate/default_fit_spec` (9 garments) |
-| Alteration: slash-spread, move, true-seam, cap-ease, transfer-curve | 01 §10 | missing | |
+| Alteration: slash-spread, move, true-seam, cap-ease, transfer-curve | 01 §10 | present | alter/alterations (21 cases: drafted bolero and trousers at 80/92/116 cm, a mutated bolero, error paths; 27,437 numbers bit-exact, history sentences and structure errors identical) in `crates/ftx-conformance/tests/alterations.rs`; CLI `ftx alter` (exit 2 where the reference exits 1) |
 | Drafting: Zouave bolero (incl. soutache layout) | 02 Part C | missing | |
 | Drafting: Zouave trousers | 02 Part C | missing | |
 | Drafting: fez | 02 Part C | missing | |

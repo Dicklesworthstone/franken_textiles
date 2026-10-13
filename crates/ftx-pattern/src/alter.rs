@@ -251,6 +251,232 @@ pub fn transfer_curve(
     Ok(out)
 }
 
+/// The reference's bisection (spec 01 §10.1): 60 halvings keeping the end whose sign matches `f(lo)`.
+/// There is no bracket check: without a sign change it converges to `hi`, as the reference does.
+fn bisect(
+    mut f: impl FnMut(f64) -> Result<f64, Refusal>,
+    mut lo: f64,
+    mut hi: f64,
+) -> Result<f64, Refusal> {
+    let mut flo = f(lo)?;
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        let fm = f(mid)?;
+        if (fm > 0.0) == (flo > 0.0) {
+            lo = mid;
+            flo = fm;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(0.5 * (lo + hi))
+}
+
+fn query<T>(r: Result<T, crate::PyError>) -> Result<T, Refusal> {
+    r.map_err(|e| invalid(e.message().to_string()))
+}
+
+fn drafted_vertex(doc: &Value, pid: &str, vid: &str) -> Result<Vec2, Refusal> {
+    let mut probe = doc.clone();
+    point(vertex_mut(piece_mut(&mut probe, pid)?, vid)?)
+}
+
+/// Make side b of `seam_id` equal side a over the seam's ratio (the mean of its `ratio_band`, else its
+/// legacy `band`, when one is truthy; else its `ratio`, else 1) by sliding b's drafted vertex at `end`
+/// (`"end"` or `"start"`) along b's own direction there, ±60 mm at most. Edges, mirrored copies and other
+/// seams through that vertex follow.
+///
+/// # Errors
+/// An unknown seam, an `end` other than start/end, side b on a mirrored (`.L`) copy, unknown pieces,
+/// edges or vertices, non-finite results.
+pub fn true_seam(doc: &Value, seam_id: &str, end: &str) -> Result<Value, Refusal> {
+    if !matches!(end, "start" | "end") {
+        return Err(Refusal::new(
+            RefusalCode::UnknownParameter,
+            "end must be start or end",
+        ));
+    }
+    let pattern = built(doc)?;
+    let seam = pattern
+        .seams()
+        .iter()
+        .find(|s| s.id() == Some(seam_id))
+        .ok_or_else(|| invalid(format!("no seam '{seam_id}'")))?;
+    let m = &seam.0;
+    let band = if m.contains_key("ratio_band") {
+        m.get("ratio_band")
+    } else {
+        m.get("band")
+    };
+    let ratio = match band.filter(|b| crate::truthy(b)) {
+        Some(b) => {
+            let xs: Vec<f64> = b
+                .as_array()
+                .map(|a| a.iter().filter_map(Value::as_f64).collect())
+                .unwrap_or_default();
+            ftx_core::np::pairwise_sum(&xs) / xs.len() as f64
+        }
+        None => match m.get("ratio") {
+            None => 1.0,
+            Some(r) => r
+                .as_f64()
+                .ok_or_else(|| invalid(format!("seam {seam_id}: ratio must be a number")))?,
+        },
+    };
+    let side = |k: &str| {
+        seam.side_ref(k)
+            .ok_or_else(|| invalid(format!("seam {seam_id} has no side {k}")))
+    };
+    let (a, b) = (side("a")?, side("b")?);
+    let (inst, eids) = query(pattern.side(b))?;
+    if inst.mirrored || inst.side == crate::Side::L || eids.iter().any(|e| e.ends_with(".L")) {
+        return Err(invalid(
+            "true the drafted (.R) side; the mirrored copy follows",
+        ));
+    }
+    let at_end = end == "end";
+    let eid = if at_end { eids.last() } else { eids.first() }
+        .ok_or_else(|| invalid(format!("seam {seam_id}: side b has no edge")))?;
+    let edge = query(inst.edge(eid))?;
+    let vid = if at_end { &edge.to } else { &edge.from }.clone();
+    let pid = inst.piece.clone();
+    let base = drafted_vertex(doc, &pid, &vid)?;
+    let dense = query(inst.edge_dense(eid, ftx_core::curve::EDGE_DENSE))?;
+    let n = dense.len();
+    let t = if at_end {
+        dense[n - 1] - dense[n - 2]
+    } else {
+        dense[0] - dense[1]
+    };
+    let norm = (t.x * t.x + t.y * t.y).sqrt();
+    let t = Vec2::new(t.x / norm, t.y / norm);
+    let target = query(pattern.side_length(a))? / ratio;
+    let d = bisect(
+        |d| {
+            let mut trial = doc.clone();
+            *vertex_mut(piece_mut(&mut trial, &pid)?, &vid)? =
+                json!([base.x + d * t.x, base.y + d * t.y]);
+            Ok(query(Pattern::new(trial).side_length(b))? - target)
+        },
+        -60.0,
+        60.0,
+    )?;
+    let mut out = doc.clone();
+    *vertex_mut(piece_mut(&mut out, &pid)?, &vid)? =
+        point_value(rounded(Vec2::new(base.x + d * t.x, base.y + d * t.y)))?;
+    history(
+        &mut out,
+        "true-seam",
+        json!({"seam": seam_id, "end": end, "moved_mm": py::round(d, 2)}),
+        format!(
+            "Trued seam {seam_id}: moved {pid}:{vid} {} mm along the seam so side b is {} mm (side a / {}).",
+            py::signed_fixed(d, 1),
+            py::fixed(target, 1),
+            py::fixed(ratio, 3)
+        ),
+    )?;
+    Ok(out)
+}
+
+/// Scale the height of `pid` above its underarm line (the lowest end of its cap sides in `seams`) so the
+/// total cap length over the total armhole length is `target`; marks above the line follow. The two cap
+/// halves are not kept equal (spec 01 §17).
+///
+/// # Errors
+/// Unknown piece, no seam of `pid` among `seams`, unknown sides, a non-finite target or result.
+pub fn cap_ease(doc: &Value, pid: &str, seams: &[String], target: f64) -> Result<Value, Refusal> {
+    Refusal::finite("target", target)?;
+    let pattern = built(doc)?;
+    piece_mut(&mut doc.clone(), pid)?;
+    let (mut caps, mut arms) = (Vec::new(), Vec::new());
+    for s in pattern.seams() {
+        let Some(id) = s.id() else { continue };
+        if !seams.iter().any(|x| x == id) {
+            continue;
+        }
+        let side = |k: &str| {
+            s.side_ref(k)
+                .ok_or_else(|| invalid(format!("seam {id} has no side {k}")))
+        };
+        let (a, b) = (side("a")?, side("b")?);
+        let head = a.split('/').next().unwrap_or("");
+        if head.split('.').next().unwrap_or("") == pid {
+            caps.push(a.to_string());
+            arms.push(b.to_string());
+        } else {
+            caps.push(b.to_string());
+            arms.push(a.to_string());
+        }
+    }
+    let first = caps
+        .first()
+        .ok_or_else(|| invalid(format!("no seam of '{pid}' among {}", seams.join(", "))))?;
+    let (inst, _) = query(pattern.side(first))?;
+    let y_of = |vid: &str| {
+        inst.verts
+            .get(vid)
+            .map(|p| p.y)
+            .ok_or_else(|| invalid(format!("no vertex '{vid}'")))
+    };
+    let mut y_ua = f64::INFINITY;
+    for r in &caps {
+        let (cap, eids) = query(pattern.side(r))?;
+        for e in &eids {
+            let edge = query(cap.edge(e))?;
+            y_ua = y_ua.min(y_of(&edge.from)?).min(y_of(&edge.to)?);
+        }
+    }
+    let mut arm = 0.0;
+    for r in &arms {
+        arm += query(pattern.side_length(r))?;
+    }
+    let lift = |k: f64| {
+        move |p: Vec2| {
+            if p.y > y_ua {
+                Vec2::new(p.x, y_ua + k * (p.y - y_ua))
+            } else {
+                p
+            }
+        }
+    };
+    let scaled = |k: f64| -> Result<Value, Refusal> {
+        let mut trial = doc.clone();
+        map_vertices(piece_mut(&mut trial, pid)?, &lift(k))?;
+        Ok(trial)
+    };
+    let k = bisect(
+        |k| {
+            let sp = Pattern::new(scaled(k)?);
+            let mut sum = 0.0;
+            for r in &caps {
+                sum += query(sp.side_length(r))?;
+            }
+            Ok(sum / arm - target)
+        },
+        0.3,
+        3.0,
+    )?;
+    let mut out = scaled(k)?;
+    shift_marks(piece_mut(&mut out, pid)?, &lift(k))?;
+    let mut old = 0.0;
+    for r in &caps {
+        old += query(pattern.side_length(r))?;
+    }
+    let old = old / arm - 1.0;
+    history(
+        &mut out,
+        "cap-ease",
+        json!({"piece": pid, "seams": seams, "target": target, "height_scale": py::round(k, 4)}),
+        format!(
+            "Scaled the {pid} cap height by {} so cap ease goes from {}% to {}% of the armhole.",
+            py::fixed(k, 3),
+            py::fixed(old * 100.0, 1),
+            py::fixed((target - 1.0) * 100.0, 1)
+        ),
+    )?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

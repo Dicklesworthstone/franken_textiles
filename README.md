@@ -31,8 +31,9 @@ is deterministic, testable against known answers, and runs in a browser with not
 **Phase 1.** Six crates have code: `ftx-core` (deterministic maths, geometry kernels), `ftx-body` (the Anny
 body model, poses, landmarks), `ftx-pattern` (the pattern model, structure checks and validation, bit-exact
 with the reference), `ftx-drape` (the garment mesh, start state, cloth solver with body contact and friction,
-fold-up animation, metrics and flags), `ftx-cli` (`ftx validate`, `ftx drape`) and `ftx-conformance` (oracle
-fixtures). Drafting, alteration, exports, tracing, the round and the browser build are not ported yet.
+fold-up animation, metrics and flags), `ftx-cli` (`ftx validate`, `ftx drape`, `ftx body`, `ftx alter`) and
+`ftx-conformance` (oracle fixtures). The alteration ops are bit-exact with the reference; drafting, exports,
+tracing, the round and the browser build are not ported yet.
 
 | Question | Answer |
 |---|---|

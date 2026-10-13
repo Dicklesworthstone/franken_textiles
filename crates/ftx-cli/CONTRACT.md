@@ -2,7 +2,7 @@
 
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
 FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx validate`,
-`ftx drape` and `ftx body`; `round`, `draft`, `measure`, `export`, `trace`, `alter`, `viewer` and
+`ftx drape`, `ftx body` and `ftx alter`; `round`, `draft`, `measure`, `export`, `trace`, `viewer` and
 `report` follow their subsystems.
 
 **Commands.**
@@ -26,6 +26,12 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,
   the phenotype and every local change in use). Exit 0; an unknown pose is refused.
+- `ftx alter OP PATTERN --out OUT [...]` with OP `slash-spread` (`--piece --axis x|y --at --add`), `move`
+  (`--piece --vertex [--dx] [--dy]`), `true-seam` (`--seam [--end start|end]`), `cap-ease` (`--piece
+  --seams S1,S2 --target`) or `transfer-curve` (`--from SRC.json:INSTANCE/EDGE`, split at the last `:`,
+  `--to PIECE/EDGE`): the reference's `alter.py` (spec 01 §10.7) on `ftx_pattern::alter`. Writes OUT even
+  with structure errors and prints the op's history sentence; exit 0, or 2 with the structure errors
+  listed (the reference exits 1); a reference error (missing piece or vertex, a `.L` side) is a refusal.
 
 **Output.** Human text, or with `--json` exactly one JSON envelope on stdout:
 `{"schema": "ftx-cli/1", "command", "ok", "exit", "result"}` or, for refused input,

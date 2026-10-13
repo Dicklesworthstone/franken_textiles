@@ -29,7 +29,7 @@ use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
 use ftx_drape::run::{DrapeBody, DrapeOptions, drape, viewer};
-use ftx_pattern::{Measurements, Pattern, format_table, validate};
+use ftx_pattern::{Measurements, Pattern, alter, format_table, validate};
 use serde_json::{Value, json};
 
 const VIEWER_TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template.html");
@@ -38,6 +38,11 @@ const USAGE: &str = "usage:
   ftx validate PATTERN --measurements M [--fit F] [--json]
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--model PATH] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
+  ftx alter slash-spread PATTERN --piece P --axis x|y --at MM --add MM --out OUT [--json]
+  ftx alter move PATTERN --piece P --vertex V [--dx MM] [--dy MM] --out OUT [--json]
+  ftx alter true-seam PATTERN --seam S [--end start|end] --out OUT [--json]
+  ftx alter cap-ease PATTERN --piece P --seams S1,S2 --target RATIO --out OUT [--json]
+  ftx alter transfer-curve PATTERN --from SRC.json:INSTANCE/EDGE --to PIECE/EDGE --out OUT [--json]
   ftx --version";
 
 /// Parsed command line: the positional arguments and the `--flag value` options.
@@ -277,6 +282,105 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     ))
 }
 
+/// `ftx alter OP PATTERN --out OUT [...]`: one alteration op (spec 01 §10.7), the result written even
+/// with structure errors (exit 2 then), the op's history sentence printed.
+fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    let op = args.positional.get(1).map_or("", String::as_str);
+    let allowed: &[&str] = match op {
+        "slash-spread" => &["out", "piece", "axis", "at", "add"],
+        "move" => &["out", "piece", "vertex", "dx", "dy"],
+        "true-seam" => &["out", "seam", "end"],
+        "cap-ease" => &["out", "piece", "seams", "target"],
+        "transfer-curve" => &["out", "from", "to"],
+        _ => {
+            return Err(bad_input(format!("ftx alter: no op {op:?}")).repair(
+                "ftx alter slash-spread|move|true-seam|cap-ease|transfer-curve PATTERN ...",
+            ));
+        }
+    };
+    known_options(args, "alter", allowed)?;
+    let pattern_path = args
+        .positional
+        .get(2)
+        .ok_or_else(|| bad_input(format!("ftx alter {op} needs a pattern file")))?;
+    let (doc, _) = read_json(pattern_path)?;
+    let out = PathBuf::from(required(args, "out")?);
+    let text = |k: &str| required(args, k);
+    let num = |k: &str, default: Option<f64>| -> Result<f64, Refusal> {
+        match (args.options.get(k), default) {
+            (Some(v), _) => v
+                .parse()
+                .map_err(|_| bad_input(format!("--{k} must be a number"))),
+            (None, Some(d)) => Ok(d),
+            (None, None) => Err(bad_input(format!("--{k} is required"))),
+        }
+    };
+    let result = match op {
+        "slash-spread" => {
+            let axis = text("axis")?;
+            if axis != "x" && axis != "y" {
+                return Err(bad_input("--axis must be x or y"));
+            }
+            alter::slash_spread(
+                &doc,
+                text("piece")?,
+                axis,
+                num("at", None)?,
+                num("add", None)?,
+            )
+        }
+        "move" => alter::move_vertex(
+            &doc,
+            text("piece")?,
+            text("vertex")?,
+            num("dx", Some(0.0))?,
+            num("dy", Some(0.0))?,
+        ),
+        "true-seam" => {
+            let end = args.options.get("end").map_or("end", String::as_str);
+            if end != "start" && end != "end" {
+                return Err(bad_input("--end must be start or end"));
+            }
+            alter::true_seam(&doc, text("seam")?, end)
+        }
+        "cap-ease" => {
+            let seams: Vec<String> = text("seams")?.split(',').map(String::from).collect();
+            alter::cap_ease(&doc, text("piece")?, &seams, num("target", None)?)
+        }
+        _ => {
+            let from = text("from")?;
+            let (src_path, src_ref) = from
+                .rsplit_once(':')
+                .ok_or_else(|| bad_input("--from must be SRC.json:instance/edge"))?;
+            let (src, _) = read_json(src_path)?;
+            alter::transfer_curve(&doc, &src, src_ref, text("to")?)
+        }
+    }?;
+    let errors = Pattern::new(result.clone()).structure_errors();
+    let body = serde_json::to_string_pretty(&result).unwrap_or_default() + "\n";
+    std::fs::write(&out, body)
+        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", out.display())))?;
+    let why = result["meta"]["history"]
+        .as_array()
+        .and_then(|h| h.last())
+        .and_then(|h| h["why"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    let mut text_out = why.clone();
+    if !errors.is_empty() {
+        text_out.push_str("\nstructure errors:");
+        for e in &errors {
+            text_out.push_str(&format!("\n  {e}"));
+        }
+    }
+    let code = if errors.is_empty() { 0 } else { 2 };
+    Ok((
+        json!({"out": out, "why": why, "structure_errors": errors}),
+        code,
+        text_out,
+    ))
+}
+
 fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(args, "validate", &["measurements", "fit"])?;
     let pattern_path = args
@@ -475,6 +579,7 @@ fn main() -> ExitCode {
         Some("validate") => emit("validate", args.json, cmd_validate(&args)),
         Some("drape") => emit("drape", args.json, cmd_drape(&args)),
         Some("body") => emit("body", args.json, cmd_body(&args)),
+        Some("alter") => emit("alter", args.json, cmd_alter(&args)),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(3)
