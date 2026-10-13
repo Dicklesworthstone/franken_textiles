@@ -30,6 +30,24 @@ jobs:
       - name: Test
         if: ${{ !cancelled() }}
         run: cargo test --workspace --locked
+      - name: Check browser bindings
+        if: ${{ !cancelled() }}
+        run: cargo check --target wasm32-unknown-unknown -p ftx-wasm --locked
+      - name: Check tracing page and worker state
+        if: ${{ !cancelled() }}
+        run: node --experimental-vm-modules --test tools/check_trace_frontend.cjs
+      - name: Build requested browser bundle
+        if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[browser-bundle]')) }}
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+          sh tools/build_web.sh
+      - name: Preserve browser bundle
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[browser-bundle]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-${{ github.sha }}
+          path: web/
+          retention-days: 1
       - name: Package pinned tools for offline reproduction
         if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[offline-tools]')
         run: |

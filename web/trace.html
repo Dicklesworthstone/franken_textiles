@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trace a pattern sheet — FrankenTextiles</title>
+<style>
+:root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; background: light-dark(#f5f6f7,#151719); color: light-dark(#17212b,#eceff2); }
+main { max-width: 1100px; margin: auto; padding: 24px; }
+section { padding: 20px; margin: 20px 0; border: 1px solid #82909b; border-radius: 10px; }
+h1,h2 { line-height: 1.2; } h2 { font-size: 1.3rem; }
+.row { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; }
+label { display: block; margin: 8px 0; } label input:not([type=checkbox]),label select { display: block; }
+input,select,textarea,button { font: inherit; padding: 8px; max-width: 100%; box-sizing: border-box; }
+textarea { width: 100%; min-height: 7em; font-family: ui-monospace,monospace; }
+button { cursor: pointer; } button:disabled { cursor: default; opacity: .6; }
+button.primary { background: #135eab; border: 1px solid #135eab; color: white; border-radius: 5px; }
+a { color: light-dark(#095da8,#8bc5ff); } #files a { display: inline-block; margin: 8px 18px 8px 0; }
+#pictures { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,340px),1fr)); gap: 16px; }
+figure { margin: 0; } img { max-width: 100%; height: auto; background: white; } figcaption { overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; max-height: 40em; overflow: auto; }
+.warning,#error { border-left: 4px solid #c26d12; padding-left: 12px; } #error { color: light-dark(#a32418,#ffb3a9); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body><main>
+<p><a href="index.html">← Pattern Workbench</a></p>
+<h1>Trace, name and scale a pattern sheet</h1>
+<p>Your PNG and JSON stay in this browser. The worker runs the same Rust geometry and review renderer as <code>ftx trace</code>, <code>annotate</code> and <code>audit</code>. No upload, Python or OpenCV is required.</p>
+<p class="warning">Review images are <strong>not for cutting</strong>. A traced drawing starts UNSCALED. Known lengths establish scale, not sewability or fit. After review, download <code>pattern.json</code> and load it as “Someone else's pattern” in the <a href="index.html">Pattern Workbench</a> with your measurements.</p>
+<section id="source"><h2>1. Choose and trace a sheet</h2>
+<label>PNG image (up to 16 MiB and 4 million decoded pixels)<input type="file" id="image" accept=".png,image/png"></label>
+<p>Use an already correctly oriented PNG. Oversized inputs are refused, not automatically resized. Convert JPEG/WebP to PNG before opening. Changing the source or settings resets the edits below.</p>
+<div class="row">
+<label>Channel<select id="channel"><option>auto</option><option>bgdist</option><option>dark</option><option>light</option><option>gray</option><option>sat</option><option>r</option><option>g</option><option>b</option><option>edge</option></select></label>
+<label>Threshold<select id="threshold"><option value="otsu">Otsu (global)</option><option value="adaptive">Gaussian (uneven lighting)</option></select></label>
+<label>Invert channel<select id="invert"><option value="auto">Automatic</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+<label>Stroke width, px (optional)<input id="stroke" type="number" min="0.1" max="100" step="0.1"></label>
+<label>Minimum piece area fraction<input id="area" type="number" min="0.0001" max="0.5" step="0.0001" value="0.01"></label>
+<label>Crop x,y,width,height (optional)<input id="crop" placeholder="0,0,1000,1000"></label>
+<label><input id="dashes" type="checkbox" checked> Bridge dashed lines</label>
+</div><button id="trace" class="primary" type="button" disabled>Trace PNG</button></section>
+<section id="edits"><h2>2. Review names and known lengths</h2>
+<p>Inspect the overlay and source-label crops below. Enter <code>names.json</code> to name pieces, edges, seams and construction. For example, <code>{"pieces":{"p1":{"id":"front","name":"Front"}}}</code>. Unspecified pieces remain unchanged; names are not inferred from the image.</p>
+<label>Names and construction JSON<textarea id="names" spellcheck="false">{}</textarea></label>
+<p>Scale targets refer to the <em>renamed</em> pattern and use explicit millimetres, for example <code>[{"reference":"front/e1","target_mm":200}]</code>. Leave <code>[]</code> to keep the draft UNSCALED. Do not guess a target from how the picture looks.</p>
+<label>Scale targets JSON<textarea id="targets" spellcheck="false">[]</textarea></label>
+<details><summary>Optional printed-label evidence for the audit</summary><p>Use the native audit's <code>labels.json</code> list. Keep <code>[]</code> when no printed dimension evidence has been transcribed.</p><label>Audit labels JSON<textarea id="labels" spellcheck="false">[]</textarea></label></details>
+<p>Each application starts from the original trace: repeating a scale or mirror operation does not accumulate it.</p>
+<button id="apply" class="primary" type="button" disabled>Apply edits and audit</button></section>
+<p class="row"><button id="cancel" type="button" disabled>Cancel and reset engine</button><span id="status" role="status" aria-live="polite"></span></p>
+<p id="error" role="alert" hidden></p>
+<section id="results" hidden><h2 id="summary"></h2>
+<p id="scaleWarning" class="warning"></p><p id="limits"></p>
+<div id="pieces"></div><div id="files" aria-label="Review downloads"></div>
+<div id="pictures"></div><details><summary>Full audit, scale residuals and trace diagnostics</summary><pre id="details"></pre></details>
+</section>
+</main><script type="module" src="trace-page.js"></script></body></html>

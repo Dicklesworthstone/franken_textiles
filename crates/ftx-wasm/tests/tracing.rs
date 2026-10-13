@@ -25,11 +25,28 @@ fn doc(review: &Review) -> PatternDoc {
     serde_json::from_slice(file(review, "pattern.json")).unwrap()
 }
 
+// Optional synthetic products for inspecting the browser UI; never oracle fixtures or wearer data.
+fn sample(name: &str, review: &Review) {
+    if let Some(root) = std::env::var_os("FTX_TRACE_SAMPLE_DIR") {
+        let dir = std::path::PathBuf::from(root).join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("input.png"), png()).unwrap();
+        std::fs::write(dir.join("report.json"), review.report.to_string()).unwrap();
+        std::fs::write(dir.join("trace-review.zip"), review.zip()).unwrap();
+        for (name, bytes) in &review.files {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
+}
+
 #[test]
 fn initial_review_matches_native_geometry_mask_and_images() {
     let bytes = png();
     let sheet = Sheet::new(&bytes, "{}").unwrap();
     let result = sheet.review("{}", "[]", "[]").unwrap();
+    sample("initial", &result);
     let image = load_png(&bytes).unwrap();
     let native =
         ftx_trace::trace_image(&image, Some("browser-sheet.png"), &TraceOptions::default())
@@ -69,6 +86,7 @@ fn edits_are_repeatable_and_failed_attempts_cannot_change_the_original() {
     let names = r#"{"pieces":{"p1":{"id":"front","drawn_side":"L"}}}"#;
     let targets = r#"[{"reference":"front/e1","target_mm":200}]"#;
     let first = sheet.review(names, targets, "[]").unwrap();
+    sample("edited", &first);
     assert_eq!(first.report["scale_status"], "FITTED");
     assert_eq!(first.report["pieces"][0]["id"], "front");
     assert_eq!(

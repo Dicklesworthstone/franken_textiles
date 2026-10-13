@@ -4,6 +4,6 @@
 # Cargo.toml pins (cargo install wasm-bindgen-cli --version 0.2.128).
 set -eu
 cd "$(dirname "$0")/.."
-cargo build --release --target wasm32-unknown-unknown -p ftx-wasm
-wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/ftx_wasm.wasm
+cargo build --locked --release --target wasm32-unknown-unknown -p ftx-wasm
+wasm-bindgen --target web --out-dir web/pkg "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/ftx_wasm.wasm"
 echo "built web/pkg; serve the page with: python3 -m http.server -d web 8000  (then open http://localhost:8000/)"
