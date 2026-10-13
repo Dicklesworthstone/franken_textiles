@@ -319,6 +319,55 @@ def main() -> int:
     hough("grain-lines", lines_img, 1, np.pi / 180, max(20, int(0.08 * size)), 0.2 * size, max(3, int(0.01 * size)))
     hough("grain-lines-thin", lines_img, 1, np.pi / 180, 10, 15.0, 2.0)
     write(args.out_dir, "raster_hough", meta, hcases)
+
+    # ---------------------------------------------------------------- drawing, convex hull
+    wcases = []
+    for k in range(12):
+        n = int(rng.integers(3, 12))
+        polys = [rng.integers(-10, 70, (n, 2)).astype(np.int32)]
+        if k % 4 == 3:
+            polys.append(rng.integers(0, 60, (int(rng.integers(3, 8)), 2)).astype(np.int32))
+        img = np.zeros((50, 60), np.uint8)
+        cv2.fillPoly(img, polys, 255)
+        wcases.append({"id": f"fillpoly-{k}", "input": {"w": 60, "h": 50, "polys": [q.tolist() for q in polys]},
+                       "output": {"img": img.reshape(-1).tolist()}})
+    for name, img in (("blobs", blobs), ("nested", nested)):
+        cs, _ = cv2.findContours(img, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+        for k, c in enumerate(cs[:6]):
+            out = np.zeros_like(img)
+            cv2.drawContours(out, [c], -1, 255, -1)
+            wcases.append({"id": f"drawcontour-{name}-{k}", "input": {"w": int(img.shape[1]), "h": int(img.shape[0]),
+                                                                     "polys": [c[:, 0, :].tolist()]},
+                           "output": {"img": out.reshape(-1).tolist()}})
+    for name, enc in sheet_masks.items():
+        mask = cv2.imdecode(enc, cv2.IMREAD_GRAYSCALE)
+        cs, hier = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+        tops = sorted([i for i in range(len(cs)) if hier[0][i][3] < 0], key=lambda i: -cv2.contourArea(cs[i]))[:3]
+        for i in tops:
+            out = np.zeros_like(mask)
+            cv2.drawContours(out, [cs[i]], -1, 255, -1)
+            wcases.append({"id": f"drawcontour-sheet-{name}-{i}", "input": {"w": int(mask.shape[1]), "h": int(mask.shape[0]),
+                                                                          "polys": [cs[i][:, 0, :].tolist()]},
+                           "output": {"sha256": hashlib.sha256(out.tobytes()).hexdigest()}})
+    for k in range(16):
+        p, q = rng.integers(-5, 85, 2), rng.integers(-5, 65, 2)
+        t = 2 + k % 6
+        img = np.zeros((60, 80), np.uint8)
+        cv2.line(img, (int(p[0]), int(q[0])), (int(p[1]), int(q[1])), 255, t)
+        wcases.append({"id": f"line-{k}", "input": {"w": 80, "h": 60, "p0": [int(p[0]), int(q[0])], "p1": [int(p[1]), int(q[1])],
+                                                    "thickness": t}, "output": {"img": img.reshape(-1).tolist()}})
+    for k in range(10):
+        img = np.zeros((40, 40), np.uint8)
+        cv2.circle(img, (int(rng.integers(5, 35)), int(rng.integers(5, 35))), int(rng.integers(1, 9)), 255, -1)
+        if k % 2:
+            cv2.rectangle(img, (int(rng.integers(0, 20)), int(rng.integers(0, 20))), (int(rng.integers(20, 40)), int(rng.integers(20, 40))), 255, -1)
+        ys, xs = np.nonzero(img)
+        pts = np.column_stack([xs, ys]).astype(np.float32)
+        hull = cv2.convexHull(pts)
+        tri = len(cv2.approxPolyDP(hull, 0.15 * float(np.ptp(xs) + 1), True))
+        wcases.append({"id": f"hull-{k}", "input": {"pts": pts.tolist()},
+                       "output": {"hull": hull[:, 0, :].tolist(), "area": cv2.contourArea(hull), "approx_n": tri}})
+    write(args.out_dir, "raster_draw", meta, wcases)
     return 0
 
 

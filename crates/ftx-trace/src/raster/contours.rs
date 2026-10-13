@@ -492,6 +492,177 @@ pub fn bounding_rect(c: &[Pt]) -> (i32, i32, i32, i32) {
     (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
 }
 
+fn sign(x: f64) -> i32 {
+    i32::from(x > 0.0) - i32::from(x < 0.0)
+}
+
+/// OpenCV's `Sklansky_<float, double>` over sorted point indices `ord`: the chain from `start` to `end`.
+fn sklansky(
+    p: &[(f32, f32)],
+    ord: &[usize],
+    start: usize,
+    end: usize,
+    nsign: i32,
+    sign2: i32,
+) -> Vec<usize> {
+    let at = |k: isize| p[ord[k as usize]];
+    let (start, end) = (start as isize, end as isize);
+    let incr: isize = if end > start { 1 } else { -1 };
+    if start == end || at(start) == at(end) {
+        return vec![start as usize];
+    }
+    let (mut pprev, mut pcur, mut pnext) = (start, start + incr, start + 2 * incr);
+    let mut stack: Vec<isize> = vec![pprev, pcur, pnext];
+    let after = end + incr;
+    let norm = |v: (f32, f32)| -> (f32, f32) {
+        let n = (f64::from(v.0) * f64::from(v.0) + f64::from(v.1) * f64::from(v.1)).sqrt();
+        let s = if n == 0.0 { 0.0 } else { 1.0 / n };
+        ((f64::from(v.0) * s) as f32, (f64::from(v.1) * s) as f32)
+    };
+    while pnext != after {
+        let (cur, next, prev) = (at(pcur), at(pnext), at(pprev));
+        let by = next.1 - cur.1;
+        if sign(f64::from(by)) != nsign {
+            let a = (cur.0 - prev.0, cur.1 - prev.1);
+            let b = (next.0 - cur.0, by);
+            let (an, bn) = (norm(a), norm(b));
+            let convexity = f64::from(an.1) * f64::from(bn.0) - f64::from(an.0) * f64::from(bn.1);
+            if sign(convexity) == sign2 && (an.0 != 0.0 || an.1 != 0.0) {
+                pprev = pcur;
+                pcur = pnext;
+                pnext += incr;
+                stack.push(pnext);
+            } else if pprev == start {
+                pcur = pnext;
+                stack[1] = pcur;
+                pnext += incr;
+                stack[2] = pnext;
+            } else {
+                let n = stack.len();
+                stack[n - 2] = pnext;
+                pcur = pprev;
+                pprev = stack[n - 4];
+                stack.pop();
+            }
+        } else {
+            pnext += incr;
+            let n = stack.len();
+            stack[n - 1] = pnext;
+        }
+    }
+    stack.pop();
+    stack.into_iter().map(|k| k as usize).collect()
+}
+
+/// `convexHull(points)` (float32 points, counter-clockwise as OpenCV orders it, the output cyclically
+/// shifted so its source indices run monotonically when they can).
+#[must_use]
+pub fn convex_hull(p: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let total = p.len();
+    if total == 0 {
+        return Vec::new();
+    }
+    let mut ord: Vec<usize> = (0..total).collect();
+    ord.sort_by(|&a, &b| {
+        p[a].0
+            .partial_cmp(&p[b].0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                p[a].1
+                    .partial_cmp(&p[b].1)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(a.cmp(&b))
+    });
+    let (mut miny, mut maxy) = (0usize, 0usize);
+    for i in 1..total {
+        let y = p[ord[i]].1;
+        if p[ord[miny]].1 > y {
+            miny = i;
+        }
+        if p[ord[maxy]].1 < y {
+            maxy = i;
+        }
+    }
+    let mut hull: Vec<usize> = Vec::new();
+    if p[ord[0]] == p[ord[total - 1]] {
+        hull.push(0);
+    } else {
+        let tl = sklansky(p, &ord, 0, maxy, -1, 1);
+        let tr = sklansky(p, &ord, total - 1, maxy, -1, -1);
+        let (tl, tr) = (tr, tl); // counter-clockwise
+        hull.extend(&tl[..tl.len() - 1]);
+        hull.extend(tr[1..].iter().rev());
+        let stop = if tr.len() > 2 {
+            Some(tr[1])
+        } else if tl.len() > 2 {
+            Some(tl[tl.len() - 2])
+        } else {
+            None
+        };
+        let bl = sklansky(p, &ord, 0, miny, 1, -1);
+        let br = sklansky(p, &ord, total - 1, miny, 1, 1);
+        let (mut bl_n, mut br_n) = (bl.len(), br.len());
+        if let Some(stop) = stop {
+            let check = if bl_n > 2 {
+                Some(bl[1])
+            } else if bl_n + br_n > 2 {
+                Some(br[2 - bl_n])
+            } else {
+                None
+            };
+            if check.is_some_and(|c| c == stop || p[ord[c]] == p[ord[stop]]) {
+                bl_n = bl_n.min(2);
+                br_n = br_n.min(2);
+            }
+        }
+        hull.extend(&bl[..bl_n - 1]);
+        hull.extend(br[1..br_n].iter().rev());
+    }
+    let mut idx: Vec<usize> = hull.iter().map(|&k| ord[k]).collect();
+    let nout = idx.len();
+    if nout >= 3 {
+        let (mut min_i, mut max_i, mut lt) = (0usize, 0usize, 0usize);
+        for i in 1..nout {
+            let v = idx[i];
+            lt += usize::from(idx[i - 1] < v);
+            if lt > 1 && lt + 2 <= i {
+                break;
+            }
+            if v < idx[min_i] {
+                min_i = i;
+            }
+            if v > idx[max_i] {
+                max_i = i;
+            }
+        }
+        let mmdist = max_i.abs_diff(min_i);
+        if (mmdist == 1 || mmdist == nout - 1) && (lt <= 1 || lt + 2 >= nout) {
+            let ascending = (max_i + 1) % nout == min_i;
+            let i0 = if ascending { min_i } else { max_i };
+            if i0 > 0 {
+                let mut shifted = Vec::with_capacity(nout);
+                let mut j = i0;
+                let mut complete = true;
+                for i in 0..nout {
+                    let cur = idx[j];
+                    shifted.push(cur);
+                    let nj = if j + 1 < nout { j + 1 } else { 0 };
+                    if i < nout - 1 && ascending != (cur < idx[nj]) {
+                        complete = false;
+                        break;
+                    }
+                    j = nj;
+                }
+                if complete {
+                    idx = shifted;
+                }
+            }
+        }
+    }
+    idx.into_iter().map(|k| p[k]).collect()
+}
+
 /// A point type `approxPolyDP` runs on: OpenCV subtracts in the point's own type, then works in double.
 pub trait DpPoint: Copy + PartialEq {
     /// `a.x − b.x` and `a.y − b.y` in the point type, as doubles.

@@ -196,6 +196,87 @@ fn hough_matches_opencv() {
     assert!(fails.is_empty(), "{}", fails.join("\n"));
 }
 
+/// `fillPoly` (random, concave, self-intersecting and partly outside polygons; several at once),
+/// `drawContours(FILLED)` on contours of blobs and the sheets, thick lines and `convexHull`, bit for bit.
+#[test]
+fn drawing_and_hull_match_opencv() {
+    use ftx_trace::raster::contours::{approx_poly_dp, convex_hull};
+    use ftx_trace::raster::draw::{fill_poly, line};
+    let fx = fixture("trace", "raster_draw");
+    let mut fails = Vec::new();
+    for case in fx["cases"].as_array().unwrap() {
+        let (inp, out, id) = (
+            &case["input"],
+            &case["output"],
+            case["id"].as_str().unwrap(),
+        );
+        if id.starts_with("hull-") {
+            let pts: Vec<(f32, f32)> = inp["pts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| (p[0].as_f64().unwrap() as f32, p[1].as_f64().unwrap() as f32))
+                .collect();
+            let hull = convex_hull(&pts);
+            let want: Vec<(f32, f32)> = out["hull"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| (p[0].as_f64().unwrap() as f32, p[1].as_f64().unwrap() as f32))
+                .collect();
+            let xs = pts.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max)
+                - pts.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+            let n = approx_poly_dp(&hull, 0.15 * f64::from(xs + 1.0), true).len();
+            if hull != want || n as u64 != out["approx_n"].as_u64().unwrap() {
+                fails.push(format!(
+                    "{id}: hull {} vs {} points, approx {n} vs {}",
+                    hull.len(),
+                    want.len(),
+                    out["approx_n"]
+                ));
+            }
+            continue;
+        }
+        let (w, h) = (
+            inp["w"].as_u64().unwrap() as usize,
+            inp["h"].as_u64().unwrap() as usize,
+        );
+        let mut img = Gray::filled(w, h, 0);
+        if let Some(polys) = inp.get("polys") {
+            let polys: Vec<Vec<(i64, i64)>> = polys
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|q| {
+                    q.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|p| (p[0].as_i64().unwrap(), p[1].as_i64().unwrap()))
+                        .collect()
+                })
+                .collect();
+            fill_poly(&mut img, &polys, 255);
+        } else {
+            let p = |k: &str| (inp[k][0].as_i64().unwrap(), inp[k][1].as_i64().unwrap());
+            line(
+                &mut img,
+                p("p0"),
+                p("p1"),
+                255,
+                inp["thickness"].as_i64().unwrap(),
+            );
+        }
+        let ok = match out.get("sha256") {
+            Some(sha) => ftx_core::receipt::sha256_hex(&img.data) == sha.as_str().unwrap(),
+            None => img.data == bytes(&out["img"]),
+        };
+        if !ok {
+            fails.push(format!("{id}: pixels differ"));
+        }
+    }
+    assert!(fails.is_empty(), "{}", fails.join("\n"));
+}
+
 /// Chamfer distance transforms (masks 3 and 5) and 8-connected components with their stats, bit for bit.
 #[test]
 fn distance_and_components_match_opencv() {
