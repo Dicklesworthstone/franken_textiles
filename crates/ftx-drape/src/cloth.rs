@@ -841,6 +841,16 @@ impl Solver {
     /// [`RefusalCode::OutOfRange`] for a non-positive step; [`RefusalCode::NonFinite`] when the state
     /// becomes non-finite; a failed symbolic analysis.
     pub fn step(&mut self, h: f64) -> Result<SolveReport, Refusal> {
+        self.step_at_body(h, None)
+    }
+
+    // Prescribed body motion is admitted transactionally by motion::advance_body. Newton sees
+    // the endpoint collider, while friction measures displacement from its previous coordinates.
+    pub(crate) fn step_at_body(
+        &mut self,
+        h: f64,
+        body_start: Option<&[Vec3]>,
+    ) -> Result<SolveReport, Refusal> {
         if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -868,7 +878,11 @@ impl Solver {
             })
             .collect();
         if let Some(c) = &mut self.contact {
-            c.update_lag(&x0, &x0, h); // friction pairs frozen at the start of the step
+            if let Some(b) = body_start {
+                c.update_lag_motion(&x0, &x0, h, Some(b));
+            } else {
+                c.update_lag(&x0, &x0, h);
+            }
         }
         let mut rep = match self.minimize(Some((&xt, h))) {
             Ok(rep) => rep,
@@ -884,7 +898,11 @@ impl Solver {
             if !c.has_friction() {
                 break;
             }
-            c.update_lag(&x0, &self.x, h);
+            if let Some(b) = body_start {
+                c.update_lag_motion(&x0, &self.x, h, Some(b));
+            } else {
+                c.update_lag(&x0, &self.x, h);
+            }
             let again = match self.minimize(Some((&xt, h))) {
                 Ok(rep) => rep,
                 Err(e) => {

@@ -23,6 +23,7 @@ pub mod eigen;
 pub mod elements;
 pub mod garment;
 pub mod metrics;
+pub mod motion;
 pub mod nearest;
 pub mod point_cache;
 pub mod render;
