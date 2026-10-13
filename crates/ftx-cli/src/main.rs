@@ -609,6 +609,40 @@ fn drape_pose(args: &Args) -> Result<Pose, Refusal> {
     Ok(pose)
 }
 
+/// Claim a fresh destination before fitting/solving. A failed retry must not leave a previous
+/// successful run at the path the caller will inspect for its new result.
+fn reserve_drape_output(out: &std::path::Path) -> Result<(), Refusal> {
+    match std::fs::symlink_metadata(out) {
+        Ok(_) => {
+            return Err(bad_input(format!(
+                "{}: drape output already exists; use a new directory for every run",
+                out.display()
+            ))
+            .repair("choose a fresh --out path; completed and failed runs are never reused"));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(workspace::io_error(out, e)),
+    }
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        make_dir(parent)?;
+    }
+    std::fs::create_dir(out).map_err(|e| workspace::io_error(out, e))
+}
+
+/// All serialization succeeds before publication starts. The report is the final completion
+/// record, never an invitation to consume stale or half-written geometry from an earlier run.
+fn write_drape_output(
+    out: &std::path::Path,
+    report: &Value,
+    files: &[(&str, Vec<u8>)],
+) -> Result<(), Refusal> {
+    let bytes = serde_json::to_vec_pretty(report).map_err(|e| bad_input(e.to_string()))?;
+    for (name, bytes) in files {
+        workspace::write_new(&out.join(name), bytes)?;
+    }
+    workspace::write_new(&out.join("sim_report.json"), &bytes)
+}
+
 fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
@@ -637,8 +671,8 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let (meas, meas_bytes) = read_json(meas_path)?;
     let out = PathBuf::from(required(args, "out")?);
     let spec = fit_spec(args)?;
-    // before the minutes of draping, so an unwritable DIR refuses at once
-    make_dir(&out)?;
+    // Refuse unwritable/existing destinations before the expensive fit and drape.
+    reserve_drape_output(&out)?;
     let model = load_model(args)?;
     let (w, fit) = fitted_body(&model, &meas)?;
     let rest = model.rest(&fit.params)?;
@@ -677,41 +711,36 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         );
         o.insert("body".into(), Value::Object(b));
     }
-    let write = |name: &str, bytes: &[u8]| -> Result<(), Refusal> {
-        std::fs::write(out.join(name), bytes)
-            .map_err(|e| Refusal::new(RefusalCode::Io, format!("{name}: {e}")))
-    };
-    write(
-        "sim_report.json",
-        serde_json::to_string_pretty(&report)
-            .unwrap_or_default()
-            .as_bytes(),
-    )?;
-    write("fold.pc2", &pc2(&run.fold.frames))?;
-    write(
-        "mesh_map.json",
-        serde_json::to_string_pretty(&mesh_map(&run.scene.mesh, &run.fold))
-            .unwrap_or_default()
-            .as_bytes(),
-    )?;
     let html = viewer(&run, &pattern, &body, VIEWER_TEMPLATE).map_err(bad_input)?;
-    write("fold_viewer.html", html.as_bytes())?;
     // the last frame and the body as OBJ, for renders outside (the skill's Blender stills): the
     // garment once with its seam colours and once with its strain colours (`v x y z r g b`)
     let mesh = &run.scene.mesh;
     let last = run.fold.frames.last().map_or(&[][..], Vec::as_slice);
     let style = pattern.raw()["style"].as_str().unwrap_or("");
-    write(
-        "garment.obj",
-        obj(last, &mesh.faces, Some(&seam_colours(mesh, style))).as_bytes(),
-    )?;
-    write(
-        "garment_strain.obj",
-        obj(last, &mesh.faces, Some(&strain_colours(mesh, last))).as_bytes(),
-    )?;
-    write(
-        "body.obj",
-        obj(&full.vertices, &full.triangles, None).as_bytes(),
+    write_drape_output(
+        &out,
+        &report,
+        &[
+            ("fold.pc2", pc2(&run.fold.frames)),
+            (
+                "mesh_map.json",
+                serde_json::to_vec_pretty(&mesh_map(&run.scene.mesh, &run.fold))
+                    .map_err(|e| bad_input(e.to_string()))?,
+            ),
+            ("fold_viewer.html", html.into_bytes()),
+            (
+                "garment.obj",
+                obj(last, &mesh.faces, Some(&seam_colours(mesh, style))).into_bytes(),
+            ),
+            (
+                "garment_strain.obj",
+                obj(last, &mesh.faces, Some(&strain_colours(mesh, last))).into_bytes(),
+            ),
+            (
+                "body.obj",
+                obj(&full.vertices, &full.triangles, None).into_bytes(),
+            ),
+        ],
     )?;
     let (gating, advisory) = (run.gating(), run.advisory());
     let mut text = format!(
@@ -837,6 +866,125 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn drape_scratch() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ftx-drape-output-{}-{time}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn drape_refuses_existing_outputs_before_loading_the_body() {
+        let dir = drape_scratch();
+        let out = dir.join("run");
+        std::fs::create_dir(&out).unwrap();
+        let previous = br#"{"settled":true,"gating":[],"previous_run":true}"#;
+        std::fs::write(out.join("sim_report.json"), previous).unwrap();
+        std::fs::write(dir.join("pattern.json"), b"{}").unwrap();
+        std::fs::write(dir.join("measurements.json"), b"{}").unwrap();
+        let args = parse(&[
+            "drape".into(),
+            dir.join("pattern.json").to_string_lossy().into_owned(),
+            "--measurements".into(),
+            dir.join("measurements.json").to_string_lossy().into_owned(),
+            "--out".into(),
+            out.to_string_lossy().into_owned(),
+            "--model".into(),
+            dir.join("absent.ftxbody").to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let error = cmd_drape(&args).unwrap_err();
+        assert!(error.message.contains("already exists"), "{error}");
+        assert_eq!(
+            std::fs::read(out.join("sim_report.json")).unwrap(),
+            previous
+        );
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 1);
+        let mut fresh = args;
+        fresh.options.insert(
+            "out".into(),
+            dir.join("fresh").to_string_lossy().into_owned(),
+        );
+        assert_eq!(cmd_drape(&fresh).unwrap_err().code, RefusalCode::Io);
+        assert!(dir.join("fresh").is_dir());
+        assert!(!dir.join("fresh/sim_report.json").exists());
+        assert!(
+            cmd_drape(&fresh)
+                .unwrap_err()
+                .message
+                .contains("already exists")
+        );
+    }
+
+    #[test]
+    fn drape_partial_geometry_never_gets_a_completion_report() {
+        let files = [
+            ("fold.pc2", b"cache".to_vec()),
+            ("mesh_map.json", b"{}".to_vec()),
+            ("fold_viewer.html", b"viewer".to_vec()),
+            ("garment.obj", b"cloth".to_vec()),
+            ("garment_strain.obj", b"strain".to_vec()),
+            ("body.obj", b"body".to_vec()),
+        ];
+        for fail_at in 0..files.len() {
+            let out = drape_scratch().join("run");
+            reserve_drape_output(&out).unwrap();
+            // A deterministic filesystem failure at each artifact; no solver or fault harness.
+            std::fs::create_dir(out.join(files[fail_at].0)).unwrap();
+            assert!(write_drape_output(&out, &json!({"settled":true}), &files).is_err());
+            assert!(!out.join("sim_report.json").exists());
+            for (name, bytes) in &files[..fail_at] {
+                assert_eq!(std::fs::read(out.join(name)).unwrap(), *bytes);
+            }
+            assert!(out.join(files[fail_at].0).is_dir());
+            assert!(reserve_drape_output(&out).is_err());
+        }
+    }
+
+    #[test]
+    fn drape_publication_is_complete_and_existing_evidence_is_not_overwritten() {
+        let out = drape_scratch().join("nested/run");
+        reserve_drape_output(&out).unwrap();
+        let report = json!({"settled":true,"gating":[]});
+        let files = [("fold.pc2", b"synthetic cache".to_vec())];
+        write_drape_output(&out, &report, &files).unwrap();
+        let bytes = std::fs::read(out.join("sim_report.json")).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), report);
+        assert_eq!(std::fs::read(out.join("fold.pc2")).unwrap(), files[0].1);
+        assert!(write_drape_output(&out, &json!({"settled":false}), &files).is_err());
+        assert_eq!(std::fs::read(out.join("sim_report.json")).unwrap(), bytes);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt, symlink};
+            for name in ["sim_report.json", "fold.pc2"] {
+                assert_eq!(
+                    std::fs::metadata(out.join(name))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+            }
+            let alias = out.parent().unwrap().join("alias");
+            symlink(&out, &alias).unwrap();
+            assert!(reserve_drape_output(&alias).is_err());
+            let dangling = out.parent().unwrap().join("dangling");
+            symlink("no-such-target", &dangling).unwrap();
+            assert!(reserve_drape_output(&dangling).is_err());
+            assert!(!out.parent().unwrap().join("no-such-target").exists());
+        }
+    }
 
     #[test]
     fn explicit_arm_angles_including_zero_reach_the_straight_arm_pose() {
