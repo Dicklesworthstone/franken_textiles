@@ -16,6 +16,7 @@ pub mod ordered;
 pub mod raster;
 pub mod refs;
 pub mod scale;
+pub mod trace;
 
 pub use annotate::{Names, annotate};
 pub use audit::{AuditOptions, audit, label_consensus};
@@ -23,3 +24,4 @@ pub use length::{parse_length, parse_number};
 pub use ordered::OValue;
 pub use refs::{measure_ref, piece_instance, resolve_side, twin};
 pub use scale::fit_scale;
+pub use trace::{Trace, TraceOptions, trace_image};

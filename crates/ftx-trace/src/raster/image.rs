@@ -56,6 +56,35 @@ impl Bgr {
     }
 }
 
+/// An 8-bit grayscale PNG of `img` (no filtering, zlib level 6): the pixels `cv2.imwrite` would store, not
+/// its bytes.
+#[must_use]
+pub fn encode_png_gray(img: &Gray) -> Vec<u8> {
+    let mut raw = Vec::with_capacity((img.w + 1) * img.h);
+    for row in img.data.chunks(img.w.max(1)) {
+        raw.push(0);
+        raw.extend_from_slice(row);
+    }
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8], data: &[u8]| {
+        out.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        out.extend_from_slice(&crc32(&[kind, data]).to_be_bytes());
+    };
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&u32::try_from(img.w).unwrap_or(0).to_be_bytes());
+    ihdr.extend_from_slice(&u32::try_from(img.h).unwrap_or(0).to_be_bytes());
+    ihdr.extend_from_slice(&[8, 0, 0, 0, 0]);
+    chunk(b"IHDR", &ihdr);
+    chunk(
+        b"IDAT",
+        &miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6),
+    );
+    chunk(b"IEND", &[]);
+    out
+}
+
 /// CRC-32 (IEEE) of a chunk's type and data.
 fn crc32(parts: &[&[u8]]) -> u32 {
     let mut table = [0u32; 256];

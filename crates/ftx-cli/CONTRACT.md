@@ -2,8 +2,8 @@
 
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
 FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx draft`, `ftx validate`,
-`ftx drape`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export`, `ftx check`, `ftx annotate`,
-`ftx scale-fit` and `ftx audit`; `round`, `trace`, `viewer` and `report` follow their subsystems.
+`ftx drape`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export`, `ftx check`, `ftx trace`,
+`ftx annotate`, `ftx scale-fit` and `ftx audit`; `round`, `viewer` and `report` follow their subsystems.
 
 **Commands.**
 - `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
@@ -76,6 +76,14 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   printed as above; exit 0, or 2 when one fails. With the pattern the DXF sew references are recomputed and
   the DSTs' couching checked against the braid lines. A file the manifest lists but DIR lacks is a failed
   `file.missing` item (the reference raises); no manifest is a failed `manifest` item.
+- `ftx trace IMAGE.png --out DIR` with the reference's flags (`--crop`, `--channel`, `--invert`/`--no-invert`,
+  `--threshold`, `--bg R,G,B`, `--stroke`, `--close`, `--open`, `--corner-deg`, `--soft-deg`,
+  `--simplify-frac`, `--smooth`, `--min-area-frac`, repeated `--erase X,Y,W,H`, `--no-dashes`): the
+  reference's `vectorize.py trace` on `ftx-trace`. Writes `DIR/draft.pattern.json`, byte for byte the
+  reference's for the same image, and `DIR/mask.png` (the same pixels); prints the reference's summary
+  `{pieces [{id, mode, stroke_px, vertices, edges, curved, notches, grain, touches_border, area_px}], files,
+  bg_rgb, retries}` and exits 3 when no piece is found. Not yet: `overlay.png` and `labels/pN.png`;
+  `--threshold adaptive`, JPEG and WebP are refused (exit 3) with a repair (`ftx-cli/tests/trace_cli.rs`).
 - `ftx annotate DRAFT --names NAMES.json --out PATTERN`, `ftx scale-fit PATTERN --target REF=LEN [--target
   …] --out PATTERN` and `ftx audit PATTERN --out DIR [--labels L.json] [--tol-mm 3] [--median-seam-mm 250]
   [--label-tol 0.03]`: the reference's `vectorize.py annotate|scale-fit|audit` (spec 04 §10.1) on

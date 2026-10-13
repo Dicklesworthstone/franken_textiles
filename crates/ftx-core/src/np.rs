@@ -162,9 +162,250 @@ pub fn interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     }
 }
 
+/// numpy's float ordering for sorts: NaN sorts last (`a < b || (b != b && a == a)`).
+fn sort_less<T: PartialOrd + Copy>(a: T, b: T) -> bool {
+    #[allow(clippy::eq_op)]
+    let (a_nan, b_nan) = (a != a, b != b);
+    a < b || (b_nan && !a_nan)
+}
+
+/// numpy `argsort(v)` with the default kind: numpy 2.5's introsort for argsort (`aquicksort_`: median of
+/// three, partitions down to 15 elements, then insertion sort; heapsort past 2·⌊log₂ n⌋ levels), which
+/// arm64 builds use unchanged (the SIMD argsorts are x86 only). Ties come out in numpy's order, which is
+/// neither stable nor reversed; 400 of 400 tie-heavy random arrays match numpy 2.5.4.
+#[must_use]
+pub fn argsort<T: PartialOrd + Copy>(v: &[T]) -> Vec<usize> {
+    let num = v.len();
+    let mut t: Vec<usize> = (0..num).collect();
+    if num < 2 {
+        return t;
+    }
+    let less = |a: usize, b: usize| sort_less(v[a], v[b]);
+    let (mut pl, mut pr) = (0usize, num - 1);
+    let mut stack: Vec<(usize, usize, i32)> = Vec::new();
+    let mut cdepth = 2 * (usize::BITS - 1 - num.leading_zeros()) as i32;
+    loop {
+        if cdepth < 0 {
+            aheapsort(v, &mut t[pl..=pr]);
+        } else {
+            while pr - pl > 15 {
+                let pm = pl + ((pr - pl) >> 1);
+                if less(t[pm], t[pl]) {
+                    t.swap(pm, pl);
+                }
+                if less(t[pr], t[pm]) {
+                    t.swap(pr, pm);
+                }
+                if less(t[pm], t[pl]) {
+                    t.swap(pm, pl);
+                }
+                let vp = v[t[pm]];
+                let (mut pi, mut pj) = (pl, pr - 1);
+                t.swap(pm, pj);
+                loop {
+                    pi += 1;
+                    while sort_less(v[t[pi]], vp) {
+                        pi += 1;
+                    }
+                    pj -= 1;
+                    while sort_less(vp, v[t[pj]]) {
+                        pj -= 1;
+                    }
+                    if pi >= pj {
+                        break;
+                    }
+                    t.swap(pi, pj);
+                }
+                t.swap(pi, pr - 1);
+                cdepth -= 1;
+                if pi - pl < pr - pi {
+                    stack.push((pi + 1, pr, cdepth));
+                    pr = pi - 1;
+                } else {
+                    stack.push((pl, pi - 1, cdepth));
+                    pl = pi + 1;
+                }
+            }
+            for pi in pl + 1..=pr {
+                let vi = t[pi];
+                let mut pj = pi;
+                while pj > pl && sort_less(v[vi], v[t[pj - 1]]) {
+                    t[pj] = t[pj - 1];
+                    pj -= 1;
+                }
+                t[pj] = vi;
+            }
+        }
+        match stack.pop() {
+            Some((l, r, d)) => (pl, pr, cdepth) = (l, r, d),
+            None => break,
+        }
+    }
+    t
+}
+
+/// numpy's `aheapsort_` on a slice of indices (1-based heap).
+fn aheapsort<T: PartialOrd + Copy>(v: &[T], a: &mut [usize]) {
+    let mut n = a.len();
+    let at = |a: &[usize], i: usize| v[a[i - 1]];
+    for l in (1..=n >> 1).rev() {
+        let tmp = a[l - 1];
+        let (mut i, mut j) = (l, l << 1);
+        while j <= n {
+            if j < n && sort_less(at(a, j), at(a, j + 1)) {
+                j += 1;
+            }
+            if sort_less(v[tmp], at(a, j)) {
+                a[i - 1] = a[j - 1];
+                i = j;
+                j += j;
+            } else {
+                break;
+            }
+        }
+        a[i - 1] = tmp;
+    }
+    while n > 1 {
+        let tmp = a[n - 1];
+        a[n - 1] = a[0];
+        n -= 1;
+        let (mut i, mut j) = (1, 2);
+        while j <= n {
+            if j < n && sort_less(at(a, j), at(a, j + 1)) {
+                j += 1;
+            }
+            if sort_less(v[tmp], at(a, j)) {
+                a[i - 1] = a[j - 1];
+                i = j;
+                j += j;
+            } else {
+                break;
+            }
+        }
+        a[i - 1] = tmp;
+    }
+}
+
+/// numpy `median` of float64 values: the middle order statistic, or the mean of the two middle ones
+/// (`(a + b)/2`). NaN for an empty slice.
+#[must_use]
+pub fn median(values: &[f64]) -> f64 {
+    let n = values.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    let mut v = values.to_vec();
+    v.sort_by(f64::total_cmp);
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    }
+}
+
+/// numpy `median` of a float32 array, which numpy computes in float32: `(a + b)/2` rounded to float32.
+#[must_use]
+pub fn median_f32(values: &[f32]) -> f32 {
+    let n = values.len();
+    if n == 0 {
+        return f32::NAN;
+    }
+    let mut v = values.to_vec();
+    v.sort_by(f32::total_cmp);
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    }
+}
+
+/// numpy `percentile` of a float32 array (linear method), which numpy 2 computes in float32 throughout:
+/// `q = p / float32(100)`, the virtual index `n·q + (1 − q) − 1` and the two-sided lerp all in float32.
+#[must_use]
+pub fn percentile_f32(values: &[f32], p: f32) -> f32 {
+    let n = values.len();
+    if n == 0 {
+        return f32::NAN;
+    }
+    let mut v = values.to_vec();
+    v.sort_by(f32::total_cmp);
+    let q = p / 100.0f32;
+    // numpy: n·q + (α + q·(1 − α − β)) − 1 with α = β = 1; 1 + q·(−1) is exactly 1 − q
+    let virtual_index = (n as f32 * q + (1.0f32 - q)) - 1.0f32;
+    if virtual_index >= (n - 1) as f32 {
+        return v[n - 1];
+    }
+    if virtual_index < 0.0 {
+        return v[0];
+    }
+    let below = virtual_index.floor();
+    let gamma = virtual_index - below;
+    let (a, b) = (v[below as usize], v[below as usize + 1]);
+    let diff = b - a;
+    if gamma >= 0.5 {
+        b - diff * (1.0 - gamma)
+    } else {
+        a + diff * gamma
+    }
+}
+
+/// numpy `convolve(a, v, mode="valid")` for float64: the longer argument slides under the reversed
+/// shorter one. Kernels of up to 11 taps go through numpy's `small_correlate`, a sequential sum that the
+/// reference's build fuses into multiply-adds (reproduced exactly); longer ones go to BLAS `ddot`, whose
+/// summation order this does not reproduce (the same sequential fused sum is used).
+#[must_use]
+pub fn convolve_valid(a: &[f64], v: &[f64]) -> Vec<f64> {
+    let (a, v) = if v.len() > a.len() { (v, a) } else { (a, v) };
+    if v.is_empty() {
+        return Vec::new();
+    }
+    let k: Vec<f64> = v.iter().rev().copied().collect();
+    (0..=a.len() - k.len())
+        .map(|i| {
+            k.iter()
+                .zip(&a[i..])
+                .fold(0.0f64, |s, (&kj, &aj)| aj.mul_add(kj, s))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// numpy 2.5.4 `np.argsort` on arrays with ties (the order is numpy's, not a stable sort's).
+    #[test]
+    fn argsort_matches_numpy_ties() {
+        let v = [
+            3.0, 1.0, 2.0, 1.0, 3.0, 0.0, 2.0, 1.0, 3.0, 0.0, 1.0, 2.0, 3.0, 1.0, 0.0, 2.0, 1.0,
+            3.0, 2.0, 0.0,
+        ];
+        assert_eq!(
+            argsort(&v),
+            [
+                9, 14, 5, 19, 7, 10, 13, 1, 16, 3, 2, 6, 18, 11, 15, 4, 8, 12, 17, 0
+            ]
+        );
+        assert_eq!(argsort(&[2.0, f64::NAN, 1.0]), [2, 0, 1]);
+        assert_eq!(argsort::<f64>(&[]), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn medians_and_f32_percentiles() {
+        assert_eq!(median(&[3.0, 1.0, 2.0, 10.0]), 2.5);
+        assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
+        assert_eq!(median_f32(&[1.1, 2.3]), (1.1f32 + 2.3f32) / 2.0);
+        let d = [1.1f32, 2.3, 3.7, 4.9, 5.2];
+        assert_eq!(percentile_f32(&d, 75.0), 4.9);
+        assert_eq!(percentile_f32(&d, 25.0), 2.3);
+    }
+
+    #[test]
+    fn convolve_is_a_sequential_fused_sum() {
+        let a = [1.0, 2.0, 3.0, 4.0, 5.0];
+        assert_eq!(convolve_valid(&a, &[1.0, 0.0, -1.0]), [2.0, 2.0, 2.0]);
+        assert_eq!(convolve_valid(&[1.0, 1.0], &a), [3.0, 5.0, 7.0, 9.0]);
+    }
 
     /// Values from numpy 2.5.4 `np.percentile` (linear method).
     #[test]

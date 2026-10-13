@@ -203,3 +203,206 @@ pub(super) fn cmd_audit(args: &Args) -> Result<(Value, i32, String), Refusal> {
                         "findings": findings, "files": [file.display().to_string()]});
     Ok((result, if ok { 0 } else { 2 }, text))
 }
+
+/// `ftx trace`'s flags.
+pub(super) const BOOLEAN_OPTIONS: &[&str] = &["invert", "no-invert", "no-dashes"];
+
+fn numbers<const N: usize>(key: &str, s: &str) -> Result<[f64; N], Refusal> {
+    let v: Vec<f64> = s
+        .split(',')
+        .map(|p| p.trim().parse::<f64>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| {
+            bad_input(format!(
+                "--{key} takes {N} comma-separated numbers, got {}",
+                py::repr_str(s)
+            ))
+        })?;
+    v.try_into().map_err(|_| {
+        bad_input(format!(
+            "--{key} takes {N} comma-separated numbers, got {}",
+            py::repr_str(s)
+        ))
+    })
+}
+
+fn number<T: std::str::FromStr>(args: &Args, key: &str) -> Result<Option<T>, Refusal> {
+    args.options
+        .get(key)
+        .map(|v| {
+            v.parse::<T>()
+                .map_err(|_| bad_input(format!("--{key}: invalid value {}", py::repr_str(v))))
+        })
+        .transpose()
+}
+
+/// `ftx trace IMAGE --out DIR [--crop X,Y,W,H] [--channel C] [--threshold otsu] [--bg R,G,B] [--stroke PX]
+/// [--close PX] [--open PX] [--corner-deg D] [--soft-deg D] [--simplify-frac F] [--smooth SIGMA]
+/// [--min-area-frac F] [--erase X,Y,W,H ...] [--invert | --no-invert] [--no-dashes]`: a pattern sheet (PNG)
+/// traced into an UNSCALED draft, the reference's `vectorize.py trace`. Writes `DIR/draft.pattern.json`
+/// (the reference's text) and `DIR/mask.png`, and reports each piece as the reference does; exits 3 when no
+/// piece was found. The overlay and the per-piece label crops are not drawn yet.
+pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    use ftx_trace::raster::image::{encode_png_gray, load_png};
+    use ftx_trace::{TraceOptions, trace_image};
+    known_options(
+        args,
+        "trace",
+        &[
+            "out",
+            "crop",
+            "min-area-frac",
+            "channel",
+            "invert",
+            "no-invert",
+            "threshold",
+            "bg",
+            "stroke",
+            "close",
+            "open",
+            "corner-deg",
+            "soft-deg",
+            "simplify-frac",
+            "smooth",
+            "erase",
+            "no-dashes",
+        ],
+    )?;
+    let image = input(args, "trace", "an image")?;
+    let out = Path::new(required(args, "out")?);
+    if args.options.contains_key("invert") && args.options.contains_key("no-invert") {
+        return Err(bad_input(
+            "argument --no-invert: not allowed with argument --invert",
+        ));
+    }
+    let d = TraceOptions::default();
+    let opts = TraceOptions {
+        crop: args
+            .options
+            .get("crop")
+            .map(|s| numbers::<4>("crop", s))
+            .transpose()?,
+        min_area_frac: number(args, "min-area-frac")?.unwrap_or(d.min_area_frac),
+        channel: args.options.get("channel").cloned().unwrap_or(d.channel),
+        invert: if args.options.contains_key("invert") {
+            Some(true)
+        } else if args.options.contains_key("no-invert") {
+            Some(false)
+        } else {
+            None
+        },
+        threshold: args
+            .options
+            .get("threshold")
+            .cloned()
+            .unwrap_or(d.threshold),
+        bg_rgb: args
+            .options
+            .get("bg")
+            .map(|s| numbers::<3>("bg", s))
+            .transpose()?,
+        stroke: number(args, "stroke")?,
+        close_px: number(args, "close")?.unwrap_or(d.close_px),
+        open_px: number(args, "open")?,
+        corner_deg: number(args, "corner-deg")?.unwrap_or(d.corner_deg),
+        soft_deg: number(args, "soft-deg")?.unwrap_or(d.soft_deg),
+        simplify_frac: number(args, "simplify-frac")?.unwrap_or(d.simplify_frac),
+        smooth_px: number(args, "smooth")?.unwrap_or(d.smooth_px),
+        erase: args
+            .options
+            .get("erase")
+            .map(|s| {
+                s.split('\n')
+                    .map(|r| numbers::<4>("erase", r))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default(),
+        marks: true,
+        dashes: !args.options.contains_key("no-dashes"),
+    };
+    let bytes =
+        std::fs::read(image).map_err(|e| Refusal::new(RefusalCode::Io, format!("{image}: {e}")))?;
+    let img = load_png(&bytes).map_err(|e| bad_input(format!("{image}: {e}")))?;
+    let source = std::fs::canonicalize(image)
+        .map_or_else(|_| image.to_string(), |p| p.display().to_string());
+    let traced = trace_image(&img, Some(&source), &opts).map_err(bad_input)?;
+    make_dir(out)?;
+    let draft = out.join("draft.pattern.json");
+    let mask = out.join("mask.png");
+    let io = |p: &Path, e: std::io::Error| {
+        Refusal::new(RefusalCode::Io, format!("{}: {e}", p.display()))
+    };
+    std::fs::write(&draft, traced.pattern.dumps(Some(1)) + "\n").map_err(|e| io(&draft, e))?;
+    std::fs::write(&mask, encode_png_gray(&traced.mask)).map_err(|e| io(&mask, e))?;
+
+    let data = traced.pattern.to_value();
+    let doc: PatternDoc =
+        serde_json::from_value(data.clone()).map_err(|e| bad_input(e.to_string()))?;
+    let mut pieces = Vec::new();
+    let mut lines = Vec::new();
+    for (p, piece) in data["pieces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .zip(&doc.pieces)
+    {
+        let area = ftx_trace::piece_instance(piece)
+            .area()
+            .map_err(|e| bad_input(e.message().to_string()))?;
+        let count = |k: &str| p[k].as_array().map_or(0, Vec::len);
+        let curved = p["edges"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|e| e.get("curve").is_some())
+            .count();
+        let row = json!({
+            "id": p["id"], "mode": p["trace"]["mode"], "stroke_px": p["trace"]["stroke_px"],
+            "vertices": p["vertices"].as_object().map_or(0, serde_json::Map::len), "edges": count("edges"),
+            "curved": curved, "notches": count("notches"), "grain": p.get("grain").is_some(),
+            "touches_border": p["trace"]["touches_border"], "area_px": py::round(area, 1),
+        });
+        lines.push(format!(
+            "  {} {} stroke {} px: {} vertices, {} edges ({curved} curved), {} notches{}{}",
+            p["id"].as_str().unwrap_or("?"),
+            p["trace"]["mode"].as_str().unwrap_or("?"),
+            p["trace"]["stroke_px"],
+            row["vertices"],
+            row["edges"],
+            row["notches"],
+            if row["grain"] == true { ", grain" } else { "" },
+            if p["trace"]["touches_border"] == true {
+                ", touches the border"
+            } else {
+                ""
+            },
+        ));
+        pieces.push(row);
+    }
+    let diag = traced.diagnostics.to_value();
+    let files = json!({"draft": draft.display().to_string(), "mask": mask.display().to_string()});
+    let text = format!(
+        "traced {} pieces -> {}{}{}",
+        pieces.len(),
+        draft.display(),
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("\n{}", lines.join("\n"))
+        },
+        diag["retries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|r| format!("\n  retry: {r}"))
+            .collect::<String>()
+    );
+    let code = if pieces.is_empty() { 3 } else { 0 };
+    Ok((
+        json!({"pieces": pieces, "files": files, "bg_rgb": diag["bg_rgb"], "retries": diag["retries"]}),
+        code,
+        text,
+    ))
+}

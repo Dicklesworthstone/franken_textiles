@@ -10,6 +10,7 @@ homepage.workspace = true
 
 [dependencies]
 ftx-core = { path = "../ftx-core" }
+ftx-export = { path = "../ftx-export" }
 ftx-pattern = { path = "../ftx-pattern" }
 miniz_oxide.workspace = true
 serde.workspace = true

@@ -845,7 +845,7 @@ Measurement names used by the specs here: `chest`, `across_back`, `upper_arm`, `
 | KeyError text | `str(KeyError(m))` = `repr(m)`, so messages from KeyErrors are wrapped in quotes: `seam s: "seam ref 'missing/right': unknown instance 'missing' (have ['a', 'b'])"`; a missing vertex reads `('nope')` inside UNMEASURABLE messages. | Reproduce for golden-text tests, or compare such messages by substring (the reference tests do). |
 | `int()` on `cut.qty` | Truncates floats (`2.7 → 2`), parses numeric strings. | SHOULD accept only integers 1 and 2 and treat other numbers as a structure error; record the deviation (§15). |
 | Ordering | Dicts keep insertion order; `sorted` is stable. | Use ordered maps; stable sort for `worst`. |
-| numpy `interp` | Clamps outside the abscissa range; repeated abscissae return the last sample. | `interp(1.0, [0,1,1,2], [0,5,7,9]) = 7`. |
+| numpy `interp` | Clamps outside the abscissa range; repeated abscissae return the last sample. On the reference's arm64 build `slope·(x − xp[j]) + fp[j]` is one fused multiply-add (clang contracts it). | `interp(1.0, [0,1,1,2], [0,5,7,9]) = 7`; compute the interpolation with a correctly rounded FMA to match the reference bit for bit. |
 | numpy `linspace(0, 1, n)` | Endpoints exact. | `t_j = j/(n−1)`, last forced to 1. |
 | Least squares (`lstsq`, `rcond=None`) | Minimum-norm solution for rank-deficient systems. | Use a QR/SVD least-squares solve; only the linear coefficient is used. |
 | JSON | `ensure_ascii`, `indent=1`; floats as shortest repr (`1e-05`, `1e+16`). | Semantic equality is the bar (§14.6). |

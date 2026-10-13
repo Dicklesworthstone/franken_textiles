@@ -401,6 +401,110 @@ def main() -> int:
             for join in ("mitre", "round"):
                 buf(f"{name}-{join}-{dist}", ring, dist, join)
     write(args.out_dir, "raster_buffer", meta, bcases)
+
+    # ---------------------------------------------------------------- the whole trace
+    tcases = []
+
+    def b64png(arr) -> str:
+        ok, enc = cv2.imencode(".png", arr)
+        return base64.b64encode(enc.tobytes()).decode()
+
+    def traced(r, name):
+        pat = r["pattern"]
+        pat["meta"]["source"]["image"] = name           # the capture's temp path is not part of the answer
+        return {"pattern": pat, "diagnostics": r["diagnostics"], "mask_png": b64png(r["mask"])}
+
+    def trace_case(cid, img, **kw):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "sheet.png"
+            ok, enc = cv2.imencode(".png", img)
+            p.write_bytes(enc.tobytes())
+            try:
+                out = traced(V.trace_image(str(p), None, **kw), "sheet.png")
+            except Exception as exc:                    # noqa: BLE001 - the refusal is the answer
+                out = {"error": type(exc).__name__, "message": str(exc)}
+        tcases.append({"id": cid, "input": {"png": base64.b64encode(enc.tobytes()).decode(), "opts": kw},
+                       "output": out})
+
+    W, H, AA, K = 360, 260, cv2.LINE_AA, (20, 20, 20)
+    pent = np.array([(30, 40), (150, 30), (170, 120), (110, 200), (40, 180)], np.int32)
+
+    def outlines(bg=(255, 255, 255), fg=K):
+        img = np.full((H, W, 3), bg, np.uint8)
+        cv2.polylines(img, [pent], True, fg, 3, AA)
+        cv2.arrowedLine(img, (90, 115), (90, 70), fg, 2, AA, tipLength=0.2)       # grainline, both ends
+        cv2.arrowedLine(img, (90, 115), (90, 165), fg, 2, AA, tipLength=0.2)
+        cv2.fillPoly(img, [np.array([(84, 36), (96, 35), (90, 46)], np.int32)], fg, AA)   # notch on the top edge
+        cv2.ellipse(img, (262, 125), (68, 92), 0, 0, 360, fg, 3, AA)
+        for y0 in range(60, 185, 13):                                           # dashed inner line
+            cv2.line(img, (238, y0), (238, y0 + 8), fg, 2, AA)
+        return img
+
+    def fills(bg=(235, 235, 235)):
+        img = np.full((H, W, 3), bg, np.uint8)
+        quad = np.array([(200, 30), (330, 50), (320, 220), (210, 200)], np.int32)
+        for poly, col in ((pent, (40, 40, 190)), (quad, (170, 120, 30))):
+            cv2.fillPoly(img, [poly], col, AA)
+            cv2.polylines(img, [poly], True, K, 2, AA)
+        return img
+
+    def panel():
+        img = np.full((H, W, 3), 255, np.uint8)
+        cv2.rectangle(img, (12, 12), (W - 13, H - 13), (80, 35, 25), -1)
+        cv2.polylines(img, [pent + 10], True, (250, 250, 250), 3, AA)
+        cv2.circle(img, (265, 130), 70, (250, 250, 250), 3, AA)
+        return img
+
+    def dashed():
+        img = np.full((H, W, 3), 255, np.uint8)
+        cv2.line(img, (200, 40), (40, 40), K, 3)
+        cv2.line(img, (40, 40), (40, 210), K, 3)
+        cv2.line(img, (40, 210), (200, 210), K, 3)
+        for y0 in range(40, 210, 16):                                           # the dashed fold edge
+            cv2.line(img, (200, y0), (200, min(y0 + 10, 210)), K, 3)
+        cv2.rectangle(img, (240, 60), (330, 190), K, 3)
+        return img
+
+    def border():
+        img = np.full((H, W, 3), 255, np.uint8)
+        cv2.polylines(img, [np.array([(-20, 60), (150, 50), (170, 230), (-20, 240)], np.int32)], True, K, 3, AA)
+        cv2.circle(img, (270, 120), 60, K, 3, AA)
+        return img
+
+    def cross():
+        img = np.full((H, W, 3), 255, np.uint8)
+        cv2.polylines(img, [pent], True, K, 3, AA)
+        cv2.line(img, (95, 65), (95, 170), K, 2)                                 # a grain arrow crossed by a mark
+        cv2.line(img, (65, 115), (125, 115), K, 2)
+        return img
+
+    trace_case("outlines", outlines())
+    trace_case("outlines-navy", outlines(bg=(80, 35, 25), fg=(245, 245, 245)))
+    trace_case("fills", fills())
+    trace_case("panel-retry", panel())
+    trace_case("dashed-fold", dashed())
+    trace_case("dashed-fold-off", dashed(), dashes=False)
+    trace_case("crop-erase", outlines(), crop=[10.0, 10.0, 340.0, 240.0], erase=[[140.0, 15.0, 40.0, 30.0]])
+    trace_case("channel-dark", outlines(), channel="dark")
+    trace_case("channel-gray-flip", outlines(), channel="gray")
+    trace_case("channel-sat", fills(), channel="sat")
+    trace_case("channel-edge", fills(), channel="edge")
+    trace_case("channel-r", fills(), channel="r", invert=True)
+    trace_case("bg-given", outlines(), bg_rgb=[255.0, 255.0, 255.0])
+    trace_case("stroke-given", outlines(), stroke=3.0, open_px=0, marks=False)
+    trace_case("corner-knobs", outlines(), corner_deg=60.0, soft_deg=0.0, simplify_frac=0.01, smooth_px=2.0,
+               close_px=5, min_area_frac=0.02)
+    trace_case("border", border())
+    trace_case("grain-hough", cross())
+    trace_case("adaptive", outlines(), threshold="adaptive")
+    trace_case("bad-channel", outlines(), channel="nope")
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, kw in (("plain", {}), ("navy", {"fg": (255, 255, 255), "bg": (25, 35, 80)}),
+                         ("filled", {"fg": (30, 20, 20), "fill": (175, 30, 35)})):
+            sheet = T.render_sheet(Path(tmp) / f"{name}.png", **kw)
+            tcases.append({"id": f"sheet-{name}", "input": {"from_mask": True, "opts": {}},
+                           "output": traced(V.trace_image(str(sheet), None), f"{name}.png")})
+    write(args.out_dir, "raster_trace", meta, tcases)
     return 0
 
 
