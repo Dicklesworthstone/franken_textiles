@@ -10,6 +10,7 @@ pub mod alter;
 pub mod doc;
 pub mod draft;
 pub mod instance;
+pub mod material_catalog;
 pub mod materials;
 pub mod pattern;
 pub mod round;
