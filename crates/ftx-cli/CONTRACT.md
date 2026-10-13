@@ -80,7 +80,9 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   `--threshold`, `--bg R,G,B`, `--stroke`, `--close`, `--open`, `--corner-deg`, `--soft-deg`,
   `--simplify-frac`, `--smooth`, `--min-area-frac`, repeated `--erase X,Y,W,H`, `--no-dashes`): the
   reference's `vectorize.py trace` on `ftx-trace`. Writes `DIR/draft.pattern.json`, byte for byte the
-  reference's for the same image, and `DIR/mask.png` (the same pixels); prints the reference's summary
+  reference's for the same image, `DIR/mask.png` (the same pixels) and `DIR/trace_px.json` (each piece's
+  stroke-centre polygon in crop px, y down, closed: what the reference cuts `labels/pN.png` along; the skill
+  draws the overlay and label images from these with `vectorize.py`'s own code); prints the reference's summary
   `{pieces [{id, mode, stroke_px, vertices, edges, curved, notches, grain, touches_border, area_px}], files,
   bg_rgb, retries}` and exits 3 when no piece is found. Not yet: `overlay.png` and `labels/pN.png`;
   `--threshold adaptive`, JPEG and WebP are refused (exit 3) with a repair (`ftx-cli/tests/trace_cli.rs`).

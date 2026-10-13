@@ -124,6 +124,25 @@ fn trace_reproduces_the_reference() {
             assert!(s["area_px"].as_f64().unwrap() > 1000.0, "{id}: {s}");
         }
         assert!(dir.join(&out).join("mask.png").is_file());
+        // the stroke-centre polygons the label crops are cut along: one closed ring per piece
+        let px: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join(&out).join("trace_px.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(px["schema"], "ftx-trace-px/1");
+        for p in pieces {
+            let PyJson::Str(id) = p.get("id").unwrap() else {
+                panic!("id")
+            };
+            let ring = px["pieces"][id.as_str()].as_array().unwrap();
+            assert!(
+                ring.len() >= 4 && ring.first() == ring.last(),
+                "{id}: {} points, {:?} .. {:?}",
+                ring.len(),
+                ring.first(),
+                ring.last()
+            );
+        }
     }
     let retries = &run(&dir, &["trace", "sheet.png", "--out", "again"], 0)["result"]["retries"];
     assert_eq!(

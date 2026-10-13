@@ -335,8 +335,25 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
     };
     std::fs::write(&draft, traced.pattern.dumps(Some(1)) + "\n").map_err(|e| io(&draft, e))?;
     std::fs::write(&mask, encode_png_gray(&traced.mask)).map_err(|e| io(&mask, e))?;
-
     let data = traced.pattern.to_value();
+    // each piece's stroke-centre polygon (crop px, y down, closed): what the label crops are cut along
+    let px = out.join("trace_px.json");
+    let rings: serde_json::Map<String, Value> = data["pieces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .zip(&traced.polys)
+        .map(|(p, ring)| {
+            let pts: Vec<Value> = ring.iter().map(|q| json!([q.x, q.y])).collect();
+            (
+                p["id"].as_str().unwrap_or("").to_string(),
+                Value::Array(pts),
+            )
+        })
+        .collect();
+    let px_doc = json!({"schema": "ftx-trace-px/1", "units": "crop px, y down", "pieces": rings});
+    std::fs::write(&px, px_doc.to_string() + "\n").map_err(|e| io(&px, e))?;
+
     let doc: PatternDoc =
         serde_json::from_value(data.clone()).map_err(|e| bad_input(e.to_string()))?;
     let mut pieces = Vec::new();
@@ -381,7 +398,8 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
         pieces.push(row);
     }
     let diag = traced.diagnostics.to_value();
-    let files = json!({"draft": draft.display().to_string(), "mask": mask.display().to_string()});
+    let files = json!({"draft": draft.display().to_string(), "mask": mask.display().to_string(),
+                       "polygons": px.display().to_string()});
     let text = format!(
         "traced {} pieces -> {}{}{}",
         pieces.len(),
