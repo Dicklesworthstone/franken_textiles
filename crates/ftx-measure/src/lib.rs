@@ -15,6 +15,7 @@ mod records;
 mod round;
 mod section;
 pub mod triangulate;
+pub mod video;
 
 pub use catalogue::{NAMES, PROVENANCES, canonical_name, catalogue, definition, unit};
 pub use document::{fuse, fused_value, reference_wearer};
