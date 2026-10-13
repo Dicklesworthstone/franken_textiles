@@ -3,6 +3,7 @@
 mod body_fit;
 mod bundle;
 mod calibration;
+mod intrinsics;
 mod photo;
 mod section;
 mod triangulate;
@@ -192,6 +193,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mut output = option(args, "out");
     let mut code = 0;
     let value = match command {
+        "calibrate-camera" => return intrinsics::run(args),
         "fit-body" => return body_fit::run(args),
         "bundle-adjust" => return bundle::run(args),
         "calib-sheet" => return calibration::run(args),
@@ -393,7 +395,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         _ => {
             return Err(bad_input(format!(
-                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, calib-sheet, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust, fit-body or video-select"
+                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, calib-sheet, calibrate-camera, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust, fit-body or video-select"
             )));
         }
     };

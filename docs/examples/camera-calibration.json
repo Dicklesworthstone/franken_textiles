@@ -1,0 +1,82 @@
+{
+  "schema": "ftx-camera-calibration-input/1",
+  "image_model": "pinhole_zero_skew",
+  "lens_id": "synthetic-pinhole",
+  "pinhole_evidence": "Analytic pinhole projection with zero skew and zero distortion; not a real camera",
+  "reference_evidence": "Synthetic rigid plane, 200 mm horizontal / 150 mm vertical grid spacing",
+  "image_size_px": [1280, 960],
+  "rotation_cw_deg": 0,
+  "controls": [
+    {"id": "p00", "sheet_xz_m": [-0.2, -0.15]},
+    {"id": "p01", "sheet_xz_m": [0.0, -0.15]},
+    {"id": "p02", "sheet_xz_m": [0.2, -0.15]},
+    {"id": "p03", "sheet_xz_m": [-0.2, 0.0]},
+    {"id": "p04", "sheet_xz_m": [0.0, 0.0]},
+    {"id": "p05", "sheet_xz_m": [0.2, 0.0]},
+    {"id": "p06", "sheet_xz_m": [-0.2, 0.15]},
+    {"id": "p07", "sheet_xz_m": [0.0, 0.15]},
+    {"id": "p08", "sheet_xz_m": [0.2, 0.15]}
+  ],
+  "views": [
+    {
+      "frame": {"stream": "synthetic-camera", "timestamp_us": 200000},
+      "partition": "fit",
+      "corners": [
+        {"id": "p00", "pixel_px": [491.1627906976744, 573.0232558139535], "partition": "fit"},
+        {"id": "p01", "pixel_px": [640.0, 573.0232558139535], "partition": "held_out"},
+        {"id": "p02", "pixel_px": [788.8372093023256, 573.0232558139535], "partition": "fit"},
+        {"id": "p03", "pixel_px": [480.0, 480.0], "partition": "fit"},
+        {"id": "p04", "pixel_px": [640.0, 480.0], "partition": "held_out"},
+        {"id": "p05", "pixel_px": [800.0, 480.0], "partition": "fit"},
+        {"id": "p06", "pixel_px": [467.027027027027, 371.8918918918919], "partition": "fit"},
+        {"id": "p07", "pixel_px": [640.0, 371.8918918918919], "partition": "held_out"},
+        {"id": "p08", "pixel_px": [812.972972972973, 371.8918918918919], "partition": "fit"}
+      ]
+    },
+    {
+      "frame": {"stream": "synthetic-camera", "timestamp_us": 400000},
+      "partition": "fit",
+      "corners": [
+        {"id": "p00", "pixel_px": [541.8978102189781, 582.1897810218978], "partition": "fit"},
+        {"id": "p01", "pixel_px": [655.36, 592.0], "partition": "held_out"},
+        {"id": "p02", "pixel_px": [792.9203539823009, 603.8938053097345], "partition": "fit"},
+        {"id": "p03", "pixel_px": [541.8978102189781, 472.7007299270073], "partition": "fit"},
+        {"id": "p04", "pixel_px": [655.36, 472.0], "partition": "held_out"},
+        {"id": "p05", "pixel_px": [792.9203539823009, 471.1504424778761], "partition": "fit"},
+        {"id": "p06", "pixel_px": [541.8978102189781, 363.2116788321168], "partition": "fit"},
+        {"id": "p07", "pixel_px": [655.36, 352.0], "partition": "held_out"},
+        {"id": "p08", "pixel_px": [792.9203539823009, 338.4070796460177], "partition": "fit"}
+      ]
+    },
+    {
+      "frame": {"stream": "synthetic-camera", "timestamp_us": 600000},
+      "partition": "fit",
+      "corners": [
+        {"id": "p00", "pixel_px": [536.9072458607798, 601.701976143849], "partition": "fit"},
+        {"id": "p01", "pixel_px": [668.2832861189802, 567.2521246458923], "partition": "held_out"},
+        {"id": "p02", "pixel_px": [783.8571652310102, 536.945967110415], "partition": "fit"},
+        {"id": "p03", "pixel_px": [532.0044759418128, 493.3532264080567], "partition": "fit"},
+        {"id": "p04", "pixel_px": [669.5384615384615, 464.61538461538464], "partition": "held_out"},
+        {"id": "p05", "pixel_px": [789.8414355628058, 439.4779771615008], "partition": "fit"},
+        {"id": "p06", "pixel_px": [526.6121010377913, 374.18445271196396], "partition": "fit"},
+        {"id": "p07", "pixel_px": [670.9102167182663, 352.44582043343655], "partition": "held_out"},
+        {"id": "p08", "pixel_px": [796.3451914893617, 333.54893617021276], "partition": "fit"}
+      ]
+    },
+    {
+      "frame": {"stream": "synthetic-camera", "timestamp_us": 800000},
+      "partition": "held_out",
+      "corners": [
+        {"id": "p00", "pixel_px": [558.75, 532.734375], "partition": "fit"},
+        {"id": "p01", "pixel_px": [684.5714285714286, 563.9285714285714], "partition": "held_out"},
+        {"id": "p02", "pixel_px": [790.5263157894738, 590.1973684210526], "partition": "fit"},
+        {"id": "p03", "pixel_px": [562.5325884543762, 418.54748603351953], "partition": "fit"},
+        {"id": "p04", "pixel_px": [682.6666666666666, 457.77777777777777], "partition": "held_out"},
+        {"id": "p05", "pixel_px": [784.5813586097946, 491.0584518167457], "partition": "fit"},
+        {"id": "p06", "pixel_px": [565.9786476868327, 314.51957295373666], "partition": "fit"},
+        {"id": "p07", "pixel_px": [680.9180327868853, 360.327868852459], "partition": "held_out"},
+        {"id": "p08", "pixel_px": [779.0881458966566, 399.4528875379939], "partition": "fit"}
+      ]
+    }
+  ]
+}

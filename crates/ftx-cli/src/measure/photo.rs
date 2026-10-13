@@ -110,6 +110,9 @@ fn integer<T: std::str::FromStr>(args: &Args, key: &str, default: T) -> Result<T
 }
 
 pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
+    if command == "sheet-pose" && option(args, "calibration").is_some() {
+        return super::intrinsics::sheet_pose(args);
+    }
     let names: &[&str] = if command == "sheet-pose" {
         &["reference", "out"]
     } else if command == "photo-scale" {

@@ -1,0 +1,110 @@
+{
+  "schema": "ftx-sheet-pose-input/1",
+  "reference_id": "synthetic-fixed-sheet",
+  "image_size_px": [
+    1280,
+    960
+  ],
+  "rotation_applied_degrees": 0,
+  "points": [
+    {
+      "sheet_xz_m": [
+        -0.2,
+        -0.15
+      ],
+      "pixel_px": [
+        558.75,
+        532.734375
+      ],
+      "held_out": false
+    },
+    {
+      "sheet_xz_m": [
+        0.0,
+        -0.15
+      ],
+      "pixel_px": [
+        684.5714285714286,
+        563.9285714285714
+      ],
+      "held_out": true
+    },
+    {
+      "sheet_xz_m": [
+        0.2,
+        -0.15
+      ],
+      "pixel_px": [
+        790.5263157894738,
+        590.1973684210526
+      ],
+      "held_out": false
+    },
+    {
+      "sheet_xz_m": [
+        -0.2,
+        0.0
+      ],
+      "pixel_px": [
+        562.5325884543762,
+        418.54748603351953
+      ],
+      "held_out": false
+    },
+    {
+      "sheet_xz_m": [
+        0.0,
+        0.0
+      ],
+      "pixel_px": [
+        682.6666666666666,
+        457.77777777777777
+      ],
+      "held_out": true
+    },
+    {
+      "sheet_xz_m": [
+        0.2,
+        0.0
+      ],
+      "pixel_px": [
+        784.5813586097946,
+        491.0584518167457
+      ],
+      "held_out": false
+    },
+    {
+      "sheet_xz_m": [
+        -0.2,
+        0.15
+      ],
+      "pixel_px": [
+        565.9786476868327,
+        314.51957295373666
+      ],
+      "held_out": false
+    },
+    {
+      "sheet_xz_m": [
+        0.0,
+        0.15
+      ],
+      "pixel_px": [
+        680.9180327868853,
+        360.327868852459
+      ],
+      "held_out": true
+    },
+    {
+      "sheet_xz_m": [
+        0.2,
+        0.15
+      ],
+      "pixel_px": [
+        779.0881458966566,
+        399.4528875379939
+      ],
+      "held_out": false
+    }
+  ]
+}
