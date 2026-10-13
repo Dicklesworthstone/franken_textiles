@@ -45,3 +45,11 @@ the reference's dictionary semantics. Oracle: `tests/fixtures/oracle/validate/` 
 `ratio_band` that is not `[lo, hi]` is an ERROR row; a `null` ratio without a band reads as 1.0; a
 measurement entry without a value counts as missing; a point without `body` is UNMEASURABLE and not
 listed as missing.
+
+**Alteration** (`alter`, spec 01 §10): slash-spread, vertex movement and transfer-curve return a new
+raw JSON document, preserve unedited fields and append `meta.history` with `origin = VECTOR_EDIT`.
+Coordinate changes use the reference's ties-to-even rounding. Grain/internal/decor/trace marks follow
+slash-spread; drills, notches and placement do not. Direct regressions use the spec's published
+F33–F36 and F39–F40 values; a captured alteration oracle is still pending. Malformed input and
+non-finite results are typed refusals, not panics or JSON nulls; invalid axes and zero-length source
+chords are refused. These operations alone establish neither structural validity nor garment fit.

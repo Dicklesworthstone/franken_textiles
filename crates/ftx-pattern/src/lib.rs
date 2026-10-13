@@ -6,6 +6,7 @@
 //! wearer's right side seen from its public side.
 #![forbid(unsafe_code)]
 
+pub mod alter;
 pub mod doc;
 pub mod instance;
 pub mod pattern;
