@@ -119,7 +119,7 @@ fn star(radii: &[f64]) -> Vec<Vec2> {
 }
 
 fn join(code: u64) -> Join {
-    if code % 2 == 0 {
+    if code.is_multiple_of(2) {
         Join::Mitre(4.0)
     } else {
         Join::Round(16)
