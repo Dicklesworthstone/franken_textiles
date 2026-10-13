@@ -152,7 +152,9 @@ dependencies = [
  "ftx-export",
  "ftx-measure",
  "ftx-pattern",
+ "ftx-trace",
  "miniz_oxide",
+ "serde",
  "serde_json",
  "wasm-bindgen",
 ]

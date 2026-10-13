@@ -7,6 +7,9 @@
 
 pub mod fold;
 pub mod page;
+pub mod tracing;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
+#[cfg(target_arch = "wasm32")]
+pub mod web_tracing;
 pub mod zip;

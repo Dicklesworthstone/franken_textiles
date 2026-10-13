@@ -18,7 +18,9 @@ ftx-drape = { path = "../ftx-drape" }
 ftx-export = { path = "../ftx-export" }
 ftx-measure = { path = "../ftx-measure" }
 ftx-pattern = { path = "../ftx-pattern" }
+ftx-trace = { path = "../ftx-trace" }
 miniz_oxide.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
