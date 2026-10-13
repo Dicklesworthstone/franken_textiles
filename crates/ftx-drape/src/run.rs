@@ -223,7 +223,9 @@ pub fn drape(
     opts: &DrapeOptions,
     mut progress: impl FnMut(&str),
 ) -> Result<DrapeRun, Refusal> {
-    opts.validate()?;
+    let material = crate::material::resolve(pattern, opts)?;
+    let opts = &material.options;
+    let fabric = material.fabric;
     // an elastic casing is simulated at its cut length and drawn up by its elastic
     let elastic = elastic_casing(pattern, opts.elastic_ea);
     let simulated;
@@ -242,7 +244,6 @@ pub fn drape(
             "no piece has a fold-up placement: nothing to drape (the pattern is judged flat)",
         ));
     }
-    let fabric = Fabric::of(pattern);
     let mut scene = build_scene(
         pattern,
         mesh,
@@ -329,6 +330,8 @@ pub fn drape(
         },
     );
     add_run_fields(&mut report, &scene, &fabric, opts, body.arm_deg, pattern);
+    report["material"] = material.report;
+    report["mass_kg"] = json!(scene.solver.model.mass.iter().sum::<f64>());
     Ok(DrapeRun {
         scene,
         fold,

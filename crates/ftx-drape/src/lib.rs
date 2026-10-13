@@ -22,6 +22,7 @@ pub mod distance;
 pub mod eigen;
 pub mod elements;
 pub mod garment;
+pub mod material;
 pub mod metrics;
 pub mod motion;
 pub mod nearest;

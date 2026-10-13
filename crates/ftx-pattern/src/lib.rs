@@ -14,6 +14,7 @@ pub mod material_catalog;
 pub mod materials;
 pub mod pattern;
 pub mod round;
+pub mod textile_import;
 pub mod validate;
 
 pub use doc::{

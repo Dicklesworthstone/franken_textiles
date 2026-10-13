@@ -16,58 +16,14 @@ use serde_json::Value;
 
 use crate::cloth::{ClothModel, SolveReport, Solver};
 use crate::contact::{Body, Contact, ContactParams, Intersection};
-use crate::elements::{ElasticSegment, Membrane};
+use crate::elements::ElasticSegment;
 use crate::garment::GarmentMesh;
 use crate::nearest::NearestTree;
 use crate::start::{
     GATHER_COMPRESSION, MM, PartFrame, StartState, WrapPlacement, start_state, wrap_points,
 };
 
-/// Fabric parameters (spec 04 §5.3).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Fabric {
-    /// Areal density (kg/m²).
-    pub areal_kg_m2: f64,
-    /// Tensile stiffness (N/m), warp and weft.
-    pub tensile_n_m: f64,
-    /// Bending rigidity (N·m).
-    pub bending_nm: f64,
-}
-
-impl Default for Fabric {
-    /// The reference's defaults: 200 g/m², 8000 N/m, 3e-5 N·m.
-    fn default() -> Self {
-        Self {
-            areal_kg_m2: 0.2,
-            tensile_n_m: 8000.0,
-            bending_nm: 3e-5,
-        }
-    }
-}
-
-impl Fabric {
-    /// `pattern.fabric` (`areal_g_m2`, `tensile_N_m`, `bending_Nm`) over the defaults.
-    #[must_use]
-    pub fn of(pattern: &Pattern) -> Self {
-        let f = &pattern.raw()["fabric"];
-        let d = Self::default();
-        Self {
-            areal_kg_m2: f["areal_g_m2"]
-                .as_f64()
-                .map_or(d.areal_kg_m2, |g| g / 1000.0),
-            tensile_n_m: f["tensile_N_m"].as_f64().unwrap_or(d.tensile_n_m),
-            bending_nm: f["bending_Nm"].as_f64().unwrap_or(d.bending_nm),
-        }
-    }
-
-    /// The membrane: equal warp and weft stiffness, no Poisson coupling, bias shear 0.2·E (the
-    /// reference's shear springs), compression softened to `compression` of tension (cloth buckles).
-    #[must_use]
-    pub fn membrane(&self, compression: f64) -> Membrane {
-        let e = self.tensile_n_m;
-        Membrane::orthotropic(e, e, 0.0, 0.2 * e, compression)
-    }
-}
+pub use crate::material::Fabric;
 
 /// Body frames, landmarks and section radii in the form the wrap needs.
 pub trait PartFrames {
