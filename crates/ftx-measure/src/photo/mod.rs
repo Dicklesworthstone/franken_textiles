@@ -7,6 +7,7 @@ mod camera;
 mod charuco;
 mod detect;
 mod geometry;
+pub mod intrinsics;
 mod measurement;
 
 pub use camera::Camera;
