@@ -2,7 +2,7 @@
 //!
 //! Provenance: [`jacobi_eigh`] is lifted from frankensim `crates/fs-la/src/eigen.rs` at commit
 //! `93fc9b26f618bea6ebac6534f1d33c715d8a1c92` (MIT + rider) without its workspace-admission call; the
-//! projection `V·max(Λ, 0)·Vᵀ` is new.
+//! projection `V·max(Λ, 0)·Vᵀ` and its reduction to the complement of the translations are new.
 
 /// Eigendecomposition of a dense symmetric matrix (row-major n × n) by cyclic Jacobi: eigenvalues
 /// ascending (lowest index first on ties) and eigenvectors as the columns of a row-major n × n matrix.
@@ -92,6 +92,89 @@ pub fn project_psd(h: &mut [f64], n: usize) -> bool {
     true
 }
 
+/// [`project_psd`] for the Hessian of an energy of `v` vertices that depends on their positions only
+/// through differences (membranes, hinges, elastic segments), so every rigid translation is in its null
+/// space: the eigendecomposition runs on the complement of the translations (Helmert basis ⊗ I₃), a
+/// 3(v − 1)-square matrix instead of 3v. The same projection in exact arithmetic, at about 30 % of the cost
+/// for a triangle. Returns whether anything changed.
+pub fn project_psd_translation_free(h: &mut [f64], v: usize) -> bool {
+    let n = 3 * v;
+    let r = 3 * (v - 1);
+    // Helmert basis of {1}⊥ in Rᵛ: q_j = (1, …, 1, −j, 0, …) / √(j(j + 1)), j = 1..v−1.
+    let q = |j: usize, i: usize| -> f64 {
+        let s = ((j * (j + 1)) as f64).sqrt();
+        match i.cmp(&j) {
+            std::cmp::Ordering::Less => 1.0 / s,
+            std::cmp::Ordering::Equal => -(j as f64) / s,
+            std::cmp::Ordering::Greater => 0.0,
+        }
+    };
+    let qm: Vec<f64> = (0..v - 1)
+        .flat_map(|j| (0..v).map(move |i| q(j + 1, i)))
+        .collect(); // qm[j * v + i]
+    // Reduced matrix: R[(3j+c),(3l+d)] = Σ_{i,i'} q_j[i] q_l[i'] H[(3i+c),(3i'+d)].
+    let mut half = vec![0.0f64; n * r]; // H Q: half[a * r + (3l+d)]
+    for a in 0..n {
+        for l in 0..v - 1 {
+            for d in 0..3 {
+                let mut acc = 0.0;
+                for i2 in 0..v {
+                    acc += h[a * n + 3 * i2 + d] * qm[l * v + i2];
+                }
+                half[a * r + 3 * l + d] = acc;
+            }
+        }
+    }
+    let mut red = vec![0.0f64; r * r];
+    for j in 0..v - 1 {
+        for c in 0..3 {
+            for b in 0..r {
+                let mut acc = 0.0;
+                for i in 0..v {
+                    acc += qm[j * v + i] * half[(3 * i + c) * r + b];
+                }
+                red[(3 * j + c) * r + b] = acc;
+            }
+        }
+    }
+    // symmetric up to rounding; Jacobi reads both triangles, so make it exactly symmetric
+    for a in 0..r {
+        for b in a + 1..r {
+            let s = 0.5 * (red[a * r + b] + red[b * r + a]);
+            red[a * r + b] = s;
+            red[b * r + a] = s;
+        }
+    }
+    if !project_psd(&mut red, r) {
+        return false;
+    }
+    // H⁺ = Q R⁺ Qᵀ
+    let mut back = vec![0.0f64; n * r]; // Q R⁺: back[(3i+c) * r + b]
+    for i in 0..v {
+        for c in 0..3 {
+            for b in 0..r {
+                let mut acc = 0.0;
+                for j in 0..v - 1 {
+                    acc += qm[j * v + i] * red[(3 * j + c) * r + b];
+                }
+                back[(3 * i + c) * r + b] = acc;
+            }
+        }
+    }
+    for a in 0..n {
+        for i2 in 0..v {
+            for d in 0..3 {
+                let mut acc = 0.0;
+                for l in 0..v - 1 {
+                    acc += back[a * r + 3 * l + d] * qm[l * v + i2];
+                }
+                h[a * n + 3 * i2 + d] = acc;
+            }
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +198,72 @@ mod tests {
         let mut spd = [2.0, 0.0, 0.0, 1.0];
         assert!(!project_psd(&mut spd, 2));
         assert_eq!(spd, [2.0, 0.0, 0.0, 1.0]);
+    }
+
+    /// `Dᵀ S D` for the differences of `v` vertices to the first (translation-free by construction) and a
+    /// symmetric `S` from a seed, shifted by `shift` (negative: indefinite).
+    fn translation_free(v: usize, seed: u64, shift: f64) -> Vec<f64> {
+        let (n, r) = (3 * v, 3 * (v - 1));
+        let mut s = seed;
+        let mut rnd = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let b: Vec<f64> = (0..r * r).map(|_| rnd()).collect();
+        let mut sm = vec![0.0; r * r];
+        for i in 0..r {
+            for j in 0..r {
+                sm[i * r + j] = (0..r).map(|k| b[i * r + k] * b[j * r + k]).sum::<f64>()
+                    + if i == j { shift } else { 0.0 };
+            }
+        }
+        // D: row (3(e−1)+c) has +1 at vertex e, −1 at vertex 0 (coordinate c)
+        let d = |row: usize, col: usize| -> f64 {
+            let (e, c) = (row / 3 + 1, row % 3);
+            if col % 3 != c {
+                0.0
+            } else if col / 3 == e {
+                1.0
+            } else if col / 3 == 0 {
+                -1.0
+            } else {
+                0.0
+            }
+        };
+        let mut h = vec![0.0; n * n];
+        for a in 0..n {
+            for c in 0..n {
+                let mut acc = 0.0;
+                for i in 0..r {
+                    for j in 0..r {
+                        acc += d(i, a) * sm[i * r + j] * d(j, c);
+                    }
+                }
+                h[a * n + c] = acc;
+            }
+        }
+        h
+    }
+
+    #[test]
+    fn translation_free_projection_equals_the_full_one() {
+        for (v, seed) in [(2, 1), (3, 2), (3, 3), (4, 4)] {
+            let n = 3 * v;
+            let h = translation_free(v, seed, -0.4);
+            let (mut full, mut reduced) = (h.clone(), h.clone());
+            assert!(project_psd(&mut full, n));
+            assert!(project_psd_translation_free(&mut reduced, v));
+            let scale = h.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+            for (a, b) in full.iter().zip(&reduced) {
+                assert!((a - b).abs() < 1e-12 * scale, "v {v}: {a} vs {b}");
+            }
+            // already PSD: unchanged
+            let mut psd = translation_free(v, seed, 0.1);
+            let before = psd.clone();
+            assert!(!project_psd_translation_free(&mut psd, v));
+            assert_eq!(psd, before);
+        }
     }
 }

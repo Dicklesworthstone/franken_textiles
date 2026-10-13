@@ -11,7 +11,7 @@
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 
 use crate::contact::{Body, Contact, ContactParams, Intersection};
-use crate::eigen::project_psd;
+use crate::eigen::{project_psd, project_psd_translation_free};
 use crate::elements::{ElasticSegment, Hinge, Membrane, MembraneElement};
 use crate::sparse::precond::{PcgFailure, pcg};
 use crate::sparse::{Coo, Csr, CsrFill, LdltFactor, LdltOptions, SymbolicLdlt, amd_order};
@@ -552,7 +552,9 @@ impl Solver {
             _ => Sink::Coo(Coo::new(self.nfree, self.nfree)),
         };
         // Elements whose Hessian is PSD by construction (every hinge; membranes without compression
-        // or a negative stress) are not projected: it would change nothing but rounding.
+        // or a negative stress) are not projected: it would change nothing but rounding. The others
+        // depend on their vertices only through differences, so they project on the complement of
+        // the translations.
         let scatter = |dofs: &[usize],
                        grad: &[f64],
                        hess: &mut [f64],
@@ -561,7 +563,7 @@ impl Solver {
                        g: &mut [f64]| {
             let n = 3 * dofs.len();
             if project && !psd {
-                project_psd(hess, n);
+                project_psd_translation_free(hess, dofs.len());
             }
             for a in 0..n {
                 let Some(fa) = self.free[3 * dofs[a / 3] + a % 3] else {

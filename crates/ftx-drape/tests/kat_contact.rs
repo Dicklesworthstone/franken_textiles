@@ -282,6 +282,6 @@ fn contact_digest_is_pinned() {
     // sewing steps moved by at most 9e-13 m.
     assert_eq!(
         digest,
-        "9bb8ddf72c586513af914f2fde6fbbf9dcc357381c759a02c5f2bbe884a8a84f"
+        "0f43d287b7dfffe38fc83ac6634247de3ea5561bf12bd3389c1ead203f7e2307"
     );
 }

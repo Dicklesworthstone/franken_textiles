@@ -93,7 +93,9 @@ grows: the bolero 374 Newton iterations, the trousers 563 (one sewing step uncon
 converged). Newton to 1e-3 m/s with the inexact Newton below (the defaults since 2026-10-13) brings them
 to 11 and 83 CPU-seconds on an M4 Pro (bolero 175 iterations, 41 factorizations; trousers 334, 108;
 measured as CPU time on a heavily loaded machine), the same verdicts and readings within 0.3 mm; the
-vectorized factorization (below) then 8.3 and 59 s, bit for bit the same drape.
+vectorized factorization (below) then 8.3 and 59 s, bit for bit the same drape; the translation-free
+projection and the backward solve by partial sums 6.7 and 36 s, the same iterations and every reading
+equal at the report's precision.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).
@@ -119,7 +121,12 @@ negative softening term σᵢφᵢ''. Projecting those had only rebuilt them fro
 rounding-level negative eigenvalue: the change moved the bolero's positions by at most 9e-13 m, left its
 report identical and re-pinned the contact digest (native and wasm agree). Tried on the bolero and not kept: flipping negative eigenvalues instead of zeroing them
 (more iterations), and a membrane Hessian with its stress clamped to the non-negative part instead of
-eigen-projection (cheaper iterations, 2.7× as many in the drape, slower overall). For body-only contact the symbolic analysis is computed once,
+eigen-projection (cheaper iterations, 2.7× as many in the drape, slower overall). Element blocks
+(membranes, hinges, elastic segments) depend on their vertices only through differences, so every
+rigid translation is in their null space: they are projected on its complement (`eigen::
+project_psd_translation_free`: a Helmert basis ⊗ I₃, a 6 × 6 Jacobi for a triangle instead of 9 × 9),
+the same projection in exact arithmetic (a unit test compares the two) at about a third of the cost;
+contact blocks, whose body side is fixed, keep the full projection. For body-only contact the symbolic analysis is computed once,
 ordered by AMD on the vertex graph and expanded to the free DOFs (the pattern never changes: every
 element block is always assembled). Per-DOF constraints (rollers, pins). Convergence: `‖p‖∞/h < tol`
 (step) or `‖p‖∞ < tol` (static); a garment's default `tol` is 1e-3 m/s (`DrapeOptions`; 42 µm per step):
@@ -249,7 +256,9 @@ only its lower triangle: bit-identical, both KAT digests unchanged; the dense ke
 loops over disjoint columns, which the compiler vectorizes, and the fully-summed block's upper triangle
 is mirrored from the lower one only when the pivot search goes past the current column: factorization
 2.9× and solve 1.3× faster, bit-identical on positive definite and shifted indefinite systems with 2×2
-and delayed pivots, every KAT digest unchanged), `eigen.rs` (`jacobi_eigh`);
+and delayed pivots, every KAT digest unchanged; then the backward solve sums each column's panel rows
+first by four partial sums, 2.1× faster with different rounding: the three KAT 9 digests re-pinned,
+each identical native debug, release and wasm32-wasip1), `eigen.rs` (`jacobi_eigh`);
 `sparse/precond.rs` (`pcg`, from fs-sparse at `6eb72a0c`: any preconditioner closure, starts from zero,
 stops with the reason on non-positive curvature or the cap).
 
