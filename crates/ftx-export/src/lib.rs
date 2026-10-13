@@ -8,6 +8,7 @@
 pub mod checks;
 pub mod ctx;
 pub mod cutter;
+pub mod dst;
 pub mod dxf;
 pub mod gc;
 pub mod geom;
@@ -23,11 +24,15 @@ pub mod union;
 mod xml;
 
 pub use checks::{
-    CheckItem, check_dxf, check_flat_dxf, check_garmentcode, check_hpgl, check_pdf, check_svg,
-    pdf_objects, svg_cut_points,
+    CheckItem, check_dst, check_dxf, check_flat_dxf, check_garmentcode, check_hpgl, check_pdf,
+    check_svg, pdf_objects, svg_cut_points,
 };
 pub use ctx::{Ctx, ExportOptions, primary_instance};
 pub use cutter::{CutterFile, export_cutter};
+pub use dst::{
+    Block, COUCH_STITCH_MM, DST_END, DstFile, DstInfo, DstRead, PLACE_STITCH_MM, dst_decode,
+    dst_record, export_embroidery, read_dst, write_dst,
+};
 pub use dxf::{export_dxf_astm, export_flat_dxf, turn_and_curve_points};
 pub use gc::export_garmentcode;
 pub use geom::{

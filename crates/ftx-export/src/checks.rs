@@ -1175,3 +1175,217 @@ pub fn check_garmentcode(text: &str, file: &str) -> Vec<CheckItem> {
     ));
     out
 }
+
+fn seg_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 > 0.0 {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dy)
+}
+
+/// The checks of a soutache DST (spec 03 §8.2) against its manifest entry `info`: the header, one END and
+/// nothing after, the record count, the extents, one stop, stitch lengths, the placement and couching lengths,
+/// the couching inside the placement line; with the instance's braid lines (pattern mm, `braid`) every couching
+/// stitch on one of them and their whole length sewn.
+#[must_use]
+pub fn check_dst(
+    data: &[u8],
+    file: &str,
+    info: &Value,
+    braid: Option<&[Vec<(f64, f64)>]>,
+) -> Vec<CheckItem> {
+    let d = crate::dst::read_dst(data);
+    let get = |k: &str| d.head.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let mut keys: Vec<String> = d.head.iter().map(|(k, _)| k.clone()).collect();
+    keys.sort();
+    keys.dedup();
+    let fields: Vec<String> = keys.iter().map(|k| format!("'{k}'")).collect();
+    let mut out = vec![
+        CheckItem::new(
+            "dst.header",
+            file,
+            ["LA", "ST", "CO", "+X", "-X", "+Y", "-Y"]
+                .iter()
+                .all(|k| get(k).is_some())
+                && d.size >= 512,
+            format!("fields [{}]", fields.join(", ")),
+        ),
+        CheckItem::new(
+            "dst.ends_once",
+            file,
+            d.ended,
+            "one END record, nothing after it",
+        ),
+    ];
+    let st = get("ST").unwrap_or_default();
+    let st_ok = !st.is_empty()
+        && st.chars().all(|c| c.is_ascii_digit())
+        && st.parse::<usize>().ok() == Some(d.moves.len());
+    out.push(CheckItem::new(
+        "dst.count",
+        file,
+        st_ok,
+        format!(
+            "ST {} vs {}",
+            get("ST").unwrap_or_else(|| "None".into()),
+            d.moves.len()
+        ),
+    ));
+    let (mut xs, mut ys, mut x, mut y) = (vec![0i64], vec![0i64], 0i64, 0i64);
+    let (mut stitched, mut place_len, mut couch_len) = (Vec::new(), 0.0, 0.0);
+    let (mut stops, mut place_pts, mut couch_pts) = (0, Vec::new(), Vec::new());
+    for &(dx, dy, kind) in &d.moves {
+        x += dx;
+        y += dy;
+        xs.push(x);
+        ys.push(y);
+        if kind == "stop" {
+            stops += 1;
+        } else if kind == "stitch" {
+            let s = ftx_core::det::hypot(dx as f64, dy as f64) * 0.1;
+            stitched.push(s);
+            if stops > 0 {
+                couch_len += s;
+                couch_pts.push((x as f64 * 0.1, y as f64 * 0.1));
+            } else {
+                place_len += s;
+                place_pts.push((x as f64 * 0.1, y as f64 * 0.1));
+            }
+        }
+    }
+    let ext = [
+        *xs.iter().max().unwrap_or(&0),
+        -*xs.iter().min().unwrap_or(&0),
+        *ys.iter().max().unwrap_or(&0),
+        -*ys.iter().min().unwrap_or(&0),
+    ];
+    let declared: Vec<Option<i64>> = ["+X", "-X", "+Y", "-Y"]
+        .iter()
+        .map(|k| {
+            let v = get(k).unwrap_or_default();
+            let digits = v.trim_start_matches(['+', '-']);
+            (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+                .then(|| v.parse().ok())
+                .flatten()
+        })
+        .collect();
+    let tuple = |v: &[Option<i64>]| {
+        let items: Vec<String> = v
+            .iter()
+            .map(|x| x.map_or("None".to_string(), |n| n.to_string()))
+            .collect();
+        format!("({})", items.join(", "))
+    };
+    out.push(CheckItem::new(
+        "dst.extents",
+        file,
+        ext.iter().map(|&v| Some(v)).collect::<Vec<_>>() == declared,
+        format!(
+            "decoded {}, header {}",
+            tuple(&ext.map(Some)),
+            tuple(&declared)
+        ),
+    ));
+    out.push(CheckItem::new(
+        "dst.one_stop",
+        file,
+        stops == 1 && get("CO").is_some_and(|c| c.trim() == "1"),
+        format!("{stops} stop(s)"),
+    ));
+    let moving: Vec<f64> = stitched.iter().copied().filter(|&s| s > 0.0).collect();
+    let (mn, mx) = (
+        moving.iter().copied().fold(f64::INFINITY, f64::min),
+        moving.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+    );
+    out.push(CheckItem::new(
+        "dst.stitch_length",
+        file,
+        !moving.is_empty() && mn >= 0.5 && mx <= 121.0 * 0.1 + 1e-9,
+        format!(
+            "{:.2}-{:.2} mm",
+            if moving.is_empty() { 0.0 } else { mn },
+            if moving.is_empty() { 0.0 } else { mx }
+        ),
+    ));
+    let repr = |v: &Value| v.as_f64().map_or_else(|| v.to_string(), py::repr_f64);
+    let num = |v: &Value| v.as_f64().unwrap_or(f64::NAN);
+    out.push(CheckItem::new(
+        "dst.placement_length",
+        file,
+        (place_len - num(&info["placement_mm"])).abs() <= 0.05,
+        format!("{place_len:.2} vs {} mm", repr(&info["placement_mm"])),
+    ));
+    out.push(CheckItem::new(
+        "dst.couch_length",
+        file,
+        (couch_len - num(&info["couch_mm"])).abs() <= 0.05,
+        format!("{couch_len:.2} vs {} mm", repr(&info["couch_mm"])),
+    ));
+    let ring: Vec<ftx_core::Vec2> = place_pts
+        .iter()
+        .map(|&(a, b)| ftx_core::Vec2::new(a, b))
+        .collect();
+    let inside = place_pts.len() > 2
+        && couch_pts.iter().all(|&p| {
+            ftx_core::polyline::point_in_polygon(ftx_core::Vec2::new(p.0, p.1), &ring)
+                || (0..place_pts.len())
+                    .map(|i| seg_distance(p, place_pts[i], place_pts[(i + 1) % place_pts.len()]))
+                    .fold(f64::INFINITY, f64::min)
+                    < 0.5
+        });
+    out.push(CheckItem::new(
+        "dst.braid_inside_placement",
+        file,
+        inside,
+        format!("{} couching stitches", couch_pts.len()),
+    ));
+    if let Some(braid) = braid {
+        let c = info["centre_mm"]
+            .as_array()
+            .map(|a| (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)))
+            .unwrap_or((0.0, 0.0));
+        let lines: Vec<Vec<(f64, f64)>> = braid
+            .iter()
+            .map(|b| b.iter().map(|&(x, y)| (x - c.0, y - c.1)).collect())
+            .collect();
+        let far = couch_pts
+            .iter()
+            .map(|&p| {
+                lines
+                    .iter()
+                    .flat_map(|l| l.windows(2).map(move |w| seg_distance(p, w[0], w[1])))
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+        let far = if couch_pts.is_empty() {
+            f64::INFINITY
+        } else {
+            far
+        };
+        out.push(CheckItem::new(
+            "dst.on_braid_lines",
+            file,
+            far <= 0.2,
+            format!("farthest couching stitch {far:.3} mm from a drafted braid line"),
+        ));
+        let drafted: f64 = lines
+            .iter()
+            .map(|l| {
+                l.windows(2)
+                    .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+                    .sum::<f64>()
+            })
+            .sum();
+        out.push(CheckItem::new(
+            "dst.covers_braid",
+            file,
+            couch_len >= 0.99 * drafted,
+            format!("sewn {couch_len:.1} of {drafted:.1} mm drafted"),
+        ));
+    }
+    out
+}

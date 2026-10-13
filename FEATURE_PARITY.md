@@ -90,7 +90,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | HPGL | 03 §7 | present | `hpgl.rs`: commands, pens and polylines as the reference's (main-label strokes and union cut lines aside); `check_hpgl` reproduces the reference checker (`tests/export_targets.rs`) |
 | Cutter SVGs and report | 03 §7 | present | `cutter.rs`: outlines within 0.05 mm as regions, the same report and manifest entry |
 | GarmentCode JSON | 03 §7 | present | `gc.rs`: byte-identical to the reference's on TESTBODICE, ROBUST and the 92 cm fez, bolero and trousers; `check_garmentcode` (`tests/export_gc.rs`) |
-| Tajima DST embroidery files | 03 §7 | missing | |
+| Tajima DST embroidery files | 03 §7 | present | `dst.rs`: byte-identical to the reference's (TESTBODICE fronts, braided bolero), README equal; `check_dst` reproduces the reference checker and catches a shifted braid (`tests/export_dst.rs`) |
 | Export manifest | 03 §7 | missing | |
 | Acceptance checks (51) | 03 §8 | partial | the SVG and PDF checks (`checks.rs`): pass on ftx's files; on the reference's PDFs the PDF checker gives exactly its 294 items; mutations fail exactly their check; DXF, HPGL, cutter, GarmentCode and DST checks to come (FTX-17) |
 

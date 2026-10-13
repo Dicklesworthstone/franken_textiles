@@ -3,8 +3,8 @@
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
 number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the
 master SVG (§7.1), the PDFs (§7.2–7.6), the DXFs (§7.7–7.8), HPGL (§7.9), the cutter files (§7.10),
-GarmentCode (§7.11), the manifest's piece reference (§7.13) and their acceptance checks (§8). The DST files,
-the manifest file and the remaining checks follow (FTX-17).
+GarmentCode (§7.11), the soutache DST files (§7.12), the manifest's piece reference (§7.13) and their acceptance
+checks (§8). The manifest file and the export/check orchestration follow.
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
@@ -126,6 +126,15 @@ seam's sides at matched arclength points (notch knots, candidates merged within 
 Casteljau at the parameter of an 801-sample arclength table), `right_wrong` for unreversed seams, warnings for
 unresolvable or excluded seams. All five reference files (`targets.json`) come out byte-identical; the manifest
 entries are equal; `check_garmentcode` reproduces the reference checker's items.
+
+**Soutache DSTs** (`dst.rs`, §7.12). Per instance carrying soutache: the design centre at the sew line's box
+centre, a 5 mm placement run on the sew line, a stop, and the braid lines (joined where they meet at the fold,
+ordered nearest first, reversed where nearer) at 2.5 mm; records in balanced ternary of at most 121 steps (moves
+split with ties to even), a needle-down stitch after each jump, a 1 mm tie-off; the 512-byte header; the hoop;
+the README. The record encoder matches the spec's goldens and round-trips every move. All seven reference DSTs
+(TESTBODICE's fronts, the braided bolero) come out byte-identical, the README and manifest entries equal;
+`check_dst` reproduces the reference checker's 140 items (with and without the pattern's braid lines) and catches
+the spec's braid shifted 4 mm (on-braid fails, lengths pass).
 
 **Checks** (`checks.rs`, `xml.rs`, §8). `check_svg`: `svg.no_transform`, `svg.mm_units_viewbox`,
 `svg.piece_subgroups` (master) or `cutter.single_closed_path` (cutter), with the reference's details, reading
