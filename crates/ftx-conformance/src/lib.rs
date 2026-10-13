@@ -6,6 +6,8 @@
 //! this code.
 #![forbid(unsafe_code)]
 
+pub mod propcheck;
+
 use std::path::PathBuf;
 
 use serde_json::Value;
