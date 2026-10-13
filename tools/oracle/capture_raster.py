@@ -247,6 +247,7 @@ def main() -> int:
                       ("empty", np.zeros((9, 7), np.uint8))):
         for mode, mname in ((cv2.RETR_CCOMP, "ccomp"), (cv2.RETR_EXTERNAL, "external")):
             kcases.append({"id": f"{name}-{mname}", "input": {**gray(img), "mode": mname}, "output": contour_info(img, mode)})
+    sheet_masks = {}
     with tempfile.TemporaryDirectory() as tmp:
         for name, kw in (("plain", {}), ("navy", {"fg": (255, 255, 255), "bg": (25, 35, 80)}),
                          ("filled", {"fg": (30, 20, 20), "fill": (175, 30, 35)})):
@@ -258,7 +259,66 @@ def main() -> int:
             kcases.append({"id": f"sheet-{name}", "input": {"mask_png": base64.b64encode(enc.tobytes()).decode(),
                                                             "mode": "ccomp"},
                            "output": contour_info(mask, cv2.RETR_CCOMP)})
+            sheet_masks[name] = enc
     write(args.out_dir, "raster_contours", meta, kcases)
+
+    # ---------------------------------------------------------------- distance transform, components
+    dcases = []
+    for name, img in (("blobs", blobs), ("nested", nested), ("noise", noise)):
+        for m in (3, 5):
+            dt = cv2.distanceTransform((img > 0).astype(np.uint8), cv2.DIST_L2, m)
+            dcases.append({"id": f"dt{m}-{name}", "input": {**gray(img), "mask": m},
+                           "output": {"dt": [float(v) for v in dt.reshape(-1)]}})
+        n, lab, stats, _ = cv2.connectedComponentsWithStats((img > 0).astype(np.uint8), connectivity=8)
+        dcases.append({"id": f"cc-{name}", "input": gray(img),
+                       "output": {"n": int(n), "labels": lab.reshape(-1).tolist(), "stats": stats.tolist()}})
+    for name, enc in sheet_masks.items():
+        mask = cv2.imdecode(enc, cv2.IMREAD_GRAYSCALE)
+        out = {}
+        for m in (3, 5):
+            out[f"dt{m}"] = hashlib.sha256(cv2.distanceTransform((mask > 0).astype(np.uint8), cv2.DIST_L2, m)
+                                           .astype("<f4").tobytes()).hexdigest()
+        n, lab, stats, _ = cv2.connectedComponentsWithStats((mask > 0).astype(np.uint8), connectivity=8)
+        out.update({"n": int(n), "labels_sha256": hashlib.sha256(lab.astype("<u4").tobytes()).hexdigest(),
+                    "stats": stats.tolist()})
+        dcases.append({"id": f"sheet-{name}", "input": {"mask_png": base64.b64encode(enc.tobytes()).decode()},
+                       "output": out})
+    write(args.out_dir, "raster_distance", meta, dcases)
+
+    # ---------------------------------------------------------------- probabilistic Hough
+    hcases = []
+
+    def hough(cid, img, rho, theta, thr, minlen, gap, stored=None):
+        segs = cv2.HoughLinesP(img, rho, theta, threshold=thr, minLineLength=minlen, maxLineGap=gap)
+        segs = [] if segs is None else np.asarray(segs).reshape(-1, 4).tolist()
+        if stored is None:
+            stored = {"mask_png": base64.b64encode(cv2.imencode(".png", img)[1].tobytes()).decode()}
+        hcases.append({"id": cid, "input": {**stored, "rho": rho, "theta": theta, "threshold": thr,
+                                            "min_len": minlen, "max_gap": gap}, "output": {"lines": segs}})
+    for name, enc in sheet_masks.items():
+        mask = cv2.imdecode(enc, cv2.IMREAD_GRAYSCALE)
+        s = min(mask.shape)
+        hough(f"dashes-{name}", mask, 1, np.pi / 360, max(20, int(0.05 * s)), int(0.12 * s), int(0.025 * s),
+              {"mask_png": base64.b64encode(enc.tobytes()).decode()})
+    from PIL import Image, ImageDraw
+    dash = Image.new("L", (600, 400), 0)
+    d = ImageDraw.Draw(dash)
+    d.rectangle([50, 50, 225, 325], outline=255, width=4)
+    x0, y0, x1, y1 = 325, 60, 500, 330
+    d.line([(x1, y0), (x0, y0), (x0, y1), (x1, y1)], fill=255, width=4)
+    for y in range(y0, y1, 26):
+        d.line([(x1, y), (x1, min(y + 14, y1))], fill=255, width=4)
+    dash = np.asarray(dash)
+    s = min(dash.shape)
+    hough("dashes-synthetic", dash, 1, np.pi / 360, max(20, int(0.05 * s)), int(0.12 * s), int(0.025 * s))
+    lines_img = ((rng.random((120, 160)) < 0.02) * 255).astype(np.uint8)
+    for k in range(6):
+        p, q = rng.integers(0, 160, 2), rng.integers(0, 120, 2)
+        cv2.line(lines_img, (int(p[0]), int(q[0])), (int(p[1]), int(q[1])), 255, 1 + k % 3)
+    size = 160.0
+    hough("grain-lines", lines_img, 1, np.pi / 180, max(20, int(0.08 * size)), 0.2 * size, max(3, int(0.01 * size)))
+    hough("grain-lines-thin", lines_img, 1, np.pi / 180, 10, 15.0, 2.0)
+    write(args.out_dir, "raster_hough", meta, hcases)
     return 0
 
 

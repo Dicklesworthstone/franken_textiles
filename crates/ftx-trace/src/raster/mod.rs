@@ -3,6 +3,8 @@
 
 pub mod color;
 pub mod contours;
+pub mod distance;
+pub mod hough;
 pub mod image;
 pub mod morph;
 pub mod threshold;

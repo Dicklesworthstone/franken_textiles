@@ -145,6 +145,163 @@ fn contours_match_opencv() {
     );
 }
 
+fn mask_png(v: &Value) -> Gray {
+    let bgr = load_png(&base64(v.as_str().unwrap())).unwrap();
+    Gray {
+        w: bgr.w,
+        h: bgr.h,
+        data: bgr.data.iter().step_by(3).copied().collect(),
+    }
+}
+
+/// `HoughLinesP` as the trace calls it (dash bridging on the sheet masks and a dashed edge, the grain
+/// fallback on lines in noise): the same segments in the same order.
+#[test]
+fn hough_matches_opencv() {
+    use ftx_trace::raster::hough::hough_lines_p;
+    let fx = fixture("trace", "raster_hough");
+    let mut fails = Vec::new();
+    for case in fx["cases"].as_array().unwrap() {
+        let (inp, id) = (&case["input"], case["id"].as_str().unwrap());
+        let img = mask_png(&inp["mask_png"]);
+        let got = hough_lines_p(
+            &img,
+            inp["rho"].as_f64().unwrap(),
+            inp["theta"].as_f64().unwrap(),
+            inp["threshold"].as_i64().unwrap() as i32,
+            inp["min_len"].as_f64().unwrap(),
+            inp["max_gap"].as_f64().unwrap(),
+        );
+        let want: Vec<[i32; 4]> = case["output"]["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| [0, 1, 2, 3].map(|k| l[k].as_i64().unwrap() as i32))
+            .collect();
+        if got != want {
+            let k = got
+                .iter()
+                .zip(&want)
+                .position(|(a, b)| a != b)
+                .unwrap_or(got.len().min(want.len()));
+            fails.push(format!(
+                "{id}: {} vs {} lines, first difference at {k}: {:?} vs {:?}",
+                got.len(),
+                want.len(),
+                got.get(k),
+                want.get(k)
+            ));
+        }
+    }
+    assert!(fails.is_empty(), "{}", fails.join("\n"));
+}
+
+/// Chamfer distance transforms (masks 3 and 5) and 8-connected components with their stats, bit for bit.
+#[test]
+fn distance_and_components_match_opencv() {
+    use ftx_trace::raster::distance::{components8, distance_l2};
+    let fx = fixture("trace", "raster_distance");
+    let mut fails = Vec::new();
+    for case in fx["cases"].as_array().unwrap() {
+        let id = case["id"].as_str().unwrap();
+        let (inp, out) = (&case["input"], &case["output"]);
+        let img = match inp.get("mask_png") {
+            Some(png) => {
+                let bgr = load_png(&base64(png.as_str().unwrap())).unwrap();
+                Gray {
+                    w: bgr.w,
+                    h: bgr.h,
+                    data: bgr.data.iter().step_by(3).copied().collect(),
+                }
+            }
+            None => gray_in(inp),
+        };
+        let stats_of = |labels: &[u32],
+                        stats: &[ftx_trace::raster::distance::Stats]|
+         -> (Vec<Vec<i64>>, Vec<u32>) {
+            (
+                stats
+                    .iter()
+                    .map(|s| {
+                        vec![
+                            s.x as i64,
+                            s.y as i64,
+                            s.w as i64,
+                            s.h as i64,
+                            s.area as i64,
+                        ]
+                    })
+                    .collect(),
+                labels.to_vec(),
+            )
+        };
+        let want_stats = |v: &Value| -> Vec<Vec<i64>> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    r.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.as_i64().unwrap())
+                        .collect()
+                })
+                .collect()
+        };
+        if id.starts_with("sheet-") {
+            for m in [3u8, 5] {
+                let dt = distance_l2(&img, m);
+                let bytes: Vec<u8> = dt.data.iter().flat_map(|v| v.to_le_bytes()).collect();
+                if ftx_core::receipt::sha256_hex(&bytes) != out[format!("dt{m}")].as_str().unwrap()
+                {
+                    fails.push(format!("{id}: dt{m} differs"));
+                }
+            }
+            let (labels, stats) = components8(&img);
+            let (s, l) = stats_of(&labels, &stats);
+            let lbytes: Vec<u8> = l.iter().flat_map(|v| v.to_le_bytes()).collect();
+            if s != want_stats(&out["stats"])
+                || ftx_core::receipt::sha256_hex(&lbytes) != out["labels_sha256"].as_str().unwrap()
+            {
+                fails.push(format!(
+                    "{id}: components differ ({} vs {})",
+                    stats.len(),
+                    out["n"]
+                ));
+            }
+        } else if let Some(m) = inp.get("mask").and_then(Value::as_u64) {
+            let dt = distance_l2(&img, m as u8);
+            let want: Vec<f32> = out["dt"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap() as f32)
+                .collect();
+            if dt.data != want {
+                let k = dt.data.iter().zip(&want).position(|(a, b)| a != b).unwrap();
+                fails.push(format!("{id}: pixel {k}: {} vs {}", dt.data[k], want[k]));
+            }
+        } else {
+            let (labels, stats) = components8(&img);
+            let (s, l) = stats_of(&labels, &stats);
+            let want_l: Vec<u32> = out["labels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as u32)
+                .collect();
+            if s != want_stats(&out["stats"]) || l != want_l {
+                fails.push(format!(
+                    "{id}: components differ ({} vs {})",
+                    stats.len(),
+                    out["n"]
+                ));
+            }
+        }
+    }
+    assert!(fails.is_empty(), "{}", fails.join("\n"));
+}
+
 #[test]
 fn thresholds_and_morphology_match_opencv() {
     let fx = fixture("trace", "raster_binarize");
