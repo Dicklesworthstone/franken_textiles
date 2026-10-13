@@ -10,7 +10,8 @@
 //! - No Payne–Hanek path: for |x| > [`TRIG_DOMAIN`] (2²⁰ rad) the trig functions return NaN instead of
 //!   reducing with 1280-bit arithmetic. Pattern and body angles are a few radians; a NaN there is a
 //!   bug upstream, and every caller refuses non-finite values.
-//! - Omitted: `tan`, `erf`, `erfc`, `pow`, double-double and quad-double support (unused here).
+//! - Omitted: `erf`, `erfc`, `pow`, double-double and quad-double support (unused here). [`tan`] was
+//!   added later from the same commit (its body over this file's reduction), for the fez's arc controls.
 //! - Added: [`cube`], a correctly rounded x³ (closest to numpy's `x ** 3`, see its docs), and
 //!   [`ulp_distance`] for tests.
 //!
@@ -191,6 +192,18 @@ pub fn sin_cos(x: f64) -> (f64, f64) {
         2 => (-sine, -cosine),
         _ => (-cosine, sine),
     }
+}
+
+/// tan(x) = sin/cos of the shared reduction (frankensim `fs-math` `det::tan`, same commit); NaN for
+/// |x| > [`TRIG_DOMAIN`].
+#[must_use]
+pub fn tan(x: f64) -> f64 {
+    let Some((r, quadrant)) = reduce_pio2(x) else {
+        return f64::NAN;
+    };
+    let s = sin_core(r);
+    let c = cos_core(r);
+    if quadrant & 1 == 0 { s / c } else { -(c / s) }
 }
 
 /// tanh(x). Odd symmetry holds bitwise: the magnitude is computed once and the sign re-applied.
@@ -627,6 +640,24 @@ mod tests {
             assert_eq!(s.to_bits(), sin(x).to_bits());
             assert_eq!(c.to_bits(), cos(x).to_bits());
         }
+    }
+
+    #[test]
+    fn tan_is_sin_over_cos_and_tracks_the_platform() {
+        let mut seed = 5;
+        for _ in 0..10_000 {
+            let x = (lcg(&mut seed) - 0.5) * 20.0;
+            let t = tan(x);
+            // det-ok: the platform tan is the oracle here
+            let want = x.tan();
+            assert!(
+                ulp_distance(t, want) <= 4 || (t - want).abs() <= 1e-15 * want.abs().max(1.0),
+                "{x}"
+            );
+        }
+        assert_eq!(tan(0.0).to_bits(), 0.0f64.to_bits());
+        assert!((tan(std::f64::consts::FRAC_PI_4) - 1.0).abs() < 2e-16);
+        assert!(tan(f64::INFINITY).is_nan() && tan(TRIG_DOMAIN * 2.0).is_nan());
     }
 
     #[test]

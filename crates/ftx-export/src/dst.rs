@@ -183,7 +183,7 @@ pub fn write_dst(label: &str, blocks: &[Block]) -> Result<(Vec<u8>, DstInfo), Re
                     }
                 }
                 let seg = ((pos.0 - prev.0) as f64, (pos.1 - prev.1) as f64);
-                let len = seg.0.hypot(seg.1);
+                let len = det::hypot(seg.0, seg.1);
                 if len > 0.0 {
                     let end = pos;
                     let m = (1.0 / 0.1f64).min(len);

@@ -4,6 +4,7 @@
 
 use std::f64::consts::PI;
 
+use ftx_core::det::{cos, sin};
 use ftx_core::{Refusal, RefusalCode, Vec3};
 use serde_json::Value;
 
@@ -102,9 +103,9 @@ pub fn landmarks(m: Meas) -> Result<Landmarks, Refusal> {
     let z_c7 = z_waist + m.get("back_neck_to_waist")?;
     let slope = m.get("shoulder_slope_deg")?.to_radians();
     let neck_r = m.get("neck_base")? / (2.0 * PI);
-    let shoulder_half = neck_r + m.get("shoulder_length")? * slope.cos();
+    let shoulder_half = neck_r + m.get("shoulder_length")? * cos(slope);
     let z_snp = z_c7 - 5.0;
-    let z_shoulder = z_snp - m.get("shoulder_length")? * slope.sin();
+    let z_shoulder = z_snp - m.get("shoulder_length")? * sin(slope);
     let z_chest = z_c7 - m.get("armscye_depth")?;
     let z_crotch = m.get("crotch_height")?;
     let z_hip = z_crotch + 0.45 * (z_waist - z_crotch);
@@ -287,7 +288,7 @@ pub fn frame(m: Meas, part: &str) -> Result<Frame, Refusal> {
                 let xj = l.at("shoulder_half_width") - 0.6 * up_arm;
                 Frame {
                     origin: Vec3::new(sx * xj, 0.0, l.at("shoulder") - 0.8 * up_arm),
-                    up: Vec3::new(-sx * a.sin(), 0.0, a.cos()),
+                    up: Vec3::new(-sx * sin(a), 0.0, cos(a)),
                     tip_h: Some(0.8 * up_arm),
                     ..base
                 }
@@ -296,9 +297,9 @@ pub fn frame(m: Meas, part: &str) -> Result<Frame, Refusal> {
                 let hip = Vec3::new(sx * l.at("hip_joint_x"), 0.0, l.at("crotch") + 25.0);
                 Frame {
                     origin: hip,
-                    up: Vec3::new(-sx * b.sin(), 0.0, b.cos()),
-                    length: Some((hip.z - l.at("ankle")) / b.cos()),
-                    knee_d: Some((hip.z - l.at("knee")) / b.cos()),
+                    up: Vec3::new(-sx * sin(b), 0.0, cos(b)),
+                    length: Some((hip.z - l.at("ankle")) / cos(b)),
+                    knee_d: Some((hip.z - l.at("knee")) / cos(b)),
                     ..base
                 }
             }
@@ -334,7 +335,7 @@ pub fn section_radius(m: Meas, part: &str, h: f64) -> Result<f64, Refusal> {
         let (a, b, cy) = interp_section(&torso_sections(m)?, h);
         return Ok(ftx_core::np::linspace(0.0, 2.0 * PI, 96)
             .into_iter()
-            .map(|t| ftx_core::det::hypot(a * t.sin(), cy - b * t.cos()))
+            .map(|t| ftx_core::det::hypot(a * sin(t), cy - b * cos(t)))
             .fold(f64::NEG_INFINITY, f64::max));
     }
     if part.starts_with("arm") {

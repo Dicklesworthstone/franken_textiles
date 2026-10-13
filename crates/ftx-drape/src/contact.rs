@@ -544,6 +544,7 @@ fn classify(pair: Pair, pts: &[Vec3; 4]) -> (Closest, [f64; 4]) {
 /// Barrier `−κ (g − ĝ)² ln(g/ĝ)` on a gap jet (0 < g < ĝ).
 fn barrier(g: Jet<12>, p: &ContactParams) -> Jet<12> {
     let r = g - Jet::constant(p.dhat);
+    // det-ok: Jet::ln, which takes its value from det::ln
     let l = (g * (1.0 / p.dhat)).ln();
     r * r * l * (-p.kappa)
 }

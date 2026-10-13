@@ -335,7 +335,7 @@ pub fn pole_of_inaccessibility(rings: Rings, tolerance: f64) -> Vec2 {
         signed_distance(rings, Vec2::new(cx, cy)),
     ));
     let diam = ((hi.x - lo.x) * (hi.x - lo.x) + (hi.y - lo.y) * (hi.y - lo.y)).sqrt();
-    let factor = ((diam / tolerance).ln() as i64).max(1);
+    let factor = (ftx_core::det::ln(diam / tolerance) as i64).max(1);
     let max_iter = 2000 + 2000 * factor as usize;
     let mut iter = 0;
     while iter < max_iter {

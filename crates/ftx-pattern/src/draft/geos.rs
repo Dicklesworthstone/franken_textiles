@@ -250,7 +250,7 @@ impl SegGen {
             return;
         }
         // limited mitre: a bevel square to the bisector at the limit distance
-        let ang = |a: Vec2, b: Vec2| (b.y - a.y).atan2(b.x - a.x);
+        let ang = |a: Vec2, b: Vec2| ftx_core::det::atan2(b.y - a.y, b.x - a.x);
         let norm = |a: f64| {
             let mut a = a;
             while a > std::f64::consts::PI {
@@ -275,7 +275,10 @@ impl SegGen {
         };
         let bis = norm(a1 + interior / 2.0);
         let bis_out = norm(bis + std::f64::consts::PI);
-        let project = |p: Vec2, d: f64, a: f64| Vec2::new(p.x + d * a.cos(), p.y + d * a.sin());
+        let project = |p: Vec2, d: f64, a: f64| {
+            let (s, c) = ftx_core::det::sin_cos(a);
+            Vec2::new(p.x + d * c, p.y + d * s)
+        };
         let mid = project(corner, limit_d, bis_out);
         let dir = norm(bis_out + std::f64::consts::FRAC_PI_2);
         let (b0, b1) = (

@@ -2,6 +2,7 @@
 
 use std::f64::consts::PI;
 
+use ftx_core::det::{cos, sin, tan};
 use ftx_core::py::round;
 use ftx_core::{Refusal, RefusalCode, Vec2};
 use serde_json::{Map, Value, json};
@@ -17,12 +18,12 @@ pub fn defaults() -> Value {
 
 /// `_arc_ctrl(c, rho, a0, a1)`: the cubic controls of a circular arc of at most 90°.
 fn arc_ctrl(c: Vec2, rho: f64, a0: f64, a1: f64) -> (Vec2, Vec2) {
-    let k = 4.0 / 3.0 * ((a1 - a0) / 4.0).tan() * rho;
-    let p0 = c + Vec2::new(a0.cos(), a0.sin()) * rho;
-    let p3 = c + Vec2::new(a1.cos(), a1.sin()) * rho;
+    let k = 4.0 / 3.0 * tan((a1 - a0) / 4.0) * rho;
+    let p0 = c + Vec2::new(cos(a0), sin(a0)) * rho;
+    let p3 = c + Vec2::new(cos(a1), sin(a1)) * rho;
     (
-        p0 + Vec2::new(-a0.sin(), a0.cos()) * k,
-        p3 - Vec2::new(-a1.sin(), a1.cos()) * k,
+        p0 + Vec2::new(-sin(a0), cos(a0)) * k,
+        p3 - Vec2::new(-sin(a1), cos(a1)) * k,
     )
 }
 
@@ -82,8 +83,8 @@ pub fn fez(meas: &Value, style: Option<&Value>) -> Result<(Value, Value), Refusa
                "note": "Stiffen with buckram or heavy fusible interfacing", "grain": null}),
     );
     for (i, a) in ang.iter().enumerate() {
-        c.v(&format!("b{i}"), rho_b * a.cos(), rho_b * a.sin());
-        c.v(&format!("t{i}"), rho_t * a.cos(), rho_t * a.sin());
+        c.v(&format!("b{i}"), rho_b * cos(*a), rho_b * sin(*a));
+        c.v(&format!("t{i}"), rho_t * cos(*a), rho_t * sin(*a));
     }
     for i in 0..n {
         let (c1, c2) = arc_ctrl(o, rho_b, ang[i], ang[i + 1]);
@@ -129,7 +130,7 @@ pub fn fez(meas: &Value, style: Option<&Value>) -> Result<(Value, Value), Refusa
         .map(|i| -PI / 2.0 + PI / 2.0 * f64::from(i))
         .collect();
     for (i, q) in quarter.iter().take(4).enumerate() {
-        t.v(&format!("p{i}"), r_top * q.cos(), r_top * q.sin());
+        t.v(&format!("p{i}"), r_top * cos(*q), r_top * sin(*q));
     }
     for i in 0..4 {
         let (c1, c2) = arc_ctrl(o, r_top, quarter[i], quarter[i + 1]);

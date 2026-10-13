@@ -1,7 +1,7 @@
 //! Weak public-data priors (spec 02 A.4). Tables are specification data, not generated oracle output.
 
 use crate::{invalid, make_record, unit};
-use ftx_core::{Refusal, py};
+use ftx_core::{Refusal, det, py};
 use serde_json::{Map, Value, json};
 use std::sync::OnceLock;
 
@@ -236,7 +236,7 @@ pub fn priors_for(
     p.add(
         "seat_over_nappy",
         p.value("hip") + 50.0,
-        35.0_f64.hypot(20.0),
+        det::hypot(35.0, 20.0),
         "hip prior + 5 cm nappy bulk",
         JUDGEMENT,
         &["UNCERTAIN placeholder: nappy bulk is not tabulated; always tape it over the nappy"],
@@ -329,7 +329,7 @@ pub fn priors_for(
     p.add(
         "neck_base",
         cpsc(agec, "neck_mid", 0) * scale + 15.0,
-        13.0_f64.hypot(8.0),
+        det::hypot(13.0, 8.0),
         &format!("{method}: mid-neck #32 + 1.5 cm"),
         C77,
         &[
@@ -364,7 +364,7 @@ pub fn priors_for(
     p.add(
         "across_back",
         cpsc(agec, "biacromial", 0) * ratio + 10.0,
-        (cpsc(agec, "biacromial", 1) * ratio).hypot(8.0),
+        det::hypot(cpsc(agec, "biacromial", 1) * ratio, 8.0),
         &format!("{method}: biacromial #36 + 1 cm surface allowance"),
         C77,
         &[

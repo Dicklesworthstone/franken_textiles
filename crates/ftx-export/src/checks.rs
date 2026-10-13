@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::py;
+use ftx_core::{det, py};
 use serde_json::{Value, json};
 
 use crate::xml::parse;
@@ -337,8 +337,8 @@ fn content_scan(stream: &[u8]) -> Scan {
             }
             "re" if args.len() >= 4 => {
                 let a = last(4);
-                let sx = ctm[0].hypot(ctm[1]);
-                let sy = ctm[2].hypot(ctm[3]);
+                let sx = det::hypot(ctm[0], ctm[1]);
+                let sy = det::hypot(ctm[2], ctm[3]);
                 rects.push((tags.clone(), a[2].abs() * sx, a[3].abs() * sy));
             }
             "m" | "l" if tags.iter().any(|t| t == "FPCut") && args.len() >= 2 => {
@@ -350,7 +350,7 @@ fn content_scan(stream: &[u8]) -> Scan {
             }
             "Tm" if args.len() >= 6 => {
                 let a = last(6);
-                tm_scale = a[0].hypot(a[1]);
+                tm_scale = det::hypot(a[0], a[1]);
             }
             "Tf" if !args.is_empty() => {
                 let size = args[args.len() - 1];
@@ -383,7 +383,7 @@ fn nearest_max(pts: &[(f64, f64)], reference: &[(f64, f64)]) -> f64 {
                         continue;
                     }
                     for &i in grid.get(&(gx, gy)).map_or(&[][..], Vec::as_slice) {
-                        best = best.min((reference[i].0 - x).hypot(reference[i].1 - y));
+                        best = best.min(det::hypot(reference[i].0 - x, reference[i].1 - y));
                     }
                 }
             }
@@ -1184,7 +1184,7 @@ fn seg_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     } else {
         0.0
     };
-    (p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dy)
+    det::hypot(p.0 - a.0 - t * dx, p.1 - a.1 - t * dy)
 }
 
 /// The checks of a soutache DST (spec 03 §8.2) against its manifest entry `info`: the header, one END and
@@ -1376,7 +1376,7 @@ pub fn check_dst(
             .iter()
             .map(|l| {
                 l.windows(2)
-                    .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+                    .map(|w| det::hypot(w[1].0 - w[0].0, w[1].1 - w[0].1))
                     .sum::<f64>()
             })
             .sum();

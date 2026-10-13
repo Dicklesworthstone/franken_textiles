@@ -4,6 +4,7 @@
 use std::f64::consts::PI;
 
 use ftx_core::curve::curve_points;
+use ftx_core::det::{cos, sin};
 use ftx_core::polyline::horizontal_width;
 use ftx_core::{Curve, CurveKind, Refusal, RefusalCode, Vec2};
 use serde_json::{Map, Value, json};
@@ -69,7 +70,7 @@ fn bodice(
     b.v("cb_hem", 0.0, x.hem);
     b.v("side_hem", x.wb - 5.0, x.hem);
     b.v("ua", x.wb, x.y_ua);
-    let tip_b = Vec2::new(neck_w + bsl * bs.cos(), x.y_snp - bsl * bs.sin());
+    let tip_b = Vec2::new(neck_w + bsl * cos(bs), x.y_snp - bsl * sin(bs));
     b.v("tip", tip_b.x, tip_b.y);
     b.v("snp", neck_w, x.y_snp);
     b.v("cbn", 0.0, x.y_cbn);
@@ -118,7 +119,7 @@ fn bodice(
     );
     let cfx = x.wf - sf(s, "front_gap_mm")?;
     let snp_f = Vec2::new(x.wf - neck_w + 3.0, x.y_snp);
-    let tip_f = snp_f + Vec2::new(-fs.cos(), -fs.sin()) * x.sl;
+    let tip_f = snp_f + Vec2::new(-cos(fs), -sin(fs)) * x.sl;
     let y_cfn = x.y_snp - k * (x.nb / 6.0 + sf(s, "front_neck_extra")?);
     f.v("side_hem", 5.0, x.hem);
     let belly = sf(s, "front_belly_mm")?;
@@ -516,8 +517,8 @@ fn trefoil(c: Vec2, r: f64) -> Vec<Vec2> {
         .into_iter()
         .map(|t| {
             Vec2::new(
-                c.x + r / 3.0 * (t.sin() + 2.0 * (2.0 * t).sin()),
-                c.y - r / 3.0 * (t.cos() - 2.0 * (2.0 * t).cos()),
+                c.x + r / 3.0 * (sin(t) + 2.0 * sin(2.0 * t)),
+                c.y - r / 3.0 * (cos(t) - 2.0 * cos(2.0 * t)),
             )
         })
         .map(|p| Vec2::new(np_round2(p.x), np_round2(p.y)))

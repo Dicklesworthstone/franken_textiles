@@ -81,9 +81,7 @@ pub fn zouave_trousers(meas: &Value, style: Option<&Value>) -> Result<(Value, Va
         r_wrap = r_wrap.max(section_radius(m, "leg_R", h_waist + y)?);
     }
     r_wrap += 22.0;
-    let mid_deg = (1.0f64.min(leg_fr.origin.x.abs() / r_wrap))
-        .asin()
-        .to_degrees();
+    let mid_deg = ftx_core::det::asin(1.0f64.min(leg_fr.origin.x.abs() / r_wrap)).to_degrees();
 
     let front_piece = || -> Result<Value, Refusal> {
         let mut p = PieceBuilder::new(

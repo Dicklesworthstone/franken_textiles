@@ -59,7 +59,7 @@ pub fn normalize_record(record: &Value) -> Result<(Value, &'static str), Refusal
         let offset = hook[0].as_f64().unwrap_or(0.0);
         let extra = hook[1].as_f64().unwrap_or(0.0);
         let value = Refusal::finite("normalized value", value + offset)?;
-        let sigma = Refusal::finite("normalized sigma", sigma.hypot(extra))?;
+        let sigma = Refusal::finite("normalized sigma", ftx_core::det::hypot(sigma, extra))?;
         out[format!("value_{u}")] = json!(value);
         out[format!("sigma_{u}")] = json!(sigma);
         out["note"] = json!(format!(
@@ -290,7 +290,7 @@ pub fn fuse_one(
         for j in i + 1..observations.len() {
             let a = &observations[i];
             let b = &observations[j];
-            let z = (a.value - b.value).abs() / a.sigma.hypot(b.sigma);
+            let z = (a.value - b.value).abs() / ftx_core::det::hypot(a.sigma, b.sigma);
             Refusal::finite("source disagreement", z)?;
             if z > z_max {
                 z_max = z;

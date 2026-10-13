@@ -403,7 +403,7 @@ pub fn union_exterior(polys: &[Vec<Vec2>]) -> Option<Vec<Vec2>> {
                 .max_by(|&p, &q| {
                     let turn = |k: usize| {
                         let dout = nodes[boundary[k].1] - nodes[b];
-                        cross(din, dout).atan2(din.x * dout.x + din.y * dout.y)
+                        ftx_core::det::atan2(cross(din, dout), din.x * dout.x + din.y * dout.y)
                     };
                     turn(p).total_cmp(&turn(q))
                 });
