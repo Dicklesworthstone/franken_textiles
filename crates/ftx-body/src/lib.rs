@@ -14,6 +14,7 @@
 //! the template frame (soles near z = −0.82 m), posed bodies are root-relative.
 #![forbid(unsafe_code)]
 
+pub mod accepted_shape;
 pub mod data;
 pub mod drape;
 pub mod fit;
