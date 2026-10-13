@@ -9,9 +9,11 @@
 pub mod doc;
 pub mod instance;
 pub mod pattern;
+pub mod validate;
 
 pub use doc::{
     Cut, Edge, Grain, Mark, Notch, PatternDoc, Piece, Placement, SCHEMA, Seam, Vertices, truthy,
 };
 pub use instance::{InstEdge, Instance, PyError, Side, piece_instances};
 pub use pattern::{Pattern, SeamPairs, piece_definition_errors, py_repr_value};
+pub use validate::{BodyMeasure, Measurements, Report, default_fit_spec, format_table, validate};

@@ -35,3 +35,13 @@ the implausible length instead of dividing by zero; an edge's `"curve": null` is
 Python's `str(KeyError)`; `Value` prints as is).
 
 **Determinism class.** Fixed-order f64 arithmetic over `ftx-core`; bit-identical across targets.
+
+**Validation** (`validate`, spec 01 §9): seam walk, truing, points of measure, report status, text table
+and the role-based default fit spec. The body comes through the `BodyMeasure` trait (values, σ, landmark
+heights); `Measurements` implements it for a measurement file (flat or fused) with the reference's
+analytic landmark formulas, and an Anny-fitted body can implement it later. Fit specs stay JSON read with
+the reference's dictionary semantics. Oracle: `tests/fixtures/oracle/validate/` (48 reports bit-exact and
+48 tables identical, 9 default fit specs exact). Deviations, all on inputs the reference crashes on: a
+`ratio_band` that is not `[lo, hi]` is an ERROR row; a `null` ratio without a band reads as 1.0; a
+measurement entry without a value counts as missing; a point without `body` is UNMEASURABLE and not
+listed as missing.
