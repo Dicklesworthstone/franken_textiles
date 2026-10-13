@@ -1,13 +1,15 @@
-//! shapely's `Polygon.buffer` (GEOS 3.14.1) for the trace's polygons, one shell and no holes: the raw offset
-//! curve ported line for line (`BufferCurveSetBuilder` → `OffsetCurveBuilder::computeRingBufferCurve`:
-//! `BufferInputLineSimplifier`, `OffsetSegmentGenerator` with mitre, limited-mitre, bevel and round joins,
-//! `LineIntersector`, the double-double `CGAlgorithmsDD::intersection`, `Angle::sinCosSnap`), then the
-//! curve's self-intersection loops cut away instead of GEOS's noding and polygon building. When the curve
-//! does not cross itself (a stroke-centre offset of a traced outline, as a rule) the ring is GEOS's ring,
-//! from the same start. Also shapely's `LineString.distance` / `project(normalized=True)` for points.
+//! shapely's `Polygon.buffer` (GEOS 3.14.1) for the trace's polygons: the raw ring curves ported line for
+//! line (`BufferCurveSetBuilder` with its erosion and inversion checks → `OffsetCurveBuilder::
+//! computeRingBufferCurve`: `BufferInputLineSimplifier`, `OffsetSegmentGenerator` with mitre,
+//! limited-mitre, bevel and round joins, `LineIntersector`, the double-double `CGAlgorithmsDD::
+//! intersection`, `Angle::sinCosSnap`), then GEOS's noding and polygon building ([`crate::buffer_graph`]).
+//! Also shapely's `LineString.distance` / `project(normalized=True)` for points.
 
 use ftx_core::exact::{Sign, orient2d};
 use ftx_core::{Vec2, det};
+
+pub use crate::buffer_graph::Polygon;
+use crate::buffer_graph::{self, Curve};
 
 /// Join style.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,7 +21,7 @@ pub enum Join {
 }
 
 /// GEOS `Orientation::index` (exact): 1 left, −1 right, 0 collinear.
-fn orientation(p1: Vec2, p2: Vec2, q: Vec2) -> i32 {
+pub(crate) fn orientation(p1: Vec2, p2: Vec2, q: Vec2) -> i32 {
     match orient2d([p1.x, p1.y], [p2.x, p2.y], [q.x, q.y]) {
         Sign::Positive => 1,
         Sign::Negative => -1,
@@ -33,7 +35,7 @@ fn dist(a: Vec2, b: Vec2) -> f64 {
 }
 
 /// GEOS `Distance::pointToSegment`.
-fn point_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+pub(crate) fn point_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     if a == b {
         return dist(p, a);
     }
@@ -161,20 +163,27 @@ fn nearest_endpoint(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> Vec2 {
 
 /// `LineIntersector::computeIntersection` of two segments: the number of intersections and the first.
 fn segment_intersection(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> (u8, Vec2) {
+    let (n, pts) = segment_intersections(p1, p2, q1, q2);
+    (n, pts[0])
+}
+
+/// `LineIntersector::computeIntersection` of two segments: the number of intersections (0, 1, or 2 for a
+/// collinear overlap) and the intersection points.
+pub(crate) fn segment_intersections(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> (u8, [Vec2; 2]) {
     let envelopes = p1.x.min(p2.x) <= q1.x.max(q2.x)
         && q1.x.min(q2.x) <= p1.x.max(p2.x)
         && p1.y.min(p2.y) <= q1.y.max(q2.y)
         && q1.y.min(q2.y) <= p1.y.max(p2.y);
     if !envelopes {
-        return (0, p1);
+        return (0, [p1, p1]);
     }
     let (pq1, pq2) = (orientation(p1, p2, q1), orientation(p1, p2, q2));
     if (pq1 > 0 && pq2 > 0) || (pq1 < 0 && pq2 < 0) {
-        return (0, p1);
+        return (0, [p1, p1]);
     }
     let (qp1, qp2) = (orientation(q1, q2, p1), orientation(q1, q2, p2));
     if (qp1 > 0 && qp2 > 0) || (qp1 < 0 && qp2 < 0) {
-        return (0, p1);
+        return (0, [p1, p1]);
     }
     if pq1 == 0 && pq2 == 0 && qp1 == 0 && qp2 == 0 {
         let (q1p, q2p, p1q, p2q) = (
@@ -184,13 +193,13 @@ fn segment_intersection(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> (u8, Vec2) {
             env_contains(q1, q2, p2),
         );
         return match (q1p, q2p, p1q, p2q) {
-            (true, true, _, _) => (2, q1),
-            (_, _, true, true) => (2, p1),
-            (true, _, true, _) => (if q1 == p1 && !q2p && !p2q { 1 } else { 2 }, q1),
-            (true, _, _, true) => (if q1 == p2 && !q2p && !p1q { 1 } else { 2 }, q1),
-            (_, true, true, _) => (if q2 == p1 && !q1p && !p2q { 1 } else { 2 }, q2),
-            (_, true, _, true) => (if q2 == p2 && !q1p && !p1q { 1 } else { 2 }, q2),
-            _ => (0, p1),
+            (true, true, _, _) => (2, [q1, q2]),
+            (_, _, true, true) => (2, [p1, p2]),
+            (true, _, true, _) => (if q1 == p1 && !q2p && !p2q { 1 } else { 2 }, [q1, p1]),
+            (true, _, _, true) => (if q1 == p2 && !q2p && !p1q { 1 } else { 2 }, [q1, p2]),
+            (_, true, true, _) => (if q2 == p1 && !q1p && !p2q { 1 } else { 2 }, [q2, p1]),
+            (_, true, _, true) => (if q2 == p2 && !q1p && !p1q { 1 } else { 2 }, [q2, p2]),
+            _ => (0, [p1, p1]),
         };
     }
     if pq1 == 0 || pq2 == 0 || qp1 == 0 || qp2 == 0 {
@@ -207,13 +216,13 @@ fn segment_intersection(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> (u8, Vec2) {
         } else {
             p2
         };
-        return (1, p);
+        return (1, [p, p]);
     }
     let mut x = intersection_dd(p1, p2, q1, q2).unwrap_or_else(|| nearest_endpoint(p1, p2, q1, q2));
     if !(env_contains(p1, p2, x) && env_contains(q1, q2, x)) {
         x = nearest_endpoint(p1, p2, q1, q2);
     }
-    (1, x)
+    (1, [x, x])
 }
 
 /// `Intersection::intersectionLineSegment`: the line `l1 l2` with the segment `s1 s2`.
@@ -544,7 +553,7 @@ impl SegGen {
 }
 
 /// GEOS `Area::ofRingSigned` (positive for clockwise) of a closed ring.
-fn ring_signed_area(c: &[Vec2]) -> f64 {
+pub(crate) fn ring_signed_area(c: &[Vec2]) -> f64 {
     let n = c.len();
     if n < 3 {
         return 0.0;
@@ -596,172 +605,130 @@ fn raw_ring_curve(shell: &[Vec2], distance: f64, join: Join) -> Vec<Vec2> {
     pts
 }
 
-/// Where segment `a0 a1` crosses `b0 b1` properly (interiors only), as `(t on a, point)`.
-fn crossing(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2) -> Option<(f64, Vec2)> {
-    let (o1, o2) = (orientation(a0, a1, b0), orientation(a0, a1, b1));
-    let (o3, o4) = (orientation(b0, b1, a0), orientation(b0, b1, a1));
-    if o1 * o2 >= 0 || o3 * o4 >= 0 {
+fn closed(ring: &[Vec2]) -> Vec<Vec2> {
+    let mut c = ring.to_vec();
+    if c.first() != c.last()
+        && let Some(&f) = c.first()
+    {
+        c.push(f);
+    }
+    c
+}
+
+/// `BufferCurveSetBuilder::isTriangleErodedCompletely`: the in-centre is nearer an edge than the distance.
+fn triangle_eroded(t: &[Vec2], distance: f64) -> bool {
+    let (p0, p1, p2) = (t[0], t[1], t[2]);
+    let (l0, l1, l2) = (dist(p1, p2), dist(p0, p2), dist(p0, p1));
+    let c = l0 + l1 + l2;
+    let centre = Vec2::new(
+        (l0 * p0.x + l1 * p1.x + l2 * p2.x) / c,
+        (l0 * p0.y + l1 * p1.y + l2 * p2.y) / c,
+    );
+    point_to_segment(centre, p0, p1) < distance.abs()
+}
+
+/// `BufferCurveSetBuilder::isRingFullyEroded` (the ring closed, as given).
+fn ring_fully_eroded(ring: &[Vec2], hole: bool, distance: f64) -> bool {
+    if ring.len() < 4 {
+        return true;
+    }
+    if ring.len() == 4 {
+        return triangle_eroded(ring, distance);
+    }
+    if (hole && distance > 0.0) || (!hole && distance < 0.0) {
+        let (lo_x, hi_x, lo_y, hi_y) = ring.iter().fold(
+            (
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |e, p| (e.0.min(p.x), e.1.max(p.x), e.2.min(p.y), e.3.max(p.y)),
+        );
+        return 2.0 * distance.abs() > (hi_x - lo_x).min(hi_y - lo_y);
+    }
+    false
+}
+
+/// `BufferCurveSetBuilder::isRingCurveInverted`: a small ring's curve with no point at the distance.
+fn ring_curve_inverted(ring: &[Vec2], distance: f64, curve: &[Vec2]) -> bool {
+    if distance == 0.0 || ring.len() <= 3 || ring.len() >= 9 || curve.len() > 4 * ring.len() {
+        return false;
+    }
+    let tol = 0.99 * distance.abs();
+    let far = |p: Vec2| {
+        ring.windows(2)
+            .map(|w| point_to_segment(p, w[0], w[1]))
+            .fold(dist(p, ring[0]), f64::min)
+            > tol
+    };
+    !(0..curve.len()).any(|i| {
+        let (v, w) = (curve[i], curve[(i + 1) % curve.len()]);
+        far(v) || far(Vec2::new((v.x + w.x) / 2.0, (v.y + w.y) / 2.0))
+    })
+}
+
+/// `BufferCurveSetBuilder::addPolygonRingSide`: a ring's raw curve and its depth delta. A clockwise
+/// shell has the polygon on its right (delta −1), a hole on its left; counter-clockwise rings swap.
+fn ring_curve(ring: &[Vec2], distance: f64, hole: bool, join: Join) -> Option<Curve> {
+    if distance == 0.0 && ring.len() < 4 {
         return None;
     }
-    let x = intersection_dd(a0, a1, b0, b1)?;
-    let ab = a1 - a0;
-    let t = (x - a0).dot(ab) / ab.dot(ab);
-    Some((t, x))
+    let ccw = ring.len() >= 4 && ring_signed_area(ring) < 0.0;
+    let delta = if hole == ccw { -1 } else { 1 };
+    let pts = if distance == 0.0 {
+        ring.to_vec()
+    } else {
+        // a hole is offset to the other side
+        raw_ring_curve(ring, if hole { -distance } else { distance }, join)
+    };
+    (pts.len() >= 2 && !ring_curve_inverted(ring, distance, &pts)).then_some(Curve { pts, delta })
 }
 
-fn distance_to_ring(p: Vec2, ring: &[Vec2]) -> f64 {
-    ring.windows(2)
-        .map(|w| point_to_segment(p, w[0], w[1]))
-        .fold(f64::INFINITY, f64::min)
-}
-
-/// The offset curve's loops cut away: rings (closed) made of the stretches that lie at the offset distance
-/// from the shell. Unchanged (from its start) when the curve does not cross itself.
-fn remove_loops(curve: &[Vec2], shell: &[Vec2], d: f64) -> Vec<Vec<Vec2>> {
-    let m = curve.len() - 1;
-    // per segment: crossings (t, point)
-    let mut cuts: Vec<Vec<(f64, Vec2)>> = vec![Vec::new(); m];
-    let bbox = |a: Vec2, b: Vec2| (a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y));
-    let mut order: Vec<usize> = (0..m).collect();
-    order.sort_by(|&i, &j| {
-        bbox(curve[i], curve[i + 1])
-            .0
-            .total_cmp(&bbox(curve[j], curve[j + 1]).0)
-    });
-    for (k, &i) in order.iter().enumerate() {
-        let bi = bbox(curve[i], curve[i + 1]);
-        for &j in &order[k + 1..] {
-            let bj = bbox(curve[j], curve[j + 1]);
-            if bj.0 > bi.1 {
-                break;
-            }
-            if bj.3 < bi.2
-                || bj.2 > bi.3
-                || i.abs_diff(j) <= 1
-                || (i == 0 && j == m - 1)
-                || (j == 0 && i == m - 1)
-            {
-                continue;
-            }
-            if let Some((t, x)) = crossing(curve[i], curve[i + 1], curve[j], curve[j + 1]) {
-                cuts[i].push((t, x));
-                let ab = curve[j + 1] - curve[j];
-                cuts[j].push(((x - curve[j]).dot(ab) / ab.dot(ab), x));
-            }
-        }
-    }
-    if cuts.iter().all(Vec::is_empty) {
-        return vec![curve.to_vec()];
-    }
-    // pieces between crossings, in curve order
-    let mut pieces: Vec<Vec<Vec2>> = vec![vec![curve[0]]];
-    for i in 0..m {
-        let mut c = cuts[i].clone();
-        c.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (_, x) in c {
-            pieces.last_mut().unwrap_or(&mut Vec::new()).push(x);
-            pieces.push(vec![x]);
-        }
-        if let Some(last) = pieces.last_mut() {
-            last.push(curve[i + 1]);
-        }
-    }
-    // the last piece continues into the first (the ring is closed)
-    if pieces.len() > 1 {
-        let last = pieces.pop().unwrap_or_default();
-        let first = std::mem::take(&mut pieces[0]);
-        pieces[0] = last.into_iter().chain(first.into_iter().skip(1)).collect();
-    }
-    let keep: Vec<Vec<Vec2>> = pieces
-        .into_iter()
-        .filter(|p| {
-            let mid = p[p.len() / 2];
-            let probe = if p.len() >= 3 {
-                mid
-            } else {
-                Vec2::new((p[0].x + p[1].x) / 2.0, (p[0].y + p[1].y) / 2.0)
-            };
-            distance_to_ring(probe, shell) >= d * (1.0 - 1e-6)
-        })
-        .collect();
-    // chain kept pieces into rings: a piece ends where another begins
-    let mut used = vec![false; keep.len()];
-    let mut rings = Vec::new();
-    for s in 0..keep.len() {
-        if used[s] {
+/// shapely `MultiPolygon(polygons).buffer(distance, join_style=…)` (GEOS 3.14.1 `BufferOp`; shells and
+/// holes of any orientation): the result polygons, rings closed, in GEOS's order with GEOS's starts.
+/// `distance` 0 is the classic clean-up: spikes and zero-width necks fall away, a pinched shape splits.
+///
+/// # Errors
+/// A non-finite shell, or a topology GEOS would refuse at full precision.
+pub fn buffer(polygons: &[Polygon], distance: f64, join: Join) -> Result<Vec<Polygon>, String> {
+    let mut curves = Vec::new();
+    for poly in polygons {
+        let shell = closed(&poly.shell);
+        if distance < 0.0 && ring_fully_eroded(&shell, false, distance) {
             continue;
         }
-        used[s] = true;
-        let mut ring = keep[s].clone();
-        loop {
-            let end = ring[ring.len() - 1];
-            if end == ring[0] && ring.len() > 3 {
-                break;
-            }
-            match (0..keep.len()).find(|&k| !used[k] && keep[k][0] == end) {
-                Some(k) => {
-                    used[k] = true;
-                    ring.extend(keep[k].iter().skip(1));
-                }
-                None => break,
-            }
+        let coords = without_repeats(&shell);
+        if coords.is_empty() {
+            return Err("buffer: a shell with no finite points".into());
         }
-        if ring.first() != ring.last() {
-            ring.push(ring[0]);
+        if distance <= 0.0 && coords.len() < 3 {
+            continue;
         }
-        if ring.len() >= 4 {
-            rings.push(ring);
+        curves.extend(ring_curve(&coords, distance, false, join));
+        for hole in &poly.holes {
+            let hole = closed(hole);
+            if distance > 0.0 && ring_fully_eroded(&hole, true, distance) {
+                continue;
+            }
+            curves.extend(ring_curve(&without_repeats(&hole), distance, true, join));
         }
     }
-    rings
+    if curves.is_empty() {
+        return Ok(Vec::new());
+    }
+    buffer_graph::polygons(&curves)
 }
 
-/// `Polygon(shell).buffer(distance, join_style=…)` for a simple shell: the result polygons' shells,
-/// closed (first point repeated), largest first is not implied. `distance` 0 returns the shell (valid
-/// polygons buffer to themselves).
-#[must_use]
-pub fn buffer_shell(shell: &[Vec2], distance: f64, join: Join) -> Vec<Vec<Vec2>> {
-    let mut closed = shell.to_vec();
-    if closed.first() != closed.last()
-        && let Some(&f) = closed.first()
-    {
-        closed.push(f);
+/// `RepeatedPointRemover::removeRepeatedAndInvalidPoints`.
+fn without_repeats(ring: &[Vec2]) -> Vec<Vec2> {
+    let mut out: Vec<Vec2> = Vec::with_capacity(ring.len());
+    for &p in ring {
+        if p.is_finite() && out.last() != Some(&p) {
+            out.push(p);
+        }
     }
-    if distance == 0.0 || closed.len() < 4 {
-        return vec![closed];
-    }
-    let (lo, hi) = closed.iter().fold(
-        (
-            Vec2::new(f64::INFINITY, f64::INFINITY),
-            Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
-        ),
-        |(lo, hi), p| {
-            (
-                Vec2::new(lo.x.min(p.x), lo.y.min(p.y)),
-                Vec2::new(hi.x.max(p.x), hi.y.max(p.y)),
-            )
-        },
-    );
-    if distance < 0.0 && 2.0 * distance.abs() > (hi.x - lo.x).min(hi.y - lo.y) {
-        return Vec::new(); // eroded completely
-    }
-    let curve = raw_ring_curve(&closed, distance, join);
-    if curve.len() < 4 {
-        return Vec::new();
-    }
-    // GEOS's buffer shells run clockwise: a counter-clockwise ring is reversed from the same start
-    remove_loops(&curve, &closed, distance.abs())
-        .into_iter()
-        .map(|r| {
-            if ring_signed_area(&r) < 0.0 {
-                std::iter::once(r[0])
-                    .chain(r[..r.len() - 1].iter().rev().copied())
-                    .collect()
-            } else {
-                r
-            }
-        })
-        .collect()
+    out
 }
 
 /// shapely `LineString(line).distance(Point(p))`.

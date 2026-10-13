@@ -67,13 +67,29 @@ hierarchy), `contourArea`, `arcLength`, `moments`, `boundingRect`, `approxPolyDP
 it), `fillPoly`, filled `drawContours` and thick lines are bit-identical to OpenCV 5.0 on the three noisy
 benchmark sheets and synthetic cases (33 binarize, 13 contour, 12 distance, 6 Hough, 58 drawing cases).
 
-**Buffer** (`buffer.rs`). shapely's `Polygon.buffer` for a shell: GEOS 3.14.1's ring offset curve line for
-line (`BufferInputLineSimplifier`, `OffsetSegmentGenerator` with mitre, limited mitre, bevel and round joins,
-`LineIntersector`, the double-double line intersection, `sinCosSnap`), then the curve's self-intersection
-loops cut away where GEOS nodes and polygonizes. On 42 cases (the sheets' stroke-centre offsets and marks
-insets, stars, ells and slivers both ways round with both joins) every stroke-centre ring is identical and
-24 cases in all; the rest are the same ring from another start point or within 1.4e-13 px (round joins use
-`det::sin_cos`). Plus `LineString.distance` and `project(normalized=True)` for points.
+**Buffer** (`buffer.rs`, `buffer_graph.rs`). shapely's `buffer` of polygons and multipolygons with holes
+(`buffer(polygons, distance, join)` → polygons): GEOS 3.14.1's curve set line for line
+(`BufferCurveSetBuilder`: the fully-eroded and triangle in-centre tests, ring sides and labels by
+orientation, the inverted-curve skip; `OffsetCurveBuilder`, `BufferInputLineSimplifier`,
+`OffsetSegmentGenerator` with mitre, limited mitre, bevel and round joins, `LineIntersector`, the
+double-double line intersection, `sinCosSnap`), then GEOS's graph stage: `MCIndexNoder` + `IntersectionAdder`
+(every pair of segments whose envelopes meet; `SegmentNodeList` with collapse nodes and its octant order),
+coincident edges merged with summed depth deltas, `PlanarGraph` stars in `EdgeEnd` order, `BufferSubgraph`s
+in `NodeMap` order sorted by their rightmost x, depths from `RightmostEdgeFinder` and
+`SubgraphDepthLocater` spread round each star, result edges, and `PolygonBuilder`'s maximal and minimal
+rings, shells, holes and free holes. So a self-crossing offset curve's ring starts where GEOS's does, a
+distance-0 buffer cleans spikes, pinches and bowties as GEOS does, and insets split or vanish as GEOS's do.
+Oracles: `raster_buffer` (42 cases: the sheets' stroke-centre offsets and marks insets, stars, ells and
+slivers; every ring GEOS's, 27 bit-identical, the rest within 1.2e-13 px; the largest 1.14e-13) and `buffer_topology` (61 cases:
+self-crossing curves, an eroded triangle, a split dumbbell, spike/pinch/bowtie clean-ups, holes,
+multipolygons, traced strokes 3–9 px, outlines with a one-pixel leader; the polygons, their order, every
+ring's start and length and the holes GEOS's, 45 bit-identical). Not matched: (1) joins built from `atan2`,
+`sin` and `cos` (round, limited mitre) differ from macOS libm in the last bits (`det::` keeps every target
+equal); (2) where GEOS's full-precision attempt throws a `TopologyException` and `BufferOp` retries with a
+snap-rounding noder at 12 significant digits (3 of the 61: offsets of the dozens of touching parts a
+one-pixel leader leaves after the clean-up, only with `--open` 0 or 1), the buffer refuses as GEOS's first
+attempt did and the trace refuses (the skill then runs `vectorize.py`). Plus `LineString.distance` and
+`project(normalized=True)` for points.
 
 **Trace** (`trace.rs`, spec 04 §10.2–10.9). `trace_image` in the reference's order: crop, erase (painted
 with the background), the channel (`auto`/`bgdist` Lab distance from the frame's modal colour, `dark`,

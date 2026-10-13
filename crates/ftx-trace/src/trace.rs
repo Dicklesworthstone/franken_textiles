@@ -17,7 +17,7 @@ use ftx_core::{Vec2, det, np, polyline, py};
 use ftx_export::pyjson::PyJson;
 use ftx_pattern::Pattern;
 
-use crate::buffer::{Join, buffer_shell, line_distance, line_project_normalized};
+use crate::buffer::{Join, Polygon, buffer, line_distance, line_project_normalized};
 use crate::geos;
 use crate::raster::color;
 use crate::raster::contours::{self, Mode, Pt};
@@ -561,26 +561,19 @@ pub fn smooth_closed(p: &[Vec2], sigma: f64) -> Vec<Vec2> {
         .collect()
 }
 
-fn ring_area(r: &[Vec2]) -> f64 {
-    r.windows(2)
-        .map(|w| w[0].x * w[1].y - w[1].x * w[0].y)
-        .sum::<f64>()
-        .abs()
-        / 2.0
-}
-
-/// `_px_polygon`: the piece's cut/stitch line (crop px, y down, closed) after the stroke-centre correction.
+/// `_px_polygon`: the piece's cut/stitch line (crop px, y down, rings closed) after the stroke-centre
+/// correction: the cleaned outline (`buffer(0)`) offset to the stroke centre, its largest part.
 ///
 /// # Errors
-/// The offset erodes the piece away.
-pub fn px_polygon(e: &Entry, smooth_px: f64) -> Result<Vec<Vec2>, String> {
+/// The offset erodes the piece away, or a topology the buffer refuses.
+pub fn px_polygon(e: &Entry, smooth_px: f64) -> Result<Polygon, String> {
     let p: Vec<Vec2> = e
         .contour
         .iter()
         .map(|&(x, y)| Vec2::new(f64::from(x), f64::from(y)))
         .collect();
     let p = smooth_closed(&resample_closed(&p, 1.0), smooth_px);
-    let mut ring = buffer_shell(&p, 0.0, Join::Mitre(4.0)).swap_remove(0);
+    let mut polys = buffer(&[Polygon::new(p)], 0.0, Join::Round(16))?;
     let w = e.stroke_px;
     // contours run through boundary-pixel centres: the region edge is 0.5 px further out; for rings the two
     // half-pixel corrections cancel
@@ -590,16 +583,16 @@ pub fn px_polygon(e: &Entry, smooth_px: f64) -> Result<Vec<Vec2>, String> {
         0.5 - w / 2.0
     };
     if off.abs() > 1e-9 {
-        let rings = buffer_shell(&ring, off, Join::Mitre(4.0));
-        if rings.is_empty() {
-            return Err(format!(
-                "a {} piece vanishes under its {off} px stroke-centre offset",
-                e.mode
-            ));
-        }
-        ring = rings[first_max_by(&rings, |r| ring_area(r))].clone();
+        polys = buffer(&polys, off, Join::Mitre(4.0))?;
     }
-    Ok(ring)
+    if polys.is_empty() {
+        return Err(format!(
+            "a {} piece vanishes under its {off} px stroke-centre offset",
+            e.mode
+        ));
+    }
+    let k = first_max_by(&polys, Polygon::area);
+    Ok(polys.swap_remove(k))
 }
 
 // ================================================================================== corners and edges
@@ -847,19 +840,20 @@ pub fn edges_from_loop(
 
 // ================================================================================== internal marks
 
-/// `_rasterize`: the rings filled with 1 (coordinates rounded half to even).
-fn rasterize(rings: &[&[Vec2]], w: usize, h: usize) -> Gray {
+/// `_rasterize`: each polygon's shell filled with 1, then its holes with 0 (coordinates rounded half to
+/// even).
+fn rasterize(polys: &[Polygon], w: usize, h: usize) -> Gray {
     let mut m = Gray::filled(w, h, 0);
-    let polys: Vec<Vec<(i64, i64)>> = rings
-        .iter()
-        .map(|r| {
-            r.iter()
-                .map(|p| (p.x.round_ties_even() as i64, p.y.round_ties_even() as i64))
-                .collect()
-        })
-        .collect();
-    for p in &polys {
-        draw::fill_poly(&mut m, std::slice::from_ref(p), 1);
+    let px = |r: &[Vec2]| -> Vec<(i64, i64)> {
+        r.iter()
+            .map(|p| (p.x.round_ties_even() as i64, p.y.round_ties_even() as i64))
+            .collect()
+    };
+    for p in polys {
+        draw::fill_poly(&mut m, &[px(&p.shell)], 1);
+        for h in &p.holes {
+            draw::fill_poly(&mut m, &[px(h)], 0);
+        }
     }
     m
 }
@@ -1033,7 +1027,7 @@ fn norm_or_one(v: Vec2) -> f64 {
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn detect_marks(
     mask: &Gray,
-    poly: &[Vec2],
+    poly: &Polygon,
     mode: &str,
     w: f64,
     size: f64,
@@ -1045,9 +1039,8 @@ fn detect_marks(
     let to_pat = |p: Vec2| [py::round(p.x, 3), py::round(hf - p.y, 3)];
     let ring = mode == "ring";
     let inset = if ring { w / 2.0 + 1.5 } else { 2.0 + w / 2.0 };
-    let inner = buffer_shell(poly, -inset, Join::Round(16));
-    let inner: Vec<&[Vec2]> = inner.iter().map(Vec::as_slice).collect();
-    let reg = rasterize(&inner, iw, ih);
+    let poly = std::slice::from_ref(poly);
+    let reg = rasterize(&buffer(poly, -inset, Join::Round(16))?, iw, ih);
     let ink = Gray {
         w: iw,
         h: ih,
@@ -1058,7 +1051,7 @@ fn detect_marks(
             .map(|(&m, &r)| u8::from(((m > 0) == ring) && r != 0))
             .collect(),
     };
-    let dt = distance::distance_l2(&rasterize(&[poly], iw, ih), 5);
+    let dt = distance::distance_l2(&rasterize(poly, iw, ih), 5);
     let wm1 = w.max(1.0);
     let comps = components(&ink, &dt, 4.0f64.max(0.25 * wm1 * wm1));
     let depth = (3.0 * w).max(0.025 * size).max(4.0);
@@ -1686,7 +1679,7 @@ fn build_draft(
     for (n, (e, (bx, by, bw, bh), _, _)) in placed.iter().enumerate() {
         let pid = format!("p{}", n + 1);
         let poly = px_polygon(e, opts.smooth_px)?;
-        let mut q: Vec<Vec2> = poly[..poly.len() - 1]
+        let mut q: Vec<Vec2> = poly.shell[..poly.shell.len() - 1]
             .iter()
             .map(|p| Vec2::new(p.x, hf64 - p.y))
             .collect();
@@ -1711,7 +1704,10 @@ fn build_draft(
         );
         let mut touches = bx <= 2 || by <= 2 || bx + bw >= wi - 2 || by + bh >= hi - 2;
         let near_erased = any_erased && {
-            let r = morph::dilate(&rasterize(&[&poly], w, h), &Kernel::rect(7, 7));
+            let r = morph::dilate(
+                &rasterize(std::slice::from_ref(&poly), w, h),
+                &Kernel::rect(7, 7),
+            );
             erased.iter().zip(&r.data).any(|(&e, &v)| e && v > 0)
         };
         touches = touches || near_erased;
@@ -1796,7 +1792,7 @@ fn build_draft(
             );
         }
         pieces.push(piece);
-        polys.push(poly);
+        polys.push(poly.shell);
     }
 
     let file_name = source.map(|s| s.rsplit('/').next().unwrap_or(s).to_string());

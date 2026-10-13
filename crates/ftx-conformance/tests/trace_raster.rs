@@ -282,7 +282,7 @@ fn drawing_and_hull_match_opencv() {
 #[test]
 fn polygon_buffers_match_geos() {
     use ftx_core::Vec2;
-    use ftx_trace::buffer::{Join, buffer_shell};
+    use ftx_trace::buffer::{Join, Polygon, buffer};
     let fx = fixture("trace", "raster_buffer");
     let ring = |v: &Value| -> Vec<Vec2> {
         v.as_array()
@@ -311,7 +311,15 @@ fn polygon_buffers_match_geos() {
         } else {
             Join::Round(16)
         };
-        let mut got = buffer_shell(&ring(&inp["ring"]), inp["distance"].as_f64().unwrap(), join);
+        let mut got: Vec<Vec<Vec2>> = buffer(
+            &[Polygon::new(ring(&inp["ring"]))],
+            inp["distance"].as_f64().unwrap(),
+            join,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|p| p.shell)
+        .collect();
         got.sort_by(|a, b| area(b).total_cmp(&area(a)));
         let mut want: Vec<Vec<Vec2>> = out["polygons"]
             .as_array()
@@ -663,4 +671,91 @@ fn colour_conversions_match_opencv() {
             case["id"]
         );
     }
+}
+
+/// `buffer` where GEOS's topology decides (`buffer_topology`, `tools/oracle/capture_buffer_topology.py`):
+/// self-crossing offset curves (where the ring starts), splitting and vanishing insets, the distance-0
+/// clean-up of spikes, pinches and bowties, holes, multipolygons, traced stroke outlines. The polygons, their
+/// order, every ring's start and length and the holes are GEOS's; coordinates are bit-identical except where a
+/// join's `atan2`/`sin`/`cos` reach the last bits (1e-9 relative). Where GEOS needed its reduced-precision
+/// retry, the buffer refuses as GEOS's first attempt did.
+#[test]
+fn buffer_topology_matches_geos() {
+    use ftx_core::Vec2;
+    use ftx_trace::buffer::{Join, Polygon, buffer};
+    let fx = fixture("trace", "buffer_topology");
+    let ring = |v: &Value| -> Vec<Vec2> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| Vec2::new(p[0].as_f64().unwrap(), p[1].as_f64().unwrap()))
+            .collect()
+    };
+    let poly = |v: &Value| Polygon {
+        shell: ring(&v["shell"]),
+        holes: v["holes"]
+            .as_array()
+            .map(|h| h.iter().map(&ring).collect())
+            .unwrap_or_default(),
+    };
+    let close = |a: &[Vec2], b: &[Vec2]| {
+        a.len() == b.len()
+            && a.iter().zip(b).all(|(p, q)| {
+                (p.x - q.x).abs() <= 1e-9 * q.x.abs().max(1.0)
+                    && (p.y - q.y).abs() <= 1e-9 * q.y.abs().max(1.0)
+            })
+    };
+    let (mut exact, mut fails) = (0, Vec::new());
+    let cases = fx["cases"].as_array().unwrap();
+    for case in cases {
+        let (inp, out, id) = (
+            &case["input"],
+            &case["output"],
+            case["id"].as_str().unwrap(),
+        );
+        let polys: Vec<Polygon> = inp["polys"].as_array().unwrap().iter().map(poly).collect();
+        let join = if inp["join"] == "mitre" {
+            Join::Mitre(4.0)
+        } else {
+            Join::Round(16)
+        };
+        let got = buffer(&polys, inp["distance"].as_f64().unwrap(), join);
+        if out["reduced_precision"] == true {
+            if got.is_ok() {
+                fails.push(format!(
+                    "{id}: GEOS needed its reduced-precision retry; this did not refuse"
+                ));
+            }
+            continue;
+        }
+        let want: Vec<Polygon> = out["polygons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(poly)
+            .collect();
+        match got {
+            Err(e) => fails.push(format!("{id}: refused ({e})")),
+            Ok(got) if got == want => exact += 1,
+            Ok(got) => {
+                let same = got.len() == want.len()
+                    && got.iter().zip(&want).all(|(g, w)| {
+                        close(&g.shell, &w.shell)
+                            && g.holes.len() == w.holes.len()
+                            && g.holes.iter().zip(&w.holes).all(|(a, b)| close(a, b))
+                    });
+                if !same {
+                    fails.push(format!(
+                        "{id}: {} polygons ({:?} points) vs {} ({:?})",
+                        got.len(),
+                        got.iter().map(|p| p.shell.len()).collect::<Vec<_>>(),
+                        want.len(),
+                        want.iter().map(|p| p.shell.len()).collect::<Vec<_>>()
+                    ));
+                }
+            }
+        }
+    }
+    println!("{exact} of {} buffers bit-identical", cases.len());
+    assert!(fails.is_empty(), "{}", fails.join("\n"));
 }
