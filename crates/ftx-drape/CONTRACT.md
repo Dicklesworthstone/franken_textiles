@@ -109,8 +109,11 @@ Hessian's pattern never changes.
 - Derivatives: exact gradient everywhere; Gauss–Newton Hessian `b''∇g∇gᵀ` (PSD, exact for a point
   against a plane) for ordinary pairs; the full Hessian (second-order forward AD, `Jet<12>`) for
   mollified pairs, projected to PSD per block.
-- Broad phase: a uniform grid in `BTreeMap`s (cell ≈ the body's mean edge length), queried per cloth
-  primitive with sorted, deduplicated results, then an exact box-overlap test; no BVH.
+- Broad phase: a dense uniform grid in CSR form over the body's bounding cells (cell ≈ the body's mean
+  edge length), queried per cloth primitive with sorted, deduplicated results, then an exact box-overlap
+  test; no BVH. It replaced cells in `BTreeMap`s with the same candidates in the same order (both digests
+  unchanged, the bolero's drape identical), about 15 % faster on the bolero in an interleaved A/B on a
+  shared machine (25–30 s against 28–36 s).
 - CCD: additive CCD (Li et al. 2021, Algorithm 1) caps each Newton step so no gap falls below a tenth of
   its value (C-IPC's s = 0.1).
 - Friction: IPC's smoothed Coulomb `μλ f₀(|u|)`, ε = ε_v·h, with normal forces, tangent bases and

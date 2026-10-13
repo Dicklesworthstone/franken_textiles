@@ -78,10 +78,9 @@ pub struct Body {
     pub edges: Vec<[usize; 2]>,
     /// Every edge has exactly two triangles, so inside and outside are defined.
     pub closed: bool,
-    cell: f64,
-    tri_grid: BTreeMap<[i64; 3], Vec<usize>>,
-    vert_grid: BTreeMap<[i64; 3], Vec<usize>>,
-    edge_grid: BTreeMap<[i64; 3], Vec<usize>>,
+    tri_grid: Grid,
+    vert_grid: Grid,
+    edge_grid: Grid,
     tri_box: Vec<(Vec3, Vec3)>,
     edge_box: Vec<(Vec3, Vec3)>,
 }
@@ -155,37 +154,90 @@ fn box_pairs(a: &[(Vec3, Vec3)], b: &[(Vec3, Vec3)], pad: f64) -> Vec<(usize, us
     out
 }
 
-fn insert(grid: &mut BTreeMap<[i64; 3], Vec<usize>>, id: usize, lo: Vec3, hi: Vec3, cell: f64) {
-    let (a, b) = cell_range(lo, hi, cell);
-    for i in a[0]..=b[0] {
-        for j in a[1]..=b[1] {
-            for k in a[2]..=b[2] {
-                grid.entry([i, j, k]).or_default().push(id);
-            }
-        }
-    }
+/// A dense broad-phase grid over the cells the items' boxes touch, in CSR form: cell `c` holds
+/// `ids[start[c]..start[c + 1]]`, in item order. A query returns the sorted, deduplicated ids of the cells
+/// a box touches (cells outside the grid hold nothing).
+#[derive(Clone, Debug)]
+struct Grid {
+    cell: f64,
+    lo: [i64; 3],
+    dims: [usize; 3],
+    start: Vec<usize>,
+    ids: Vec<usize>,
 }
 
-fn query(
-    grid: &BTreeMap<[i64; 3], Vec<usize>>,
-    lo: Vec3,
-    hi: Vec3,
-    cell: f64,
-    out: &mut Vec<usize>,
-) {
-    out.clear();
-    let (a, b) = cell_range(lo, hi, cell);
-    for i in a[0]..=b[0] {
-        for j in a[1]..=b[1] {
-            for k in a[2]..=b[2] {
-                if let Some(v) = grid.get(&[i, j, k]) {
-                    out.extend_from_slice(v);
+impl Grid {
+    fn build(boxes: &[(Vec3, Vec3)], cell: f64) -> Self {
+        let ranges: Vec<([i64; 3], [i64; 3])> = boxes
+            .iter()
+            .map(|&(lo, hi)| cell_range(lo, hi, cell))
+            .collect();
+        let (mut lo, mut hi) = match ranges.first() {
+            Some(&(a, b)) => (a, b),
+            None => ([0; 3], [-1; 3]), // no cells
+        };
+        for (a, b) in &ranges {
+            for k in 0..3 {
+                lo[k] = lo[k].min(a[k]);
+                hi[k] = hi[k].max(b[k]);
+            }
+        }
+        let dims: [usize; 3] =
+            std::array::from_fn(|k| usize::try_from(hi[k] - lo[k] + 1).unwrap_or(0));
+        let mut grid = Self {
+            cell,
+            lo,
+            dims,
+            start: vec![0; dims[0] * dims[1] * dims[2] + 1],
+            ids: Vec::new(),
+        };
+        let each = |r: &([i64; 3], [i64; 3]), f: &mut dyn FnMut(usize)| {
+            for i in r.0[0]..=r.1[0] {
+                for j in r.0[1]..=r.1[1] {
+                    for k in r.0[2]..=r.1[2] {
+                        f(grid_index(lo, dims, [i, j, k]));
+                    }
+                }
+            }
+        };
+        for r in &ranges {
+            each(r, &mut |c| grid.start[c + 1] += 1);
+        }
+        for c in 0..grid.start.len() - 1 {
+            grid.start[c + 1] += grid.start[c];
+        }
+        let mut fill = grid.start.clone();
+        grid.ids = vec![0; *grid.start.last().unwrap_or(&0)];
+        for (id, r) in ranges.iter().enumerate() {
+            each(r, &mut |c| {
+                grid.ids[fill[c]] = id;
+                fill[c] += 1;
+            });
+        }
+        grid
+    }
+
+    fn query(&self, lo: Vec3, hi: Vec3, out: &mut Vec<usize>) {
+        out.clear();
+        let (a, b) = cell_range(lo, hi, self.cell);
+        let a: [i64; 3] = std::array::from_fn(|k| a[k].max(self.lo[k]));
+        let b: [i64; 3] = std::array::from_fn(|k| b[k].min(self.lo[k] + self.dims[k] as i64 - 1));
+        for i in a[0]..=b[0] {
+            for j in a[1]..=b[1] {
+                for k in a[2]..=b[2] {
+                    let c = grid_index(self.lo, self.dims, [i, j, k]);
+                    out.extend_from_slice(&self.ids[self.start[c]..self.start[c + 1]]);
                 }
             }
         }
+        out.sort_unstable();
+        out.dedup();
     }
-    out.sort_unstable();
-    out.dedup();
+}
+
+fn grid_index(lo: [i64; 3], dims: [usize; 3], c: [i64; 3]) -> usize {
+    let r: [usize; 3] = std::array::from_fn(|k| (c[k] - lo[k]) as usize);
+    (r[0] * dims[1] + r[1]) * dims[2] + r[2]
 }
 
 /// Unique edges of a triangle list, sorted.
@@ -215,10 +267,9 @@ impl Body {
             triangles: Vec::new(),
             edges: Vec::new(),
             closed: false,
-            cell: 1.0,
-            tri_grid: BTreeMap::new(),
-            vert_grid: BTreeMap::new(),
-            edge_grid: BTreeMap::new(),
+            tri_grid: Grid::build(&[], 1.0),
+            vert_grid: Grid::build(&[], 1.0),
+            edge_grid: Grid::build(&[], 1.0),
             tri_box: Vec::new(),
             edge_box: Vec::new(),
         }
@@ -261,32 +312,26 @@ impl Body {
             .sum::<f64>()
             / edges.len() as f64;
         let cell = mean.max(min_cell);
-        let mut body = Self {
+        let tri_box: Vec<(Vec3, Vec3)> = triangles
+            .iter()
+            .map(|t| aabb(&t.map(|v| vertices[v])))
+            .collect();
+        let edge_box: Vec<(Vec3, Vec3)> = edges
+            .iter()
+            .map(|e| aabb(&e.map(|v| vertices[v])))
+            .collect();
+        let vert_box: Vec<(Vec3, Vec3)> = vertices.iter().map(|&v| (v, v)).collect();
+        Ok(Self {
+            tri_grid: Grid::build(&tri_box, cell),
+            vert_grid: Grid::build(&vert_box, cell),
+            edge_grid: Grid::build(&edge_box, cell),
             vertices,
             triangles,
             edges,
             closed,
-            cell,
-            tri_grid: BTreeMap::new(),
-            vert_grid: BTreeMap::new(),
-            edge_grid: BTreeMap::new(),
-            tri_box: Vec::new(),
-            edge_box: Vec::new(),
-        };
-        for (i, t) in body.triangles.iter().enumerate() {
-            let (lo, hi) = aabb(&t.map(|v| body.vertices[v]));
-            insert(&mut body.tri_grid, i, lo, hi, cell);
-            body.tri_box.push((lo, hi));
-        }
-        for (i, v) in body.vertices.iter().enumerate() {
-            insert(&mut body.vert_grid, i, *v, *v, cell);
-        }
-        for (i, e) in body.edges.iter().enumerate() {
-            let (lo, hi) = aabb(&e.map(|v| body.vertices[v]));
-            insert(&mut body.edge_grid, i, lo, hi, cell);
-            body.edge_box.push((lo, hi));
-        }
-        Ok(body)
+            tri_box,
+            edge_box,
+        })
     }
 
     /// Winding number of the surface about `p` (Van Oosterom–Strackee solid angles): about 1 inside a
@@ -828,7 +873,7 @@ impl Contact {
         // Grid cells give a superset; the exact box test keeps the pairs whose boxes come within `pad`.
         for cv in 0..x.len() {
             let (lo, hi) = span(&[cv]);
-            query(&b.tri_grid, lo, hi, b.cell, &mut buf);
+            b.tri_grid.query(lo, hi, &mut buf);
             out.extend(
                 buf.iter()
                     .filter(|&&bt| overlaps(b.tri_box[bt], lo, hi))
@@ -837,7 +882,7 @@ impl Contact {
         }
         for (ct, t) in self.cloth.triangles.iter().enumerate() {
             let (lo, hi) = span(t);
-            query(&b.vert_grid, lo, hi, b.cell, &mut buf);
+            b.vert_grid.query(lo, hi, &mut buf);
             out.extend(
                 buf.iter()
                     .filter(|&&bv| overlaps((b.vertices[bv], b.vertices[bv]), lo, hi))
@@ -846,7 +891,7 @@ impl Contact {
         }
         for (ce, e) in self.cloth.edges.iter().enumerate() {
             let (lo, hi) = span(e);
-            query(&b.edge_grid, lo, hi, b.cell, &mut buf);
+            b.edge_grid.query(lo, hi, &mut buf);
             out.extend(
                 buf.iter()
                     .filter(|&&be| overlaps(b.edge_box[be], lo, hi))
@@ -914,7 +959,7 @@ impl Contact {
                 return out;
             }
             let (lo, hi) = aabb(&e.map(|i| x[i]));
-            query(&b.tri_grid, lo, hi, b.cell, &mut buf);
+            b.tri_grid.query(lo, hi, &mut buf);
             if let Some(&bt) = buf.iter().find(|&&bt| {
                 segment_meets_triangle(x[e[0]], x[e[1]], b.triangles[bt].map(|i| b.vertices[i]))
             }) {
@@ -927,7 +972,7 @@ impl Contact {
             }
             let tri = t.map(|i| x[i]);
             let (lo, hi) = aabb(&tri);
-            query(&b.edge_grid, lo, hi, b.cell, &mut buf);
+            b.edge_grid.query(lo, hi, &mut buf);
             if let Some(&be) = buf.iter().find(|&&be| {
                 let [p, q] = b.edges[be].map(|i| b.vertices[i]);
                 segment_meets_triangle(p, q, tri)
