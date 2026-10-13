@@ -6,6 +6,7 @@ mod calibration;
 mod intrinsics;
 mod photo;
 mod section;
+mod still;
 mod triangulate;
 mod video;
 
@@ -189,6 +190,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .ok_or_else(|| bad_input("give a measure subcommand"))?;
     if command == "video-select" {
         return video::run(args);
+    }
+    if command == "still-window" {
+        return still::run(args);
     }
     let mut output = option(args, "out");
     let mut code = 0;
@@ -395,7 +399,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
         _ => {
             return Err(bad_input(format!(
-                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, calib-sheet, calibrate-camera, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust, fit-body or video-select"
+                "unknown measure command '{command}'; use catalogue, prior, init, add, validate, fuse, ready, reference, calib-sheet, calibrate-camera, photo-scale, measure-photo, sheet-pose, girth-from-section, triangulate, bundle-adjust, fit-body, still-window or video-select"
             )));
         }
     };
