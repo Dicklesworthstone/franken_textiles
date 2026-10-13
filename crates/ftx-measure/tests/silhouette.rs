@@ -129,7 +129,11 @@ fn extra_components_and_missing_coverage_cannot_pass_one_way_boundary_checks() {
     assert!(!r.passed);
     assert_eq!(r.symmetric_difference_px, 20.);
     assert_eq!(r.boundary_error_px, Some(50.));
-    assert_eq!(r.residuals_px, Some(vec![0., 0., 0., 20.]));
+    let residuals = r.residuals_px.unwrap();
+    assert_eq!(&residuals[..2], &[0., 0.]);
+    assert_eq!(&residuals[2..6], &[0., 0., 30., 50.]);
+    assert!(residuals[6..18].iter().all(|&v| v == 0.));
+    assert_eq!(residuals[18], 20.);
     let mut empty = s.clone();
     empty.lines.push(Scanline {
         at_px: 10.,

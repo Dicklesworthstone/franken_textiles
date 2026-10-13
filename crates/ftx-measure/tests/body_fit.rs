@@ -93,6 +93,7 @@ fn scene() -> (HingedBody, BodyFitInput, Vec<Vec<f64>>) {
                 camera,
                 image_size_px: [1280, 960],
                 rotation_cw_deg: 0,
+                silhouette: None,
                 keypoints: model
                     .points(&shape, p)
                     .unwrap()

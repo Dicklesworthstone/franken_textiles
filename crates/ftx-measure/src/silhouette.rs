@@ -142,7 +142,8 @@ pub struct LineComparison {
     pub partition: Partition,
     /// Mesh coverage; interior triangle edges and overlapping surfaces have been merged.
     pub predicted_intervals_px: Vec<[f64; 2]>,
-    /// Signed observed-edge distances followed by missing/extra foreground lengths, in pixels.
+    /// Signed observed-edge distances, sixteen padded reverse-boundary distances, then signed
+    /// coverage-length difference, in pixels. At most eight predicted intervals are permitted.
     /// Its length is fixed by the observation, not by the number of predicted components.
     /// Absent when observed foreground has no predicted coverage and no finite edge distance.
     pub residuals_px: Option<Vec<f64>>,
@@ -204,7 +205,12 @@ fn boundary_distance(x: f64, intervals: &[[f64; 2]]) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
-fn line_comparison(line: &Scanline, predicted: Vec<[f64; 2]>) -> LineComparison {
+fn line_comparison(line: &Scanline, predicted: Vec<[f64; 2]>) -> Result<LineComparison, Refusal> {
+    if predicted.len() > 8 {
+        return Err(invalid(
+            "predicted silhouette exceeds eight components on a slice; no component was dropped",
+        ));
+    }
     let observed = &line.intervals_px;
     let residuals = observed.iter().flatten().map(|&x| {
         let distance = boundary_distance(x, &predicted);
@@ -245,20 +251,54 @@ fn line_comparison(line: &Scanline, predicted: Vec<[f64; 2]>) -> LineComparison 
                 .fold(0.0, f64::max),
         )
     };
-    LineComparison {
+    // Squaring aggregated missing/extra lengths couples absolute endpoint errors and creates
+    // nonstationary kinks even when coverage topology is fixed. Symmetric squared boundary
+    // distances plus signed total length remain smooth in that region. Missing/extra coverage
+    // is still retained as a diagnostic, not confused with the optimization objective.
+    // Keep individual signed errors rather than the norm of a group: a scalar norm has
+    // ill-scaled finite differences near a noisy optimum. Zero padding bounds the number of
+    // residuals independently of predicted topology; topology transitions can still be nonsmooth.
+    let mut reverse = [0.0; 16];
+    if !observed.is_empty() {
+        for (slot, &x) in reverse.iter_mut().zip(predicted.iter().flatten()) {
+            let distance = boundary_distance(x, observed);
+            *slot = if observed.iter().any(|&[lo, hi]| lo < x && x < hi) {
+                -distance
+            } else {
+                distance
+            };
+        }
+    }
+    let residuals = if !observed.is_empty() && predicted.is_empty() {
+        None
+    } else {
+        Some(
+            residuals
+                .chain(reverse)
+                .chain([extra - missing])
+                .collect::<Vec<_>>(),
+        )
+    };
+    if !missing.is_finite()
+        || !extra.is_finite()
+        || !(missing + extra).is_finite()
+        || error.is_some_and(|e| !e.is_finite())
+        || residuals
+            .as_ref()
+            .is_some_and(|r| r.iter().any(|v| !v.is_finite()))
+    {
+        return Err(invalid("silhouette comparison overflow"));
+    }
+    Ok(LineComparison {
         axis: line.axis,
         at_px: line.at_px,
         partition: line.partition,
-        residuals_px: if !observed.is_empty() && predicted.is_empty() {
-            None
-        } else {
-            Some(residuals.chain([missing, extra]).collect())
-        },
+        residuals_px: residuals,
         predicted_intervals_px: predicted,
         boundary_error_px: error,
         symmetric_difference_px: missing + extra,
         passed: error.is_some_and(|e| e <= 3.0),
-    }
+    })
 }
 
 /// Compare selected fixed scanlines with projected mesh coverage. `partition: None` checks all.
@@ -324,11 +364,11 @@ pub fn compare(
             }
         }
     }
-    Ok(lines
+    lines
         .into_iter()
         .zip(coverage)
         .map(|(line, intervals)| line_comparison(line, union(intervals)))
-        .collect())
+        .collect()
 }
 
 /// Explicit mask slice selection, established before fitting or selecting held-out checks.

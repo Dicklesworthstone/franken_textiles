@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     camera::Camera,
     invalid,
+    silhouette::{self, Silhouette, SurfaceMesh},
     triangulate::{FrameId, Partition},
 };
 
@@ -50,6 +51,13 @@ pub trait BodyModel {
     fn points(&self, shape: &[f64], pose: &[f64]) -> Result<Vec<Vec3>, Refusal>;
     /// Rest-body tape functionals in metres, independent of pose.
     fn measurements(&self, shape: &[f64]) -> Result<Vec<f64>, Refusal>;
+    /// Posed world-space triangle surface for optional silhouette evidence.
+    /// Models without a surface retain keypoint/tape fitting but refuse silhouette requests.
+    fn surface(&self, _shape: &[f64], _pose: &[f64]) -> Result<SurfaceMesh, Refusal> {
+        Err(invalid(
+            "this body model does not expose a silhouette surface",
+        ))
+    }
 }
 
 /// A 2D observation, not a model-inferred or triangulated point.
@@ -80,6 +88,9 @@ pub struct FitFrame {
     pub rotation_cw_deg: u16,
     /// Fit and independently held-out evidence, with unique correspondence names.
     pub keypoints: Vec<Keypoint>,
+    /// Optional fixed scanlines from an oriented, rectified body mask. Absence preserves /1 JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silhouette: Option<Silhouette>,
 }
 
 /// Independent tape evidence that constrains shared shape, never a population prior.
@@ -146,7 +157,7 @@ pub struct FitOptions {
     /// Largest per-frame pose spread, normalized by each declared parameter range.
     /// This is a conservative parameter-space gate, not an angular equivalence test.
     pub max_pose_spread_fraction: f64,
-    /// Total points/measurements calls across ALL starts, derivatives, trials and final output.
+    /// Total points/measurements/surface calls across ALL starts, derivatives, trials and output.
     /// Failed calls consume budget too; layout queries do not. Not a wall-clock limit.
     pub max_model_evaluations: usize,
 }
@@ -327,6 +338,11 @@ fn canonical(input: &BodyFitInput, layout: &ModelLayout) -> Result<BodyFitInput,
     let mut ids = BTreeSet::new();
     for frame in &mut input.frames {
         frame.camera.validate()?;
+        if let Some(silhouette) = &mut frame.silhouette {
+            silhouette.validate(frame.image_size_px)?;
+            silhouette::require_rectified(&frame.camera)?;
+            silhouette.canonicalize();
+        }
         if !text(&frame.frame.stream)
             || !ids.insert(frame.frame.clone())
             || frame
@@ -487,6 +503,36 @@ fn residual(
             let d = (frame.camera.project(p.points[f][k])? - obs.pixel_px) / obs.sigma_px;
             r.extend([d.x, d.y]);
         }
+        if let Some(s) = &frame.silhouette
+            && s.lines.iter().any(|line| line.partition == Partition::Fit)
+        {
+            let ns = l.shape.len();
+            let begin = ns + f * l.pose.len();
+            let mesh = budget.call(|| {
+                model.surface(
+                    &values(&x[..ns], &l.shape),
+                    &values(&x[begin..begin + l.pose.len()], &l.pose),
+                )
+            })?;
+            let comparisons = silhouette::compare(
+                &mesh,
+                &frame.camera,
+                frame.image_size_px,
+                s,
+                Some(Partition::Fit),
+            )?;
+            for (line, comparison) in s
+                .lines
+                .iter()
+                .filter(|line| line.partition == Partition::Fit)
+                .zip(comparisons)
+            {
+                let residuals = comparison.residuals_px.ok_or_else(|| invalid(
+                    "model does not intersect an observed silhouette slice; improve initialization",
+                ))?;
+                r.extend(residuals.iter().map(|v| v / line.sigma_px));
+            }
+        }
     }
     for obs in input
         .measurements
@@ -567,6 +613,27 @@ fn checks(
                 limit: 3.0,
                 passed: error.is_some_and(|e| e <= 3.0),
             });
+        }
+        if let Some(s) = &frame.silhouette {
+            let ns = l.shape.len();
+            let begin = ns + f * l.pose.len();
+            let mesh = budget.call(|| {
+                model.surface(
+                    &values(&x[..ns], &l.shape),
+                    &values(&x[begin..begin + l.pose.len()], &l.pose),
+                )
+            })?;
+            for line in silhouette::compare(&mesh, &frame.camera, frame.image_size_px, s, None)? {
+                out.push(FitCheck {
+                    frame: Some(frame.frame.clone()),
+                    name: format!("silhouette:{:?}:{}", line.axis, line.at_px),
+                    partition: line.partition,
+                    unit: "px",
+                    residual: line.boundary_error_px,
+                    limit: 3.0,
+                    passed: line.passed,
+                });
+            }
         }
     }
     for obs in &input.measurements {
@@ -782,12 +849,24 @@ pub fn fit_body(
         f.keypoints
             .iter()
             .any(|p| p.partition == Partition::HeldOut)
+            || f.silhouette.as_ref().is_some_and(|s| {
+                s.lines
+                    .iter()
+                    .any(|line| line.partition == Partition::HeldOut)
+            })
     }) {
         report
             .advisories
             .push("No held-out image observations were supplied.".into());
     }
-    report.advisories.push("Cameras, lens parameters and tape definitions are fixed; their systematic uncertainty is not estimated. Silhouettes are not fitted in this keypoint slice.".into());
+    report.advisories.push("Cameras, lens parameters and tape definitions are fixed; their systematic uncertainty is not estimated.".into());
+    if input.frames.iter().any(|f| f.silhouette.is_some()) {
+        report.advisories.push("Silhouettes are checked only on supplied rectified scanlines, not over the entire mask. Segmentation, clothing, occlusion and contour correlation are caller assumptions; contour weights are not a calibrated independent-noise model.".into());
+    } else {
+        report
+            .advisories
+            .push("No silhouette observations were supplied.".into());
+    }
     let mut states = Vec::new();
     let mut budget = EvaluationBudget {
         used: 0,
