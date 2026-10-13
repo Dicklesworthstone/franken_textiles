@@ -1,7 +1,7 @@
 //! Contact between the cloth and a static body (plan §11.2, §11.5): the IPC log barrier on the
-//! thickness-offset gap, the edge–edge mollifier, deterministic broad phases (a grid for the body, a BVH
-//! for self-contact), additive CCD (Li et al. 2021) to cap each Newton step, and lagged smoothed Coulomb
-//! friction.
+//! thickness-offset gap, the edge–edge mollifier, deterministic broad phases (a bounded body grid with
+//! BVH fallback, a BVH for self-contact), additive CCD (Li et al. 2021) to cap each Newton step, and
+//! lagged smoothed Coulomb friction.
 //!
 //! Pairs: a cloth vertex against a body triangle, a body vertex against a cloth triangle, and a cloth
 //! edge against a body edge. Optional self-contact adds non-incident cloth vertex–triangle and
@@ -14,7 +14,7 @@ use ftx_core::intersection::{indexed_triangle_pair, segment_triangle, validate_m
 use ftx_core::{Refusal, RefusalCode, Vec3};
 
 use crate::ad::Jet;
-use crate::bvh::Bvh;
+use crate::bvh::{Bvh, QueryBvh};
 use crate::distance::{
     Closest, edge_cross_squared, edge_edge_closest, point_triangle_closest, squared_distance,
     squared_distance_f64, squared_distance_grad,
@@ -142,7 +142,9 @@ fn box_self_pairs(a: &[(Vec3, Vec3)], pad: f64) -> Vec<(usize, usize)> {
 
 /// A dense broad-phase grid over the cells the items' boxes touch, in CSR form: cell `c` holds
 /// `ids[start[c]..start[c + 1]]`, in item order. A query returns the sorted, deduplicated ids of the cells
-/// a box touches (cells outside the grid hold nothing).
+/// a box touches (cells outside the grid hold nothing). A frankensim-derived BVH replaces the grid
+/// when its integer range or bounded storage cannot represent the mesh economically. The fallback
+/// is exhaustive, not a truncated query or a coarsening of the collision geometry.
 #[derive(Clone, Debug)]
 struct Grid {
     cell: f64,
@@ -150,10 +152,38 @@ struct Grid {
     dims: [usize; 3],
     start: Vec<usize>,
     ids: Vec<usize>,
+    fallback: Option<QueryBvh>,
 }
 
 impl Grid {
     fn build(boxes: &[(Vec3, Vec3)], cell: f64) -> Self {
+        Self::dense(boxes, cell).unwrap_or_else(|| Self {
+            cell: 1.0,
+            lo: [0; 3],
+            dims: [0; 3],
+            start: Vec::new(),
+            ids: Vec::new(),
+            fallback: Some(QueryBvh::build(boxes)),
+        })
+    }
+
+    fn dense(boxes: &[(Vec3, Vec3)], cell: f64) -> Option<Self> {
+        // These cap only the choice of accelerator, never the geometry or returned candidates.
+        const MAX_CELLS: usize = 1 << 20;
+        const MAX_ENTRIES: usize = 8 << 20;
+        if !cell.is_finite() || cell <= 0.0 {
+            return None;
+        }
+        // A saturating float-to-integer cast can alias remote coordinates. Fall back before casting
+        // either endpoint outside i64's range (the upper endpoint rounds to 2^63 as f64).
+        for &(lo, hi) in boxes {
+            for k in 0..3 {
+                let (a, b) = ((lo[k] / cell).floor(), (hi[k] / cell).floor());
+                if !(i64::MIN as f64 <= a && a <= b && b < i64::MAX as f64) {
+                    return None;
+                }
+            }
+        }
         let ranges: Vec<([i64; 3], [i64; 3])> = boxes
             .iter()
             .map(|&(lo, hi)| cell_range(lo, hi, cell))
@@ -168,14 +198,33 @@ impl Grid {
                 hi[k] = hi[k].max(b[k]);
             }
         }
-        let dims: [usize; 3] =
-            std::array::from_fn(|k| usize::try_from(hi[k] - lo[k] + 1).unwrap_or(0));
+        let mut dims = [0; 3];
+        for k in 0..3 {
+            dims[k] = usize::try_from(hi[k].checked_sub(lo[k])?.checked_add(1)?).ok()?;
+        }
+        let cells = dims.iter().try_fold(1usize, |n, &d| n.checked_mul(d))?;
+        if cells > MAX_CELLS {
+            return None;
+        }
+        let mut entries = 0usize;
+        for &(a, b) in &ranges {
+            let mut volume = 1usize;
+            for k in 0..3 {
+                let d = usize::try_from(b[k].checked_sub(a[k])?.checked_add(1)?).ok()?;
+                volume = volume.checked_mul(d)?;
+            }
+            entries = entries.checked_add(volume)?;
+            if entries > MAX_ENTRIES {
+                return None;
+            }
+        }
         let mut grid = Self {
             cell,
             lo,
             dims,
-            start: vec![0; dims[0] * dims[1] * dims[2] + 1],
+            start: vec![0; cells + 1],
             ids: Vec::new(),
+            fallback: None,
         };
         let each = |r: &([i64; 3], [i64; 3]), f: &mut dyn FnMut(usize)| {
             for i in r.0[0]..=r.1[0] {
@@ -200,10 +249,14 @@ impl Grid {
                 fill[c] += 1;
             });
         }
-        grid
+        Some(grid)
     }
 
     fn query(&self, lo: Vec3, hi: Vec3, out: &mut Vec<usize>) {
+        if let Some(bvh) = &self.fallback {
+            bvh.query((lo, hi), out);
+            return;
+        }
         out.clear();
         let (a, b) = cell_range(lo, hi, self.cell);
         let a: [i64; 3] = std::array::from_fn(|k| a[k].max(self.lo[k]));
@@ -265,7 +318,8 @@ impl Body {
     ///
     /// # Errors
     /// [`RefusalCode::DegenerateGeometry`] for an empty mesh, an out-of-range index or a zero-area face;
-    /// [`RefusalCode::NonFinite`] for a non-finite vertex.
+    /// [`RefusalCode::NonFinite`] for a non-finite vertex or minimum cell size;
+    /// [`RefusalCode::OutOfRange`] for a non-positive minimum cell size.
     pub fn new(
         vertices: Vec<Vec3>,
         triangles: Vec<[usize; 3]>,
@@ -279,6 +333,13 @@ impl Body {
         }
         // Admit before grids can hide NaNs or distance derivatives encounter a collapsed face.
         validate_mesh(&vertices, &triangles)?;
+        Refusal::finite("body grid minimum cell size", min_cell)?;
+        if min_cell <= 0.0 {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "body grid minimum cell size must be positive",
+            ));
+        }
         let edges = edges_of(&triangles);
         let mut uses: BTreeMap<[usize; 2], usize> = BTreeMap::new();
         for t in &triangles {
@@ -1285,6 +1346,55 @@ pub fn accd(pair: Pair, pts: [Vec3; 4], dp: [Vec3; 4], xi: f64, t_max: f64) -> f
 mod tests {
     use super::*;
     use ftx_core::Vec2;
+
+    #[test]
+    fn grid_falls_back_before_dense_storage_or_integer_ranges_explode() {
+        let one = (Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
+        assert!(Grid::dense(&[one], 0.25).is_some());
+        assert!(Grid::build(&[], 1.0).fallback.is_none());
+        // Cell-volume cap, then entry cap (each of nine boxes occupies 101^3 cells).
+        assert!(Grid::build(&[one], 1e-3).fallback.is_some());
+        assert!(Grid::build(&[one; 9], 0.01).fallback.is_some());
+        // Float-to-integer aliasing, and a span whose subtraction overflows i64.
+        for (a, b) in [(1e30, 1e30), (-9e18, 9e18)] {
+            let boxes = [(Vec3::new(a, 0.0, 0.0), Vec3::new(b, 1.0, 1.0))];
+            let index = Grid::build(&boxes, 1.0);
+            assert!(index.fallback.is_some());
+            let mut out = vec![999];
+            index.query(boxes[0].0, boxes[0].1, &mut out);
+            assert_eq!(out, [0]);
+        }
+    }
+
+    #[test]
+    fn dense_and_fallback_queries_match_after_the_same_exact_box_filter() {
+        let boxes: Vec<_> = (0..200)
+            .map(|i| {
+                let lo = Vec3::new((i % 11) as f64, (i % 17) as f64, (i % 7) as f64);
+                (lo, lo + Vec3::new(0.4, 0.7, 0.2))
+            })
+            .collect();
+        let dense = Grid::build(&boxes, 1.0);
+        let fallback = Grid::build(&boxes, 1e-6);
+        assert!(dense.fallback.is_none());
+        assert!(fallback.fallback.is_some());
+        let mut out = Vec::new();
+        for (lo, hi) in boxes.iter().copied().chain([
+            (Vec3::ZERO, Vec3::ZERO),
+            (Vec3::new(-10.0, -10.0, -10.0), Vec3::new(30.0, 30.0, 30.0)),
+            (Vec3::new(50.0, 50.0, 50.0), Vec3::new(60.0, 60.0, 60.0)),
+        ]) {
+            let expected: Vec<_> = (0..boxes.len())
+                .filter(|&i| overlaps(boxes[i], lo, hi))
+                .collect();
+            for index in [&dense, &fallback] {
+                index.query(lo, hi, &mut out);
+                assert!(out.windows(2).all(|w| w[0] < w[1]));
+                out.retain(|&i| overlaps(boxes[i], lo, hi));
+                assert_eq!(out, expected);
+            }
+        }
+    }
 
     fn params() -> ContactParams {
         ContactParams {

@@ -8,6 +8,8 @@
 //! replaces); the within-one-set query visits each unordered pair of leaves once; no pair cap and no
 //! cancellation. The tree's shape never reaches the result: every overlapping pair is reported once and
 //! the output is sorted.
+//! The owning body-query adapter returns sorted leaf supersets, with the caller's exact box and
+//! narrow-phase tests retained; it reuses this tree instead of allocating a grid over empty space.
 
 use ftx_core::Vec3;
 
@@ -34,6 +36,49 @@ pub(crate) struct Bvh<'a> {
     boxes: &'a [Aabb],
     order: Vec<usize>,
     nodes: Vec<Node>,
+}
+
+/// An owning query index over the same median-split hierarchy. Leaf candidates are a superset;
+/// callers retain their exact box/narrow-phase tests. No copy of the primitive boxes is retained.
+/// Used when a body's dense grid would scale with empty world volume rather than mesh size.
+#[derive(Clone, Debug)]
+pub(crate) struct QueryBvh {
+    order: Vec<usize>,
+    nodes: Vec<Node>,
+}
+
+impl QueryBvh {
+    pub(crate) fn build(boxes: &[Aabb]) -> Self {
+        let bvh = Bvh::build(boxes);
+        Self {
+            order: bvh.order,
+            nodes: bvh.nodes,
+        }
+    }
+
+    pub(crate) fn query(&self, bounds: Aabb, out: &mut Vec<usize>) {
+        out.clear();
+        if !self.nodes.is_empty() && (0..3).all(|k| bounds.0[k] <= bounds.1[k]) {
+            self.visit(0, bounds, out);
+        }
+        out.sort_unstable();
+    }
+
+    // Median splitting bounds the recursion depth by O(log(number of primitives)). Each leaf is
+    // visited once, so candidates are unique without deduplication or a collision-dropping cap.
+    fn visit(&self, node: usize, bounds: Aabb, out: &mut Vec<usize>) {
+        let n = self.nodes[node];
+        if !overlaps(n.bounds, bounds) {
+            return;
+        }
+        match n.kind {
+            Kind::Leaf { start, len } => out.extend_from_slice(&self.order[start..start + len]),
+            Kind::Internal { left, right } => {
+                self.visit(left, bounds, out);
+                self.visit(right, bounds, out);
+            }
+        }
+    }
 }
 
 /// Closed boxes overlap (touching counts).
@@ -280,5 +325,33 @@ mod tests {
         assert_eq!(Bvh::build(&a).self_pairs(), brute);
         assert!(Bvh::build(&[]).self_pairs().is_empty());
         assert!(Bvh::build(&a[..1]).self_pairs().is_empty());
+    }
+
+    #[test]
+    fn owning_queries_retain_every_brute_force_overlap() {
+        let mut boxes = scatter(900, 7);
+        boxes.push(boxes[3]);
+        let bvh = QueryBvh::build(&boxes);
+        let mut queries = scatter(100, 9);
+        queries.push((boxes[0].0, boxes[0].0)); // exact boundary contact
+        queries.push((Vec3::new(-1.0, -1.0, -1.0), Vec3::new(4.0, 4.0, 4.0)));
+        let mut actual = vec![usize::MAX]; // query clears a reused buffer
+        for q in queries {
+            bvh.query(q, &mut actual);
+            assert!(actual.windows(2).all(|w| w[0] < w[1]));
+            let filtered: Vec<_> = actual
+                .iter()
+                .copied()
+                .filter(|&i| overlaps(boxes[i], q))
+                .collect();
+            let expected: Vec<_> = (0..boxes.len())
+                .filter(|&i| overlaps(boxes[i], q))
+                .collect();
+            assert_eq!(filtered, expected);
+        }
+        bvh.query((Vec3::new(1.0, 1.0, 1.0), Vec3::ZERO), &mut actual);
+        assert!(actual.is_empty());
+        QueryBvh::build(&[]).query((Vec3::ZERO, Vec3::ZERO), &mut actual);
+        assert!(actual.is_empty());
     }
 }
