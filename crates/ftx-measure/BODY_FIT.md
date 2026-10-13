@@ -28,6 +28,18 @@ All model points, measurement and surface calls share a global evaluation budget
 derivatives, rejected trials, held-out checks and final publication. Exhaustion returns
 BUDGET_STOP without a solution. The default is 100,000 calls, with a maximum of one million.
 
+Central differences follow the model's declared dependency blocks: shared shape columns
+evaluate all frames and tape functionals, while a pose column evaluates only its frame's
+keypoints and (when fit scanlines are present) surface. Unrelated frame/tape rows retain
+exact structural zeros in the original dense column order. Gram assembly, reduction order,
+finite-difference steps and rank gates are unchanged; this is not row subsampling or an
+approximate Jacobian. Every trial objective and final acceptance check still evaluates the
+whole problem. Actual callback counts (and consequently the work reachable within a given
+budget) change; deterministic model values, accepted histories and solutions do not.
+Held-out-only poses have zero derivative columns and remain unobservable, not implicitly fixed.
+Tests compare local and full-problem columns bit for bit, independently count model calls,
+and exercise each local points/surface budget boundary and callback refusal.
+
 Silhouette-capable adapters implement `BodyModel::surface` with world-space triangles. The
 default trait method refuses silhouette input, leaving keypoint-only callers unchanged.
 Projected triangle unions keep limb gaps, merge overlapping surfaces and discard internal mesh

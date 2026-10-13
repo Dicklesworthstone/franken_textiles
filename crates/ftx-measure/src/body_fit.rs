@@ -14,6 +14,8 @@ use crate::{
     triangulate::{FrameId, Partition},
 };
 
+mod derivatives;
+
 /// One scalar model parameter. Fitting stays strictly inside its declared physical bounds.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -489,50 +491,25 @@ fn residual(
     model: &impl BodyModel,
     x: &[f64],
     budget: &mut EvaluationBudget,
-) -> Result<Vec<f64>, Refusal> {
+) -> Result<derivatives::Residual, Refusal> {
     let p = predict(model, x, input.frames.len(), budget)?;
     let l = model.layout();
     let mut r = Vec::new();
+    let mut frame_rows = Vec::with_capacity(input.frames.len());
+    let ns = l.shape.len();
+    let shape = values(&x[..ns], &l.shape);
     for (f, frame) in input.frames.iter().enumerate() {
-        for obs in frame
-            .keypoints
-            .iter()
-            .filter(|o| o.partition == Partition::Fit)
-        {
-            let k = l.keypoints.iter().position(|n| n == &obs.name).unwrap();
-            let d = (frame.camera.project(p.points[f][k])? - obs.pixel_px) / obs.sigma_px;
-            r.extend([d.x, d.y]);
-        }
-        if let Some(s) = &frame.silhouette
-            && s.lines.iter().any(|line| line.partition == Partition::Fit)
-        {
-            let ns = l.shape.len();
-            let begin = ns + f * l.pose.len();
-            let mesh = budget.call(|| {
-                model.surface(
-                    &values(&x[..ns], &l.shape),
-                    &values(&x[begin..begin + l.pose.len()], &l.pose),
-                )
-            })?;
-            let comparisons = silhouette::compare(
-                &mesh,
-                &frame.camera,
-                frame.image_size_px,
-                s,
-                Some(Partition::Fit),
-            )?;
-            for (line, comparison) in s
-                .lines
-                .iter()
-                .filter(|line| line.partition == Partition::Fit)
-                .zip(comparisons)
-            {
-                let residuals = comparison.residuals_px.ok_or_else(|| invalid(
-                    "model does not intersect an observed silhouette slice; improve initialization",
-                ))?;
-                r.extend(residuals.iter().map(|v| v / line.sigma_px));
-            }
-        }
+        let begin = ns + f * l.pose.len();
+        let first = r.len();
+        r.extend(derivatives::frame_residual(
+            frame,
+            model,
+            &shape,
+            &values(&x[begin..begin + l.pose.len()], &l.pose),
+            &p.points[f],
+            budget,
+        )?);
+        frame_rows.push(first..r.len());
     }
     for obs in input
         .measurements
@@ -545,7 +522,10 @@ fn residual(
     if r.iter().any(|v| !v.is_finite()) || !cost(&r).is_finite() {
         return Err(invalid("non-finite body-fit objective"));
     }
-    Ok(r)
+    Ok(derivatives::Residual {
+        values: r,
+        frame_rows,
+    })
 }
 fn cost(r: &[f64]) -> f64 {
     r.iter().map(|v| v * v).sum()
@@ -674,10 +654,10 @@ fn attempt(
             return (result, None);
         }
     };
-    result.cost_history.push(cost(&r));
+    result.cost_history.push(cost(&r.values));
     let n = x.len();
     let mut damping = 1e-3_f64;
-    if r.len() < n {
+    if r.values.len() < n {
         result.status = "UNOBSERVABLE";
         result
             .flags
@@ -695,19 +675,8 @@ fn attempt(
                 );
                 return (result, None);
             }
-            let mut plus = x.clone();
-            let mut minus = x.clone();
-            plus[k] += h;
-            minus[k] -= h;
-            let pair = residual(input, model, &plus, budget)
-                .and_then(|a| residual(input, model, &minus, budget).map(|b| (a, b)));
-            match pair {
-                Ok((a, b)) => cols.push(
-                    a.iter()
-                        .zip(b)
-                        .map(|(p, m)| (p - m) / (2.0 * h))
-                        .collect::<Vec<_>>(),
-                ),
+            match derivatives::column(input, model, &x, k, h, &r, budget) {
+                Ok(col) => cols.push(col),
                 Err(e) => {
                     result.flags.push("derivative unavailable".into());
                     result.failed_evaluation(&e);
@@ -743,9 +712,11 @@ fn attempt(
         }
         let g: Vec<f64> = cols
             .iter()
-            .map(|c| c.iter().zip(&r).map(|(j, v)| j * v).sum())
+            .map(|c| c.iter().zip(&r.values).map(|(j, v)| j * v).sum())
             .collect();
-        if g.iter().all(|v| v.abs() <= 1e-6 * cost(&r).sqrt().max(1.0)) {
+        if g.iter()
+            .all(|v| v.abs() <= 1e-6 * cost(&r.values).sqrt().max(1.0))
+        {
             match checks(input, model, &x, budget) {
                 Ok(c) => result.checks = c,
                 Err(e) => {
@@ -783,7 +754,7 @@ fn attempt(
                 .collect();
             if trial.iter().all(|v| v.is_finite() && *v > 0.0 && *v < 1.0) {
                 match residual(input, model, &trial, budget) {
-                    Ok(next) if cost(&next) < cost(&r) => {
+                    Ok(next) if cost(&next.values) < cost(&r.values) => {
                         accepted = Some((trial, next));
                         damping = (damping * 0.3).max(1e-12);
                         break;
@@ -805,7 +776,7 @@ fn attempt(
         };
         x = next;
         r = next_r;
-        result.cost_history.push(cost(&r));
+        result.cost_history.push(cost(&r.values));
     }
     unreachable!("bounded loop returns on its final iteration")
 }
