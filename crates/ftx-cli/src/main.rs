@@ -89,7 +89,7 @@ const USAGE: &str = "usage:
   ftx trace IMAGE.png --out DIR [--crop X,Y,W,H] [--channel auto|bgdist|dark|light|gray|sat|r|g|b|edge]
             [--invert|--no-invert] [--bg R,G,B] [--stroke PX] [--close 3] [--open PX] [--corner-deg 35]
             [--soft-deg 70] [--simplify-frac 0.003] [--smooth 1.2] [--min-area-frac 0.01]
-            [--erase X,Y,W,H ...] [--no-dashes] [--json]
+            [--erase X,Y,W,H ...] [--no-dashes] [--px-out FILE] [--json]
   ftx annotate DRAFT --names NAMES.json --out PATTERN [--json]
   ftx scale-fit PATTERN --target REF=LEN [--target REF=LEN ...] --out PATTERN [--json]
   ftx audit PATTERN --out DIR [--labels L.json] [--tol-mm 3] [--median-seam-mm 250] [--label-tol 0.03] [--json]

@@ -343,6 +343,7 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "smooth",
             "erase",
             "no-dashes",
+            "px-out",
         ],
     )?;
     let image = input(args, "trace", "an image")?;
@@ -410,7 +411,10 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mask = out.join("mask.png");
     let data = traced.pattern.to_value();
     // each piece's stroke-centre polygon (crop px, y down, closed): what the label crops are cut along
-    let px = out.join("trace_px.json");
+    let px = args
+        .options
+        .get("px-out")
+        .map_or_else(|| out.join("trace_px.json"), std::path::PathBuf::from);
     let rings: serde_json::Map<String, Value> = data["pieces"]
         .as_array()
         .into_iter()
@@ -432,14 +436,17 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mut artifacts = vec![
         ("mask.png".into(), encode_png_gray(&traced.mask)),
         (
-            "trace_px.json".into(),
-            (px_doc.to_string() + "\n").into_bytes(),
-        ),
-        (
             "overlay.png".into(),
             ftx_trace::review::overlay(&doc, Some(&img))?,
         ),
     ];
+    let px_bytes = (px_doc.to_string() + "\n").into_bytes();
+    // `--px-out FILE` keeps the polygons out of DIR (the skill's wrapper, whose DIR matches vectorize.py's)
+    match args.options.get("px-out") {
+        Some(file) => std::fs::write(file, &px_bytes)
+            .map_err(|e| Refusal::new(RefusalCode::Io, format!("{file}: {e}")))?,
+        None => artifacts.push(("trace_px.json".into(), px_bytes)),
+    }
     for (i, label) in ftx_trace::review::label_crops(&traced, &img)?
         .into_iter()
         .enumerate()
