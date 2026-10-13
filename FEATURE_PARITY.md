@@ -99,9 +99,9 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
 | Trace pipeline | 04 §10 | missing | |
-| names.json / labels.json, annotate | 04 §10 | missing | |
-| Round-0 audit | 04 §10 | missing | |
-| Scale-fit | 04 §10 | missing | |
+| names.json / labels.json, annotate | 04 §10.10–10.12 | present | oracle `trace/post` (`tools/oracle/capture_tracing.py`, drafts the reference traced off its own plain, navy and filled test sheets): 33 annotate cases (renames, cut, fold, drawn-side mirroring, split, merge, seams with twins, checks, drops) incl. 20 refusals with the reference's text, 298 `measure_ref` and 52 `parse_length` cases; bit-identical (`ftx-conformance/tests/tracing.rs`); `ftx annotate` (`ftx-cli/tests/trace_workflow.rs`) |
+| Round-0 audit | 04 §10.13 | partial | oracle `trace/post`: 18 reports covering every finding kind and scale basis, bit-identical; `ftx audit`. Missing: `round0_audit.png` |
+| Scale-fit | 04 §10.14 | present | oracle `trace/post`: 7 cases incl. a disagreeing pair and refusals, bit-identical; `ftx scale-fit` |
 
 ## CLI and browser (`ftx-cli`, `ftx-wasm`, spec 04 §11–12)
 

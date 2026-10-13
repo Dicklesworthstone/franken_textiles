@@ -51,6 +51,8 @@ dependencies = [
  "ftx-export",
  "ftx-measure",
  "ftx-pattern",
+ "ftx-trace",
+ "serde",
  "serde_json",
 ]
 
@@ -63,6 +65,8 @@ dependencies = [
  "ftx-export",
  "ftx-measure",
  "ftx-pattern",
+ "ftx-trace",
+ "serde",
  "serde_json",
 ]
 
@@ -109,6 +113,16 @@ name = "ftx-pattern"
 version = "0.1.0"
 dependencies = [
  "ftx-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ftx-trace"
+version = "0.1.0"
+dependencies = [
+ "ftx-core",
+ "ftx-pattern",
  "serde",
  "serde_json",
 ]

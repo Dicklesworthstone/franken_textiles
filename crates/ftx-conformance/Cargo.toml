@@ -15,6 +15,8 @@ ftx-drape = { path = "../ftx-drape" }
 ftx-export = { path = "../ftx-export" }
 ftx-measure = { path = "../ftx-measure" }
 ftx-pattern = { path = "../ftx-pattern" }
+ftx-trace = { path = "../ftx-trace" }
+serde.workspace = true
 serde_json.workspace = true
 
 [lints]

@@ -2,8 +2,8 @@
 
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
 FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx draft`, `ftx validate`,
-`ftx drape`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export` and `ftx check`; `round`, `trace`,
-`viewer` and `report` follow their subsystems.
+`ftx drape`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export`, `ftx check`, `ftx annotate`,
+`ftx scale-fit` and `ftx audit`; `round`, `trace`, `viewer` and `report` follow their subsystems.
 
 **Commands.**
 - `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
@@ -76,6 +76,15 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   printed as above; exit 0, or 2 when one fails. With the pattern the DXF sew references are recomputed and
   the DSTs' couching checked against the braid lines. A file the manifest lists but DIR lacks is a failed
   `file.missing` item (the reference raises); no manifest is a failed `manifest` item.
+- `ftx annotate DRAFT --names NAMES.json --out PATTERN`, `ftx scale-fit PATTERN --target REF=LEN [--target
+  …] --out PATTERN` and `ftx audit PATTERN --out DIR [--labels L.json] [--tol-mm 3] [--median-seam-mm 250]
+  [--label-tol 0.03]`: the reference's `vectorize.py annotate|scale-fit|audit` (spec 04 §10.1) on
+  `ftx-trace`, writing what the reference writes for the same inputs (`ftx-cli/tests/trace_workflow.rs`).
+  They print `{out, pieces, seams, notes}`, `{out, k, mm_per_px, targets, rms_pct, warning}` and `{summary,
+  scale_basis, findings ["F# [C] message"], files}`. Targets take units (`=10.5in`, default mm). A bad
+  `names.json`, target or reference is refused (exit 3) with the reference's message (the reference exits
+  2); `audit` exits 2 when a finding is an error (the reference exits 0) and writes only
+  `DIR/round0_audit.json` so far (the callout PNG follows the raster trace).
 
 **Output.** Human text, or with `--json` exactly one JSON envelope on stdout:
 `{"schema": "ftx-cli/1", "command", "ok", "exit", "result"}` or, for refused input,

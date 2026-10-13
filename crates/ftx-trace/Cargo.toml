@@ -1,0 +1,18 @@
+[package]
+name = "ftx-trace"
+description = "FrankenTextiles tracing: names.json, the reference grammar, scale-fit and the round-0 audit for traced pattern sheets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+ftx-core = { path = "../ftx-core" }
+ftx-pattern = { path = "../ftx-pattern" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

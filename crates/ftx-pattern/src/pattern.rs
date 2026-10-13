@@ -354,6 +354,13 @@ impl Pattern {
         Ok(Self::build(raw, doc))
     }
 
+    /// Builds a pattern from a typed document, keeping its vertex order (as [`Pattern::from_json`]).
+    #[must_use]
+    pub fn from_doc(doc: PatternDoc) -> Self {
+        let raw = serde_json::to_value(&doc).unwrap_or(Value::Null);
+        Self::build(raw, Ok(doc))
+    }
+
     /// The document as given.
     #[must_use]
     pub fn raw(&self) -> &Value {

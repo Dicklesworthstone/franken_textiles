@@ -22,6 +22,7 @@ mod export;
 mod measure;
 mod render;
 mod round;
+mod trace;
 mod workspace;
 
 use std::collections::BTreeMap;
@@ -70,11 +71,15 @@ const USAGE: &str = "usage:
             [--layout-width MM] [--keep-blank-pages] [--hpgl-rotate90] [--hpgl-mirror] [--created YYYY-MM-DDTHH:MM] [--json]
       TARGET: svg pdf letter a4 copyshop projector dxf astm aama flat-dxf hpgl cutter garmentcode embroidery all
   ftx check DIR [--pattern-ref PATTERN] [--json]
+  ftx annotate DRAFT --names NAMES.json --out PATTERN [--json]
+  ftx scale-fit PATTERN --target REF=LEN [--target REF=LEN ...] --out PATTERN [--json]
+  ftx audit PATTERN --out DIR [--labels L.json] [--tol-mm 3] [--median-seam-mm 250] [--label-tol 0.03] [--json]
   ftx --version";
 
 /// Parsed command line: the positional arguments and the `--flag value` options.
 struct Args {
     positional: Vec<String>,
+    /// `--flag value` options; a repeated `--target` (scale-fit) keeps every value, newline-joined.
     options: BTreeMap<String, String>,
     values: Vec<String>,
     json: bool,
@@ -106,6 +111,16 @@ fn parse(argv: &[String]) -> Result<Args, String> {
             }
             if name == "value" {
                 values.push(value.clone());
+            }
+            if name == "target" {
+                options
+                    .entry(name.to_string())
+                    .and_modify(|v: &mut String| {
+                        v.push('\n');
+                        v.push_str(value);
+                    })
+                    .or_insert_with(|| value.clone());
+                continue;
             }
             if options.insert(name.to_string(), value.clone()).is_some() && name != "value" {
                 return Err(format!("--{name} was supplied more than once"));
@@ -748,6 +763,9 @@ fn main() -> ExitCode {
         Some("alter") => emit("alter", args.json, cmd_alter(&args)),
         Some("measure") => emit("measure", args.json, measure::run(&args)),
         Some("export") => emit("export", args.json, export::cmd_export(&args)),
+        Some("annotate") => emit("annotate", args.json, trace::cmd_annotate(&args)),
+        Some("scale-fit") => emit("scale-fit", args.json, trace::cmd_scale_fit(&args)),
+        Some("audit") => emit("audit", args.json, trace::cmd_audit(&args)),
         Some("check") => emit(
             "check",
             args.json,
