@@ -33,7 +33,7 @@ Unix). No media or report is uploaded and no external process is executed.
         "frame": { "stream": "camera-1", "timestamp_us": 133333 },
         "rotation_cw_deg": 90,
         "camera_epoch": "lens-1-calibration-a",
-        "focal_px": { "x": 1500.0, "y": 1500.0 }
+        "focal_px": [1500.0, 1500.0]
       },
       "image": "frames/frame-133333.png",
       "person_mask": "masks/person-133333.png",

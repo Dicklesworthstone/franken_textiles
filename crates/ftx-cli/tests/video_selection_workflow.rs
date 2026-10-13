@@ -60,7 +60,7 @@ fn setup() -> PathBuf {
         .unwrap();
     }
     let frames: Vec<_> = [(0, "blurred"), (33_333, "uneven"), (66_666, "balanced"), (150_000, "blank")].into_iter().map(|(timestamp, image)| json!({
-        "metadata":{"frame":{"stream":"synthetic","timestamp_us":timestamp},"rotation_cw_deg":0,"camera_epoch":"synthetic-lens","focal_px":{"x":800,"y":800}},
+        "metadata":{"frame":{"stream":"synthetic","timestamp_us":timestamp},"rotation_cw_deg":0,"camera_epoch":"synthetic-lens","focal_px":[800,800]},
         "image":format!("{image}.png"), "person_mask":"person.png", "sheet_mask":"sheet.png"
     })).collect();
     save(
