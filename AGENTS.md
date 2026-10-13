@@ -179,8 +179,9 @@ measurements fills the unmeasured from its prior: those values are `MODEL_FIT`, 
 - Dated nightly pinned in `rust-toolchain.toml`; Rust 2024 edition; one Cargo workspace.
 - Targets: native (CLI) and `wasm32-unknown-unknown` (browser).
 - Determinism (plan §6): fixed-order assembly, sorted candidates, deterministic elementary functions where
-  native/wasm results must agree, no fused multiply-add in those hot loops, no hash-map iteration that
-  affects output.
+  native/wasm results must agree, no compiler-contracted multiply-add in those hot loops (an explicit
+  `mul_add` is a correctly rounded fma on every target, so it is deterministic), no hash-map iteration
+  that affects output.
 
 ### Unsafe Code
 

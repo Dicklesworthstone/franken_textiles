@@ -1,6 +1,7 @@
 //! FrankenTextiles foundations (plan §6–7): no domain logic, only what every other crate shares.
 //!
 //! - [`det`]: deterministic elementary functions (bit-identical native and wasm).
+//! - [`exact`]: the exact orientation predicate for intersection audits.
 //! - [`vec`]: 2D/3D vectors and 3×3 matrices.
 //! - [`linalg`]: minimum-norm least squares.
 //! - [`np`] and [`py`]: the numpy and Python semantics the reference's numbers and messages depend
@@ -14,6 +15,7 @@
 
 pub mod curve;
 pub mod det;
+pub mod exact;
 pub mod linalg;
 pub mod np;
 pub mod polyline;

@@ -65,10 +65,10 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 |---|---|---|---|
 | Garment mesh (spacing, seam pairs, instance ranges) | 04 §2 | missing | |
 | Placement and start shape (wrap, pre-sew) | 04 §3–4 | missing | |
-| Dynamics contract | 04 §5 | partial | implicit Euler on the incremental potential without contact (`ftx-drape` CONTRACT); pre-sew, collider and flags pending |
+| Dynamics contract | 04 §5 | partial | implicit Euler on the incremental potential with body contact (IPC barrier on the ξ-offset gap, additive CCD, lagged Coulomb friction, start-intersection audit; `ftx-drape` CONTRACT); pre-sew, seams and flags pending; no self-contact |
 | Metrics and flags with the reference's text and gating split | 04 §6 | missing | |
 | Qualification bands and tightness gating | 04 §7 | missing | |
-| Known-answer tests (plan §11.9) | 04 §8 | partial | KAT 2 (anisotropy, compression law), KAT 3 (Peirce cantilever vs exact elastica), KAT 9 (small drape digest equal native/wasm) in `crates/ftx-drape/tests/kat.rs`; KAT 1, 4–8 need contact |
+| Known-answer tests (plan §11.9) | 04 §8 | partial | KAT 2 (anisotropy, compression law), KAT 3 (Peirce cantilever vs exact elastica), KAT 9 (drape digest equal native/wasm) in `crates/ftx-drape/tests/kat.rs`; KAT 1 (barrier calculus vs AD and differences, unit test), KAT 4 (ring on a cylinder, 2πμT), KAT 5 (ring on a cone, tan α vs μ), KAT 6 (ease sweep), KAT 9 (contact digest equal native/wasm) in `tests/kat_contact.rs`; KAT 7 (elastic ladder), 8 (armpit wedge) and 10 (two-start spread) need elastics, seams, the garment scene and fitted bodies (FTX-09, FTX-13) |
 | Output formats (fold.pc2, mesh_map.json, report, viewer data) | 04 §9 | missing | |
 
 ## Exports (`ftx-export`, spec 03)

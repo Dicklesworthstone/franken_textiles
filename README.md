@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Status](https://img.shields.io/badge/status-phase%201%20%C2%B7%20patterns%2C%20body%2C%20drape%20core-orange)](#honest-status)
+[![Status](https://img.shields.io/badge/status-phase%201%20%C2%B7%20patterns%2C%20body%2C%20drape%20%2B%20contact-orange)](#honest-status)
 [![Reference](https://img.shields.io/badge/reference-Python%20skill%20%4088e03965-3776ab)](#oracles-and-pins)
 [![Body model](https://img.shields.io/badge/body-Anny%200.6.1%20(newborn%E2%86%92adult)-2ea44f)](#bodies-anny-not-a-dress-form)
 [![Core](https://img.shields.io/badge/core-Rust%20%2F%20Wasm-b7410e)](#architecture)
@@ -30,8 +30,8 @@ is deterministic, testable against known answers, and runs in a browser with not
 
 **Phase 0–1.** Five crates have code: `ftx-core` (deterministic maths, geometry kernels), `ftx-body` (the Anny
 body model), `ftx-pattern` (the pattern model, structure checks and validation, bit-exact with the reference),
-`ftx-drape` (the cloth solver core) and `ftx-conformance` (oracle fixtures). Drafting, alteration, contact,
-exports, tracing, the CLI and the browser build are not ported yet.
+`ftx-drape` (the cloth solver with body contact and friction) and `ftx-conformance` (oracle fixtures).
+Drafting, alteration, the garment scene, exports, tracing, the CLI and the browser build are not ported yet.
 
 | Question | Answer |
 |---|---|
@@ -39,7 +39,7 @@ exports, tracing, the CLI and the browser build are not ported yet.
 | Is the reference behaviour specified? | **Yes**: four behaviour specifications extracted from the Python reference by running it, and one for the Anny forward model ([`docs/spec/`](docs/spec/)), about 7,100 lines with fixture cases. The Anny spec was checked by re-implementing the model in NumPy from the text alone (agrees to 2e-15 m) |
 | Is there a Cargo workspace with code? | **Partly**: `ftx-core`, `ftx-body`, `ftx-pattern`, `ftx-drape` and `ftx-conformance` (tests pass natively and, where run, as wasm under Node); `ftx-measure`, `ftx-export`, `ftx-trace`, `ftx-cli` and `ftx-wasm` are planned |
 | Does the body model work? | **Yes, in Rust**: the Anny forward model matches the Python package on 16 reference bodies (newborn to adult, extremes, local changes, two poses) to 1e-14 m, about 0.3–0.4 ms per body against 7 ms upstream. Fitting it to a person's measurements is next |
-| Does the drape solver exist? | **The core, without contact yet**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica) and give bit-identical results native and in wasm. Contact with the body, seams and the garment scene are next; the reference still drapes in Blender |
+| Does the drape solver exist? | **The core and body contact, not the garment scene yet**: orthotropic membrane, hinge bending and Newton on a sparse LDLᵀ pass their known-answer tests (anisotropy; a Peirce cantilever within 1.5 % of the exact elastica). Barrier contact on the thickness-offset gap with Coulomb friction passes its own: a ring on a cylinder holds below 2πμT and slides above it, a ring on a cone slides iff tan α > μ, and tight and loose tubes settle at the predicted strain and clearance. Results are bit-identical native and in wasm. Seams, the garment scene and self-contact are next; the reference still drapes in Blender |
 | Has anything been benchmarked? | **No**. Every number in the plan is a target or a measurement of the reference |
 
 The plan is written to be falsifiable: it names kill gates that can stop the body port or the drape solver

@@ -88,6 +88,17 @@ impl MembraneElement {
         })
     }
 
+    /// Rest lengths of the edges (v0v1, v1v2, v2v0), recovered from the shape gradients (exact also
+    /// across welds, where per-vertex rest coordinates are not).
+    #[must_use]
+    pub fn rest_edge_lengths(&self) -> [f64; 3] {
+        let (g1, g2) = (self.g[1], self.g[2]);
+        let det = g1[0] * g2[1] - g1[1] * g2[0];
+        let d1 = Vec2::new(g2[1] / det, -g2[0] / det);
+        let d2 = Vec2::new(-g1[1] / det, g1[0] / det);
+        [d1.norm(), (d2 - d1).norm(), d2.norm()]
+    }
+
     fn frame(&self, x: &[Vec3]) -> (Vec3, Vec3) {
         let mut f1 = Vec3::ZERO;
         let mut f2 = Vec3::ZERO;

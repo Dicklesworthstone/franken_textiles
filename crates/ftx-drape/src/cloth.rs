@@ -9,6 +9,7 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 
+use crate::contact::{Body, Contact, ContactParams};
 use crate::eigen::project_psd;
 use crate::elements::{Hinge, Membrane, MembraneElement};
 use crate::sparse::{Coo, Csr, LdltOptions, SymbolicLdlt, amd_order};
@@ -46,13 +47,55 @@ impl ClothModel {
         bending: f64,
         areal_density: f64,
     ) -> Result<Self, Refusal> {
+        if let Some((t, _)) = tris
+            .iter()
+            .enumerate()
+            .find(|(_, tri)| tri.iter().any(|&i| i >= rest.len()))
+        {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                format!("triangle {t} indexes a missing vertex"),
+            ));
+        }
+        let tri_rest: Vec<[Vec2; 3]> = tris.iter().map(|t| t.map(|i| rest[i])).collect();
+        Self::from_triangles(
+            rest.len(),
+            tris,
+            &tri_rest,
+            membrane,
+            bending,
+            areal_density,
+        )
+    }
+
+    /// Builds the model from triangles that each carry their own rest coordinates, so a vertex may sit
+    /// at different rest positions in different triangles: a seam welded across the pattern, or a tube
+    /// closed on itself. A hinge across such a weld maps its second triangle rigidly onto the first.
+    /// `rest` (per vertex) keeps the first rest position seen for each vertex.
+    ///
+    /// # Errors
+    /// As [`ClothModel::new`].
+    pub fn from_triangles(
+        n: usize,
+        tris: &[[usize; 3]],
+        tri_rest: &[[Vec2; 3]],
+        membrane: Membrane,
+        bending: f64,
+        areal_density: f64,
+    ) -> Result<Self, Refusal> {
         if areal_density.is_nan() || areal_density <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 format!("areal density {areal_density} kg/m² must be positive"),
             ));
         }
-        let n = rest.len();
+        if tri_rest.len() != tris.len() {
+            return Err(Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "one rest triangle per triangle is required",
+            ));
+        }
+        let mut rest: Vec<Option<Vec2>> = vec![None; n];
         let mut membranes = Vec::with_capacity(tris.len());
         let mut mass = vec![0.0; n];
         // edge (lo, hi) → [(edge start, edge end, opposite, triangle)] in triangle order
@@ -64,13 +107,15 @@ impl ClothModel {
                     format!("triangle {t} indexes a missing vertex"),
                 ));
             }
-            let e = MembraneElement::new(*tri, [rest[tri[0]], rest[tri[1]], rest[tri[2]]])
-                .ok_or_else(|| {
-                    Refusal::new(
-                        RefusalCode::DegenerateGeometry,
-                        format!("triangle {t} is degenerate"),
-                    )
-                })?;
+            for (k, &i) in tri.iter().enumerate() {
+                rest[i].get_or_insert(tri_rest[t][k]);
+            }
+            let e = MembraneElement::new(*tri, tri_rest[t]).ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::DegenerateGeometry,
+                    format!("triangle {t} is degenerate"),
+                )
+            })?;
             for &i in tri {
                 mass[i] += areal_density * e.area / 3.0;
             }
@@ -91,7 +136,22 @@ impl ClothModel {
                 [_] => {}
                 [(a, b, o1, t1), (_, _, o2, t2)] => {
                     let v = [*a, *b, *o1, *o2];
-                    let h = Hinge::new(v, v.map(|i| rest[i])).ok_or_else(|| {
+                    // The stencil in the first triangle's rest frame; the second triangle's opposite
+                    // vertex mapped by the rigid motion that takes its copy of the edge onto the first's.
+                    let at = |t: usize, i: usize| {
+                        tri_rest[t][tris[t].iter().position(|&j| j == i).unwrap_or(0)]
+                    };
+                    let (pa, pb, po1) = (at(*t1, *a), at(*t1, *b), at(*t1, *o1));
+                    let (qa, qb, qo2) = (at(*t2, *a), at(*t2, *b), at(*t2, *o2));
+                    let po2 = if (qa, qb) == (pa, pb) {
+                        qo2 // the same frame (no weld): use it as is, bit for bit
+                    } else {
+                        let (u, w) = ((pb - pa).normalized(), (qb - qa).normalized());
+                        let (cos, sin) = (u.dot(w), w.cross(u));
+                        let r = qo2 - qa;
+                        pa + Vec2::new(cos * r.x - sin * r.y, sin * r.x + cos * r.y)
+                    };
+                    let h = Hinge::new(v, [pa, pb, po1, po2]).ok_or_else(|| {
                         Refusal::new(
                             RefusalCode::DegenerateGeometry,
                             format!("hinge on edge {key:?} is degenerate"),
@@ -117,7 +177,7 @@ impl ClothModel {
             );
         }
         Ok(Self {
-            rest,
+            rest: rest.into_iter().map(Option::unwrap_or_default).collect(),
             membranes,
             hinges,
             mass,
@@ -192,6 +252,10 @@ pub struct Solver {
     pub tol: f64,
     /// Newton iteration cap per solve.
     pub max_newton: usize,
+    /// Contact with a static body, if any.
+    pub contact: Option<Contact>,
+    /// Friction lag rounds per step after the first solve (IPC; 1 is usually enough).
+    pub friction_rounds: usize,
     free: Vec<Option<usize>>,
     nfree: usize,
     symbolic: Option<SymbolicLdlt>,
@@ -227,10 +291,66 @@ impl Solver {
             gravity,
             tol: 1e-6,
             max_newton: 100,
+            contact: None,
+            friction_rounds: 1,
             free,
             nfree,
             symbolic: None,
         }
+    }
+
+    /// Adds contact with a static body. The cloth must start clear of it (IPC needs an
+    /// intersection-free start).
+    ///
+    /// # Errors
+    /// [`RefusalCode::IntersectingStart`] when some cloth–body gap is not positive, an edge of either
+    /// mesh passes through the other, or a piece lies inside a closed body;
+    /// [`RefusalCode::NonFinite`] for a non-finite position.
+    pub fn with_contact(mut self, body: Body, params: ContactParams) -> Result<Self, Refusal> {
+        if self.x.iter().any(|p| !p.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "the cloth has a non-finite position",
+            ));
+        }
+        let tris: Vec<[usize; 3]> = self.model.membranes.iter().map(|e| e.v).collect();
+        let lengths: std::collections::BTreeMap<(usize, usize), f64> = self
+            .model
+            .membranes
+            .iter()
+            .flat_map(|e| {
+                let l = e.rest_edge_lengths();
+                (0..3).map(move |k| {
+                    let (a, b) = (e.v[k], e.v[(k + 1) % 3]);
+                    ((a.min(b), a.max(b)), l[k])
+                })
+            })
+            .collect();
+        let contact = Contact::new(body, params, tris, |a, b| {
+            lengths.get(&(a.min(b), a.max(b))).copied().unwrap_or(1e-3)
+        });
+        if let Some(g) = contact.min_gap(&self.x, params.dhat)
+            && (g.is_nan() || g <= 0.0)
+        {
+            return Err(Refusal::new(
+                RefusalCode::IntersectingStart,
+                format!(
+                    "the cloth starts {:.3} mm inside the body's offset surface",
+                    -g * 1e3
+                ),
+            )
+            .repair("place the pieces further out (a larger push-out or clearance)")
+            .repair("reduce the cloth thickness offset"));
+        }
+        if let Some(i) = contact.first_intersection(&self.x) {
+            return Err(Refusal::new(
+                RefusalCode::IntersectingStart,
+                format!("the cloth crosses the body at the start: {i:?}"),
+            )
+            .repair("place the pieces outside the body (a larger push-out or clearance)"));
+        }
+        self.contact = Some(contact);
+        Ok(self)
     }
 
     /// Free degrees of freedom.
@@ -253,6 +373,9 @@ impl Solver {
                     e -= m * self.gravity.dot(x[i]);
                 }
             }
+        }
+        if let Some(c) = &self.contact {
+            e += c.terms(x, false, inertia.is_some()).energy;
         }
         e
     }
@@ -310,6 +433,28 @@ impl Solver {
                 }
             }
         }
+        if let Some(c) = &self.contact {
+            // Mollified edge pairs carry their full, indefinite Hessian and are projected here; the
+            // Gauss–Newton barrier and friction blocks are PSD already. A block's cloth vertices share
+            // an element, so the pattern does not change.
+            for mut block in c.terms(x, true, inertia.is_some()).blocks {
+                let m = block.dofs.len();
+                if !block.psd {
+                    project_psd(&mut block.hess, m);
+                }
+                for (ia, &(va, ka)) in block.dofs.iter().enumerate() {
+                    let Some(fa) = self.free[3 * va + ka] else {
+                        continue;
+                    };
+                    g[fa] += block.grad[ia];
+                    for (ib, &(vb, kb)) in block.dofs.iter().enumerate() {
+                        if let Some(fb) = self.free[3 * vb + kb] {
+                            coo.push(fa, fb, block.hess[ia * m + ib]);
+                        }
+                    }
+                }
+            }
+        }
         (g, coo.assemble())
     }
 
@@ -349,17 +494,24 @@ impl Solver {
             .ok_or_else(|| Refusal::new(RefusalCode::NotConverged, "no symbolic analysis"))
     }
 
+    /// Per-vertex displacement of a free-DOF vector (zero on fixed components).
+    fn displacement(&self, p: &[f64]) -> Vec<Vec3> {
+        (0..self.x.len())
+            .map(|i| {
+                Vec3::new(
+                    self.free[3 * i].map_or(0.0, |f| p[f]),
+                    self.free[3 * i + 1].map_or(0.0, |f| p[f]),
+                    self.free[3 * i + 2].map_or(0.0, |f| p[f]),
+                )
+            })
+            .collect()
+    }
+
     fn apply(&self, x: &[Vec3], p: &[f64], alpha: f64) -> Vec<Vec3> {
-        let mut out = x.to_vec();
-        for (i, xi) in out.iter_mut().enumerate() {
-            let d = Vec3::new(
-                self.free[3 * i].map_or(0.0, |f| p[f]),
-                self.free[3 * i + 1].map_or(0.0, |f| p[f]),
-                self.free[3 * i + 2].map_or(0.0, |f| p[f]),
-            );
-            *xi += d * alpha;
-        }
-        out
+        x.iter()
+            .zip(self.displacement(p))
+            .map(|(xi, d)| *xi + d * alpha)
+            .collect()
     }
 
     /// Projected Newton on the potential from the current positions.
@@ -401,7 +553,11 @@ impl Solver {
                 rep.converged = true;
                 break;
             }
-            let mut alpha = 1.0;
+            // Never step through the body: cap α by additive CCD along the Newton direction.
+            let mut alpha = match &self.contact {
+                Some(c) => c.step_bound(&self.x, &self.displacement(&p)),
+                None => 1.0,
+            };
             let mut accepted = false;
             for _ in 0..50 {
                 let trial = self.apply(&self.x, &p, alpha);
@@ -469,7 +625,27 @@ impl Solver {
                 p
             })
             .collect();
-        let rep = self.minimize(Some((&xt, h)))?;
+        if let Some(c) = &mut self.contact {
+            c.update_lag(&x0, &x0, h); // friction pairs frozen at the start of the step
+        }
+        let mut rep = self.minimize(Some((&xt, h)))?;
+        // Lag rounds (IPC): refresh normal forces and contact sets at the new iterate and re-solve,
+        // so a contact made during the step has friction within the same step.
+        for _ in 0..self.friction_rounds {
+            let Some(c) = &mut self.contact else { break };
+            if c.params.mu <= 0.0 {
+                break;
+            }
+            c.update_lag(&x0, &self.x, h);
+            let again = self.minimize(Some((&xt, h)))?;
+            rep.iterations += again.iterations;
+            rep.projected_iterations += again.projected_iterations;
+            rep.line_search_failures += again.line_search_failures;
+            rep.converged = again.converged;
+            rep.energy_end = again.energy_end;
+            rep.residual = again.residual;
+            rep.last_step = again.last_step;
+        }
         if self.x.iter().any(|p| !p.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
@@ -601,6 +777,43 @@ pub fn hex_grid(w: f64, h: f64, spacing: f64, origin: Vec2) -> (Vec<Vec2>, Vec<[
         }
     }
     (rest, tris)
+}
+
+/// A welded tube: vertex count, triangles, per-triangle rest coordinates and per-vertex rest coordinates.
+pub type Tube = (usize, Vec<[usize; 3]>, Vec<[Vec2; 3]>, Vec<Vec2>);
+
+/// A tube of rest circumference `c` and height `h` (m): a [`hex_grid`] whose right edge is welded onto
+/// its left, so each triangle keeps its flat rest coordinates (u ∈ [0, c]) while the seam vertices are
+/// shared. Returns the vertex count, triangles, per-triangle rest coordinates and each vertex's rest
+/// coordinate (u ∈ [0, c)). Build the model with [`ClothModel::from_triangles`]. `c` should be at least
+/// three spacings, or welding collapses triangles.
+#[must_use]
+pub fn hex_tube(c: f64, h: f64, spacing: f64) -> Tube {
+    let (rest, tris) = hex_grid(c, h, spacing, Vec2::ZERO);
+    let tol = 1e-9 * c;
+    // Each vertex on the right edge maps to the left-edge vertex of its row.
+    let left: Vec<usize> = (0..rest.len())
+        .filter(|&j| rest[j].x.abs() <= tol)
+        .collect();
+    let mut target: Vec<usize> = (0..rest.len()).collect();
+    for (i, p) in rest.iter().enumerate() {
+        if (p.x - c).abs() <= tol
+            && let Some(&j) = left.iter().find(|&&j| (rest[j].y - p.y).abs() <= tol)
+        {
+            target[i] = j;
+        }
+    }
+    let mut index = vec![usize::MAX; rest.len()];
+    let mut kept = Vec::new();
+    for i in 0..rest.len() {
+        if target[i] == i {
+            index[i] = kept.len();
+            kept.push(rest[i]);
+        }
+    }
+    let tri_rest: Vec<[Vec2; 3]> = tris.iter().map(|t| t.map(|i| rest[i])).collect();
+    let welded: Vec<[usize; 3]> = tris.iter().map(|t| t.map(|i| index[target[i]])).collect();
+    (kept.len(), welded, tri_rest, kept)
 }
 
 /// A rectangular grid `w × h` (m) with `nx × ny` cells in the material frame, each cell split along
