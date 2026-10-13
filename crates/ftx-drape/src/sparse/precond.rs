@@ -4,7 +4,8 @@
 //! `6eb72a0c075fa9ea7dff083e1aafec6c61c5be21` (same author, MIT + OpenAI/Anthropic rider). Changes: the
 //! preconditioner is any `Fn(&[f64]) -> Vec<f64>` (here an [`super::direct::LdltFactor`]'s solve); the
 //! iteration starts at zero and refuses (returns `None`) on non-positive curvature, a non-finite value or
-//! the iteration cap, since the caller then factorizes.
+//! the iteration cap, since the caller then factorizes. An iterate is accepted only when the recomputed
+//! residual `b − a x` meets the tolerance too (frankensim `crates/fs-solver/src/checked_cg.rs`'s gate).
 
 use super::Csr;
 
@@ -54,13 +55,7 @@ pub fn pcg(
             return Err(PcgFailure::NotConverged(it));
         }
         if rel <= tol {
-            return Ok((
-                x,
-                PcgReport {
-                    iters: it,
-                    rel_residual: rel,
-                },
-            ));
+            return accept(a, b, x, it, rel, tol, bnorm);
         }
         a.spmv(&p, &mut ap);
         let pap: f64 = p.iter().zip(&ap).map(|(a, b)| a * b).sum();
@@ -85,15 +80,43 @@ pub fn pcg(
     }
     let rel = norm(&r) / bnorm;
     if rel <= tol {
+        accept(a, b, x, max_iters, rel, tol, bnorm)
+    } else {
+        Err(PcgFailure::NotConverged(max_iters))
+    }
+}
+
+/// The recomputed-residual gate (frankensim `fs-solver` `checked_cg`): the recursive residual drifts from
+/// `b − a x` in floating point, so an iterate is accepted only when the true residual meets the tolerance
+/// too; otherwise the solve reports no convergence and the caller factorizes.
+fn accept(
+    a: &Csr,
+    b: &[f64],
+    x: Vec<f64>,
+    iters: usize,
+    rel: f64,
+    tol: f64,
+    bnorm: f64,
+) -> Result<(Vec<f64>, PcgReport), PcgFailure> {
+    let mut ax = vec![0.0f64; b.len()];
+    a.spmv(&x, &mut ax);
+    let true_rel = b
+        .iter()
+        .zip(&ax)
+        .map(|(bi, axi)| (bi - axi) * (bi - axi))
+        .sum::<f64>()
+        .sqrt()
+        / bnorm;
+    if true_rel <= tol {
         Ok((
             x,
             PcgReport {
-                iters: max_iters,
+                iters,
                 rel_residual: rel,
             },
         ))
     } else {
-        Err(PcgFailure::NotConverged(max_iters))
+        Err(PcgFailure::NotConverged(iters))
     }
 }
 
