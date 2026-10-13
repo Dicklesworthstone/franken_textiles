@@ -21,7 +21,7 @@
 //! cancellation context, fingerprint or parameter rescaling; f64 throughout; the slab test without
 //! outward rounding (a pixel ray misses a node by more than rounding or not at all).
 
-use ftx_core::{Vec3, det};
+use ftx_core::{Refusal, RefusalCode, Vec3, det};
 
 /// A triangle mesh with per-vertex colours (linear RGB in [0, 1]).
 #[derive(Clone, Debug, Default)]
@@ -534,9 +534,94 @@ pub fn stills(
         .collect()
 }
 
+/// A schematic felt fez (spec 04 §9.9), from finished radii/height in metres. Its base is open;
+/// the wall is 2 mm radially inward and the top cap 2 mm thick. It is not a simulated hat.
+pub fn fez_frustum(
+    base: Vec3,
+    base_radius: f64,
+    top_radius: f64,
+    height: f64,
+) -> Result<ColouredMesh, Refusal> {
+    let thickness = 0.002;
+    if !base.is_finite()
+        || base.x.abs().max(base.y.abs()).max(base.z.abs()) > 1e6
+        || [base_radius, top_radius, height]
+            .iter()
+            .any(|v| !v.is_finite() || *v <= thickness || *v > 10.0)
+        || top_radius >= base_radius
+    {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            "fez needs finite radii/height above 2 mm, at most 10 m, with a smaller top radius",
+        ));
+    }
+    const N: usize = 64;
+    let inner_height = height - thickness;
+    let inner_top = base_radius + (top_radius - base_radius) * inner_height / height - thickness;
+    let mut mesh = ColouredMesh::default();
+    for (radius, z) in [
+        (base_radius, 0.0),
+        (top_radius, height),
+        (base_radius - thickness, 0.0),
+        (inner_top, inner_height),
+    ] {
+        for i in 0..N {
+            let (s, c) = det::sin_cos(2.0 * std::f64::consts::PI * i as f64 / N as f64);
+            mesh.vertices
+                .push(base + Vec3::new(radius * c, radius * s, z));
+        }
+    }
+    mesh.vertices.extend([
+        base + Vec3::new(0.0, 0.0, height),
+        base + Vec3::new(0.0, 0.0, inner_height),
+    ]);
+    for i in 0..N {
+        let j = (i + 1) % N;
+        mesh.triangles.extend([
+            [i, j, N + j],
+            [i, N + j, N + i],
+            [2 * N + i, 3 * N + j, 2 * N + j],
+            [2 * N + i, 3 * N + i, 3 * N + j],
+            [i, 2 * N + j, j],
+            [i, 2 * N + i, 2 * N + j],
+            [4 * N, N + i, N + j],
+            [4 * N + 1, 3 * N + j, 3 * N + i],
+        ]);
+    }
+    mesh.colours = vec![[0.55, 0.05, 0.05]; mesh.vertices.len()];
+    Ok(mesh)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fez_shell_has_finished_dimensions_and_consistently_closed_wall() {
+        let base = Vec3::new(0.01, -0.02, 0.85);
+        let m = fez_frustum(base, 0.08, 0.06, 0.11).unwrap();
+        assert_eq!((m.vertices.len(), m.triangles.len()), (258, 512));
+        assert!((m.vertices[0] - base - Vec3::new(0.08, 0.0, 0.0)).norm() < 1e-15);
+        assert!((m.vertices[64].z - 0.96).abs() < 1e-15);
+        let mut edges = std::collections::BTreeMap::<(usize, usize), (usize, i32)>::new();
+        for t in &m.triangles {
+            assert!(
+                (m.vertices[t[1]] - m.vertices[t[0]])
+                    .cross(m.vertices[t[2]] - m.vertices[t[0]])
+                    .norm()
+                    > 0.0
+            );
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let e = edges.entry((a.min(b), a.max(b))).or_default();
+                e.0 += 1;
+                e.1 += if a < b { 1 } else { -1 };
+            }
+        }
+        assert!(edges.values().all(|e| *e == (2, 0)));
+        assert!(fez_frustum(base, 0.001, 0.0005, 0.1).is_err());
+        assert!(fez_frustum(base, 0.1, 0.2, 0.1).is_err());
+        assert!(fez_frustum(base, 0.1, 0.08, f64::NAN).is_err());
+    }
 
     fn quad(z: f64, colour: [f64; 3]) -> ColouredMesh {
         ColouredMesh {
