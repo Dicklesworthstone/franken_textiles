@@ -218,11 +218,16 @@ impl WorkspaceBody {
 
     pub(super) fn adopt(&self, ws: &Path, rd: &Path, n: u64) -> Result<Vec<String>, Refusal> {
         let path = ws.join("measurements.json");
-        if self.previous.is_none() {
-            write_new(&path, &self.bytes)?;
-        } else if self.changed {
+        let previous = match &self.previous {
+            None => {
+                write_new(&path, &self.bytes)?;
+                return Ok(Vec::new());
+            }
+            Some(previous) => previous,
+        };
+        if self.changed {
             // Recheck after reservation; never replace an intervening writer's body with our stale one.
-            if fs::read(&path).map_err(|e| io(&path, e))? != *self.previous.as_ref().unwrap() {
+            if fs::read(&path).map_err(|e| io(&path, e))? != *previous {
                 return Err(bad_input(
                     "workspace measurements changed during this run; retry with the current body",
                 ));
@@ -244,7 +249,7 @@ impl WorkspaceBody {
                     .checked_add(1)
                     .ok_or_else(|| bad_input("measurement backup number overflow"))?;
             };
-            write_new(&backup, self.previous.as_ref().unwrap())?;
+            write_new(&backup, previous)?;
             fs::set_permissions(
                 &backup,
                 fs::metadata(&path).map_err(|e| io(&path, e))?.permissions(),
