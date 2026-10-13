@@ -66,7 +66,12 @@ iterations): skipping the projection of element Hessians that are PSD by constru
 and deferring the factorization's panel updates (→ 45–50 s); assembly now fills the fixed pattern in
 place (bit-identical, no triplet sort). With compression at the reference's stiffness (above) the whole
 bolero drape takes about 70 s and the trousers about 7.5 minutes; on the body fitted to 15 tape
-measurements (ftx-body), 50 s and 5.4 minutes.
+measurements (ftx-body), 50 s and 5.4 minutes; without the friction lag round while sewing
+(`DrapeOptions::lag_rounds` = [0, 1], the default) 29 s and 2.4 minutes: the bolero 312 Newton
+iterations instead of 448, the trousers 318 instead of 680, the same verdicts (no flag, settled),
+readings within a few millimetres (bands within 3.7 mm, hem rise within 6 mm, hem balance −2.2 → 6.0 mm,
+seam strain p90 within 1 %) — the run-to-run spread the reference itself shows. Contacts made during a
+sewing step get friction from the next step on.
 
 **Units and frames.** Metres, kilograms, seconds; z up. Rest coordinates are the flat piece in its material
 frame (+u along the grain).

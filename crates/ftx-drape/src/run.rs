@@ -48,6 +48,9 @@ pub struct DrapeOptions {
     /// Compression stiffness as a fraction of tension, outside gather zones (inside them it falls to
     /// [`crate::start::GATHER_COMPRESSION`] at the gathered seam).
     pub compression: f64,
+    /// Friction lag rounds per step (re-solves with the normal forces and contacts of the step's end)
+    /// while sewing and while draping.
+    pub lag_rounds: [usize; 2],
     /// Contact and friction.
     pub contact: ContactParams,
 }
@@ -55,7 +58,8 @@ pub struct DrapeOptions {
 impl Default for DrapeOptions {
     /// 12 mm mesh, 12 sewing and 36 draping steps of 1/24 s, Newton to 1e-4 m/s, compression as stiff
     /// as tension outside gather zones (the reference's `tension = compression = E_t·L`, spec 04 §5.3),
-    /// ĝ 1 mm, the cloth's mid-surface 1.5 mm off the body, μ 0.4.
+    /// friction lagged once a step while draping and not while sewing, ĝ 1 mm, the cloth's mid-surface
+    /// 1.5 mm off the body, μ 0.4.
     fn default() -> Self {
         Self {
             spacing: 12.0,
@@ -64,6 +68,7 @@ impl Default for DrapeOptions {
             step: 1.0 / 24.0,
             tol: 1e-4,
             compression: 1.0,
+            lag_rounds: [0, 1],
             contact: ContactParams {
                 dhat: 1e-3,
                 thickness: 1.5e-3,
@@ -168,10 +173,11 @@ pub fn drape(
     let mut frames = fold_frames(&scene.mesh, &scene.placements, &board, FOLD_FRAMES);
     frames.extend(zip_frames(&scene.start.wrapped, &scene.start.relaxed));
     let mut phases = Vec::new();
-    for (name, steps, g) in [
-        ("sew", opts.sew_steps, 0.0),
-        ("drape", opts.drape_steps, 9.81),
+    for (name, steps, g, lag) in [
+        ("sew", opts.sew_steps, 0.0, opts.lag_rounds[0]),
+        ("drape", opts.drape_steps, 9.81, opts.lag_rounds[1]),
     ] {
+        scene.solver.friction_rounds = lag;
         let rep = run_phase(&mut scene, steps, opts.step, g, |_, x| {
             frames.push(x.to_vec());
         })?;
