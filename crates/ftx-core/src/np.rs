@@ -320,20 +320,21 @@ pub fn median_f32(values: &[f32]) -> f32 {
     }
 }
 
-/// numpy `percentile` of a float32 array (linear method), which numpy 2 computes in float32 throughout:
-/// `q = p / float32(100)`, the virtual index `(n − 1)·q` and the two-sided lerp all in float32.
+/// numpy 2.5.4 `percentile` of a float32 array at a Python number `p` (linear method): `q = p / 100`, the
+/// virtual index `(n − 1)·q` and the fraction in float64, the fraction cast to float32, the two-sided lerp
+/// in float32.
 #[must_use]
-pub fn percentile_f32(values: &[f32], p: f32) -> f32 {
+pub fn percentile_f32(values: &[f32], p: f64) -> f32 {
     let n = values.len();
     if n == 0 {
         return f32::NAN;
     }
     let mut v = values.to_vec();
     v.sort_by(f32::total_cmp);
-    let q = p / 100.0f32;
+    let q = p / 100.0;
     // numpy's `linear` method: (n − 1)·q
-    let virtual_index = (n - 1) as f32 * q;
-    if virtual_index >= (n - 1) as f32 {
+    let virtual_index = (n - 1) as f64 * q;
+    if virtual_index >= (n - 1) as f64 {
         return v[n - 1];
     }
     if virtual_index < 0.0 {
@@ -344,9 +345,9 @@ pub fn percentile_f32(values: &[f32], p: f32) -> f32 {
     let (a, b) = (v[below as usize], v[below as usize + 1]);
     let diff = b - a;
     if gamma >= 0.5 {
-        b - diff * (1.0 - gamma)
+        b - diff * ((1.0 - gamma) as f32)
     } else {
-        a + diff * gamma
+        a + diff * (gamma as f32)
     }
 }
 
@@ -442,7 +443,13 @@ mod tests {
             19.02365820664012,
         ];
         assert_eq!(percentile(&c, 33.0), 15.956946452192618);
-        assert_eq!(percentile_f32(&[15.930_443, 8.089_892], 95.0), 15.538_415);
+        // float32 data at a Python number: index and fraction in float64 (numpy 2.5.4's bits; the
+        // all-float32 path gives 20.246475 at 33)
+        let bits = |v: f32| v.to_bits();
+        assert_eq!(
+            bits(percentile_f32(&[15.930_443, 8.089_892], 95.0)),
+            1_098_423_641
+        );
         let d = [
             38.032_135f32,
             3.318_774,
@@ -453,7 +460,9 @@ mod tests {
             38.653_07,
             19.365_04,
         ];
-        assert_eq!(percentile_f32(&d, 33.0), 20.246_475);
+        assert_eq!(bits(percentile_f32(&d, 33.0)), 1_101_134_023);
+        assert_eq!(bits(percentile_f32(&d, 10.0)), 1_092_136_370);
+        assert_eq!(bits(percentile_f32(&d, 99.9)), 1_111_453_753);
     }
 
     /// Values from numpy 2.5.4 `np.arange`; in the hex-row case 30 of 33 differ from `start + i·step`.

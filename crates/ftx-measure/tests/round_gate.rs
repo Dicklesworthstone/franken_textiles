@@ -144,3 +144,29 @@ fn a_failed_check_keeps_what_was_gathered() {
         "full_trousers_gathered: readiness could not be computed (cuff_level must be knee, calf or ankle)"
     );
 }
+
+/// Style values as the reference reads them: `nappy` by Python truthiness, a present non-string
+/// `cuff_level` passed on to the gate (which refuses it) rather than replaced by the default.
+#[test]
+fn style_values_are_read_as_the_reference_reads_them() {
+    let m = measurements();
+    let mut p = pattern(&["pant_front", "pant_back", "cuff"]);
+    p["meta"] = json!({"style":{"nappy":"yes"}});
+    let r = round_readiness(&p, &m, TODAY);
+    assert!(
+        r["blocking"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("seat_over_nappy"))
+    );
+    p["meta"] = json!({"style":{"cuff_level":null}});
+    let r = round_readiness(&p, &m, TODAY);
+    assert_eq!(r["status"], "NOT_CHECKED");
+    assert_eq!(
+        r["note"],
+        "full_trousers_gathered: readiness could not be computed (cuff_level must be knee, calf or ankle)"
+    );
+    p["meta"] = json!({"style":"not a mapping"});
+    let r = round_readiness(&p, &m, TODAY);
+    assert_eq!(r["checks"][0]["garment"], "full_trousers_gathered"); // treated as no style: calf
+}

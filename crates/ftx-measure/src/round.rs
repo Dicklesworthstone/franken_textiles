@@ -24,7 +24,22 @@ pub fn garment_checks(pattern: &Value) -> Vec<(&'static str, ReadinessOptions<'_
         .filter_map(|p| p["role"].as_str())
         .collect();
     let has = |role| roles.contains(&role);
-    let style = &pattern["meta"]["style"];
+    // `style if isinstance(style, dict) else {}`; `style.get("cuff_level", "calf")` passes a present
+    // non-string on (the gate then refuses it); `True if style.get("nappy") else None` is Python truthiness
+    let style = pattern["meta"]["style"].as_object();
+    let cuff_level = match style.and_then(|s| s.get("cuff_level")) {
+        None => "calf",
+        Some(Value::String(s)) => s.as_str(),
+        Some(_) => "",
+    };
+    let nappy = style.and_then(|s| s.get("nappy")).is_some_and(|v| match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|x| x != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    });
     let elastic_waist = has("waistband");
     let mut out = Vec::new();
     if has("bodice_front") || has("bodice_back") {
@@ -45,8 +60,8 @@ pub fn garment_checks(pattern: &Value) -> Vec<(&'static str, ReadinessOptions<'_
                 "full_trousers_gathered",
                 ReadinessOptions {
                     elastic_waist,
-                    cuff_level: style["cuff_level"].as_str().unwrap_or("calf"),
-                    nappies: (style["nappy"] == true).then_some(true),
+                    cuff_level,
+                    nappies: nappy.then_some(true),
                     ..Default::default()
                 },
             )
