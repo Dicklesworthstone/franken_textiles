@@ -17,6 +17,7 @@ mod records;
 mod round;
 mod section;
 pub mod silhouette;
+pub mod still;
 pub mod triangulate;
 pub mod video;
 

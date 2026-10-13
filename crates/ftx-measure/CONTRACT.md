@@ -141,3 +141,14 @@ the existing multistart, rank and held-out rules. Binary-mask sampling retains h
 boundaries and refuses clipping, soft evidence and excess components. No full-mask, segmentation
 accuracy, covariance or real-wearer fit claim. See `BODY_FIT.md` and
 `docs/multi-frame-body-fit.md` for exact input conventions, limits and failure behavior.
+
+**Still-window candidates (FTX-20).** `still::assess_still_window` checks one 4–64-frame,
+one-stream interval with calibrated cameras in a common stationary-reference frame and the same
+named sparse landmarks in every frame. At least three fit landmarks are required. Each landmark is
+triangulated independently in the early and late temporal halves and over the complete interval;
+each subset needs at least 3-degree parallax and at most 3 px reprojection error. The early/late
+metric displacement must stay within a caller-supplied positive threshold (at most 100 mm). Held-out
+landmarks never rescue fit evidence and independently reject the candidate. Weak parallax is
+UNOBSERVABLE, not evidence of stillness. No outlier is trimmed. A `STILL_CANDIDATE` remains only a
+filter for explicit human review: it does not create `triangulate::Capture::StillWindow`, prove that
+untracked anatomy was still, or establish camera/scale accuracy. See `docs/still-window.md`.
