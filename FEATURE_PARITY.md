@@ -54,11 +54,12 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Size-chart priors and the reference wearer | 02 Part A | present | oracle `measure/priors` (`tools/oracle/capture_measurements.py`; `crates/ftx-conformance/tests/measurements.rs`): priors at 7 statures × 3 ages × 3 sexes, the CDC table and its inverse, 5 reference wearers, the out-of-chart refusals: all 115 cases equal (numbers within 1e-9) |
 | Fusion and flags | 02 Part A | present | `measure/fusion`: synthetic documents with repeats, a z > 2 disagreement, a z > 3 conflict, photo, scan and garment-derived sources, an alias in degrees, an unnormalizable definition, statures beyond the charts, priors on and off, and the schema checks: all 17 equal but the wearer-stature exception |
 | Readiness gate and re-measure requests | 02 Part A | present | `measure/readiness`: 284 cases (every garment kind and option on five documents, both sides of the 42-day staleness line, refusals): all equal but the wearer-stature exception (38 cases) |
-| ChArUco sheet generation and sidecar | 02 Part A | missing | |
+| ChArUco sheet generation and sidecar | 02 A.9 | partial | Native `ftx measure calib-sheet`: Letter/A4, DICT_4X4_50, 300-DPI PNG, lossless one-bit PDF, metric/inch bars, test squares and `fabric-calib-sheet/1`. Eight `ftx-cli` calibration tests cover D.7 coordinates, dictionary, sampling, PNG/PDF and protected output. Independent OpenCV 4.13/Pillow checks: default board pixels equal; all 35/42 corners and 24/28 markers detected; PDF pixels equal PNG. Other dictionaries and browser control not implemented; full FTX-19 acceptance unclaimed. Usage/boundaries: `docs/calibration-and-click-uncertainty.md` |
 | Photo scale from the ChArUco sheet | 02 Part A | missing | |
 | Plain Letter/A4 sheet detection and photo scale | 02 Part A | missing | |
 | measure-photo with bootstrap σ | 02 Part A | missing | |
 | Photogrammetry of a moving child (frames, cameras, still windows, triangulation, factor graph) | plan §10.2 | missing | |
+| Conditional click-noise precision for triangulated landmarks | plan §10.2 | partial | `ftx_measure::triangulate::uncertainty` and `ftx measure triangulate --click-noise`: full covariance through the existing pixel-refined estimator, held-out isolation, declared evidence, unavailable-not-zero failures. Ten library and four CLI regressions include analytic stereo, cross covariance, scaling, distortion and numerical boundaries. Fixed cameras/scale/capture; calibration, motion and systematic uncertainty excluded. This does not establish the full photogrammetry gate or real-body accuracy |
 | Multi-frame body fit | plan §10.2 | missing | |
 
 ## Draping (`ftx-drape`, spec 04 §1–9, plan §11)
@@ -135,6 +136,8 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Behaviour | Reference | Port | Reason |
 |---|---|---|---|
 | Bisection with no root | returns the upper bound silently | typed refusal | Fail closed |
+| Calibration sheets with very small boards | A.9's upper-size checks permit lower marks to overlap the fixed vertical ruler bars | refuse board heights below 108 mm and test squares outside the printable area | Avoid an ambiguous physical reference; default Letter/A4 geometry is unchanged (`calibration::tests::invalid_layouts_and_unknown_dictionaries_are_refused`) |
+| Calibration output directory reuse | writes the named files into the output directory | exclusively create a new directory; finish rendering before I/O and write the sidecar last | Never replace existing references or reports (`calibration::tests::cli_publishes_all_three_files_and_never_overwrites_a_previous_sheet`) |
 | Malformed inputs that crash the reference | exception | structure error with a message | Fail closed (piece without id, `cut: null`, wrong Bézier control count, seam ref without `/`, zero-length side with notches; `ftx-pattern` CONTRACT) |
 | `cut.qty` 2.7 or `"2"` | truncated or parsed to 2 | structure error | Only the integers 1 and 2 mean anything |
 | Rewritten documents | insertion order, `"curve": null` kept | canonical key order, null curve dropped | Semantic equality is the bar (spec 01 §14.6) |
