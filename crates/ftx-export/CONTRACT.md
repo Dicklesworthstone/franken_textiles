@@ -2,9 +2,9 @@
 
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
 number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the
-master SVG (§7.1), the PDFs (§7.2–7.6), HPGL (§7.9), the cutter files (§7.10), the manifest's piece reference
-(§7.13) and their acceptance checks (§8). The DXFs, GarmentCode, DST, the manifest file and the remaining checks
-follow (FTX-17).
+master SVG (§7.1), the PDFs (§7.2–7.6), the DXFs (§7.7–7.8), HPGL (§7.9), the cutter files (§7.10), the
+manifest's piece reference (§7.13) and their acceptance checks (§8). GarmentCode, DST, the manifest file and
+the remaining checks follow (FTX-17).
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
@@ -105,6 +105,20 @@ anchor, the same strokes) and union cut lines (within 0.05 mm); cutter titles an
 0.05 mm as regions (where a notch triangle's base runs along a curved cut line GEOS, which grows the cut by 1e-4 mm
 first, keeps the micrometre sliver between them as a hole); the manifest's `pieces`, `hpgl` and `cutter` entries
 equal (cut perimeters within 0.05 mm).
+
+**DXF** (`dxf.rs`, §7.7–7.8). Written here, not from a template. ASTM / AAMA (R12): header (`$ACADVER AC1009`,
+`$HANDLING 0`, extents computed, quirk Q1), LTYPE, LAYER (all colour 7), STYLE, APPID tables; one block per piece
+(its primary instance unfolded, text size 10) with the cut and sew lines (2 dp, ASTM copies on 84 and 87),
+turn and curve points (15°, 10 mm), notches as POINTs (depth, width, angle; ASTM typed layers 80–83) and LINEs,
+grainline, internal lines, fold lines, decor, drills and piece text (ASTM notes on layer 15); style text and
+INSERTs in modelspace; dates from `created`. Flat (R2000): handles, owners, symbol tables, block records,
+`*Model_Space`/`*Paper_Space`, a root dictionary, `$INSUNITS 4`; every instance laid out grain vertical, y up,
+as LWPOLYLINEs and CIRCLEs on CUT, DRAW, NOTCH, DRILL, GRAIN and TEXT (single-stroke text). Both open in ezdxf 1.4.4
+with a clean audit. Against the reference's files (`targets.json`, clocks and random ids fixed): the same blocks,
+and per block and layer the same entities within the 2 dp rounding (union cut lines and their turn points within
+0.05 mm; piece texts that hang off the main label compared by string); the same modelspace; flat files entity
+for entity (main-label strokes at ftx's anchor). `check_dxf` and `check_flat_dxf` (a small DXF reader) give
+exactly the reference checker's 268 items on its files and pass on ftx's.
 
 **Checks** (`checks.rs`, `xml.rs`, §8). `check_svg`: `svg.no_transform`, `svg.mm_units_viewbox`,
 `svg.piece_subgroups` (master) or `cutter.single_closed_path` (cutter), with the reference's details, reading

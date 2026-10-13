@@ -85,8 +85,8 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 | Tiled Letter and A4 PDFs | 03 §7 | present | `pdf.rs` (hand-written writer, FlateDecode via `miniz_oxide`, dates from `created`): same objects and content as the reference's files but for union cut lines (0.05 mm) and main-label lines (`tests/export_pdfs.rs`) |
 | Copy-shop A0 and 36 × 48 in | 03 §7 | present | `pdf.rs`: orientation with fewer sheets, band with squares and scale bars; as above |
 | Projector light and dark | 03 §7 | present | `pdf.rs`: grain vertical, 12 mm text, calibration grid layer off, the 200 in limit refused; as above |
-| DXF-ASTM and DXF-AAMA (R12) | 03 §7 | missing | |
-| Flat DXF (R2000, stroke font) | 03 §7 | missing | |
+| DXF-ASTM and DXF-AAMA (R12) | 03 §7 | present | `dxf.rs`, own writer (ezdxf-clean): same blocks and entities as the reference's (union cut lines 0.05 mm); `check_dxf` reproduces the reference checker (`tests/export_dxf.rs`) |
+| Flat DXF (R2000, stroke font) | 03 §7 | present | `dxf.rs`: handles, tables, block records, root dictionary, mm; entity for entity as the reference's |
 | HPGL | 03 §7 | present | `hpgl.rs`: commands, pens and polylines as the reference's (main-label strokes and union cut lines aside); `check_hpgl` reproduces the reference checker (`tests/export_targets.rs`) |
 | Cutter SVGs and report | 03 §7 | present | `cutter.rs`: outlines within 0.05 mm as regions, the same report and manifest entry |
 | GarmentCode JSON | 03 §7 | missing | |

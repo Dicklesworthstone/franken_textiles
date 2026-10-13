@@ -759,3 +759,363 @@ pub fn check_hpgl(text: &str, file: &str, master: Option<&Value>, hpgl: &Value) 
     ));
     out
 }
+
+/// A DXF entity: its type, its group pairs and, for a POLYLINE or LWPOLYLINE, its points and closed flag.
+#[derive(Clone, Debug, Default)]
+struct DxfEntity {
+    kind: String,
+    pairs: Vec<(i32, String)>,
+    points: Vec<(f64, f64)>,
+    closed: bool,
+}
+
+impl DxfEntity {
+    fn get(&self, code: i32) -> Option<&str> {
+        self.pairs
+            .iter()
+            .find(|(c, _)| *c == code)
+            .map(|(_, v)| v.as_str())
+    }
+    fn layer(&self) -> &str {
+        self.get(8).unwrap_or("")
+    }
+}
+
+/// What the checks need of a DXF: its version, layer names, blocks with their entities and the modelspace
+/// entities.
+#[derive(Clone, Debug, Default)]
+struct DxfDoc {
+    version: String,
+    layers: Vec<String>,
+    blocks: Vec<(String, Vec<DxfEntity>)>,
+    modelspace: Vec<DxfEntity>,
+}
+
+fn read_dxf(text: &str) -> DxfDoc {
+    let lines: Vec<&str> = text.lines().collect();
+    let pairs: Vec<(i32, &str)> = lines
+        .chunks(2)
+        .filter(|c| c.len() == 2)
+        .map(|c| {
+            (
+                c[0].trim().parse().unwrap_or(-1),
+                c[1].trim_end_matches('\r'),
+            )
+        })
+        .collect();
+    let mut doc = DxfDoc::default();
+    let (mut i, n) = (0, pairs.len());
+    let mut section = String::new();
+    let mut entities: Vec<DxfEntity> = Vec::new();
+    while i < n {
+        let (code, value) = pairs[i];
+        if code == 0 && value == "SECTION" {
+            section = pairs.get(i + 1).map_or(String::new(), |p| p.1.to_string());
+            i += 2;
+            continue;
+        }
+        if code == 0 && value == "ENDSEC" {
+            if section == "ENTITIES" {
+                doc.modelspace = std::mem::take(&mut entities);
+            }
+            section.clear();
+            i += 1;
+            continue;
+        }
+        if code == 9 && value == "$ACADVER" && section == "HEADER" {
+            doc.version = pairs
+                .get(i + 1)
+                .map_or(String::new(), |p| p.1.trim().to_string());
+            i += 2;
+            continue;
+        }
+        if code == 0 {
+            // an entity (or table entry, block marker): gather its pairs
+            let mut e = DxfEntity {
+                kind: value.to_string(),
+                ..DxfEntity::default()
+            };
+            i += 1;
+            while i < n && pairs[i].0 != 0 {
+                e.pairs.push((pairs[i].0, pairs[i].1.trim().to_string()));
+                i += 1;
+            }
+            match (section.as_str(), e.kind.as_str()) {
+                ("TABLES", "LAYER") => {
+                    if let Some(name) = e.get(2) {
+                        doc.layers.push(name.to_string());
+                    }
+                }
+                ("BLOCKS", "BLOCK") => doc
+                    .blocks
+                    .push((e.get(2).unwrap_or("").to_string(), Vec::new())),
+                ("BLOCKS", "ENDBLK") => {}
+                ("BLOCKS" | "ENTITIES", "VERTEX") => {
+                    let target = if section == "BLOCKS" {
+                        doc.blocks.last_mut().map(|b| &mut b.1)
+                    } else {
+                        Some(&mut entities)
+                    };
+                    if let Some(last) = target.and_then(|v| v.last_mut()) {
+                        let x = e.get(10).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                        let y = e.get(20).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                        last.points.push((x, y));
+                    }
+                }
+                ("BLOCKS" | "ENTITIES", "SEQEND") => {}
+                ("BLOCKS" | "ENTITIES", _) => {
+                    let flags: i64 = e.get(70).and_then(|v| v.parse().ok()).unwrap_or(0);
+                    e.closed = flags & 1 == 1;
+                    if e.kind == "LWPOLYLINE" {
+                        let xs: Vec<f64> = e
+                            .pairs
+                            .iter()
+                            .filter(|(c, _)| *c == 10)
+                            .filter_map(|(_, v)| v.parse().ok())
+                            .collect();
+                        let ys: Vec<f64> = e
+                            .pairs
+                            .iter()
+                            .filter(|(c, _)| *c == 20)
+                            .filter_map(|(_, v)| v.parse().ok())
+                            .collect();
+                        e.points = xs.into_iter().zip(ys).collect();
+                    }
+                    if section == "BLOCKS" {
+                        if let Some(b) = doc.blocks.last_mut() {
+                            b.1.push(e);
+                        }
+                    } else {
+                        entities.push(e);
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        i += 1;
+    }
+    doc
+}
+
+fn area_perimeter(pts: &[(f64, f64)]) -> (f64, f64) {
+    let ring: Vec<ftx_core::Vec2> = pts
+        .iter()
+        .map(|&(x, y)| ftx_core::Vec2::new(x, y))
+        .collect();
+    let n = ring.len();
+    let lengths: Vec<f64> = (0..n)
+        .map(|i| {
+            let d = ring[(i + 1) % n] - ring[i];
+            (d.x * d.x + d.y * d.y).sqrt()
+        })
+        .collect();
+    (
+        ftx_core::polyline::signed_area(&ring).abs(),
+        ftx_core::np::pairwise_sum(&lengths),
+    )
+}
+
+/// The checks of an ASTM or AAMA R12 DXF (spec 03 §8.2): ASCII, no LWPOLYLINE, version AC1009, one block per
+/// manifest piece with its INSERT, the style text, and per block its name, closed layer-1 cut line, single
+/// grainline, piece text, and cut and sew line perimeters and areas against the manifest's references (`sew_ref`
+/// recomputed from the pattern replaces the manifest's sew values when given).
+#[must_use]
+pub fn check_dxf(
+    raw: &[u8],
+    file: &str,
+    reference: &Value,
+    sew_ref: Option<&Value>,
+) -> Vec<CheckItem> {
+    let mut out = vec![
+        CheckItem::new("dxf.ascii", file, raw.iter().all(|&b| b < 128), ""),
+        CheckItem::new(
+            "dxf.no_lwpolyline",
+            file,
+            find(raw, b"LWPOLYLINE", 0).is_none(),
+            "",
+        ),
+    ];
+    let text: String = raw.iter().map(|&b| char::from(b)).collect();
+    let doc = read_dxf(&text);
+    out.push(CheckItem::new(
+        "dxf.r12",
+        file,
+        doc.version == "AC1009",
+        doc.version.clone(),
+    ));
+    let blocks: Vec<&(String, Vec<DxfEntity>)> = doc
+        .blocks
+        .iter()
+        .filter(|(n, _)| !(n.starts_with('*') || n.starts_with('$')))
+        .collect();
+    let empty = serde_json::Map::new();
+    let refs = reference.as_object().unwrap_or(&empty);
+    out.push(CheckItem::new(
+        "dxf.block_count",
+        file,
+        blocks.len() == refs.len(),
+        format!("{} blocks vs {} pieces", blocks.len(), refs.len()),
+    ));
+    let mut inserts: Vec<String> = doc
+        .modelspace
+        .iter()
+        .filter(|e| e.kind == "INSERT")
+        .map(|e| e.get(2).unwrap_or("").to_string())
+        .collect();
+    let n_inserts = inserts.len();
+    inserts.sort();
+    let mut bnames: Vec<String> = blocks.iter().map(|(n, _)| n.clone()).collect();
+    bnames.sort();
+    out.push(CheckItem::new(
+        "dxf.inserts",
+        file,
+        inserts == bnames,
+        format!("{n_inserts} INSERTs"),
+    ));
+    let texts: Vec<&str> = doc
+        .modelspace
+        .iter()
+        .filter(|e| e.kind == "TEXT")
+        .filter_map(|e| e.get(1))
+        .collect();
+    out.push(CheckItem::new(
+        "dxf.style_text",
+        file,
+        texts.contains(&"Units:METRIC") && texts.iter().any(|t| t.starts_with("Style Name:")),
+        "",
+    ));
+    for (name, ents) in blocks {
+        out.push(CheckItem::new(
+            "dxf.block_name",
+            file,
+            name.chars().count() <= 20 && name.is_ascii(),
+            name.clone(),
+        ));
+        let l1: Vec<&DxfEntity> = ents
+            .iter()
+            .filter(|e| e.kind == "POLYLINE" && e.layer() == "1")
+            .collect();
+        out.push(CheckItem::new(
+            "dxf.layer1_closed",
+            file,
+            !l1.is_empty() && l1.iter().all(|e| e.closed),
+            format!("{name}: {} layer-1 polylines", l1.len()),
+        ));
+        let l7 = ents
+            .iter()
+            .filter(|e| e.kind == "LINE" && e.layer() == "7")
+            .count();
+        out.push(CheckItem::new(
+            "dxf.one_grain_line",
+            file,
+            l7 == 1,
+            format!("{name}: {l7}"),
+        ));
+        let bt: Vec<&str> = ents
+            .iter()
+            .filter(|e| e.kind == "TEXT")
+            .filter_map(|e| e.get(1))
+            .collect();
+        let pn: Vec<&&str> = bt.iter().filter(|t| t.starts_with("Piece Name:")).collect();
+        out.push(CheckItem::new(
+            "dxf.piece_text",
+            file,
+            pn.len() == 1 && pn[0][11..].chars().count() <= 20 && bt.iter().all(|t| t.is_ascii()),
+            name.clone(),
+        ));
+        let Some(r) = refs.get(name).filter(|_| !l1.is_empty()) else {
+            out.push(CheckItem::new(
+                "dxf.reference",
+                file,
+                false,
+                format!("{name}: no reference"),
+            ));
+            continue;
+        };
+        let cut = l1
+            .iter()
+            .map(|e| &e.points)
+            .max_by(|a, b| area_perimeter(a).0.total_cmp(&area_perimeter(b).0))
+            .cloned()
+            .unwrap_or_default();
+        let (a, p) = area_perimeter(&cut);
+        let f = |v: &Value| v.as_f64().unwrap_or(f64::NAN);
+        let (rp, ra) = (f(&r["cut_perimeter"]), f(&r["cut_area"]));
+        out.push(CheckItem::new(
+            "dxf.cut_perimeter",
+            file,
+            (p - rp).abs() <= 0.1,
+            format!("{name}: {p:.3} vs {rp:.3}"),
+        ));
+        out.push(CheckItem::new(
+            "dxf.cut_area",
+            file,
+            (a - ra).abs() <= 0.1 * rp,
+            format!("{name}: {a:.1} vs {ra:.1} mm2"),
+        ));
+        let sref = sew_ref.and_then(|s| s.get(name)).unwrap_or(r);
+        match ents
+            .iter()
+            .find(|e| e.kind == "POLYLINE" && e.layer() == "14")
+        {
+            Some(l14) => {
+                let (a, p) = area_perimeter(&l14.points);
+                let (sp, sa) = (f(&sref["sew_perimeter"]), f(&sref["sew_area"]));
+                out.push(CheckItem::new(
+                    "dxf.sew_perimeter",
+                    file,
+                    (p - sp).abs() <= 0.1,
+                    format!("{name}: {p:.3} vs model {sp:.3}"),
+                ));
+                out.push(CheckItem::new(
+                    "dxf.sew_area",
+                    file,
+                    (a - sa).abs() <= 0.1 * sp,
+                    format!("{name}: {a:.1} vs model {sa:.1}"),
+                ));
+            }
+            None => out.push(CheckItem::new(
+                "dxf.sew_line",
+                file,
+                false,
+                format!("{name}: no layer-14 sew line"),
+            )),
+        }
+    }
+    out
+}
+
+/// The checks of the flat DXF: its layers, closed CUT polylines and no TEXT or MTEXT entities.
+#[must_use]
+pub fn check_flat_dxf(text: &str, file: &str) -> Vec<CheckItem> {
+    let doc = read_dxf(text);
+    let need = ["CUT", "DRAW", "NOTCH", "DRILL", "GRAIN", "TEXT"];
+    let cuts: Vec<&DxfEntity> = doc
+        .modelspace
+        .iter()
+        .filter(|e| e.kind == "LWPOLYLINE" && e.layer() == "CUT")
+        .collect();
+    vec![
+        CheckItem::new(
+            "flatdxf.layers",
+            file,
+            need.iter().all(|n| doc.layers.iter().any(|l| l == n)),
+            "",
+        ),
+        CheckItem::new(
+            "flatdxf.cut_closed",
+            file,
+            !cuts.is_empty() && cuts.iter().any(|e| e.closed),
+            format!("{} CUT polylines", cuts.len()),
+        ),
+        CheckItem::new(
+            "flatdxf.no_text_entities",
+            file,
+            !doc.modelspace
+                .iter()
+                .any(|e| e.kind == "TEXT" || e.kind == "MTEXT"),
+            "",
+        ),
+    ]
+}

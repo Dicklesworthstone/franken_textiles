@@ -14,8 +14,9 @@
                            03 §7.2-7.6) as written, their manifest entries and the reference checker's items, for
                            TESTBODICE, ROBUST (also at --layout-width 300 with and without --keep-blank-pages),
                            TESTBODICE at --projector-width 1100 and the 92 cm bolero and trousers
-    OUT_DIR/targets.json   HPGL (also rotated and mirrored), the cutter SVGs and report, the manifest and the
-                           reference checker's HPGL, cutter and SVG items, for TESTBODICE, ROBUST, the 92 cm fez,
+    OUT_DIR/targets.json   HPGL (also rotated and mirrored), the cutter SVGs and report, the ASTM, AAMA and
+                           flat DXFs (clocks and random ids fixed), the manifest and the reference checker's HPGL,
+                           cutter, SVG and DXF items, for TESTBODICE, ROBUST, the 92 cm fez,
                            bolero and trousers
     OUT_DIR/outlines.json  seam-allowance cut outlines (ring and method), sew rings and edge breaks of every
                            piece as drafted and of every instance, for the spec's fixture patterns (TESTBODICE,
@@ -42,6 +43,16 @@ import numpy as np
 SCHEMA = "ftx-oracle/1"
 FILES = ("export.py", "pattern_model.py", "tests/test_export.py")
 DRAFTS = Path(__file__).resolve().parents[2] / "tests/fixtures/oracle/pattern/drafts.json"
+
+
+def stable_dxf(text: str) -> str:
+    """A DXF the reference wrote with the wall clock and random ids made reproducible: the creation date and
+    time texts, the Julian dates, GUIDs and the library's ISO timestamps fixed."""
+    text = re.sub(r"Creation Date:\d\d-\d\d-\d{4}", "Creation Date:11-10-2026", text)
+    text = re.sub(r"Creation Time:\d\d-\d\d", "Creation Time:12-00", text)
+    text = re.sub(r"(\$TD\w+\n\s*40\n)[-0-9.e+]+", r"\g<1>0.0", text)
+    text = re.sub(r"\{[0-9A-Fa-f-]{36}\}", "{00000000-0000-0000-0000-000000000000}", text)
+    return re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?([+-]\d\d:\d\d)?", "2026-10-11T12:00:00", text)
 
 
 def ring_list(r) -> list:
@@ -271,13 +282,17 @@ def main(argv=None) -> int:
             X.export_svg(ctx)
             hp = X.export_hpgl(ctx)
             cut = X.export_cutter(ctx)
+            dxfs = [X.export_dxf_astm(ctx, "astm"), X.export_dxf_astm(ctx, "aama"), X.export_flat_dxf(ctx)]
             mpath = ctx.save_manifest()
             rep = X.check_dir(Path(tmp))
             out = {"hpgl": hp.read_text(),
                    "cutter": {f"{p.parent.name}/{p.name}": p.read_text() for p in cut},
                    "cutter_report": (Path(tmp) / f"{ctx.style}_cutter" / "cutter_report.json").read_text(),
                    "manifest": mpath.read_text(),
-                   "checks": [it for it in rep.items if it["check"].split(".")[0] in ("hpgl", "cutter", "svg")]}
+                   # the DXFs do not depend on the HPGL options
+                   "dxf": {p.name: stable_dxf(p.read_text()) for p in dxfs} if not opts and cid != "fez920" else {},
+                   "checks": [it for it in rep.items
+                              if it["check"].split(".")[0] in ("hpgl", "cutter", "svg", "dxf", "flatdxf")]}
         tcases.append({"id": cid, "input": {"pattern": doc, "options": opts, "created": "2026-10-11T12:00"},
                        "output": out})
     path = args.out_dir / "targets.json"
