@@ -79,7 +79,7 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 |---|---|---|---|
 | Text and number helpers (ascii_text, safe_name, formatting) | 03 §2 | present | `ftx-export` `text.rs`: fnum, ascii_text (NFKD from a table generated with the reference's Python), safe_name, text_width, wrap, stroke font, column letters, page lists; 524 oracle values byte-exact (`tests/export_helpers.rs`) |
 | Seam-allowance cut outline | 03 §4 | present | `outline.rs`, `union.rs` (own overlay in place of GEOS): 102 outlines of the spec's fixtures and the drafted garments, methods equal, mitre within 1.2e-13 mm, union within 4.9e-6 mm Hausdorff (`tests/export_outlines.rs`) |
-| Piece geometry (notches, grain, fold, internal, drills, decor, labels) | 03 §5 | missing | |
+| Piece geometry (notches, grain, fold, internal, drills, decor, labels) | 03 §5 | present | `geom.rs`, `pole.rs`: 376 geometries, 38,422 numbers within 1e-9 mm incl. default grains (GEOS's inscribed circle: exact for convex triangles and quadrilaterals, else its branch and bound); main labels where the largest block fits (all fit; never > 5 % smaller unless the reference's overlaps) (`tests/export_geoms.rs`) |
 | Layouts | 03 §6 | missing | |
 | Master SVG | 03 §7 | missing | |
 | Tiled Letter and A4 PDFs | 03 §7 | missing | |

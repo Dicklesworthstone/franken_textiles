@@ -3,6 +3,9 @@
 
     OUT_DIR/helpers.json   text and number helpers: fnum, ascii_text, safe_name, text_width, wrap,
                            stroke_text, column letters, page lists
+    OUT_DIR/geoms.json     piece geometry (spec 03 §5: notches, grain, fold marks, internal lines, drills, decor,
+                           labels, label texts, grain marks and rotation) of every piece as drafted and every
+                           instance, at text sizes 6 and 10
     OUT_DIR/outlines.json  seam-allowance cut outlines (ring and method), sew rings and edge breaks of every
                            piece as drafted and of every instance, for the spec's fixture patterns (TESTBODICE,
                            ROBUST, the single pieces) and the drafted garments of tests/fixtures/oracle/pattern
@@ -146,6 +149,48 @@ def main(argv=None) -> int:
                                 "cases": cases}, separators=(",", ":"), ensure_ascii=False) + "\n")
     methods = [o["method"] for c in cases for o in [*c["output"]["pieces"].values(), *c["output"]["instances"].values()]]
     print(f"wrote {len(cases)} cases ({methods.count('mitre')} mitre, {methods.count('union')} union) to {path}")
+
+    # ------------------------------------------------------------------ piece geometry
+    def geom_json(g):
+        return {
+            "pid": g.pid, "iid": g.iid, "name": g.name,
+            "meta": {k: (list(v) if isinstance(v, (list, tuple)) else v) for k, v in g.meta.items()},
+            "sew_breaks": list(g.sew_breaks),
+            "notches": [{"id": n.id, "type": n.type, "base": ring_list([n.base])[0], "inward": ring_list([n.inward])[0],
+                         "tangent": ring_list([n.tangent])[0], "depth": n.depth, "width": n.width,
+                         "marks": [ring_list(m) for m in n.marks], "sew_point": ring_list([n.sew_point])[0]}
+                        for n in g.notches],
+            "grain": None if g.grain is None else ring_list(g.grain), "grain_default": g.grain_default,
+            "fold_lines": [{"pts": ring_list(q), "style": st} for q, st in g.fold_lines],
+            "internal_draw": [{"pts": ring_list(q), "closed": c} for q, c in g.internal_draw],
+            "internal_cut": [{"pts": ring_list(q), "closed": c} for q, c in g.internal_cut],
+            "drills": [{"p": ring_list([q])[0], "d": d} for q, d in g.drills],
+            "labels": [{"p": ring_list([lb.p])[0], "lines": [list(x) for x in lb.lines], "size": lb.size,
+                        "kind": lb.kind} for lb in g.labels],
+            "decor": [{"kind": d["kind"], "pts": ring_list(d["pts"]), "width": d["width"], "closed": d["closed"]}
+                      for d in g.decor],
+            "grain_rotation": X.grain_vertical_rotation(g),
+            "grain_marks": [ring_list(m) for m in X.grain_marks(g)] if g.grain is not None else [],
+            "label_texts": [[[x, y, t, size, bold] for x, y, t, size, bold in X.label_texts(lb, yd, 0.0, 1.0)]
+                            for lb in g.labels for yd in (True, False)],
+        }
+
+    gcases = []
+    for cid, doc, sa, limit in patterns:
+        if cid == "testbodice_sa15_mitre2":
+            continue
+        doc = json.loads(json.dumps(doc))
+        pat = pm.Pattern(copy.deepcopy(doc))
+        out = {}
+        for ts in (6.0, 10.0):
+            out[f"pieces@{ts:g}"] = {p["id"]: geom_json(X.build_geom(pat, p, sa, limit, ts)) for p in pat.data["pieces"]}
+            out[f"instances@{ts:g}"] = {iid: geom_json(X.build_geom(pat, inst, sa, limit, ts))
+                                        for iid, inst in pat.instances.items()}
+        gcases.append({"id": cid, "input": {"pattern": doc, "sa": sa, "mitre_limit": limit}, "output": out})
+    path = args.out_dir / "geoms.json"
+    path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "export", "fixture": "geoms", "meta": meta,
+                                "cases": gcases}, separators=(",", ":"), ensure_ascii=False) + "\n")
+    print(f"wrote {len(gcases)} geometry cases to {path}")
     return 0
 
 
