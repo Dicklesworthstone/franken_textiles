@@ -733,7 +733,7 @@ fn emit(command: &str, json_out: bool, outcome: Result<(Value, i32, String), Ref
         println!("{envelope}");
     } else if refused {
         eprintln!("{text}");
-    } else {
+    } else if !text.is_empty() {
         println!("{text}");
     }
     ExitCode::from(u8::try_from(code).unwrap_or(3))

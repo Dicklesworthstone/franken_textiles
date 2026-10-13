@@ -393,6 +393,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             }
         }
         text
+    } else if output.is_some() {
+        // the document goes to the file, as measurements.py's does ("wrote FILE" on stderr)
+        String::new()
     } else if command == "catalogue" && option(args, "garment").is_none() {
         NAMES
             .iter()
