@@ -17,16 +17,16 @@ const HEADER: f64 = 76.0;
 const MAX_POINTS: usize = 1_000_000;
 // Spec 04 §9.4's seam families, sorted across every seam, including non-simulated pieces.
 const PALETTE: [&str; 10] = [
-    "rgb(95% 75% 10%)",
-    "rgb(10% 80% 90%)",
-    "rgb(95% 30% 80%)",
-    "rgb(30% 95% 30%)",
-    "rgb(100% 50% 10%)",
-    "rgb(60% 50% 100%)",
-    "rgb(0% 50% 45%)",
-    "rgb(90% 20% 20%)",
-    "rgb(50% 30% 10%)",
-    "rgb(15% 30% 90%)",
+    "rgb(95%,75%,10%)",
+    "rgb(10%,80%,90%)",
+    "rgb(95%,30%,80%)",
+    "rgb(30%,95%,30%)",
+    "rgb(100%,50%,10%)",
+    "rgb(60%,50%,100%)",
+    "rgb(0%,50%,45%)",
+    "rgb(90%,20%,20%)",
+    "rgb(50%,30%,10%)",
+    "rgb(15%,30%,90%)",
 ];
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -282,12 +282,12 @@ pub fn diagnostic_svg(pattern: &Pattern, report: &Report, dark: bool) -> Result<
         let q = p.outline.iter().fold(Vec2::ZERO, |sum, &v| {
             sum + p.mapped(v) / p.outline.len() as f64
         });
+        // Two layers work in SVG 1.1 renderers too: an unsupported paint-order property would
+        // otherwise paint the halo over the glyph and make the instance label disappear.
+        let (x, y, label) = (fnum(q.x, 3), fnum(q.y, 3), xml_escape(&p.instance.id));
         let _ = writeln!(
             svg,
-            "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" font-size=\"16\" paint-order=\"stroke\" stroke=\"{background}\" stroke-width=\"4\">{}</text>",
-            fnum(q.x, 3),
-            fnum(q.y, 3),
-            xml_escape(&p.instance.id)
+            "<text x=\"{x}\" y=\"{y}\" text-anchor=\"middle\" font-size=\"16\" aria-hidden=\"true\" fill=\"{background}\" stroke=\"{background}\" stroke-width=\"4\">{label}</text>\n<text x=\"{x}\" y=\"{y}\" text-anchor=\"middle\" font-size=\"16\" fill=\"{foreground}\">{label}</text>"
         );
     }
     svg.push_str("</g>\n</svg>\n");

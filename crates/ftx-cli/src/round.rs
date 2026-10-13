@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 
 use super::{Args, bad_input, export, known_options, make_dir, read_json};
 
+mod report;
+
 pub(super) const BOOLEAN_OPTIONS: &[&str] = &["export", "update-measurements", "sim"];
 
 const SIM_OPTIONS: &[&str] = &[
@@ -405,6 +407,10 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     write_json(&rd.join("readiness.json"), &ready)?;
     let val = serde_json::to_value(&validation).map_err(|e| bad_input(e.to_string()))?;
     write_json(&rd.join("validation.json"), &val)?;
+    for (file, dark) in [("preview.svg", false), ("preview_dark.svg", true)] {
+        let svg = ftx_export::diagnostic_svg(&pattern, &validation, dark)?;
+        write_new(&rd.join(file), svg.as_bytes())?;
+    }
     let (sim, sim_basis, viewer, budget_stop) = if args.options.contains_key("sim") {
         simulate(args, &rd, n, &raw, validation.status(), unscaled)?
     } else {
@@ -460,9 +466,11 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let basis = json!({"flat":validation.status(), "sim":sim_basis, "exports":export_basis, "measurements":ready["status"]});
     let entry = json!({"round":n, "dir":format!("rounds/{n:03}"), "note":args.options.get("note").map_or("", String::as_str),
         "auto_notes":notes, "status":state, "basis":basis, "readiness":ready, "exports":exports,
-        "pattern_meta":raw["meta"], "validation":val, "images":[], "video":null, "viewer":viewer, "sim":sim, "at":at});
+        "pattern_meta":raw["meta"], "validation":val, "images":[], "video":null, "viewer":viewer, "sim":sim, "at":at,
+        "preview":format!("rounds/{n:03}/preview.svg"), "preview_dark":format!("rounds/{n:03}/preview_dark.svg")});
     write_json(&rd.join("round.json"), &entry)?;
     append(&ws, &entry)?;
+    report::publish(&ws)?;
     let mut text = format!(
         "{}\n{}",
         format_round_readiness(&ready),
@@ -491,6 +499,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     text.push_str(&format!("\nROUND STATUS: {state} (flat: {}; sim: {sim_basis}; exports: {export_basis}; measurements: {})\nround dir: {}",
         validation.status(), ready["status"].as_str().unwrap_or("NOT_CHECKED"), rd.display()));
+    text.push_str(&format!("\nreport: {}", ws.join("report.html").display()));
     let code = if budget_stop {
         4
     } else if state == "CONVERGED" {
