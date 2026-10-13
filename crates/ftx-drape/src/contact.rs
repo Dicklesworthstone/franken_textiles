@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use ftx_core::exact::{Sign, orient3d};
+use ftx_core::intersection::{indexed_triangle_pair, segment_triangle, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
 
 use crate::ad::Jet;
@@ -264,7 +264,7 @@ impl Body {
     /// Builds the body and its broad-phase grids (cell size about the mean edge length, at least `min_cell`).
     ///
     /// # Errors
-    /// [`RefusalCode::DegenerateGeometry`] for an empty mesh or an out-of-range index;
+    /// [`RefusalCode::DegenerateGeometry`] for an empty mesh, an out-of-range index or a zero-area face;
     /// [`RefusalCode::NonFinite`] for a non-finite vertex.
     pub fn new(
         vertices: Vec<Vec3>,
@@ -277,12 +277,8 @@ impl Body {
                 "the body mesh is empty or indexes a missing vertex",
             ));
         }
-        if vertices.iter().any(|v| !v.is_finite()) {
-            return Err(Refusal::new(
-                RefusalCode::NonFinite,
-                "the body mesh has a non-finite vertex",
-            ));
-        }
+        // Admit before grids can hide NaNs or distance derivatives encounter a collapsed face.
+        validate_mesh(&vertices, &triangles)?;
         let edges = edges_of(&triangles);
         let mut uses: BTreeMap<[usize; 2], usize> = BTreeMap::new();
         for t in &triangles {
@@ -369,24 +365,10 @@ fn find(root: &mut [usize], mut i: usize) -> usize {
     i
 }
 
-/// Exact orientation of four points (`ftx_core::exact::orient3d`).
-fn orient(a: Vec3, b: Vec3, c: Vec3, d: Vec3) -> Sign {
-    let v = |p: Vec3| [p.x, p.y, p.z];
-    orient3d(v(a), v(b), v(c), v(d))
-}
-
-/// Whether segment `pq` meets triangle `t` (touching counts), decided with exact predicates. A segment
-/// in the triangle's plane is left to the distance check, which sees it as a zero gap.
+/// Exact closed-segment/triangle contact, including coplanar containment and boundary contact.
+/// The kernel is lifted from frankensim fs-topo in `ftx_core::intersection`.
 fn segment_meets_triangle(p: Vec3, q: Vec3, t: [Vec3; 3]) -> bool {
-    if orient(t[0], t[1], t[2], p) == orient(t[0], t[1], t[2], q) {
-        return false; // both ends on one side, or both in the plane
-    }
-    let s = [
-        orient(p, q, t[0], t[1]),
-        orient(p, q, t[1], t[2]),
-        orient(p, q, t[2], t[0]),
-    ];
-    !(s.contains(&Sign::Positive) && s.contains(&Sign::Negative))
+    segment_triangle(p, q, t).is_some()
 }
 
 /// A contact candidate.
@@ -761,23 +743,7 @@ impl Contact {
 
     /// Finite positions and non-degenerate triangles with valid vertex indices.
     fn check_cloth(&self, x: &[Vec3]) -> Result<(), Refusal> {
-        if x.iter().any(|v| !v.is_finite()) {
-            return Err(Refusal::new(
-                RefusalCode::NonFinite,
-                "non-finite cloth position",
-            ));
-        }
-        for t in &self.cloth.triangles {
-            if t.iter().any(|&i| i >= x.len())
-                || (x[t[1]] - x[t[0]]).cross(x[t[2]] - x[t[0]]).norm2() == 0.0
-            {
-                return Err(Refusal::new(
-                    RefusalCode::DegenerateGeometry,
-                    "self-contact needs non-degenerate triangles with valid vertex indices",
-                ));
-            }
-        }
-        Ok(())
+        validate_mesh(x, &self.cloth.triangles)
     }
 
     /// The start creases' count and smallest offset (m).
@@ -832,7 +798,8 @@ impl Contact {
     }
 
     /// Checks a self-contact-enabled state: finite, non-degenerate triangles, positive thickness
-    /// gaps, and no non-incident edge passing through a triangle (exact orientation predicates).
+    /// gaps, and no triangle intersections beyond shared indexed vertices/edges. Exact coplanar
+    /// contacts and duplicate faces are refused; legal seam adjacency is not an intersection.
     ///
     /// # Errors
     /// [`RefusalCode::NonFinite`], [`RefusalCode::DegenerateGeometry`] or
@@ -843,23 +810,21 @@ impl Contact {
         };
         self.check_cloth(x)?;
         let boxes = |ids: &[usize]| swept_box(ids, x, None);
-        let edges: Vec<_> = self.cloth.edges.iter().map(|e| boxes(e)).collect();
         let tris: Vec<_> = self.cloth.triangles.iter().map(|t| boxes(t)).collect();
-        for (ce, ct) in box_pairs(&edges, &tris, 0.0) {
-            let e = self.cloth.edges[ce];
-            let t = self.cloth.triangles[ct];
-            if !e.iter().any(|i| t.contains(i))
-                && segment_meets_triangle(x[e[0]], x[e[1]], t.map(|i| x[i]))
+        for (a, b) in box_self_pairs(&tris, 0.0) {
+            if indexed_triangle_pair(x, self.cloth.triangles[a], self.cloth.triangles[b]).is_some()
             {
                 return Err(Refusal::new(
                     RefusalCode::IntersectingStart,
-                    format!("cloth edge {ce} crosses cloth triangle {ct}"),
+                    format!(
+                        "cloth triangles {a} and {b} intersect beyond their shared mesh feature"
+                    ),
                 )
                 .repair("separate the overlapping cloth layers before enabling self-contact"));
             }
         }
-        // Coplanar overlaps and touching features are caught by their distance, even when every
-        // orientation in the edge-through-triangle test is zero.
+        // Disjoint mid-surfaces must still satisfy their thickness offsets. Keep the original
+        // force-pair exclusions and per-crease offsets; exact geometry does not replace clearance.
         for pair in self.self_candidates(x, None, p.thickness + p.dhat) {
             let st = stencil(pair, x, &self.body, &self.cloth);
             let (kind, _) = classify(pair, &st.pts);
@@ -1408,11 +1373,10 @@ mod tests {
                 // value and gradient to 1e-8 relative.
                 let (kind, _) = classify(pair, &st.pts);
                 let d2 = squared_distance_grad(st.pts, st.fixed, kind);
-                let d = d2.v.sqrt();
-                let (b, b1, _) = barrier_f64(d - p.thickness, &p);
+                let (b, b1, _) = barrier_f64(d2.v.sqrt() - p.thickness, &p);
                 assert!((b - e.v).abs() <= 1e-8 * e.v.abs(), "{pair:?} value");
                 for i in 0..12 {
-                    let gi = b1 * d2.g[i] / (2.0 * d);
+                    let gi = b1 * d2.g[i] / (2.0 * d2.v.sqrt());
                     assert!(
                         (gi - e.g[i]).abs() <= 1e-8 * gscale,
                         "{pair:?} solver grad[{i}]: {gi} vs {}",
@@ -1763,7 +1727,7 @@ mod tests {
         ];
         let err = self_layers(&x).with_self_contact(&x, params()).unwrap_err();
         assert_eq!(err.code, RefusalCode::IntersectingStart);
-        assert!(err.message.contains("crosses"));
+        assert!(err.message.contains("triangles 0 and 1"), "{err}");
         let x = layers(0.002);
         for bad in [
             ContactParams {
