@@ -8,11 +8,45 @@ use ftx_core::textile as legacy;
 use ftx_core::{Refusal, RefusalCode};
 use serde_json::Value;
 
+use crate::Pattern;
 use crate::material_catalog::{ResolvedMaterial, Selection};
 use crate::materials::{Catalog, Component, Evidence, Form, Material, Quantity, Source};
 
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
+}
+
+/// The source-piece selection shared by simulation, cutting and purchasing. An absent piece
+/// selection inherits the global fabric; a present one must be complete. Informational cutting
+/// labels do not select physics or supplier goods. This does not require any mechanical properties.
+///
+/// # Errors
+/// Missing piece, ambiguous labels/selectors or partial per-piece overrides/layer declarations.
+pub fn piece_fabric(pattern: &Pattern, index: usize) -> Result<&Value, Refusal> {
+    let raw = pattern.raw();
+    let piece = raw["pieces"]
+        .as_array()
+        .and_then(|p| p.get(index))
+        .ok_or_else(|| invalid(format!("no source piece {index}")))?;
+    if piece.get("material").is_some_and(|m| !m.is_string()) || piece.get("material_id").is_some() {
+        return Err(invalid(
+            "piece.material is a cutting label; use piece.fabric.material",
+        ));
+    }
+    match piece.get("fabric") {
+        None => Ok(&raw["fabric"]),
+        Some(f) => {
+            let object = f
+                .as_object()
+                .ok_or_else(|| invalid("piece.fabric must be an object"))?;
+            if object.is_empty() || object.keys().any(|k| k != "material" && k != "material_id") {
+                return Err(invalid(
+                    "piece.fabric requires a complete material OR material_id selection, not partial coefficients/layers",
+                ));
+            }
+            Ok(f)
+        }
+    }
 }
 
 /// Imports an initial catalog record without promoting assumed/estimated observations to evidence.

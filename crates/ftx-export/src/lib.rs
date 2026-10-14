@@ -9,6 +9,7 @@ pub mod all;
 pub mod checks;
 pub mod ctx;
 pub mod cutter;
+pub mod cutting;
 pub mod dst;
 pub mod dxf;
 pub mod gc;

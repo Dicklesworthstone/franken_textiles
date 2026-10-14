@@ -4,7 +4,7 @@
 use ftx_core::{Refusal, Vec2, py};
 
 use crate::ctx::Ctx;
-use crate::geom::grain_vertical_rotation;
+use crate::geom::{Geom, grain_vertical_rotation};
 use crate::layout::rotation;
 use crate::outline::clean_ring;
 use crate::pyjson::PyJson;
@@ -23,6 +23,29 @@ pub struct CutterFile {
     pub text: String,
 }
 
+/// The actual external cutter path, including the existing outward notch tabs. Shared with roll
+/// planning so procurement never nests a sew line or a smaller, notch-free approximation.
+///
+/// # Errors
+/// A cut outline without a valid union exterior.
+pub fn cutter_ring(g: &Geom) -> Result<Vec<Vec2>, Refusal> {
+    let mut polys = vec![g.cut.clone()];
+    for n in &g.notches {
+        let out = Vec2::new(-n.inward.x, -n.inward.y);
+        polys.push(vec![
+            n.base + n.tangent * 2.0,
+            n.base + out * 3.0,
+            n.base - n.tangent * 2.0,
+        ]);
+    }
+    Ok(clean_ring(&union_exterior(&polys).ok_or_else(|| {
+        Refusal::new(
+            ftx_core::RefusalCode::DegenerateGeometry,
+            format!("{}: no cutter outline", g.iid),
+        )
+    })?))
+}
+
 /// The cutter SVGs, the report's path and text (`cutter_report.json`) and the manifest's `cutter` entry.
 ///
 /// # Errors
@@ -34,21 +57,7 @@ pub fn export_cutter(ctx: &Ctx) -> Result<(Vec<CutterFile>, String, String, PyJs
     let mut too_large = Vec::new();
     for g in ctx.instance_geoms(6.0)? {
         let gr = g.transform(&rotation(grain_vertical_rotation(&g)));
-        let mut polys = vec![gr.cut.clone()];
-        for n in &gr.notches {
-            let out = Vec2::new(-n.inward.x, -n.inward.y);
-            polys.push(vec![
-                n.base + n.tangent * 2.0,
-                n.base + out * 3.0,
-                n.base - n.tangent * 2.0,
-            ]);
-        }
-        let ring = clean_ring(&union_exterior(&polys).ok_or_else(|| {
-            Refusal::new(
-                ftx_core::RefusalCode::DegenerateGeometry,
-                format!("{}: no cutter outline", g.iid),
-            )
-        })?);
+        let ring = cutter_ring(&gr)?;
         let (mut lo, mut hi) = (
             Vec2::new(f64::INFINITY, f64::INFINITY),
             Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),

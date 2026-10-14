@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ftx_core::Refusal;
 use ftx_core::receipt::sha256_hex;
 use ftx_pattern::Pattern;
+use ftx_pattern::textile_import::piece_fabric;
 use serde_json::json;
 
 use super::{ContactMaterials, MaterialInputs, interfaces, invalid, resolve_uniform};
@@ -29,12 +30,8 @@ pub(super) fn resolve(
         }
         return Ok(base);
     };
-    for p in pieces {
-        if p.get("material").is_some_and(|m| !m.is_string()) || p.get("material_id").is_some() {
-            return Err(invalid(
-                "piece.material is a cutting label; put characterized selections in piece.fabric.material",
-            ));
-        }
+    for i in 0..pieces.len() {
+        piece_fabric(pattern, i)?;
     }
     if !pieces.iter().any(|p| p.get("fabric").is_some()) && interface_data.is_none() {
         return Ok(base);
@@ -56,15 +53,8 @@ pub(super) fn resolve(
     let mut bindings = Vec::with_capacity(pieces.len());
     let mut fabrics = Vec::with_capacity(pieces.len());
     for (piece_index, p) in pieces.iter().enumerate() {
-        let (fabric, hash, mechanical) = if let Some(f) = p.get("fabric") {
-            let object = f
-                .as_object()
-                .ok_or_else(|| invalid("piece.fabric must be an object"))?;
-            if object.is_empty() || object.keys().any(|k| k != "material" && k != "material_id") {
-                return Err(invalid(
-                    "piece.fabric must contain only a complete material OR material_id selection; partial coefficients/layers are not inherited",
-                ));
-            }
+        let (fabric, hash, mechanical) = if p.get("fabric").is_some() {
+            let f = piece_fabric(pattern, piece_index)?;
             let resolved = resolve_uniform(&Pattern::new(json!({"fabric":f})), &base.options)?;
             let hash = resolved.report["record_sha256"]
                 .as_str()
