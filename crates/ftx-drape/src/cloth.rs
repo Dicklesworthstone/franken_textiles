@@ -9,6 +9,7 @@
 //! solve minimises `Ψ − Σ mᵢ g·xᵢ` the same way. Units: metres, kilograms, seconds.
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
+use ftx_pattern::material_response::CompiledMembrane;
 
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::eigen::{project_psd, project_psd_translation_free};
@@ -45,6 +46,9 @@ pub struct ClothModel {
     pub elastics: Vec<ElasticSegment>,
     // None preserves the homogeneous model's arithmetic and mutable legacy coefficients.
     element_materials: Option<Vec<Membrane>>,
+    // Nonlinear laws are immutable source-bound constitutive responses; None entries use the
+    // corresponding linear/reference-tangent material above.
+    element_responses: Option<Vec<Option<CompiledMembrane>>>,
     hinge_bending: Option<Vec<f64>>,
     // Each hinge's adjacent triangles and their shares of the existing bending integration area.
     hinge_support: Vec<[(usize, f64); 2]>,
@@ -206,6 +210,7 @@ impl ClothModel {
             bending,
             elastics: Vec::new(),
             element_materials: None,
+            element_responses: None,
             hinge_bending: None,
             hinge_support,
         })
@@ -261,6 +266,60 @@ impl ClothModel {
         self.element_materials.is_some()
     }
 
+    /// Bind one optional characterized nonlinear response to each membrane triangle.
+    /// An all-`None` field preserves the legacy/reference-tangent solver path exactly.
+    ///
+    /// # Errors
+    /// Unless there is exactly one response slot per membrane element.
+    pub fn set_membrane_responses(
+        &mut self,
+        responses: &[Option<CompiledMembrane>],
+    ) -> Result<(), Refusal> {
+        if responses.len() != self.membranes.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "one nonlinear response slot per membrane triangle is required",
+            ));
+        }
+        self.element_responses = responses
+            .iter()
+            .any(Option::is_some)
+            .then(|| responses.to_vec());
+        Ok(())
+    }
+
+    /// Nonlinear law of membrane element `e`, when characterized.
+    #[must_use]
+    pub fn membrane_response(&self, e: usize) -> Option<&CompiledMembrane> {
+        self.element_responses
+            .as_ref()
+            .and_then(|r| r.get(e))
+            .and_then(Option::as_ref)
+    }
+
+    /// Refuse a physical state outside any source-declared nonlinear strain domain.
+    /// Numerical compression/gather softening never widens this domain.
+    ///
+    /// # Errors
+    /// First element whose raw material-frame Green strain leaves its characterized box.
+    pub fn check_membrane_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        for (i, e) in self.membranes.iter().enumerate() {
+            if let Some(law) = self.membrane_response(i) {
+                let strain = e.strain(x);
+                if !law.contains(strain) {
+                    let ranges = law.strain_range();
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!(
+                            "membrane element {i}: physical Green strain {strain:?} is outside characterized ranges {ranges:?}"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Elastic energy Ψ (membrane + bending + elastics) at positions `x`.
     #[must_use]
     pub fn elastic_energy(&self, x: &[Vec3]) -> f64 {
@@ -268,7 +327,12 @@ impl ClothModel {
             .membranes
             .iter()
             .enumerate()
-            .map(|(i, e)| e.energy(x, &self.material(i)))
+            .map(|(i, e)| {
+                self.membrane_response(i).map_or_else(
+                    || e.energy(x, &self.material(i)),
+                    |law| e.response_energy(x, law, &self.material(i)),
+                )
+            })
             .sum();
         let b: f64 = self
             .hinges
@@ -552,7 +616,8 @@ impl Solver {
     }
 
     /// The potential: incremental (`Some((x̃, h))`) or static (`None`, gravity as potential).
-    fn potential(&self, x: &[Vec3], inertia: Option<(&[Vec3], f64)>) -> f64 {
+    fn potential(&self, x: &[Vec3], inertia: Option<(&[Vec3], f64)>) -> Result<f64, Refusal> {
+        self.model.check_membrane_domains(x)?;
         let mut e = self.model.elastic_energy(x);
         match inertia {
             Some((xt, h)) => {
@@ -569,7 +634,14 @@ impl Solver {
         if let Some(c) = &self.contact {
             e += c.terms(x, false, inertia.is_some()).energy;
         }
-        e
+        if e.is_finite() {
+            Ok(e)
+        } else {
+            Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "cloth potential is not finite",
+            ))
+        }
     }
 
     /// Gradient over free DOFs and the Hessian (every element block pushed, so the pattern is fixed),
@@ -615,7 +687,10 @@ impl Solver {
             }
         };
         for (i, e) in self.model.membranes.iter().enumerate() {
-            let mut l = e.local(x, &self.model.material(i));
+            let mut l = self.model.membrane_response(i).map_or_else(
+                || e.local(x, &self.model.material(i)),
+                |law| e.response_local(x, law, &self.model.material(i)),
+            );
             scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
@@ -751,7 +826,7 @@ impl Solver {
     /// Projected Newton on the potential from the current positions.
     fn minimize(&mut self, inertia: Option<(&[Vec3], f64)>) -> Result<SolveReport, Refusal> {
         let mut rep = SolveReport {
-            energy_start: self.potential(&self.x, inertia),
+            energy_start: self.potential(&self.x, inertia)?,
             ..SolveReport::default()
         };
         let mut energy = rep.energy_start;
@@ -805,7 +880,17 @@ impl Solver {
             let mut accepted = false;
             for _ in 0..50 {
                 let trial = self.apply(&self.x, &p, alpha);
-                let e = self.potential(&trial, inertia);
+                let e = match self.potential(&trial, inertia) {
+                    Ok(e) => e,
+                    // A Newton trial may leave the characterized domain; treat it like an invalid
+                    // line-search trial and shorten the step. The accepted state never extrapolates.
+                    Err(e) if e.code == RefusalCode::OutOfRange => {
+                        alpha *= 0.5;
+                        rep.halvings += 1;
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                };
                 if e <= energy + 1e-4 * alpha * slope {
                     self.x = trial;
                     energy = e;

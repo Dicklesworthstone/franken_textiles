@@ -52,8 +52,9 @@ pub(super) fn resolve(
     let mut piece_hashes = Vec::with_capacity(pieces.len());
     let mut bindings = Vec::with_capacity(pieces.len());
     let mut fabrics = Vec::with_capacity(pieces.len());
+    let mut responses = Vec::with_capacity(pieces.len());
     for (piece_index, p) in pieces.iter().enumerate() {
-        let (fabric, hash, mechanical) = if p.get("fabric").is_some() {
+        let (fabric, response, hash, mechanical) = if p.get("fabric").is_some() {
             let f = piece_fabric(pattern, piece_index)?;
             let resolved = resolve_uniform(&Pattern::new(json!({"fabric":f})), &base.options)?;
             let hash = resolved.report["record_sha256"]
@@ -61,9 +62,14 @@ pub(super) fn resolve(
                 .ok_or_else(|| invalid("piece material has no source identity"))?
                 .to_owned();
             records.insert(hash.clone(), resolved.report);
-            (resolved.fabric, hash, resolved.mechanics)
+            (resolved.fabric, resolved.response, hash, resolved.mechanics)
         } else {
-            (base.fabric, default_hash.clone(), base.mechanics)
+            (
+                base.fabric,
+                base.response.clone(),
+                default_hash.clone(),
+                base.mechanics,
+            )
         };
         // Include unplaced pieces in the receipt and validation. No named material is silently
         // ignored merely because this particular drape did not simulate its source piece.
@@ -81,6 +87,7 @@ pub(super) fn resolve(
         bindings.push(json!({"piece_index":piece_index, "piece_id":p["id"],
             "record_sha256":hash, "inherited_default":p.get("fabric").is_none()}));
         fabrics.push(fabric);
+        responses.push(response);
     }
     let hashes: Vec<_> = hashes.into_iter().collect();
     let diagonal: Vec<_> = hashes.iter().map(|h| mechanics[h].friction_self).collect();
@@ -120,7 +127,7 @@ pub(super) fn resolve(
     base.options.validate()?;
     let mut report = json!({
         "basis":"per_piece_characterization",
-        "model":"orthotropic_green_strain_scalar_bending",
+        "model":"per_piece_green_strain_scalar_bending",
         "default_record_sha256":default_hash,
         "pieces":bindings, "records":records,
         "contact_policy":"feature-local thickness/body friction and source-bound pairwise friction; welded features use maximum-adjacent envelopes",
@@ -130,7 +137,7 @@ pub(super) fn resolve(
         "interfaces":interfaces.report,
         "self_contact_enabled":base.options.self_contact.is_some(),
         "hinge_policy":"shared curvature with each adjacent triangle's bending-area share; not an empirical seam law",
-        "not_simulated":["layer generation", "directional bending", "resolved seam cross-section", "nonlinear textile response"],
+        "not_simulated":["layer generation", "directional bending", "resolved seam cross-section", "irreversible hysteresis/damage"],
         "fit_claim":false
     });
     report["assignment_sha256"] = json!(sha256_hex(
@@ -138,6 +145,7 @@ pub(super) fn resolve(
     ));
     base.report = report;
     base.piece_fabrics = Some(fabrics);
+    base.piece_responses = responses.iter().any(Option::is_some).then_some(responses);
     // One identity keeps the original homogeneous start/ramp and numerical path exactly.
     base.contact_materials = (hashes.len() > 1).then_some(ContactMaterials {
         piece_ids,

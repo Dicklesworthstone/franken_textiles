@@ -3,6 +3,7 @@
 //! tolerances and whether self-contact is enabled. Grain rotation remains in the existing scene builder.
 
 use ftx_core::{Refusal, RefusalCode, Vec2};
+use ftx_pattern::material_response::CompiledMembrane;
 use ftx_pattern::materials::Mechanics;
 use ftx_pattern::textile_import::resolve_fabric;
 use ftx_pattern::{Grain, Pattern, truthy};
@@ -175,6 +176,8 @@ pub struct MaterialInputs {
     pub report: Value,
     // Indexed by source piece, not vertex: seam welding must never merge material identities.
     pub(crate) piece_fabrics: Option<Vec<Fabric>>,
+    pub(crate) response: Option<CompiledMembrane>,
+    pub(crate) piece_responses: Option<Vec<Option<CompiledMembrane>>>,
     pub(crate) contact_materials: Option<ContactMaterials>,
     mechanics: Option<Mechanics>,
 }
@@ -210,11 +213,14 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             report: json!({"basis":"legacy_uncertain", "model":"orthotropic_green_strain_scalar_bending",
                 "note":"Legacy defaults/declarations are not characterized textile properties."}),
             piece_fabrics: None,
+            response: None,
+            piece_responses: None,
             contact_materials: None,
             mechanics: None,
         });
     };
     let mechanics = record.mechanics()?;
+    let response = record.membrane_response()?;
     let properties = &record.material().properties;
     let thermal = if properties.contains_key("thermal_resistance")
         || properties.contains_key("thermal_conductivity")
@@ -251,16 +257,20 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         options: opts,
         report: json!({
             "basis":"characterized_record", "record":record, "record_sha256":record.sha256(),
-            "mechanics":mechanics, "model":"orthotropic_green_strain_scalar_bending",
+            "mechanics":mechanics,
+            "model": if response.is_some() {"tabulated_green_strain_scalar_bending"} else {"orthotropic_green_strain_scalar_bending"},
+            "nonlinear_strain_range": response.as_ref().map(CompiledMembrane::strain_range),
             "contact_policy":"material owns thickness and friction; caller owns numerical tolerances and self-contact enablement",
             "body_offset_m":opts.contact.thickness,
             "self_contact_enabled":opts.self_contact.is_some(),
             "dry_material_resistance_m2_k_w":resistance, "thermal_basis":thermal_basis,
             "thermal_unavailable":thermal_failure,
-            "not_simulated":["yarn/loop-scale nonlinear response", "directional bending", "moisture and heat transport", "garment thermal comfort", "damage/fire", "robotic sewing"],
+            "not_simulated":["yarn/loop-scale homogenization", "directional bending", "irreversible hysteresis/damage", "moisture and heat transport", "garment thermal comfort", "damage/fire", "robotic sewing"],
             "fit_claim":false
         }),
         piece_fabrics: None,
+        response,
+        piece_responses: None,
         contact_materials: None,
         mechanics: Some(mechanics),
     })

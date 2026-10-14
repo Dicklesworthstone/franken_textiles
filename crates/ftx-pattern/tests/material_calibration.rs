@@ -63,6 +63,7 @@ fn input() -> Input {
             composition_complete: false,
             structure: BTreeMap::new(),
             properties,
+            membrane_response: None,
             sources: BTreeMap::from([(
                 "synthetic".into(),
                 Source {

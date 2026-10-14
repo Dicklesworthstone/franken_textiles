@@ -238,6 +238,16 @@ impl ResolvedMaterial {
         self.normalized.mechanics(self.allow_estimates)
     }
 
+    /// Compile the optional nonlinear membrane response under this frozen selection's evidence policy.
+    ///
+    /// # Errors
+    /// Invalid response/source data or missing consent for interpolated/estimated observations.
+    pub fn membrane_response(
+        &self,
+    ) -> Result<Option<crate::material_response::CompiledMembrane>, Refusal> {
+        self.normalized.compiled_membrane(self.allow_estimates)
+    }
+
     /// Resolve dry thermal resistance under exactly the same evidence policy.
     ///
     /// # Errors

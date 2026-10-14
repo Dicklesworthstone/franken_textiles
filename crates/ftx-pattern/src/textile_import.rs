@@ -18,7 +18,7 @@ fn invalid(message: impl Into<String>) -> Refusal {
 
 /// The source-piece selection shared by simulation, cutting and purchasing. An absent piece
 /// selection inherits the global fabric; a present one must be complete. Informational cutting
-/// labels do not select physics or supplier goods. This does not require any mechanical properties.
+/// labels do not select physics or supplier goods. This does not require mechanical properties.
 ///
 /// # Errors
 /// Missing piece, ambiguous labels/selectors or partial per-piece overrides/layer declarations.
@@ -135,6 +135,7 @@ pub fn import(record: &legacy::Textile) -> Result<Material, Refusal> {
         composition_complete: !record.composition.is_empty(),
         structure,
         properties,
+        membrane_response: None,
         sources: record
             .sources
             .iter()

@@ -115,6 +115,11 @@ pub struct Material {
     /// Sparse extensible properties. Unknown properties may be stored, never inferred or consumed.
     #[serde(default)]
     pub properties: BTreeMap<String, Quantity>,
+    /// Optional source-bearing nonlinear membrane law. When present it replaces the four scalar
+    /// warp/weft/Poisson/shear properties; mass, bending, thickness and interfaces remain ordinary
+    /// observations so consumers can use them independently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membrane_response: Option<crate::material_response::TabulatedMembrane>,
     /// Sources keyed by stable local identifiers.
     pub sources: BTreeMap<String, Source>,
 }
@@ -267,7 +272,40 @@ impl Material {
                 return Err(invalid(format!("{}: invalid bounds for {name}", self.id)));
             }
         }
+        if let Some(response) = &self.membrane_response {
+            for key in [
+                "warp_stiffness",
+                "weft_stiffness",
+                "poisson_warp_weft",
+                "shear_stiffness",
+            ] {
+                if self.properties.contains_key(key) {
+                    return Err(invalid(format!(
+                        "{}: {key} conflicts with membrane_response",
+                        self.id
+                    )));
+                }
+            }
+            // Structural validation is independent of whether a downstream simulation consents to
+            // estimated/interpolated response data. The consumer applies that evidence policy again.
+            response.compile(&self.sources, true)?;
+        }
         Ok(())
+    }
+
+    /// Compile the optional nonlinear law under the caller's evidence policy.
+    ///
+    /// # Errors
+    /// Invalid sources/curves, unapproved interpolation/estimates or unstable response data.
+    pub fn compiled_membrane(
+        &self,
+        allow_estimates: bool,
+    ) -> Result<Option<crate::material_response::CompiledMembrane>, Refusal> {
+        self.validate()?;
+        self.membrane_response
+            .as_ref()
+            .map(|r| r.compile(&self.sources, allow_estimates))
+            .transpose()
     }
 
     /// Reads one property in a specific unit, enforcing the evidence policy.
@@ -302,7 +340,17 @@ impl Material {
     pub fn missing_mechanics(&self) -> Vec<&'static str> {
         MECHANICAL_PROPERTIES
             .iter()
-            .filter(|(name, _)| !self.properties.contains_key(*name))
+            .filter(|(name, _)| {
+                let response_supplies = self.membrane_response.is_some()
+                    && matches!(
+                        *name,
+                        "warp_stiffness"
+                            | "weft_stiffness"
+                            | "poisson_warp_weft"
+                            | "shear_stiffness"
+                    );
+                !response_supplies && !self.properties.contains_key(*name)
+            })
             .map(|(name, _)| *name)
             .collect()
     }
@@ -321,7 +369,34 @@ impl Material {
             )));
         }
         let mut v = [0.0; 9];
-        for (i, (name, unit)) in MECHANICAL_PROPERTIES.iter().enumerate() {
+        v[0] = self.require("areal_density", "kg/m2", allow_estimates)?;
+        if let Some(law) = self.compiled_membrane(allow_estimates)? {
+            let [q11, q22, q12, g12] = law.origin_stiffness();
+            let nu12 = q12 / q22;
+            let d = 1.0 - nu12 * (q12 / q11);
+            v[1] = q11 * d;
+            v[2] = q22 * d;
+            v[3] = nu12;
+            v[4] = g12;
+            if [v[1], v[2], v[3], v[4], d].iter().any(|x| !x.is_finite())
+                || v[1] <= 0.0
+                || v[2] <= 0.0
+                || v[4] <= 0.0
+                || d <= 0.0
+            {
+                return Err(invalid(format!(
+                    "{}: nonlinear origin tangent cannot form a stable orthotropic reference law",
+                    self.id
+                )));
+            }
+        } else {
+            for i in 1..=4 {
+                let (name, unit) = MECHANICAL_PROPERTIES[i];
+                v[i] = self.require(name, unit, allow_estimates)?;
+            }
+        }
+        for i in 5..9 {
+            let (name, unit) = MECHANICAL_PROPERTIES[i];
             v[i] = self.require(name, unit, allow_estimates)?;
         }
         if [0, 1, 2, 4, 6].iter().any(|&i| v[i] <= 0.0) || [5, 7, 8].iter().any(|&i| v[i] < 0.0) {
@@ -479,6 +554,7 @@ mod tests {
             composition_complete: false,
             structure: BTreeMap::new(),
             properties,
+            membrane_response: None,
             sources,
         }
     }
@@ -591,5 +667,37 @@ mod tests {
         assert!((two.heat_flow_w - 200.0).abs() < 1e-10);
         assert!(two.heat_flow_w < one.heat_flow_w);
         assert!(ThermalStack::evaluate(&[&m], 2.0, 30.0, 0.0, 0.1, false).is_err());
+    }
+
+    #[test]
+    fn nonlinear_response_replaces_scalar_membrane_inputs_without_inventing_other_properties() {
+        let m: Material = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-nonlinear.json"
+        ))
+        .unwrap();
+        assert!(m.validate().is_ok());
+        assert!(m.mechanics(false).is_err());
+        let mechanics = m.mechanics(true).unwrap();
+        assert!((mechanics.warp_n_m - 199.0).abs() < 1e-12);
+        assert!((mechanics.weft_n_m - 99.5).abs() < 1e-12);
+        assert!((mechanics.poisson - 0.1).abs() < 1e-12);
+        assert!((mechanics.shear_n_m - 40.0).abs() < 1e-12);
+        assert!(m.missing_mechanics().is_empty());
+        assert!(m.compiled_membrane(true).unwrap().is_some());
+
+        let mut conflicting = m;
+        conflicting.properties.insert(
+            "warp_stiffness".into(),
+            Quantity {
+                value: 999.0,
+                unit: "N/m".into(),
+                evidence: Evidence::Estimate,
+                source: "test".into(),
+                method: "Conflicting synthetic scalar".into(),
+                conditions: BTreeMap::new(),
+                bounds: None,
+            },
+        );
+        assert!(conflicting.validate().is_err());
     }
 }

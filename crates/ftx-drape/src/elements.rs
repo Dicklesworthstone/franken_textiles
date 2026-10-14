@@ -14,6 +14,7 @@
 //!   positive semidefinite, which suits Newton.
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
+use ftx_pattern::material_response::CompiledMembrane;
 
 /// Orthotropic membrane material (resultants in N/m, so thickness is folded in).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -179,6 +180,100 @@ impl MembraneElement {
         let (eff, _, _) = soften(e, m);
         let s = mat3(&m.q, eff);
         0.5 * self.area * (eff[0] * s[0] + eff[1] * s[1] + eff[2] * s[2])
+    }
+
+    /// Energy of a characterized nonlinear law, with the existing gather/compression transform.
+    /// The caller must first check the raw physical strain against the law's characterized domain.
+    #[must_use]
+    pub fn response_energy(&self, x: &[Vec3], law: &CompiledMembrane, m: &Membrane) -> f64 {
+        let e = self.strain(x);
+        let (eff, _, _) = soften(e, m);
+        law.evaluate(eff).map_or(f64::NAN, |r| self.area * r.energy)
+    }
+
+    /// Exact chain-rule gradient/Hessian for a characterized nonlinear membrane response.
+    /// The material tangent supplied by the response replaces Q; geometric and gather-softening
+    /// terms remain identical to the linear element. No extrapolation is performed.
+    #[must_use]
+    pub fn response_local(&self, x: &[Vec3], law: &CompiledMembrane, m: &Membrane) -> Local<9, 81> {
+        let (f1, f2) = self.frame(x);
+        let e = [
+            0.5 * (f1.dot(f1) - 1.0),
+            0.5 * (f2.dot(f2) - 1.0),
+            f1.dot(f2),
+        ];
+        let (eff, dphi, ddphi) = soften(e, m);
+        let Some(response) = law.evaluate(eff) else {
+            return Local {
+                energy: f64::NAN,
+                grad: [f64::NAN; 9],
+                hess: [f64::NAN; 81],
+                psd: false,
+            };
+        };
+        let sigma = response.stress;
+        let q = response.tangent;
+        let mut b = [[0.0; 9]; 3];
+        for a in 0..3 {
+            let (ga0, ga1) = (self.g[a][0], self.g[a][1]);
+            for k in 0..3 {
+                b[0][3 * a + k] = dphi[0] * ga0 * f1[k];
+                b[1][3 * a + k] = dphi[1] * ga1 * f2[k];
+                b[2][3 * a + k] = ga0 * f2[k] + ga1 * f1[k];
+            }
+        }
+        let mut grad = [0.0; 9];
+        for (i, gi) in grad.iter_mut().enumerate() {
+            *gi = self.area * (sigma[0] * b[0][i] + sigma[1] * b[1][i] + sigma[2] * b[2][i]);
+        }
+        let mut hess = [0.0; 81];
+        let mut qb = [[0.0; 9]; 3];
+        for r in 0..3 {
+            for j in 0..9 {
+                qb[r][j] = q[r][0] * b[0][j] + q[r][1] * b[1][j] + q[r][2] * b[2][j];
+            }
+        }
+        for i in 0..9 {
+            for j in 0..9 {
+                hess[i * 9 + j] =
+                    self.area * (b[0][i] * qb[0][j] + b[1][i] * qb[1][j] + b[2][i] * qb[2][j]);
+            }
+        }
+        for a in 0..3 {
+            for c in 0..3 {
+                let (ga, gc) = (self.g[a], self.g[c]);
+                let s = sigma[0] * dphi[0] * ga[0] * gc[0]
+                    + sigma[1] * dphi[1] * ga[1] * gc[1]
+                    + sigma[2] * (ga[0] * gc[1] + ga[1] * gc[0]);
+                for k in 0..3 {
+                    hess[(3 * a + k) * 9 + 3 * c + k] += self.area * s;
+                }
+            }
+        }
+        for (i, (&dd, f)) in ddphi.iter().zip([f1, f2]).enumerate() {
+            if dd == 0.0 {
+                continue;
+            }
+            let de: [f64; 9] = std::array::from_fn(|j| self.g[j / 3][i] * f[j % 3]);
+            let c = self.area * sigma[i] * dd;
+            for r in 0..9 {
+                for s in 0..9 {
+                    hess[r * 9 + s] += c * de[r] * de[s];
+                }
+            }
+        }
+        let (m11, m22) = (sigma[0] * dphi[0], sigma[1] * dphi[1]);
+        let psd = m11 >= 0.0
+            && m22 >= 0.0
+            && m11 * m22 >= sigma[2] * sigma[2]
+            && sigma[0] * ddphi[0] >= 0.0
+            && sigma[1] * ddphi[1] >= 0.0;
+        Local {
+            energy: self.area * response.energy,
+            grad,
+            hess,
+            psd,
+        }
     }
 
     /// Energy, gradient and exact Hessian (material plus geometric part).
@@ -604,6 +699,41 @@ mod tests {
                 |x| e.local(x, &mat),
             );
         }
+    }
+
+    #[test]
+    fn nonlinear_membrane_derivatives_match_finite_differences() {
+        let raw: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-nonlinear.json"
+        ))
+        .unwrap();
+        let response: ftx_pattern::material_response::TabulatedMembrane =
+            serde_json::from_value(raw["membrane_response"].clone()).unwrap();
+        let sources = serde_json::from_value(raw["sources"].clone()).unwrap();
+        let law = response.compile(&sources, true).unwrap();
+        let [q11, q22, q12, g] = law.origin_stiffness();
+        let nu = q12 / q22;
+        let d = 1.0 - nu * q12 / q11;
+        let mat = Membrane::orthotropic(q11 * d, q22 * d, nu, g, 0.2);
+        let rest = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.012, 0.001),
+            Vec2::new(0.003, 0.010),
+        ];
+        let e = MembraneElement::new([0, 1, 2], rest).unwrap();
+        let x: Vec<Vec3> = rest
+            .iter()
+            .map(|p| Vec3::new(1.07 * p.x + 0.01 * p.y, 0.96 * p.y, 0.02 * p.x))
+            .collect();
+        assert!(law.contains(e.strain(&x)));
+        check(
+            &x,
+            &[0, 1, 2],
+            1e-7,
+            |x| e.response_energy(x, &law, &mat),
+            |x| e.response_local(x, &law, &mat),
+        );
+        assert!(e.response_local(&x, &law, &mat).energy.is_finite());
     }
 
     #[test]
