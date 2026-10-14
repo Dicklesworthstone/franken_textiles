@@ -8,6 +8,8 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod nist;
+
 /// A selection for `fabric.material`. A frozen record makes custom/edited patterns self-contained.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -154,6 +156,7 @@ impl Catalog {
         catalog.materials.extend(insulation.materials);
         let measured = Self::from_json(include_str!("material_catalog/thermal-measurements.json"))?;
         catalog.materials.extend(measured.materials);
+        catalog.materials.extend(nist::records());
         catalog.validate()?;
         Ok(catalog)
     }

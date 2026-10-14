@@ -37,6 +37,7 @@ ftx-materials resolve PATTERN.json
 ftx-materials bind PATTERN.json SELECTION.json NEW-PATTERN.json
 ftx-materials price PATTERN.json QUOTES.json SCOPE.json
 ftx-materials thermal STACK.json
+ftx-materials thermal-at ID TEMPERATURE-C [--allow-estimates]
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
@@ -52,6 +53,7 @@ JSON output. `show` includes a portable selection and missing-property coverage.
 `bind` preserves geometry and embeds a locked selection; its output path must not exist.
 `price` is a dated offer sample, not a checkout or a worldwide market price.
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
+`thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
 `thermal-coverage` couples mapped layers and bare body areas; generated geometry receipts are replayed.
@@ -189,6 +191,8 @@ fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["thermal-at", id, t] => thermal_transient::point(id, t, false),
+        ["thermal-at", id, t, "--allow-estimates"] => thermal_transient::point(id, t, true),
         ["calibrate-relaxation", path] => relaxation_calibration::run(path, false),
         ["calibrate-relaxation", path, "--allow-estimates"] => {
             relaxation_calibration::run(path, true)

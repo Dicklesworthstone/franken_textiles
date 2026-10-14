@@ -239,12 +239,25 @@ impl DryThermalModel {
     #[must_use]
     pub fn snapshot(&self) -> Value {
         if let Some(variable) = &self.variable {
+            let polynomial = self.layers.iter().any(|m| {
+                m.material().thermal_response.as_ref().is_some_and(|r| {
+                    [&r.conductivity, &r.specific_heat]
+                        .into_iter()
+                        .flatten()
+                        .any(|s| s.polynomial.is_some())
+                })
+            });
+            let storage = if polynomial {
+                "integrated source-qualified specific heat (tabulated or polynomial) times reference mass"
+            } else {
+                "integrated piecewise-linear specific heat times reference mass"
+            };
             return json!({"schema":"ftx-dry-thermal-model/2", "layers":self.layers,
                 "interface_resistance_m2_k_w":self.interfaces,"cells_per_layer":self.cells_per_layer,
                 "temperature_domain_c":variable.domain(),
                 "model":"temperature-dependent dry 1D finite volume; enthalpy backward Euler",
                 "transport":"cell-centre conductivity, harmonic half-cell paths; no extrapolation",
-                "storage":"integrated piecewise-linear specific heat times reference mass",
+                "storage":storage,
                 "solver":{"iteration_limit":nonlinear::ITERATIONS,"damping":0.5,
                     "acceptance":"local nonlinear residual and global energy balance"},
                 "not_simulated":["human thermoregulation","moisture","evaporation","wind-dependent films",

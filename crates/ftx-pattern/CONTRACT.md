@@ -90,3 +90,14 @@ measurement (`invalid_document` naming it, the reference's `KeyError`). No claim
 and the simulator's placement helpers (spec 02 B.6–B.7; the drape places pieces on Anny); the fez's
 taper refusal, which the style ranges make unreachable (the widest allowed sector is 314°); a braid line
 that comes back within twice its inset of itself (the curve would then need the buffer's other side).
+
+**Bounded thermal fits** (`material_thermal`, `tests/thermal_polynomial.rs`). A thermal series
+contains either reported temperature observations or an explicitly classified polynomial fit of
+maximum degree three. Coefficients are in ascending Celsius powers and canonical output units;
+fits preserve their source/method/domain and never acquire measured-knot status. Admission checks
+positive values at both endpoints and all interior stationary points and refuses numerically
+cancellation-dominated positivity. All fitted/interpolated laws require explicit estimate consent.
+Local Simpson integration is algebraically exact through cubic degree and avoids subtracting large
+absolute enthalpies near equilibrium. Existing tabulated arithmetic and serialization are unchanged.
+The same law reaches dry thermal stepping and source-locked surface replay; evidence qualification
+is independent from physical specimen validation, uncertainty propagation and garment safety.

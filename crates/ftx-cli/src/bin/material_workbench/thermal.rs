@@ -8,6 +8,28 @@ use serde_json::{Value, json};
 
 use super::{invalid, read};
 
+pub(super) fn point(id: &str, temperature: &str, allow_estimates: bool) -> Result<Value, Refusal> {
+    let t: f64 = temperature
+        .parse()
+        .map_err(|_| invalid("temperature must be in degrees Celsius"))?;
+    let snapshot = catalog()?.resolve(&Selection {
+        id: id.into(),
+        allow_estimates,
+        ..Selection::default()
+    })?;
+    let law = ftx_pattern::material_thermal::ThermalLaw::from_material(
+        snapshot.material(),
+        snapshot.allows_estimates(),
+    )?;
+    let resistance = law.resistance_at(t)?;
+    let capacity = law.capacity_at(t)?;
+    Ok(json!({"schema":"ftx-thermal-point/1", "temperature_c":t,
+        "temperature_domain_c":law.domain(), "resistance_m2_k_w":resistance,
+        "areal_heat_capacity_j_m2_k":capacity, "selection":snapshot.frozen_selection(),
+        "material":snapshot, "model":"effective dry sheet at the stated material temperature",
+        "uncertainty_propagated":false, "comfort_claim":false, "empirical_validation_claim":false}))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Input {
@@ -115,7 +137,7 @@ fn evaluate(input: Input) -> Result<Value, Refusal> {
         return Err(invalid("steady area-scaled heat overflow"));
     }
     let accuracy_note = if model.temperature_domain().is_some() {
-        "Condition-qualified temperature interpolation; enthalpy-conservative time stepping. No extrapolation. Refine cells_per_layer and step_seconds to check discretization error; this is not garment validation."
+        "Condition-qualified temperature interpolation or published fit; enthalpy-conservative time stepping. No extrapolation. Refine cells_per_layer and step_seconds to check discretization error; this is not garment validation."
     } else {
         "Constant effective layer properties; refine cells_per_layer and step_seconds to check discretization error."
     };

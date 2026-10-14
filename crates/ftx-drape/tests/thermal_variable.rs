@@ -339,3 +339,72 @@ fn characterized_domains_intersect_across_layers_and_uniform_states_stay_exact()
     assert_eq!(result.inside_flux_w_m2, 0.0);
     assert!(m.advance(&[10.0; 4], 5.0, boundary).is_err());
 }
+
+#[test]
+fn polynomial_enthalpy_drives_the_existing_solver_and_source_locked_surface() {
+    use ftx_pattern::material_thermal::PolynomialFit;
+    let mut selection = selection();
+    let cp = selection
+        .record
+        .as_mut()
+        .unwrap()
+        .thermal_response
+        .as_mut()
+        .unwrap()
+        .specific_heat
+        .as_mut()
+        .unwrap();
+    cp.points.clear();
+    cp.polynomial = Some(PolynomialFit {
+        coefficients: [1000.0, 20.0, 2.0, 0.1],
+        domain_c: [0.0, 60.0],
+    });
+    let model = model(&selection, 1);
+    let step = model.advance(&[10.0], 5.0, boundary()).unwrap();
+    // Independent quartic primitive and scalar balance; no use of ThermalLaw or solver integration.
+    let h = |t: f64| 200.0 * t + 2.0 * t * t + (0.4 / 3.0) * t * t * t + 0.005 * t * t * t * t;
+    let residual = |t: f64| h(t) - h(10.0) - 5.0 * ((30.0 - t) / 0.3 - t / 0.4);
+    let (mut lo, mut hi) = (10.0, 30.0);
+    for _ in 0..60 {
+        let mid = (lo + hi) / 2.0;
+        if residual(mid) > 0.0 {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    near(step.temperature_c[0], (lo + hi) / 2.0, 1e-9);
+    near(
+        step.stored_change_j_m2,
+        h(step.temperature_c[0]) - h(10.0),
+        1e-8,
+    );
+    near(step.balance_error_j_m2, 0.0, 1e-7);
+    assert!(
+        model.snapshot()["storage"]
+            .as_str()
+            .unwrap()
+            .contains("polynomial")
+    );
+    let s = surface(&selection);
+    let restored = Surface::from_snapshot(&s.snapshot()).unwrap();
+    assert_eq!(s.snapshot(), restored.snapshot());
+    let x = [
+        Vec3::ZERO,
+        Vec3::new(2.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    ];
+    let step = restored
+        .advance(&restored.initial(10.0).unwrap(), &x, 2.5, &[boundary()])
+        .unwrap();
+    near(step.state.temperature_c()[0][0], (lo + hi) / 2.0, 1e-9);
+    near(
+        step.stored_change_j,
+        0.5 * (h(step.state.temperature_c()[0][0]) - h(10.0)),
+        1e-8,
+    );
+    let mut changed = s.snapshot();
+    changed["columns"][0]["layers"][0]["authored"]["thermal_response"]["specific_heat"]["polynomial"]
+        ["coefficients"][0] = json!(999.0);
+    assert!(Surface::from_snapshot(&changed).is_err());
+}

@@ -1,0 +1,18 @@
+{
+  "schema": "ftx-thermal-transient/1",
+  "layers": [
+    {"id": "nist/7282/aralite", "allow_estimates": true},
+    {"id": "nist/7282/nomex-iii-defender", "allow_estimates": true}
+  ],
+  "interface_resistance_m2_k_w": [0.005],
+  "cells_per_layer": 4,
+  "area_m2": 1.0,
+  "inside_c": 35.0,
+  "outside_c": 20.0,
+  "inside_resistance_m2_k_w": 0.1,
+  "outside_resistance_m2_k_w": 0.1,
+  "initial_temperature_c": 23.0,
+  "step_seconds": 0.5,
+  "steps": 20,
+  "record_every": 5
+}

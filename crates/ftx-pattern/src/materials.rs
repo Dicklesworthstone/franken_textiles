@@ -17,6 +17,8 @@ pub const CATALOG_SCHEMA: &str = "ftx-textile-catalog/1";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Form {
+    /// A finished sheet whose weave/knit/bonded construction is not established by the source.
+    Sheet,
     /// Constituent fiber, not a sheet.
     Fiber,
     /// Spun or filament yarn, including sewing thread.
