@@ -54,10 +54,9 @@ Unicode decimal digits).
 `ftx-conformance/tests/trace_raster.rs`). `load_png`: Pillow 12.3's `load_image` semantics (palette, gray+alpha
 and RGBA composited on white with Pillow's fixed-point `alpha_composite`; 1/2/4-bit gray scaled, 16-bit gray
 clipped at 255, 16-bit colour to its high byte; gray/RGB `tRNS` ignored), every filter and Adam7: 55 PNGs
-bit-identical. Baseline and progressive 8-bit JPEGs (gray, YCbCr, CMYK and YCCK; an EXIF orientation is ignored, as `load_image` ignores it) and
+bit-identical. Baseline and progressive 8-bit JPEGs (gray, YCbCr, CMYK and YCCK; progressive block smoothing via `jdcoefct.c` `decompress_smooth_data`; Pillow's EXIF `XResolution` length-1 and MPF `<16`-byte `MPEntry` header-walk refusals; an EXIF orientation is ignored, as `load_image` ignores it) and
 lossless/lossy WebP images (`VP8L`, `VP8 `, `VP8X` with alpha composited on white; an animation's first frame
-at its offset on the canvas, as `Image.open` shows it) decode in pure Rust (`raster::jpeg`, `raster::webp`);
-a JPEG libjpeg would block-smooth is refused.
+at its offset on the canvas, as `Image.open` shows it) decode in pure Rust (`raster::jpeg`, `raster::webp`).
 Colour (OpenCV 5.0 `cvtColor`, 8-bit): Lab is OpenCV's integer formula over tables built as OpenCV builds them,
 including its truncating `softfloat` cube root, bit-identical over all 16,777,216 colours; the `auto`
 channel (float32 Lab distance) bit-identical. Gray and HSV saturation are OpenCV's own fixed-point code,
