@@ -11,6 +11,7 @@ pub mod doc;
 pub mod draft;
 pub mod instance;
 pub mod material_catalog;
+pub mod material_cost;
 pub mod materials;
 pub mod pattern;
 pub mod round;

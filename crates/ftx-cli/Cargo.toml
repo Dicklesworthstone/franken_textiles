@@ -1,5 +1,6 @@
 [package]
 name = "ftx-cli"
+default-run = "ftx"
 description = "FrankenTextiles command line: validate patterns and drape them on a body (the skill calls `ftx`)"
 version.workspace = true
 edition.workspace = true

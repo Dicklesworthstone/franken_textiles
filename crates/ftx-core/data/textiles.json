@@ -6,7 +6,7 @@
       "composition": {"cotton": 1.0}, "identity_source": "supplier",
       "construction": {"weave": "muslin", "variant": "45 inch width"},
       "properties": {
-        "areal_mass": {"value": 3.5, "range": [3.0, 3.5], "unit": "oz/yd2", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier grade; reported 3-3.5 oz per square yard."},
+        "areal_mass": {"value": 3.25, "range": [3.0, 3.5], "unit": "oz/yd2", "source": "supplier", "evidence": "estimated", "conditions": "Explicit midpoint of supplier 3-3.5 oz/yd2 range; no measured nominal is reported."},
         "width": {"value": 45, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Approximate width."},
         "warp_count": {"value": 78, "unit": "threads/in", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier thread count; not a stiffness measurement."},
         "weft_count": {"value": 76, "unit": "threads/in", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier thread count; not a stiffness measurement."}
@@ -17,12 +17,10 @@
     {
       "id": "fs_il019_natural", "name": "Fabrics-store IL019 Natural linen", "form": "woven",
       "composition": {"linen_flax": 1.0}, "identity_source": "supplier",
-      "construction": {"weave": "plain", "variant": "IL019 Natural middle weight"},
+      "construction": {"weave": "plain", "variant": "IL019 Natural middle weight", "supplier_thread_counts": "Warp 46 and weft 37; count units are unspecified in the supplier table, so not normalized. [source: supplier]"},
       "properties": {
         "areal_mass": {"value": 5.3, "unit": "oz/yd2", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal product weight."},
-        "width": {"value": 58, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal product width."},
-        "warp_count": {"value": 46, "unit": "threads/in", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier warp count."},
-        "weft_count": {"value": 37, "unit": "threads/in", "source": "supplier", "evidence": "manufacturer", "conditions": "Supplier weft count."}
+        "width": {"value": 58, "unit": "in", "source": "supplier", "evidence": "manufacturer", "conditions": "Nominal product width."}
       },
       "sources": {"supplier": {"locator": "https://fabrics-store.com/fabrics/linen-fabric-IL019-natural-middle", "title": "Fabrics-store IL019 Natural technical specifications", "accessed": "2026-10-13"}},
       "notes": ["Finish and lot matter; this is not a universal linen material law."]
