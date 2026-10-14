@@ -19,6 +19,9 @@ use crate::sparse::{Coo, Csr, CsrFill, LdltFactor, LdltOptions, SymbolicLdlt, am
 /// Edge (lo, hi) → its uses as (edge start, edge end, opposite vertex, triangle).
 type EdgeUses = std::collections::BTreeMap<(usize, usize), Vec<(usize, usize, usize, usize)>>;
 
+mod materials;
+pub use materials::SheetMaterial;
+
 /// The cloth: flat rest geometry, elements, lumped masses and material.
 #[derive(Clone, Debug)]
 pub struct ClothModel {
@@ -40,6 +43,11 @@ pub struct ClothModel {
     /// Tension-only elastic segments (a casing's elastic), between vertices that share an element so the
     /// Hessian pattern does not change.
     pub elastics: Vec<ElasticSegment>,
+    // None preserves the homogeneous model's arithmetic and mutable legacy coefficients.
+    element_materials: Option<Vec<Membrane>>,
+    hinge_bending: Option<Vec<f64>>,
+    // Each hinge's adjacent triangles and their shares of the existing bending integration area.
+    hinge_support: Vec<[(usize, f64); 2]>,
 }
 
 impl ClothModel {
@@ -91,7 +99,7 @@ impl ClothModel {
         bending: f64,
         areal_density: f64,
     ) -> Result<Self, Refusal> {
-        if areal_density.is_nan() || areal_density <= 0.0 {
+        if !areal_density.is_finite() || areal_density <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 format!("areal density {areal_density} kg/m² must be positive"),
@@ -179,10 +187,14 @@ impl ClothModel {
             }
         }
         // Each triangle's area goes to its interior hinges, so free edges are not too soft.
+        let mut hinge_support = Vec::with_capacity(hinges.len());
         for (h, [t1, t2]) in hinges.iter_mut().zip(hinge_tris) {
-            h.set_area(
-                membranes[t1].area / interior[t1] as f64 + membranes[t2].area / interior[t2] as f64,
+            let (a, b) = (
+                membranes[t1].area / interior[t1] as f64,
+                membranes[t2].area / interior[t2] as f64,
             );
+            h.set_area(a + b);
+            hinge_support.push([(t1, a), (t2, b)]);
         }
         Ok(Self {
             rest: rest.into_iter().map(Option::unwrap_or_default).collect(),
@@ -193,6 +205,9 @@ impl ClothModel {
             membrane,
             bending,
             elastics: Vec::new(),
+            element_materials: None,
+            hinge_bending: None,
+            hinge_support,
         })
     }
 
@@ -227,8 +242,23 @@ impl ClothModel {
     pub fn material(&self, e: usize) -> Membrane {
         Membrane {
             compression: self.compression[e],
-            ..self.membrane
+            ..self
+                .element_materials
+                .as_ref()
+                .map_or(self.membrane, |m| m[e])
         }
+    }
+
+    /// Effective bending coefficient of hinge `h` (N·m), including unlike adjacent sheets.
+    #[must_use]
+    pub fn hinge_rigidity(&self, h: usize) -> f64 {
+        self.hinge_bending.as_ref().map_or(self.bending, |b| b[h])
+    }
+
+    /// Whether element coefficients differ, rather than merely their source identities.
+    #[must_use]
+    pub fn is_heterogeneous(&self) -> bool {
+        self.element_materials.is_some()
     }
 
     /// Elastic energy Ψ (membrane + bending + elastics) at positions `x`.
@@ -240,7 +270,12 @@ impl ClothModel {
             .enumerate()
             .map(|(i, e)| e.energy(x, &self.material(i)))
             .sum();
-        let b: f64 = self.hinges.iter().map(|h| h.energy(x, self.bending)).sum();
+        let b: f64 = self
+            .hinges
+            .iter()
+            .enumerate()
+            .map(|(i, h)| h.energy(x, self.hinge_rigidity(i)))
+            .sum();
         let t: f64 = self.elastics.iter().map(|e| e.energy(x)).sum();
         m + b + t
     }
@@ -581,8 +616,8 @@ impl Solver {
             let mut l = e.local(x, &self.model.material(i));
             scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
-        for h in &self.model.hinges {
-            let mut l = h.local(x, self.model.bending);
+        for (i, h) in self.model.hinges.iter().enumerate() {
+            let mut l = h.local(x, self.model.hinge_rigidity(i));
             scatter(&h.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for e in &self.model.elastics {
@@ -1013,8 +1048,8 @@ impl Solver {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
         }
-        for h in &self.model.hinges {
-            let l = h.local(&self.x, self.model.bending);
+        for (i, h) in self.model.hinges.iter().enumerate() {
+            let l = h.local(&self.x, self.model.hinge_rigidity(i));
             for (a, &vi) in h.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
