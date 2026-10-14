@@ -26,7 +26,7 @@ pub use annotate::{Names, annotate};
 pub use audit::{AuditOptions, audit, label_consensus};
 pub use length::{parse_length, parse_number};
 pub use ordered::OValue;
-pub use py_order::{annotate_py, fit_scale_py};
+pub use py_order::{alter_py, annotate_py, fit_scale_py};
 pub use refs::{measure_ref, piece_instance, resolve_side, twin};
 pub use scale::fit_scale;
 pub use trace::{Trace, TraceOptions, trace_image};

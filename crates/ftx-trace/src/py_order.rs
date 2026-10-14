@@ -1,5 +1,7 @@
-//! The reference's key order for `annotate` and `scale-fit` results (spec 04 §10.10, §10.14). Python's
-//! dicts keep insertion order and `json.dump` writes it, while the typed documents sort their free-form maps.
+//! The reference's key order for `annotate`, `scale-fit` and `alter` results (spec 04 §10.10, §10.14; spec
+//! 01 §10).
+//! Python's dicts keep insertion order and `json.dump` writes it, while the typed documents sort their
+//! free-form maps.
 //! So each result is laid out from a skeleton. The skeleton is the input with the reference's dict
 //! operations replayed on it: every value it copies is kept exactly (an integer stays an integer, a `null`
 //! stays), and every value it computes is marked. The typed result fills the marks, and
@@ -657,4 +659,97 @@ pub fn fit_scale_py(
         meta.set("scale_fit", rep.clone());
     }
     Ok((reorder(&r, &s), reorder(&report, &rep), data))
+}
+
+/// An `alter.py` result (`result`, the typed op's output) in the reference's key order: a deep copy of
+/// `input` with the op's edits in place, then `{"op", "args", "why"}` appended to `meta.history` and
+/// `meta.origin` set. `piece` is the op's `--piece` (slash-spread, move, cap-ease) or the target piece
+/// (transfer-curve); `item` the moved vertex (move) or the target edge (transfer-curve).
+#[must_use]
+pub fn alter_py(
+    input: &PyJson,
+    result: &Value,
+    op: &str,
+    piece: Option<&str>,
+    item: Option<&str>,
+) -> PyJson {
+    let args: &[&str] = match op {
+        "slash-spread" => &["piece", "axis", "at", "add"],
+        "move" => &["piece", "vertex", "dx", "dy"],
+        "true-seam" => &["seam", "end", "moved_mm"],
+        "cap-ease" => &["piece", "seams", "target", "height_scale"],
+        _ => &["from", "to"],
+    };
+    let mut s = Sk::from_py(input);
+    if let Some(Sk::List(pieces)) = s.get_mut("pieces")
+        && let Some(p) = pieces
+            .iter_mut()
+            .find(|p| p.get("id").and_then(Sk::as_text).as_deref() == piece)
+    {
+        alter_marks(p, op, item);
+    }
+    if !s.has("meta") {
+        s.set("meta", Sk::Dict(Vec::new()));
+    }
+    if let Some(meta) = s.get_mut("meta") {
+        if !meta.has("history") {
+            meta.set("history", Sk::List(Vec::new()));
+        }
+        if let Some(Sk::List(history)) = meta.get_mut("history") {
+            let args = args.iter().map(|k| ((*k).to_string(), Sk::Computed));
+            history.push(Sk::Dict(vec![
+                ("op".to_string(), Sk::Computed),
+                ("args".to_string(), Sk::Dict(args.collect())),
+                ("why".to_string(), Sk::Computed),
+            ]));
+        }
+        meta.set("origin", Sk::text("VECTOR_EDIT"));
+    }
+    reorder(result, &s)
+}
+
+/// What an alteration recomputes in its piece, beyond values that visibly change: slash-spread rewrites
+/// every vertex as floats, move its vertex, and `_shift_marks` (slash-spread, cap-ease) the grain and
+/// every internal, decoration and trace-mark point; transfer-curve sets a new `poly` curve.
+fn alter_marks(p: &mut Sk, op: &str, item: Option<&str>) {
+    match (op, item) {
+        ("slash-spread", _) => {
+            if let Some(Sk::Dict(vs)) = p.get_mut("vertices") {
+                for (_, v) in vs.iter_mut() {
+                    *v = Sk::Computed;
+                }
+            }
+        }
+        ("move", Some(vid)) => {
+            if let Some(v) = p.get_mut("vertices").and_then(|vs| vs.get_mut(vid)) {
+                *v = Sk::Computed;
+            }
+        }
+        ("transfer-curve", Some(eid)) => {
+            if let Some(e) = p
+                .items_mut("edges")
+                .iter_mut()
+                .find(|e| e.get("id").and_then(Sk::as_text).as_deref() == Some(eid))
+            {
+                let curve = vec![
+                    ("type".to_string(), Sk::Computed),
+                    ("c".to_string(), Sk::Computed),
+                ];
+                e.set("curve", Sk::Dict(curve));
+            }
+        }
+        _ => {}
+    }
+    if op == "slash-spread" || op == "cap-ease" {
+        if p.get("grain").is_some_and(Sk::truthy) {
+            p.set("grain", Sk::Computed);
+        }
+        for key in ["internal", "decor", "trace_marks"] {
+            for it in p.items_mut(key) {
+                if it.has("pts") {
+                    it.set("pts", Sk::Computed);
+                }
+            }
+        }
+    }
 }

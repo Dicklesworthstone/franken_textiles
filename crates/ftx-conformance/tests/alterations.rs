@@ -5,10 +5,12 @@
 //! a refusal whose message contains the reference's (ftx names what is missing where the reference's
 //! `KeyError` gives only the key).
 
-use ftx_conformance::{Compare, fixture};
+use ftx_conformance::{Compare, fixture, fixture_dir};
 use ftx_core::Refusal;
+use ftx_export::pyjson::PyJson;
 use ftx_pattern::Pattern;
 use ftx_pattern::alter::{cap_ease, move_vertex, slash_spread, transfer_curve, true_seam};
+use ftx_trace::alter_py;
 use serde_json::Value;
 
 fn run(inp: &Value) -> Result<Value, Refusal> {
@@ -78,4 +80,44 @@ fn alterations_match_the_reference() {
     println!("alterations: {} cases", cases.len());
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     cmp.finish("alteration outputs");
+}
+
+/// The file `alter.py` writes, byte for byte: the fixture keeps each document in the reference's key order,
+/// and `alter_py` lays the typed result out in it (`json.dumps(…, indent=1)`).
+#[test]
+fn alterations_write_the_reference_bytes() {
+    let raw = std::fs::read_to_string(fixture_dir().join("alter/alterations.json")).unwrap();
+    let ordered = PyJson::parse(&raw).unwrap();
+    let fx = fixture("alter", "alterations");
+    let Some(PyJson::List(cases)) = ordered.get("cases") else {
+        panic!("no cases")
+    };
+    let (mut checked, mut failures) = (0, Vec::new());
+    for (case, typed) in cases.iter().zip(fx["cases"].as_array().unwrap()) {
+        let Some(want) = case.get("output").and_then(|o| o.get("doc")) else {
+            continue;
+        };
+        let (id, inp) = (typed["id"].as_str().unwrap(), &typed["input"]);
+        let (op, a) = (inp["op"].as_str().unwrap(), &inp["args"]);
+        let (piece, item) = match op {
+            "transfer-curve" => {
+                let (p, e) = a["dst_ref"].as_str().unwrap().split_once('/').unwrap();
+                (Some(p), Some(e))
+            }
+            "move" => (a["piece"].as_str(), a["vertex"].as_str()),
+            _ => (a["piece"].as_str(), None),
+        };
+        let input = case.get("input").and_then(|i| i.get("pattern")).unwrap();
+        let got = alter_py(input, &run(inp).unwrap(), op, piece, item).dumps(Some(1));
+        let want = want.dumps(Some(1));
+        if let Some((g, w)) = got.lines().zip(want.lines()).find(|(g, w)| g != w) {
+            failures.push(format!("{id}: got {g:?}, want {w:?}"));
+        } else if got != want {
+            failures.push(format!("{id}: lengths differ"));
+        }
+        checked += 1;
+    }
+    println!("{checked} altered documents compared byte for byte");
+    assert!(checked >= 17, "only {checked} cases");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

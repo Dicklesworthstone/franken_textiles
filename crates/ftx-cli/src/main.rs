@@ -457,7 +457,12 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .positional
         .get(2)
         .ok_or_else(|| bad_input(format!("ftx alter {op} needs a pattern file")))?;
-    let (doc, _) = read_json(pattern_path)?;
+    let (doc, bytes) = read_json(pattern_path)?;
+    // the input in its key order: alter.py writes a deep copy with the edits in place
+    let ordered = std::str::from_utf8(&bytes)
+        .map_err(|e| e.to_string())
+        .and_then(ftx_export::pyjson::PyJson::parse)
+        .map_err(|e| bad_input(format!("{pattern_path}: {e}")))?;
     let out = PathBuf::from(required(args, "out")?);
     let text = |k: &str| required(args, k);
     let num = |k: &str, default: Option<f64>| -> Result<f64, Refusal> {
@@ -513,9 +518,17 @@ fn cmd_alter(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let errors = Pattern::new(result.clone()).structure_errors();
     // Finish serialization before touching the filesystem. create_new is an atomic no-clobber
     // check, including symlinks/hard links: a mistaken --out must not destroy the source pattern.
-    let body = serde_json::to_string_pretty(&result)
-        .map_err(|e| bad_input(format!("cannot serialize altered pattern: {e}")))?
-        + "\n";
+    // The bytes are alter.py's: its key order, json.dumps(…, indent=1).
+    let target = args.options.get("to").and_then(|t| t.split_once('/'));
+    let (piece, item) = match op {
+        "transfer-curve" => (target.map(|t| t.0), target.map(|t| t.1)),
+        "move" => (
+            args.options.get("piece").map(String::as_str),
+            args.options.get("vertex").map(String::as_str),
+        ),
+        _ => (args.options.get("piece").map(String::as_str), None),
+    };
+    let body = ftx_trace::alter_py(&ordered, &result, op, piece, item).dumps(Some(1)) + "\n";
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
