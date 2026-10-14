@@ -185,16 +185,19 @@ calibration for your camera.** Supply a calibration measured for the exact lens,
 zoom, crop/stabilization geometry, resolution and already-applied rotation of your image.
 `calibration_evidence` identifies that calibration and its assumptions; it is not validated
 by matching an identifier. This command consumes intrinsics, it does not estimate them.
-The existing `calibrate-camera` command estimates a zero-distortion pinhole only and does
-not provide a Brown-distortion calibration.
+`calibrate-camera` defaults to zero-distortion pinhole calibration. Its explicit
+`brown5_zero_skew` model also fits all five Brown coefficients from coordinate observations
+or ChArUco photographs; see `docs/camera-calibration.md` for the stronger view, corner,
+held-out and non-folding-domain requirements.
 
-For pinhole images, `--lens` also accepts the saved `ftx-camera-calibration/1` report
+For either calibrated model, `--lens` also accepts the saved `ftx-camera-calibration/1` report
 from `ftx measure calibrate-camera`. It re-runs calibration from the retained observations
 and held-out assignments, requires an accepted solution, and verifies the stored intrinsics
 against the recomputed values. Failed/altered reports and CLI envelopes are refused. There
 is no need to transcribe the matrix into a second file; the original report and its hash are
-retained with `lens_input.recomputed: true`. This does not upgrade the pinhole model to a
-Brown-distortion fit or establish that physical lens settings stayed unchanged.
+retained with `lens_input.recomputed: true`. Replay uses the original declared model; it
+never upgrades a pinhole calibration to Brown or establishes that physical lens settings
+stayed unchanged. Fitted Brown parameters remain conditional estimates without covariance.
 
 ```bash
 ftx measure calibrate-camera camera-views.json --out camera.json --json

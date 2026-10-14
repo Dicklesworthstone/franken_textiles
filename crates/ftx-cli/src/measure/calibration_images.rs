@@ -1,4 +1,4 @@
-//! ChArUco photographs -> the shared Rust pinhole calibration, with predeclared held-out evidence.
+//! ChArUco photographs -> shared Rust camera calibration, with predeclared held-out evidence.
 //! Only detection is external. Pixels are processed once per view and never embedded in a report.
 
 use std::{collections::BTreeSet, path::Path};
@@ -7,7 +7,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, receipt::sha256_hex};
 use ftx_measure::{
     photo::{
         MAX_PHOTO_PIXELS,
-        intrinsics::{CalibrationInput, Control, Corner, View},
+        intrinsics::{CalibrationInput, Control, Corner, DistortionFit, View},
     },
     triangulate::{FrameId, Partition},
 };
@@ -31,7 +31,10 @@ struct Manifest {
     schema: String,
     image_model: String,
     lens_id: String,
+    #[serde(default)]
     pinhole_evidence: String,
+    #[serde(default)]
+    distortion_fit: Option<DistortionFit>,
     reference_evidence: String,
     image_size_px: [u32; 2],
     rotation_cw_deg: u16,
@@ -89,6 +92,17 @@ fn text(s: &str, limit: usize) -> bool {
 }
 
 fn prepare(manifest: &Manifest, board: &Board) -> Result<CalibrationInput, Refusal> {
+    match (manifest.image_model.as_str(), &manifest.distortion_fit) {
+        ("pinhole_zero_skew", None) if text(&manifest.pinhole_evidence, 4096) => {}
+        ("brown5_zero_skew", Some(fit)) if manifest.pinhole_evidence.is_empty() => {
+            fit.validate()?;
+        }
+        _ => {
+            return Err(bad_input(
+                "select pinhole_zero_skew with pinhole_evidence, or brown5_zero_skew with distortion_fit; never mix raw and rectified models",
+            ));
+        }
+    }
     let pixels = u64::from(manifest.image_size_px[0]) * u64::from(manifest.image_size_px[1]);
     if manifest.views.len() > 32
         || pixels > MAX_PHOTO_PIXELS as u64
@@ -100,9 +114,7 @@ fn prepare(manifest: &Manifest, board: &Board) -> Result<CalibrationInput, Refus
         ));
     }
     if manifest.schema != "ftx-camera-calibration-images/1"
-        || manifest.image_model != "pinhole_zero_skew"
         || !text(&manifest.lens_id, 256)
-        || !text(&manifest.pinhole_evidence, 4096)
         || !text(&manifest.reference_evidence, 4096)
         || manifest.image_size_px.iter().any(|n| *n < 16)
         || ![0, 90, 180, 270].contains(&manifest.rotation_cw_deg)
@@ -116,21 +128,27 @@ fn prepare(manifest: &Manifest, board: &Board) -> Result<CalibrationInput, Refus
         .iter()
         .filter(|v| v.partition == Partition::Fit)
         .count();
-    if fits < 3 || fits == manifest.views.len() {
-        return Err(bad_input(
-            "image calibration requires at least three fit views and one independently held-out view, assigned before fitting",
-        ));
+    let minimum_views = if manifest.distortion_fit.is_some() {
+        4
+    } else {
+        3
+    };
+    if fits < minimum_views || fits == manifest.views.len() {
+        return Err(bad_input(format!(
+            "image calibration requires at least {minimum_views} fit views and one independently held-out view, assigned before fitting"
+        )));
     }
     let total = board.columns * board.rows;
     let held: BTreeSet<_> = manifest.held_out_corner_ids.iter().copied().collect();
     if held.len() != manifest.held_out_corner_ids.len()
         || held.len() < 4
         || held.iter().any(|&id| id >= total)
-        || total - held.len() < 8
+        || total - held.len() < minimum_fit_corners(manifest)
     {
-        return Err(bad_input(
-            "declare at least four unique in-range held_out_corner_ids and leave at least eight fit corners",
-        ));
+        return Err(bad_input(format!(
+            "declare at least four unique in-range held_out_corner_ids and leave at least {} fit corners",
+            minimum_fit_corners(manifest)
+        )));
     }
     let mut frames = BTreeSet::new();
     let mut paths = BTreeSet::new();
@@ -162,7 +180,7 @@ fn prepare(manifest: &Manifest, board: &Board) -> Result<CalibrationInput, Refus
         image_model: manifest.image_model.clone(),
         lens_id: manifest.lens_id.clone(),
         pinhole_evidence: manifest.pinhole_evidence.clone(),
-        distortion_fit: None,
+        distortion_fit: manifest.distortion_fit.clone(),
         reference_evidence: manifest.reference_evidence.clone(),
         image_size_px: manifest.image_size_px,
         rotation_cw_deg: manifest.rotation_cw_deg,
@@ -176,6 +194,14 @@ fn prepare(manifest: &Manifest, board: &Board) -> Result<CalibrationInput, Refus
 struct Detection {
     id: usize,
     point_px: Vec2,
+}
+
+fn minimum_fit_corners(manifest: &Manifest) -> usize {
+    if manifest.distortion_fit.is_some() {
+        12
+    } else {
+        8
+    }
 }
 
 fn observations(
@@ -239,9 +265,10 @@ fn observations(
         .filter(|p| p.partition == Partition::Fit)
         .count();
     let held = points.len() - fit;
-    if fit < 8 || held < 4 {
+    let minimum = minimum_fit_corners(manifest);
+    if fit < minimum || held < 4 {
         return Err(Refusal::new(RefusalCode::Unscaled,
-            format!("insufficient ChArUco evidence: {fit} fit and {held} held-out corners; need at least 8 and 4 in EVERY image"))
+            format!("insufficient ChArUco evidence: {fit} fit and {held} held-out corners; need at least {minimum} and 4 in EVERY image"))
             .repair("retake a sharp, flat, well-lit board with the predeclared held-out corners visible; do not change partitions to rescue a fit"));
     }
     points.sort_by(|a, b| a.id.cmp(&b.id));
@@ -309,10 +336,14 @@ pub(in crate::measure) fn load(
         });
     }
     let receipt = json!({"schema":"ftx-camera-image-acquisition/1",
-        "manifest_path":manifest_path,"manifest_sha256":sha256_hex(&manifest_bytes),"manifest":manifest_value,
-        "sheet_path":sheet_path,"sheet_sha256":sha256_hex(&sheet_bytes),"sheet":sheet,"views":receipts,
-        "corner_selection":"all detected corners; partitions declared before calibration; no RANSAC, trimming or fit-dependent redetection",
-        "no_claim":"Original pinhole pixels are required. No distortion fit, intrinsic covariance, physical print-scale verification, or proof of unchanged lens settings. Detection errors may be correlated within a frame."});
+    "manifest_path":manifest_path,"manifest_sha256":sha256_hex(&manifest_bytes),"manifest":manifest_value,
+    "sheet_path":sheet_path,"sheet_sha256":sha256_hex(&sheet_bytes),"sheet":sheet,"views":receipts,
+    "corner_selection":"all detected corners; partitions declared before calibration; no RANSAC, trimming or fit-dependent redetection",
+    "no_claim":if manifest.distortion_fit.is_some() {
+        "Raw Brown-model pixels; no fitted-lens redetection. Inverse certification is not empirical lens-disk coverage. No intrinsic covariance, physical print-scale verification, or proof of unchanged lens settings. Detection errors may be correlated within a frame."
+    } else {
+        "Original pinhole pixels are required. No distortion fit, intrinsic covariance, physical print-scale verification, or proof of unchanged lens settings. Detection errors may be correlated within a frame."
+    }});
     Ok((input, receipt))
 }
 
@@ -326,6 +357,7 @@ mod tests {
             image_model: "pinhole_zero_skew".into(),
             lens_id: "synthetic".into(),
             pinhole_evidence: "Analytical pinhole renderer".into(),
+            distortion_fit: None,
             reference_evidence: "Synthetic, perfectly flat metric board".into(),
             image_size_px: [800, 600],
             rotation_cw_deg: 0,
@@ -441,5 +473,40 @@ mod tests {
             }
             assert!(observations(&r, &manifest(), 35).is_err(), "case {kind}");
         }
+    }
+
+    #[test]
+    fn brown_acquisition_requires_explicit_raw_model_and_stronger_fit_evidence() {
+        let mut m = manifest();
+        m.image_model = "brown5_zero_skew".into();
+        m.pinhole_evidence.clear();
+        m.distortion_fit = Some(DistortionFit {
+            model_evidence: "Independent synthetic Brown renderer".into(),
+            max_radius: 0.9,
+            max_iterations: 80,
+        });
+        assert!(prepare(&m, &board()).is_err()); // only three fit views
+        m.views.push(Capture {
+            image: "view4.png".into(),
+            frame: FrameId {
+                stream: "synthetic".into(),
+                timestamp_us: 400_000,
+            },
+            partition: Partition::Fit,
+        });
+        let input = prepare(&m, &board()).unwrap();
+        assert!(input.distortion_fit.is_some());
+        assert!(input.pinhole_evidence.is_empty());
+        let mut sparse = detections();
+        sparse["reference"]["corners"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|p| p["id"].as_u64().unwrap() < 12 || p["id"] == 28 || p["id"] == 34);
+        assert!(observations(&sparse, &m, 35).is_err()); // ten fit points, four holdouts
+        m.pinhole_evidence = "Contradictory rectified-image claim".into();
+        assert!(prepare(&m, &board()).is_err());
+        m.pinhole_evidence.clear();
+        m.distortion_fit.as_mut().unwrap().max_radius = -1.0;
+        assert!(prepare(&m, &board()).is_err());
     }
 }

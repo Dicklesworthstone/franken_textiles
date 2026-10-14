@@ -30,7 +30,7 @@ jobs:
       - name: Synthetic pixel and physical-ID conformance
         run: python tools/photo/test_charuco_detector.py
       - name: Rust scale and evidence gates
-        run: cargo test --locked -p ftx-measure --test photo --test charuco_evidence --test photo_lens
+        run: cargo test --locked -p ftx-measure --test photo --test charuco_evidence --test photo_lens --test camera_brown
       - name: Calibration, ChArUco and plain-sheet end-to-end workflows
         run: cargo test --locked -p ftx-cli --test camera_image_workflow --test camera_calibration_workflow --test photo_charuco_workflow --test photo_image_workflow --test photo_workflow -- --include-ignored
       - name: Blur diagnostic unit tests

@@ -353,3 +353,196 @@ fn inconsistent_held_out_pixels_reject_calibration_without_changing_fit_or_overw
         );
     }
 }
+
+// Direct inverse warping of raw Brown pixels. Neither the Rust fit nor OpenCV calibration/
+// projection routines supply the synthetic observations or the independent measurement targets.
+const BROWN_RENDER: &str = r#"
+import cv2, json, numpy as np
+from pathlib import Path
+s=json.loads(Path('sheet/calib-sheet-letter.json').read_text())
+page=cv2.imread('sheet/calib-sheet-letter.png', cv2.IMREAD_GRAYSCALE)
+b=s['board']; ox,oy=b['origin_px']; rw,rh=b['size_px']
+sx=b['size_mm'][0]/1000/rw; sy=b['size_mm'][1]/1000/rh
+S=np.array([[sx,0,(.5-ox)*sx],[0,sy,(.5-oy)*sy],[0,0,1.]])
+fx,fy,cx,cy=1050.,1000.,790.,610.
+def distort(x,y):
+    r2=x*x+y*y; radial=1+.12*r2-.035*r2*r2+.009*r2*r2*r2
+    return (x*radial+.004*x*y-.0015*(r2+2*x*x),
+            y*radial+.002*(r2+2*y*y)-.003*x*y)
+yy,xx=np.mgrid[:1200,:1600].astype(np.float64)
+dx,dy=(xx-cx)/fx,(yy-cy)/fy
+ux,uy=dx.copy(),dy.copy()
+for _ in range(30):
+    x,y=distort(ux,uy); ux+=dx-x; uy+=dy-y
+assert max(np.max(np.abs(distort(ux,uy)[0]-dx)),np.max(np.abs(distort(ux,uy)[1]-dy))) < 1e-10
+rays=np.stack((ux,uy,np.ones_like(ux))).reshape(3,-1)
+poses=[(20,-17,4,-.055,-.035,.25),(-23,24,-7,.06,.045,.27),
+       (16,28,12,-.055,.055,.28),(-27,-18,6,.06,-.055,.28),
+       (33,-22,-10,0.,-.015,.225),(-20,32,8,-.065,.02,.29)]
+for i,(a,b,c,tx,ty,tz) in enumerate(poses):
+    x,y,z=np.deg2rad([a,b,c])
+    Rx=np.array([[1,0,0],[0,np.cos(x),-np.sin(x)],[0,np.sin(x),np.cos(x)]])
+    Ry=np.array([[np.cos(y),0,np.sin(y)],[0,1,0],[-np.sin(y),0,np.cos(y)]])
+    Rz=np.array([[np.cos(z),-np.sin(z),0],[np.sin(z),np.cos(z),0],[0,0,1]])
+    R=Rz@Ry@Rx; t=np.array([tx,ty,tz])-R@np.array([.088,.066,0.])
+    G=np.column_stack((R[:,0],R[:,1],t))
+    sample=np.linalg.inv(G@S)@rays
+    mapx=(sample[0]/sample[2]).reshape(1200,1600).astype(np.float32)
+    mapy=(sample[1]/sample[2]).reshape(1200,1600).astype(np.float32)
+    im=cv2.remap(page,mapx,mapy,cv2.INTER_LINEAR,borderMode=cv2.BORDER_CONSTANT,borderValue=85)
+    cv2.imwrite(f'capture/view{i}.png',im)
+    if i==5:
+        def project(p):
+            v=G@np.array([*p,1.]); x,y=distort(v[0]/v[2],v[1]/v[2])
+            return [fx*x+cx,fy*y+cy]
+        # The second span extends below the board, not just between fitted chessboard corners.
+        points={'across_back':[project((.022,.044)),project((.154,.044))],
+                'test_span':[project((.022,.16)),project((.172,.16))]}
+        assert all(0<=p[0]<1600 and 0<=p[1]<1200 for pair in points.values() for p in pair)
+        Path('capture/brown-points.json').write_text(json.dumps(points))
+"#;
+
+#[test]
+#[ignore = "requires optional OpenCV Python detector"]
+fn raw_brown_images_calibrate_and_measure_through_the_saved_lens_without_transcription() {
+    let d = setup();
+    let mut m = manifest();
+    m["image_model"] = json!("brown5_zero_skew");
+    m.as_object_mut().unwrap().remove("pinhole_evidence");
+    m["distortion_fit"] = json!({"model_evidence":"Independent synthetic raw Brown renderer; not real camera evidence",
+        "max_radius":0.9,"max_iterations":80});
+    m["views"] = json!(
+        (0..6)
+            .map(|i| json!({"image":format!("view{i}.png"),
+        "frame":{"stream":"synthetic-burst","timestamp_us":i*100_000},
+        "partition":if i==5 {"held_out"} else {"fit"}}))
+            .collect::<Vec<_>>()
+    );
+    write(&d, "capture/views.json", &m);
+    let o = Command::new("python3")
+        .current_dir(&d)
+        .args(["-I", "-c", BROWN_RENDER])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let mut args = CALIBRATE.to_vec();
+    args.extend(["--out", "brown-camera.json"]);
+    let r = run(&d, &args, 0)["result"].clone();
+    let k = &r["solution"]["intrinsics"];
+    assert_eq!(r["status"], "ACCEPTED");
+    assert_eq!(r["input"]["image_model"], "brown5_zero_skew");
+    assert!(r["input"].get("pinhole_evidence").is_none());
+    for (field, want, tolerance) in [
+        ("focal_px", [1050., 1000.], 20.),
+        ("principal_px", [790., 610.], 10.),
+    ] {
+        for i in 0..2 {
+            assert!(
+                (k[field][i].as_f64().unwrap() - want[i]).abs() < tolerance,
+                "{k}"
+            );
+        }
+    }
+    assert!(
+        (k["distortion"]["radial"][0].as_f64().unwrap() - 0.12).abs() < 0.05,
+        "{k}"
+    );
+    assert_eq!(r["image_acquisition"]["views"].as_array().unwrap().len(), 6);
+    assert!(
+        r["image_acquisition"]["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v["detector"]["uses_lens_intrinsics"] == false)
+    );
+    assert!(
+        r["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|v| v["corners"].as_array().unwrap())
+            .all(|p| p["error_px"].as_f64().unwrap() < 1.0)
+    );
+    let measured = run(
+        &d,
+        &[
+            "measure",
+            "measure-photo",
+            "--image",
+            "capture/view5.png",
+            "--sheet",
+            "sheet/calib-sheet-letter.json",
+            "--lens",
+            "brown-camera.json",
+            "--lens-id",
+            "synthetic-pinhole",
+            "--rotation-cw-deg",
+            "0",
+            "--points",
+            "capture/brown-points.json",
+            "--out",
+            "measured-brown.json",
+        ],
+        0,
+    )["result"]
+        .clone();
+    for (name, want) in [("across_back", 132.), ("test_span", 150.)] {
+        let record = measured["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap();
+        assert!(
+            (record["value_mm"].as_f64().unwrap() - want).abs() < 1.,
+            "{record}"
+        );
+        assert_eq!(record["provenance"], "PHOTO_ESTIMATED");
+        assert!(record["sigma_mm"].as_f64().unwrap() > 0.);
+    }
+    assert_eq!(measured["photo"]["lens_input"]["recomputed"], true);
+    assert_eq!(measured["photo"]["intrinsics"], *k);
+    assert!(measured["photo"].get("homography_px_to_board_mm").is_none());
+    run(&d, &["measure", "validate", "measured-brown.json"], 0);
+    // Refitting the retained pixels is Python-free and does not need the source images.
+    write(&d, "brown-coordinates.json", &r["input"]);
+    let replay = run(
+        &d,
+        &["measure", "calibrate-camera", "brown-coordinates.json"],
+        0,
+    );
+    assert_eq!(replay["result"]["solution"], r["solution"]);
+    assert_eq!(replay["result"]["refinement"], r["refinement"]);
+    let mut changed = r.clone();
+    changed["solution"]["intrinsics"]["distortion"]["radial"][0] = json!(0.);
+    write(&d, "altered-camera.json", &changed);
+    let refused = run(
+        &d,
+        &[
+            "measure",
+            "measure-photo",
+            "--image",
+            "capture/view5.png",
+            "--sheet",
+            "sheet/calib-sheet-letter.json",
+            "--lens",
+            "altered-camera.json",
+            "--lens-id",
+            "synthetic-pinhole",
+            "--rotation-cw-deg",
+            "0",
+            "--points",
+            "capture/brown-points.json",
+            "--out",
+            "not-created.json",
+        ],
+        3,
+    );
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stored intrinsics differ")
+    );
+    assert!(!d.join("not-created.json").exists());
+}

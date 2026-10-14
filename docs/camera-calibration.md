@@ -1,4 +1,57 @@
-# Calibrate a shared pinhole camera from several sheet views
+# Calibrate a shared camera from several sheet views
+
+## Native Brown lens fitting
+
+Both coordinate input and the image manifest support `image_model: "brown5_zero_skew"`, estimating
+`fx, fy, cx, cy, k1, k2, k3, p1, p2` jointly with each fitting view's rigid pose.
+Omit `pinhole_evidence` for raw Brown input and add:
+
+```json
+"distortion_fit": {
+  "model_evidence": "Replace with evidence for unchanged lens/focus/zoom and Brown image geometry",
+  "max_radius": 0.9,
+  "max_iterations": 80
+}
+```
+
+The radius above is illustrative, not a calibration for a real camera. It is a fixed
+**undistorted normalized-coordinate** disk, not pixels. Every optimizer step and published
+lens must pass the shared camera model's conservative non-folding certificate throughout
+this disk; observations and subsequent measurements outside it refuse. Mathematical
+invertibility is not empirical validation of unsampled image regions. The report therefore
+retains the minimum/maximum fit-point radius; choose the disk using capture coverage.
+
+The implementation follows Zhang's algebraic initialization plus nonlinear pixel-error
+refinement, using the existing Brown projection rather than an external optimizer. It fits
+log focal lengths, scaled principal point, the five coefficients, and normalized rigid poses
+with analytic derivatives, column-scaled Levenberg–Marquardt and strictly decreasing objective.
+The undamped normalized Hessian must pass a 1e-10 Cholesky-pivot floor before damping: damping
+cannot make missing calibration information observable. Four fit views and one independent
+held-out view are required, with twelve fit and four held-out corners in every view. An
+invalid/ill-conditioned algebraic start refuses rather than inventing a focal-length prior.
+
+Only fit corners of fit views determine the shared camera, convergence and objective history.
+Held-out views fit only their own pose after the lens is frozen, still without using their
+held-out corners. Every original corner must then project within 3 pixels. No RANSAC trimming,
+silent view dropping or fit-dependent redetection occurs. Nonconvergence, a budget stop or a
+failed held-out gate publishes diagnostics with no usable solution. `max_iterations` is 1–200,
+default 80, with at most 16 damping trials per update.
+
+The unchanged `ftx-camera-calibration/1` report includes `refinement` for this opt-in path.
+It retains the fit-only objective history, accepted update count, scaled-gradient norm,
+rank floor, fit-radius range and termination reason. The existing `--lens` and
+`sheet-pose --calibration` consumers recompute the Brown fit before using its intrinsics.
+Inputs without `distortion_fit` retain the original pinhole algorithm and serialized fields.
+
+This is a local least-squares solution, not a global-optimum or calibration-uncertainty
+certificate. Correlated detector noise, reference flatness and print error remain outside
+the statistical model; no real-camera or real-wearer qualification follows from synthetic
+tests. Rational/fisheye/prism/rolling-shutter lens models are not supported.
+
+Mathematical sources: Zhang, *A Flexible New Technique for Camera Calibration*, MSR-TR-98-71,
+sections 2–3; OpenCV's official camera-calibration documentation, Brown radial/tangential
+projection. Synthetic tests use independently evaluated projection polynomials, not fitted
+output as an oracle.
 
 `ftx measure calibrate-camera` estimates both focal lengths and the principal
 point from identified points on a planar reference. It supplies intrinsics for
@@ -25,9 +78,11 @@ Print at actual size, check both reference rulers, and use a rigid flat board. P
 it at different **out-of-plane** tilts without changing the camera settings or image
 geometry. Apply orientation before exporting opaque 8-bit RGB/grayscale PNGs without EXIF.
 
-This is still a **zero-skew pinhole calibration**, not a Brown-distortion fit. Supply
-rectified images or independently justified negligible distortion. A successful residual
-check alone does not establish that a raw phone image follows the pinhole model.
+Choose the image model explicitly. `pinhole_zero_skew` needs rectified images or independently
+justified negligible distortion. For raw photographs, select `brown5_zero_skew`, omit
+`pinhole_evidence`, and add the `distortion_fit` object described above. The same command then
+estimates the Brown lens in Rust without passing guessed or fitted intrinsics to acquisition.
+A successful residual check alone does not establish the physical validity of either model.
 
 The manifest uses `ftx-camera-calibration-images/1`. The following paths and evidence
 strings are an example structure, not a camera calibration or verified capture:
@@ -58,9 +113,11 @@ capture assertions, not transformations. Every photograph must have the exact de
 All views share the same physical board and lens geometry; occlusion may hide different
 subsets of corners. Board IDs determine metric controls, in metres, without hand transcription.
 
-Assign both kinds of held-out evidence **before** fitting. This image workflow requires
+Assign both kinds of held-out evidence **before** fitting. Pinhole acquisition requires
 at least three fit views and one held-out view, plus at least eight detected fit corners and
-four detected held-out corners in **every** image. `held_out_corner_ids` refers to physical
+four detected held-out corners in **every** image. Brown acquisition instead requires at
+least four fit views and twelve fit corners per image, retaining the independent held-out
+view and four held-out corners per image. `held_out_corner_ids` refers to physical
 row-major internal chessboard IDs and is shared across images. The example IDs are the four
 extreme corners on the generated Letter board; use `[0,6,35,41]` for generated A4. Unlisted
 detected IDs are fit corners. Detection may use adjacent ArUco markers, but held-out
@@ -95,6 +152,7 @@ Run the synthetic image-to-calibration-to-pose workflow, including optional Open
 ```sh
 cargo test -p ftx-cli --test camera_image_workflow -- --include-ignored
 cargo test -p ftx-cli --bin ftx calibration_images
+cargo test -p ftx-measure --test camera_brown
 ```
 
 ## Run the complete synthetic example
@@ -118,9 +176,9 @@ are never overwritten. Without `--out`, the result is printed but not saved.
 
 ## Acquisition and input contract
 
-This slice fits **zero-skew pinhole intrinsics only**. Pixels must already be
+The default fits **zero-skew pinhole intrinsics**. Those pixels must already be
 rectified or have negligible distortion, with evidence for that assumption.
-It does not estimate radial/tangential lens distortion or silently remove it.
+The explicit Brown mode above instead fits radial/tangential distortion from raw pixels.
 The same lens, focus, zoom, crop, stabilization geometry, resolution and applied
 orientation must hold throughout the acquisition and subsequent reuse. Matching
 metadata is necessary but does not verify those physical conditions.
@@ -135,9 +193,10 @@ The top-level schema is `ftx-camera-calibration-input/1`. Its fields are:
 
 | Field | Meaning |
 |---|---|
-| `image_model` | Exactly `pinhole_zero_skew` |
+| `image_model` | `pinhole_zero_skew`, or explicit `brown5_zero_skew` |
 | `lens_id` | Explicit identifier for the unchanged lens/settings |
 | `pinhole_evidence` | Receipt explaining why these pixels follow the pinhole assumption |
+| `distortion_fit` | Brown-only model evidence, fixed normalized disk and iteration budget; omit `pinhole_evidence` in this mode |
 | `reference_evidence` | Receipt for the physical reference, dimensions and flatness |
 | `image_size_px` | Common oriented width and height |
 | `rotation_cw_deg` | Rotation **already applied**, one of 0, 90, 180 or 270 |
@@ -147,8 +206,9 @@ The top-level schema is `ftx-camera-calibration-input/1`. Its fields are:
 Each corner is `{id, pixel_px: [x,y], partition}`; identifiers refer to `controls`.
 Unknown fields and IDs, duplicate identities or locations, and out-of-image
 pixels are errors. All views use unique decoded timestamps within one stream.
-At least three fit views are required, each with at least four noncollinear fit
-controls. Different subsets of the reference may be visible in different views.
+Pinhole coordinate input needs at least three fit views, each with at least four
+noncollinear fit controls. Brown input needs four fit views and a held-out view, each
+with twelve fit and four held-out corners. Different reference subsets may be visible.
 
 Partitions are `fit` or `held_out`, assigned before calibration. A held-out view
 does **not** determine intrinsics; its fit corners determine only its own sheet
@@ -163,7 +223,8 @@ flags and advisories. Only `ACCEPTED` includes `solution.intrinsics` and the
 sheet-local poses. Every corner must project within 3 pixels and every pose must
 pass the existing rigid-sheet, positive-depth and calibrated-domain checks.
 The rank test rejects insufficient orientation information before solving.
-Missing held-out views or corners are visible advisories, not invented evidence.
+Missing held-out views or corners are advisories for the original pinhole coordinate path;
+Brown calibration and image acquisition require independent checks and refuse their absence.
 
 | Exit | Calibration outcome |
 |---|---|
@@ -191,16 +252,16 @@ synchronized or stationary-world camera rig.
 
 ## Numerical and verification boundaries
 
-This is an algebraic planar-constraint fit, not nonlinear maximum likelihood.
-It fixes skew to zero and publishes no uncertainty estimate. The principal point
+The default is an algebraic planar-constraint fit; Brown fitting adds the bounded
+pixel-error refinement described above. Both fix skew to zero and publish no uncertainty estimate. The principal point
 must lie inside the image; off-image optical centers from some crops are not
-supported. The existing pinhole's normalized radius limit of 2 applies. A small
+supported. The pinhole's normalized radius limit is 2; Brown uses its explicit fixed disk. A small
 residual does not establish metric accuracy, body measurements or garment fit.
 
 Limits are 128 controls, 32 views, 128 corners per view and 16 MiB per JSON input.
 Budgets refuse rather than truncate. The numerical library and coordinate-only command
 use no runtime Python/OpenCV or new dependency; image acquisition uses the optional detector
-described above. Algorithm details and the primary formula source are in
+described above. Pinhole initialization details and the primary formula source are in
 `crates/ftx-measure/CAMERA_CALIBRATION.md`.
 
 Ten direct synthetic tests cover known intrinsics/poses, noise, ordering,
