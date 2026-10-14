@@ -5,8 +5,6 @@
 //! The functions take any unit and answer in it. A vertex exactly at the cutting height counts as above
 //! it (simulation of simplicity), so on a closed mesh every section is a set of closed loops.
 
-use std::collections::BTreeMap;
-
 use ftx_core::{Vec3, det};
 
 use crate::landmarks::BodyFrames;
@@ -25,7 +23,9 @@ pub struct Slicer<'a> {
     triangles: &'a [[usize; 3]],
     z0: f64,
     width: f64,
-    buckets: Vec<Vec<usize>>,
+    /// Slab `b`'s triangles, in index order: `faces[start[b]..start[b + 1]]`.
+    start: Vec<usize>,
+    faces: Vec<usize>,
 }
 
 impl<'a> Slicer<'a> {
@@ -45,15 +45,34 @@ impl<'a> Slicer<'a> {
                 (a.min(v.z), b.max(v.z))
             });
         let slab = |z: f64| ((z - z0) / width).floor() as usize;
-        let mut buckets = vec![Vec::new(); if z1 >= z0 { slab(z1) + 1 } else { 0 }];
-        for (i, t) in triangles.iter().enumerate() {
-            let (lo, hi) = t
-                .iter()
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &v| {
-                    (a.min(vertices[v].z), b.max(vertices[v].z))
-                });
-            for b in &mut buckets[slab(lo)..=slab(hi)] {
-                b.push(i);
+        let n = if z1 >= z0 { slab(z1) + 1 } else { 0 };
+        // the slabs each triangle reaches; counted, then filled in triangle order (one allocation each)
+        let spans: Vec<(usize, usize)> = triangles
+            .iter()
+            .map(|t| {
+                let (lo, hi) = t
+                    .iter()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &v| {
+                        (a.min(vertices[v].z), b.max(vertices[v].z))
+                    });
+                (slab(lo), slab(hi))
+            })
+            .collect();
+        let mut start = vec![0usize; n + 1];
+        for &(lo, hi) in &spans {
+            for c in &mut start[lo + 1..=hi + 1] {
+                *c += 1;
+            }
+        }
+        for b in 0..n {
+            start[b + 1] += start[b];
+        }
+        let mut next = start.clone();
+        let mut faces = vec![0; start[n]];
+        for (i, &(lo, hi)) in spans.iter().enumerate() {
+            for at in &mut next[lo..=hi] {
+                faces[*at] = i;
+                *at += 1;
             }
         }
         Self {
@@ -61,7 +80,8 @@ impl<'a> Slicer<'a> {
             triangles,
             z0,
             width,
-            buckets,
+            start,
+            faces,
         }
     }
 
@@ -69,13 +89,14 @@ impl<'a> Slicer<'a> {
     #[must_use]
     pub fn loops(&self, z: f64) -> Vec<Vec<[f64; 2]>> {
         let b = (z - self.z0) / self.width;
-        if !(b >= 0.0 && (b as usize) < self.buckets.len()) {
+        if !(b >= 0.0 && (b as usize) + 1 < self.start.len()) {
             return Vec::new();
         }
+        let b = b as usize;
         loops_of(
             self.vertices,
             self.triangles,
-            self.buckets[b as usize].iter().copied(),
+            self.faces[self.start[b]..self.start[b + 1]].iter().copied(),
             z,
         )
     }
@@ -124,12 +145,36 @@ fn loops_of(
             segments.push(cut);
         }
     }
-    let mut at_edge: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+    // the segments at each cut edge: (edge, segment) pairs in an open-addressed table at most half
+    // full; an edge's pairs all lie in the probe run from its hash, and the walk takes the lowest
+    // unused segment among them (the order the segments were found in)
+    let cap = (4 * segments.len()).next_power_of_two();
+    let slot = |(a, b): (usize, usize)| {
+        let h = (a as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (b as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+        (h >> 32) as usize & (cap - 1)
+    };
+    let mut at_edge = vec![(usize::MAX, 0, 0); cap];
     for (s, seg) in segments.iter().enumerate() {
-        for e in seg {
-            at_edge.entry(*e).or_default().push(s);
+        for &(a, b) in seg {
+            let mut i = slot((a, b));
+            while at_edge[i].0 != usize::MAX {
+                i = (i + 1) & (cap - 1);
+            }
+            at_edge[i] = (a, b, s);
         }
     }
+    let lowest_unused = |edge: (usize, usize), used: &[bool]| {
+        let (mut i, mut best) = (slot(edge), None);
+        while at_edge[i].0 != usize::MAX {
+            let (a, b, s) = at_edge[i];
+            if (a, b) == edge && !used[s] && best.is_none_or(|t| s < t) {
+                best = Some(s);
+            }
+            i = (i + 1) & (cap - 1);
+        }
+        best
+    };
     let point = |(a, b): (usize, usize)| -> [f64; 2] {
         let (pa, pb) = (vertices[a], vertices[b]);
         let t = (z - pa.z) / (pb.z - pa.z);
@@ -147,7 +192,7 @@ fn loops_of(
         let mut poly = vec![point(first)];
         let closed = loop {
             poly.push(point(edge));
-            let Some(s) = at_edge[&edge].iter().copied().find(|&s| !used[s]) else {
+            let Some(s) = lowest_unused(edge, &used) else {
                 break false;
             };
             used[s] = true;
@@ -661,6 +706,134 @@ mod tests {
             assert_eq!(s.loops(z), section_loops(&v, &t, z), "z {z}");
         }
         assert_eq!(s.girth(0.25, [0.0, 0.0]), girth(&v, &t, 0.25, [0.0, 0.0]));
+    }
+
+    /// The walk as it was first written: each cut edge's segments in a `BTreeMap`.
+    fn loops_reference(vertices: &[Vec3], triangles: &[[usize; 3]], z: f64) -> Vec<Vec<[f64; 2]>> {
+        let above = |i: usize| vertices[i].z >= z;
+        let mut segments: Vec<[(usize, usize); 2]> = Vec::new();
+        for t in triangles {
+            let mut cut = [(0, 0); 2];
+            let mut n = 0;
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                if above(a) != above(b) {
+                    if n < 2 {
+                        cut[n] = (a.min(b), a.max(b));
+                    }
+                    n += 1;
+                }
+            }
+            if n == 2 {
+                segments.push(cut);
+            }
+        }
+        let mut at_edge: std::collections::BTreeMap<(usize, usize), Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (s, seg) in segments.iter().enumerate() {
+            for e in seg {
+                at_edge.entry(*e).or_default().push(s);
+            }
+        }
+        let point = |(a, b): (usize, usize)| -> [f64; 2] {
+            let (pa, pb) = (vertices[a], vertices[b]);
+            let t = (z - pa.z) / (pb.z - pa.z);
+            [pa.x + t * (pb.x - pa.x), pa.y + t * (pb.y - pa.y)]
+        };
+        let mut used = vec![false; segments.len()];
+        let mut loops = Vec::new();
+        for start in 0..segments.len() {
+            if used[start] {
+                continue;
+            }
+            used[start] = true;
+            let first = segments[start][0];
+            let mut edge = segments[start][1];
+            let mut poly = vec![point(first)];
+            let closed = loop {
+                poly.push(point(edge));
+                let Some(s) = at_edge[&edge].iter().copied().find(|&s| !used[s]) else {
+                    break false;
+                };
+                used[s] = true;
+                let seg = segments[s];
+                edge = if seg[0] == edge { seg[1] } else { seg[0] };
+                if edge == first {
+                    break true;
+                }
+            };
+            if closed && poly.len() >= 3 {
+                loops.push(poly);
+            }
+        }
+        loops
+    }
+
+    /// Two lumpy closed spheres side by side, rings at shared heights: sections of none, one or two
+    /// non-convex loops, and cuts exactly through vertices.
+    fn lumpy_pair() -> (Vec<Vec3>, Vec<[usize; 3]>) {
+        let (rings, around) = (23, 31);
+        let (mut v, mut t) = (Vec::new(), Vec::new());
+        for (cx, phase) in [(0.0, 0.0), (2.6, 1.7)] {
+            let south = v.len();
+            v.push(Vec3::new(cx, 0.0, -1.0));
+            for i in 1..rings {
+                let (sp, cp) = det::sin_cos(std::f64::consts::PI * i as f64 / rings as f64);
+                for j in 0..around {
+                    let th = 2.0 * std::f64::consts::PI * j as f64 / around as f64;
+                    let (st, ct) = det::sin_cos(th);
+                    let r = 1.0 + 0.25 * det::sin(3.0 * th + phase) * (2.0 * sp * cp);
+                    v.push(Vec3::new(cx + r * sp * ct, r * sp * st, -cp));
+                }
+            }
+            let north = v.len();
+            v.push(Vec3::new(cx, 0.0, 1.0));
+            let ring = |i: usize, j: usize| south + 1 + (i - 1) * around + j % around;
+            for j in 0..around {
+                t.push([south, ring(1, j + 1), ring(1, j)]);
+                t.push([north, ring(rings - 1, j), ring(rings - 1, j + 1)]);
+            }
+            for i in 1..rings - 1 {
+                for j in 0..around {
+                    t.push([ring(i, j), ring(i, j + 1), ring(i + 1, j + 1)]);
+                    t.push([ring(i, j), ring(i + 1, j + 1), ring(i + 1, j)]);
+                }
+            }
+        }
+        (v, t)
+    }
+
+    #[test]
+    fn sorted_edge_walk_and_flat_slabs_cut_as_the_first_version() {
+        let (v, t) = lumpy_pair();
+        let width = 0.05;
+        let s = Slicer::new(&v, &t, width);
+        // the slabs: each triangle in every slab its height range reaches, in index order
+        let z0 = v.iter().map(|p| p.z).fold(f64::INFINITY, f64::min);
+        let slab = |z: f64| ((z - z0) / width).floor() as usize;
+        let mut buckets = vec![Vec::new(); s.start.len() - 1];
+        for (i, tri) in t.iter().enumerate() {
+            let zs = tri.map(|k| v[k].z);
+            let (lo, hi) = (zs[0].min(zs[1]).min(zs[2]), zs[0].max(zs[1]).max(zs[2]));
+            for b in &mut buckets[slab(lo)..=slab(hi)] {
+                b.push(i);
+            }
+        }
+        for (b, want) in buckets.iter().enumerate() {
+            assert_eq!(&s.faces[s.start[b]..s.start[b + 1]], &want[..], "slab {b}");
+        }
+        let mut zs: Vec<f64> = (0..400)
+            .map(|k| -1.1 + 2.2 * f64::from(k) / 399.0)
+            .collect();
+        zs.extend(v.iter().step_by(7).map(|p| p.z));
+        let mut two = 0;
+        for z in zs {
+            let want = loops_reference(&v, &t, z);
+            two += usize::from(want.len() == 2);
+            assert_eq!(section_loops(&v, &t, z), want, "z {z}");
+            assert_eq!(s.loops(z), want, "slicer, z {z}");
+        }
+        assert!(two > 300, "{two} two-loop sections");
     }
 
     #[test]
