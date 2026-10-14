@@ -39,11 +39,30 @@ pub(super) fn read_document(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
 }
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    known_options(args, "measure calibrate-camera", &["out"])?;
-    let file = single(args, "calibrate-camera")?;
-    let (value, bytes) = read_document(file)?;
-    let input: CalibrationInput = serde_json::from_value(value)
-        .map_err(|e| bad_input(format!("invalid camera calibration: {e}")))?;
+    known_options(
+        args,
+        "measure calibrate-camera",
+        &["images", "sheet", "detector-python", "out"],
+    )?;
+    let (input, bytes, acquisition) = if let Some(path) = option(args, "images") {
+        no_files(args, "calibrate-camera --images")?;
+        let (input, receipt) = photo::calibration_images::load(
+            path,
+            required(args, "sheet")?,
+            option(args, "detector-python").unwrap_or("python3"),
+        )?;
+        let bytes = serde_json::to_vec(&input).map_err(|e| bad_input(e.to_string()))?;
+        (input, bytes, Some(receipt))
+    } else {
+        if option(args, "sheet").is_some() || option(args, "detector-python").is_some() {
+            return Err(bad_input("--sheet and --detector-python require --images"));
+        }
+        let file = single(args, "calibrate-camera")?;
+        let (value, bytes) = read_document(file)?;
+        let input: CalibrationInput = serde_json::from_value(value)
+            .map_err(|e| bad_input(format!("invalid camera calibration: {e}")))?;
+        (input, bytes, None)
+    };
     let report = calibrate_camera(&input)?;
     let code = if report.solution.is_some() { 0 } else { 2 };
     let mut text = format!(
@@ -67,6 +86,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     text.push_str(&format!("\n{}", report.no_claim));
     let mut value = serde_json::to_value(&report).map_err(|e| bad_input(e.to_string()))?;
     value["input_sha256"] = json!(sha256_hex(&bytes));
+    if let Some(receipt) = acquisition {
+        value["image_acquisition"] = receipt;
+    }
     if let Some(path) = option(args, "out") {
         photo::save(path, &value)?;
         eprintln!("wrote {path}");

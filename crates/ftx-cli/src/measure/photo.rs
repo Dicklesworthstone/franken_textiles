@@ -1,5 +1,7 @@
 //! Photo commands from explicit coordinates or an oriented PNG. EXIF conversion remains external.
 
+#[path = "calibration_images.rs"]
+pub(super) mod calibration_images;
 #[path = "charuco_image.rs"]
 mod charuco_image;
 

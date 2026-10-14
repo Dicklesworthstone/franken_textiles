@@ -5,6 +5,98 @@ point from identified points on a planar reference. It supplies intrinsics for
 the existing sheet-pose, triangulation and body-fit camera model instead of
 requiring you to guess a focal length. No images or model assets are downloaded.
 
+## Calibrate directly from ChArUco photographs
+
+The image path detects corners locally with the same optional OpenCV adapter used by
+photo measurement, then gives **all** identified corners to the existing Rust camera
+solver. It does not run photo-scale RANSAC, discard inconvenient corners, or re-detect
+with a fitted camera. It consumes the sidecar produced by `ftx measure calib-sheet`:
+
+```sh
+ftx measure calib-sheet --paper letter --out sheet --json
+ftx measure calibrate-camera --images capture/views.json \
+  --sheet sheet/calib-sheet-letter.json \
+  --detector-python .venv-charuco/bin/python --out camera.json --json
+```
+
+The detector environment needs `opencv-python-headless==4.13.0.92`; installation is
+explicit, never performed by `ftx`. The coordinate-only command below remains Python-free.
+Print at actual size, check both reference rulers, and use a rigid flat board. Photograph
+it at different **out-of-plane** tilts without changing the camera settings or image
+geometry. Apply orientation before exporting opaque 8-bit RGB/grayscale PNGs without EXIF.
+
+This is still a **zero-skew pinhole calibration**, not a Brown-distortion fit. Supply
+rectified images or independently justified negligible distortion. A successful residual
+check alone does not establish that a raw phone image follows the pinhole model.
+
+The manifest uses `ftx-camera-calibration-images/1`. The following paths and evidence
+strings are an example structure, not a camera calibration or verified capture:
+
+```json
+{
+  "schema": "ftx-camera-calibration-images/1",
+  "image_model": "pinhole_zero_skew",
+  "lens_id": "my-fixed-camera-settings",
+  "pinhole_evidence": "Replace with evidence for rectification or negligible distortion",
+  "reference_evidence": "Replace with the board flatness and ruler checks",
+  "image_size_px": [1600, 1200],
+  "rotation_cw_deg": 0,
+  "held_out_corner_ids": [0, 6, 28, 34],
+  "views": [
+    {"image": "left.png", "frame": {"stream": "capture", "timestamp_us": 0}, "partition": "fit"},
+    {"image": "right.png", "frame": {"stream": "capture", "timestamp_us": 100000}, "partition": "fit"},
+    {"image": "up.png", "frame": {"stream": "capture", "timestamp_us": 200000}, "partition": "fit"},
+    {"image": "check.png", "frame": {"stream": "capture", "timestamp_us": 300000}, "partition": "held_out"}
+  ]
+}
+```
+
+Image paths are relative to the **manifest directory**, not the process working directory.
+Timestamps are actual decoded presentation times in microseconds on the declared stream,
+not image ordinals inferred from filenames. The lens/settings and rotation fields are
+capture assertions, not transformations. Every photograph must have the exact declared size.
+All views share the same physical board and lens geometry; occlusion may hide different
+subsets of corners. Board IDs determine metric controls, in metres, without hand transcription.
+
+Assign both kinds of held-out evidence **before** fitting. This image workflow requires
+at least three fit views and one held-out view, plus at least eight detected fit corners and
+four detected held-out corners in **every** image. `held_out_corner_ids` refers to physical
+row-major internal chessboard IDs and is shared across images. The example IDs are the four
+extreme corners on the generated Letter board; use `[0,6,35,41]` for generated A4. Unlisted
+detected IDs are fit corners. Detection may use adjacent ArUco markers, but held-out
+chessboard corners never enter camera or pose fitting. Detection errors within one image
+may still be correlated; this is not an independent pixel-noise covariance estimate.
+
+No-board, sparse-board, missing backend, changed dimensions, invalid IDs and duplicate
+images are explicit refusals, not permission to drop a view or change its partition.
+Duplicates are checked using decoded BGR pixels, so renaming or re-encoding a fit image
+cannot turn it into independent held-out evidence. Valid but geometrically inconsistent
+or insufficiently tilted acquisitions produce the existing rejected/unobservable report
+with `solution: null`. The unchanged native 3-pixel residual and rank gates apply to all views.
+
+The saved result is the existing `ftx-camera-calibration/1` report. It can be passed directly
+to `sheet-pose --calibration` or ChArUco photo commands with `--lens camera.json --lens-id ID
+--rotation-cw-deg N`. Both handoffs recompute the retained observations before using the
+camera. `input` contains all metric controls, detected pixels and partitions; an additional
+`image_acquisition` receipt retains the manifest and sidecar, their byte hashes, each image's
+byte and decoded-pixel hashes, detector version and embedded-adapter hash. No image pixels
+are embedded. `input_sha256` hashes the expanded coordinate input supplied to the native
+solver; `image_acquisition.manifest_sha256` hashes the original manifest bytes. None of these
+hashes proves physical camera settings or authenticity of the photographed reference.
+
+The batch is limited to 32 images, 16 million pixels and 64 MiB encoded per image, and
+128 million pixels across the batch; manifest/sidecar JSON retain the 16 MiB input limit.
+One image is decoded and released at a time. The existing 30-second detector deadline
+applies to each view. Limits refuse without resizing, truncating a batch or publishing a
+partial calibration. New outputs never overwrite earlier evidence or input aliases.
+
+Run the synthetic image-to-calibration-to-pose workflow, including optional OpenCV tests:
+
+```sh
+cargo test -p ftx-cli --test camera_image_workflow -- --include-ignored
+cargo test -p ftx-cli --bin ftx calibration_images
+```
+
 ## Run the complete synthetic example
 
 ```sh
@@ -106,8 +198,9 @@ supported. The existing pinhole's normalized radius limit of 2 applies. A small
 residual does not establish metric accuracy, body measurements or garment fit.
 
 Limits are 128 controls, 32 views, 128 corners per view and 16 MiB per JSON input.
-Budgets refuse rather than truncate. No runtime Python/OpenCV or new dependency
-is used. Algorithm details and the primary formula source are in
+Budgets refuse rather than truncate. The numerical library and coordinate-only command
+use no runtime Python/OpenCV or new dependency; image acquisition uses the optional detector
+described above. Algorithm details and the primary formula source are in
 `crates/ftx-measure/CAMERA_CALIBRATION.md`.
 
 Ten direct synthetic tests cover known intrinsics/poses, noise, ordering,

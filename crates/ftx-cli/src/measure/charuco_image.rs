@@ -148,6 +148,18 @@ fn percentile(histogram: &[u32], fraction: f64, value: impl Fn(usize) -> f64) ->
     unreachable!("nonempty bounded pixel histogram")
 }
 
+// Calibration must retain every identified corner and its predeclared partition. Do not run
+// photo-scale's RANSAC here: dropping a held-out residual would invalidate its independent check.
+pub(super) fn calibration_corners(
+    image: &Bgr,
+    sheet: &Value,
+    python: &str,
+) -> Result<Value, Refusal> {
+    let mut response = detect(image, sheet, python, None)?;
+    response["adapter_sha256"] = json!(sha256_hex(DETECTOR.as_bytes()));
+    Ok(response)
+}
+
 // Spec A.10 Sobel/percentile diagnostic. The padding comes from Rust's fitted scale, not
 // an independent OpenCV homography. No texture/contrast means unknown, never zero blur.
 fn blur(image: &Bgr, reference: &Value, square_px: f64) -> Option<f64> {
