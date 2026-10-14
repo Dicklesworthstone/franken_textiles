@@ -91,6 +91,21 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
 mod tests {
     use super::*;
     #[test]
+    fn comparison_is_source_backed_and_unknown_ids_refuse() {
+        let c = textile_import::catalog().unwrap();
+        let ids: Vec<String> = c.materials.iter().take(2).map(|m| m.id.clone()).collect();
+        assert_eq!(ids.len(), 2);
+        let a = super::super::parse(&["materials".into(), "compare".into(),
+            ids[0].clone(), ids[1].clone()]).unwrap();
+        let (comparison, status, _) = run(&a).unwrap();
+        assert_eq!(status, 0);
+        assert_eq!(comparison["first"]["id"], ids[0]);
+        assert_eq!(comparison["second"]["id"], ids[1]);
+        let unknown = super::super::parse(&["materials".into(), "compare".into(),
+            ids[0].clone(), "absent-material-identifier".into()]).unwrap();
+        assert!(run(&unknown).is_err());
+    }
+    #[test]
     fn catalog_discovery_and_reproducible_selection() {
         let list = super::super::parse(&["materials".into(), "list".into()]).unwrap();
         let (v, status, _) = run(&list).unwrap();
