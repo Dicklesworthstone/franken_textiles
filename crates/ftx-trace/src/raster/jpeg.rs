@@ -42,6 +42,9 @@
 
 use super::image::Bgr;
 
+mod photo;
+pub use photo::{OrientedJpeg, decode_photo};
+
 /// The refusal for a file that ends inside data the decoder needs (Pillow: "image file is truncated").
 const TRUNCATED: &str = "JPEG: the file is truncated";
 /// jdhuff.h `MIN_GET_BITS` for a 64-bit bit buffer.
@@ -163,6 +166,9 @@ struct Reader<'a> {
     left: i32,
     /// `insufficient_data`: a marker cut the segment short and zeros were supplied.
     insufficient: bool,
+    // Persistent across restarts/scans. Photo evidence must not use libjpeg's repair path.
+    repaired: bool,
+    strict: bool,
 }
 
 impl Reader<'_> {
@@ -189,6 +195,7 @@ impl Reader<'_> {
         loop {
             let mut c = self.byte()?;
             while c != 0xFF {
+                self.repaired = true;
                 c = self.byte()?;
             }
             loop {
@@ -201,6 +208,7 @@ impl Reader<'_> {
                 self.marker = c;
                 return Ok(());
             }
+            self.repaired = true;
         }
     }
 
@@ -236,6 +244,7 @@ impl Reader<'_> {
 
     fn zeros(&mut self, nbits: i32) {
         if nbits > self.left {
+            self.repaired = true;
             self.insufficient = true;
             self.buf <<= MIN_GET_BITS - self.left;
             self.left = MIN_GET_BITS;
@@ -278,6 +287,7 @@ impl Reader<'_> {
             l += 1;
         }
         if l > 16 {
+            self.repaired = true;
             return Ok(0);
         }
         Ok(i32::from(t.val[(code + t.valoffset[l]) as usize & 0xFF]))
@@ -292,6 +302,7 @@ impl Reader<'_> {
         if self.marker == 0xD0 + *next {
             self.marker = 0;
         } else {
+            self.repaired = true;
             self.resync(*next)?;
         }
         *next = (*next + 1) & 7;
@@ -410,6 +421,10 @@ struct Decoder<'a> {
 /// # Errors
 /// A damaged or truncated file, an image over `max_pixels`, or a variant not ported (see the module).
 pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
+    decode_impl(bytes, max_pixels, false)
+}
+
+fn decode_impl(bytes: &[u8], max_pixels: usize, strict: bool) -> Result<Bgr, String> {
     let mut d = Decoder {
         r: Reader {
             data: bytes,
@@ -418,6 +433,8 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
             buf: 0,
             left: 0,
             insufficient: false,
+            repaired: false,
+            strict,
         },
         max_pixels,
         saw_soi: false,
@@ -457,11 +474,13 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
         // it: ImageFile.load reads MAXBLOCK blocks from the start, and the last row came out once the block
         // holding the scan's last byte arrived. Pillow accepts a suspension past that block.
         let fed = d.r.pos.div_ceil(MAXBLOCK) * MAXBLOCK;
-        d.r.data = &d.r.data[..fed.min(d.r.data.len())];
+        if !strict {
+            d.r.data = &d.r.data[..fed.min(d.r.data.len())];
+        }
         match d.read_markers() {
             Ok(true) => return Err("JPEG: a second scan in a single-scan file".into()),
             Ok(false) => {}
-            Err(e) if e == TRUNCATED => {}
+            Err(e) if e == TRUNCATED && !strict => {}
             Err(e) => return Err(e),
         }
     }
@@ -470,6 +489,13 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
             "JPEG: a progressive file with incomplete coefficients (libjpeg's block smoothing is not ported)"
                 .into(),
         );
+    }
+    if strict
+        && (d.r.repaired
+            || d.comps.iter().any(|c| c.quant.is_none())
+            || (d.progressive && d.comps.iter().any(|c| c.known.iter().any(|&b| b < 0))))
+    {
+        return Err("JPEG photo requires complete scans without damaged-data recovery".into());
     }
     Ok(d.output(space))
 }
@@ -538,7 +564,7 @@ impl<'a> Decoder<'a> {
                     let len = self.r.word()? - 2;
                     self.r.skip(len);
                 }
-                0xD0..=0xD7 => {}
+                0xD0..=0xD7 => self.r.repaired = true,
                 0x01 if !self.in_headers => {}
                 m => return Err(format!("JPEG: unsupported marker 0x{m:02x}")),
             }
@@ -896,6 +922,9 @@ impl<'a> Decoder<'a> {
             for mx in 0..mcus_x {
                 if interval != 0 {
                     if togo == 0 {
+                        if eobrun != 0 {
+                            r.repaired = true;
+                        }
                         r.restart(next_restart)?;
                         (last_dc, eobrun, togo) = ([0; 4], 0, interval);
                     }
@@ -927,9 +956,13 @@ impl<'a> Decoder<'a> {
                                 let (run, s) = (rs >> 4, rs & 15);
                                 if s != 0 {
                                     k += run as usize;
+                                    if k >= 64 || s > 10 {
+                                        r.repaired = true;
+                                    }
                                     block[NATURAL[k]] = extend(r.bits(s)?, s) as i16;
                                 } else if run == 15 {
                                     k += 15;
+                                    r.repaired |= k >= 64;
                                 } else {
                                     break;
                                 }
@@ -960,10 +993,12 @@ impl<'a> Decoder<'a> {
                                 let (run, s) = (rs >> 4, rs & 15);
                                 if s != 0 {
                                     k += run as usize;
+                                    r.repaired |= k > se;
                                     let v = extend(r.bits(s)?, s);
                                     block[NATURAL[k]] = v.wrapping_shl(al as u32) as i16;
                                 } else if run == 15 {
                                     k += 15;
+                                    r.repaired |= k > se;
                                 } else {
                                     eobrun = 1 << run;
                                     if run != 0 {
@@ -980,8 +1015,14 @@ impl<'a> Decoder<'a> {
                         }
                     }
                 }
+                if r.strict && r.repaired {
+                    return Err(
+                        "JPEG photo requires complete scans without damaged-data recovery".into(),
+                    );
+                }
             }
         }
+        r.repaired |= eobrun != 0;
         Ok(())
     }
 
@@ -992,6 +1033,7 @@ impl<'a> Decoder<'a> {
             Derived::new(d.dht[class].get(slot).and_then(Option::as_ref), class == 0)
         };
         if !self.progressive {
+            self.r.repaired |= self.ss != 0 || self.se != 63 || self.ah != 0 || self.al != 0;
             let t = self
                 .scan
                 .iter()
@@ -1016,6 +1058,11 @@ impl<'a> Decoder<'a> {
             ));
         }
         for &ci in &self.scan {
+            let known = &self.comps[ci].known;
+            self.r.repaired |= (!dc_band && known[0] < 0)
+                || known[ss..=se]
+                    .iter()
+                    .any(|&v| v != if ah == 0 { -1 } else { i32::from(ah) });
             self.comps[ci].known[ss..=se].fill(i32::from(al));
         }
         Ok(match (dc_band, ah == 0) {
@@ -1177,6 +1224,7 @@ fn ac_refine(
             let (mut run, s) = (rs >> 4, rs & 15);
             let mut new = 0;
             if s != 0 {
+                r.repaired |= s != 1;
                 new = if r.bits(1)? != 0 { p1 } else { m1 };
             } else if run != 15 {
                 *eobrun = 1 << run;
@@ -1201,6 +1249,7 @@ fn ac_refine(
                 }
             }
             if new != 0 {
+                r.repaired |= k > se;
                 block[NATURAL[k]] = new as i16;
             }
             k += 1;
