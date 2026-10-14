@@ -917,6 +917,63 @@ and price-width known answers, native/wasm determinism, explicit incomplete-data
 reported real-specimen validation. Measured linen/leather/knit jacket comparisons are the eventual
 end-to-end acceptance, not a synthetic test dressed up as real-world fit evidence.
 
+### 25.6 Material-following thermal surfaces: delivered path and remaining physical gates
+
+The dry thermal foundation now reaches actual garment geometry, rather than remaining an isolated
+catalogue calculator. Commits `fb055935`, `faca56e7` and `bd07cad0` add conservative surface columns,
+automatic characterized-drape exchange and `ftx-materials thermal-surface`. Each retained solver
+triangle carries its reference area, welded vertex indices, instance owner and the same frozen
+material observations/evidence policy as mechanics. Heat exchange uses current area; sensible heat
+storage uses reference mass. A change of pose cannot create material. Thermal-only material changes
+change heat flow/capacity while leaving mechanical trajectories unchanged; mechanics changes can
+also alter the deformed exchange geometry. Portable reports bind material, topology and positions,
+and refuse modified receipts rather than resolving a newer catalogue entry by name.
+
+This delivery is an explicitly constant-resistance, independent dry-sheet model, not a whole-wearer
+heat-loss or comfort calculation. The library admits explicitly coextensive series layers, but the
+drape adapter does not infer a shell/lining stack merely because triangles are nearby. Missing heat
+capacity or resistance leaves mechanics available and records thermal unavailability. The command
+produces per-triangle steady flux/temperature fields and bounded transient energy histories on the
+final drape geometry. See `docs/thermal-surface.md` for equations, units, source replay, budgets and
+limitations. Ten new synthetic numerical, actual sewn-drape propagation and CLI tests cover this
+slice; they do not establish agreement with a measured textile or a real jacket. Bead `ftx-tm9`
+records this delivered slice; the wider `ftx-tm5` remains open.
+
+The next material/transport work is separated into independently falsifiable gates:
+
+1. **Condition-qualified measured data (`ftx-tma`, P0).** Extend the shared materials system with
+   temperature/conditioning/pressure-dependent observations, not a second unrelated catalogue.
+   Preserve specimen identity, test geometry, original mean and separately labelled standard
+   deviation, exact source/version and permitted retention. Distinguish sample variability from
+   uncertainty of the mean and confidence intervals. Interpolation is an explicit fitted/estimated
+   operation with source provenance and validity domain; never extrapolate silently, mix dried and
+   unconditioned data, or equate fibrous bulk density with solid-fiber density. Qualify scalar and
+   temperature-dependent consumers separately, including missing heat-capacity refusals.
+2. **Garment/body and interlayer topology (`ftx-tmb`).** Introduce explicit layer order and attachment
+   identities, body coverage, shared overlap areas, exposed faces and material-following air-gap
+   geometry. Preserve energy across many-to-many overlaps and changing poses; count one covered
+   body patch once, not once per sheet. Ambiguous or intersecting layering must refuse. Establish
+   analytic flat multilayer and partial-coverage cases before claiming total wearer heat loss, and
+   retain the independent-sheet mode as a distinct, reproducible calculation.
+3. **Measured compression and coupled transport (`ftx-tmc`).** Add pressure/strain-dependent loft,
+   thickness, conductivity and moisture storage/transport only from characterized constructions.
+   Couple film/radiative/evaporative terms to declared environment conditions; preserve reference
+   mass and sensible/latent energy and explicitly account for mechanical heating when supported.
+   Validate compressed batts, wet/dry layers and transient response against held-out measurements,
+   with discretization convergence and uncertainty. A physical validation failure is not repaired
+   by silently fitting the held-out case or replacing unknown data with a generic fiber constant.
+
+Primary data leads inspected on 2026-10-14 include FSRI's Materials and Products Database:
+`https://materials.fsri.org/materialdetail/cotton-sheet`,
+`https://materials.fsri.org/materialdetail/cotton-batting`, and
+`https://materials.fsri.org/materialdetail/overstuffed-chair-polyester-batting`, with source data in
+`https://github.com/ulfsri/fsri_materials_database`. These retain materially different temperature
+and conditioning coverage; the polyester-batting page, for example, must not be assigned cotton's
+heat capacity. NISTIR 7282 is another primary lead for measured clothing-material thermophysical
+properties (`https://www.nist.gov/publications/estimates-thermal-properties-fire-fighters-protective-clothing-materials-nistir-7282`).
+These are acquisition leads, not numbers already ingested or validated by the thermal-surface work.
+Neither a fire-test observation nor a dry heat map grants a safety rating or machine-process approval.
+
 ---
 
 ## Appendix A. Sources
