@@ -31,9 +31,12 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   Tests: `round_workflow`, `round_review`, and `round::stills` synthetic triangle scenes; these
   tests do not certify an Anny garment's fit or solve at every requested arm angle.
 - `ftx qualify [WS | --ws WS | --measurements M --out DIR] [--pattern P] [--fabric F] [--model PATH]
-  [--body-fit PATH] [--arm-deg DEG] [--sew N] [--drape N] [--json]`: runs the three known-answer chest
-  bands (`-20`, `0`, `+20` mm ease) at zero gravity (`--sew 70 --drape 0` by default) and writes
-  `qualify.json` (`fabric-qualify/1`, spec 04 §7.1). Exit 0 when all three bands pass, 2 otherwise.
+  [--body-fit PATH] [--arm-deg DEG] [--json]`: runs the three known-answer chest bands (`-20`, `0`,
+  `+20` mm ease) at zero gravity (70 sew steps, no drape steps) and writes `qualify.json`
+  (`fabric-qualify/1`, spec 04 §7.1: `pass`, `rows`, `fabric_key` and the measurements file's
+  `measurements_sha256`, so the skill's `fab round` and `ftx round` each accept the other's
+  qualification), printing a line per band and `QUALIFIED` / `NOT QUALIFIED: ...`. Exit 0 when all
+  three bands pass, 2 otherwise.
 - `ftx report WS [--json]`: regenerates `WS/report.html` from existing `WS/rounds.jsonl` without creating
   a new round directory.
 - `ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]`: rebuilds `fold_viewer.html` from an existing
