@@ -32,6 +32,7 @@ pub mod run;
 pub mod scene;
 pub mod sparse;
 pub mod start;
+pub mod thermal;
 pub mod two_start;
 
 pub use cloth::{ClothModel, SettleReport, SolveReport, Solver, Tube, grid, hex_grid, hex_tube};

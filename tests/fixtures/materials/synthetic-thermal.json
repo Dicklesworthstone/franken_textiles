@@ -1,0 +1,55 @@
+{
+  "schema": "ftx-thermal-transient/1",
+  "layers": [
+    {
+      "id": "synthetic-insulation",
+      "record": {
+        "id": "synthetic-insulation",
+        "name": "Synthetic thermal insulation, not measured textile data",
+        "form": "fill",
+        "properties": {
+          "areal_density": {
+            "value": 0.2,
+            "unit": "kg/m2",
+            "source": "test",
+            "evidence": "estimate",
+            "method": "Synthetic finite-volume regression"
+          },
+          "specific_heat": {
+            "value": 1000.0,
+            "unit": "J/(kg*K)",
+            "source": "test",
+            "evidence": "estimate",
+            "method": "Synthetic finite-volume regression"
+          },
+          "thermal_resistance": {
+            "value": 0.4,
+            "unit": "m2*K/W",
+            "source": "test",
+            "evidence": "estimate",
+            "method": "Synthetic finite-volume regression"
+          }
+        },
+        "sources": {
+          "test": {
+            "reference": "test:dry-thermal-stack",
+            "accessed_on": "2026-10-14",
+            "note": "Synthetic known answer, not a supplier or lab observation"
+          }
+        }
+      },
+      "allow_estimates": true
+    }
+  ],
+  "interface_resistance_m2_k_w": [],
+  "cells_per_layer": 4,
+  "area_m2": 1.2,
+  "inside_c": 30.0,
+  "outside_c": 0.0,
+  "inside_resistance_m2_k_w": 0.1,
+  "outside_resistance_m2_k_w": 0.2,
+  "initial_temperature_c": 10.0,
+  "step_seconds": 0.5,
+  "steps": 40,
+  "record_every": 10
+}

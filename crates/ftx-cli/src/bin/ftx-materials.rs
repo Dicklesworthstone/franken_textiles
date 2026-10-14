@@ -17,6 +17,9 @@ use ftx_pattern::textile_import::{catalog, resolve_fabric};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+#[path = "material_workbench/thermal.rs"]
+mod thermal_transient;
+
 const USAGE: &str = "ftx-materials catalog [SEARCH]
 ftx-materials show ID
 ftx-materials resolve PATTERN.json
@@ -24,6 +27,7 @@ ftx-materials bind PATTERN.json SELECTION.json NEW-PATTERN.json
 ftx-materials price PATTERN.json QUOTES.json SCOPE.json
 ftx-materials thermal STACK.json
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
+ftx-materials thermal-transient STACK.json
 
 JSON output. `show` includes a portable selection and missing-property coverage.
 `resolve` invokes the actual drape resolver without meshing; missing mechanics refuse.
@@ -155,6 +159,7 @@ fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["thermal-transient", path] => thermal_transient::run(path),
         ["calibrate", path] => calibration(path, false),
         ["calibrate", path, "--allow-estimates"] => calibration(path, true),
         ["catalog"] | ["catalog", _] => {
