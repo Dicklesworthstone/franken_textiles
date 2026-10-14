@@ -50,9 +50,11 @@ This creates `calib-sheet-letter.png`, `.pdf` and `.json` in a new directory. Ph
 as the plain-paper path. The sidecar describes the physical board, not the dimensions or
 position of that board in the photograph.
 
-The optional detector uses a local Python environment with OpenCV. Nothing is downloaded or
-installed implicitly by `ftx`; the measurement library itself has no Python/OpenCV dependency.
-The tested dependency can be installed in a separate environment:
+By default a pure-Rust detector (`ftx_measure::photo::detect_charuco`, receipt backend
+`rust_charuco`) identifies the markers and refines the chessboard corners; it needs no Python or
+OpenCV. The optional OpenCV detector uses a local Python environment instead. Nothing is
+downloaded or installed implicitly by `ftx`; the measurement library itself has no Python/OpenCV
+dependency. The tested OpenCV dependency can be installed in a separate environment:
 
 ```bash
 python3 -m venv .venv-charuco
@@ -69,7 +71,7 @@ ftx measure measure-photo --image oriented.png \
   --out photo-measurements.json --json
 ```
 
-`--detector-python` defaults to `python3`; it names an executable, not a shell command.
+`--detector-python` selects the OpenCV adapter; it names an executable, not a shell command.
 `--sheet` selects ChArUco detection and requires `--image`. It cannot be combined with
 `--paper` or `--reference`; `--detector-python` is only valid with `--sheet`. Without
 `--sheet`, the existing plain-paper behavior is unchanged and does not start Python.
@@ -100,8 +102,15 @@ six-corner scale can fail the measurement bootstrap stability gate described bel
 The adapter has a 30-second execution deadline, a 64 KiB request-header limit and a 256 KiB
 limit on each output stream, in addition to the photo budgets above. Budget exhaustion is a
 refusal, not permission to drop corners, resize the image or reuse a previous calibration.
-OpenCV remains an optional external detector as permitted by plan section 10.1 / `ftx-0eq`;
-this is not a native Rust ChArUco detector or a browser image-detection implementation.
+OpenCV remains an optional external detector as permitted by plan section 10.1 / `ftx-0eq`.
+
+The two detectors were compared on 100 synthetic 12 MP phone photos of the printed Letter sheet
+(tilts to 35°, uneven light, blur σ 0.3–2 px, noise, a JPEG round trip, some partly covered; the
+sheet's diagonal 12–70 % of the short side): the native detector scaled all 100 and OpenCV 5.0
+scaled 98, with median corner errors of 0.10–0.16 px against OpenCV's 0.08–0.11 px and no corner
+misidentified or more than 3 px off. A small sheet matters: in a full-body photo its markers can
+be 25 pixels wide, and the native search goes finer until it finds two of them. These are
+synthetic images, not a claim about real photographs.
 
 ## Plain Letter or A4 paper
 

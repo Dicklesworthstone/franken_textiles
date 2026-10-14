@@ -19,7 +19,11 @@ const MARKERS: [u16; 50] = [
     0x502e, 0x5013,
 ];
 
-const SEARCH_SIDE: usize = 1000;
+/// Long sides of the downsampled marker searches, coarse first. A blob under 10 search pixels is not a
+/// candidate, so on a 12 MP photo the 1000-pixel search misses markers under about 40 pixels (a Letter
+/// sheet whose diagonal is under a quarter of the short side, as in a full-body photo). Finer searches
+/// run only until two markers seed the board homography, which then recovers the rest at full size.
+const SEARCH_SIDES: [usize; 3] = [1000, 2000, 4000];
 
 fn refuse(msg: impl Into<String>) -> Refusal {
     Refusal::new(
@@ -574,8 +578,8 @@ fn decode_marker_quad(gray: &GrayImage, quad: [Point; 4]) -> Option<DetectedMark
     Some(DetectedMarker { id, corners })
 }
 
-fn find_candidate_quads(gray: &GrayImage) -> Vec<[Point; 4]> {
-    let (search, sx, sy) = gray.downsample(SEARCH_SIDE);
+fn find_candidate_quads(gray: &GrayImage, side: usize) -> Vec<[Point; 4]> {
+    let (search, sx, sy) = gray.downsample(side);
     let min_perim = 0.01 * (search.w.max(search.h) as f64);
     let mut out = Vec::new();
     for radius in [35, 18] {
@@ -754,35 +758,40 @@ pub fn detect_charuco(
     let max_id = board_markers.len();
 
     let mut by_id: Vec<Option<DetectedMarker>> = vec![None; 50];
-    for quad in find_candidate_quads(&gray) {
-        let Some(m) = decode_marker_quad(&gray, quad) else {
-            continue;
-        };
-        if m.id >= max_id {
-            return Err(refuse(
-                "BOARD_MISMATCH: detected marker IDs do not belong to this sidecar",
-            ));
-        }
-        if let Some(prev) = &by_id[m.id] {
-            let c_prev = [
-                0.25 * prev.corners.iter().map(|p| p[0]).sum::<f64>(),
-                0.25 * prev.corners.iter().map(|p| p[1]).sum::<f64>(),
-            ];
-            let c_now = [
-                0.25 * m.corners.iter().map(|p| p[0]).sum::<f64>(),
-                0.25 * m.corners.iter().map(|p| p[1]).sum::<f64>(),
-            ];
-            let diag = det::hypot(
-                prev.corners[2][0] - prev.corners[0][0],
-                prev.corners[2][1] - prev.corners[0][1],
-            );
-            if det::hypot(c_now[0] - c_prev[0], c_now[1] - c_prev[1]) > 0.35 * diag {
+    for side in SEARCH_SIDES {
+        for quad in find_candidate_quads(&gray, side) {
+            let Some(m) = decode_marker_quad(&gray, quad) else {
+                continue;
+            };
+            if m.id >= max_id {
                 return Err(refuse(
-                    "AMBIGUOUS_BOARD: duplicate marker IDs; show only one calibration board",
+                    "BOARD_MISMATCH: detected marker IDs do not belong to this sidecar",
                 ));
             }
-        } else {
-            by_id[m.id] = Some(m);
+            if let Some(prev) = &by_id[m.id] {
+                let c_prev = [
+                    0.25 * prev.corners.iter().map(|p| p[0]).sum::<f64>(),
+                    0.25 * prev.corners.iter().map(|p| p[1]).sum::<f64>(),
+                ];
+                let c_now = [
+                    0.25 * m.corners.iter().map(|p| p[0]).sum::<f64>(),
+                    0.25 * m.corners.iter().map(|p| p[1]).sum::<f64>(),
+                ];
+                let diag = det::hypot(
+                    prev.corners[2][0] - prev.corners[0][0],
+                    prev.corners[2][1] - prev.corners[0][1],
+                );
+                if det::hypot(c_now[0] - c_prev[0], c_now[1] - c_prev[1]) > 0.35 * diag {
+                    return Err(refuse(
+                        "AMBIGUOUS_BOARD: duplicate marker IDs; show only one calibration board",
+                    ));
+                }
+            } else {
+                by_id[m.id] = Some(m);
+            }
+        }
+        if by_id.iter().flatten().count() >= 2 || side >= w.max(h) {
+            break;
         }
     }
 
