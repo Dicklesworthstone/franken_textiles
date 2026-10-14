@@ -72,6 +72,7 @@ fn fixture() -> CalibrationInput {
             model_evidence: "Independent synthetic Brown lens; not a camera calibration".into(),
             max_radius: 0.9,
             max_iterations: 80,
+            corner_noise: None,
         }),
         reference_evidence: "Synthetic 60 mm planar grid".into(),
         image_size_px: [1600, 1200],
@@ -225,6 +226,165 @@ fn noisy_corners_report_their_residuals_instead_of_being_trimmed() {
     );
 }
 
+fn inline_noise(input: &mut CalibrationInput, sigma_px: f64) {
+    input.distortion_fit.as_mut().unwrap().corner_noise =
+        Some(ftx_measure::photo::intrinsics::CornerNoise {
+            model: "independent_isotropic".into(),
+            sigma_px,
+            evidence:
+                "Synthetic independent per-coordinate perturbations, not residual-derived sigma"
+                    .into(),
+        });
+}
+
+#[test]
+fn covariance_is_opt_in_and_scales_with_declared_noise_not_residual_rms() {
+    let mut input = fixture();
+    let original = json!(calibrate_camera(&input).unwrap());
+    assert!(original.get("uncertainty").is_none());
+    assert!(
+        original["input"]["distortion_fit"]
+            .get("corner_noise")
+            .is_none()
+    );
+    inline_noise(&mut input, 0.2);
+    let a = calibrate_camera(&input).unwrap();
+    inline_noise(&mut input, 0.4);
+    let b = calibrate_camera(&input).unwrap();
+    assert_eq!(json!(a.solution), original["solution"]);
+    assert_eq!(json!(a.refinement), original["refinement"]);
+    assert_eq!(json!(a.solution), json!(b.solution));
+    let (a, b) = (a.uncertainty.unwrap(), b.uncertainty.unwrap());
+    assert_eq!(a.fit_corners, 220);
+    assert_eq!(a.nuisance_parameters, 30);
+    assert_eq!(a.residual_degrees_of_freedom, 401);
+    for i in 0..9 {
+        assert!(a.standard_deviations[i] > 0.0);
+        assert_eq!(b.standard_deviations[i], 2.0 * a.standard_deviations[i]);
+        for j in 0..9 {
+            assert_eq!(a.covariance[i][j], a.covariance[j][i]);
+            assert_eq!(b.covariance[i][j], 4.0 * a.covariance[i][j]);
+        }
+    }
+    assert!(
+        a.covariance[4][5].abs() > 1e-12,
+        "coefficient correlation is retained"
+    );
+}
+
+#[test]
+fn covariance_never_uses_held_out_observations_and_failed_fits_publish_none() {
+    let mut input = fixture();
+    inline_noise(&mut input, 0.1);
+    let good = calibrate_camera(&input).unwrap();
+    let mut changed = input.clone();
+    changed.views[5].corners[0].pixel_px.x += 0.2;
+    changed.views[0].corners[0].pixel_px.y += 0.2;
+    let other = calibrate_camera(&changed).unwrap();
+    assert_eq!(other.status, "ACCEPTED");
+    assert_eq!(json!(good.uncertainty), json!(other.uncertainty));
+    changed.views[5].corners[0].pixel_px.x += 30.0;
+    let rejected = calibrate_camera(&changed).unwrap();
+    assert!(rejected.solution.is_none() && rejected.uncertainty.is_none());
+    assert_eq!(json!(good.refinement), json!(rejected.refinement));
+    input.distortion_fit.as_mut().unwrap().max_iterations = 1;
+    let rejected = calibrate_camera(&input).unwrap();
+    assert!(rejected.solution.is_none() && rejected.uncertainty.is_none());
+}
+
+#[test]
+fn noise_requires_finite_positive_sigma_and_an_explicit_supported_model() {
+    for sigma in [0.0, -1.0, f64::INFINITY, f64::NAN, 1001.0] {
+        let mut input = fixture();
+        inline_noise(&mut input, sigma);
+        assert!(calibrate_camera(&input).is_err());
+    }
+    for (model, evidence) in [
+        ("correlated", "known sigma"),
+        ("independent_isotropic", "  "),
+    ] {
+        let mut input = fixture();
+        inline_noise(&mut input, 0.25);
+        let n = input
+            .distortion_fit
+            .as_mut()
+            .unwrap()
+            .corner_noise
+            .as_mut()
+            .unwrap();
+        n.model = model.into();
+        n.evidence = evidence.into();
+        assert!(calibrate_camera(&input).is_err());
+    }
+}
+
+fn coefficients(k: ftx_measure::camera::Intrinsics) -> [f64; 9] {
+    [
+        k.focal_px.x,
+        k.focal_px.y,
+        k.principal_px.x,
+        k.principal_px.y,
+        k.distortion.radial[0],
+        k.distortion.radial[1],
+        k.distortion.radial[2],
+        k.distortion.tangential[0],
+        k.distortion.tangential[1],
+    ]
+}
+
+#[test]
+fn covariance_matches_independent_small_noise_refits() {
+    // Independent Rademacher noise has the declared variance; Gaussianity is not needed for
+    // the first-order covariance identity. No fitted values are used as ground truth.
+    let mut input = fixture();
+    inline_noise(&mut input, 0.005);
+    let reference = calibrate_camera(&input).unwrap().uncertainty.unwrap();
+    let mut state = 173_u64;
+    let mut sign = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        if state & 1 == 0 { -1.0 } else { 1.0 }
+    };
+    let mut draws = Vec::new();
+    for _ in 0..80 {
+        let mut trial = input.clone();
+        trial.distortion_fit.as_mut().unwrap().corner_noise = None;
+        for v in trial
+            .views
+            .iter_mut()
+            .filter(|v| v.partition == Partition::Fit)
+        {
+            for c in v
+                .corners
+                .iter_mut()
+                .filter(|p| p.partition == Partition::Fit)
+            {
+                c.pixel_px.x += 0.005 * sign();
+                c.pixel_px.y += 0.005 * sign();
+            }
+        }
+        let report = calibrate_camera(&trial).unwrap();
+        assert_eq!(
+            report.status,
+            "ACCEPTED",
+            "{:?} / {:?}",
+            report.checks.last().map(|c| &c.failure),
+            report.refinement
+        );
+        draws.push(coefficients(report.solution.unwrap().intrinsics));
+    }
+    for i in 0..9 {
+        let mean = draws.iter().map(|d| d[i]).sum::<f64>() / draws.len() as f64;
+        let empirical =
+            draws.iter().map(|d| (d[i] - mean).powi(2)).sum::<f64>() / (draws.len() - 1) as f64;
+        let ratio = empirical / reference.covariance[i][i];
+        assert!(
+            (0.5..1.65).contains(&ratio),
+            "parameter {i}: variance ratio {ratio}"
+        );
+    }
+}
 fn noise(sigma_px: f64) -> ftx_measure::photo::intrinsics::uncertainty::CalibrationNoise {
     ftx_measure::photo::intrinsics::uncertainty::CalibrationNoise {
         schema: "ftx-calibration-corner-noise/1".into(),

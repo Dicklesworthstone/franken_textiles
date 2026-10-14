@@ -8,6 +8,7 @@ mod charuco;
 mod detect;
 mod geometry;
 pub mod intrinsics;
+mod lens_uncertainty;
 mod measurement;
 
 pub use camera::Camera;
@@ -41,6 +42,7 @@ struct Calibration {
     samples: Samples,
     // When present, h and samples use virtual pinhole pixels; clicks/receipts stay observed.
     intrinsics: Option<crate::camera::Intrinsics>,
+    intrinsic_uncertainty: Option<intrinsics::IntrinsicUncertainty>,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +54,7 @@ enum Samples {
     Charuco {
         pixels: Vec<Point>,
         board: Vec<Point>,
+        observed: Vec<Point>,
     },
     Edges {
         points: [Vec<Point>; 4],
@@ -306,6 +309,7 @@ pub fn analyze_reference(reference: &Value) -> Result<PhotoScale, Refusal> {
         image,
         samples: Samples::Manual { corners, sigma },
         intrinsics: None,
+        intrinsic_uncertainty: None,
     });
     Ok(PhotoScale {
         report,

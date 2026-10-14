@@ -324,8 +324,10 @@ pub(super) fn analyze(v: &Value) -> Result<PhotoScale, Refusal> {
             samples: Samples::Charuco {
                 pixels: ids.iter().map(|&i| p[i]).collect(),
                 board: ids.iter().map(|&i| q[i]).collect(),
+                observed: ids.iter().map(|&i| detections[i].1).collect(),
             },
             intrinsics,
+            intrinsic_uncertainty: None,
         }),
     })
 }

@@ -6,7 +6,7 @@
 
 mod refine;
 pub mod uncertainty;
-pub use refine::{DistortionFit, RefinementReport};
+pub use refine::{CornerNoise, DistortionFit, IntrinsicUncertainty, RefinementReport};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -133,6 +133,9 @@ pub struct CalibrationSolution {
 /// Calibration receipt. A small residual is not an uncertainty or real-wearer accuracy certificate.
 #[derive(Clone, Debug, Serialize)]
 pub struct CalibrationReport {
+    /// Optional declared-noise covariance from the shared explicit-noise API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditional_uncertainty: Option<uncertainty::CalibrationUncertainty>,
     /// `ftx-camera-calibration/1`.
     pub schema: &'static str,
     /// ACCEPTED, REJECTED or UNOBSERVABLE.
@@ -158,11 +161,11 @@ pub struct CalibrationReport {
     /// Fit-only pixel objective and convergence diagnostics for explicit Brown fitting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refinement: Option<RefinementReport>,
+    /// Conditional fit-only intrinsic covariance, only after every calibration gate passes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uncertainty: Option<IntrinsicUncertainty>,
     /// Scope of the estimate.
     pub no_claim: &'static str,
-    /// Optional declared-noise covariance; absent preserves the original report format.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub conditional_uncertainty: Option<uncertainty::CalibrationUncertainty>,
 }
 
 fn name(s: &str) -> bool {
@@ -332,6 +335,7 @@ pub fn calibrate_camera(input: &CalibrationInput) -> Result<CalibrationReport, R
         flags: Vec::new(),
         advisories: Vec::new(),
         refinement: None,
+        uncertainty: None,
         no_claim: if input.distortion_fit.is_some() {
             refine::NO_CLAIM
         } else {

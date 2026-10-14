@@ -105,6 +105,15 @@ pub fn calibrate_camera_with_uncertainty(
     noise: &CalibrationNoise,
 ) -> Result<CalibrationReport, Refusal> {
     noise.validate()?;
+    if input
+        .distortion_fit
+        .as_ref()
+        .is_some_and(|o| o.corner_noise.is_some())
+    {
+        return Err(invalid(
+            "declare calibration noise once: inline corner_noise or the separate noise argument, not both",
+        ));
+    }
     if input.image_model != "brown5_zero_skew" {
         return Err(Refusal::new(
             RefusalCode::InvalidDocument,

@@ -481,6 +481,7 @@ mod tests {
         m.image_model = "brown5_zero_skew".into();
         m.pinhole_evidence.clear();
         m.distortion_fit = Some(DistortionFit {
+            corner_noise: None,
             model_evidence: "Independent synthetic Brown renderer".into(),
             max_radius: 0.9,
             max_iterations: 80,

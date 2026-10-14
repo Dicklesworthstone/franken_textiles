@@ -2,6 +2,9 @@
 //! Zhang initialization is only a start; acceptance uses original pixel residuals and the
 //! shared camera model's certified inverse. No OpenCV optimizer or external numeric runtime.
 
+mod uncertainty;
+pub use uncertainty::{CornerNoise, IntrinsicUncertainty};
+
 use ftx_core::{Mat3, Refusal, Vec2, Vec3, det};
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +32,9 @@ pub struct DistortionFit {
     /// Maximum accepted LM updates per fit (1–200); exhausted fits publish no solution.
     #[serde(default = "iterations")]
     pub max_iterations: usize,
+    /// Optional independent isotropic corner-noise model for conditional intrinsic covariance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_noise: Option<CornerNoise>,
 }
 
 fn iterations() -> usize {
@@ -38,6 +44,9 @@ fn iterations() -> usize {
 impl DistortionFit {
     /// Check explicit evidence, calibrated disk and work budget before processing observations.
     pub fn validate(&self) -> Result<(), Refusal> {
+        if let Some(noise) = &self.corner_noise {
+            noise.validate()?;
+        }
         if !super::evidence(&self.model_evidence)
             || !self.max_radius.is_finite()
             || !(0.0 < self.max_radius && self.max_radius <= 10.0)
@@ -299,7 +308,13 @@ fn optimize(
                 "UNOBSERVABLE: fit-only lens/pose Jacobian is rank deficient or ill-conditioned; damping cannot supply missing evidence",
             ));
         }
-        if telemetry.scaled_gradient_inf.unwrap() <= 1e-8 * s.cost.sqrt().max(1e-4)
+        // Pixel projection subtracts quantities of image-scale magnitude. Once a residual is
+        // tiny, a purely relative threshold demands sub-ulp projection changes, particularly
+        // for frozen-lens held-out poses. Bound accumulated projection roundoff in each
+        // unit-norm Jacobian column; rank and original-pixel acceptance gates still apply.
+        let coordinates = 2 * observations.iter().map(Vec::len).sum::<usize>();
+        let roundoff = 32.0 * f64::EPSILON * scale * (coordinates as f64).sqrt();
+        if telemetry.scaled_gradient_inf.unwrap() <= 1e-8 * s.cost.sqrt().max(1e-4) + roundoff
             || s.cost <= 1e-16
         {
             telemetry.termination = "gradient_converged".into();
@@ -329,9 +344,22 @@ fn optimize(
             damping *= 10.0;
         }
         let Some((next, next_system)) = accepted else {
-            return Err(invalid(
-                "NOT_CONVERGED: Brown calibration stalled before gradient convergence",
-            ));
+            // A pose can be at the floating-point projection floor with a nonzero residual:
+            // the fixed lens is itself estimated from noisy fitting images. Test the remaining
+            // *undamped* GN decrement against residual-dot-projection roundoff, never accept
+            // merely because a damped step is small. No objective-increasing update is taken.
+            let l = cholesky(&h, 0.0, PIVOT_FLOOR).unwrap();
+            let correction = solve(&l, &g);
+            let decrement = -g.iter().zip(&correction).map(|(a, b)| a * b).sum::<f64>();
+            let cost_roundoff = roundoff * (2.0 * s.cost).sqrt();
+            if decrement.is_finite() && decrement >= 0.0 && 0.5 * decrement <= cost_roundoff {
+                telemetry.termination = "projection_roundoff_converged".into();
+                return Ok(());
+            }
+            return Err(invalid(format!(
+                "NOT_CONVERGED: Brown calibration stalled before gradient convergence (gradient {:?}, cost {})",
+                telemetry.scaled_gradient_inf, s.cost
+            )));
         };
         *state = next;
         s = next_system;
@@ -526,11 +554,26 @@ pub(super) fn calibrate(report: &mut CalibrationReport, mut k: Intrinsics) -> Re
         report.checks.push(check);
     }
     if report.flags.is_empty() {
+        let noise = options.corner_noise.clone();
         report.status = "ACCEPTED";
         report.solution = Some(CalibrationSolution {
             intrinsics: state.k,
             sheet_poses: poses,
         });
+        if let Some(noise) = noise {
+            // Inline noise is a CLI convenience, not a second covariance estimator. Both
+            // request surfaces use the published full joint-Jacobian marginal below.
+            match covariance(report, noise.sigma_px) {
+                Ok(value) => report.uncertainty = Some(uncertainty::from_estimate(value, noise)),
+                Err(e) => {
+                    report.solution = None;
+                    report.status = "REJECTED";
+                    report.flags.push(e.message);
+                    return Ok(());
+                }
+            }
+            report.no_claim = "Local Brown calibration with conditional linearized intrinsic covariance under the declared independent isotropic corner-noise model. No reference-error, correlated detector-noise, camera-drift, global-optimum or real-camera accuracy claim.";
+        }
     }
     Ok(())
 }
