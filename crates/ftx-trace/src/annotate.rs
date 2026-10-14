@@ -20,7 +20,7 @@ fn r3(x: f64) -> f64 {
 }
 
 /// Python `str(value)` for the few places the reference formats a JSON value.
-fn py_str(v: &OValue) -> String {
+pub(crate) fn py_str(v: &OValue) -> String {
     match v {
         OValue::String(s) => s.clone(),
         OValue::Null => "None".into(),
@@ -110,12 +110,15 @@ pub fn mirror_piece(piece: &mut Piece) {
     if let Some(tr) = trace_mut(piece)
         && let Some(a) = tr.get("to_px").and_then(Value::as_array)
     {
-        // [A; 0 0 1] @ [[-1, 0, 2cx], [0, 1, 0], [0, 0, 1]], first two rows
+        // [A; 0 0 1] @ [[-1, 0, 2cx], [0, 1, 0], [0, 0, 1]], first two rows, each entry the full sum of
+        // three products as numpy's matmul takes it (0·-1 + -1·0 + c·0 is +0.0; negating 0.0 gives -0.0)
+        let m = [[-1.0, 0.0, 2.0 * cx], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         let out: Vec<Value> = a
             .iter()
             .filter_map(|r| {
                 let r: Vec<f64> = r.as_array()?.iter().filter_map(Value::as_f64).collect();
-                (r.len() == 3).then(|| json!([-r[0], r[1], r[0] * (2.0 * cx) + r[2]]))
+                let col = |j: usize| r[0] * m[0][j] + r[1] * m[1][j] + r[2] * m[2][j];
+                (r.len() == 3).then(|| json!([col(0), col(1), col(2)]))
             })
             .collect();
         tr.insert("to_px".into(), Value::Array(out));
@@ -317,7 +320,7 @@ pub fn split_edge(piece: &mut Piece, eid: &str, fractions: &[f64]) -> Result<Vec
 }
 
 /// An ordered `{old: new}` map of strings from names.json.
-fn rename_map(v: Option<&OValue>) -> Vec<(String, String)> {
+pub(crate) fn rename_map(v: Option<&OValue>) -> Vec<(String, String)> {
     v.map(OValue::entries)
         .unwrap_or_default()
         .into_iter()
@@ -325,7 +328,7 @@ fn rename_map(v: Option<&OValue>) -> Vec<(String, String)> {
         .collect()
 }
 
-fn lookup<'a>(map: &'a [(String, String)], k: &'a str) -> &'a str {
+pub(crate) fn lookup<'a>(map: &'a [(String, String)], k: &'a str) -> &'a str {
     map.iter()
         .find(|(o, _)| o == k)
         .map_or(k, |(_, n)| n.as_str())
@@ -344,7 +347,16 @@ fn has_duplicates(ids: &[String]) -> bool {
 /// The reference's message: unknown pieces, a bad id or rename, a bad cut or side, or `annotate failed:`
 /// followed by every seam, check or structure problem.
 pub fn annotate(draft: &PatternDoc, names: &Names) -> Result<PatternDoc, String> {
+    annotate_twins(draft, names).map(|(data, _)| data)
+}
+
+/// [`annotate`], and for each seam of `names.json` whether a left-side twin followed it.
+pub(crate) fn annotate_twins(
+    draft: &PatternDoc,
+    names: &Names,
+) -> Result<(PatternDoc, Vec<bool>), String> {
     let mut data = draft.clone();
+    let mut twins: Vec<bool> = Vec::new();
     let specs: Vec<(&str, &OValue)> = names.get("pieces").map(OValue::entries).unwrap_or_default();
     let mut drop: Vec<String> = Vec::new();
     for d in names.get("drop").map(OValue::items).unwrap_or_default() {
@@ -580,6 +592,7 @@ pub fn annotate(draft: &PatternDoc, names: &Names) -> Result<PatternDoc, String>
             seam.insert("ratio_band".into(), band.to_value());
         }
         seams.push(Seam(seam.clone()));
+        twins.push(false);
         if mirror && (ea || eb) {
             let ta = if ea {
                 twin(&data, &a).map_err(|e| e.to_string())?
@@ -598,6 +611,9 @@ pub fn annotate(draft: &PatternDoc, names: &Names) -> Result<PatternDoc, String>
                 t.insert("b".into(), Value::String(tb));
                 t.insert("twin_of".into(), sid.to_value());
                 seams.push(Seam(t));
+                if let Some(twinned) = twins.last_mut() {
+                    *twinned = true;
+                }
             } else {
                 notes.push(format!(
                     "seam {sid_text}: no automatic left-side twin (one side is a single piece); declare it explicitly"
@@ -670,5 +686,5 @@ pub fn annotate(draft: &PatternDoc, names: &Names) -> Result<PatternDoc, String>
     if !problems.is_empty() {
         return Err(format!("annotate failed:\n  {}", problems.join("\n  ")));
     }
-    Ok(data)
+    Ok((data, twins))
 }

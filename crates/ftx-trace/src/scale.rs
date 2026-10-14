@@ -63,10 +63,11 @@ pub fn fit_scale(
         if let Some(tr) = p.extra.get_mut("trace").and_then(Value::as_object_mut)
             && let Some(rows) = tr.get_mut("to_px").and_then(Value::as_array_mut)
         {
+            // np.asarray(to_px, float) with A[:, :2] /= k: every entry comes back a float
             for row in rows.iter_mut().filter_map(Value::as_array_mut) {
-                for c in row.iter_mut().take(2) {
+                for (i, c) in row.iter_mut().enumerate() {
                     if let Some(x) = c.as_f64() {
-                        *c = json!(x / k);
+                        *c = json!(if i < 2 { x / k } else { x });
                     }
                 }
             }

@@ -4,8 +4,9 @@
 use std::path::Path;
 
 use ftx_core::{Refusal, RefusalCode, py};
+use ftx_export::pyjson::PyJson;
 use ftx_pattern::doc::PatternDoc;
-use ftx_trace::{AuditOptions, OValue, annotate, audit, fit_scale, parse_length};
+use ftx_trace::{AuditOptions, OValue, annotate_py, audit, fit_scale_py, parse_length};
 use serde_json::{Value, json};
 
 use super::{Args, bad_input, known_options, make_dir, required, workspace};
@@ -62,12 +63,19 @@ fn read_doc(path: &str) -> Result<PatternDoc, Refusal> {
     serde_json::from_str(&read_text(path)?).map_err(|e| bad_input(format!("{path}: {e}")))
 }
 
-fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<(), Refusal> {
+/// A pattern both typed and in its key order (from the same text).
+fn read_ordered(path: &str) -> Result<(PyJson, PatternDoc), Refusal> {
+    let text = read_text(path)?;
+    let doc = serde_json::from_str(&text).map_err(|e| bad_input(format!("{path}: {e}")))?;
+    let ordered = PyJson::parse(&text).map_err(|e| bad_input(format!("{path}: {e}")))?;
+    Ok((ordered, doc))
+}
+
+fn write_text(path: &Path, text: &str) -> Result<(), Refusal> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         make_dir(dir)?;
     }
-    let text = serde_json::to_string_pretty(value).map_err(|e| bad_input(e.to_string()))?;
-    std::fs::write(path, text + "\n")
+    std::fs::write(path, text)
         .map_err(|e| Refusal::new(RefusalCode::Io, format!("{}: {e}", path.display())))
 }
 
@@ -85,12 +93,14 @@ pub(super) fn cmd_annotate(args: &Args) -> Result<(Value, i32, String), Refusal>
     if args.options.contains_key("image") && !args.options.contains_key("overlay") {
         return Err(bad_input("annotate --image requires --overlay PNG"));
     }
-    let draft = read_doc(input(args, "annotate", "a traced draft")?)?;
+    let (ordered, draft) = read_ordered(input(args, "annotate", "a traced draft")?)?;
     let names_path = required(args, "names")?;
     let out = required(args, "out")?;
     let names: OValue = serde_json::from_str(&read_text(names_path)?)
         .map_err(|e| bad_input(format!("{names_path}: {e}")))?;
-    let data = annotate(&draft, &names).map_err(bad_input)?;
+    // the reference's file: its key order, written as json.dump(…, indent=1)
+    let (written, data) = annotate_py(&ordered, &draft, &names).map_err(bad_input)?;
+    let text = written.dumps(Some(1)) + "\n";
     if let Some(path) = args.options.get("overlay") {
         unused(Path::new(out))?;
         unused(Path::new(path))?;
@@ -99,13 +109,10 @@ pub(super) fn cmd_annotate(args: &Args) -> Result<(Value, i32, String), Refusal>
         }
         let image = source_image(args)?;
         let png = ftx_trace::review::overlay(&data, image.as_ref())?;
-        // Serialize the typed document directly: to_value would sort the ordered vertex map.
-        let mut bytes = serde_json::to_vec_pretty(&data).map_err(|e| bad_input(e.to_string()))?;
-        bytes.push(b'\n');
         save_new(Path::new(path), &png)?;
-        save_new(Path::new(out), &bytes)?;
+        save_new(Path::new(out), text.as_bytes())?;
     } else {
-        write_json(Path::new(out), &data)?;
+        write_text(Path::new(out), &text)?;
     }
     let pieces: Vec<&str> = data.pieces.iter().map(|p| p.id.as_str()).collect();
     let seams: Vec<String> = data
@@ -164,7 +171,7 @@ fn target(s: &str) -> Result<(String, f64), Refusal> {
 /// lengths; writes the FITTED pattern and prints the report.
 pub(super) fn cmd_scale_fit(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(args, "scale-fit", &["target", "out"])?;
-    let doc = read_doc(input(args, "scale-fit", "a pattern")?)?;
+    let (ordered, doc) = read_ordered(input(args, "scale-fit", "a pattern")?)?;
     let out = required(args, "out")?;
     let Some(given) = args.options.get("target") else {
         return Err(bad_input("scale-fit needs at least one --target REF=MM"));
@@ -173,9 +180,15 @@ pub(super) fn cmd_scale_fit(args: &Args) -> Result<(Value, i32, String), Refusal
         .split('\n')
         .map(target)
         .collect::<Result<Vec<_>, _>>()?;
-    let (data, report) =
-        fit_scale(&doc, &targets).map_err(|e| bad_input(format!("scale-fit failed: {e}")))?;
-    write_json(Path::new(out), &data)?;
+    let (written, _, data) = fit_scale_py(&ordered, &doc, &targets)
+        .map_err(|e| bad_input(format!("scale-fit failed: {e}")))?;
+    write_text(Path::new(out), &(written.dumps(Some(1)) + "\n"))?;
+    let report = data
+        .meta
+        .as_ref()
+        .and_then(|m| m.get("scale_fit"))
+        .cloned()
+        .unwrap_or_default();
     let mut result = json!({"out": out});
     if let (Some(r), Some(rep)) = (result.as_object_mut(), report.as_object()) {
         r.extend(rep.clone());
