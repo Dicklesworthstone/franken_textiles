@@ -15,6 +15,7 @@
 
 pub mod ad;
 pub mod animation;
+pub mod bending;
 mod bvh;
 pub mod cloth;
 pub mod contact;

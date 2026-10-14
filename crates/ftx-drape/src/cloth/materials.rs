@@ -117,6 +117,11 @@ impl ClothModel {
     /// # Errors
     /// Invalid/mismatched materials, mass underflow/overflow, or unrepresentable bending coefficients.
     pub fn set_materials(&mut self, materials: &[SheetMaterial]) -> Result<(), Refusal> {
+        if self.panel_bending.is_some() {
+            return Err(bad(
+                "rebuild the cloth model to replace materials bound to panel bending",
+            ));
+        }
         if materials.len() != self.membranes.len() || materials.is_empty() {
             return Err(bad("one sheet material per triangle is required"));
         }

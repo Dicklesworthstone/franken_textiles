@@ -22,6 +22,7 @@ type EdgeUses = std::collections::BTreeMap<(usize, usize), Vec<(usize, usize, us
 
 mod materials;
 pub use materials::SheetMaterial;
+mod bending;
 mod relaxation;
 
 /// The cloth: flat rest geometry, elements, lumped masses and material.
@@ -53,6 +54,8 @@ pub struct ClothModel {
     hinge_bending: Option<Vec<f64>>,
     // Each hinge's adjacent triangles and their shares of the existing bending integration area.
     hinge_support: Vec<[(usize, f64); 2]>,
+    // Optional panel curvature replaces interior scalar hinges, never the explicit seam hinges.
+    panel_bending: Option<bending::PanelField>,
 }
 
 impl ClothModel {
@@ -214,6 +217,7 @@ impl ClothModel {
             element_responses: None,
             hinge_bending: None,
             hinge_support,
+            panel_bending: None,
         })
     }
 
@@ -258,6 +262,13 @@ impl ClothModel {
     /// Effective bending coefficient of hinge `h` (N·m), including unlike adjacent sheets.
     #[must_use]
     pub fn hinge_rigidity(&self, h: usize) -> f64 {
+        if self
+            .panel_bending
+            .as_ref()
+            .is_some_and(|p| p.replaced_hinges[h])
+        {
+            return 0.0;
+        }
         self.hinge_bending.as_ref().map_or(self.bending, |b| b[h])
     }
 
@@ -265,6 +276,7 @@ impl ClothModel {
     #[must_use]
     pub fn is_heterogeneous(&self) -> bool {
         self.element_materials.is_some()
+            || self.panel_bending.as_ref().is_some_and(|p| p.heterogeneous)
     }
 
     /// Bind one optional characterized nonlinear response to each membrane triangle.
@@ -335,12 +347,15 @@ impl ClothModel {
                 )
             })
             .sum();
-        let b: f64 = self
+        let mut b: f64 = self
             .hinges
             .iter()
             .enumerate()
             .map(|(i, h)| h.energy(x, self.hinge_rigidity(i)))
             .sum();
+        if let Some(field) = &self.panel_bending {
+            b += field.patches.iter().map(|p| p.energy(x)).sum::<f64>();
+        }
         let t: f64 = self.elastics.iter().map(|e| e.energy(x)).sum();
         m + b + t
     }
@@ -422,7 +437,8 @@ pub struct Solver {
     /// With self-contact: the free-DOF pattern of every element, elastic and mass block (and the
     /// membrane, hinge and elastic counts it was built for), which each assembly extends by its
     /// contact couplings.
-    element_pattern: Option<(Csr, [usize; 3])>,
+    element_pattern: Option<(Csr, [usize; 4])>,
+    cached_panel_count: usize,
     /// The last positive-definite factorization, the preconditioner for [`Solver::pcg_iters`].
     precond: Option<LdltFactor>,
     // Per-triangle, accepted physical memory; trial evaluations never mutate it.
@@ -478,6 +494,7 @@ impl Solver {
                 }
             }
         }
+        let cached_panel_count = model.panel_bending_patches().len();
         Self {
             v: vec![Vec3::ZERO; n],
             model,
@@ -493,6 +510,7 @@ impl Solver {
             symbolic: None,
             pattern: None,
             element_pattern: None,
+            cached_panel_count,
             precond: None,
             relaxation: None,
         }
@@ -615,14 +633,19 @@ impl Solver {
             .is_some_and(|c| c.self_contact_params().is_some())
     }
 
-    fn element_counts(&self) -> [usize; 3] {
+    fn element_counts(&self) -> [usize; 4] {
         let m = &self.model;
-        [m.membranes.len(), m.hinges.len(), m.elastics.len()]
+        [
+            m.membranes.len(),
+            m.hinges.len(),
+            m.elastics.len(),
+            m.panel_bending_patches().len(),
+        ]
     }
 
     /// The positions [`Solver::assemble`] pushes before any contact block: every pair of free DOFs of
     /// each membrane, hinge and elastic, and each free DOF's mass.
-    fn element_blocks_pattern(&self) -> (Csr, [usize; 3]) {
+    fn element_blocks_pattern(&self) -> (Csr, [usize; 4]) {
         let mut coo = Coo::new(self.nfree, self.nfree);
         let mut block = |vs: &[usize]| {
             let dofs: Vec<usize> = vs
@@ -637,6 +660,10 @@ impl Solver {
         };
         self.model.membranes.iter().for_each(|e| block(&e.v));
         self.model.hinges.iter().for_each(|h| block(&h.v));
+        self.model
+            .panel_bending_patches()
+            .iter()
+            .for_each(|p| block(&p.v));
         self.model.elastics.iter().for_each(|e| block(&e.v));
         for f in self.free.iter().flatten() {
             coo.push(*f, *f, 0.0);
@@ -780,6 +807,10 @@ impl Solver {
             let mut l = h.local(x, self.model.hinge_rigidity(i));
             scatter(&h.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
+        for p in self.model.panel_bending_patches() {
+            let mut l = p.local(x);
+            scatter(&p.v, &l.grad, &mut l.hess, true, &mut sink, &mut g);
+        }
         for e in &self.model.elastics {
             let mut l = e.local(x);
             scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
@@ -848,6 +879,10 @@ impl Solver {
             };
             self.model.membranes.iter().for_each(|e| link(&e.v));
             self.model.hinges.iter().for_each(|h| link(&h.v));
+            self.model
+                .panel_bending_patches()
+                .iter()
+                .for_each(|p| link(&p.v));
             if self.dynamic_contact() {
                 // Order the actual contact graph too, not only the rest-mesh adjacency.
                 let mut vertex = vec![0; self.nfree];
@@ -908,6 +943,14 @@ impl Solver {
 
     /// Projected Newton on the potential from the current positions.
     fn minimize(&mut self, inertia: Option<(&[Vec3], f64)>) -> Result<SolveReport, Refusal> {
+        let count = self.model.panel_bending_patches().len();
+        if count != self.cached_panel_count {
+            self.symbolic = None;
+            self.pattern = None;
+            self.precond = None;
+            self.element_pattern = None;
+            self.cached_panel_count = count;
+        }
         let mut rep = SolveReport {
             energy_start: self.potential(&self.x, inertia)?,
             ..SolveReport::default()
@@ -1252,6 +1295,12 @@ impl Solver {
         for (i, h) in self.model.hinges.iter().enumerate() {
             let l = h.local(&self.x, self.model.hinge_rigidity(i));
             for (a, &vi) in h.v.iter().enumerate() {
+                f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
+            }
+        }
+        for p in self.model.panel_bending_patches() {
+            let l = p.local(&self.x);
+            for (a, &vi) in p.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
         }
