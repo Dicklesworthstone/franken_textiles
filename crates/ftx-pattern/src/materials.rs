@@ -175,8 +175,8 @@ impl Catalog {
     /// # Errors
     /// Invalid JSON, schema, source references, values, compositions or duplicate IDs.
     pub fn from_json(text: &str) -> Result<Self, Refusal> {
-        let catalog: Self = serde_json::from_str(text)
-            .map_err(|e| invalid(format!("textile catalog: {e}")))?;
+        let catalog: Self =
+            serde_json::from_str(text).map_err(|e| invalid(format!("textile catalog: {e}")))?;
         catalog.validate()?;
         Ok(catalog)
     }
@@ -187,7 +187,10 @@ impl Catalog {
     /// Unsupported schema, duplicate IDs, or any invalid material record.
     pub fn validate(&self) -> Result<(), Refusal> {
         if self.schema != CATALOG_SCHEMA {
-            return Err(invalid(format!("unsupported textile schema {}", self.schema)));
+            return Err(invalid(format!(
+                "unsupported textile schema {}",
+                self.schema
+            )));
         }
         let mut ids = BTreeSet::new();
         for material in &self.materials {
@@ -244,7 +247,10 @@ impl Material {
             total += c.fraction;
         }
         if total > 1.0 + 1e-9 || (self.composition_complete && (total - 1.0).abs() > 1e-9) {
-            return Err(invalid(format!("{}: composition mass balance is {total}", self.id)));
+            return Err(invalid(format!(
+                "{}: composition mass balance is {total}",
+                self.id
+            )));
         }
         for (name, q) in &self.properties {
             if name.trim().is_empty()
@@ -270,14 +276,23 @@ impl Material {
     /// Missing, unsourced, non-finite, wrong-unit or unapproved estimated property.
     pub fn require(&self, name: &str, unit: &str, allow_estimates: bool) -> Result<f64, Refusal> {
         let q = self.properties.get(name).ok_or_else(|| {
-            invalid(format!("{}: missing textile property {name} ({unit})", self.id))
-                .repair("supply a sourced specimen measurement; do not substitute a fiber modulus")
+            invalid(format!(
+                "{}: missing textile property {name} ({unit})",
+                self.id
+            ))
+            .repair("supply a sourced specimen measurement; do not substitute a fiber modulus")
         })?;
         if q.unit != unit || !q.value.is_finite() || !self.sources.contains_key(&q.source) {
-            return Err(invalid(format!("{}: {name} must be sourced and finite in {unit}", self.id)));
+            return Err(invalid(format!(
+                "{}: {name} must be sourced and finite in {unit}",
+                self.id
+            )));
         }
         if q.evidence == Evidence::Estimate && !allow_estimates {
-            return Err(invalid(format!("{}: {name} is an estimate; explicit opt-in required", self.id)));
+            return Err(invalid(format!(
+                "{}: {name} is an estimate; explicit opt-in required",
+                self.id
+            )));
         }
         Ok(q.value)
     }
@@ -300,22 +315,33 @@ impl Material {
     pub fn mechanics(&self, allow_estimates: bool) -> Result<Mechanics, Refusal> {
         self.validate()?;
         if matches!(self.form, Form::Fiber | Form::Yarn | Form::Fill) {
-            return Err(invalid(format!("{}: {:?} is not a shell constitutive law", self.id, self.form)));
+            return Err(invalid(format!(
+                "{}: {:?} is not a shell constitutive law",
+                self.id, self.form
+            )));
         }
         let mut v = [0.0; 9];
         for (i, (name, unit)) in MECHANICAL_PROPERTIES.iter().enumerate() {
             v[i] = self.require(name, unit, allow_estimates)?;
         }
-        if [0, 1, 2, 4, 6].iter().any(|&i| v[i] <= 0.0)
-            || [5, 7, 8].iter().any(|&i| v[i] < 0.0)
-        {
-            return Err(invalid(format!("{}: nonphysical mechanical property", self.id)));
+        if [0, 1, 2, 4, 6].iter().any(|&i| v[i] <= 0.0) || [5, 7, 8].iter().any(|&i| v[i] < 0.0) {
+            return Err(invalid(format!(
+                "{}: nonphysical mechanical property",
+                self.id
+            )));
         }
         let coupling = v[3] * (v[3] * v[2] / v[1]);
         let denominator = 1.0 - coupling;
-        let q = [v[1] / denominator, v[2] / denominator, v[3] * v[2] / denominator];
+        let q = [
+            v[1] / denominator,
+            v[2] / denominator,
+            v[3] * v[2] / denominator,
+        ];
         if !coupling.is_finite() || denominator <= 0.0 || q.iter().any(|x| !x.is_finite()) {
-            return Err(invalid(format!("{}: unstable orthotropic stiffness", self.id)));
+            return Err(invalid(format!(
+                "{}: unstable orthotropic stiffness",
+                self.id
+            )));
         }
         Ok(Mechanics {
             areal_kg_m2: v[0],
@@ -344,12 +370,18 @@ impl Material {
             let t = self.require("thickness", "m", allow_estimates)?;
             let k = self.require("thermal_conductivity", "W/(m*K)", allow_estimates)?;
             if t <= 0.0 || k <= 0.0 {
-                return Err(invalid(format!("{}: thickness and conductivity must be positive", self.id)));
+                return Err(invalid(format!(
+                    "{}: thickness and conductivity must be positive",
+                    self.id
+                )));
             }
             t / k
         };
         if !r.is_finite() || r <= 0.0 {
-            return Err(invalid(format!("{}: thermal resistance must be finite and positive", self.id)));
+            return Err(invalid(format!(
+                "{}: thermal resistance must be finite and positive",
+                self.id
+            )));
         }
         Ok(r)
     }
@@ -400,7 +432,10 @@ impl ThermalStack {
         if !r.is_finite() || !total.is_finite() || !heat_flow_w.is_finite() {
             return Err(invalid("thermal stack arithmetic overflow"));
         }
-        Ok(Self { resistance_m2_k_w: r, heat_flow_w })
+        Ok(Self {
+            resistance_m2_k_w: r,
+            heat_flow_w,
+        })
     }
 }
 
@@ -409,23 +444,42 @@ mod tests {
     use super::*;
 
     fn specimen() -> Material {
-        let sources = BTreeMap::from([("test".into(), Source {
-            reference: "test:synthetic-known-answer".into(),
-            accessed_on: "2026-10-13".into(),
-            note: "Synthetic test inputs, not measurements of a commercial fabric".into(),
-        })]);
+        let sources = BTreeMap::from([(
+            "test".into(),
+            Source {
+                reference: "test:synthetic-known-answer".into(),
+                accessed_on: "2026-10-13".into(),
+                note: "Synthetic test inputs, not measurements of a commercial fabric".into(),
+            },
+        )]);
         let values = [0.2, 8000.0, 2000.0, 0.2, 1000.0, 3e-5, 0.001, 0.3, 0.5];
-        let properties = MECHANICAL_PROPERTIES.iter().zip(values).map(|((name, unit), value)| {
-            ((*name).into(), Quantity {
-                value, unit: (*unit).into(), evidence: Evidence::Estimate,
-                source: "test".into(), method: "synthetic known answer".into(),
-                conditions: BTreeMap::new(), bounds: None,
+        let properties = MECHANICAL_PROPERTIES
+            .iter()
+            .zip(values)
+            .map(|((name, unit), value)| {
+                (
+                    (*name).into(),
+                    Quantity {
+                        value,
+                        unit: (*unit).into(),
+                        evidence: Evidence::Estimate,
+                        source: "test".into(),
+                        method: "synthetic known answer".into(),
+                        conditions: BTreeMap::new(),
+                        bounds: None,
+                    },
+                )
             })
-        }).collect();
+            .collect();
         Material {
-            id: "synthetic".into(), name: "Synthetic test sheet".into(), form: Form::Woven,
-            composition: Vec::new(), composition_complete: false,
-            structure: BTreeMap::new(), properties, sources,
+            id: "synthetic".into(),
+            name: "Synthetic test sheet".into(),
+            form: Form::Woven,
+            composition: Vec::new(),
+            composition_complete: false,
+            structure: BTreeMap::new(),
+            properties,
+            sources,
         }
     }
 
@@ -483,13 +537,21 @@ mod tests {
     #[test]
     fn incomplete_and_overfull_blends_are_distinct() {
         let mut m = specimen();
-        m.composition = vec![Component { fiber: "cotton".into(), fraction: 0.8, source: "test".into() }];
+        m.composition = vec![Component {
+            fiber: "cotton".into(),
+            fraction: 0.8,
+            source: "test".into(),
+        }];
         assert!(m.validate().is_ok());
         m.composition_complete = true;
         assert!(m.validate().is_err());
         m.composition[0].fraction = 1.0;
         assert!(m.validate().is_ok());
-        m.composition.push(Component { fiber: "polyester".into(), fraction: 0.2, source: "test".into() });
+        m.composition.push(Component {
+            fiber: "polyester".into(),
+            fraction: 0.2,
+            source: "test".into(),
+        });
         assert!(m.validate().is_err());
     }
 
@@ -505,7 +567,10 @@ mod tests {
 
     #[test]
     fn catalog_roundtrip_and_duplicate_rejection() {
-        let mut c = Catalog { schema: CATALOG_SCHEMA.into(), materials: vec![specimen()] };
+        let mut c = Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: vec![specimen()],
+        };
         let json = serde_json::to_string(&c).unwrap();
         assert!(Catalog::from_json(&json).unwrap().get("synthetic").is_ok());
         assert!(c.get("typo").is_err());
