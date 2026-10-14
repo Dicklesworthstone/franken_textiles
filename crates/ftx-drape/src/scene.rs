@@ -348,9 +348,10 @@ pub fn build_scene(
     contact: ContactParams,
     elastic: Option<&ElasticCasing>,
 ) -> Result<Scene, Refusal> {
-    if pattern.raw()["pieces"]
-        .as_array()
-        .is_some_and(|ps| ps.iter().any(|p| p.get("fabric").is_some()))
+    if pattern.raw()["fabric"].get("interfaces").is_some()
+        || pattern.raw()["pieces"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p.get("fabric").is_some()))
     {
         return Err(bad(
             "per-piece fabrics require the resolved drape pipeline, not a uniform Fabric argument"
@@ -367,6 +368,7 @@ pub fn build_scene(
         compression,
         contact,
         elastic,
+        None,
         None,
     )
 }
@@ -391,6 +393,7 @@ pub(crate) fn build_scene_resolved(
         material.options.contact,
         elastic,
         material.piece_fabrics.as_deref(),
+        material.contact_materials.as_ref(),
     )
 }
 
@@ -406,6 +409,7 @@ fn build_scene_inner(
     contact: ContactParams,
     elastic: Option<&ElasticCasing>,
     piece_fabrics: Option<&[Fabric]>,
+    contact_materials: Option<&crate::material::ContactMaterials>,
 ) -> Result<Scene, Refusal> {
     fabric.validate()?;
     fabric.membrane(compression).validate()?;
@@ -536,8 +540,37 @@ fn build_scene_inner(
     } else {
         contact // refused below, with the location
     };
-    let solver = Solver::new(model, x, &vec![[false; 3]; next], Vec3::ZERO)
-        .with_contact(body, start_contact)?;
+    // Admit geometry with zero offset only long enough to bind the actual per-feature material.
+    // The binding audits full physical offsets before any scene escapes or solver step runs. Using
+    // a uniform maximum for this first admission would incorrectly reject a clear thin panel.
+    let admission = if contact_materials.is_some() {
+        ContactParams {
+            thickness: 0.0,
+            ..contact
+        }
+    } else {
+        start_contact
+    };
+    let mut solver =
+        Solver::new(model, x, &vec![[false; 3]; next], Vec3::ZERO).with_contact(body, admission)?;
+    if let Some(field) = contact_materials {
+        let ids: Vec<_> = triangle_owner
+            .iter()
+            .map(|&owner| {
+                let piece = pattern
+                    .instance(&mesh.instances[owner])
+                    .expect("resolved instance")
+                    .piece_index;
+                field.piece_ids[piece]
+            })
+            .collect();
+        let bound = solver
+            .contact
+            .take()
+            .expect("contact was created")
+            .with_surface_materials(&solver.x, &ids, &field.surfaces, field.friction.as_deref())?;
+        solver.contact = Some(bound);
+    }
     Ok(Scene {
         mesh,
         placements: places,

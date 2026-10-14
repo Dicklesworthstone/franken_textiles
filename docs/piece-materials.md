@@ -33,21 +33,68 @@ using the two bending-area shares. This is a shared-curvature discretization,
 not empirical seam stiffness, seam bulk or laminate homogenization. Gather-zone
 compression is reapplied without replacing the triangle's directional stiffness.
 
-The initial contact scope requires exactly equal canonical thickness and skin
-friction across all selected pieces. With self-contact enabled, all pieces must
-resolve to the same snapshot hash. Two self-friction measurements do not establish
-mutual friction between unlike sheets, even when their numeric values happen to
-be equal. Such combinations currently refuse. No coefficient is averaged and
-no collision candidate is discarded to make a heterogeneous garment pass.
+## Physical contact and explicit interfaces
+
+Each piece now retains its own thickness and skin friction in the actual contact
+solver. Cloth/body offsets use the local half-thickness; cloth/cloth offsets sum
+both sides' half-thicknesses. Global contact numbers are broad-phase upper
+envelopes, not averages applied to every collision. At welded vertices or edges
+shared by unlike sheets, contact uses the maximum adjacent thickness and friction:
+an explicit conservative junction envelope, not resolved seam bulk or seam geometry.
+
+Two self-friction measurements do not establish mutual friction between unlike
+sheets. With self-contact enabled, every pair of distinct assigned snapshot hashes
+needs an observation in `fabric.interfaces`. The diagonal comes from each sheet's
+own `friction_self`. Every observation uses the canonical quantity/source fields:
+
+```json
+{
+  "materials": ["<first exact record_sha256>", "<second exact record_sha256>"],
+  "friction": {
+    "value": 0.3, "unit": "1", "source": "pair-test",
+    "evidence": "estimate", "method": "Illustrative synthetic scalar coefficient",
+    "bounds": [0.3, 0.3],
+    "conditions": {"orientation": "symmetric scalar law, both sides"}
+  },
+  "sources": {"pair-test": {
+    "reference": "test:synthetic-interface", "accessed_on": "2026-10-13",
+    "note": "Not a real fabric measurement"
+  }},
+  "allow_estimates": true
+}
+```
+
+This is one list element; the example value is not empirical material data. Use the
+hashes in the resolved material receipt, not display IDs. Changing either material
+record invalidates its interface lock. Reversed pair order is canonicalized;
+duplicates, unknown/stale hashes, partial coverage, wrong units, invalid bounds,
+unknown fields and unsourced observations refuse. Estimate permission is specific
+to the interface: sheet-level permission does not grant it. Supplied observations
+are validated and retained even with self-contact off; no pair is invented for a
+later self-contact run. At most 64 distinct snapshots and 4096 source pieces are
+accepted. Off-diagonal friction is symmetric and scalar, not directional friction.
+
+Unlike-sheet scenes must pass the full physical body-offset audit at construction.
+They do not begin with a reduced-thickness ramp. A too-close start refuses; change
+its placement instead of claiming that a relaxed thickness represents the fabric.
+Uniform one-snapshot patterns retain the existing start/ramp behavior exactly.
 
 `sim_report.json.material` records all source snapshots, per-piece inheritance,
 an assignment hash, instantiated piece mappings, retained-triangle owners, rest
-areas and masses. `fabric.basis` becomes `per_piece` instead of reporting the
+areas and masses, hash-ordered contact IDs, the full interface matrix and its
+observations. `fabric.basis` becomes `per_piece` instead of reporting the
 default as a global material. Uniform patterns retain their existing report and
 numerical paths; explicit equal piece assignments give bit-identical states and
 animations while adding the assignment receipt. Solver clones and prescribed
 motion retain the assembled field; no material substitution is done during motion.
 
-This does not add layers, different-thickness contact, unlike-interface friction,
-new textile constitutive laws, empirical characterization or a real-wearer fit
-claim. Source-record hashes establish identity, not experimental validity.
+Contact reports label their global thickness/friction numbers as upper envelopes.
+The elastic-ring grip diagnostic uses the casing's skin friction, not the maximum
+elsewhere in the garment; it remains an ideal ring estimate, not an integration of
+the heterogeneous contact tractions. Material fields and interface tables survive
+checked body-motion continuation and its transactional failure path.
+
+This does not generate layers or add new textile constitutive laws, resolved seam
+cross-sections, empirical characterization or a real-wearer fit claim. Source-record
+hashes establish identity, not experimental validity. The existing contact, CCD,
+friction, sparse Newton and frankensim-derived BVH kernels remain the only solver.

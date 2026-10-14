@@ -1,6 +1,6 @@
 //! Source-piece assignment for the existing sheet-element solver. No remeshing or material mixing.
-//! This first contact scope requires equal sheet thickness and skin friction. Unlike-cloth friction
-//! is not inferred from the two self-friction observations; unsupported self-contact refuses.
+//! Unlike-cloth friction is never inferred from two same-cloth observations. Source-bound pair data
+//! feeds the existing feature-local contact kernel, including the conservative welded-seam envelope.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,19 +9,24 @@ use ftx_core::receipt::sha256_hex;
 use ftx_pattern::Pattern;
 use serde_json::json;
 
-use super::{MaterialInputs, invalid, resolve_uniform};
+use super::{ContactMaterials, MaterialInputs, interfaces, invalid, resolve_uniform};
+use crate::contact::SurfaceMaterial;
 
 pub(super) fn resolve(
     pattern: &Pattern,
     mut base: MaterialInputs,
 ) -> Result<MaterialInputs, Refusal> {
     let raw = pattern.raw();
-    if raw["fabric"].get("layers").is_some() || raw["fabric"].get("interfaces").is_some() {
+    if raw["fabric"].get("layers").is_some() {
         return Err(invalid(
-            "layer/interface assignments are not supported by this contact scope",
+            "layer generation is not supported; use explicit pattern pieces",
         ));
     }
+    let interface_data = raw["fabric"].get("interfaces");
     let Some(pieces) = raw["pieces"].as_array() else {
+        if interface_data.is_some() {
+            return Err(invalid("material interfaces require source pieces"));
+        }
         return Ok(base);
     };
     for p in pieces {
@@ -31,7 +36,7 @@ pub(super) fn resolve(
             ));
         }
     }
-    if !pieces.iter().any(|p| p.get("fabric").is_some()) {
+    if !pieces.iter().any(|p| p.get("fabric").is_some()) && interface_data.is_none() {
         return Ok(base);
     }
     if pieces.len() > 4096 || base.report["basis"] != "characterized_record" {
@@ -46,10 +51,12 @@ pub(super) fn resolve(
         .to_owned();
     records.insert(default_hash.clone(), base.report.clone());
     let mut hashes = BTreeSet::new();
+    let mut mechanics = BTreeMap::new();
+    let mut piece_hashes = Vec::with_capacity(pieces.len());
     let mut bindings = Vec::with_capacity(pieces.len());
     let mut fabrics = Vec::with_capacity(pieces.len());
     for (piece_index, p) in pieces.iter().enumerate() {
-        let (fabric, hash) = if let Some(f) = p.get("fabric") {
+        let (fabric, hash, mechanical) = if let Some(f) = p.get("fabric") {
             let object = f
                 .as_object()
                 .ok_or_else(|| invalid("piece.fabric must be an object"))?;
@@ -59,49 +66,81 @@ pub(super) fn resolve(
                 ));
             }
             let resolved = resolve_uniform(&Pattern::new(json!({"fabric":f})), &base.options)?;
-            if resolved.options.contact.thickness != base.options.contact.thickness
-                || resolved.options.contact.mu != base.options.contact.mu
-            {
-                return Err(invalid(format!(
-                    "piece {piece_index}: different thickness/skin friction needs per-feature contact; no global average is used",
-                )));
-            }
-            if resolved.options.self_contact != base.options.self_contact {
-                return Err(invalid(format!(
-                    "piece {piece_index}: different self-friction needs pairwise contact",
-                )));
-            }
             let hash = resolved.report["record_sha256"]
                 .as_str()
                 .ok_or_else(|| invalid("piece material has no source identity"))?
                 .to_owned();
             records.insert(hash.clone(), resolved.report);
-            (resolved.fabric, hash)
+            (resolved.fabric, hash, resolved.mechanics)
         } else {
-            (base.fabric, default_hash.clone())
+            (base.fabric, default_hash.clone(), base.mechanics)
         };
         // Include unplaced pieces in the receipt and validation. No named material is silently
         // ignored merely because this particular drape did not simulate its source piece.
         hashes.insert(hash.clone());
+        if hashes.len() > 64 {
+            return Err(invalid(
+                "contact supports at most 64 distinct source snapshots",
+            ));
+        }
+        mechanics.insert(
+            hash.clone(),
+            mechanical.ok_or_else(|| invalid("missing sheet mechanics"))?,
+        );
+        piece_hashes.push(hash.clone());
         bindings.push(json!({"piece_index":piece_index, "piece_id":p["id"],
             "record_sha256":hash, "inherited_default":p.get("fabric").is_none()}));
         fabrics.push(fabric);
     }
-    if base.options.self_contact.is_some() && hashes.len() > 1 {
-        return Err(invalid(
-            "unlike sheets require explicit pairwise friction evidence before self-contact; equal self-friction values do not establish their mutual friction",
-        ));
+    let hashes: Vec<_> = hashes.into_iter().collect();
+    let diagonal: Vec<_> = hashes.iter().map(|h| mechanics[h].friction_self).collect();
+    let interfaces = interfaces::resolve(
+        interface_data,
+        &hashes,
+        &diagonal,
+        base.options.self_contact.is_some(),
+    )?;
+    let surfaces: Vec<_> = hashes
+        .iter()
+        .map(|h| SurfaceMaterial {
+            half_thickness_m: 0.5 * mechanics[h].thickness_m,
+            friction_body: mechanics[h].friction_skin,
+        })
+        .collect();
+    let piece_ids = piece_hashes
+        .iter()
+        .map(|h| hashes.binary_search(h).expect("assigned hash is retained"))
+        .collect();
+    base.options.contact.thickness = surfaces
+        .iter()
+        .map(|s| s.half_thickness_m)
+        .fold(0.0, f64::max);
+    base.options.contact.mu = surfaces.iter().map(|s| s.friction_body).fold(0.0, f64::max);
+    if let Some(p) = &mut base.options.self_contact {
+        p.thickness = 2.0 * base.options.contact.thickness;
+        p.mu = interfaces
+            .matrix
+            .as_ref()
+            .expect("complete enabled interfaces")
+            .iter()
+            .flatten()
+            .copied()
+            .fold(0.0, f64::max);
     }
+    base.options.validate()?;
     let mut report = json!({
         "basis":"per_piece_characterization",
         "model":"orthotropic_green_strain_scalar_bending",
         "default_record_sha256":default_hash,
         "pieces":bindings, "records":records,
-        "contact_policy":"equal physical thickness and skin friction; unlike self-contact is refused",
-        "body_offset_m":base.options.contact.thickness,
+        "contact_policy":"feature-local thickness/body friction and source-bound pairwise friction; welded features use maximum-adjacent envelopes",
+        "body_offset_envelope_m":base.options.contact.thickness,
+        "contact_material_order":hashes,
+        "self_friction_matrix":interfaces.matrix,
+        "interfaces":interfaces.report,
         "self_contact_enabled":base.options.self_contact.is_some(),
         "hinge_policy":"shared curvature with each adjacent triangle's bending-area share; not an empirical seam law",
-        "not_simulated":["layer generation", "unlike interface friction", "different sheet thicknesses", "directional bending", "seam bulk", "nonlinear textile response"],
+        "not_simulated":["layer generation", "directional bending", "resolved seam cross-section", "nonlinear textile response"],
         "fit_claim":false
     });
     report["assignment_sha256"] = json!(sha256_hex(
@@ -109,5 +148,11 @@ pub(super) fn resolve(
     ));
     base.report = report;
     base.piece_fabrics = Some(fabrics);
+    // One identity keeps the original homogeneous start/ramp and numerical path exactly.
+    base.contact_materials = (hashes.len() > 1).then_some(ContactMaterials {
+        piece_ids,
+        surfaces,
+        friction: interfaces.matrix,
+    });
     Ok(base)
 }

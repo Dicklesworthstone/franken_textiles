@@ -11,7 +11,15 @@ use serde_json::{Value, json};
 use crate::elements::Membrane;
 use crate::run::DrapeOptions;
 
+mod interfaces;
 mod pieces;
+
+/// Contact lookup in source-hash order, independent of piece order and mesh resolution.
+pub(crate) struct ContactMaterials {
+    pub piece_ids: Vec<usize>,
+    pub surfaces: Vec<crate::contact::SurfaceMaterial>,
+    pub friction: Option<Vec<Vec<f64>>>,
+}
 
 /// Effective sheet coefficients; legacy defaults reproduce spec 04 §5.3 exactly.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -167,6 +175,8 @@ pub struct MaterialInputs {
     pub report: Value,
     // Indexed by source piece, not vertex: seam welding must never merge material identities.
     pub(crate) piece_fabrics: Option<Vec<Fabric>>,
+    pub(crate) contact_materials: Option<ContactMaterials>,
+    mechanics: Option<Mechanics>,
 }
 
 /// Resolves `pattern.fabric` for every ordinary drape consumer. Material selection supersedes caller
@@ -186,7 +196,7 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
     pieces::resolve(pattern, resolve_uniform(pattern, options)?)
 }
 
-// This helper deliberately does not inspect pieces: each explicitly selected sheet uses this same
+// This helper does not resolve piece selectors: each explicitly selected sheet uses this same
 // canonical evidence/units/thermal policy before its coefficients enter the element field.
 fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInputs, Refusal> {
     let raw = pattern.raw();
@@ -200,6 +210,8 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             report: json!({"basis":"legacy_uncertain", "model":"orthotropic_green_strain_scalar_bending",
                 "note":"Legacy defaults/declarations are not characterized textile properties."}),
             piece_fabrics: None,
+            contact_materials: None,
+            mechanics: None,
         });
     };
     let mechanics = record.mechanics()?;
@@ -249,6 +261,8 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             "fit_claim":false
         }),
         piece_fabrics: None,
+        contact_materials: None,
+        mechanics: Some(mechanics),
     })
 }
 

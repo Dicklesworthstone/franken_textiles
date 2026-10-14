@@ -109,7 +109,7 @@ fn unlike_layers_sum_half_thicknesses_and_use_the_explicit_interface() {
 fn mixed_barrier_gradient_matches_energy_and_balances_force() {
     let (c, x) = layers(0.0);
     let terms = c.terms(&x, true, false);
-    let mut g = vec![0.0; 18];
+    let mut g = [0.0; 18];
     for b in &terms.blocks {
         for (i, &(v, k)) in b.dofs.iter().enumerate() {
             g[v * 3 + k] += b.grad[i];

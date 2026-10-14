@@ -263,7 +263,7 @@ fn unsupported_interfaces_partial_assignments_and_bad_sources_refuse_before_mesh
         p["pieces"][1]["fabric"] = change;
         assert!(resolve(&Pattern::new(p), &options()).is_err());
     }
-    for (name, value) in [("thickness", 1.2), ("friction_skin", 0.5)] {
+    for (name, value) in [("thickness", -1.2), ("friction_skin", -0.5)] {
         let mut p = assigned(2.0).raw().clone();
         p["pieces"][1]["fabric"]["material"]["record"]["properties"][name]["value"] = json!(value);
         assert!(resolve(&Pattern::new(p), &options()).is_err());
@@ -302,5 +302,238 @@ fn unsupported_interfaces_partial_assignments_and_bad_sources_refuse_before_mesh
         )
         .is_err(),
         "low-level uniform entry must not erase assignment"
+    );
+}
+
+fn interface_pattern(raw: Value, mu: f64) -> Pattern {
+    let p = Pattern::new(raw);
+    let r = resolve(&p, &options()).unwrap().report;
+    let mut raw = p.raw().clone();
+    raw["fabric"]["interfaces"] = json!([{
+        "materials":[r["pieces"][0]["record_sha256"], r["pieces"][1]["record_sha256"]],
+        "friction":{"value":mu, "unit":"1", "source":"pair", "evidence":"estimate",
+            "method":"Synthetic cross-sheet coefficient", "bounds":[mu,mu],
+            "conditions":{"orientation":"symmetric scalar, both sides"}},
+        "sources":{"pair":{"reference":"test:cross-sheet", "accessed_on":"2026-10-13",
+            "note":"Synthetic interface, not a textile measurement"}},
+        "allow_estimates":true
+    }]);
+    Pattern::new(raw)
+}
+
+#[test]
+fn piece_surface_field_reaches_contact_and_survives_checked_body_motion() {
+    let mut raw = assigned(2.0).raw().clone();
+    let props = &mut raw["pieces"][1]["fabric"]["material"]["record"]["properties"];
+    props["thickness"]["value"] = json!(1.2);
+    props["friction_skin"]["value"] = json!(0.7);
+    props["friction_self"]["value"] = json!(0.9);
+    let p = interface_pattern(raw, 0.12);
+    let opts = DrapeOptions {
+        self_contact: Some(options().contact),
+        ..options()
+    };
+    let mut r = run(&p, opts);
+    let mat = &r.report["material"];
+    let order = mat["contact_material_order"].as_array().unwrap();
+    let ids: Vec<_> = mat["pieces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| order.iter().position(|h| *h == p["record_sha256"]).unwrap())
+        .collect();
+    let f = &mat["self_friction_matrix"];
+    assert_eq!(f[ids[0]][ids[0]], 0.3);
+    assert_eq!(f[ids[1]][ids[1]], 0.9);
+    assert_eq!(f[ids[0]][ids[1]], 0.12);
+    assert_eq!(f[ids[1]][ids[0]], 0.12);
+    let c = r.scene.solver.contact.as_ref().unwrap();
+    assert!(c.has_surface_materials());
+    assert_eq!(c.params.thickness, 0.0006);
+    assert_eq!(c.params.mu, 0.7);
+    assert_eq!(c.self_contact_params().unwrap().thickness, 0.0012);
+    assert_eq!(r.report["self_contact"]["friction_mu"], 0.9); // explicitly an envelope, not mu_AB
+    assert!(
+        r.report["self_contact"]["coefficient_basis"]
+            .as_str()
+            .unwrap()
+            .contains("upper envelopes")
+    );
+    let target: Vec<_> = c
+        .body
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0., 0., 0.00001))
+        .collect();
+    let mass = r.scene.solver.model.mass.clone();
+    let laws: Vec<_> = (0..r.scene.triangle_owner.len())
+        .map(|i| r.scene.solver.model.material(i))
+        .collect();
+    let before = format!("{:?}", r.scene.solver.contact);
+    let original_x = r.scene.solver.x.clone();
+    let err = ftx_drape::motion::advance_body(
+        &mut r.scene.solver,
+        &target,
+        0.001,
+        ftx_drape::motion::MotionOptions {
+            max_sample_vertices: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, ftx_core::RefusalCode::BudgetExceeded);
+    assert_eq!(format!("{:?}", r.scene.solver.contact), before);
+    assert_eq!(r.scene.solver.x, original_x);
+    let motion =
+        ftx_drape::motion::advance_body(&mut r.scene.solver, &target, 0.001, Default::default())
+            .unwrap();
+    assert!(!motion.samples.is_empty());
+    let c = r.scene.solver.contact.as_ref().unwrap();
+    assert!(c.has_surface_materials());
+    assert_eq!(c.body.vertices, target);
+    c.audit_self_contact(&r.scene.solver.x).unwrap();
+    assert_eq!(r.scene.solver.model.mass, mass);
+    for (i, law) in laws.into_iter().enumerate() {
+        assert_eq!(r.scene.solver.model.material(i), law);
+    }
+}
+
+#[test]
+fn interface_source_locks_coverage_and_consent_cannot_be_silently_repaired() {
+    let p = interface_pattern(assigned(2.0).raw().clone(), 0.12);
+    let opts = DrapeOptions {
+        self_contact: Some(options().contact),
+        ..options()
+    };
+    let original = resolve(&p, &opts).unwrap().report;
+    let mut reversed = p.raw().clone();
+    reversed["fabric"]["interfaces"][0]["materials"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    assert_eq!(
+        resolve(&Pattern::new(reversed), &opts).unwrap().report,
+        original
+    );
+    for i in 0..12 {
+        let mut raw = p.raw().clone();
+        let pair = &mut raw["fabric"]["interfaces"][0];
+        match i {
+            0 => pair["friction"]["unit"] = json!("N/m"),
+            1 => pair["friction"]["value"] = json!(-0.1),
+            2 => pair["friction"]["source"] = json!("absent"),
+            3 => pair["sources"]["pair"]["reference"] = json!(""),
+            4 => pair["allow_estimates"] = json!(false),
+            5 => pair["allow_estimates"] = json!("true"),
+            6 => pair["materials"][0] = json!("test-sheet"), // display ID is not a snapshot lock
+            7 => pair["friction"]["bounds"] = json!([0.3, 0.4]),
+            8 => pair["friction"]["method"] = json!(" "),
+            9 => pair["materials"][0] = pair["materials"][1].clone(),
+            10 => pair["invented_field"] = json!(1),
+            _ => pair["friction"]["conditions"] = json!({"": "unspecified"}),
+        }
+        for opts in [&opts, &options()] {
+            assert!(
+                resolve(&Pattern::new(raw.clone()), opts).is_err(),
+                "case {i}"
+            );
+        }
+    }
+    let mut stale = p.raw().clone();
+    stale["pieces"][1]["fabric"]["material"]["record"]["properties"]["warp_stiffness"]["value"] =
+        json!(800.);
+    assert!(resolve(&Pattern::new(stale), &opts).is_err());
+    let mut duplicate = p.raw().clone();
+    let second = duplicate["fabric"]["interfaces"][0].clone();
+    duplicate["fabric"]["interfaces"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    assert!(resolve(&Pattern::new(duplicate), &opts).is_err());
+    let mut third = p.raw().clone();
+    let mut piece = third["pieces"][1].clone();
+    piece["id"] = json!("lining");
+    piece["fabric"]["material"] = sheet(3.0);
+    third["pieces"].as_array_mut().unwrap().push(piece);
+    assert!(
+        resolve(&Pattern::new(third), &opts).is_err(),
+        "all unlike pairs need evidence"
+    );
+}
+
+#[test]
+fn explicit_cross_friction_changes_slip_on_the_assembled_two_sheet_model() {
+    fn sliding(mu: f64) -> ftx_drape::Solver {
+        let mut raw = assigned(2.0).raw().clone();
+        raw["seams"] = json!([]);
+        for (i, piece) in raw["pieces"].as_array_mut().unwrap().iter_mut().enumerate() {
+            piece["vertices"] = json!({"a":[0,0],"b":[20,0],"c":[20,20],"d":[0,20]});
+            piece["placement"]["theta_deg"] = json!(0);
+            piece["placement"]["x0"] = json!(10);
+            piece["placement"]["radius_mm"] = json!(if i == 0 { 40. } else { 41.3 });
+        }
+        let p = interface_pattern(raw, mu);
+        let r = run(
+            &p,
+            DrapeOptions {
+                self_contact: Some(options().contact),
+                spacing: 10.,
+                ..options()
+            },
+        );
+        let fixed: Vec<_> = r
+            .scene
+            .mesh
+            .owner
+            .iter()
+            .map(|&o| [o == 0, true, true])
+            .collect();
+        // Start both comparisons inside the activation band. The preceding free drape can
+        // already separate unloaded layers, leaving no contact traction to test.
+        let mut x = r.scene.solver.x;
+        for (v, &w) in r.scene.weld.iter().enumerate() {
+            x[w] = r.scene.start.relaxed[v];
+        }
+        let mut solver = ftx_drape::Solver::new(r.scene.solver.model, x, &fixed, Vec3::ZERO);
+        solver.contact = r.scene.solver.contact;
+        solver = solver.with_self_contact(options().contact).unwrap();
+        solver.tol = 1e-8;
+        for (i, v) in solver.v.iter_mut().enumerate() {
+            if r.scene.mesh.owner[i] == 1 {
+                v.x = 0.01;
+            }
+        }
+        solver
+    }
+    let mut frictionless = sliding(0.0);
+    let mut frictional = sliding(0.8);
+    assert_eq!(frictionless.x, frictional.x);
+    assert_eq!(frictionless.model.mass, frictional.model.mass);
+    assert!(
+        frictionless
+            .contact
+            .as_ref()
+            .unwrap()
+            .min_self_gap(&frictionless.x, 0.001)
+            .unwrap()
+            < 0.001
+    );
+    let x0: f64 = frictionless.x.iter().map(|v| v.x).sum();
+    let y0: f64 = frictional.x.iter().map(|v| v.x).sum();
+    for _ in 0..5 {
+        assert!(frictionless.step(0.001).unwrap().converged);
+        assert!(frictional.step(0.001).unwrap().converged);
+        frictional
+            .contact
+            .as_ref()
+            .unwrap()
+            .audit_self_contact(&frictional.x)
+            .unwrap();
+    }
+    let no_friction = frictionless.x.iter().map(|v| v.x).sum::<f64>() - x0;
+    let friction = frictional.x.iter().map(|v| v.x).sum::<f64>() - y0;
+    assert!(
+        no_friction > 0.0 && friction.abs() < no_friction * 0.8,
+        "{no_friction} vs {friction}"
     );
 }

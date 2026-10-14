@@ -178,7 +178,7 @@ pub struct DrapeRun {
     pub sew: PhaseReport,
     /// The draping phase.
     pub drape: PhaseReport,
-    /// The fabric used.
+    /// Default fabric; heterogeneous per-element laws live in `scene.solver.model` and the report.
     pub fabric: Fabric,
 }
 
@@ -326,7 +326,23 @@ pub fn drape(
             arm_deg: body.arm_deg,
         },
     );
-    add_run_fields(&mut report, &scene, &fabric, opts, body.arm_deg, pattern);
+    let casing_mu = elastic
+        .as_ref()
+        .and_then(|e| {
+            let piece = pattern.instance(&e.instance)?.piece_index;
+            let field = material.contact_materials.as_ref()?;
+            Some(field.surfaces[field.piece_ids[piece]].friction_body)
+        })
+        .unwrap_or(opts.contact.mu);
+    add_run_fields(
+        &mut report,
+        &scene,
+        &fabric,
+        opts,
+        body.arm_deg,
+        pattern,
+        casing_mu,
+    );
     report["material"] = material.report;
     if let Some(fabrics) = &material.piece_fabrics {
         report["fabric"] = json!({"basis":"per_piece", "see":"material.records"});
@@ -358,6 +374,17 @@ pub fn drape(
             .collect();
         report["material"]["instances"] = json!(instances);
         report["material"]["triangle_instance"] = json!(scene.triangle_owner);
+        if material.contact_materials.is_some() {
+            report["cloth_offset_basis"] = json!(
+                "maximum broad-phase envelope; see material.records for physical sheet thicknesses"
+            );
+            if !report["elastic"].is_null() {
+                report["elastic"]["friction_mu"] = json!(casing_mu);
+                report["elastic"]["grip_basis"] = json!(
+                    "ideal ring estimate using casing/body friction; not integrated heterogeneous contact traction"
+                );
+            }
+        }
     }
     report["mass_kg"] = json!(scene.solver.model.mass.iter().sum::<f64>());
     Ok(DrapeRun {
@@ -378,6 +405,7 @@ fn add_run_fields(
     opts: &DrapeOptions,
     arm_deg: f64,
     pattern: &Pattern,
+    casing_mu: f64,
 ) {
     let mesh = &scene.mesh;
     let area: f64 = mesh
@@ -485,7 +513,7 @@ fn add_run_fields(
         let tension: f64 = rings.iter().map(|r| r.2).sum();
         let stretch = (length / relaxed - 1.0) * 100.0;
         // KAT 4's law: a ring of tension T holds up to 2πμT, here against the whole garment's weight
-        let grip = 2.0 * std::f64::consts::PI * opts.contact.mu * tension;
+        let grip = 2.0 * std::f64::consts::PI * casing_mu * tension;
         let weight = scene.solver.model.mass.iter().sum::<f64>() * GRAVITY;
         o.insert(
             "elastic".into(),
@@ -518,7 +546,7 @@ fn add_run_fields(
 }
 
 fn self_contact_report(contact: Option<&Contact>, x: &[Vec3]) -> Value {
-    match contact.and_then(|c| c.self_contact_params().map(|p| (c, p))) {
+    let mut report = match contact.and_then(|c| c.self_contact_params().map(|p| (c, p))) {
         Some((c, p)) => json!({
             "enabled": true,
             "audit": "passed",
@@ -532,7 +560,13 @@ fn self_contact_report(contact: Option<&Contact>, x: &[Vec3]) -> Value {
             "start_crease_min_offset_mm": c.start_creases().1.map(|o| o * 1000.0),
         }),
         None => json!({"enabled": false, "audit": "not_simulated"}),
+    };
+    if contact.is_some_and(Contact::has_surface_materials) && report["enabled"] == true {
+        report["coefficient_basis"] = json!(
+            "thickness/friction fields are broad-phase upper envelopes; per-pair coefficients come from source-bound material interfaces"
+        );
     }
+    report
 }
 
 /// The fold-up viewer page of a run (`template` is `assets/fold_viewer_template.html`).
