@@ -418,6 +418,10 @@ pub struct Solver {
     symbolic: Option<SymbolicLdlt>,
     /// The Hessian pattern used by the current symbolic analysis.
     pattern: Option<Csr>,
+    /// With self-contact: the free-DOF pattern of every element, elastic and mass block (and the
+    /// membrane, hinge and elastic counts it was built for), which each assembly extends by its
+    /// contact couplings.
+    element_pattern: Option<(Csr, [usize; 3])>,
     /// The last positive-definite factorization, the preconditioner for [`Solver::pcg_iters`].
     precond: Option<LdltFactor>,
 }
@@ -485,6 +489,7 @@ impl Solver {
             nfree,
             symbolic: None,
             pattern: None,
+            element_pattern: None,
             precond: None,
         }
     }
@@ -569,6 +574,9 @@ impl Solver {
         });
         self.symbolic = None;
         self.pattern = None;
+        self.element_pattern = self
+            .dynamic_contact()
+            .then(|| self.element_blocks_pattern());
         Ok(self)
     }
 
@@ -593,6 +601,7 @@ impl Solver {
         self.contact = Some(contact.with_self_contact(&self.x, params)?);
         self.symbolic = None;
         self.pattern = None;
+        self.element_pattern = Some(self.element_blocks_pattern());
         Ok(self)
     }
 
@@ -600,6 +609,35 @@ impl Solver {
         self.contact
             .as_ref()
             .is_some_and(|c| c.self_contact_params().is_some())
+    }
+
+    fn element_counts(&self) -> [usize; 3] {
+        let m = &self.model;
+        [m.membranes.len(), m.hinges.len(), m.elastics.len()]
+    }
+
+    /// The positions [`Solver::assemble`] pushes before any contact block: every pair of free DOFs of
+    /// each membrane, hinge and elastic, and each free DOF's mass.
+    fn element_blocks_pattern(&self) -> (Csr, [usize; 3]) {
+        let mut coo = Coo::new(self.nfree, self.nfree);
+        let mut block = |vs: &[usize]| {
+            let dofs: Vec<usize> = vs
+                .iter()
+                .flat_map(|&v| (0..3).filter_map(move |k| self.free[3 * v + k]))
+                .collect();
+            for &a in &dofs {
+                for &b in &dofs {
+                    coo.push(a, b, 0.0);
+                }
+            }
+        };
+        self.model.membranes.iter().for_each(|e| block(&e.v));
+        self.model.hinges.iter().for_each(|h| block(&h.v));
+        self.model.elastics.iter().for_each(|e| block(&e.v));
+        for f in self.free.iter().flatten() {
+            coo.push(*f, *f, 0.0);
+        }
+        (coo.assemble(), self.element_counts())
     }
 
     fn audit_self_contact(&self) -> Result<(), Refusal> {
@@ -653,12 +691,36 @@ impl Solver {
         project: bool,
     ) -> (Vec<f64>, Csr) {
         let mut g = vec![0.0; self.nfree];
+        // The contact blocks (a function of `x` alone) come first, so that their positions are known
+        // before anything is pushed; they are still pushed last.
+        let blocks = self
+            .contact
+            .as_ref()
+            .map(|c| c.terms(x, true, inertia.is_some()).blocks);
         // Cloth–cloth contact can couple previously unrelated elements. Never scatter those blocks
-        // into a stale fixed pattern (CsrFill rejects missing entries). Body-only solves keep the
-        // existing allocation-free fill path and numerical ordering.
-        let mut sink = match (&self.pattern, self.dynamic_contact()) {
-            (Some(p), false) => Sink::Fill(CsrFill::new(p)),
-            _ => Sink::Coo(Coo::new(self.nfree, self.nfree)),
+        // into a stale fixed pattern (CsrFill rejects missing entries): the element pattern plus this
+        // iterate's contact couplings is the structure the triplets would assemble to, filled in place
+        // in the same order (bit for bit Coo's matrix). Body-only solves fill the analysed pattern.
+        let mut sink = if let (Some(p), false) = (&self.pattern, self.dynamic_contact()) {
+            Sink::Fill(CsrFill::new(p))
+        } else if let Some((elements, counts)) = &self.element_pattern
+            && *counts == self.element_counts()
+            && self.dynamic_contact()
+        {
+            let mut coupled = Vec::new();
+            for block in blocks.iter().flatten() {
+                let free: Vec<usize> = block
+                    .dofs
+                    .iter()
+                    .filter_map(|&(v, k)| self.free[3 * v + k])
+                    .collect();
+                for &a in &free {
+                    coupled.extend(free.iter().map(|&b| (a, b)));
+                }
+            }
+            Sink::Fill(CsrFill::new(&elements.with_entries(&mut coupled)))
+        } else {
+            Sink::Coo(Coo::new(self.nfree, self.nfree))
         };
         // Elements whose Hessian is PSD by construction (every hinge; membranes without compression
         // or a negative stress) are not projected: it would change nothing but rounding. The others
@@ -718,11 +780,11 @@ impl Solver {
                 }
             }
         }
-        if let Some(c) = &self.contact {
+        if let Some(blocks) = blocks {
             // Mollified edge pairs carry their full, indefinite Hessian and are projected here; the
             // Gauss–Newton barrier and friction blocks are PSD already. Self-contact blocks may
             // couple all four moving vertices across previously unrelated elements.
-            for mut block in c.terms(x, true, inertia.is_some()).blocks {
+            for mut block in blocks {
                 let m = block.dofs.len();
                 if !block.psd {
                     project_psd(&mut block.hess, m);

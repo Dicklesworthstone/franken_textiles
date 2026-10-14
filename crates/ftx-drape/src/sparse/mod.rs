@@ -248,6 +248,61 @@ impl Csr {
         (&self.col_idx[span.clone()], &self.vals[span])
     }
 
+    /// This matrix's pattern with the positions `extra` added (sorted and deduplicated in place), every
+    /// value zero: the structure [`Coo::assemble`] gives when both are pushed, to fill with [`CsrFill`].
+    ///
+    /// # Panics
+    /// When an extra position lies outside the matrix.
+    #[must_use]
+    pub fn with_entries(&self, extra: &mut Vec<(usize, usize)>) -> Csr {
+        extra.sort_unstable();
+        extra.dedup();
+        assert!(
+            extra.last().is_none_or(|&(r, _)| r < self.nrows)
+                && extra.iter().all(|&(_, c)| c < self.ncols),
+            "an extra entry lies outside the matrix"
+        );
+        let mut row_ptr = Vec::with_capacity(self.nrows + 1);
+        row_ptr.push(0);
+        let mut col_idx = Vec::with_capacity(self.col_idx.len() + extra.len());
+        let mut e = 0;
+        for r in 0..self.nrows {
+            let (cols, _) = self.row(r);
+            let mut i = 0;
+            loop {
+                let more = (e < extra.len() && extra[e].0 == r).then(|| extra[e].1);
+                match (cols.get(i).copied(), more) {
+                    (None, None) => break,
+                    (Some(a), Some(b)) if a == b => {
+                        col_idx.push(a);
+                        (i, e) = (i + 1, e + 1);
+                    }
+                    (Some(a), Some(b)) if a < b => {
+                        col_idx.push(a);
+                        i += 1;
+                    }
+                    (Some(a), None) => {
+                        col_idx.push(a);
+                        i += 1;
+                    }
+                    (_, Some(b)) => {
+                        col_idx.push(b);
+                        e += 1;
+                    }
+                }
+            }
+            row_ptr.push(col_idx.len());
+        }
+        let vals = vec![0.0; col_idx.len()];
+        Csr {
+            nrows: self.nrows,
+            ncols: self.ncols,
+            row_ptr,
+            col_idx,
+            vals,
+        }
+    }
+
     /// Value access; zero if not stored.
     #[must_use]
     pub fn get(&self, r: usize, c: usize) -> f64 {
