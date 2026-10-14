@@ -54,9 +54,21 @@ pub(super) fn resolve(
     let mut fabrics = Vec::with_capacity(pieces.len());
     let mut responses = Vec::with_capacity(pieces.len());
     for (piece_index, p) in pieces.iter().enumerate() {
+        let mut explicit_role: Option<String> = None;
         let (fabric, response, hash, mechanical) = if p.get("fabric").is_some() {
             let f = piece_fabric(pattern, piece_index)?;
+            explicit_role = f
+                .get("role")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
             let resolved = resolve_uniform(&Pattern::new(json!({"fabric":f})), &base.options)?;
+            if explicit_role.as_deref() == Some("laminate")
+                && resolved.report["record"]["authored"]["form"] != "laminate"
+            {
+                return Err(invalid(
+                    "piece.fabric.role \"laminate\" requires a material with form \"laminate\"",
+                ));
+            }
             let hash = resolved.report["record_sha256"]
                 .as_str()
                 .ok_or_else(|| invalid("piece material has no source identity"))?
@@ -84,8 +96,12 @@ pub(super) fn resolve(
             mechanical.ok_or_else(|| invalid("missing sheet mechanics"))?,
         );
         piece_hashes.push(hash.clone());
-        bindings.push(json!({"piece_index":piece_index, "piece_id":p["id"],
-            "record_sha256":hash, "inherited_default":p.get("fabric").is_none()}));
+        let mut binding = json!({"piece_index":piece_index, "piece_id":p["id"],
+            "record_sha256":hash, "inherited_default":p.get("fabric").is_none()});
+        if let Some(role) = explicit_role {
+            binding["role"] = json!(role);
+        }
+        bindings.push(binding);
         fabrics.push(fabric);
         responses.push(response);
     }

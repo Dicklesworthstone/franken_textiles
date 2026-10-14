@@ -7,13 +7,7 @@ use ftx_drape::{ClothModel, Membrane, Solver};
 
 fn sheet(scale: f64) -> SheetMaterial {
     SheetMaterial {
-        membrane: Membrane::orthotropic(
-            100.0 * scale,
-            40.0 * scale,
-            0.2,
-            20.0 * scale,
-            1.0,
-        ),
+        membrane: Membrane::orthotropic(100.0 * scale, 40.0 * scale, 0.2, 20.0 * scale, 1.0),
         bending_nm: 0.01 * scale,
         areal_kg_m2: 0.2 * scale,
     }

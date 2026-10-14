@@ -20,6 +20,7 @@ pub mod exact;
 pub mod intersection;
 pub mod linalg;
 pub mod np;
+pub mod philox;
 pub mod polyline;
 pub mod py;
 pub mod receipt;

@@ -165,10 +165,8 @@ struct GrayImage {
 impl GrayImage {
     fn from_bgr(bgr: &[u8], w: usize, h: usize) -> Self {
         let mut data = Vec::with_capacity(w * h);
-        for px in bgr.chunks_exact(3) {
-            let b = f64::from(px[0]);
-            let g = f64::from(px[1]);
-            let r = f64::from(px[2]);
+        for &[b, g, r] in bgr.as_chunks::<3>().0 {
+            let (b, g, r) = (f64::from(b), f64::from(g), f64::from(r));
             data.push(((b * 3735.0 + g * 19235.0 + r * 9798.0 + 16384.0) / 32768.0).floor());
         }
         Self { w, h, data }
@@ -521,10 +519,10 @@ fn decode_marker_quad(gray: &GrayImage, quad: [Point; 4]) -> Option<DetectedMark
     }
     let mut cells = [[0.0; 4]; 4];
     let mut strong_bits = 0;
-    for r in 0..4 {
-        for c in 0..4 {
+    for (r, row) in cells.iter_mut().enumerate() {
+        for (c, cell) in row.iter_mut().enumerate() {
             let v = sample_cell((c + 1) as f64 + 0.5, (r + 1) as f64 + 0.5)?;
-            cells[r][c] = v;
+            *cell = v;
             if (v - thresh).abs() >= 0.12 * contrast {
                 strong_bits += 1;
             }

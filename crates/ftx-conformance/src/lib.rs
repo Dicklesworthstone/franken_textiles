@@ -6,6 +6,7 @@
 //! this code.
 #![forbid(unsafe_code)]
 
+pub mod detaudit;
 pub mod propcheck;
 
 use std::path::PathBuf;

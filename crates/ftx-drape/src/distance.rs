@@ -255,9 +255,24 @@ mod tests {
     fn check_derivatives(pts: [Vec3; 4], kind: Closest, f: impl Fn([Vec3; 4]) -> Jet<12>) {
         let h = 1e-6;
         let j = f(pts);
+        let d2: crate::ad::Dual2<12> = squared_distance_as(pts, [false; 4], kind);
+        let d2_grad = d2.grad();
+        let d2_hess = d2.hess();
         let scale = j.g.iter().fold(1e-9f64, |m, g| m.max(g.abs()));
         let hscale = j.h.iter().flatten().fold(1e-9f64, |m, g| m.max(g.abs()));
+        assert!(
+            (d2.value() - j.v).abs() <= 1e-12 * j.v.abs().max(1.0),
+            "{kind:?} Dual2 value: {} vs {}",
+            d2.value(),
+            j.v
+        );
         for i in 0..12 {
+            assert!(
+                (d2_grad[i] - j.g[i]).abs() <= 1e-12 * scale,
+                "{kind:?} Dual2 grad[{i}]: {} vs {}",
+                d2_grad[i],
+                j.g[i]
+            );
             let bump = |d: f64| {
                 let mut q = pts;
                 let c = &mut q[i / 3];
@@ -276,6 +291,12 @@ mod tests {
                 j.g[i]
             );
             for k in 0..12 {
+                assert!(
+                    (d2_hess[k][i] - j.h[k][i]).abs() <= 1e-12 * hscale,
+                    "{kind:?} Dual2 hess[{k}][{i}]: {} vs {}",
+                    d2_hess[k][i],
+                    j.h[k][i]
+                );
                 let fdh = (fp.g[k] - fm.g[k]) / (2.0 * h);
                 assert!(
                     (fdh - j.h[k][i]).abs() < 1e-5 * hscale,
