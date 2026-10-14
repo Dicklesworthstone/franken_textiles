@@ -53,6 +53,41 @@ def board_spec(sheet):
     return b, legacy, origin
 
 
+def lens_spec(value):
+    """Same coefficient order as the Rust camera; OpenCV consumes k1,k2,p1,p2,k3.
+
+    This validates the optional wire payload, not the provenance of a lens calibration.
+    The Rust caller remains responsible for certified inverse-domain and capture checks.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - {"focal_px", "principal_px", "distortion"}:
+        raise ValueError("invalid lens intrinsics fields")
+
+    def vector(v, size, name):
+        if (not isinstance(v, list) or len(v) != size
+                or any(type(x) not in (int, float) or not math.isfinite(x) for x in v)):
+            raise ValueError("lens " + name + " needs " + str(size) + " finite numbers")
+        return v
+
+    focal = vector(value.get("focal_px"), 2, "focal_px")
+    principal = vector(value.get("principal_px"), 2, "principal_px")
+    d = value.get("distortion", {})
+    if not isinstance(d, dict) or set(d) - {"radial", "tangential", "max_radius"}:
+        raise ValueError("invalid lens distortion fields")
+    radial = vector(d.get("radial", [0, 0, 0]), 3, "radial")
+    tangential = vector(d.get("tangential", [0, 0]), 2, "tangential")
+    radius = d.get("max_radius", 2.0)
+    if (any(f <= 0 for f in focal) or type(radius) not in (int, float)
+            or not math.isfinite(radius) or not 0 < radius <= 10):
+        raise ValueError("lens needs positive focal lengths and 0 < max_radius <= 10")
+    lower = 1.0 + sum((2 * i + 3) * min(k, 0) * radius ** (2 * i + 2)
+                      for i, k in enumerate(radial)) - 8 * radius * sum(abs(p) for p in tangential)
+    if not math.isfinite(lower) or lower <= 1e-6:
+        raise ValueError("lens inverse is not certified on its declared disk")
+    return focal, principal, radial, tangential
+
+
 def detect(header, pixels):
     b, legacy, origin = board_spec(header.get("sheet"))
     if header.get("schema") != "ftx-charuco-request/1":
@@ -65,6 +100,7 @@ def detect(header, pixels):
     w, h = size
     if len(pixels) != w * h * 3:
         raise ValueError("BGR input length disagrees with image_size_px")
+    lens = lens_spec(header.get("intrinsics"))
     try:
         import cv2
         import numpy as np
@@ -87,6 +123,10 @@ def detect(header, pixels):
     charuco = aruco.CharucoParameters()
     charuco.minMarkers = 2
     charuco.tryRefineMarkers = True
+    if lens is not None:
+        (fx, fy), (cx, cy), (k1, k2, k3), (p1, p2) = lens
+        charuco.cameraMatrix = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], np.float64)
+        charuco.distCoeffs = np.array([k1, k2, p1, p2, k3], np.float64)
     gray = cv2.cvtColor(np.frombuffer(pixels, np.uint8).reshape(h, w, 3), cv2.COLOR_BGR2GRAY)
     corners, ids, marker_corners, marker_ids = aruco.CharucoDetector(
         board, charuco, params).detectBoard(gray)
@@ -130,6 +170,7 @@ def detect(header, pixels):
                          "marker_ids": sorted(markers), "min_marker_perimeter_rate": 0.01,
                          "min_markers_per_corner": 2, "refine_markers": True,
                          "chessboard_refinement": "adaptive_cornerSubPix",
+                         "uses_lens_intrinsics": lens is not None,
                          "threads": 1, "coordinate_frame": "stored_full_resolution_pixels"}}
 
 
