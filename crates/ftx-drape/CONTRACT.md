@@ -298,3 +298,23 @@ debug, native release and wasm32-wasip1.
 a moving body; an elastic's own mass or its friction in the casing; fabric parameters (they are inputs;
 plan §11, research 07 §2.7). The §11.7 budgets are measured above, on one machine (native and node's
 wasm), not on a browser's.
+
+**Explicit thermal coverage** (`thermal::surface::coverage`, plan §25.6 / `ftx-tmb`).
+`Coverage` composes the existing source-locked independent-sheet `Surface` into declared disjoint
+body-area fractions and inside-to-outside layers. It checks both body and cloth allocation budgets,
+consistent layer identities and acyclic layer order. Uncovered body fractions use explicitly supplied
+films; unallocated cloth is reported and excluded. Temperature state follows allocated reference
+cloth mass while resistance uses current cloth area; films/interfaces use covered body area. The
+existing constant and temperature-dependent column solvers are reused without modifying material
+observations. Native field calculations are in metres, watts and joules. Snapshot replay has no
+catalog lookup; material/topology edits invalidate state, while pose changes do not. Tests:
+`thermal_coverage` (analytic series/parallel networks, independent enthalpy and moving-area answers,
+partition invariance, input refusals, source-locked replay). The added direct `serde` dependency is
+the already pinned workspace 1.0.229 with std/derive, used only for layout/report serialization;
+no additional package/version or transitive dependency is introduced.
+No claim: geometry-derived overlaps, partition disjointness beyond the authored allocation contract,
+air-gap inference, in-plane conduction, tissue storage, human comfort or measured garment validation.
+The `ftx-materials thermal-coverage` consumer verifies saved drape/frame identity before reading
+indices, retains declared body geometry and mapping, and emits regional/bare heat and bounded
+transient histories. See `docs/thermal-coverage.md` and the actual sewn-drape CLI regressions in
+`crates/ftx-cli/tests/thermal_coverage_workflow.rs`.
