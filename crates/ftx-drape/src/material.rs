@@ -3,6 +3,7 @@
 //! tolerances and whether self-contact is enabled. Grain rotation remains in the existing scene builder.
 
 use ftx_core::{Refusal, RefusalCode, Vec2};
+use ftx_pattern::material_relaxation::CompiledRelaxation;
 use ftx_pattern::material_response::CompiledMembrane;
 use ftx_pattern::materials::Mechanics;
 use ftx_pattern::textile_import::resolve_fabric;
@@ -178,6 +179,8 @@ pub struct MaterialInputs {
     pub(crate) piece_fabrics: Option<Vec<Fabric>>,
     pub(crate) response: Option<CompiledMembrane>,
     pub(crate) piece_responses: Option<Vec<Option<CompiledMembrane>>>,
+    pub(crate) relaxation: Option<CompiledRelaxation>,
+    pub(crate) piece_relaxations: Option<Vec<Option<CompiledRelaxation>>>,
     pub(crate) contact_materials: Option<ContactMaterials>,
     mechanics: Option<Mechanics>,
 }
@@ -215,12 +218,15 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             piece_fabrics: None,
             response: None,
             piece_responses: None,
+            relaxation: None,
+            piece_relaxations: None,
             contact_materials: None,
             mechanics: None,
         });
     };
     let mechanics = record.mechanics()?;
     let response = record.membrane_response()?;
+    let relaxation = record.membrane_relaxation()?;
     let properties = &record.material().properties;
     let thermal = if properties.contains_key("thermal_resistance")
         || properties.contains_key("thermal_conductivity")
@@ -260,17 +266,21 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             "mechanics":mechanics,
             "model": if response.is_some() {"tabulated_green_strain_scalar_bending"} else {"orthotropic_green_strain_scalar_bending"},
             "nonlinear_strain_range": response.as_ref().map(CompiledMembrane::strain_range),
+            "relaxation_law_sha256": relaxation.as_ref().map(CompiledRelaxation::fingerprint),
+            "membrane_stiffness_basis": "equilibrium; optional Maxwell branches add transient response",
             "contact_policy":"material owns thickness and friction; caller owns numerical tolerances and self-contact enablement",
             "body_offset_m":opts.contact.thickness,
             "self_contact_enabled":opts.self_contact.is_some(),
             "dry_material_resistance_m2_k_w":resistance, "thermal_basis":thermal_basis,
             "thermal_unavailable":thermal_failure,
-            "not_simulated":["yarn/loop-scale homogenization", "directional bending", "irreversible hysteresis/damage", "moisture and heat transport", "garment thermal comfort", "damage/fire", "robotic sewing"],
+            "not_simulated":["yarn/loop-scale homogenization", "directional bending", "plastic set/damage", "moisture and heat transport", "garment thermal comfort", "damage/fire", "robotic sewing"],
             "fit_claim":false
         }),
         piece_fabrics: None,
         response,
         piece_responses: None,
+        relaxation,
+        piece_relaxations: None,
         contact_materials: None,
         mechanics: Some(mechanics),
     })

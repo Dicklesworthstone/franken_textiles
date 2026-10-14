@@ -14,7 +14,7 @@
 //!   positive semidefinite, which suits Newton.
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
-use ftx_pattern::material_response::CompiledMembrane;
+use ftx_pattern::material_response::{CompiledMembrane, Response};
 
 /// Orthotropic membrane material (resultants in N/m, so thickness is folded in).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -196,6 +196,17 @@ impl MembraneElement {
     /// terms remain identical to the linear element. No extrapolation is performed.
     #[must_use]
     pub fn response_local(&self, x: &[Vec3], law: &CompiledMembrane, m: &Membrane) -> Local<9, 81> {
+        self.local_with_response(x, m, |strain| law.evaluate(strain))
+    }
+
+    // Shared exact geometric/compression chain rule for equilibrium and Maxwell responses. The
+    // closure's tangent must be PSD; raw physical domains are checked before a Newton evaluation.
+    pub(crate) fn local_with_response(
+        &self,
+        x: &[Vec3],
+        m: &Membrane,
+        evaluate: impl FnOnce([f64; 3]) -> Option<Response>,
+    ) -> Local<9, 81> {
         let (f1, f2) = self.frame(x);
         let e = [
             0.5 * (f1.dot(f1) - 1.0),
@@ -203,7 +214,7 @@ impl MembraneElement {
             f1.dot(f2),
         ];
         let (eff, dphi, ddphi) = soften(e, m);
-        let Some(response) = law.evaluate(eff) else {
+        let Some(response) = evaluate(eff) else {
             return Local {
                 energy: f64::NAN,
                 grad: [f64::NAN; 9],
@@ -367,7 +378,7 @@ fn mat3(q: &[[f64; 3]; 3], e: [f64; 3]) -> [f64; 3] {
 }
 
 /// Compression softening of the two normal strains: effective strains φ(e), φ'(e) and φ''(e).
-fn soften(e: [f64; 3], m: &Membrane) -> ([f64; 3], [f64; 2], [f64; 2]) {
+pub(crate) fn soften(e: [f64; 3], m: &Membrane) -> ([f64; 3], [f64; 2], [f64; 2]) {
     let mut eff = e;
     let mut d = [1.0; 2];
     let mut dd = [0.0; 2];

@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::material_response::Response;
 use crate::materials::{Evidence, Quantity, Source};
 
+mod binding;
+
 /// Stress-free reference strain or a pre-relaxed start; neither is inferred from a garment pose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,6 +66,7 @@ struct Branch {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledRelaxation {
     branches: Vec<Branch>,
+    origin_tangent: [[f64; 3]; 3],
     range: [[f64; 2]; 3],
     initialization: Initialization,
     fingerprint: String,
@@ -208,6 +211,7 @@ impl Relaxation {
             serde_json::to_vec(&(self, sources, allow, q)).map_err(|e| bad(e.to_string()))?;
         Ok(CompiledRelaxation {
             branches,
+            origin_tangent: q,
             range: self.strain_range,
             initialization: self.initialization,
             fingerprint: sha256_hex(&bytes),
@@ -216,6 +220,12 @@ impl Relaxation {
 }
 
 impl CompiledRelaxation {
+    /// Equilibrium reference tangent against which branch ratios were characterized.
+    #[must_use]
+    pub fn origin_tangent(&self) -> [[f64; 3]; 3] {
+        self.origin_tangent
+    }
+
     /// Source/parameter/tangent identity, not experimental validation.
     #[must_use]
     pub fn fingerprint(&self) -> &str {

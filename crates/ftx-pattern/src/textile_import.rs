@@ -136,6 +136,7 @@ pub fn import(record: &legacy::Textile) -> Result<Material, Refusal> {
         structure,
         properties,
         membrane_response: None,
+        membrane_relaxation: None,
         thermal_response: None,
         sources: record
             .sources

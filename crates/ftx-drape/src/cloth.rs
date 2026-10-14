@@ -22,6 +22,7 @@ type EdgeUses = std::collections::BTreeMap<(usize, usize), Vec<(usize, usize, us
 
 mod materials;
 pub use materials::SheetMaterial;
+mod relaxation;
 
 /// The cloth: flat rest geometry, elements, lumped masses and material.
 #[derive(Clone, Debug)]
@@ -424,6 +425,8 @@ pub struct Solver {
     element_pattern: Option<(Csr, [usize; 3])>,
     /// The last positive-definite factorization, the preconditioner for [`Solver::pcg_iters`].
     precond: Option<LdltFactor>,
+    // Per-triangle, accepted physical memory; trial evaluations never mutate it.
+    relaxation: Option<relaxation::Field>,
 }
 
 /// The relative residual an inexact Newton direction is solved to.
@@ -491,6 +494,7 @@ impl Solver {
             pattern: None,
             element_pattern: None,
             precond: None,
+            relaxation: None,
         }
     }
 
@@ -657,6 +661,9 @@ impl Solver {
     fn potential(&self, x: &[Vec3], inertia: Option<(&[Vec3], f64)>) -> Result<f64, Refusal> {
         self.model.check_membrane_domains(x)?;
         let mut e = self.model.elastic_energy(x);
+        if let Some(field) = &self.relaxation {
+            e += field.energy(x, inertia.map(|(_, h)| h))?;
+        }
         match inertia {
             Some((xt, h)) => {
                 for (i, m) in self.model.mass.iter().enumerate() {
@@ -753,6 +760,20 @@ impl Solver {
                 || e.local(x, &self.model.material(i)),
                 |law| e.response_local(x, law, &self.model.material(i)),
             );
+            if let Some(extra) = self
+                .relaxation
+                .as_ref()
+                .and_then(|field| field.local(i, x, inertia.map(|(_, h)| h)))
+            {
+                l.energy += extra.energy;
+                for (a, b) in l.grad.iter_mut().zip(extra.grad) {
+                    *a += b;
+                }
+                for (a, b) in l.hess.iter_mut().zip(extra.hess) {
+                    *a += b;
+                }
+                l.psd &= extra.psd;
+            }
             scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
@@ -1035,6 +1056,13 @@ impl Solver {
         h: f64,
         body_start: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
+        if self.relaxation.is_some() {
+            return self.relaxing_step(h, body_start);
+        }
+        self.step_inner(h, body_start)
+    }
+
+    fn step_inner(&mut self, h: f64, body_start: Option<&[Vec3]>) -> Result<SolveReport, Refusal> {
         if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -1134,6 +1162,12 @@ impl Solver {
         quiet: usize,
         max_steps: usize,
     ) -> Result<SettleReport, Refusal> {
+        if self.relaxation.is_some() {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "speed-only settling cannot certify relaxed material history; use explicit time steps and inspect transient stress",
+            ));
+        }
         let mut rep = SettleReport {
             h: h0,
             ..SettleReport::default()
@@ -1163,6 +1197,12 @@ impl Solver {
     /// # Errors
     /// As [`Solver::step`].
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
+        if self.relaxation.is_some() {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "a static solve cannot choose a material-history duration; use explicit time steps",
+            ));
+        }
         self.audit_self_contact()?;
         let x0 = self.x.clone();
         let rep = match self.minimize(None) {
@@ -1192,7 +1232,19 @@ impl Solver {
     pub fn elastic_forces(&self) -> Vec<Vec3> {
         let mut f = vec![Vec3::ZERO; self.x.len()];
         for (i, e) in self.model.membranes.iter().enumerate() {
-            let l = e.local(&self.x, &self.model.material(i));
+            let mut l = self.model.membrane_response(i).map_or_else(
+                || e.local(&self.x, &self.model.material(i)),
+                |law| e.response_local(&self.x, law, &self.model.material(i)),
+            );
+            if let Some(extra) = self
+                .relaxation
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x, None))
+            {
+                for (a, b) in l.grad.iter_mut().zip(extra.grad) {
+                    *a += b;
+                }
+            }
             for (a, &vi) in e.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }

@@ -387,6 +387,12 @@ pub fn drape(
         }
     }
     report["mass_kg"] = json!(scene.solver.model.mass.iter().sum::<f64>());
+    if let Some(history) = scene.solver.relaxation_report()? {
+        report["membrane_history"] = history;
+        report["material_settledness_note"] = json!(
+            "Geometric settledness does not establish relaxed stress; history time includes sewing and draping steps."
+        );
+    }
     // Missing thermal observations must not invalidate a supported mechanical drape. Legacy reports
     // stay byte-compatible; explicit materials carry a ready-to-evaluate exchange or a refusal.
     if report["material"]["basis"] != "legacy_uncertain" {

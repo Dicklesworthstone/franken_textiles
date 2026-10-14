@@ -357,13 +357,15 @@ pub fn build_scene(
     contact: ContactParams,
     elastic: Option<&ElasticCasing>,
 ) -> Result<Scene, Refusal> {
-    if pattern.raw()["fabric"].get("interfaces").is_some()
+    if pattern.raw()["fabric"].get("material").is_some()
+        || pattern.raw()["fabric"].get("material_id").is_some()
+        || pattern.raw()["fabric"].get("interfaces").is_some()
         || pattern.raw()["pieces"]
             .as_array()
             .is_some_and(|ps| ps.iter().any(|p| p.get("fabric").is_some()))
     {
         return Err(bad(
-            "per-piece fabrics require the resolved drape pipeline, not a uniform Fabric argument"
+            "characterized/per-piece fabrics require the resolved drape pipeline, not a uniform Fabric argument"
                 .into(),
         ));
     }
@@ -393,7 +395,7 @@ pub(crate) fn build_scene_resolved(
     material: &crate::material::MaterialInputs,
     elastic: Option<&ElasticCasing>,
 ) -> Result<Scene, Refusal> {
-    build_scene_inner(
+    let mut scene = build_scene_inner(
         pattern,
         mesh,
         frames,
@@ -407,7 +409,34 @@ pub(crate) fn build_scene_resolved(
         material.response.as_ref(),
         material.piece_responses.as_deref(),
         material.contact_materials.as_ref(),
-    )
+    )?;
+    if material.relaxation.is_some()
+        || material
+            .piece_relaxations
+            .as_ref()
+            .is_some_and(|v| v.iter().any(Option::is_some))
+    {
+        // Retained triangles own history in their already rotated rest frame, never welded vertices.
+        let laws = scene
+            .triangle_owner
+            .iter()
+            .map(|owner| {
+                let id = &scene.mesh.instances[*owner];
+                let instance = pattern
+                    .instance(id)
+                    .ok_or_else(|| bad(format!("missing instance {id}")))?;
+                match &material.piece_relaxations {
+                    Some(field) => field
+                        .get(instance.piece_index)
+                        .cloned()
+                        .ok_or_else(|| bad("missing per-piece Maxwell selector".into())),
+                    None => Ok(material.relaxation.clone()),
+                }
+            })
+            .collect::<Result<Vec<_>, Refusal>>()?;
+        scene.solver = scene.solver.with_relaxation(&laws)?;
+    }
+    Ok(scene)
 }
 
 #[allow(clippy::too_many_arguments)]
