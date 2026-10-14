@@ -8,9 +8,10 @@
 //! - the alpha plane (`src/dec/alpha_dec.c`, `src/dsp/filters.c`);
 //! - the output stage's fancy upsampler and YUV→RGB (`src/dec/io_dec.c`, `src/dsp/upsampling.c`,
 //!   `src/dsp/yuv.h`);
-//! - the lossless VP8L decoder ([`super::webp_lossless`]).
-//!
-//! Refused here, because it is not ported: animated files (ANIM/ANMF chunks).
+//! - the lossless VP8L decoder ([`super::webp_lossless`]);
+//! - for an animation, `WebPAnimDecoderGetNext`'s first frame (`src/demux/anim_decode.c`), which is what
+//!   `Image.open` shows: the frame decoded at its offset on a transparent black canvas. Later frames are
+//!   never read, but every frame must parse and fit the canvas, as the demuxer demands.
 //!
 //! The port follows libwebp's C code. On arm64, Pillow's libwebp runs Neon transforms instead, which give
 //! the same pixels except for coefficients beyond what an encoder writes (`TransformAC3`'s 16-bit
@@ -43,7 +44,8 @@ fn le32(b: &[u8]) -> usize {
     le24(b) | usize::from(b[3]) << 24
 }
 
-/// One still image: its optional ALPH payload and its VP8/VP8L payload (to the end of the padded chunk).
+/// One image (a still, or an animation's frame): its optional ALPH payload and its VP8/VP8L payload (to the
+/// end of the padded chunk), and the bitstream's size.
 struct Frame<'a> {
     alpha: Option<&'a [u8]>,
     payload: &'a [u8],
@@ -55,23 +57,35 @@ struct Frame<'a> {
 /// Decodes a WebP as Pillow 12.3 does for `Image.open(f)` and `load_image`, returned as OpenCV's BGR.
 ///
 /// # Errors
-/// A damaged or truncated file, an image over `max_pixels`, or an animated file (not ported).
+/// A damaged or truncated file, or a canvas over `max_pixels`.
 pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
     // anim_decode.c: WebPAnimDecoderNew refuses what WebPGetFeatures refuses, before it demuxes
     let has_alpha = features_have_alpha(bytes).ok_or("WebP: bad file header")?;
-    let (frame, canvas) = demux(bytes)?;
-    let (w, h) = canvas;
+    let (frame, (w, h), (xo, yo)) = demux(bytes)?;
     if w.checked_mul(h).is_none_or(|p| p > max_pixels) {
         return Err(format!("WebP {w}×{h}: more than {max_pixels} pixels"));
     }
-    let rgba = if frame.lossless {
-        let argb = webp_lossless::decode_image(frame.payload, w, h)?;
+    let (fw, fh) = (frame.w, frame.h);
+    let decoded: Vec<u8> = if frame.lossless {
+        let argb = webp_lossless::decode_image(frame.payload, fw, fh)?;
         argb.iter()
             .flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8])
             .collect()
     } else {
-        let alpha = frame.alpha.map(|a| decode_alpha(a, w, h)).transpose()?;
-        decode_vp8(frame.payload, w, h, alpha.as_deref())?
+        let alpha = frame.alpha.map(|a| decode_alpha(a, fw, fh)).transpose()?;
+        decode_vp8(frame.payload, fw, fh, alpha.as_deref())?
+    };
+    // WebPAnimDecoderGetNext on the first frame: a zeroed (transparent black) canvas with the frame decoded
+    // into its rectangle; a still's frame is the canvas
+    let rgba = if (fw, fh) == (w, h) {
+        decoded
+    } else {
+        let mut canvas = vec![0u8; w * h * 4];
+        for (y, row) in decoded.chunks_exact(fw * 4).enumerate() {
+            let at = ((yo + y) * w + xo) * 4;
+            canvas[at..at + fw * 4].copy_from_slice(row);
+        }
+        canvas
     };
     // _webp.c: RGBA when WebPGetFeatures reports alpha, else RGBX, which Pillow reads as RGB
     let data = rgba
@@ -92,8 +106,8 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
 
 /// demux.c `WebPDemux` as `WebPAnimDecoderNew` runs it on the whole file: the RIFF header, the master
 /// chunk (simple VP8/VP8L or extended VP8X) and the checks of `IsValidSimpleFormat` /
-/// `IsValidExtendedFormat`. Returns the first frame and the canvas size.
-fn demux(data: &[u8]) -> Result<(Frame<'_>, (usize, usize)), String> {
+/// `IsValidExtendedFormat`. Returns the first frame, the canvas size and the frame's offset on the canvas.
+fn demux(data: &[u8]) -> Result<Demuxed<'_>, String> {
     if data.len() < 20 {
         return Err(TRUNCATED.into());
     }
@@ -112,18 +126,21 @@ fn demux(data: &[u8]) -> Result<(Frame<'_>, (usize, usize)), String> {
     let data = &data[..end];
     match &data[12..16] {
         b"VP8 " | b"VP8L" => {
-            let (mut frame, _, _) = store_frame(data, 12, end)?;
+            let (frame, _, _) = store_frame(data, 12, end)?;
+            let mut frame = frame.ok_or("WebP: no image chunk")?;
             frame.alpha = None; // a simple file has no ALPHA_FLAG: ParseSingleImage drops any ALPH
             let canvas = (frame.w, frame.h);
-            Ok((frame, canvas))
+            Ok((frame, canvas, (0, 0)))
         }
         b"VP8X" => extended(data, end),
         _ => Err("WebP: unknown first chunk".into()),
     }
 }
 
-/// demux.c `ParseVP8X` + `ParseVP8XChunks` for a still image.
-fn extended(data: &[u8], end: usize) -> Result<(Frame<'_>, (usize, usize)), String> {
+/// demux.c `ParseVP8X` + `ParseVP8XChunks` (+ `ParseAnimationFrame`) and `IsValidExtendedFormat`: a still
+/// image, or an animation whose frames all parse and fit the canvas. Returns the first frame, the canvas
+/// size and the frame's offset on it.
+fn extended(data: &[u8], end: usize) -> Result<Demuxed<'_>, String> {
     let size = le32(&data[16..]);
     if !(10..=MAX_CHUNK_PAYLOAD).contains(&size) {
         return Err("WebP: bad VP8X chunk".into());
@@ -133,6 +150,7 @@ fn extended(data: &[u8], end: usize) -> Result<(Frame<'_>, (usize, usize)), Stri
         return Err("WebP: bad VP8X chunk".into());
     }
     let flags = data[20];
+    let animated = flags & ANIMATION_FLAG != 0;
     let (cw, ch) = (1 + le24(&data[24..]), 1 + le24(&data[27..]));
     if (cw as u64) * (ch as u64) >= 1u64 << 32 {
         return Err("WebP: image too large".into());
@@ -141,34 +159,81 @@ fn extended(data: &[u8], end: usize) -> Result<(Frame<'_>, (usize, usize)), Stri
     if end - pos < 8 {
         return Err("WebP: no image chunk".into());
     }
-    let mut frame: Option<Frame<'_>> = None;
+    let mut still: Option<Frame<'_>> = None;
     let mut alpha_after_image = false;
+    let mut anim_chunks = 0;
+    // the animation's frames: the frame and its offset on the canvas
+    let mut frames: Vec<(Frame<'_>, usize, usize)> = Vec::new();
     loop {
         let start = pos;
         let (fourcc, size) = (&data[pos..pos + 4], le32(&data[pos + 4..]));
-        if size > MAX_CHUNK_PAYLOAD || size + (size & 1) > end - pos - 8 {
+        let padded = size + (size & 1);
+        if size > MAX_CHUNK_PAYLOAD || padded > end - pos - 8 {
             return Err("WebP: bad chunk size".into());
         }
         match fourcc {
             b"VP8X" => return Err("WebP: a second VP8X chunk".into()),
             b"ALPH" | b"VP8 " | b"VP8L" => {
-                if flags & ANIMATION_FLAG != 0 {
-                    return Err("WebP: animated files are not decoded here".into());
+                if anim_chunks > 0 || animated {
+                    return Err("WebP: an image outside ANMF in an animation".into());
                 }
-                if frame.is_some() {
+                if still.is_some() {
                     return Err("WebP: a second image in a still file".into());
                 }
-                let (mut f, next, late_alpha) = store_frame(data, start, end)?;
+                let (f, next, late_alpha) = store_frame(data, start, end)?;
+                // ALPH alone: an incomplete frame, invalid in a complete file
+                let mut f = f.ok_or("WebP: no image chunk")?;
                 if flags & ALPHA_FLAG == 0 {
                     f.alpha = None;
                 } else {
                     alpha_after_image = late_alpha;
                 }
-                frame = Some(f);
+                still = Some(f);
                 pos = next;
             }
-            b"ANIM" | b"ANMF" => return Err("WebP: animated files are not decoded here".into()),
-            _ => pos += 8 + size + (size & 1),
+            b"ANIM" => {
+                if padded < 6 {
+                    return Err("WebP: bad ANIM chunk".into());
+                }
+                anim_chunks += 1; // background colour and loop count: nothing a first frame uses
+                pos += 8 + padded;
+            }
+            b"ANMF" => {
+                if anim_chunks == 0 {
+                    return Err("WebP: ANMF before ANIM".into());
+                }
+                // NewFrame, then the 16-byte frame header; StoreFrame reads on from there
+                if padded < 16 {
+                    return Err("WebP: bad ANMF chunk".into());
+                }
+                let p = pos + 8;
+                let (xo, yo) = (2 * le24(&data[p..]), 2 * le24(&data[p + 3..]));
+                let (fw, fh) = (1 + le24(&data[p + 6..]), 1 + le24(&data[p + 9..]));
+                if (fw as u64) * (fh as u64) >= 1u64 << 32 {
+                    return Err("WebP: frame too large".into());
+                }
+                pos = p + 16;
+                if end - pos < 8 {
+                    return Err(TRUNCATED.into());
+                }
+                // StoreFrame stops at the first chunk that is not ALPH/VP8/VP8L; parsing goes on from there
+                // (inside the ANMF payload when nothing was stored)
+                let (f, next, late_alpha) = store_frame(data, pos, end)?;
+                if next - pos > padded - 16 {
+                    return Err("WebP: bad ANMF frame".into());
+                }
+                let stored = next > pos;
+                pos = next;
+                // only an animation keeps its frames (AddFrame); an ALPH without an image is incomplete
+                // and an ALPH after the image invalid there
+                if animated && stored {
+                    match f {
+                        Some(f) if !late_alpha => frames.push((f, xo, yo)),
+                        _ => return Err("WebP: bad ANMF frame".into()),
+                    }
+                }
+            }
+            _ => pos += 8 + padded,
         }
         if pos == end {
             break;
@@ -177,20 +242,38 @@ fn extended(data: &[u8], end: usize) -> Result<(Frame<'_>, (usize, usize)), Stri
             return Err(TRUNCATED.into());
         }
     }
-    let frame = frame.ok_or("WebP: no image chunk")?;
-    if flags & !ALL_VALID_FLAGS != 0 || alpha_after_image || (frame.w, frame.h) != (cw, ch) {
+    if flags & !ALL_VALID_FLAGS != 0 {
         return Err("WebP: invalid extended file".into());
     }
-    Ok((frame, (cw, ch)))
+    if animated {
+        // CheckFrameBounds: each frame (its bitstream's size) inside the canvas
+        if frames
+            .iter()
+            .any(|(f, xo, yo)| xo + f.w > cw || yo + f.h > ch)
+        {
+            return Err("WebP: an animation frame outside the canvas".into());
+        }
+        let (frame, xo, yo) = frames.into_iter().next().ok_or("WebP: no image chunk")?;
+        return Ok((frame, (cw, ch), (xo, yo)));
+    }
+    let frame = still.ok_or("WebP: no image chunk")?;
+    if alpha_after_image || (frame.w, frame.h) != (cw, ch) {
+        return Err("WebP: invalid extended file".into());
+    }
+    Ok((frame, (cw, ch), (0, 0)))
 }
 
+/// A demuxed file's first frame, the canvas size and the frame's offset on the canvas.
+type Demuxed<'a> = (Frame<'a>, (usize, usize), (usize, usize));
+
 /// demux.c `StoreFrame`: an optional ALPH, then one VP8 or VP8L chunk; stops at anything else. Returns the
-/// frame, the position after it, and whether an ALPH chunk followed the image (invalid with ALPHA_FLAG).
+/// frame (None when no image chunk came), the position after it, and whether an ALPH chunk followed the
+/// image (invalid with ALPHA_FLAG).
 fn store_frame(
     data: &[u8],
     mut pos: usize,
     end: usize,
-) -> Result<(Frame<'_>, usize, bool), String> {
+) -> Result<(Option<Frame<'_>>, usize, bool), String> {
     let mut alpha: Option<&[u8]> = None;
     let mut image: Option<(&[u8], bool, usize, usize)> = None;
     let mut late_alpha = false;
@@ -230,14 +313,13 @@ fn store_frame(
             return Err(TRUNCATED.into());
         }
     }
-    let (payload, lossless, w, h) = image.ok_or("WebP: no image chunk")?;
-    let frame = Frame {
+    let frame = image.map(|(payload, lossless, w, h)| Frame {
         alpha,
         payload,
         lossless,
         w,
         h,
-    };
+    });
     Ok((frame, pos, late_alpha))
 }
 

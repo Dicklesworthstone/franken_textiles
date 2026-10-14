@@ -16,7 +16,10 @@ PNGs. The load_image files cover
 - damaged files: truncations, flipped bytes and cut slices. Both decoders must refuse them, or decode them to
   the same pixels;
 - headers only the demuxer reads (RIFF sizes under 12, VP8X chunks over 10 bytes), and palette-only VP8L
-  alpha planes built field by field for libwebp's 8-bit path, whole and cut.
+  alpha planes built field by field for libwebp's 8-bit path, whole and cut;
+- animations (Pillow's encoder, and img2webp and webpmux when installed; their versions go into the meta) and
+  hand-built ANIM/ANMF containers: offset first frames with and without the alpha flag, and the demuxer's
+  frame rules (bounds, chunk order, empty and overrunning frames, ANIM/ANMF chunks in still files).
 Images over 1,024 pixels record the SHA-256 of the BGR bytes instead of the array. The reference is
 identified by the SHA-256 of its files, not by a path. Usage:
     python capture_webp.py --reference SKILL/scripts OUT_DIR
@@ -250,6 +253,104 @@ def main() -> int:
             alph = chunk(b"ALPH", bytes([1]) + stream[:len(stream) - cut])
             add(f"alpha-8bit-path-{w}x{h}-cut{cut}", riff(vp8x(0x10, w, h) + alph + frame))
 
+    # animations: Image.open shows the first frame at its offset on a zeroed canvas (white once composited,
+    # black for a file without the alpha flag); every frame must still parse and fit. Own generator, so the
+    # cases above keep their noise.
+    arng = np.random.default_rng(43)
+
+    def frame_img(h, w, phase):
+        y, x = np.mgrid[0:h, 0:w] / max(h, w, 1)
+        a = np.stack([128 + 100 * np.sin(7 * x + 3 * y + phase), 128 + 90 * np.cos(5 * y - 2 * x * x + phase),
+                      128 + 80 * np.sin(11 * x * y + 1 + phase)], -1)
+        return np.clip(a + arng.normal(0, 6, a.shape), 0, 255).astype(np.uint8)
+
+    def pil_anim(frames, **kw) -> bytes:
+        b = io.BytesIO()
+        ims = [Image.fromarray(f) for f in frames]
+        ims[0].save(b, "WEBP", save_all=True, append_images=ims[1:], duration=80, **kw)
+        return b.getvalue()
+
+    def image_chunks(data: bytes) -> bytes:
+        return b"".join(chunk(f, p) for f, p in chunks_of(data) if f in (b"ALPH", b"VP8 ", b"VP8L"))
+
+    def anim(bg=0xFFFFFFFF, loops=0) -> bytes:
+        return chunk(b"ANIM", struct.pack("<IH", bg, loops))
+
+    def anmf(x, y, w, h, frame: bytes, bits=0) -> bytes:
+        head = b"".join(v.to_bytes(3, "little") for v in (x // 2, y // 2, w - 1, h - 1, 100)) + bytes([bits])
+        return chunk(b"ANMF", head + frame)
+
+    fa, fb = frame_img(21, 30, 0.0), frame_img(21, 30, 1.3)
+    aa = alpha_of(21, 30)
+    add("anim-pil-lossy", pil_anim([fa, fb], quality=70))
+    add("anim-pil-lossless", pil_anim([fa, fb], lossless=True))
+    add("anim-pil-alpha", pil_anim([np.dstack([fa, aa]), np.dstack([fb, aa])], quality=70))
+    add("anim-pil-alpha-lossless", pil_anim([np.dstack([fa, aa]), np.dstack([fb, aa])], lossless=True))
+    img2webp, webpmux = shutil.which("img2webp"), shutil.which("webpmux")
+    if img2webp:
+        meta["img2webp_version"] = subprocess.run([img2webp, "-version"], capture_output=True,
+                                                  text=True).stdout.strip()
+        pngs = []
+        for i, f in enumerate((fa, fb, np.dstack([fa, aa]))):
+            pngs.append(work / f"anim{i}.png")
+            Image.fromarray(f).save(pngs[-1])
+        for opts, tag in ((["-lossy", "-q", "60"], "lossy"), (["-lossless"], "lossless"), (["-mixed"], "mixed")):
+            path = work / f"img2webp-{tag}.webp"
+            subprocess.run([img2webp, "-loop", "2", *opts, "-d", "70", *map(str, pngs), "-o", str(path)],
+                           check=True, capture_output=True)
+            add(f"anim-img2webp-{tag}", path.read_bytes())
+    if webpmux:
+        meta["webpmux_version"] = subprocess.run([webpmux, "-version"], capture_output=True,
+                                                 text=True).stdout.strip()
+        big_frame = work / "mux-big.webp"
+        big_frame.write_bytes(pil(frame_img(40, 50, 2.0), quality=75))
+        for tag, data, off in (("lossy", pil(fa, quality=75), "+10+6"), ("lossless", pil(fa, lossless=True), "+4+18"),
+                               ("alpha", pil(np.dstack([fa, aa]), quality=75), "+8+8")):
+            first, path = work / f"mux-{tag}-in.webp", work / f"mux-{tag}.webp"
+            first.write_bytes(data)
+            subprocess.run([webpmux, "-frame", str(first), "+100" + off + "+0+b", "-frame", str(big_frame),
+                            "+100+0+0+1-b", "-loop", "0", "-bgcolor", "255,0,0,255", "-o", str(path)],
+                           check=True, capture_output=True)
+            add(f"anim-webpmux-offset-{tag}", path.read_bytes())
+    lossy, lossless = image_chunks(pil(fa, quality=75)), image_chunks(pil(fa, lossless=True))
+    with_alph = image_chunks(pil(np.dstack([fa, aa]), quality=75))          # ALPH, then VP8
+    k = with_alph.index(b"VP8 ")
+    second = image_chunks(pil(frame_img(40, 50, 2.0), quality=60))           # 50 x 40
+    for flags, ftag in ((0x02, "no-alpha-flag"), (0x12, "alpha-flag")):
+        for fr, frtag in ((lossy, "vp8"), (with_alph, "alph-vp8"), (lossless, "vp8l")):
+            add(f"anim-{ftag}-{frtag}-at-10-6", riff(vp8x(flags, 64, 48) + anim() + anmf(10, 6, 30, 21, fr)
+                                                      + anmf(0, 0, 50, 40, second)))
+    A = vp8x(0x12, 64, 48) + anim()
+    damaged = bytearray(second)
+    damaged[40:60] = bytes(20)
+    for cid, body in (
+            ("anim-frame-header-size-ignored", A + anmf(2, 2, 7, 9, lossy)),      # the bitstream's size counts
+            ("anim-dispose-no-blend-bits", A + anmf(6, 4, 30, 21, with_alph, bits=3) + anmf(0, 0, 50, 40, second, 1)),
+            ("anim-second-frame-damaged", A + anmf(0, 0, 30, 21, lossy) + anmf(0, 0, 50, 40, bytes(damaged))),
+            ("anim-second-anim-chunk", A + anim(0, 3) + anmf(4, 4, 30, 21, lossy)),
+            ("anim-unknown-chunk-in-frame", A + anmf(0, 0, 30, 21, lossy + chunk(b"ABCD", b"xy"))),
+            ("anim-empty-frame-then-frame", A + chunk(b"ANMF", bytes(16)) + anmf(0, 0, 30, 21, lossy)),
+            ("anim-frame-outside-canvas", A + anmf(36, 0, 30, 21, lossy)),
+            ("anim-second-frame-outside-canvas", A + anmf(0, 0, 30, 21, lossy) + anmf(20, 20, 50, 40, second)),
+            ("anim-anmf-before-anim", vp8x(0x12, 64, 48) + anmf(0, 0, 30, 21, lossy) + anim()),
+            ("anim-no-frames", A),
+            ("anim-anim-chunk-short", vp8x(0x12, 64, 48) + chunk(b"ANIM", b"12345") + anmf(0, 0, 30, 21, lossy)),
+            ("anim-anmf-short", A + chunk(b"ANMF", bytes(15))),
+            ("anim-empty-frame-last", A + anmf(0, 0, 30, 21, lossy) + chunk(b"ANMF", bytes(16))),
+            ("anim-unknown-chunk-before-image", A + anmf(0, 0, 30, 21, chunk(b"ABCD", b"xy") + lossy)),
+            ("anim-alph-without-image", A + anmf(0, 0, 30, 21, with_alph[:k])),
+            ("anim-alph-after-image", A + anmf(0, 0, 30, 21, with_alph[k:] + with_alph[:k])),
+            ("anim-alph-with-vp8l", A + anmf(0, 0, 30, 21, with_alph[:k] + lossless)),
+            ("anim-image-outside-anmf", A + lossy),
+            ("anim-frame-overruns-anmf", A + chunk(b"ANMF", anmf(0, 0, 30, 21, b"")[8:24] + lossy[:20]) + lossy[20:]),
+            ("still-trailing-anim", vp8x(0x10, 30, 21) + with_alph + anim()),
+            ("still-trailing-anim-and-frame", vp8x(0x10, 30, 21) + with_alph + anim() + anmf(0, 0, 30, 21, lossy)),
+            ("still-trailing-frame-alph-only", vp8x(0x10, 30, 21) + with_alph + anim() + anmf(0, 0, 30, 21,
+                                                                                               with_alph[:k])),
+            ("still-anim-before-image", vp8x(0x10, 30, 21) + anim() + with_alph),
+            ("still-anmf-before-anim", vp8x(0x10, 30, 21) + with_alph + anmf(0, 0, 30, 21, lossy))):
+        add(cid, riff(body))
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
     path = args.out_dir / "raster_webp.json"
     path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "trace", "fixture": "raster_webp", "meta": meta,
@@ -294,6 +395,10 @@ def main() -> int:
     trace_case("navy-q80", pil(sheet(bg=(80, 35, 25), fg=(245, 245, 245))[..., ::-1].copy(), quality=80))
     trace_case("photo-adaptive", pil(sheet(light=0.4, noise=3.0)[..., ::-1].copy(), quality=85),
                threshold="adaptive")
+    # an animation whose first frame is the sheet, offset on a larger canvas left transparent (white)
+    frame = image_chunks(pil(sheet()[..., ::-1].copy(), quality=85))
+    trace_case("animated-offset-q85", riff(vp8x(0x12, W + 40, H + 20) + anim() + anmf(20, 10, W, H, frame)
+                                           + anmf(0, 0, W, H, frame)))
     path = args.out_dir / "trace_webp.json"
     path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "trace", "fixture": "trace_webp", "meta": meta,
                                 "cases": tcases}, separators=(",", ":")) + "\n")
