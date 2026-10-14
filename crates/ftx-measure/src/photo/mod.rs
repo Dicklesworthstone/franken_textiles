@@ -5,6 +5,7 @@
 
 mod camera;
 mod charuco;
+mod charuco_detect;
 mod detect;
 mod geometry;
 pub mod intrinsics;
@@ -12,6 +13,7 @@ mod lens_uncertainty;
 mod measurement;
 
 pub use camera::Camera;
+pub use charuco_detect::detect_charuco;
 pub use detect::{MAX_PHOTO_PIXELS, analyze_plain_sheet};
 pub use measurement::{PhotoOptions, measure_photo};
 

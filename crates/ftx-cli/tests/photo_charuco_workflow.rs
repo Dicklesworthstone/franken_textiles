@@ -661,3 +661,258 @@ fn actual_brown_distorted_png_uses_one_lens_for_detection_scale_and_uncertainty(
     );
     assert!(!dir.join("not-created.json").exists());
 }
+
+#[test]
+fn pure_rust_charuco_detector_covers_generated_warped_brown_distorted_and_refused_sheets() {
+    // 1. Generated letter and a4 sheets without --detector-python (pure Rust).
+    for (paper, total) in [("letter", 35), ("a4", 42)] {
+        let dir = setup();
+        let sidecar = sheet(&dir, paper);
+        let image = format!("sheet/calib-sheet-{paper}.png");
+        let metadata = format!("sheet/calib-sheet-{paper}.json");
+        let args = [
+            "measure",
+            "photo-scale",
+            "--image",
+            &image,
+            "--sheet",
+            &metadata,
+        ];
+        let scale = run(&dir, &args, 0)["result"].clone();
+        assert_eq!(scale["coordinate_source"], "detected_charuco");
+        assert_eq!(scale["reference"], "charuco");
+        assert_eq!(scale["inliers"], total);
+        assert!((scale["mm_per_px"].as_f64().unwrap() - 25.4 / 300.0).abs() < 0.0001);
+        assert!(scale["blur_sigma_px_estimate"].as_f64().unwrap() < 1.0);
+        let detection = &scale["image_input"]["charuco_detection"];
+        assert_eq!(detection["implementation"]["backend"], "rust_charuco");
+        assert_eq!(
+            detection["reference_input"]["corners"]
+                .as_array()
+                .unwrap()
+                .len(),
+            total as usize
+        );
+        let points = json!({"across_back":[raster_point([44.0,44.0], &sidecar["board"]), raster_point([132.0,44.0], &sidecar["board"])]});
+        write_json(&dir, "points.json", &points);
+        let measured = run(
+            &dir,
+            &[
+                "measure",
+                "measure-photo",
+                "--image",
+                &image,
+                "--sheet",
+                &metadata,
+                "--points",
+                "points.json",
+                "--depth-offset-mm",
+                "50",
+                "--camera-distance-mm",
+                "2500",
+                "--out",
+                "measured.json",
+            ],
+            0,
+        )["result"]
+            .clone();
+        let record = &measured["records"][0];
+        assert!(
+            (record["value_mm"].as_f64().unwrap() - 88.0).abs() <= 0.2,
+            "{record}"
+        );
+    }
+
+    // 2. Perspective warp, blur (sigma=1 px), and partial occlusion in pure Rust.
+    {
+        let dir = setup();
+        let sidecar = sheet(&dir, "a4");
+        let src = load_png(&std::fs::read(dir.join("sheet/calib-sheet-a4.png")).unwrap()).unwrap();
+        let mut image = Gray::filled(900, 800, 80);
+        for y in 0..image.h {
+            for x in 0..image.w {
+                let (u, v) = (x as f64, y as f64);
+                let (a, b, c, d) = (
+                    3.8 - 0.0006 * u,
+                    0.25 + 0.0003 * u,
+                    0.18 - 0.0006 * v,
+                    3.9 + 0.0003 * v,
+                );
+                let det = a * d - b * c;
+                let p = [
+                    ((u - 100.0) * d - b * (v - 80.0)) / det,
+                    (a * (v - 80.0) - c * (u - 100.0)) / det,
+                ];
+                if p[0] < 50.0 || p[0] >= 176.0 || p[1] < 0.0 || p[1] >= 154.0 {
+                    continue;
+                }
+                let p = raster_point(p, &sidecar["board"]);
+                let (ix, iy) = (p[0].floor() as usize, p[1].floor() as usize);
+                let (dx, dy) = (p[0] - ix as f64, p[1] - iy as f64);
+                let value = |x, y| f64::from(src.at(x, y)[0]);
+                let v = (1.0 - dy) * ((1.0 - dx) * value(ix, iy) + dx * value(ix + 1, iy))
+                    + dy * ((1.0 - dx) * value(ix, iy + 1) + dx * value(ix + 1, iy + 1));
+                image.data[y * image.w + x] = (v * 0.75 + 25.0).round() as u8;
+            }
+        }
+        for horizontal in [true, false] {
+            let previous = image.clone();
+            for y in 2..image.h - 2 {
+                for x in 2..image.w - 2 {
+                    let sum: u32 = [1, 4, 6, 4, 1]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, k)| {
+                            let p = if horizontal {
+                                previous.at(x + i - 2, y)
+                            } else {
+                                previous.at(x, y + i - 2)
+                            };
+                            k * u32::from(p)
+                        })
+                        .sum();
+                    image.data[y * image.w + x] = ((sum + 8) / 16) as u8;
+                }
+            }
+        }
+        std::fs::write(dir.join("warped.png"), encode_png_gray(&image)).unwrap();
+        let points = json!({"across_back":[project([66.0, 66.0]), project([154.0, 66.0])]});
+        write_json(&dir, "points.json", &points);
+        let measured = run(
+            &dir,
+            &[
+                "measure",
+                "measure-photo",
+                "--image",
+                "warped.png",
+                "--sheet",
+                "sheet/calib-sheet-a4.json",
+                "--points",
+                "points.json",
+            ],
+            0,
+        )["result"]
+            .clone();
+        assert!(
+            (measured["records"][0]["value_mm"].as_f64().unwrap() - 88.0).abs() <= 0.3,
+            "{measured}"
+        );
+        assert!(measured["photo"]["inliers"].as_u64().unwrap() >= 18);
+        assert!(measured["photo"]["corners_detected"].as_u64().unwrap() < 42);
+        assert!(measured["photo"]["reprojection_rms_px"].as_f64().unwrap() < 0.8);
+    }
+
+    // 3. Missing markers and bad sidecars in pure Rust.
+    {
+        let dir = setup();
+        let sidecar = sheet(&dir, "letter");
+        let mut blank = Gray::filled(720, 960, 80);
+        for y in 170..589 {
+            blank.data[y * 720 + 150..y * 720 + 474].fill(255);
+        }
+        std::fs::write(dir.join("plain.png"), encode_png_gray(&blank)).unwrap();
+        let scale = run(
+            &dir,
+            &[
+                "measure",
+                "photo-scale",
+                "--image",
+                "plain.png",
+                "--sheet",
+                "sheet/calib-sheet-letter.json",
+            ],
+            3,
+        );
+        assert_eq!(scale["result"]["ok"], false);
+        let mut wrong = sidecar;
+        wrong["board"]["dictionary"] = json!("DICT_5X5_50");
+        write_json(&dir, "wrong.json", &wrong);
+        let report = run(
+            &dir,
+            &[
+                "measure",
+                "photo-scale",
+                "--image",
+                "plain.png",
+                "--sheet",
+                "wrong.json",
+            ],
+            3,
+        );
+        assert!(
+            report["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unsupported dictionary")
+        );
+    }
+
+    // 4. Actual Brown-distorted PNG with lens intrinsics in pure Rust.
+    {
+        let dir = setup();
+        lens_inputs(&dir);
+        let metadata = sheet(&dir, "letter");
+        let source =
+            load_png(&std::fs::read(dir.join("sheet/calib-sheet-letter.png")).unwrap()).unwrap();
+        let mut image = Gray::filled(1000, 800, 80);
+        let (sx, cx) = (-0.15_f64).sin_cos();
+        let (sy, cy) = 0.20_f64.sin_cos();
+        for y in 0..image.h {
+            for x in 0..image.w {
+                let (xd, yd) = ((x as f64 - 500.0) / 700.0, (y as f64 - 360.0) / 650.0);
+                let (mut u, mut v) = (xd, yd);
+                for _ in 0..45 {
+                    let r2 = u * u + v * v;
+                    let radial = 1.0 + 0.25 * r2 + 0.015 * r2 * r2;
+                    let tx = 0.008 * u * v - 0.003 * (r2 + 2.0 * u * u);
+                    let ty = 0.004 * (r2 + 2.0 * v * v) - 0.006 * u * v;
+                    u = (xd - tx) / radial;
+                    v = (yd - ty) / radial;
+                }
+                let (a, b, c, d) = (
+                    cy + u * cx * sy,
+                    -u * sx,
+                    sx * sy + v * cx * sy,
+                    cx - v * sx,
+                );
+                let determinant = a * d - b * c;
+                let point = [
+                    110.0 + 250.0 * (u * d - b * v) / determinant,
+                    90.0 + 250.0 * (a * v - c * u) / determinant,
+                ];
+                if point[0] < 0.0 || point[0] >= 176.0 || point[1] < 0.0 || point[1] >= 132.0 {
+                    continue;
+                }
+                let p = raster_point(point, &metadata["board"]);
+                let (ix, iy) = (p[0].floor() as usize, p[1].floor() as usize);
+                let (dx, dy) = (p[0] - ix as f64, p[1] - iy as f64);
+                let sample = |x, y| f64::from(source.at(x, y)[0]);
+                let value = (1.0 - dy) * ((1.0 - dx) * sample(ix, iy) + dx * sample(ix + 1, iy))
+                    + dy * ((1.0 - dx) * sample(ix, iy + 1) + dx * sample(ix + 1, iy + 1));
+                image.data[y * image.w + x] = value.round() as u8;
+            }
+        }
+        std::fs::write(dir.join("distorted.png"), encode_png_gray(&image)).unwrap();
+        let mut args = vec![
+            "measure",
+            "measure-photo",
+            "--image",
+            "distorted.png",
+            "--sheet",
+            "sheet/calib-sheet-letter.json",
+        ];
+        args.extend(LENS_FLAGS);
+        args.extend(["--points", "points.json", "--out", "measured.json"]);
+        let measured = run(&dir, &args, 0)["result"].clone();
+        assert!(
+            (measured["records"][0]["value_mm"].as_f64().unwrap() - 132.0).abs() < 0.4,
+            "{measured}"
+        );
+        assert!(
+            (measured["records"][1]["value_mm"].as_f64().unwrap() - 200.0).abs() < 0.5,
+            "{measured}"
+        );
+        assert!(measured["photo"]["inliers"].as_u64().unwrap() >= 30);
+        assert!(measured["photo"]["reprojection_rms_px"].as_f64().unwrap() < 0.6);
+    }
+}
