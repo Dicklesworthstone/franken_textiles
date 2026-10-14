@@ -1,7 +1,9 @@
 //! Sheet-plane projective geometry. All fits are normalized before solving; rank loss and
 //! projective horizons are refusals, not enormous or non-finite measurements.
 
-use ftx_core::{Refusal, RefusalCode, det};
+use ftx_core::{Refusal, RefusalCode, Vec2, det};
+
+use crate::camera::Intrinsics;
 
 pub(super) type Point = [f64; 2];
 type Matrix = [[f64; 3]; 3];
@@ -214,14 +216,57 @@ pub(super) struct PlaneScale {
     pub variation: f64,
 }
 
+pub(super) fn undistort_point(p: Point, intrinsics: Option<&Intrinsics>) -> Result<Point, Refusal> {
+    match intrinsics {
+        None => Ok(p),
+        Some(k) => k
+            .undistort_pixel_with_jacobian(Vec2::new(p[0], p[1]))
+            .map(|(q, _)| [q.x, q.y]),
+    }
+}
+
+pub(super) fn distort_point(p: Point, intrinsics: Option<&Intrinsics>) -> Result<Point, Refusal> {
+    match intrinsics {
+        None => Ok(p),
+        Some(k) => k.distort_pixel(Vec2::new(p[0], p[1])).map(|q| [q.x, q.y]),
+    }
+}
+
+/// Chain rule from observed image pixels through the lens inverse to board millimetres.
+pub(super) fn image_jacobian(
+    h: &Homography,
+    p: Point,
+    intrinsics: Option<&Intrinsics>,
+) -> Result<[[f64; 2]; 2], Refusal> {
+    let Some(k) = intrinsics else {
+        return h.jacobian(p);
+    };
+    let (q, lens) = k.undistort_pixel_with_jacobian(Vec2::new(p[0], p[1]))?;
+    let j = h.jacobian([q.x, q.y])?;
+    let result = std::array::from_fn(|r| {
+        std::array::from_fn(|c| j[r][0] * lens[0][c] + j[r][1] * lens[1][c])
+    });
+    Ok(result)
+}
+
 pub(super) fn plane_scale(h: &Homography, size: Point) -> Result<PlaneScale, Refusal> {
+    plane_scale_in_image(h, size, None)
+}
+
+/// Report scale in observed pixels even when h is fitted in undistorted pixels.
+pub(super) fn plane_scale_in_image(
+    h: &Homography,
+    size: Point,
+    intrinsics: Option<&Intrinsics>,
+) -> Result<PlaneScale, Refusal> {
     let inv = h.inverse()?;
-    let centre = inv.map([size[0] / 2.0, size[1] / 2.0])?;
+    let image_point = |q| distort_point(inv.map(q)?, intrinsics);
+    let centre = image_point([size[0] / 2.0, size[1] / 2.0])?;
     let scale = |p| -> Result<f64, Refusal> {
-        let j = h.jacobian(p)?;
+        let j = image_jacobian(h, p, intrinsics)?;
         Ok((j[0][0] * j[1][1] - j[0][1] * j[1][0]).abs().sqrt())
     };
-    let j = h.jacobian(centre)?;
+    let j = image_jacobian(h, centre, intrinsics)?;
     let a = j[0][0] * j[0][0] + j[0][1] * j[0][1];
     let b = j[0][0] * j[1][0] + j[0][1] * j[1][1];
     let c = j[1][0] * j[1][0] + j[1][1] * j[1][1];
@@ -231,13 +276,19 @@ pub(super) fn plane_scale(h: &Homography, size: Point) -> Result<PlaneScale, Ref
     if !hi.is_finite() || !lo.is_finite() || lo <= 1e-12 * hi {
         return Err(degenerate("sheet is edge-on or has unusable scale"));
     }
-    let (mut min, mut max) = (f64::INFINITY, 0.0_f64);
+    // A nonlinear lens may have its lowest/highest scale at the centre, unlike a homography.
+    // For calibrated images this is explicitly a five-location diagnostic, not a global bound.
+    let (mut min, mut max) = if intrinsics.is_some() {
+        (mmpp, mmpp)
+    } else {
+        (f64::INFINITY, 0.0_f64)
+    };
     let side = inv.denominator([size[0] / 2.0, size[1] / 2.0])?;
     for q in rectangle(size) {
         if inv.denominator(q)?.is_sign_positive() != side.is_sign_positive() {
             return Err(degenerate("projective horizon crosses the reference sheet"));
         }
-        let s = scale(inv.map(q)?)?;
+        let s = scale(image_point(q)?)?;
         min = min.min(s);
         max = max.max(s);
     }

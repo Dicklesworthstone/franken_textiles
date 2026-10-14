@@ -39,6 +39,8 @@ struct Calibration {
     size: Point,
     image: Point,
     samples: Samples,
+    // When present, h and samples use virtual pinhole pixels; clicks/receipts stay observed.
+    intrinsics: Option<crate::camera::Intrinsics>,
 }
 
 #[derive(Clone, Debug)]
@@ -178,6 +180,10 @@ fn paper_fit(corners: &[Point; 4], paper: &str, image: Point) -> Result<PaperFit
 /// detection, blur estimation or EXIF processing is performed at this coordinate-only boundary.
 /// Imported detector output can instead use `reference: "charuco"`, `board` dimensions, and
 /// `corners: [{id, point_px}]`; at least six identified corners must support a single homography.
+/// Optional `intrinsics` on a ChArUco reference uses the shared camera model to remove lens
+/// distortion from both corners and subsequent clicks. They must describe exactly this oriented
+/// image. The matrix is then named `homography_undistorted_px_to_board_mm`, not a raw-pixel map.
+/// Intrinsics are treated as fixed, not newly estimated or assigned zero statistical uncertainty.
 pub fn analyze_reference(reference: &Value) -> Result<PhotoScale, Refusal> {
     if reference["reference"] == "charuco" {
         return charuco::analyze(reference);
@@ -299,6 +305,7 @@ pub fn analyze_reference(reference: &Value) -> Result<PhotoScale, Refusal> {
         size: best.size,
         image,
         samples: Samples::Manual { corners, sigma },
+        intrinsics: None,
     });
     Ok(PhotoScale {
         report,

@@ -4,7 +4,10 @@
 use ftx_core::{Refusal, RefusalCode, det, py};
 use serde_json::{Value, json};
 
-use super::geometry::{Homography, Point, convex_clockwise, fit, plane_scale, rectangle};
+use super::geometry::{
+    Homography, Point, convex_clockwise, fit, image_jacobian, plane_scale, plane_scale_in_image,
+    rectangle, undistort_point,
+};
 use super::{Calibration, PhotoScale, Samples, invalid, known, number, point, round_point};
 
 /// Measurement uncertainty and coordinate-frame controls. Lengths are mm, angles degrees,
@@ -117,7 +120,7 @@ fn bootstrap(c: &Calibration, options: &PhotoOptions) -> Result<Vec<Homography>,
             }
         };
         if let Ok(h) = trial
-            && plane_scale(&h, size).is_ok()
+            && plane_scale_in_image(&h, size, c.intrinsics.as_ref()).is_ok()
         {
             out.push(h);
         }
@@ -287,7 +290,9 @@ pub fn measure_photo(
                 "{key}: depth offset magnitude must be less than camera distance"
             )));
         }
-        let (a, b) = (on_plane(&c.h, p, centre)?, on_plane(&c.h, q, centre)?);
+        let up = undistort_point(p, c.intrinsics.as_ref())?;
+        let uq = undistort_point(q, c.intrinsics.as_ref())?;
+        let (a, b) = (on_plane(&c.h, up, centre)?, on_plane(&c.h, uq, centre)?);
         let delta = [b[0] - a[0], b[1] - a[1]];
         let dist = Refusal::finite("sheet-plane distance", det::hypot(delta[0], delta[1]))?;
         if dist <= 1e-12 {
@@ -305,7 +310,7 @@ pub fn measure_photo(
         };
         let mut draws = Vec::with_capacity(hs.len());
         for h in &hs {
-            if let (Ok(a), Ok(b)) = (on_plane(h, p, centre), on_plane(h, q, centre)) {
+            if let (Ok(a), Ok(b)) = (on_plane(h, up, centre), on_plane(h, uq, centre)) {
                 let v = value_of(a, b);
                 if v.is_finite() {
                     draws.push(v);
@@ -327,8 +332,10 @@ pub fn measure_photo(
         let projected = |j: [[f64; 2]; 2]| {
             (u[0] * j[0][0] + u[1] * j[1][0]).powi(2) + (u[0] * j[0][1] + u[1] * j[1][1]).powi(2)
         };
-        let mut sc =
-            options.click_px * (projected(c.h.jacobian(p)?) + projected(c.h.jacobian(q)?)).sqrt();
+        let mut sc = options.click_px
+            * (projected(image_jacobian(&c.h, p, c.intrinsics.as_ref())?)
+                + projected(image_jacobian(&c.h, q, c.intrinsics.as_ref())?))
+            .sqrt();
         if angle {
             sc = (sc / dist).to_degrees();
         }

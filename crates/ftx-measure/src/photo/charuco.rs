@@ -4,7 +4,9 @@
 use ftx_core::{Refusal, RefusalCode, det, py};
 use serde_json::{Value, json};
 
-use super::geometry::{Homography, Point, fit, plane_scale};
+use super::geometry::{
+    Homography, Point, distort_point, fit, plane_scale, plane_scale_in_image, undistort_point,
+};
 use super::measurement::Random;
 use super::{
     Calibration, PhotoScale, Samples, invalid, known, number, point, positive, scale_fields,
@@ -98,10 +100,21 @@ pub(super) fn analyze(v: &Value) -> Result<PhotoScale, Refusal> {
             "corners",
             "markers_detected",
             "blur_sigma_px_estimate",
+            "intrinsics",
         ],
     )?;
     if v["schema"] != "ftx-photo-reference/1" {
         return Err(invalid("expected ftx-photo-reference/1"));
+    }
+    let intrinsics: Option<crate::camera::Intrinsics> = v
+        .get("intrinsics")
+        .map(|k| {
+            serde_json::from_value(k.clone())
+                .map_err(|e| invalid(format!("invalid photo intrinsics: {e}")))
+        })
+        .transpose()?;
+    if let Some(k) = &intrinsics {
+        k.validate()?;
     }
     for key in ["image", "paper"] {
         if v.get(key).is_some_and(|x| !x.is_string()) {
@@ -184,7 +197,10 @@ pub(super) fn analyze(v: &Value) -> Result<PhotoScale, Refusal> {
             calibration: None,
         });
     }
-    let p: Vec<Point> = detections.iter().map(|(_, p)| *p).collect();
+    let p: Vec<Point> = detections
+        .iter()
+        .map(|(_, p)| undistort_point(*p, intrinsics.as_ref()))
+        .collect::<Result<_, _>>()?;
     let q: Vec<Point> = detections
         .iter()
         .map(|(id, _)| {
@@ -204,20 +220,43 @@ pub(super) fn analyze(v: &Value) -> Result<PhotoScale, Refusal> {
             });
         }
     };
-    let s = plane_scale(&h, size)?;
+    let mut s = plane_scale_in_image(&h, size, intrinsics.as_ref())?;
+    if intrinsics.is_some() {
+        // Perspective belongs to the pinhole plane; local pixel scale also includes the lens.
+        s.tilt = plane_scale(&h, size)?.tilt;
+    }
     let inv = h.inverse()?;
     let errors: Vec<_> = ids.iter().map(|&i| residual(&h, p[i], q[i])).collect();
     let sse: f64 = errors.iter().map(|v| v * v).sum();
     let rms = (sse / ids.len() as f64).sqrt();
-    let rms_px = (ids
+    let pixel_errors = ids
         .iter()
-        .map(|&i| residual(&inv, q[i], p[i]).powi(2))
-        .sum::<f64>()
-        / ids.len() as f64)
-        .sqrt();
+        .map(|&i| {
+            let projected = distort_point(inv.map(q[i])?, intrinsics.as_ref())?;
+            let observed = detections[i].1;
+            Ok(det::hypot(projected[0] - observed[0], projected[1] - observed[1]).powi(2))
+        })
+        .collect::<Result<Vec<_>, Refusal>>()?;
+    let rms_px = (pixel_errors.iter().sum::<f64>() / ids.len() as f64).sqrt();
     Refusal::finite("reprojection RMS px", rms_px)?;
     report["ok"] = json!(true);
     scale_fields(&mut report, &h, &s);
+    if let Some(k) = &intrinsics {
+        // A nonlinear observed-pixel map cannot be represented by this 3x3 matrix. Do not
+        // publish it under the old raw-pixel key where another consumer could misuse it.
+        let matrix = report
+            .as_object_mut()
+            .unwrap()
+            .remove("homography_px_to_board_mm")
+            .unwrap();
+        report["homography_undistorted_px_to_board_mm"] = matrix;
+        report["intrinsics"] = json!(k);
+        report["homography_coordinate_frame"] = json!("undistorted_pixels_same_intrinsics");
+        report["scale_variation_sampling"] = json!("centre_and_four_board_corners");
+        report["notes"].as_array_mut().unwrap().push(json!(
+            "Brown lens correction applies to reference corners and landmark clicks. Scale and click sigma use observed-pixel Jacobians. Intrinsics are assumed exact; lens calibration uncertainty is not included."
+        ));
+    }
     report["inliers"] = json!(ids.len());
     report["inlier_ids"] = json!(ids.iter().map(|&i| detections[i].0).collect::<Vec<_>>());
     report["outlier_ids"] = json!(
@@ -248,7 +287,15 @@ pub(super) fn analyze(v: &Value) -> Result<PhotoScale, Refusal> {
             n - ids.len()
         ));
     }
-    let mut geometric = scale_warnings(&s);
+    let mut geometric = if intrinsics.is_some() {
+        let mut perspective = plane_scale(&h, size)?;
+        // Perspective warnings must not mistake radial distortion for a tilted reference.
+        // Resolution/click diagnostics, however, belong to the observed image.
+        perspective.mm_per_px = s.mm_per_px;
+        scale_warnings(&perspective)
+    } else {
+        scale_warnings(&s)
+    };
     let low = geometric
         .last()
         .is_some_and(|w| w.starts_with("LOW_RESOLUTION"))
@@ -278,6 +325,7 @@ pub(super) fn analyze(v: &Value) -> Result<PhotoScale, Refusal> {
                 pixels: ids.iter().map(|&i| p[i]).collect(),
                 board: ids.iter().map(|&i| q[i]).collect(),
             },
+            intrinsics,
         }),
     })
 }

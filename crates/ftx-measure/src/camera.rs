@@ -174,6 +174,72 @@ impl Intrinsics {
         self.distortion.validate()
     }
 
+    /// Remove Brown distortion without changing the focal lengths or principal point.
+    /// Returns virtual pinhole pixels and their Jacobian with respect to the observed pixels.
+    /// The inverse is certified on the declared lens disk; pixels outside it are refused.
+    /// Intrinsic parameter uncertainty is not included in this coordinate derivative.
+    pub fn undistort_pixel_with_jacobian(
+        &self,
+        pixel: Vec2,
+    ) -> Result<(Vec2, [[f64; 2]; 2]), Refusal> {
+        self.validate()?;
+        let q = self.distortion.undistort(Vec2::new(
+            (pixel.x - self.principal_px.x) / self.focal_px.x,
+            (pixel.y - self.principal_px.y) / self.focal_px.y,
+        ))?;
+        // Preserve an identity lens exactly, after checking its domain. This also avoids
+        // a needless pixel -> normalized -> pixel round trip in already rectified workflows.
+        if self.distortion.radial == [0.0; 3] && self.distortion.tangential == [0.0; 2] {
+            return Ok((pixel, [[1.0, 0.0], [0.0, 1.0]]));
+        }
+        let (_, [a, b, c]) = self.distortion.evaluate(q);
+        let determinant = a * c - b * b;
+        // K * D'(q)^-1 * K^-1, not D'(q)^-1 alone: fx and fy may differ.
+        let jacobian = [
+            [
+                c / determinant,
+                -b / determinant * (self.focal_px.x / self.focal_px.y),
+            ],
+            [
+                -b / determinant * (self.focal_px.y / self.focal_px.x),
+                a / determinant,
+            ],
+        ];
+        let point = Vec2::new(
+            self.focal_px.x * q.x + self.principal_px.x,
+            self.focal_px.y * q.y + self.principal_px.y,
+        );
+        if determinant <= 0.0
+            || !point.is_finite()
+            || jacobian.iter().flatten().any(|v| !v.is_finite())
+        {
+            return Err(invalid("non-finite or singular pixel undistortion"));
+        }
+        Ok((point, jacobian))
+    }
+
+    /// Map virtual pinhole pixels back into the observed image with the same intrinsics.
+    /// This does not resize, crop or rotate the image, and never extrapolates the lens model.
+    pub fn distort_pixel(&self, pixel: Vec2) -> Result<Vec2, Refusal> {
+        self.validate()?;
+        let normalized = Vec2::new(
+            (pixel.x - self.principal_px.x) / self.focal_px.x,
+            (pixel.y - self.principal_px.y) / self.focal_px.y,
+        );
+        let q = self.distortion.distort(normalized)?;
+        if self.distortion.radial == [0.0; 3] && self.distortion.tangential == [0.0; 2] {
+            return Ok(pixel);
+        }
+        let point = Vec2::new(
+            self.focal_px.x * q.x + self.principal_px.x,
+            self.focal_px.y * q.y + self.principal_px.y,
+        );
+        if !point.is_finite() {
+            return Err(invalid("non-finite distorted pixel"));
+        }
+        Ok(point)
+    }
+
     /// Project a camera-space point; points on or behind the camera plane are refused.
     pub fn project(&self, point: Vec3) -> Result<Vec2, Refusal> {
         self.validate()?;
