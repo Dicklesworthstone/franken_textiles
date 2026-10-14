@@ -379,6 +379,8 @@ pub fn build_scene(
         elastic,
         None,
         None,
+        None,
+        None,
     )
 }
 
@@ -402,6 +404,8 @@ pub(crate) fn build_scene_resolved(
         material.options.contact,
         elastic,
         material.piece_fabrics.as_deref(),
+        material.response.as_ref(),
+        material.piece_responses.as_deref(),
         material.contact_materials.as_ref(),
     )
 }
@@ -418,6 +422,8 @@ fn build_scene_inner(
     contact: ContactParams,
     elastic: Option<&ElasticCasing>,
     piece_fabrics: Option<&[Fabric]>,
+    response: Option<&ftx_pattern::material_response::CompiledMembrane>,
+    piece_responses: Option<&[Option<ftx_pattern::material_response::CompiledMembrane>]>,
     contact_materials: Option<&crate::material::ContactMaterials>,
 ) -> Result<Scene, Refusal> {
     fabric.validate()?;
@@ -439,6 +445,23 @@ fn build_scene_inner(
                 .collect::<Result<_, Refusal>>()
         })
         .transpose()?;
+    let instance_responses: Option<Vec<Option<ftx_pattern::material_response::CompiledMembrane>>> =
+        piece_responses
+            .map(|responses| {
+                mesh.instances
+                    .iter()
+                    .map(|id| {
+                        let instance = pattern
+                            .instance(id)
+                            .ok_or_else(|| bad(format!("no instance {id}")))?;
+                        responses
+                            .get(instance.piece_index)
+                            .cloned()
+                            .ok_or_else(|| bad(format!("no response slot for instance {id}")))
+                    })
+                    .collect::<Result<_, Refusal>>()
+            })
+            .transpose()?;
     let casing = elastic.and_then(|e| mesh.instances.iter().position(|i| *i == e.instance));
     let places = placements(pattern, &mesh, frames)?;
     let wrapped = wrapped_positions(&mesh, &places);
@@ -468,6 +491,7 @@ fn build_scene_inner(
     // cloth's factor to GATHER_COMPRESSION at a gathered seam, linearly in the element's mean weight.
     let mut tri_compression = Vec::new();
     let mut tri_materials = Vec::new();
+    let mut tri_responses = Vec::new();
     let mut triangle_owner = Vec::new();
     let low = GATHER_COMPRESSION.min(compression);
     for f in &mesh.faces {
@@ -495,6 +519,16 @@ fn build_scene_inner(
                 bending_nm: m.bending_nm,
             });
         }
+        if let Some(field) = &instance_responses {
+            tri_responses.push(
+                field
+                    .get(owner)
+                    .cloned()
+                    .ok_or_else(|| bad("invalid nonlinear triangle owner".into()))?,
+            );
+        } else if let Some(law) = response {
+            tri_responses.push(Some(law.clone()));
+        }
         if casing == Some(mesh.owner[f[0]]) {
             // a casing at its cut length, drawn up by its elastic: gathered all through
             tri_compression.push(low);
@@ -516,6 +550,10 @@ fn build_scene_inner(
         )?
     };
     model.set_compression(&tri_compression)?;
+    if !tri_responses.is_empty() {
+        model.set_membrane_responses(&tri_responses)?;
+        model.check_membrane_domains(&x)?;
+    }
     let mut elastic_rings = Vec::new();
     if let Some(e) = elastic {
         for ring in elastic_rings_of(&mesh, &weld, e)? {

@@ -1,18 +1,18 @@
-//! Local multi-view calibration and an explicit same-lens handoff to sheet-pose.
+//! Local multi-view calibration and checked same-lens handoffs to sheet poses and photos.
 
 use std::{fs::File, io::Read};
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_measure::{
     camera::Camera,
-    photo::intrinsics::{CalibrationInput, calibrate_camera},
+    photo::intrinsics::{CalibrationInput, CalibrationReport, calibrate_camera},
 };
 use serde_json::{Value, json};
 
 use super::{no_files, option, photo, single};
 use crate::{Args, bad_input, known_options, required};
 
-fn read_document(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
+pub(super) fn read_document(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
     const LIMIT: u64 = 16 * 1024 * 1024;
     let io = |e| Refusal::new(RefusalCode::Io, format!("{path}: {e}"));
     let file = File::open(path).map_err(io)?;
@@ -74,6 +74,35 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     Ok((value, code, text))
 }
 
+// Both photo measurement and sheet poses consume the same checked source, not a stored
+// success flag or manually copied matrix. Capture matching remains mandatory at each boundary.
+pub(super) fn checked_calibration(saved: &Value) -> Result<CalibrationReport, Refusal> {
+    if saved["schema"] != "ftx-camera-calibration/1"
+        || saved["status"] != "ACCEPTED"
+        || !saved["flags"].as_array().is_some_and(Vec::is_empty)
+    {
+        return Err(bad_input(
+            "expected a saved ACCEPTED camera calibration, not a failed report or CLI envelope",
+        ));
+    }
+    let input: CalibrationInput = serde_json::from_value(saved["input"].clone())
+        .map_err(|e| bad_input(format!("invalid saved calibration input: {e}")))?;
+    // Reuse the real calibration algorithm instead of trusting a stored success flag. This
+    // checks internal consistency, not authenticity or whether the actual lens settings changed.
+    let checked = calibrate_camera(&input)?;
+    let solution = checked
+        .solution
+        .as_ref()
+        .ok_or_else(|| bad_input("saved calibration no longer passes its input checks"))?;
+    let k = serde_json::to_value(solution.intrinsics).map_err(|e| bad_input(e.to_string()))?;
+    if saved["solution"]["intrinsics"] != k {
+        return Err(bad_input(
+            "stored intrinsics differ from calibration inputs; regenerate the calibration report",
+        ));
+    }
+    Ok(checked)
+}
+
 pub(super) fn sheet_pose(args: &Args) -> Result<(Value, i32), Refusal> {
     known_options(
         args,
@@ -89,16 +118,8 @@ pub(super) fn sheet_pose(args: &Args) -> Result<(Value, i32), Refusal> {
         ));
     }
     let (saved, bytes) = read_document(required(args, "calibration")?)?;
-    if saved["schema"] != "ftx-camera-calibration/1"
-        || saved["status"] != "ACCEPTED"
-        || !saved["flags"].as_array().is_some_and(Vec::is_empty)
-    {
-        return Err(bad_input(
-            "sheet-pose requires a saved ACCEPTED camera calibration, not a failed report or CLI envelope",
-        ));
-    }
-    let input: CalibrationInput = serde_json::from_value(saved["input"].clone())
-        .map_err(|e| bad_input(format!("invalid saved calibration input: {e}")))?;
+    let checked = checked_calibration(&saved)?;
+    let input = &checked.input;
     if input.lens_id != lens
         || reference["image_size_px"] != json!(input.image_size_px)
         || reference["rotation_applied_degrees"] != json!(input.rotation_cw_deg)
@@ -107,18 +128,8 @@ pub(super) fn sheet_pose(args: &Args) -> Result<(Value, i32), Refusal> {
             "lens identifier, image size and applied rotation must match the calibration exactly; no rescaling or reorientation is inferred",
         ));
     }
-    // Reuse the real calibration algorithm instead of trusting a stored success flag. This
-    // checks internal consistency, not authenticity or whether the actual lens settings changed.
-    let checked = calibrate_camera(&input)?;
-    let solution = checked
-        .solution
-        .ok_or_else(|| bad_input("saved calibration no longer passes its input checks"))?;
-    let k = serde_json::to_value(solution.intrinsics).map_err(|e| bad_input(e.to_string()))?;
-    if saved["solution"]["intrinsics"] != k {
-        return Err(bad_input(
-            "stored intrinsics differ from calibration inputs; regenerate the calibration report",
-        ));
-    }
+    let k = serde_json::to_value(checked.solution.as_ref().unwrap().intrinsics)
+        .map_err(|e| bad_input(e.to_string()))?;
     reference["intrinsics"] = k;
     let mut report = Camera::sheet_pose_report(&reference)?;
     report["intrinsics_source"] = json!({"schema":"ftx-camera-calibration/1", "report_sha256":sha256_hex(&bytes),

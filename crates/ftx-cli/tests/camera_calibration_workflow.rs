@@ -306,3 +306,106 @@ fn budgets_and_bad_schema_options_have_distinct_exit_codes_and_no_output() {
     );
     assert!(!dir.join("absent").exists());
 }
+
+fn photo_inputs(dir: &Path) {
+    // Independent fronto-parallel board at 1.2 m under the example's known
+    // fx=960, fy=1000, principal=(640,480); board coordinates below are millimetres.
+    let project = |x: f64, y: f64| [640.0 + 0.8 * (x - 88.0), 480.0 + (y - 66.0) / 1.2];
+    let corners: Vec<_> = (0..35)
+        .map(|id| {
+            json!({"id":id,"point_px":project(
+                (id % 7 + 1) as f64 * 22.0, (id / 7 + 1) as f64 * 22.0)})
+        })
+        .collect();
+    save(
+        &dir.join("photo.json"),
+        &json!({"schema":"ftx-photo-reference/1","reference":"charuco",
+            "image_size_px":[1280,960],
+            "board":{"squares_x":8,"squares_y":6,"square_mm":22},"corners":corners}),
+    );
+    save(
+        &dir.join("points.json"),
+        &json!({"across_back":[project(20.0,66.0),project(220.0,66.0)]}),
+    );
+}
+
+const PHOTO: &[&str] = &[
+    "measure",
+    "measure-photo",
+    "--reference",
+    "photo.json",
+    "--lens",
+    "calibration.json",
+    "--lens-id",
+    "synthetic-pinhole",
+    "--rotation-cw-deg",
+    "0",
+    "--points",
+    "points.json",
+];
+
+#[test]
+fn native_calibration_flows_directly_into_photo_measurement_without_transcription() {
+    let dir = setup();
+    let report = calibrate(&dir);
+    photo_inputs(&dir);
+    let original = std::fs::read(dir.join("calibration.json")).unwrap();
+    let mut args = PHOTO.to_vec();
+    args.extend(["--out", "measured.json"]);
+    let measured = run(&dir, &args, 0)["result"].clone();
+    let record = &measured["records"][0];
+    assert_eq!(record["value_mm"], 200.0);
+    assert_eq!(record["provenance"], "PHOTO_ESTIMATED");
+    assert!(record["sigma_mm"].as_f64().unwrap() > 0.0);
+    assert_eq!(
+        measured["photo"]["intrinsics"],
+        report["solution"]["intrinsics"]
+    );
+    let source = &measured["photo"]["lens_input"];
+    assert_eq!(source["recomputed"], true);
+    assert_eq!(source["calibration"], report);
+    assert_eq!(source["sha256"], sha256_hex(&original));
+    run(&dir, &["measure", "validate", "measured.json"], 0);
+    // The same native source remains usable by the existing pose command.
+    assert_eq!(run(&dir, SHEET, 0)["result"]["ok"], true);
+    *args.last_mut().unwrap() = "calibration.json";
+    run(&dir, &args, 3);
+    assert_eq!(
+        original,
+        std::fs::read(dir.join("calibration.json")).unwrap()
+    );
+}
+
+#[test]
+fn photo_handoff_recomputes_and_refuses_rejected_or_altered_native_calibration() {
+    let dir = setup();
+    let original = calibrate(&dir);
+    photo_inputs(&dir);
+    let mut args = PHOTO.to_vec();
+    args.extend(["--out", "no-output/measured.json"]);
+    for kind in [
+        "status",
+        "flags",
+        "parameters",
+        "lens",
+        "rotation",
+        "source",
+        "solution",
+        "envelope",
+    ] {
+        let mut saved = original.clone();
+        match kind {
+            "status" => saved["status"] = json!("UNOBSERVABLE"),
+            "flags" => saved["flags"] = json!(["FAILED"]),
+            "parameters" => saved["solution"]["intrinsics"]["focal_px"][0] = json!(999),
+            "lens" => saved["input"]["lens_id"] = json!("another-lens"),
+            "rotation" => saved["input"]["rotation_cw_deg"] = json!(90),
+            "source" => saved["input"]["views"][0]["corners"][1]["pixel_px"][0] = json!(900),
+            "solution" => saved["solution"] = Value::Null,
+            _ => saved = json!({"schema":"ftx-cli/1","result":saved}),
+        }
+        save(&dir.join("calibration.json"), &saved);
+        run(&dir, &args, 3);
+        assert!(!dir.join("no-output").exists(), "{kind}");
+    }
+}

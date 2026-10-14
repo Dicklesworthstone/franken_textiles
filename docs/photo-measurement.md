@@ -172,6 +172,100 @@ in the sheet plane (0–90 degrees). `--sheet-level-sigma-deg` defaults to 1.5; 
 sheet must be upright for horizontal to mean body horizontal. A rotated image or sheet is
 not automatically corrected. `--view` labels the method but does not alter its geometry.
 
+## Correct a known lens without resampling the photograph
+
+For a camera with known Brown radial/tangential distortion, both photo commands accept
+`--lens lens.json --lens-id ID --rotation-cw-deg N`. Use these with ChArUco image detection
+(`--image` plus `--sheet`) or imported ChArUco coordinates (`--reference`). The plain-sheet
+detector is unchanged: its straight-edge evidence cannot be replaced by four distorted
+corners, so it refuses this option rather than silently ignoring lens distortion.
+
+A lens file has the following form. **These coefficients are synthetic test data, not a
+calibration for your camera.** Supply a calibration measured for the exact lens, focus,
+zoom, crop/stabilization geometry, resolution and already-applied rotation of your image.
+`calibration_evidence` identifies that calibration and its assumptions; it is not validated
+by matching an identifier. This command consumes intrinsics, it does not estimate them.
+The existing `calibrate-camera` command estimates a zero-distortion pinhole only and does
+not provide a Brown-distortion calibration.
+
+For pinhole images, `--lens` also accepts the saved `ftx-camera-calibration/1` report
+from `ftx measure calibrate-camera`. It re-runs calibration from the retained observations
+and held-out assignments, requires an accepted solution, and verifies the stored intrinsics
+against the recomputed values. Failed/altered reports and CLI envelopes are refused. There
+is no need to transcribe the matrix into a second file; the original report and its hash are
+retained with `lens_input.recomputed: true`. This does not upgrade the pinhole model to a
+Brown-distortion fit or establish that physical lens settings stayed unchanged.
+
+```bash
+ftx measure calibrate-camera camera-views.json --out camera.json --json
+ftx measure measure-photo --image pinhole-oriented.png \
+  --sheet calibration/calib-sheet-letter.json --lens camera.json \
+  --lens-id YOUR_LENS_ID --rotation-cw-deg 0 \
+  --points points.json --out measurements.json --json
+```
+
+```json
+{
+  "schema": "ftx-photo-lens/1",
+  "lens_id": "synthetic-brown",
+  "image_size_px": [1000, 800],
+  "rotation_cw_deg": 0,
+  "calibration_evidence": "Synthetic Brown lens for regression tests; not a real camera.",
+  "intrinsics": {
+    "focal_px": [700.0, 650.0],
+    "principal_px": [500.0, 360.0],
+    "distortion": {
+      "radial": [0.25, 0.015, 0.0],
+      "tangential": [0.004, -0.003],
+      "max_radius": 1.2
+    }
+  }
+}
+```
+
+The radial array is `[k1,k2,k3]`; tangential is `[p1,p2]`. The adapter translates this to
+OpenCV's `[k1,k2,p1,p2,k3]` order. `max_radius` is the calibrated **undistorted normalized**
+radius, not a pixel count. The shared Rust camera model requires a certified, non-folding
+inverse throughout this disk. An unsupported lens model, invalid coefficients, a board or
+landmark outside the disk, or failure to invert is an explicit refusal.
+
+```bash
+ftx measure measure-photo --image oriented.png \
+  --sheet calibration/calib-sheet-letter.json \
+  --detector-python .venv-charuco/bin/python \
+  --lens lens.json --lens-id YOUR_LENS_ID --rotation-cw-deg 0 \
+  --points points.json --out corrected-measurements.json --json
+```
+
+`--lens-id` and `--rotation-cw-deg` are required capture assertions, not transformations.
+The rotation must be 0, 90, 180 or 270 and match the lens file exactly. Image dimensions
+must also match exactly. `--points-from-width` still rescales only landmark clicks, never
+calibration parameters or the original image. Mismatches refuse before detector execution;
+no crop, alternate lens, resizing or rotation is inferred. Lens JSON is bounded to 16 MiB.
+An imported ChArUco reference with inline `intrinsics` cannot also select `--lens`;
+neither source silently overrides the other. The image detector cannot inject its own lens.
+
+OpenCV uses these same intrinsics when locating ChArUco corners, but returns **original
+distorted pixel coordinates**. Rust rectifies the identified corners before fitting the
+homography. It retains original landmark pixels, rectifies them before every homography
+evaluation, and propagates click uncertainty through the full inverse-lens/homography
+Jacobian. This handles unequal focal lengths and tangential distortion; multiplying a
+click sigma by an average scale is not substituted for the Jacobian.
+
+The resulting mapping is nonlinear. Its report therefore publishes
+`homography_undistorted_px_to_board_mm`, **not** `homography_px_to_board_mm`. A consumer must
+apply the supplied intrinsics' inverse distortion before this matrix. The reported centre,
+pixel reprojection residuals and local mm/px refer to original pixels; perspective estimates
+refer to the rectified plane. Scale variation samples the board centre and outer corners,
+not a guaranteed maximum over its interior. `lens_input` retains the complete lens document,
+its byte hash and the capture assertions in both scale and measurement reports.
+
+**Uncertainty remains conditional on the supplied lens calibration.** Its focal-length,
+principal-point and distortion-coefficient uncertainty is not estimated by the corner
+bootstrap. The report states this explicitly, and records remain `PHOTO_ESTIMATED`. Lens
+correction does not solve print scaling, depth differences, nonplanar surfaces or landmark
+placement. Unknown calibration accuracy still needs independent ruler/tape checks.
+
 ## Imported ChArUco detections
 
 An external detector can supply a `ftx-photo-reference/1` document with:
@@ -245,18 +339,23 @@ protocol. The end-to-end Rust CLI tests additionally use the actual `calib-sheet
 independently calculated 88 mm landmark pairs and a known projective camera. They verify
 scale, inlier counts, click/depth uncertainty, bootstrap acceptance, repeatability,
 validation/fusion, provenance, input protection and explicit failures.
+Known-lens tests additionally render distorted pixels from a rigid tilted camera, recover
+132 mm and 200 mm distances (including landmarks beyond the board), check inverse-lens
+Jacobians independently for both lengths and angles, and reject mismatched capture metadata
+before starting the detector. Core tests include a case where an uncorrected homography
+passes calibration yet gives an incorrect off-board distance.
 
 ```bash
 .venv-charuco/bin/python tools/photo/test_charuco_detector.py
 FTX_DETECTOR_PYTHON="$PWD/.venv-charuco/bin/python" \
   cargo test -p ftx-cli --test photo_charuco_workflow -- --include-ignored
-cargo test -p ftx-cli --test photo_image_workflow --test photo_workflow
+cargo test -p ftx-cli --test camera_calibration_workflow --test photo_image_workflow --test photo_workflow
 cargo test -p ftx-cli --bin ftx charuco_image
-cargo test -p ftx-measure --test photo --test charuco_evidence
+cargo test -p ftx-measure --test photo --test charuco_evidence --test photo_lens
 ```
 
 Set `FTX_DETECTOR_PYTHON` to an **absolute** interpreter path when running the CLI tests:
-their working directories are temporary fixture directories. The three tests that require
+their working directories are temporary fixture directories. The four tests that require
 OpenCV are explicitly ignored by default; the `ChArUco photo conformance` CI workflow installs
 the pinned backend and runs them with `--include-ignored`. Plain-paper, imported-coordinate,
 option-conflict and absent-backend tests remain runnable without OpenCV.
