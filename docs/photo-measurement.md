@@ -197,7 +197,8 @@ against the recomputed values. Failed/altered reports and CLI envelopes are refu
 is no need to transcribe the matrix into a second file; the original report and its hash are
 retained with `lens_input.recomputed: true`. Replay uses the original declared model; it
 never upgrades a pinhole calibration to Brown or establishes that physical lens settings
-stayed unchanged. Fitted Brown parameters remain conditional estimates without covariance.
+stayed unchanged. Fitted Brown parameters have no covariance unless the calibration requests
+an explicit noise model; the opt-in uncertainty workflow below retains that model on reuse.
 
 ```bash
 ftx measure calibrate-camera camera-views.json --out camera.json --json
@@ -263,11 +264,57 @@ refer to the rectified plane. Scale variation samples the board centre and outer
 not a guaranteed maximum over its interior. `lens_input` retains the complete lens document,
 its byte hash and the capture assertions in both scale and measurement reports.
 
-**Uncertainty remains conditional on the supplied lens calibration.** Its focal-length,
-principal-point and distortion-coefficient uncertainty is not estimated by the corner
-bootstrap. The report states this explicitly, and records remain `PHOTO_ESTIMATED`. Lens
+**Without a declared calibration-noise model, uncertainty remains conditional on the supplied
+lens calibration.** Its focal-length, principal-point and distortion-coefficient uncertainty
+is not estimated by the photo-corner bootstrap. The report states this explicitly, and records remain `PHOTO_ESTIMATED`. Lens
 correction does not solve print scaling, depth differences, nonplanar surfaces or landmark
 placement. Unknown calibration accuracy still needs independent ruler/tape checks.
+
+## Include conditional lens-calibration uncertainty
+
+A Brown calibration with `--corner-noise noise.json` (the shared uncertainty API), or inline
+`distortion_fit.corner_noise`, produces the full nine-parameter covariance described in
+`camera-calibration.md`. Both use the same numerical estimator. When the saved report is used with `--lens`,
+the CLI recomputes and verifies the covariance alongside the lens. It then **requires** an
+independence assertion for the measurement photograph; it never silently discards the covariance:
+
+```bash
+ftx measure measure-photo --image independent-photo.png \
+  --sheet calibration/calib-sheet-letter.json \
+  --lens camera.json --lens-id YOUR_LENS_ID --rotation-cw-deg 0 \
+  --independent-calibration-evidence "Describe this separate acquisition and why its pixel noise is independent" \
+  --points points.json --out measurements.json --json
+```
+
+Known calibration-image reuse is refused by both encoded-byte and decoded-pixel hashes, including
+renamed/re-encoded copies. Imported-coordinate acquisition cannot be matched to pixels here: the
+caller must justify independence. Metadata and evidence strings cannot prove physical independence.
+An evidence option without a supported, verified covariance report is refused, not treated as a
+substitute for that report. Plain sheets and raw `ftx-photo-lens/1` files do not acquire covariance
+implicitly. Use the measured noise model that is actually justified, not this guide's example sigma.
+
+Propagation uses the **full** covariance, including parameter correlations. For each of nine
+Cholesky directions, it rectifies the same original inlier pixels and refits their measurement
+homography before differentiating the measured span. Keeping that homography fixed would double
+count a calibration change it can absorb (notably pinhole focal length and principal point).
+Inlier IDs are fixed at the accepted fit; covariance does not re-run RANSAC to select better data.
+Two central-difference step sizes must agree. Invalid lens domains, rank loss, projective horizons,
+invalid covariance or unstable derivatives refuse the entire measurement, not individual terms.
+
+The additional one-sigma term appears as `sigma_terms_mm.intrinsics` or
+`sigma_terms_deg.intrinsics` and is combined in quadrature with the existing homography, click,
+depth/level terms. The nominal measurement and the existing terms are unchanged. Correlated lens
+error is propagated jointly through **both endpoints**, including for horizontal angles; a
+zero rounded term can legitimately result when a pinhole change is absorbed by the refitted
+homography. `photo.intrinsic_uncertainty` retains covariance, noise assumptions and independence
+evidence. Library callers use `PhotoScale::with_lens_uncertainty` on a usable ChArUco scale.
+
+This is a **local, first-order, conditional** uncertainty estimate. It does not include print
+scale, board flatness, correlated detector error, camera drift, nonlinear tail probabilities or
+shared calibration/photo noise. The finite-difference checks are local numerical checks, not
+validation of a full confidence region. Multiple measurements using one lens share calibration
+error; this feature does not turn them into statistically independent readings or teach the fusion
+engine a general cross-record covariance. Provenance remains `PHOTO_ESTIMATED`.
 
 ## Imported ChArUco detections
 

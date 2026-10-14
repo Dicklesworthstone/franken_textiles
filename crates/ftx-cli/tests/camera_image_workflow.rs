@@ -378,7 +378,8 @@ assert max(np.max(np.abs(distort(ux,uy)[0]-dx)),np.max(np.abs(distort(ux,uy)[1]-
 rays=np.stack((ux,uy,np.ones_like(ux))).reshape(3,-1)
 poses=[(20,-17,4,-.055,-.035,.25),(-23,24,-7,.06,.045,.27),
        (16,28,12,-.055,.055,.28),(-27,-18,6,.06,-.055,.28),
-       (33,-22,-10,0.,-.015,.225),(-20,32,8,-.065,.02,.29)]
+       (33,-22,-10,0.,-.015,.225),(-20,32,8,-.065,.02,.29),
+       (12,-15,3,-.03,-.01,.30)]
 for i,(a,b,c,tx,ty,tz) in enumerate(poses):
     x,y,z=np.deg2rad([a,b,c])
     Rx=np.array([[1,0,0],[0,np.cos(x),-np.sin(x)],[0,np.sin(x),np.cos(x)]])
@@ -391,7 +392,7 @@ for i,(a,b,c,tx,ty,tz) in enumerate(poses):
     mapy=(sample[1]/sample[2]).reshape(1200,1600).astype(np.float32)
     im=cv2.remap(page,mapx,mapy,cv2.INTER_LINEAR,borderMode=cv2.BORDER_CONSTANT,borderValue=85)
     cv2.imwrite(f'capture/view{i}.png',im)
-    if i==5:
+    if i in (5,6):
         def project(p):
             v=G@np.array([*p,1.]); x,y=distort(v[0]/v[2],v[1]/v[2])
             return [fx*x+cx,fy*y+cy]
@@ -399,7 +400,8 @@ for i,(a,b,c,tx,ty,tz) in enumerate(poses):
         points={'across_back':[project((.022,.044)),project((.154,.044))],
                 'test_span':[project((.022,.16)),project((.172,.16))]}
         assert all(0<=p[0]<1600 and 0<=p[1]<1200 for pair in points.values() for p in pair)
-        Path('capture/brown-points.json').write_text(json.dumps(points))
+        name='brown-points.json' if i==5 else 'independent-points.json'
+        Path('capture/'+name).write_text(json.dumps(points))
 "#;
 
 #[test]
@@ -545,4 +547,294 @@ fn raw_brown_images_calibrate_and_measure_through_the_saved_lens_without_transcr
             .contains("stored intrinsics differ")
     );
     assert!(!d.join("not-created.json").exists());
+}
+
+#[test]
+#[ignore = "requires optional OpenCV Python detector"]
+fn fitted_intrinsic_covariance_replays_into_independent_photo_uncertainty_and_refuses_reuse() {
+    let d = setup();
+    let mut m = manifest();
+    m["image_model"] = json!("brown5_zero_skew");
+    m.as_object_mut().unwrap().remove("pinhole_evidence");
+    m["distortion_fit"] = json!({"model_evidence":"Independent synthetic raw Brown renderer",
+        "max_radius":0.9,"max_iterations":80,
+        "corner_noise":{"model":"independent_isotropic","sigma_px":0.2,
+            "evidence":"Assumed independent 0.2 px noise for synthetic test only; not measured detector uncertainty"}});
+    m["views"] = json!(
+        (0..6)
+            .map(|i| json!({"image":format!("view{i}.png"),
+        "frame":{"stream":"synthetic-burst","timestamp_us":i*100_000},
+        "partition":if i==5 {"held_out"} else {"fit"}}))
+            .collect::<Vec<_>>()
+    );
+    write(&d, "capture/views.json", &m);
+    let render = Command::new("python3")
+        .current_dir(&d)
+        .args(["-I", "-c", BROWN_RENDER])
+        .output()
+        .unwrap();
+    assert!(
+        render.status.success(),
+        "{}",
+        String::from_utf8_lossy(&render.stderr)
+    );
+    let mut args = CALIBRATE.to_vec();
+    args.extend(["--out", "uncertain-camera.json"]);
+    let calibration = run(&d, &args, 0)["result"].clone();
+    let u = &calibration["uncertainty"];
+    assert_eq!(u["schema"], "ftx-intrinsic-uncertainty/1");
+    assert_eq!(
+        u["parameters"],
+        json!(["fx", "fy", "cx", "cy", "k1", "k2", "k3", "p1", "p2"])
+    );
+    assert_eq!(u["covariance"].as_array().unwrap().len(), 9);
+    write(&d, "coordinate-input.json", &calibration["input"]);
+    let replay = run(
+        &d,
+        &["measure", "calibrate-camera", "coordinate-input.json"],
+        0,
+    );
+    assert_eq!(replay["result"]["uncertainty"], *u);
+    assert_eq!(replay["result"]["solution"], calibration["solution"]);
+    let photo = |image, lens, out, evidence| {
+        let mut args = vec![
+            "measure",
+            "measure-photo",
+            "--image",
+            image,
+            "--sheet",
+            "sheet/calib-sheet-letter.json",
+            "--lens",
+            lens,
+            "--lens-id",
+            "synthetic-pinhole",
+            "--rotation-cw-deg",
+            "0",
+            "--points",
+            "capture/independent-points.json",
+            "--out",
+            out,
+        ];
+        if evidence {
+            args.extend([
+                "--independent-calibration-evidence",
+                "Seventh synthetic acquisition, not used in fitting or held-out selection",
+            ]);
+        }
+        args
+    };
+    let no_evidence = run(
+        &d,
+        &photo(
+            "capture/view6.png",
+            "uncertain-camera.json",
+            "no-evidence.json",
+            false,
+        ),
+        3,
+    );
+    assert!(
+        no_evidence["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("independent-calibration-evidence")
+    );
+    assert!(!d.join("no-evidence.json").exists());
+    let measured = run(
+        &d,
+        &photo(
+            "capture/view6.png",
+            "uncertain-camera.json",
+            "with-uncertainty.json",
+            true,
+        ),
+        0,
+    )["result"]
+        .clone();
+    for (name, want) in [("across_back", 132.), ("test_span", 150.)] {
+        let r = measured["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap();
+        assert!((r["value_mm"].as_f64().unwrap() - want).abs() < 1., "{r}");
+        assert!(
+            r["sigma_terms_mm"]["intrinsics"].as_f64().unwrap() > 0.,
+            "{r}"
+        );
+        assert_eq!(r["provenance"], "PHOTO_ESTIMATED");
+    }
+    assert_eq!(
+        measured["photo"]["intrinsic_uncertainty"]["calibration"],
+        *u
+    );
+    run(&d, &["measure", "validate", "with-uncertainty.json"], 0);
+    // The concurrently published shared API and separate-noise CLI input use the same
+    // numerical covariance. Transport that report through the actual image measurement too.
+    let mut shared_input = calibration["input"].clone();
+    shared_input["distortion_fit"]
+        .as_object_mut()
+        .unwrap()
+        .remove("corner_noise");
+    write(&d, "shared-input.json", &shared_input);
+    write(
+        &d,
+        "noise.json",
+        &json!({
+            "schema":"ftx-calibration-corner-noise/1", "sigma_px":0.2,
+            "evidence":"Assumed synthetic 0.2 px error, not empirical detector precision",
+            "independence_evidence":"Independent synthetic fitting coordinates and acquisitions"
+        }),
+    );
+    let shared = run(
+        &d,
+        &[
+            "measure",
+            "calibrate-camera",
+            "shared-input.json",
+            "--corner-noise",
+            "noise.json",
+            "--out",
+            "shared-camera.json",
+        ],
+        0,
+    )["result"]
+        .clone();
+    assert_eq!(shared["conditional_uncertainty"]["status"], "AVAILABLE");
+    assert_eq!(
+        shared["conditional_uncertainty"]["estimate"]["covariance"],
+        u["covariance"]
+    );
+    let shared_measurement = run(
+        &d,
+        &photo(
+            "capture/view6.png",
+            "shared-camera.json",
+            "shared-measurements.json",
+            true,
+        ),
+        0,
+    )["result"]
+        .clone();
+    assert_eq!(shared_measurement["records"], measured["records"]);
+    assert_eq!(
+        shared_measurement["photo"]["intrinsic_uncertainty"]["calibration"]["calibration_independence_evidence"],
+        "Independent synthetic fitting coordinates and acquisitions"
+    );
+    let mut stripped = shared;
+    stripped
+        .as_object_mut()
+        .unwrap()
+        .remove("conditional_uncertainty");
+    write(&d, "stripped-shared.json", &stripped);
+    let bad = run(
+        &d,
+        &photo(
+            "capture/view6.png",
+            "stripped-shared.json",
+            "no-shared-output.json",
+            true,
+        ),
+        3,
+    );
+    assert!(
+        bad["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stored conditional uncertainty")
+    );
+    assert!(!d.join("no-shared-output.json").exists());
+    let mut changed = calibration.clone();
+    changed["uncertainty"]["covariance"][0][0] = json!(123.);
+    write(&d, "changed-camera.json", &changed);
+    let bad = run(
+        &d,
+        &photo(
+            "capture/view6.png",
+            "changed-camera.json",
+            "bad-covariance.json",
+            true,
+        ),
+        3,
+    );
+    assert!(
+        bad["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("stored intrinsic uncertainty")
+    );
+    assert!(!d.join("bad-covariance.json").exists());
+    // Omitting a requested covariance must not silently make the lens "exact"; a caller
+    // cannot inject covariance either when the original input requested no noise model.
+    for injected in [false, true] {
+        let mut changed = calibration.clone();
+        if injected {
+            changed["input"]["distortion_fit"]
+                .as_object_mut()
+                .unwrap()
+                .remove("corner_noise");
+        } else {
+            changed.as_object_mut().unwrap().remove("uncertainty");
+        }
+        write(&d, "changed-camera.json", &changed);
+        let bad = run(
+            &d,
+            &photo(
+                "capture/view6.png",
+                "changed-camera.json",
+                "bad-covariance.json",
+                true,
+            ),
+            3,
+        );
+        assert!(
+            bad["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("stored intrinsic uncertainty")
+        );
+        assert!(!d.join("bad-covariance.json").exists());
+    }
+    let reused = run(
+        &d,
+        &photo(
+            "capture/view0.png",
+            "uncertain-camera.json",
+            "reused.json",
+            true,
+        ),
+        3,
+    );
+    assert!(
+        reused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("reuses a calibration image")
+    );
+    assert!(!d.join("reused.json").exists());
+    let copy=Command::new("python3").current_dir(&d).args(["-I","-c",
+        "import cv2; im=cv2.imread('capture/view0.png'); assert cv2.imwrite('capture/reencoded.png',im,[cv2.IMWRITE_PNG_COMPRESSION,9])"]).output().unwrap();
+    assert!(copy.status.success());
+    assert_ne!(
+        std::fs::read(d.join("capture/view0.png")).unwrap(),
+        std::fs::read(d.join("capture/reencoded.png")).unwrap()
+    );
+    let reused = run(
+        &d,
+        &photo(
+            "capture/reencoded.png",
+            "uncertain-camera.json",
+            "reencoded-output.json",
+            true,
+        ),
+        3,
+    );
+    assert!(
+        reused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("reuses a calibration image")
+    );
+    assert!(!d.join("reencoded-output.json").exists());
 }

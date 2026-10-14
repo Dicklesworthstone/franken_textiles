@@ -1,5 +1,79 @@
 # Calibrate a shared camera from several sheet views
 
+## Conditional intrinsic uncertainty
+
+The shared `calibrate_camera_with_uncertainty` API is exposed by both coordinate and image
+calibration with `--corner-noise noise.json`. The separate noise file uses:
+
+```json
+{
+  "schema": "ftx-calibration-corner-noise/1",
+  "sigma_px": 0.2,
+  "evidence": "Replace with the source of the per-coordinate sigma",
+  "independence_evidence": "Replace with the basis for independent fitting coordinates and images"
+}
+```
+
+These numbers describe example assumptions, not measured OpenCV or camera performance.
+The saved report retains `corner_noise_input` and `conditional_uncertainty`; an unavailable
+estimate returns exit 2 without inventing zero precision. The noise model does not change
+the fitted geometry. Checked photo reuse recomputes the estimate and verifies the entire
+conditional report, including the presence of a result for the retained noise request.
+
+```bash
+ftx measure calibrate-camera --images capture/views.json --sheet sheet/calib-sheet-letter.json \
+  --corner-noise noise.json --out camera.json --json
+```
+
+The inline option below is a convenience for self-contained manifests/coordinate documents.
+It calls the **same published joint covariance estimator**, not a second numerical algorithm.
+Do not combine the separate file/API argument with inline noise; conflicting sources refuse.
+
+Brown calibration may additionally declare `distortion_fit.corner_noise` with
+`model: "independent_isotropic"`, a positive `sigma_px` per observed pixel coordinate,
+and nonempty `evidence` for that noise model. This is an explicit statistical assumption,
+not an estimate from the calibration residuals. Correlated ChArUco detection errors,
+reference-size/flatness error, camera drift and model mismatch are not represented.
+
+After convergence and every existing held-out gate, compute the undamped fit-only
+Gauss–Newton covariance `sigma_px² (JᵀJ)⁻¹`, then take its nine-intrinsic marginal block.
+The full Jacobian includes every fitting view's six pose parameters; poses must not be
+treated as known when reporting intrinsic uncertainty. Convert optimizer coordinates
+(log focal lengths, scaled principal point) to `[fx, fy, cx, cy, k1, k2, k3, p1, p2]`.
+Publish the full covariance, not just its diagonal, with the assumptions and fit counts.
+No held-out observations, damping, variance floors or residual-derived noise rescaling
+are permitted in this calculation. Invalid noise and singular/unstable covariance refuse;
+rejected fits publish no covariance. Omitting noise adds no uncertainty fields; requesting
+it never changes the fitted lens, objective history, or held-out tests.
+
+For example, inside `distortion_fit` (the numbers below are assumptions for an example,
+not a characterization of OpenCV or a real camera):
+
+```json
+"corner_noise": {
+  "model": "independent_isotropic",
+  "sigma_px": 0.2,
+  "evidence": "Replace with the source of the per-coordinate sigma and independence assumption"
+}
+```
+
+The inline path's optional `uncertainty` binds the full covariance to the exact fitted
+lens. Consumers recompute and compare it, including its presence: deleting, inventing,
+or modifying covariance does not silently turn the lens into an exact calibration.
+Photo reuse requires `--independent-calibration-evidence TEXT`; see the photo guide.
+
+The optimizer also recognizes projection-roundoff convergence: a stalled update is accepted
+only when its remaining **undamped** Gauss–Newton decrement is below the estimated
+residual-dot-projection arithmetic floor. No increasing update is taken, no rank check is
+relaxed, and every held-out and three-pixel reprojection gate still applies. This avoids
+refusing tiny-noise held-out pose fits that cannot make representable progress. The report
+distinguishes this termination from ordinary gradient convergence.
+
+This local linear approximation is not a confidence certificate or empirical camera
+qualification. The mathematical convention follows Ceres Solver's *Covariance Estimation*
+documentation (full-Jacobian marginal blocks and explicitly scaled observation noise):
+https://ceres-solver.readthedocs.io/latest/nnls_covariance.html . No Ceres dependency is used.
+
 ## Native Brown lens fitting
 
 Both coordinate input and the image manifest support `image_model: "brown5_zero_skew"`, estimating
@@ -44,7 +118,8 @@ rank floor, fit-radius range and termination reason. The existing `--lens` and
 Inputs without `distortion_fit` retain the original pinhole algorithm and serialized fields.
 
 This is a local least-squares solution, not a global-optimum or calibration-uncertainty
-certificate. Correlated detector noise, reference flatness and print error remain outside
+certificate. Conditional covariance is available only under the explicit noise assumptions
+above. Correlated detector noise, reference flatness and print error remain outside
 the statistical model; no real-camera or real-wearer qualification follows from synthetic
 tests. Rational/fisheye/prism/rolling-shutter lens models are not supported.
 
@@ -253,7 +328,8 @@ synchronized or stationary-world camera rig.
 ## Numerical and verification boundaries
 
 The default is an algebraic planar-constraint fit; Brown fitting adds the bounded
-pixel-error refinement described above. Both fix skew to zero and publish no uncertainty estimate. The principal point
+pixel-error refinement described above. Both fix skew to zero; conditional Brown uncertainty
+is opt-in under the explicit noise assumptions above. The principal point
 must lie inside the image; off-image optical centers from some crops are not
 supported. The pinhole's normalized radius limit is 2; Brown uses its explicit fixed disk. A small
 residual does not establish metric accuracy, body measurements or garment fit.

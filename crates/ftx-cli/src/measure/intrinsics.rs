@@ -5,7 +5,10 @@ use std::{fs::File, io::Read};
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_measure::{
     camera::Camera,
-    photo::intrinsics::{CalibrationInput, CalibrationReport, calibrate_camera},
+    photo::intrinsics::{
+        CalibrationInput, CalibrationReport, calibrate_camera,
+        uncertainty::{CalibrationNoise, calibrate_camera_with_uncertainty},
+    },
 };
 use serde_json::{Value, json};
 
@@ -42,7 +45,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(
         args,
         "measure calibrate-camera",
-        &["images", "sheet", "detector-python", "out"],
+        &["images", "sheet", "detector-python", "corner-noise", "out"],
     )?;
     let (input, bytes, acquisition) = if let Some(path) = option(args, "images") {
         no_files(args, "calibrate-camera --images")?;
@@ -63,8 +66,26 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             .map_err(|e| bad_input(format!("invalid camera calibration: {e}")))?;
         (input, bytes, None)
     };
-    let report = calibrate_camera(&input)?;
-    let code = if report.solution.is_some() { 0 } else { 2 };
+    let noise = option(args, "corner-noise")
+        .map(read_document)
+        .transpose()?;
+    let report = if let Some((value, _)) = &noise {
+        let noise: CalibrationNoise = serde_json::from_value(value.clone())
+            .map_err(|e| bad_input(format!("invalid calibration corner noise: {e}")))?;
+        calibrate_camera_with_uncertainty(&input, &noise)?
+    } else {
+        calibrate_camera(&input)?
+    };
+    let code = if report.solution.is_some()
+        && report
+            .conditional_uncertainty
+            .as_ref()
+            .is_none_or(|u| u.estimate.is_some())
+    {
+        0
+    } else {
+        2
+    };
     let mut text = format!(
         "CAMERA CALIBRATION: {} ({} views, {})",
         report.status,
@@ -83,9 +104,23 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     for flag in report.flags.iter().chain(&report.advisories) {
         text.push_str(&format!("\n  {flag}"));
     }
+    if let Some(u) = &report.conditional_uncertainty {
+        text.push_str(&format!(
+            "\nConditional intrinsic uncertainty: {}",
+            u.status
+        ));
+        for flag in &u.flags {
+            text.push_str(&format!("\n  {flag}"));
+        }
+    }
     text.push_str(&format!("\n{}", report.no_claim));
     let mut value = serde_json::to_value(&report).map_err(|e| bad_input(e.to_string()))?;
     value["input_sha256"] = json!(sha256_hex(&bytes));
+    if let Some((input, bytes)) = noise {
+        // Keep the explicit request separately from its result. A missing result is not
+        // permission to reinterpret a requested uncertain camera as an exact one.
+        value["corner_noise_input"] = json!({"input":input,"sha256":sha256_hex(&bytes)});
+    }
     if let Some(receipt) = acquisition {
         value["image_acquisition"] = receipt;
     }
@@ -111,7 +146,16 @@ pub(super) fn checked_calibration(saved: &Value) -> Result<CalibrationReport, Re
         .map_err(|e| bad_input(format!("invalid saved calibration input: {e}")))?;
     // Reuse the real calibration algorithm instead of trusting a stored success flag. This
     // checks internal consistency, not authenticity or whether the actual lens settings changed.
-    let checked = calibrate_camera(&input)?;
+    let noise = saved
+        .get("corner_noise_input")
+        .or_else(|| saved.get("conditional_uncertainty"));
+    let checked = if let Some(source) = noise {
+        let noise: CalibrationNoise = serde_json::from_value(source["input"].clone())
+            .map_err(|e| bad_input(format!("invalid saved calibration noise: {e}")))?;
+        calibrate_camera_with_uncertainty(&input, &noise)?
+    } else {
+        calibrate_camera(&input)?
+    };
     let solution = checked
         .solution
         .as_ref()
@@ -120,6 +164,18 @@ pub(super) fn checked_calibration(saved: &Value) -> Result<CalibrationReport, Re
     if saved["solution"]["intrinsics"] != k {
         return Err(bad_input(
             "stored intrinsics differ from calibration inputs; regenerate the calibration report",
+        ));
+    }
+    let uncertainty = checked.uncertainty.as_ref().map(|u| json!(u));
+    if saved.get("uncertainty") != uncertainty.as_ref() {
+        return Err(bad_input(
+            "stored intrinsic uncertainty differs from calibration inputs; regenerate the calibration report",
+        ));
+    }
+    let conditional = checked.conditional_uncertainty.as_ref().map(|u| json!(u));
+    if saved.get("conditional_uncertainty") != conditional.as_ref() {
+        return Err(bad_input(
+            "stored conditional uncertainty differs from calibration inputs; regenerate the calibration report",
         ));
     }
     Ok(checked)
