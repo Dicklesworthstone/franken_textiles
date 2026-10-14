@@ -152,6 +152,8 @@ impl Catalog {
         let mut catalog = Self::from_json(include_str!("material_catalog/catalog.json"))?;
         let insulation = Self::from_json(include_str!("material_catalog/insulation.json"))?;
         catalog.materials.extend(insulation.materials);
+        let measured = Self::from_json(include_str!("material_catalog/thermal-measurements.json"))?;
+        catalog.materials.extend(measured.materials);
         catalog.validate()?;
         Ok(catalog)
     }

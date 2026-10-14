@@ -64,6 +64,7 @@ fn input() -> Input {
             structure: BTreeMap::new(),
             properties,
             membrane_response: None,
+            thermal_response: None,
             sources: BTreeMap::from([(
                 "synthetic".into(),
                 Source {

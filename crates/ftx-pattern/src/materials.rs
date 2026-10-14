@@ -120,6 +120,9 @@ pub struct Material {
     /// observations so consumers can use them independently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membrane_response: Option<crate::material_response::TabulatedMembrane>,
+    /// Condition-qualified temperature observations; no extrapolation or implicit conditioning mix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_response: Option<crate::material_thermal::ThermalResponse>,
     /// Sources keyed by stable local identifiers.
     pub sources: BTreeMap<String, Source>,
 }
@@ -271,6 +274,9 @@ impl Material {
             {
                 return Err(invalid(format!("{}: invalid bounds for {name}", self.id)));
             }
+        }
+        if let Some(response) = &self.thermal_response {
+            response.validate(self)?;
         }
         if let Some(response) = &self.membrane_response {
             for key in [
@@ -555,6 +561,7 @@ mod tests {
             structure: BTreeMap::new(),
             properties,
             membrane_response: None,
+            thermal_response: None,
             sources,
         }
     }
