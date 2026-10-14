@@ -119,6 +119,7 @@ fn selected(raw: &Value) -> Result<ftx_pattern::material_catalog::ResolvedMateri
 fn simulation_readiness(material: &ResolvedMaterial) -> Result<(), Refusal> {
     material.mechanics()?;
     material.membrane_relaxation()?;
+    material.bending_response()?;
     Ok(())
 }
 

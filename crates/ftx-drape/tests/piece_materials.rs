@@ -31,6 +31,123 @@ fn sheet(scale: f64) -> Value {
         "sources":{"test":{"reference":"test:piece-materials","note":"Synthetic inputs", "accessed_on":"2026-10-13"}}}})
 }
 
+fn panel_sheet(warp: f64, weft: f64) -> Value {
+    let mut m = sheet(1.0);
+    m["record"]["structure"] = json!({"bending_model":ftx_pattern::material_bending::MODEL});
+    for (key, value) in [
+        ("bending_warp", warp),
+        ("bending_weft", weft),
+        ("bending_coupling", 1e-5),
+        ("bending_twist", 2e-5),
+    ] {
+        m["record"]["properties"][key] = json!({"value":value,"unit":"N*m","source":"test",
+            "evidence":"estimate","method":"Synthetic orthotropic panel bending coefficient"});
+    }
+    m
+}
+
+#[test]
+fn panel_bending_selection_reaches_sewn_dynamics_with_fixed_geometry_and_membrane() {
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = panel_sheet(2e-4, 5e-5);
+    let p = Pattern::new(raw.clone());
+    let opts = DrapeOptions {
+        spacing: 8.0,
+        ..options()
+    };
+    let a = run(&p, opts);
+    raw["fabric"]["material"] = panel_sheet(5e-5, 2e-4);
+    let b = run(&Pattern::new(raw), opts);
+    assert_eq!(a.scene.mesh.verts2d, b.scene.mesh.verts2d);
+    assert_eq!(a.scene.mesh.faces, b.scene.mesh.faces);
+    assert_eq!(a.scene.weld, b.scene.weld);
+    assert_eq!(a.scene.start.relaxed, b.scene.start.relaxed);
+    assert_eq!(a.scene.solver.model.mass, b.scene.solver.model.mass);
+    assert_eq!(
+        a.scene.solver.model.membranes,
+        b.scene.solver.model.membranes
+    );
+    assert_eq!(a.scene.solver.model.membrane, b.scene.solver.model.membrane);
+    assert_ne!(a.scene.solver.x, b.scene.solver.x);
+    let m = &a.scene.solver.model;
+    assert_eq!(m.panel_bending_patches().len(), m.membranes.len());
+    assert_eq!(a.report["panel_bending"]["patch_count"], m.membranes.len());
+    assert!(
+        a.report["panel_bending"]["active_scalar_hinges"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_ne!(
+        a.report["material"]["record_sha256"],
+        b.report["material"]["record_sha256"]
+    );
+    let repeat = run(&p, opts);
+    assert_eq!(repeat.scene.solver.x, a.scene.solver.x);
+    assert_eq!(repeat.report, a.report);
+}
+
+#[test]
+fn only_selected_source_panels_get_patches_and_scalar_seams_are_retained() {
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = panel_sheet(2e-4, 5e-5);
+    raw["pieces"][1]["fabric"] = json!({"material":sheet(1.0)});
+    let r = run(
+        &Pattern::new(raw),
+        DrapeOptions {
+            spacing: 8.0,
+            ..options()
+        },
+    );
+    let m = &r.scene.solver.model;
+    assert!(m.is_heterogeneous()); // only bending differs
+    assert!(m.panel_bending_patches().len() < m.membranes.len());
+    assert!(!m.panel_bending_patches().is_empty());
+    for &i in m.panel_bending_triangles() {
+        assert_eq!(r.scene.triangle_owner[i], 0);
+    }
+    assert_eq!(r.report["material"]["panel_bending_piece_count"], 1);
+    let weld = &r.scene.weld;
+    let ownership: Vec<_> = (0..m.mass.len())
+        .map(|v| {
+            r.scene
+                .mesh
+                .owner
+                .iter()
+                .zip(weld)
+                .filter_map(|(&o, &w)| (w == v).then_some(o))
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .collect();
+    // Curvature support on the selected front may include seam vertices, but no interior back vertex.
+    for p in m.panel_bending_patches() {
+        for &v in &p.v {
+            assert!(ownership[v].contains(&0));
+        }
+    }
+}
+
+#[test]
+fn tensor_default_and_same_explicit_piece_selection_are_identical_with_self_contact() {
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = panel_sheet(2e-4, 5e-5);
+    let opts = DrapeOptions {
+        spacing: 8.0,
+        self_contact: Some(DrapeOptions::default().contact),
+        ..options()
+    };
+    let a = run(&Pattern::new(raw.clone()), opts);
+    raw["pieces"][1]["fabric"] = raw["fabric"].clone();
+    let b = run(&Pattern::new(raw), opts);
+    assert_eq!(a.scene.solver.x, b.scene.solver.x);
+    assert_eq!(a.scene.solver.v, b.scene.solver.v);
+    assert_eq!(a.fold.frames, b.fold.frames);
+    assert_eq!(
+        a.scene.solver.model.panel_bending_triangles(),
+        b.scene.solver.model.panel_bending_triangles()
+    );
+}
+
 fn band() -> Pattern {
     let w = 40.0 * std::f64::consts::PI;
     let pieces: Vec<_> = ["front", "back"]

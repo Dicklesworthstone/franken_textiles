@@ -1,0 +1,32 @@
+{
+  "id": "synthetic-panel-bending",
+  "allow_estimates": true,
+  "record": {
+    "id": "synthetic-panel-bending",
+    "name": "Synthetic orthotropic bending sheet; not measured textile data",
+    "form": "woven",
+    "structure": {"bending_model": "orthotropic_quadratic_patch/1"},
+    "properties": {
+      "areal_density": {"value":0.2,"unit":"kg/m2","evidence":"estimate","source":"test","method":"Synthetic software test"},
+      "thickness": {"value":0.0006,"unit":"m","evidence":"estimate","source":"test","method":"Synthetic software test"},
+      "warp_stiffness": {"value":1000.0,"unit":"N/m","evidence":"estimate","source":"test","method":"Synthetic software test"},
+      "weft_stiffness": {"value":1000.0,"unit":"N/m","evidence":"estimate","source":"test","method":"Synthetic software test"},
+      "poisson_warp_weft": {"value":0.0,"unit":"1","evidence":"estimate","source":"test","method":"Synthetic software test"},
+      "shear_stiffness": {"value":500.0,"unit":"N/m","evidence":"estimate","source":"test","method":"Synthetic software test"},
+      "bending_rigidity": {"value":0.00003,"unit":"N*m","evidence":"estimate","source":"test","method":"Synthetic scalar seam approximation"},
+      "friction_skin": {"value":0.2,"unit":"1","evidence":"estimate","source":"test","method":"Synthetic software test"},
+      "friction_self": {"value":0.3,"unit":"1","evidence":"estimate","source":"test","method":"Synthetic software test"},
+      "bending_warp": {"value":0.0002,"unit":"N*m","evidence":"estimate","source":"test","method":"Synthetic D11, independent of membrane stiffness"},
+      "bending_weft": {"value":0.00005,"unit":"N*m","evidence":"estimate","source":"test","method":"Synthetic D22, independent of membrane stiffness"},
+      "bending_coupling": {"value":0.00001,"unit":"N*m","evidence":"estimate","source":"test","method":"Synthetic D12, not a Poisson ratio"},
+      "bending_twist": {"value":0.000025,"unit":"N*m","evidence":"estimate","source":"test","method":"Synthetic D66 conjugate to engineering curvature 2*k_uv"}
+    },
+    "sources": {
+      "test": {
+        "reference": "test:orthotropic-panel-bending",
+        "accessed_on": "2026-10-14",
+        "note": "Entire selection is synthetic. No garment-fit, textile-characterization or process-safety claim."
+      }
+    }
+  }
+}
