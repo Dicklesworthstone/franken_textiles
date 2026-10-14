@@ -974,6 +974,61 @@ properties (`https://www.nist.gov/publications/estimates-thermal-properties-fire
 These are acquisition leads, not numbers already ingested or validated by the thermal-surface work.
 Neither a fire-test observation nor a dry heat map grants a safety rating or machine-process approval.
 
+### 25.7 Temperature-qualified transport: implemented path and empirical handoff
+
+Commits `02dd3b2` and `f451e8d` extend the section 25.6 delivery beyond constant properties.
+The shared `Material` now retains specimen- and conditioning-qualified temperature observations,
+reported means and separately labelled standard deviations. The catalog adds five FSRI cotton-sheet,
+cotton-batting and chair-polyester-batting records with 25 temperature-specific observations, bringing
+the canonical seed to 41 records; legacy compatibility imports remain additional discovery records.
+Dried and unconditioned specimens remain distinct. These numbers are now ingested, superseding the
+acquisition-only status above, but matching conditioned HFM geometry and areal mass are still missing.
+Two records also lack specific heat. None of these five is represented as a complete drape or thermal
+simulation input, and none supplies a generic cotton/polyester or branded-performance-fabric law.
+
+The implementation compiles explicitly admitted piecewise-linear conductivity and specific heat,
+integrates sensible heat against reference mass, and enforces the intersection of the characterized
+temperature intervals. Interpolation is an estimated modeling choice even when its knots were
+measured. Companion mass/geometry observations must match the specimen and conditioning; scalar
+conflicts, absent data, nonconvergence and extrapolation refuse. Reported variability is not silently
+converted to confidence intervals or propagated uncertainty. The solver uses a bounded conservative
+enthalpy backward-Euler iteration with checks of the original local equations, global energy balance
+and maximum principle; constant-only models keep their original arithmetic and snapshot format.
+
+The same selected record now drives the dry transient CLI, actual sewn-drape thermal exchange,
+material-following surface columns and source-locked replay without solver edits. A thermal-only
+record change leaves mechanical trajectories/pattern geometry unchanged, changes heat transport and
+invalidates the previous thermal state. Surface heat storage follows undeformed mass even when
+current exchange area changes. See `docs/temperature-dependent-textiles.md` and the executable
+`tests/fixtures/materials/synthetic-variable-thermal.json`. Analytic enthalpy/Fourier answers,
+spatial-refinement checks, mixed-material boundary reversal, moving-surface conservation and actual
+sewn-drape propagation are software acceptance, not measured garment validation or a warmth rating.
+Native tests and wasm32 compilation are not a claim of cross-platform execution parity.
+
+Record this completed software slice in `ftx-tmd`; keep the broader material/transport, real-specimen
+and fixed-pattern garment gates open. The immediate empirical handoff is:
+
+1. **Matched raw characterization (`ftx-tme`, P0, under `ftx-tma`).** Acquire specimen/lot identity,
+   ply count, actual HFM thickness, mass/area, direction, contact pressure, conditioning protocol,
+   replicate information, temperature range and source revision/retention terms together. Import and
+   replay the raw observations against independently transcribed tables. Derive areal mass only
+   from matching geometry and mass, not a different test's nominal density. Dried cotton-batting and
+   polyester-batting heat capacity remain absent until characterized; extend cold-weather validity
+   with measurements rather than extrapolating room-temperature curves.
+2. **Independent physical acceptance (`ftx-tmf`, P0).** Validate held-out coupon and sewn-layer
+   heat-flux and transient-temperature data with declared geometry/interfaces and conditioning.
+   Separate discretization error, sample variability and measurement uncertainty; retain replicate
+   counts/covariance when estimating uncertainty. Do not tune against the held-out acceptance case.
+   Compare measured prediction residuals and coverage, not merely a small numerical energy residual.
+
+In parallel, the highest-value mechanical dependency remains `ftx-tm2`: fully characterize linen,
+treated cowhide and performance-knit specimens, then execute the unchanged-pattern mechanical and
+thermal acceptance in `ftx-tm8`. Explicit body/layer overlap topology (`ftx-tmb`) and characterized
+compression/moisture laws (`ftx-tmc`) are still required before whole-wearer heat loss. Supplier
+distribution coverage/refresh (`ftx-tm6`) and material-qualified cutting/sewing constraints (`ftx-tm7`)
+remain separate product gates. Neither this temperature-law delivery nor its partial catalog authorizes
+robot execution, establishes fire/cut resistance, or supplies an outdoor comfort/safety temperature.
+
 ---
 
 ## Appendix A. Sources
