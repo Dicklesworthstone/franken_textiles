@@ -2,16 +2,21 @@
 
 The photo commands turn **a reference sheet and landmark clicks** into `fabric-measurements/1`
 records for the existing fusion and readiness commands. They run locally without uploading
-images. Supply an oriented PNG and a calibration-sheet sidecar for ChArUco detection, an
-oriented PNG for plain-paper detection, or explicit reference coordinates. None of these
-paths infers body landmarks, applies EXIF orientation, or establishes fit.
+images. Supply a photo (an oriented PNG or a phone's JPEG) and a calibration-sheet sidecar for
+ChArUco detection, a photo for plain-paper detection, or explicit reference coordinates. None of
+these paths infers body landmarks or establishes fit.
 
-## Detect plain paper directly from a PNG
+## Detect plain paper directly from a photo
 
-Show a whole, flat Letter or A4 sheet on a darker background. Apply the photograph's orientation
-before export, then click landmarks on that same image. Use an opaque 8-bit grayscale or RGB PNG,
-without EXIF metadata. JPEG/HEIC/WebP, transparency, palette/16-bit images and animation require
-conversion first; the command refuses them rather than silently changing measurement pixels.
+Show a whole, flat Letter or A4 sheet on a darker background, then click landmarks on the image as
+it is displayed. A JPEG is used as a phone writes it: its EXIF orientation is applied once by an
+exact pixel permutation (as Pillow's `ImageOps.exif_transpose`), so clicks are in the displayed
+frame, and `image_input` records the orientation, the stored size and the stored-to-displayed
+pixel map. The JPEG must be one complete 8-bit frame: damaged or cut data, incomplete progressive
+scans, multi-picture (MPF) files, trailing payloads and an XMP orientation beside EXIF are refused.
+A PNG must be already oriented, opaque 8-bit grayscale or RGB, without EXIF metadata. HEIC/WebP,
+transparency, palette/16-bit images and animation require conversion first; the command refuses
+them rather than silently changing measurement pixels.
 
 ```bash
 ftx measure photo-scale --image oriented.png --paper letter --out scale.json --json
@@ -27,13 +32,13 @@ coordinate documents specify their own paper. An image is limited to 16 million 
 is silently resized. Ordinary malformed inputs and rejected calibrations return exit 3.
 
 The report retains detected corners, straight-edge support, blur and perspective diagnostics.
-`image_input` records the image path, SHA-256, dimensions and stored-pixel orientation convention,
-not the image itself. Measurement uses the unrounded calibration and bootstraps detected edge
+`image_input` records the image path, SHA-256, dimensions, encoding and orientation, not the
+image itself. Measurement uses the unrounded calibration and bootstraps detected edge
 samples, rather than treating detected corners as manual clicks. Review warnings and the detected
 outline: a bright rectangle is not proof of nominal paper size, and scale applies only in the
 sheet's plane. A failed detector can emit a diagnostic scale report, never measurement records.
 
-## Detect a ChArUco calibration board directly from a PNG
+## Detect a ChArUco calibration board directly from a photo
 
 Generate the board and keep its JSON sidecar with the printed sheet. Print at **100% / Actual
 size**, disable fit-to-page, and verify both the 100 mm and 4 in bars with a ruler. A good
@@ -46,8 +51,8 @@ ftx measure calib-sheet --paper letter --out calibration --json
 ```
 
 This creates `calib-sheet-letter.png`, `.pdf` and `.json` in a new directory. Photograph
-**one** flat board, then export the oriented, opaque PNG under the same pixel restrictions
-as the plain-paper path. The sidecar describes the physical board, not the dimensions or
+**one** flat board and use the JPEG, or an oriented, opaque PNG, under the same restrictions as
+the plain-paper path. The sidecar describes the physical board, not the dimensions or
 position of that board in the photograph.
 
 By default a pure-Rust detector (`ftx_measure::photo::detect_charuco`, receipt backend

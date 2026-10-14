@@ -1,4 +1,4 @@
-//! Photo commands from explicit coordinates or an oriented PNG. EXIF conversion remains external.
+//! Photo commands from explicit coordinates, an oriented PNG or a JPEG (its EXIF orientation applied).
 
 #[path = "calibration_images.rs"]
 pub(super) mod calibration_images;
@@ -15,7 +15,7 @@ use ftx_measure::photo::{
     MAX_PHOTO_PIXELS, PhotoOptions, analyze_plain_sheet, analyze_reference,
     intrinsics::IntrinsicUncertainty, measure_photo,
 };
-use ftx_trace::raster::{Bgr, image::load_png_with_limit};
+use ftx_trace::raster::{Bgr, image::load_png_with_limit, jpeg::decode_photo};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -168,7 +168,7 @@ pub(super) fn load_image(path: &str, max_pixels: usize) -> Result<(Bgr, Value), 
     let budget = || {
         Refusal::new(
             RefusalCode::BudgetExceeded,
-            "photo PNG exceeds 64 MiB encoded input",
+            "photo exceeds 64 MiB encoded input",
         )
     };
     if metadata.len() > MAX_BYTES {
@@ -181,9 +181,20 @@ pub(super) fn load_image(path: &str, max_pixels: usize) -> Result<(Bgr, Value), 
     if bytes.len() as u64 > MAX_BYTES {
         return Err(budget());
     }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        // One complete frame, its EXIF orientation applied once without resampling (Pillow's
+        // ImageOps.exif_transpose), no repaired or smoothed pixels: clicks are in this frame.
+        let photo = decode_photo(&bytes, max_pixels)?;
+        let receipt = json!({"path":path, "sha256":sha256_hex(&bytes),
+            "image_size_px":[photo.image.w,photo.image.h],
+            "orientation":if photo.exif_orientation.is_some() {"exif_applied"} else {"stored_pixels_without_exif"},
+            "exif_orientation":photo.exif_orientation, "stored_size_px":photo.stored_size_px,
+            "stored_to_oriented_px":photo.stored_to_oriented_px, "encoding":"jpeg"});
+        return Ok((photo.image, receipt));
+    }
     if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err(bad_input(
-            "photo input must be an oriented PNG; convert JPEG, HEIC or WebP first",
+            "photo input must be a PNG or a JPEG; convert HEIC or WebP first",
         ));
     }
     let mut pos = 8usize;

@@ -279,7 +279,7 @@ pub(super) fn annotate(report: &mut Value) {
     if report["image_input"].get("charuco_detection").is_some() {
         report["coordinate_source"] = json!("detected_charuco");
         report["notes"][0] = json!(
-            "ChArUco IDs and subpixel corners detected locally; homography, inliers and uncertainty computed in Rust. Pixels are already oriented; no EXIF transform was applied."
+            "ChArUco IDs and subpixel corners detected locally; homography, inliers and uncertainty computed in Rust. Pixels are as displayed: a PNG as stored, a JPEG with its EXIF orientation applied."
         );
     }
 }

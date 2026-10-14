@@ -1,10 +1,13 @@
-//! Synthetic PNG pixels through detection, measurement and evidence-file protection.
+//! Synthetic PNG and JPEG pixels through detection, measurement and evidence-file protection.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ftx_core::receipt::sha256_hex;
-use ftx_trace::raster::{Gray, image::encode_png_gray};
+use ftx_trace::raster::{
+    Gray,
+    image::{encode_png_bgr, encode_png_gray},
+};
 use serde_json::{Value, json};
 
 fn setup() -> PathBuf {
@@ -253,4 +256,53 @@ fn exif_alpha_and_animation_are_not_silently_treated_as_photo_pixels() {
             .unwrap()
             .contains("opaque 8-bit")
     );
+}
+
+#[test]
+fn a_jpeg_is_measured_in_its_exif_orientation_as_its_pixels_are_as_png() {
+    // A synthetic Letter sheet at 2 px/mm, displayed 600 x 800 and stored 800 x 600 with EXIF
+    // Orientation 6, as a phone held upright writes it (Pillow 12.3, grayscale, quality 90).
+    let jpeg = include_bytes!("../../../tests/fixtures/photo/plain-letter-exif6.jpg");
+    let dir = setup();
+    std::fs::write(dir.join("photo.jpg"), jpeg).unwrap();
+    let photo = ftx_trace::raster::jpeg::decode_photo(jpeg, 16_000_000).unwrap();
+    std::fs::write(
+        dir.join("oriented.png"),
+        encode_png_bgr(&photo.image).unwrap(),
+    )
+    .unwrap();
+    let scale = |image: &str| {
+        let mut result = run(
+            &dir,
+            &[
+                "measure",
+                "photo-scale",
+                "--image",
+                image,
+                "--paper",
+                "letter",
+            ],
+            0,
+        )["result"]
+            .clone();
+        let receipt = result
+            .as_object_mut()
+            .unwrap()
+            .remove("image_input")
+            .unwrap();
+        (result, receipt)
+    };
+    let (from_jpeg, receipt) = scale("photo.jpg");
+    let (from_png, _) = scale("oriented.png");
+    assert_eq!(from_jpeg, from_png);
+    assert!((from_jpeg["mm_per_px"].as_f64().unwrap() - 0.5).abs() < 0.002);
+    assert_eq!(receipt["encoding"], "jpeg");
+    assert_eq!(receipt["exif_orientation"], 6);
+    assert_eq!(receipt["image_size_px"], json!([600, 800]));
+    assert_eq!(receipt["stored_size_px"], json!([800, 600]));
+    assert_eq!(receipt["sha256"], sha256_hex(jpeg));
+    // A cut file is refused, not decoded with libjpeg's repair.
+    std::fs::write(dir.join("cut.jpg"), &jpeg[..jpeg.len() / 2]).unwrap();
+    let out = run(&dir, &["measure", "photo-scale", "--image", "cut.jpg"], 3);
+    assert_eq!(out["refusal"]["code"], "invalid_document");
 }
