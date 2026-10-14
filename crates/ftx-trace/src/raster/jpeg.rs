@@ -17,8 +17,7 @@
 //! - a file that ends inside the data it needs is refused, as Pillow refuses it ("image file is truncated").
 //!
 //! Refused here, because they are not ported:
-//! - arithmetic, lossless and hierarchical files;
-//! - progressive files whose low coefficients are incomplete. libjpeg smooths those (`decompress_smooth_data`).
+//! - arithmetic, lossless and hierarchical files.
 //!
 //! Pillow feeds libjpeg 64 KiB blocks. After the last row of a single-scan file, markers past the block
 //! that held the scan's last byte are never read, so they cannot fail the file. A tables-only datastream
@@ -29,9 +28,7 @@
 //! - component counts other than 1, 3 and 4;
 //! - a TEM marker before the first scan;
 //! - a short JFIF or Adobe marker, an ICC_PROFILE chunk without its count byte, a Photoshop resource cut
-//!   off after its code.
-//!
-//! Two of its refusals are not ported: an EXIF resolution of length 1 and an MPF entry under 16 bytes.
+//!   off after its code, an EXIF `XResolution` of length 1 with `ResolutionUnit`, and an MPF entry under 16 bytes.
 //!
 //! Dequantized coefficients beyond 16 bits follow the C code; Pillow's Neon IDCT on arm64 wraps them at 16
 //! bits. Valid files never have them, but damaged files often do (one in ten randomly damaged files in
@@ -414,6 +411,12 @@ struct Decoder<'a> {
     multi_scan: bool,
     /// Pillow's `icclist`: the ICC_PROFILE APP2 payloads since the last SOF.
     icc: Vec<&'a [u8]>,
+    /// Whether JFIF APP0 already set `info["dpi"]` (`jfif_unit` 1 or 2).
+    jfif_dpi: bool,
+    /// Pillow's `info["exif"]`: concatenated `Exif\0\0` APP1 payloads before the first SOS.
+    exif: Vec<u8>,
+    /// Pillow's `info["mp"]`: the last `MPF\0` APP2 payload before the first SOS.
+    mpf: Option<&'a [u8]>,
 }
 
 /// Decodes a JPEG as Pillow 12.3 does for `Image.open(f).convert("RGB")`, returned as OpenCV's BGR.
@@ -458,6 +461,9 @@ fn decode_impl(bytes: &[u8], max_pixels: usize, strict: bool) -> Result<Bgr, Str
         max_v: 1,
         multi_scan: false,
         icc: Vec::new(),
+        jfif_dpi: false,
+        exif: Vec::new(),
+        mpf: None,
     };
     if !d.read_markers()? {
         return Err("JPEG: no image in the file".into());
@@ -484,16 +490,13 @@ fn decode_impl(bytes: &[u8], max_pixels: usize, strict: bool) -> Result<Bgr, Str
             Err(e) => return Err(e),
         }
     }
-    if d.progressive && d.smoothing_ok() {
-        return Err(
-            "JPEG: a progressive file with incomplete coefficients (libjpeg's block smoothing is not ported)"
-                .into(),
-        );
-    }
+    // Photo evidence takes no smoothed (estimated) coefficients either: a progressive file libjpeg would
+    // block-smooth has incomplete scans.
     if strict
         && (d.r.repaired
             || d.comps.iter().any(|c| c.quant.is_none())
-            || (d.progressive && d.comps.iter().any(|c| c.known.iter().any(|&b| b < 0))))
+            || (d.progressive
+                && (d.comps.iter().any(|c| c.known.iter().any(|&b| b < 0)) || d.smoothing_ok())))
     {
         return Err("JPEG photo requires complete scans without damaged-data recovery".into());
     }
@@ -660,6 +663,14 @@ impl<'a> Decoder<'a> {
         let a = self.r.byte()?;
         (self.ah, self.al) = (a >> 4, a & 15);
         self.next_restart = 0;
+        if self.in_headers {
+            if !self.jfif_dpi && !self.exif.is_empty() && exif_dpi_raises(&self.exif) {
+                return Err("JPEG: Pillow cannot read the EXIF marker".into());
+            }
+            if self.mpf.is_some_and(mpf_raises) {
+                return Err("JPEG: Pillow cannot read the MPF marker".into());
+            }
+        }
         Ok(())
     }
 
@@ -771,8 +782,7 @@ impl<'a> Decoder<'a> {
     }
 
     /// Pillow's `JpegImagePlugin.APP` on the `len` bytes at the reader: what it raises makes `Image.open`
-    /// fail, though libjpeg would decode the file. Its EXIF resolution and MPF parsing can raise too; they
-    /// are not ported.
+    /// fail, though libjpeg would decode the file.
     fn pillow_app(&mut self, m: u8, len: i64) -> Result<(), String> {
         let data: &'a [u8] = self.r.data;
         let at = self.r.pos;
@@ -782,13 +792,33 @@ impl<'a> Decoder<'a> {
             .ok_or(TRUNCATED)?;
         let unreadable = |what: &str| Err(format!("JPEG: Pillow cannot read the {what} marker"));
         match m {
-            0xE0 if s.starts_with(b"JFIF") && s.len() < 7 => unreadable("JFIF"),
+            0xE0 if s.starts_with(b"JFIF") => {
+                if s.len() < 7 {
+                    return unreadable("JFIF");
+                }
+                if s.len() >= 12 && matches!(s[7], 1 | 2) {
+                    self.jfif_dpi = true;
+                }
+                Ok(())
+            }
+            0xE1 if s.starts_with(b"Exif\0\0") => {
+                if self.exif.is_empty() {
+                    self.exif.extend_from_slice(s);
+                } else {
+                    self.exif.extend_from_slice(&s[6..]);
+                }
+                Ok(())
+            }
             0xEE if s.starts_with(b"Adobe") && s.len() < 7 => unreadable("Adobe"),
             0xED if s.starts_with(b"Photoshop 3.0\0") && photoshop_raises(s) => {
                 unreadable("Photoshop")
             }
             0xE2 if s.starts_with(b"ICC_PROFILE\0") => {
                 self.icc.push(s);
+                Ok(())
+            }
+            0xE2 if s.starts_with(b"MPF\0") => {
+                self.mpf = Some(&s[4..]);
                 Ok(())
             }
             _ => Ok(()),
@@ -811,13 +841,14 @@ impl<'a> Decoder<'a> {
         self.max_h = self.comps.iter().map(|c| c.h).max().unwrap_or(1);
         self.max_v = self.comps.iter().map(|c| c.v).max().unwrap_or(1);
         let (w, h, mh, mv) = (self.w, self.h, self.max_h, self.max_v);
+        let imcu_rows = h.div_ceil(mv * 8);
         for c in &mut self.comps {
             c.wib = (w * c.h).div_ceil(mh * 8);
             c.hib = (h * c.v).div_ceil(mv * 8);
             c.dw = (w * c.h).div_ceil(mh);
             c.dh = (h * c.v).div_ceil(mv);
             c.stride = c.wib.next_multiple_of(c.h);
-            c.coef = vec![[0; 64]; c.stride * c.hib.next_multiple_of(c.v)];
+            c.coef = vec![[0; 64]; c.stride * c.hib.next_multiple_of(c.v).max(imcu_rows * c.v)];
         }
         self.multi_scan = self.scan.len() < self.comps.len() || self.progressive;
         for c in &self.comps {
@@ -1101,9 +1132,12 @@ impl<'a> Decoder<'a> {
         useful
     }
 
-    /// IDCT, upsampling and colour conversion of the whole image.
+    /// IDCT (with jdcoefct.c `decompress_smooth_data` when `smoothing_ok`), upsampling and colour conversion
+    /// of the whole image.
     fn output(&self, space: Space) -> Bgr {
         let (w, h) = (self.w, self.h);
+        let smooth = self.progressive && self.smoothing_ok();
+        let total_imcu_rows = h.div_ceil(self.max_v * 8);
         let full: Vec<Vec<u8>> = self
             .comps
             .iter()
@@ -1111,10 +1145,41 @@ impl<'a> Decoder<'a> {
                 let pw = c.wib * 8;
                 let mut plane = vec![0u8; pw * c.hib * 8];
                 let q = c.quant.map_or([0; 64], |q| q.map(|v| v as i16));
-                for by in 0..c.hib {
-                    for bx in 0..c.wib {
-                        let at = by * 8 * pw + bx * 8;
-                        idct_islow(&c.coef[by * c.stride + bx], &q, &mut plane[at..], pw);
+                if smooth && c.known[1..10].iter().any(|&b| b != 0) && c.wib > 0 {
+                    for imcu_row in 0..total_imcu_rows {
+                        let block_rows = if imcu_row + 1 < total_imcu_rows {
+                            c.v
+                        } else {
+                            match c.hib % c.v {
+                                0 => c.v,
+                                r => r,
+                            }
+                        };
+                        let last_row = total_imcu_rows * block_rows - 1;
+                        for br in 0..block_rows {
+                            let by = imcu_row * c.v + br;
+                            if by >= c.hib {
+                                continue;
+                            }
+                            let r_idx = imcu_row * block_rows + br;
+                            let r_m1 = if r_idx > 0 { by - 1 } else { by };
+                            let r_m2 = if r_idx > 1 { by - 2 } else { r_m1 };
+                            let r_p1 = if r_idx < last_row { by + 1 } else { by };
+                            let r_p2 = if r_idx + 1 < last_row { by + 2 } else { r_p1 };
+                            let rows = [r_m2, r_m1, by, r_p1, r_p2];
+                            for bx in 0..c.wib {
+                                let ws = smooth_block(c, rows, bx);
+                                let at = by * 8 * pw + bx * 8;
+                                idct_islow(&ws, &q, &mut plane[at..], pw);
+                            }
+                        }
+                    }
+                } else {
+                    for by in 0..c.hib {
+                        for bx in 0..c.wib {
+                            let at = by * 8 * pw + bx * 8;
+                            idct_islow(&c.coef[by * c.stride + bx], &q, &mut plane[at..], pw);
+                        }
                     }
                 }
                 let up = upsampler(c, self.max_h, self.max_v).unwrap_or(Up::Full);
@@ -1155,6 +1220,282 @@ impl<'a> Decoder<'a> {
         }
         Bgr { w, h, data }
     }
+}
+
+/// jdcoefct.c `decompress_smooth_data` on one block at `(rows[2], bx)` using its 5×5 DC neighbourhood.
+fn smooth_block(c: &Comp, rows: [usize; 5], bx: usize) -> [i16; 64] {
+    let mut ws = c.coef[rows[2] * c.stride + bx];
+    let Some(q) = c.quant else { return ws };
+    let last_col = c.wib - 1;
+    let cols = [
+        bx.saturating_sub(2),
+        bx.saturating_sub(1),
+        bx,
+        (bx + 1).min(last_col),
+        (bx + 2).min(last_col),
+    ];
+    let dc = |ry: usize, cx: usize| i32::from(c.coef[rows[ry] * c.stride + cols[cx]][0]);
+    let (dc01, dc02, dc03, dc04, dc05) = (dc(0, 0), dc(0, 1), dc(0, 2), dc(0, 3), dc(0, 4));
+    let (dc06, dc07, dc08, dc09, dc10) = (dc(1, 0), dc(1, 1), dc(1, 2), dc(1, 3), dc(1, 4));
+    let (dc11, dc12, dc13, dc14, dc15) = (dc(2, 0), dc(2, 1), dc(2, 2), dc(2, 3), dc(2, 4));
+    let (dc16, dc17, dc18, dc19, dc20) = (dc(3, 0), dc(3, 1), dc(3, 2), dc(3, 3), dc(3, 4));
+    let (dc21, dc22, dc23, dc24, dc25) = (dc(4, 0), dc(4, 1), dc(4, 2), dc(4, 3), dc(4, 4));
+
+    let more = c.known[1..10].iter().all(|&b| b == -1);
+    let q00 = i64::from(q[0]);
+    let apply = |ws: &mut [i16; 64], pos: usize, al: i32, num: i32| {
+        if al != 0 && ws[pos] == 0 {
+            let prod = i64::from(num) * q00;
+            let div = i64::from(q[pos]) << 8;
+            let half = i64::from(q[pos]) << 7;
+            let clamp = |mut p: i32| {
+                if al > 0 && p >= (1 << al) {
+                    p = (1 << al) - 1;
+                }
+                p
+            };
+            ws[pos] = if prod >= 0 {
+                clamp(((prod + half) / div) as i32) as i16
+            } else {
+                (-clamp(((half - prod) / div) as i32)) as i16
+            };
+        }
+    };
+
+    // Q01 (pos 1, zig 1)
+    let num01 = if more {
+        3 * (dc10 + dc15 + dc20 - dc06 - dc11 - dc16)
+            + (dc04 + dc05 + dc24 + dc25 - dc01 - dc02 - dc21 - dc22)
+            + 13 * (dc07 + dc17 - dc09 - dc19)
+            + 38 * (dc12 - dc14)
+    } else {
+        50 * (dc12 - dc14) - 7 * (dc11 - dc15)
+    };
+    apply(&mut ws, 1, c.known[1], num01);
+
+    // Q10 (pos 8, zig 2)
+    let num10 = if more {
+        3 * (dc22 + dc23 + dc24 - dc02 - dc03 - dc04)
+            + (dc16 + dc21 + dc20 + dc25 - dc01 - dc06 - dc05 - dc10)
+            + 13 * (dc07 + dc09 - dc17 - dc19)
+            + 38 * (dc08 - dc18)
+    } else {
+        50 * (dc08 - dc18) - 7 * (dc03 - dc23)
+    };
+    apply(&mut ws, 8, c.known[2], num10);
+
+    // Q20 (pos 16, zig 3)
+    let num20 = if more {
+        (dc03 + dc23) + 7 * (dc08 + dc18) + 2 * (dc07 + dc09 + dc17 + dc19)
+            - 14 * dc13
+            - 5 * (dc12 + dc14)
+    } else {
+        13 * (dc08 + dc18) - 24 * dc13 - (dc03 + dc23)
+    };
+    apply(&mut ws, 16, c.known[3], num20);
+
+    // Q11 (pos 9, zig 4)
+    let diag = dc07 + dc19 - dc09 - dc17;
+    let num11 = if more {
+        9 * diag + (dc05 + dc21 - dc01 - dc25)
+    } else {
+        10 * diag + (dc04 + dc10 + dc16 + dc22) - (dc02 + dc06 + dc20 + dc24)
+    };
+    apply(&mut ws, 9, c.known[4], num11);
+
+    // Q02 (pos 2, zig 5)
+    let num02 = if more {
+        (dc11 + dc15) + 7 * (dc12 + dc14) + 2 * (dc07 + dc09 + dc17 + dc19)
+            - 14 * dc13
+            - 5 * (dc08 + dc18)
+    } else {
+        13 * (dc12 + dc14) - 24 * dc13 - (dc11 + dc15)
+    };
+    apply(&mut ws, 2, c.known[5], num02);
+
+    if more {
+        // Q03 (pos 3, zig 6)
+        apply(
+            &mut ws,
+            3,
+            c.known[6],
+            2 * (dc12 - dc14) + (dc07 + dc17 - dc09 - dc19),
+        );
+        // Q12 (pos 10, zig 7)
+        apply(
+            &mut ws,
+            10,
+            c.known[7],
+            3 * (dc18 - dc08) + (dc07 + dc09 - dc17 - dc19),
+        );
+        // Q21 (pos 17, zig 8)
+        apply(
+            &mut ws,
+            17,
+            c.known[8],
+            3 * (dc14 - dc12) + (dc07 + dc17 - dc09 - dc19),
+        );
+        // Q30 (pos 24, zig 9)
+        apply(
+            &mut ws,
+            24,
+            c.known[9],
+            2 * (dc08 - dc18) + (dc07 + dc09 - dc17 - dc19),
+        );
+        // DC (pos 0)
+        let sum256 = 152 * dc13
+            + 42 * (dc08 + dc12 + dc14 + dc18)
+            + 6 * (dc07 + dc09 + dc17 + dc19
+                - (dc02 + dc04 + dc06 + dc10 + dc16 + dc20 + dc22 + dc24))
+            - 8 * (dc03 + dc11 + dc15 + dc23)
+            - 2 * (dc01 + dc05 + dc21 + dc25);
+        let n = i64::from(sum256);
+        let div = q00 << 8;
+        ws[0] = if n * q00 >= 0 {
+            (((n + 128) * q00) / div) as i16
+        } else {
+            (-(((128 - n) * q00) / div)) as i16
+        };
+    }
+    ws
+}
+
+type TiffEntry<'a> = (u16, u16, usize, &'a [u8]);
+
+/// Parses a standard 32-bit TIFF IFD0 header and returns `(little_endian, entries)` where each entry is
+/// `(tag, typ, count, value_bytes)`, stopping quietly on truncated entries as Pillow's `ImageFileDirectory_v2.load`
+/// does.
+fn parse_tiff_ifd(data: &[u8]) -> Option<(bool, Vec<TiffEntry<'_>>)> {
+    let head = data.get(..8)?;
+    if !matches!(
+        &head[..4],
+        b"MM\x00*" | b"II*\x00" | b"MM*\x00" | b"II\x00*"
+    ) {
+        return None;
+    }
+    let le = head.starts_with(b"II");
+    let u16_at = |b: &[u8]| {
+        if le {
+            u16::from_le_bytes([b[0], b[1]])
+        } else {
+            u16::from_be_bytes([b[0], b[1]])
+        }
+    };
+    let u32_at = |b: &[u8]| {
+        if le {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize
+        } else {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize
+        }
+    };
+    let next = u32_at(&head[4..8]);
+    let count_bytes = data.get(next..next.checked_add(2)?)?;
+    let tag_count = usize::from(u16_at(count_bytes));
+    let mut tags: Vec<(u16, u16, usize, &[u8])> = Vec::new();
+    for i in 0..tag_count {
+        let off = next.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
+        let Some(ent) = data.get(off..off + 12) else {
+            break;
+        };
+        let tag = u16_at(&ent[0..2]);
+        let typ = u16_at(&ent[2..4]);
+        let count = u32_at(&ent[4..8]);
+        let unit = match typ {
+            1 | 2 | 6 | 7 => 1usize,
+            3 | 8 => 2,
+            4 | 9 | 11 | 13 => 4,
+            5 | 10 | 12 | 16 => 8,
+            _ => continue,
+        };
+        let Some(size) = count.checked_mul(unit) else {
+            continue;
+        };
+        if size == 0 {
+            continue;
+        }
+        let val = if size <= 4 {
+            &ent[8..8 + size]
+        } else {
+            let voff = u32_at(&ent[8..12]);
+            let Some(s) = voff.checked_add(size).and_then(|e| data.get(voff..e)) else {
+                continue;
+            };
+            s
+        };
+        if let Some(slot) = tags.iter_mut().find(|t| t.0 == tag) {
+            *slot = (tag, typ, count, val);
+        } else {
+            tags.push((tag, typ, count, val));
+        }
+    }
+    Some((le, tags))
+}
+
+/// Whether Pillow's `JpegImageFile._read_dpi_from_exif` raises an uncaught `IndexError`: `ResolutionUnit`
+/// (`0x0128`) is present and `XResolution` (`0x011A`) unpacks to a 1-byte `bytes` or a 0/1-char numeric `str`.
+fn exif_dpi_raises(mut exif: &[u8]) -> bool {
+    while let Some(rest) = exif.strip_prefix(b"Exif\0\0") {
+        exif = rest;
+    }
+    let Some((_, tags)) = parse_tiff_ifd(exif) else {
+        return false;
+    };
+    if !tags.iter().any(|t| t.0 == 0x0128) {
+        return false;
+    }
+    let Some(&(_, typ, _, val)) = tags.iter().find(|t| t.0 == 0x011A) else {
+        return false;
+    };
+    match typ {
+        1 | 7 => val.len() == 1,
+        2 => {
+            let s = val.strip_suffix(b"\0").unwrap_or(val);
+            s.is_empty() || (s.len() == 1 && s[0].is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
+/// Whether Pillow's `_getmp` raises an uncaught `struct.error` when unpacking `0xB002` (`MPEntry`) for
+/// `0xB001` (`NumberOfImages`) entries of 16 bytes each.
+fn mpf_raises(mp: &[u8]) -> bool {
+    let Some((le, tags)) = parse_tiff_ifd(mp) else {
+        return false;
+    };
+    let Some(&(_, qtyp, _, qval)) = tags.iter().find(|t| t.0 == 0xB001) else {
+        return false;
+    };
+    let Some(&(_, etyp, _, eval)) = tags.iter().find(|t| t.0 == 0xB002) else {
+        return false;
+    };
+    if !matches!(etyp, 1 | 7) {
+        return false;
+    }
+    let quant: i64 = match qtyp {
+        6 => i64::from(qval[0] as i8),
+        3 => i64::from(if le {
+            u16::from_le_bytes([qval[0], qval[1]])
+        } else {
+            u16::from_be_bytes([qval[0], qval[1]])
+        }),
+        8 => i64::from(if le {
+            i16::from_le_bytes([qval[0], qval[1]])
+        } else {
+            i16::from_be_bytes([qval[0], qval[1]])
+        }),
+        4 | 13 => i64::from(if le {
+            u32::from_le_bytes([qval[0], qval[1], qval[2], qval[3]])
+        } else {
+            u32::from_be_bytes([qval[0], qval[1], qval[2], qval[3]])
+        }),
+        9 => i64::from(if le {
+            i32::from_le_bytes([qval[0], qval[1], qval[2], qval[3]])
+        } else {
+            i32::from_be_bytes([qval[0], qval[1], qval[2], qval[3]])
+        }),
+        _ => return false,
+    };
+    quant > 0 && (eval.len() as i64) < quant.saturating_mul(16)
 }
 
 /// jdcolor.c's YCbCr → RGB (build_ycc_rgb_table: FIX(x) = round(x·2¹⁶), x = Cb or Cr − 128), range-limited.
@@ -1482,3 +1823,143 @@ const AC_CHR_VALS: [u8; 162] = [
     0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
     0xf9, 0xfa,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftx_core::receipt::sha256_hex;
+
+    fn from_hex(s: &str) -> Vec<u8> {
+        s.as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| {
+                let d = |b: u8| match b {
+                    b'0'..=b'9' => b - b'0',
+                    b'a'..=b'f' => b - b'a' + 10,
+                    b'A'..=b'F' => b - b'A' + 10,
+                    _ => 0,
+                };
+                (d(c[0]) << 4) | d(c[1])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn progressive_block_smoothing_matches_pillow_across_partial_scans() {
+        const SUB_0_HEX: &str = "ffd8ffe000104a46494600010100000100010000ffdb00430006040506050406060506070706080a100a0a09090a140e0f0c1017141818171416161a1d251f1a1b231c1616202c20232627292a29191f2d302d283025282928ffdb0043010707070a080a130a0a13281a161a2828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828ffc2001108001d002503011100021101031101ffc400190000020301000000000000000000000000050600030402ffc4001a010100030101010000000000000000000005020304060107ffda000c03010002100310000001718c64aa0faf9ba256dd4f592ddf8e61e4ce0180d1285b891f456c3d7ce723676a2d762b6285d8eb0078b6e0419b731bbc3fffc4001c1000020203010100000000000000000000000301210211130431ffda00080101000105025cd332193b217127083b6a19e821db9465b3431b4d75a997e4ccc73a68cfa98b451d723fffc4001c1100020301010101000000000000000000000102030411122132ffda0008010301013f01a6af28d32f28bec7d32f5b337e474f989b224aaf4ccb9f8417170bfe234af4caf3759565e16478cd5364df646589e1245f1fa7ffc4001f1100020202020301000000000000000000000201030411132105123114ffda0008010201013f0165d8a827435d107eb8388e3d1737a99393304def2221674644ec6c697917c791f0bdcd6e4aa95fa3c68fffc400161000030000000000000000000000000000203140ffda0008010100063f020507ffc4001b10010100020301000000000000000000000100113110214161ffda0008010100013f21020e22529c029f7bdc80c0c6a43a49ea577b4f71cd6ef73059208d17ffda000c03010002000300000010fb459c6f3481ff006fffc4001811010101010100000000000000000000000100112151ffda0008010301013f105d59a519260649dc3812767975b09a89844916d910db9908b88fb0ae470e2bffc400191100030101010000000000000000000000000121113151ffda0008010201013f10736b45e88944b46b7d1698b0331c763c9a25ad278584e225511bf475175186043623ffc4001f100100020104030100000000000000000001001121314161915171d1e1ffda0008010100013f101865a97f695c691b225dd71d477659e62e15dabe4c8d9a63300513dc20c5b610286dc5efe22020cc476db32f3b66177d6a5a66a378c36dfa869f0cb2e5c5c2d51fb2907820ac3a733fffd9";
+        const SOS_0: [(usize, &str); 9] = [
+            (
+                326,
+                "3d1bceb19efdf4e2958724a184c16a75c07f5492798620ae2dc58221dc52e90b",
+            ),
+            (
+                402,
+                "a899d0c2599e1129520b0fbb2664793f4481f0f124c0eee7032b3c793355ae38",
+            ),
+            (
+                496,
+                "0a51769295429a10be7bc4a0c82d6152731a16782c769231972323b69e2ac42e",
+            ),
+            (
+                572,
+                "196b41a86c1bee12f04146a1d9b43430101735a443d74c47260b9329062251ed",
+            ),
+            (
+                613,
+                "4917fafdc31472ce2dfd4007d1c09fd1b3f9c9fdbefd5c7582b395c8e9ee6688",
+            ),
+            (
+                651,
+                "f4aa96a594cbe7caec1c9f87d0d352cc052405e92006e41168670d255bd5a62c",
+            ),
+            (
+                700,
+                "8cd751ed7255a438b060374df0936b5f5635ed81fb957cb6c42882ad0572b462",
+            ),
+            (
+                768,
+                "7b4f4e9ded7873d035fd514aba46b659449f947f5e4e929b2e4de7ebfd41130c",
+            ),
+            (
+                845,
+                "109cba86b4b054271784d6feb74abe17193ae20104be4e033cd43288bc4bfe24",
+            ),
+        ];
+        let s0 = from_hex(SUB_0_HEX);
+        for (k, (cut, want)) in SOS_0.iter().enumerate() {
+            let mut part = s0[..*cut].to_vec();
+            part.extend_from_slice(&[0xFF, 0xD9]);
+            let bgr = decode(&part, 40_000_000).unwrap();
+            assert_eq!(sha256_hex(&bgr.data), *want, "sub=0 k={}", k + 1);
+        }
+
+        const SUB_2_HEX: &str = "ffd8ffe000104a46494600010100000100010000ffdb00430006040506050406060506070706080a100a0a09090a140e0f0c1017141818171416161a1d251f1a1b231c1616202c20232627292a29191f2d302d283025282928ffdb0043010707070a080a130a0a13281a161a2828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828ffc2001108001d002503012200021101031101ffc400190000030101010000000000000000000000000506040103ffc4001801000203000000000000000000000000000306000105ffda000c03010002100310000001b113633dedf05ce06b7c1a996d9109f6a06b2b0aa8aa6c49624e12bfffc4001c1000020203010100000000000000000000000301210211130431ffda00080101000105025cd332193b217127083b6a19e821db9465b3431b4d75a997e4ccc73a68cfa98b451d723fffc4001c1100020203010100000000000000000000020300010411120521ffda0008010301013f01c94da57a89499b7703e0d54f44e8af9985843aea1af453ffc4001d110001040301010000000000000000000000010203041115211451ffda0008010201013f014afdc93da4ae86e97e12e18c1d53d2ee9af89387ffc400161000030000000000000000000000000000203140ffda0008010100063f020507ffc4001b10010100020301000000000000000000000100113110214161ffda0008010100013f21020e22529c029f7bdc80c0c6a43a49ea577b4f71cd6ef73059208d17ffda000c03010002000300000010e7802438ff00ffc400191100020301000000000000000000000000000110115121ffda0008010301013f10a4b204779052086791708fffc400191100030101010000000000000000000000000111214151ffda0008010201013f1073a133e0d2f03d023461ce3fffc4001f100100020104030100000000000000000001001121314161915171d1e1ffda0008010100013f101865a97f695c691b225dd71d477659e62e15dabe4c8d9a63300513dc20c5b610286dc5efe22020cc476db32f3b66177d6a5a66a378c36dfa869f0cb2e5c5c2d51fb2907820ac3a733fffd9";
+        const SOS_2: [(usize, &str); 9] = [
+            (
+                302,
+                "bec8fa5ca7d8893a173e3196099c010adc65499e99809ef1ad5b76573c032635",
+            ),
+            (
+                378,
+                "4d3412cf99e6bab829e29da42b1db796170df32ddd39ece66bf7f5351b43159e",
+            ),
+            (
+                442,
+                "82bd54ba726220ebaf2d0fa54c60d0b3b7ce63001f350ed332fdcdc63263c2b0",
+            ),
+            (
+                496,
+                "55b09dea21ad11725ecc5374458edf8bf07998a21e3f00eb0c5d5079cb88fe30",
+            ),
+            (
+                537,
+                "4292eb50b99eab229c70b26da25e55a90c9d67a35c25b42c37382ad0a3b2980b",
+            ),
+            (
+                575,
+                "8d79c8c084953041a6aa4b04bb003b6e5919428a19044a807b27951332716100",
+            ),
+            (
+                622,
+                "3892df4f46377707ef3d3a91311c746779ef1ddaf2b42569bad6b7f894ddf52c",
+            ),
+            (
+                670,
+                "ec32c17f6b69915fc6a6b4ab82264ed1d1911d7b3e1a9fedb330a27c66ac6f0a",
+            ),
+            (
+                725,
+                "4433ae6f068944d3044717335634bd79d31f9a00bb5012f1411af3fcc289b23f",
+            ),
+        ];
+        let s2 = from_hex(SUB_2_HEX);
+        for (k, (cut, want)) in SOS_2.iter().enumerate() {
+            let mut part = s2[..*cut].to_vec();
+            part.extend_from_slice(&[0xFF, 0xD9]);
+            let bgr = decode(&part, 40_000_000).unwrap();
+            assert_eq!(sha256_hex(&bgr.data), *want, "sub=2 k={}", k + 1);
+        }
+
+        // Refuses EXIF XResolution of length 1 (BYTE) with ResolutionUnit when JFIF has no DPI unit (unit=0)
+        let exif_bad = b"Exif\0\0II*\x00\x08\x00\x00\x00\x02\x00\x1a\x01\x01\x00\x01\x00\x00\x00\x48\x00\x00\x00\x28\x01\x03\x00\x01\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00";
+        let mut with_exif_bad = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, (exif_bad.len() + 2) as u8];
+        with_exif_bad.extend_from_slice(exif_bad);
+        with_exif_bad.extend_from_slice(&s0[2..]);
+        assert!(decode(&with_exif_bad, 40_000_000).is_err());
+
+        // Refuses MPF with MPEntry under 16 bytes, accepts 16-byte MPEntry
+        let mpf_bad = b"MPF\0II*\x00\x08\x00\x00\x00\x02\x00\x01\xb0\x04\x00\x01\x00\x00\x00\x01\x00\x00\x00\x02\xb0\x07\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let mut with_mpf_bad = vec![0xFF, 0xD8, 0xFF, 0xE2, 0x00, (mpf_bad.len() + 2) as u8];
+        with_mpf_bad.extend_from_slice(mpf_bad);
+        with_mpf_bad.extend_from_slice(&s0[2..]);
+        assert!(decode(&with_mpf_bad, 40_000_000).is_err());
+
+        let mpf_ok = b"MPF\0II*\x00\x08\x00\x00\x00\x02\x00\x01\xb0\x04\x00\x01\x00\x00\x00\x01\x00\x00\x00\x02\xb0\x07\x00\x10\x00\x00\x00\x26\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let mut with_mpf_ok = vec![0xFF, 0xD8, 0xFF, 0xE2, 0x00, (mpf_ok.len() + 2) as u8];
+        with_mpf_ok.extend_from_slice(mpf_ok);
+        with_mpf_ok.extend_from_slice(&s0[2..]);
+        assert!(decode(&with_mpf_ok, 40_000_000).is_ok());
+    }
+}

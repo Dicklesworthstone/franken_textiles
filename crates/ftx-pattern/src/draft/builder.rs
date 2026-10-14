@@ -213,17 +213,24 @@ pub fn merge_style(defaults: &Value, style: Option<&Value>) -> Result<Map<String
     Ok(out)
 }
 
-/// A style number.
+/// A style number (including a boolean, which Python treats as `1.0` or `0.0` in arithmetic while keeping
+/// `true` / `false` in `meta.style`).
 ///
 /// # Errors
-/// `invalid_document` when it is not a number.
+/// `invalid_document` when it is not a number or boolean.
 pub fn sf(s: &Map<String, Value>, key: &str) -> Result<f64, Refusal> {
-    s.get(key).and_then(Value::as_f64).ok_or_else(|| {
-        Refusal::new(
-            RefusalCode::InvalidDocument,
-            format!("style {key} must be a number"),
-        )
-    })
+    let v = s.get(key);
+    v.and_then(Value::as_f64)
+        .or_else(|| {
+            v.and_then(Value::as_bool)
+                .map(|b| if b { 1.0 } else { 0.0 })
+        })
+        .ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::InvalidDocument,
+                format!("style {key} must be a number"),
+            )
+        })
 }
 
 /// `_mirror_seams(seams)`: each seam as `<id>_R`, and its wearer's-left copy `<id>_L` when it touches `.R`.
@@ -262,4 +269,26 @@ pub fn size_label(m: Meas) -> String {
         |_| "custom".into(),
         |s| format!("{} mm stature", py::fixed(s, 0)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::draft::draft;
+
+    #[test]
+    fn bool_style_value_acts_as_one_or_zero_in_arithmetic_and_stays_bool_in_meta() {
+        let meas = json!({"head": 500.0});
+        let (pat_true, _) = draft("fez", &meas, Some(&json!({"head_ease": true}))).unwrap();
+        let (pat_one, _) = draft("fez", &meas, Some(&json!({"head_ease": 1.0}))).unwrap();
+        assert_eq!(pat_true["meta"]["style"]["head_ease"], json!(true));
+        assert_eq!(pat_true["meta"]["solved"], pat_one["meta"]["solved"]);
+        assert_eq!(pat_true["pieces"], pat_one["pieces"]);
+
+        let (pat_false, _) = draft("fez", &meas, Some(&json!({"head_ease": false}))).unwrap();
+        let (pat_zero, _) = draft("fez", &meas, Some(&json!({"head_ease": 0.0}))).unwrap();
+        assert_eq!(pat_false["meta"]["style"]["head_ease"], json!(false));
+        assert_eq!(pat_false["meta"]["solved"], pat_zero["meta"]["solved"]);
+        assert_eq!(pat_false["pieces"], pat_zero["pieces"]);
+    }
 }
