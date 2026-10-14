@@ -43,8 +43,8 @@ pub(super) fn load(args: &Args) -> Result<Option<Override>, Refusal> {
     let Some(path) = args.options.get("fabric") else {
         return Ok(None);
     };
-    let file = File::open(path)
-        .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
+    let file =
+        File::open(path).map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
     let metadata = file
         .metadata()
         .map_err(|e| Refusal::new(RefusalCode::Io, format!("{path}: {e}")))?;
@@ -68,8 +68,17 @@ pub(super) fn load(args: &Args) -> Result<Option<Override>, Refusal> {
         .ok_or_else(|| bad_input("--fabric needs a fabric object, not a pattern or catalog"))?;
     for key in object.keys() {
         if ![
-            "material", "material_id", "areal_g_m2", "tensile_N_m", "bending_Nm",
-            "id", "name", "kind", "width_mm", "sim_note", "notes",
+            "material",
+            "material_id",
+            "areal_g_m2",
+            "tensile_N_m",
+            "bending_Nm",
+            "id",
+            "name",
+            "kind",
+            "width_mm",
+            "sim_note",
+            "notes",
         ]
         .contains(&key.as_str())
         {
@@ -95,7 +104,9 @@ pub(super) fn load(args: &Args) -> Result<Option<Override>, Refusal> {
         record.mechanics()?;
         let frozen = serde_json::to_value(record.frozen_selection())
             .map_err(|e| bad_input(e.to_string()))?;
-        let object = fabric.as_object_mut().expect("fabric was checked as object");
+        let object = fabric
+            .as_object_mut()
+            .expect("fabric was checked as object");
         object.remove("material_id");
         object
             .entry("name")
