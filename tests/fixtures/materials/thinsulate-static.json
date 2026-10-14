@@ -1,0 +1,7 @@
+{
+  "layers": [{"id": "3m_thinsulate_c100_2020"}],
+  "area_m2": 1.2,
+  "inside_c": 30.0,
+  "outside_c": 0.0,
+  "boundary_resistance_m2_k_w": 0.1
+}

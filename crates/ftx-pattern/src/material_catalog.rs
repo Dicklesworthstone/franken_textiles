@@ -91,6 +91,7 @@ fn factor(unit: &str, expected: &str) -> Option<f64> {
         ("g/m2", "kg/m2") => 0.001,
         ("oz/yd2", "kg/m2") => 0.028_349_523_125 / (0.9144 * 0.9144),
         ("mm", "m") => 0.001,
+        ("cm", "m") => 0.01,
         ("um", "m") => 1e-6,
         ("in", "m") => 0.0254,
         ("g/cm3", "kg/m3") => 1000.0,
@@ -143,12 +144,16 @@ pub fn normalize(material: &Material) -> Result<Material, Refusal> {
 }
 
 impl Catalog {
-    /// The offline factual seed, expressed in canonical units. Missing measurements remain absent.
+    /// The offline factual seed, preserving authored units. Missing measurements remain absent.
     ///
     /// # Errors
     /// A malformed bundled catalog is a refusal, never a panic or silent default.
     pub fn builtin() -> Result<Self, Refusal> {
-        Self::from_json(include_str!("material_catalog/catalog.json"))
+        let mut catalog = Self::from_json(include_str!("material_catalog/catalog.json"))?;
+        let insulation = Self::from_json(include_str!("material_catalog/insulation.json"))?;
+        catalog.materials.extend(insulation.materials);
+        catalog.validate()?;
+        Ok(catalog)
     }
 
     /// Resolve an exact ID or frozen record, then source-preserving overrides, without mutating data.
