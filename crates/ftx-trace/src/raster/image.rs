@@ -86,7 +86,9 @@ pub fn encode_png_gray(img: &Gray) -> Vec<u8> {
 }
 
 /// Encode a validated BGR raster as an RGB PNG, without reordering pixels or adding a clock.
-/// The 16-million-pixel limit bounds the uncompressed scanlines and intermediate allocations.
+/// The 16-million-pixel limit bounds the uncompressed scanlines and intermediate allocations. zlib level 1,
+/// `cv2.imwrite`'s default: on a photographed sheet's overlay level 6 took a third of the trace for files
+/// 14 % smaller.
 pub fn encode_png_bgr(img: &Bgr) -> Result<Vec<u8>, String> {
     let pixels = img.w.checked_mul(img.h).ok_or("PNG dimensions overflow")?;
     if img.w == 0
@@ -117,7 +119,7 @@ pub fn encode_png_bgr(img: &Bgr) -> Result<Vec<u8>, String> {
     chunk(b"IHDR", &ihdr);
     chunk(
         b"IDAT",
-        &miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6),
+        &miniz_oxide::deflate::compress_to_vec_zlib(&raw, 1),
     );
     chunk(b"IEND", &[]);
     Ok(out)
