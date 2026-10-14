@@ -23,6 +23,44 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 .collect::<Vec<_>>().join("\n");
             Ok((json!({"schema":"ftx-material-list/1","count":entries.len(),"materials":entries}), 0, text))
         }
+        "compare" => {
+            if args.positional.len() != 4 {
+                return Err(bad_input("usage: ftx materials compare FIRST_ID SECOND_ID"));
+            }
+            let permit = args.options.contains_key("allow-estimates");
+            let select = |id: &str| catalog.resolve(&Selection {
+                id: id.into(), allow_estimates: permit, ..Selection::default()
+            });
+            let first = select(&args.positional[2])?;
+            let second = select(&args.positional[3])?;
+            let a = first.material();
+            let b = second.material();
+            let mut properties = serde_json::Map::new();
+            for (key, x) in &a.properties {
+                if let Some(y) = b.properties.get(key) {
+                    if x.unit == y.unit && (permit || (
+                        x.evidence != ftx_pattern::materials::Evidence::Estimate &&
+                        y.evidence != ftx_pattern::materials::Evidence::Estimate)) {
+                        properties.insert(key.clone(), json!({
+                            "unit":x.unit,"first":x.value,"second":y.value,
+                            "ratio_second_to_first": if x.value != 0.0 {Some(y.value / x.value)} else {None},
+                            "first_evidence":x.evidence,"second_evidence":y.evidence,
+                            "first_source":a.sources[&x.source],"second_source":b.sources[&y.source]
+                        }));
+                    }
+                }
+            }
+            let output = json!({"schema":"ftx-material-comparison/1",
+                "first":{"id":a.id,"sha256":first.sha256(),"mechanics_ready":first.mechanics().is_ok(),
+                    "missing_mechanics":a.missing_mechanics()},
+                "second":{"id":b.id,"sha256":second.sha256(),"mechanics_ready":second.mechanics().is_ok(),
+                    "missing_mechanics":b.missing_mechanics()},
+                "comparable_properties":properties,
+                "note":"Observed properties; not an inferred fit, safety or thermal-comfort rating."});
+            let text = serde_json::to_string_pretty(&output)
+                .map_err(|e| Refusal::new(RefusalCode::InvalidDocument,e.to_string()))?;
+            Ok((output,0,text))
+        }
         "show" | "freeze" => {
             let id = args.positional.get(2).ok_or_else(|| bad_input("usage: ftx materials show|freeze ID"))?;
             if args.positional.len() != 3 { return Err(bad_input("exactly one material ID is required")); }
@@ -45,7 +83,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
             Ok((result, 0, text))
         }
-        _ => Err(bad_input("usage: ftx materials [list|show ID|freeze ID]")),
+        _ => Err(bad_input("usage: ftx materials [list|show ID|freeze ID|compare ID ID]")),
     }
 }
 
