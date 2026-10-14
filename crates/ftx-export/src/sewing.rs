@@ -161,6 +161,11 @@ impl SewPlan {
         if pattern.raw()["schema"] != "fabric-pattern/1" || pattern.raw()["units"] != "mm" {
             return Err(bad("sewing requires fabric-pattern/1 in millimetres"));
         }
+        if pattern.raw()["fabric"].get("layers").is_some() {
+            return Err(bad(
+                "implicit fabric layers need explicit sewing sides; ply counts cannot invent a layer stack",
+            ));
+        }
         let machine = &options.machine;
         if machine.id.trim().is_empty()
             || !range(machine.stitch_mm)

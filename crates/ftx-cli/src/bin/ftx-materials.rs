@@ -50,6 +50,7 @@ ftx-materials thermal-motion MOTION.json
 ftx-materials cut-plan PATTERN.json OPTIONS.json
 ftx-materials cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json
 ftx-materials cut-svg PATTERN.json OPTIONS.json ROLL-INDEX NEW.svg
+ftx-materials sew-plan PATTERN.json OPTIONS.json
 
 JSON output. `show` includes a portable selection and missing-property coverage.
 `resolve` invokes the actual drape resolver without meshing; missing mechanics refuse.
@@ -65,6 +66,7 @@ JSON output. `show` includes a portable selection and missing-property coverage.
 `cut-plan` derives material-specific roll requirements from real cut instances and sourced width.
 `cut-price` prices gross marker stock, including layout waste; missing offers remain unknown.
 `cut-svg` writes a new source-locked planning preview, not device execution code.
+`sew-plan` checks material thickness, allowances, local feed and declared sewing order; never authorizes hardware.
 Fitted coefficients are estimates: --allow-estimates explicitly admits them to simulation.";
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -203,6 +205,12 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             relaxation_calibration::run(path, true)
         }
         ["cut-plan", pattern, options] => cutting::plan(pattern, options),
+        ["sew-plan", pattern, options] => {
+            let pattern = Pattern::new(read::<Value>(pattern)?);
+            let options = read::<ftx_export::sewing::SewOptions>(options)?;
+            serde_json::to_value(ftx_export::sewing::SewPlan::build(&pattern, &options)?)
+                .map_err(|e| invalid(e.to_string()))
+        }
         ["cut-price", pattern, options, quotes, market] => {
             cutting::price(pattern, options, quotes, market)
         }

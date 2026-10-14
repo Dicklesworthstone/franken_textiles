@@ -193,6 +193,14 @@ fn missing_estimated_loose_fill_and_mismatched_notch_inputs_refuse() {
     p["fabric"]["material"]["record"]["form"] = json!("fill");
     assert!(plan(p, options()).is_err());
     let mut p = base.clone();
+    p["fabric"]["layers"] = json!([{"role":"fill"}]);
+    assert!(
+        plan(p, options())
+            .unwrap_err()
+            .message
+            .contains("implicit fabric layers")
+    );
+    let mut p = base.clone();
     p["pieces"][0]["notches"] = json!([{"edge":"right","s":0.5}]);
     assert!(plan(p, options()).unwrap_err().message.contains("notches"));
     let mut p = base;
