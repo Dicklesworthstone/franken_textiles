@@ -20,6 +20,7 @@
 mod body_source;
 mod draft;
 mod export;
+mod fabric;
 mod fold;
 mod measure;
 mod materials;
@@ -50,13 +51,13 @@ use serde_json::{Value, json};
 const VIEWER_TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template.html");
 
 const USAGE: &str = "usage:
-  ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]
-  ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
+  ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--fabric F.json] [--json]
+  ftx draft PROGRAM --measurements M --ws WS [--style S.json] [--fabric F.json] [--update-measurements] [--as-of DATE] [--no-priors] [--json]
   ftx validate PATTERN --measurements M [--fit F] [--json]
-  ftx round WS [--pattern P] [--measurements M] [--fit F] [--export]
+  ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
             [--sim|--stills] [--body-fit REPORT] [--arm-deg DEG] [--res WIDTHxHEIGHT]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
-  ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N]
+  ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]
@@ -686,6 +687,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "arm-deg",
             "body-fit",
             "two-start-sew",
+            "fabric",
             "spread-vertex-mm",
             "spread-hem-mm",
             "spread-clearance-mm",
@@ -699,7 +701,13 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .positional
         .get(1)
         .ok_or_else(|| bad_input("ftx drape needs a pattern file"))?;
-    let (pat, _) = read_json(pattern_path)?;
+    let (mut pat, _) = read_json(pattern_path)?;
+    let fabric_override = fabric::load(args)?;
+    if let Some(selected) = &fabric_override {
+        selected.apply(&mut pat)?;
+    }
+    let material_probe = Pattern::new(pat.clone());
+    ftx_drape::material::resolve(&material_probe, &opts)?;
     let meas_path = required(args, "measurements")?;
     let (meas, meas_bytes) = read_json(meas_path)?;
     let out = PathBuf::from(required(args, "out")?);
@@ -738,6 +746,9 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         None => drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?,
     };
     let mut report = run.report.clone();
+    if let Some(selected) = &fabric_override {
+        report["fabric_override"] = selected.receipt().clone();
+    }
     if let Some(o) = report.as_object_mut() {
         o.insert("pattern".into(), json!(pattern_path));
         o.insert("measurements_sha256".into(), json!(sha256_hex(&meas_bytes)));
