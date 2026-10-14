@@ -1,13 +1,14 @@
 //! JPEG decoding as the reference's `load_image` sees it. Pillow 12.3 opens a JPEG with its bundled
 //! libjpeg-turbo 3.1.4.1 at the library's defaults (accurate integer IDCT, fancy upsampling, block smoothing
-//! allowed) and asks for `L` or `RGB`. This is a port of the path that takes:
+//! allowed) and asks for `L`, `RGB` or (four components) `CMYK`, which it unpacks inverted ("CMYK;I", Adobe's
+//! convention) and converts with its own `cmyk2rgb`. This is a port of the path that takes:
 //! - the marker reader, `jdmarker.c`;
 //! - sequential and progressive Huffman decoding into a full coefficient buffer (`jdhuff.c`, `jdphuff.c`,
 //!   `jdcoefct.c`);
 //! - the islow IDCT and its wrapping range limit (`jidctint.c`, `jdmaster.c`);
 //! - the upsamplers, with edge-replicated context rows (`jdsample.c`, `jdmainct.c`);
 //! - the YCbCr→RGB tables (`jdcolor.c`). They give the same values as the Arm Neon code Pillow runs on
-//!   arm64 for every Cb and Cr.
+//!   arm64 for every Cb and Cr. YCCK goes to CMYK through them (`ycck_cmyk_convert`).
 //!
 //! Damaged data is handled the way libjpeg handles it:
 //! - zero bits are supplied after a premature marker, and the rest of the segment is left zero;
@@ -17,7 +18,6 @@
 //!
 //! Refused here, because they are not ported:
 //! - arithmetic, lossless and hierarchical files;
-//! - CMYK and YCCK (Pillow's mode `CMYK`);
 //! - progressive files whose low coefficients are incomplete. libjpeg smooths those (`decompress_smooth_data`).
 //!
 //! Pillow feeds libjpeg 64 KiB blocks. After the last row of a single-scan file, markers past the block
@@ -364,6 +364,8 @@ enum Space {
     Gray,
     Ycc,
     Rgb,
+    Cmyk,
+    Ycck,
 }
 
 /// What a scan's MCUs decode (jdhuff.c, jdphuff.c).
@@ -563,12 +565,8 @@ impl<'a> Decoder<'a> {
         if len - 8 != 3 * n as i64 {
             return Err("JPEG: bogus SOF marker length".into());
         }
-        match n {
-            1 | 3 => {}
-            4 => {
-                return Err("JPEG: CMYK images are not decoded here: convert to RGB".into());
-            }
-            _ => return Err(format!("JPEG: cannot handle {n}-layer images")),
+        if !matches!(n, 1 | 3 | 4) {
+            return Err(format!("JPEG: cannot handle {n}-layer images"));
         }
         // JpegImagePlugin.SOF sorts the ICC_PROFILE chunks and reads the first one's chunk count
         self.icc.sort_unstable();
@@ -801,6 +799,12 @@ impl<'a> Decoder<'a> {
         }
         let space = if self.comps.len() == 1 {
             Space::Gray
+        } else if self.comps.len() == 4 {
+            // Adobe transform 0 is CMYK, anything else is taken for YCCK; no Adobe marker, plain CMYK
+            match self.adobe {
+                Some(0) | None => Space::Cmyk,
+                Some(_) => Space::Ycck,
+            }
         } else if self.jfif {
             Space::Ycc
         } else if let Some(t) = self.adobe {
@@ -1076,21 +1080,44 @@ impl<'a> Decoder<'a> {
             Space::Gray => pixels.for_each(|(i, px)| *px = [full[0][i]; 3]),
             Space::Rgb => pixels.for_each(|(i, px)| *px = [full[2][i], full[1][i], full[0][i]]),
             Space::Ycc => {
-                // jdcolor.c build_ycc_rgb_table: FIX(x) = round(x·2¹⁶), x = Cb or Cr − 128
-                let fix = |x: i64, k: i64| (k * x + (1 << 15)) >> 16;
-                let clamp = |v: i64| v.clamp(0, 255) as u8;
                 for (i, px) in pixels {
-                    let y = i64::from(full[0][i]);
-                    let (cb, cr) = (i64::from(full[1][i]) - 128, i64::from(full[2][i]) - 128);
-                    let r = y + fix(cr, 91_881);
-                    let g = y + ((-22_554 * cb + (1 << 15) - 46_802 * cr) >> 16);
-                    let b = y + fix(cb, 116_130);
-                    *px = [clamp(b), clamp(g), clamp(r)];
+                    let [r, g, b] = ycc_rgb(full[0][i], full[1][i], full[2][i]);
+                    *px = [b, g, r];
+                }
+            }
+            Space::Cmyk | Space::Ycck => {
+                // libjpeg's CMYK output (jdcolor.c: copied, or ycck_cmyk_convert's inverted RGB with K as it
+                // is), Pillow's "CMYK;I" unpacker (every byte inverted) and Convert.c cmyk2rgb
+                let muldiv255 = |a: i64, b: i64| {
+                    let t = a * b + 128;
+                    ((t >> 8) + t) >> 8
+                };
+                for (i, px) in pixels {
+                    let cmy = if space == Space::Ycck {
+                        ycc_rgb(full[0][i], full[1][i], full[2][i]).map(|v| 255 - v)
+                    } else {
+                        [full[0][i], full[1][i], full[2][i]]
+                    };
+                    // inverted: c' = 255 − c and nk = 255 − k' = k
+                    let nk = i64::from(full[3][i]);
+                    let rgb =
+                        cmy.map(|v| (nk - muldiv255(255 - i64::from(v), nk)).clamp(0, 255) as u8);
+                    *px = [rgb[2], rgb[1], rgb[0]];
                 }
             }
         }
         Bgr { w, h, data }
     }
+}
+
+/// jdcolor.c's YCbCr → RGB (build_ycc_rgb_table: FIX(x) = round(x·2¹⁶), x = Cb or Cr − 128), range-limited.
+fn ycc_rgb(y: u8, cb: u8, cr: u8) -> [u8; 3] {
+    let fix = |x: i64, k: i64| (k * x + (1 << 15)) >> 16;
+    let (y, cb, cr) = (i64::from(y), i64::from(cb) - 128, i64::from(cr) - 128);
+    let r = y + fix(cr, 91_881);
+    let g = y + ((-22_554 * cb + (1 << 15) - 46_802 * cr) >> 16);
+    let b = y + fix(cb, 116_130);
+    [r, g, b].map(|v| v.clamp(0, 255) as u8)
 }
 
 /// Whether Pillow's walk over a Photoshop APP13 payload `s` raises the IndexError it does not catch: a
