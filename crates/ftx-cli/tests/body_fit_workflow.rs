@@ -902,6 +902,43 @@ fn silhouette_fits_export_without_refitting_and_keep_held_out_failures_closed() 
         saved["silhouette_input"]["masks"][0]["decoded_mask_sha256"],
         sha256_hex(&masks[0].data)
     );
+    for (artifact, frame) in saved["mesh_review"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(saved["input"]["frames"].as_array().unwrap())
+    {
+        let folder = dir.join("silhouette-review");
+        let coordinates: Value = serde_json::from_slice(
+            &std::fs::read(folder.join(artifact["reprojections"]["file"].as_str().unwrap()))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            coordinates["silhouette"]["evidence"],
+            frame["silhouette"]["evidence"]
+        );
+        let lines = coordinates["silhouette"]["lines"].as_array().unwrap();
+        assert_eq!(
+            lines.len(),
+            frame["silhouette"]["lines"].as_array().unwrap().len()
+        );
+        for (line, observation) in lines
+            .iter()
+            .zip(frame["silhouette"]["lines"].as_array().unwrap())
+        {
+            assert_eq!(line["observation"], *observation);
+            assert_eq!(line["comparison"]["partition"], observation["partition"]);
+            assert_eq!(line["comparison"]["passed"], true);
+            assert!(line["comparison"]["boundary_error_px"].as_f64().unwrap() <= 3.);
+        }
+        let svg = std::fs::read_to_string(
+            folder.join(artifact["reprojection_svg"]["file"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(svg.matches("data-silhouette=").count(), lines.len());
+        assert!(svg.contains("data-silhouette=\"held_out\""));
+    }
     let row = &mut masks[0].data[480 * 1280..481 * 1280];
     let last = row.iter().rposition(|&v| v == 255).unwrap();
     row[last + 1..=last + 10].fill(255);

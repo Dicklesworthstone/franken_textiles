@@ -6,6 +6,7 @@ use ftx_body::{PosedBody, RestBody};
 use ftx_core::{Refusal, RefusalCode, Vec3, receipt::sha256_hex};
 use ftx_export::text::xml_escape;
 use ftx_measure::body_fit::{BodyFitReport, FitFrame};
+use ftx_measure::silhouette::{self, Axis, SurfaceMesh};
 use serde_json::{Value, json};
 
 use super::{Adapter, ResolvedTarget};
@@ -135,6 +136,70 @@ fn label(s: &str) -> String {
     )
 }
 
+fn contours(mesh: &SurfaceMesh, frame: &FitFrame) -> Result<(String, Value), Refusal> {
+    let Some(silhouette) = &frame.silhouette else {
+        return Ok((String::new(), Value::Null));
+    };
+    // Reuse the exact coverage/gating kernel, not a raster or hull approximation. Every supplied
+    // slice is rechecked, including held-out evidence, on the full exported posed mesh.
+    let comparisons =
+        silhouette::compare(mesh, &frame.camera, frame.image_size_px, silhouette, None)?;
+    if comparisons.iter().any(|line| !line.passed) {
+        return Err(bad_input(
+            "full mesh silhouette disagrees with an accepted fit/held-out scanline gate",
+        ));
+    }
+    let mut svg = String::new();
+    let mut lines = Vec::new();
+    for comparison in comparisons {
+        // Match by geometric identity; do not assume source evidence was already sorted.
+        let observation = silhouette
+            .lines
+            .iter()
+            .find(|line| line.axis == comparison.axis && line.at_px == comparison.at_px)
+            .ok_or_else(|| bad_input("missing source silhouette scanline"))?;
+        let partition = match observation.partition {
+            ftx_measure::triangulate::Partition::Fit => "fit",
+            ftx_measure::triangulate::Partition::HeldOut => "held_out",
+        };
+        let axis = match observation.axis {
+            Axis::Horizontal => "horizontal",
+            Axis::Vertical => "vertical",
+        };
+        write!(svg, "<g data-silhouette=\"{partition}\"><title>silhouette {axis} @ {} px: {partition}, boundary error {} px</title>",
+            observation.at_px, comparison.boundary_error_px.unwrap()).unwrap();
+        for (runs, style) in [
+            (
+                &observation.intervals_px,
+                "stroke=\"#b45309\" stroke-width=\"6\" stroke-opacity=\"0.45\"",
+            ),
+            (
+                &comparison.predicted_intervals_px,
+                "stroke=\"#0369a1\" stroke-width=\"2\" stroke-dasharray=\"6 3\"",
+            ),
+        ] {
+            for &[lo, hi] in runs {
+                let [x1, y1, x2, y2] = match observation.axis {
+                    Axis::Horizontal => [lo, observation.at_px, hi, observation.at_px],
+                    Axis::Vertical => [observation.at_px, lo, observation.at_px, hi],
+                };
+                write!(
+                    svg,
+                    "<line x1=\"{x1}\" y1=\"{y1}\" x2=\"{x2}\" y2=\"{y2}\" {style}/>"
+                )
+                .unwrap();
+            }
+        }
+        svg.push_str("</g>");
+        lines.push(json!({"observation":observation,"comparison":comparison}));
+    }
+    Ok((
+        svg,
+        json!({"evidence":silhouette.evidence,"lines":lines,
+        "no_claim":"Agreement on supplied scanlines only, not full-mask, occlusion, segmentation or real-wearer validation. Original oriented rectified coordinates; no resampling."}),
+    ))
+}
+
 fn projections(
     adapter: &Adapter,
     rest: &RestBody,
@@ -212,14 +277,30 @@ fn projections(
             "predicted_px":projected, "world_m":point, "residual_px":error
         }));
     }
-    svg.push_str("</g></svg>\n");
-    Ok((
-        svg,
-        json!({"schema":"ftx-body-reprojections/1","frame":frame.frame,
+    let mut result = json!({"schema":"ftx-body-reprojections/1","frame":frame.frame,
         "image_size_px":frame.image_size_px,"rotation_cw_deg":frame.rotation_cw_deg,
         "camera":frame.camera,"keypoints":points,
-        "no_claim":"Keypoint residuals on an accepted local estimate, not silhouette agreement or occlusion testing. Stored oriented image coordinates; no additional rotation or undistortion. No photograph was loaded."}),
-    ))
+        "no_claim":"Keypoint residuals on an accepted local estimate, not silhouette agreement or occlusion testing. Stored oriented image coordinates; no additional rotation or undistortion. No photograph was loaded."});
+    if frame.silhouette.is_some() {
+        let mesh = SurfaceMesh {
+            vertices_m: body.vertices.clone(),
+            triangles: adapter
+                .model
+                .data()
+                .faces
+                .iter()
+                .map(|t| t.map(|v| v as usize))
+                .collect(),
+        };
+        let (overlay, silhouette) = contours(&mesh, frame)?;
+        svg.push_str(&overlay);
+        result["silhouette"] = silhouette;
+        result["no_claim"] = json!(
+            "Keypoint residuals and supplied silhouette scanlines on an accepted local estimate, not full-mask or occlusion testing. Stored oriented image coordinates; no additional rotation or undistortion. No photograph was loaded."
+        );
+    }
+    svg.push_str("</g></svg>\n");
+    Ok((svg, result))
 }
 
 pub(super) fn prepare(adapter: &Adapter, report: &BodyFitReport) -> Result<Bundle, Refusal> {
@@ -261,11 +342,17 @@ pub(super) fn prepare(adapter: &Adapter, report: &BodyFitReport) -> Result<Bundl
          <h1>Accepted body-fit review</h1>\
          <p>Orange circles are observed keypoints; blue crosses are projections of the complete fitted mesh. \
          Labels retain fit/held-out partitions. No photograph is embedded or loaded. \
-         This is not silhouette, occlusion or real-wearer fit validation.</p>\
+         This is not full-mask, occlusion or real-wearer fit validation.</p>\
          <p>Mesh coordinates are metres in the common calibrated world frame, +Z up. \
          Full topology is preserved; these are not certified collision skins.</p>\
          <p><a href=\"fit.json\">Complete fit and source evidence</a></p>",
     );
+    if report.input.frames.iter().any(|f| f.silhouette.is_some()) {
+        page.push_str("<p>Supplied silhouette slices are shown at their original pixel coordinates: \
+            thick orange segments are observed foreground, thin dashed blue segments are full-mesh coverage. \
+            Gaps are retained; fit and held-out partitions and boundary errors are in each line's tooltip \
+            and coordinate JSON. Only supplied slices are tested, not the entire mask.</p>");
+    }
     for (i, (frame, pose)) in report.input.frames.iter().zip(&solution.poses).enumerate() {
         if frame.frame != pose.frame {
             return Err(bad_input(
@@ -348,5 +435,104 @@ mod tests {
             label("<x>\0\u{ffff}&\""),
             "&lt;x&gt;\u{fffd}\u{fffd}&amp;&quot;"
         );
+    }
+
+    #[test]
+    fn contour_review_preserves_gaps_axes_partitions_and_rechecks_held_out_lines() {
+        use ftx_core::{Mat3, Vec2};
+        use ftx_measure::{
+            camera::{Camera, Distortion, Intrinsics},
+            silhouette::{Scanline, Silhouette},
+            triangulate::{FrameId, Partition},
+        };
+        let mesh = SurfaceMesh {
+            vertices_m: [
+                [10., 20.],
+                [30., 20.],
+                [30., 80.],
+                [10., 80.],
+                [50., 20.],
+                [70., 20.],
+                [70., 80.],
+                [50., 80.],
+            ]
+            .map(|[x, y]| Vec3::new(x / 128., y / 128., 1.))
+            .to_vec(),
+            triangles: vec![[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]],
+        };
+        let mut frame = FitFrame {
+            frame: FrameId {
+                stream: "synthetic".into(),
+                timestamp_us: 0,
+            },
+            image_size_px: [100, 100],
+            rotation_cw_deg: 0,
+            keypoints: vec![],
+            camera: Camera {
+                intrinsics: Intrinsics {
+                    focal_px: Vec2::new(128., 128.),
+                    principal_px: Vec2::ZERO,
+                    distortion: Distortion::default(),
+                },
+                world_to_camera: Mat3::IDENTITY,
+                center_m: Vec3::ZERO,
+            },
+            silhouette: Some(Silhouette {
+                evidence: "explicit <source> & definitions".into(),
+                lines: vec![
+                    Scanline {
+                        axis: Axis::Vertical,
+                        at_px: 20.,
+                        intervals_px: vec![[20., 80.]],
+                        sigma_px: 2.,
+                        partition: Partition::Fit,
+                    },
+                    Scanline {
+                        axis: Axis::Horizontal,
+                        at_px: 40.,
+                        intervals_px: vec![[10., 30.], [50., 70.]],
+                        sigma_px: 1.,
+                        partition: Partition::HeldOut,
+                    },
+                    Scanline {
+                        axis: Axis::Horizontal,
+                        at_px: 10.,
+                        intervals_px: vec![],
+                        sigma_px: 1.,
+                        partition: Partition::Fit,
+                    },
+                ],
+            }),
+        };
+        let original = serde_json::to_value(&frame).unwrap();
+        let (svg, data) = contours(&mesh, &frame).unwrap();
+        assert!(svg.contains("x1=\"10\" y1=\"40\" x2=\"30\" y2=\"40\""));
+        assert!(svg.contains("x1=\"50\" y1=\"40\" x2=\"70\" y2=\"40\""));
+        assert!(svg.contains("x1=\"20\" y1=\"20\" x2=\"20\" y2=\"80\""));
+        assert!(svg.contains("data-silhouette=\"held_out\""));
+        assert!(!svg.contains("<source>"));
+        assert_eq!(data["evidence"], original["silhouette"]["evidence"]);
+        let lines = data["lines"].as_array().unwrap();
+        assert_eq!(lines.len(), 3);
+        for (entry, source) in lines.iter().zip([2, 1, 0]) {
+            assert_eq!(
+                entry["observation"],
+                original["silhouette"]["lines"][source]
+            );
+            assert_eq!(
+                entry["comparison"]["predicted_intervals_px"],
+                entry["observation"]["intervals_px"]
+            );
+            assert_eq!(entry["comparison"]["boundary_error_px"], 0.);
+            assert_eq!(entry["comparison"]["passed"], true);
+        }
+        assert_eq!(serde_json::to_value(&frame).unwrap(), original);
+        // A previously accepted report cannot authorize changed held-out coverage on export.
+        frame.silhouette.as_mut().unwrap().lines[1].intervals_px[1][1] += 10.;
+        assert!(contours(&mesh, &frame).is_err());
+        frame.silhouette = None;
+        let (empty, absent) = contours(&mesh, &frame).unwrap();
+        assert!(empty.is_empty());
+        assert!(absent.is_null());
     }
 }

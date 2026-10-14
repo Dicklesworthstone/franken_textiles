@@ -20,7 +20,9 @@ and vertex indices are kept, including internal shells. These diagnostic meshes 
 Open `index.html` for a self-contained, offline keypoint review. Orange circles mark
 observations, blue crosses mark the corresponding full-mesh projections, and joining
 lines show residuals. Labels retain fit/held-out partitions. No photograph is loaded
-or embedded, and no silhouette or occlusion agreement is inferred from these plots.
+or embedded. When silhouette evidence was supplied, orange segments show observed
+foreground intervals and dashed blue segments show full-mesh coverage at the exact
+horizontal/vertical slice coordinates. Gaps are retained, not replaced by a hull.
 
 Each `frame-0000.json` retains the camera, oriented image size, recorded rotation,
 original observations/sigmas/partitions, full-mesh world points, projected pixels and
@@ -45,8 +47,12 @@ directories and files have modes 0700 and 0600 respectively.
 `--mesh-out` also works with `--silhouettes masks/manifest.json`. The fit uses the
 existing silhouette gates and the bundle retains the complete mask-source receipts
 and scanline evidence in `fit.json`. Export does not rerun optimization or change
-its objective history. A failed held-out silhouette prevents mesh publication.
-The SVG page still displays keypoints only; it is not a full-mask validation image.
+its objective history. The exported full mesh independently passes every supplied
+fit and held-out silhouette slice through the existing triangle-union and 3-pixel
+boundary gates before publication; a discrepancy refuses the bundle. Coordinate
+JSON records original evidence, intervals, contour sigmas, partitions, predicted
+coverage, boundary errors and symmetric differences. Empty/background slices are
+retained. This remains sampled-line agreement, not full-mask or occlusion validation.
 
 Export is limited to 100,000 vertices, 200,000 faces, eight accepted poses and 256 MiB
 of total output. It performs one rest-body evaluation and one full pose evaluation per
