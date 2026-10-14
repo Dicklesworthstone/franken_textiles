@@ -4,6 +4,7 @@ use std::{
     fs,
     path::PathBuf,
     process::{Command, Output},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde_json::{Value, json};
@@ -11,13 +12,16 @@ use serde_json::{Value, json};
 struct Workspace(PathBuf);
 impl Workspace {
     fn new() -> Self {
+        // macOS clocks tick in microseconds: parallel tests need the counter too
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "ftx-cut-workflow-{}-{}",
+            "ftx-cut-workflow-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&root).unwrap();
         Self(root)
