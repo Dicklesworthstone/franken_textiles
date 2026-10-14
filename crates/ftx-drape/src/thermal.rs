@@ -82,6 +82,46 @@ fn temperature(value: f64) -> Result<(), Refusal> {
 }
 
 impl DryThermalModel {
+    // Re-express this column per unit COVERED BODY area, without modifying a single material
+    // observation. For layer i: R' = R * A_body/A_sheet_current, C' = C * A_sheet_ref/A_body.
+    // Interfaces and films already refer to covered-body area. Only the coverage adapter uses this
+    // temporary solve object; its public receipt retains original materials and explicit mappings.
+    fn with_area_factors(&self, resistance: &[f64], capacity: &[f64]) -> Result<Self, Refusal> {
+        if resistance.len() != self.layers.len() || capacity.len() != self.layers.len() {
+            return Err(invalid("one geometry factor is required per thermal layer"));
+        }
+        for &value in resistance.iter().chain(capacity) {
+            positive("thermal area factor", value)?;
+        }
+        let mut model = self.clone();
+        if let Some(variable) = &mut model.variable {
+            variable.scale_areas(resistance, capacity);
+        } else {
+            for i in 0..self.cells() {
+                let layer = i / self.cells_per_layer;
+                model.resistance[i] = positive(
+                    "scaled cell resistance",
+                    self.resistance[i] * resistance[layer],
+                )?;
+                model.capacity[i] =
+                    positive("scaled cell capacity", self.capacity[i] * capacity[layer])?;
+            }
+            for i in 1..self.cells() {
+                let interface = if i % self.cells_per_layer == 0 {
+                    self.interfaces[i / self.cells_per_layer - 1]
+                } else {
+                    0.0
+                };
+                let path = positive(
+                    "scaled thermal path",
+                    model.resistance[i - 1] / 2.0 + model.resistance[i] / 2.0 + interface,
+                )?;
+                model.joins[i - 1] = positive("scaled conductance", 1.0 / path)?;
+            }
+        }
+        Ok(model)
+    }
+
     /// Build a layer stack with equal cells within each layer. Interfaces are declared thermal
     /// contact/air-gap resistances, not inferred from drape, names, nominal loft or blend fractions.
     /// Fill is admitted only when it has separately characterized effective sheet R, mass and heat

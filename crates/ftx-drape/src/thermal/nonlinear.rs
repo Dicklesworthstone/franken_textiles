@@ -14,6 +14,8 @@ pub(super) struct Variable {
     interfaces: Vec<f64>,
     per_layer: usize,
     domain: [f64; 2],
+    resistance_factors: Vec<f64>,
+    capacity_factors: Vec<f64>,
 }
 
 impl Variable {
@@ -39,11 +41,18 @@ impl Variable {
             ));
         }
         Ok(Self {
+            resistance_factors: vec![1.0; laws.len()],
+            capacity_factors: vec![1.0; laws.len()],
             laws,
             interfaces: interfaces.to_vec(),
             per_layer,
             domain,
         })
+    }
+
+    pub(super) fn scale_areas(&mut self, resistance: &[f64], capacity: &[f64]) {
+        self.resistance_factors.copy_from_slice(resistance);
+        self.capacity_factors.copy_from_slice(capacity);
     }
 
     pub(super) fn domain(&self) -> [f64; 2] {
@@ -64,12 +73,16 @@ impl Variable {
     fn capacity(&self, i: usize, t: f64) -> Result<f64, Refusal> {
         positive(
             "cell heat capacity",
-            self.laws[i / self.per_layer].capacity_at(t)? / self.per_layer as f64,
+            self.laws[i / self.per_layer].capacity_at(t)? / self.per_layer as f64
+                * self.capacity_factors[i / self.per_layer],
         )
     }
 
     fn heat(&self, i: usize, old: f64, new: f64) -> Result<f64, Refusal> {
-        Ok(self.laws[i / self.per_layer].sensible_change(old, new)? / self.per_layer as f64)
+        Ok(
+            self.laws[i / self.per_layer].sensible_change(old, new)? / self.per_layer as f64
+                * self.capacity_factors[i / self.per_layer],
+        )
     }
 
     fn conductances(&self, t: &[f64], b: Boundary) -> Result<Vec<f64>, Refusal> {
@@ -77,7 +90,8 @@ impl Variable {
         for (i, &t) in t.iter().enumerate() {
             r.push(positive(
                 "cell resistance",
-                self.laws[i / self.per_layer].resistance_at(t)? / self.per_layer as f64,
+                self.laws[i / self.per_layer].resistance_at(t)? / self.per_layer as f64
+                    * self.resistance_factors[i / self.per_layer],
             )?);
         }
         let mut paths = vec![b.inside_resistance + r[0] / 2.0];

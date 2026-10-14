@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::{Boundary, DryThermalModel, invalid, positive, temperature};
 
+pub mod coverage;
 mod io;
 pub(crate) use io::for_drape;
 
