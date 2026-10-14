@@ -14,7 +14,9 @@ PNGs. The load_image files cover
 - container variants: extended files with ICCP/EXIF/XMP and unknown chunks, an alpha flag without ALPH, ALPH
   without the flag;
 - damaged files: truncations, flipped bytes and cut slices. Both decoders must refuse them, or decode them to
-  the same pixels.
+  the same pixels;
+- headers only the demuxer reads (RIFF sizes under 12, VP8X chunks over 10 bytes), and palette-only VP8L
+  alpha planes built field by field for libwebp's 8-bit path, whole and cut.
 Images over 1,024 pixels record the SHA-256 of the BGR bytes instead of the array. The reference is
 identified by the SHA-256 of its files, not by a path. Usage:
     python capture_webp.py --reference SKILL/scripts OUT_DIR
@@ -216,6 +218,37 @@ def main() -> int:
             add(f"{name}-corrupt-{t}", bytes(d))
         j = len(data) // 2
         add(f"{name}-slice-cut", data[:j] + data[j + 7:])
+
+    # headers WebPGetFeatures refuses (so WebPAnimDecoderNew does) though the demuxer reads them
+    add("riff-size-10", b"RIFF" + struct.pack("<I", 10) + b"WEBP" + chunk(b"VP8 ", vp8))
+    add("riff-size-8-vp8x", b"RIFF" + struct.pack("<I", 8) + b"WEBP" + vp8x(0, 83, 61) + chunk(b"VP8 ", vp8))
+    for extra in (1, 2):
+        body = bytes(4) + (82).to_bytes(3, "little") + (60).to_bytes(3, "little") + bytes(extra)
+        add(f"vp8x-chunk-size-{10 + extra}", riff(chunk(b"VP8X", body) + chunk(b"VP8 ", vp8)))
+
+    # libwebp's 8-bit path for a palette-only VP8L alpha plane checks the end of the stream only after
+    # each literal: built field by field (LSB first), whole and cut by one or two bytes
+    def palette_alpha(pixels: list[int]) -> bytes:
+        one = [(1, 1), (0, 1), (0, 1), (0, 1)]                        # a simple code of the one symbol 0
+        f = [(1, 1), (3, 2), (1, 8)]                                  # colour indexing, two colours
+        f += [(0, 1), (1, 1), (0, 1), (1, 1), (0x60, 8)] + one * 4    # palette: green 0x60, then zeros
+        f += [(0, 1), (0, 1), (0, 1)]                                 # no more transforms, cache or meta
+        f += [(1, 1), (1, 1), (1, 1), (0x00, 8), (0xA5, 8)] + one * 4  # green: literals 0x00 and 0xA5
+        f += [(p, 1) for p in pixels]
+        acc = n = 0
+        for v, k in f:
+            acc |= v << n
+            n += k
+        return acc.to_bytes((n + 7) // 8, "little")
+
+    for w, h in ((16, 6), (16, 2), (9, 7)):        # 89, 81 and 91 bits: one missing bit is still decoded
+        y, x = np.mgrid[0:h, 0:w]
+        gray = np.dstack([(x * 37 + y * 11) % 256] * 3).astype(np.uint8)
+        frame = chunk(b"VP8 ", dict(chunks_of(pil(gray, quality=80)))[b"VP8 "])
+        stream = palette_alpha([(i * 7 + 3) % 5 % 2 for i in range((w + 7) // 8 * h)])
+        for cut in (0, 1, 2):
+            alph = chunk(b"ALPH", bytes([1]) + stream[:len(stream) - cut])
+            add(f"alpha-8bit-path-{w}x{h}-cut{cut}", riff(vp8x(0x10, w, h) + alph + frame))
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     path = args.out_dir / "raster_webp.json"

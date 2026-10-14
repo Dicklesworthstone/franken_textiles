@@ -25,7 +25,8 @@ The changes from the original:
   fancy upsampling and 8-bit samples. It returns BGR or gray for the whole image.
 - **Whole-image buffering.** Every file is buffered as a whole coefficient array, then inverse-transformed,
   upsampled and colour-converted plane by plane. This replaces libjpeg's row-group pipeline and its
-  suspension.
+  suspension. Suspension is kept only where Pillow's 64 KiB feed changes the result: after a single scan,
+  markers are read only to the end of the block that held the scan's last byte.
 - **Not ported**, and refused instead:
   - arithmetic, lossless and hierarchical coding;
   - CMYK and YCCK;

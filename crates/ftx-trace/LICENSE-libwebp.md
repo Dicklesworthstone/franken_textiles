@@ -20,8 +20,9 @@ The changes from the original:
   loop-filtered in macroblock order, then upsampled. This replaces the row cache with its filter delay,
   incremental decoding and threading.
 - **One output.** The only output is RGBA, as `WebPAnimDecoder` produces it, with no scaling or cropping.
-- **No speed paths.** Packed Huffman tables, trivial-code shortcuts, the 8-bit alpha path and SIMD are left
-  out; they give the same pixels.
+- **No speed paths.** Packed Huffman tables, trivial-code shortcuts and SIMD are left out; they give the
+  same pixels. The 8-bit alpha path is kept as a separate loop, because it accepts a stream whose last
+  literal runs past the data.
 - **Animation refused.** Animated files, and still files carrying ANIM/ANMF chunks, are refused instead
   of decoded.
 

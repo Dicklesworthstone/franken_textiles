@@ -5,14 +5,17 @@
 //! - incomplete Huffman codes are refused, a lone symbol is coded in zero bits;
 //! - each transform appears at most once;
 //! - backward references stay inside the image;
-//! - the stream is padded with zeros to at least eight bytes, and reading past that is an error.
+//! - the stream is padded with zeros to at least eight bytes, and reading past that is an error;
+//! - except in the 8-bit path of a palette-only alpha plane (`DecodeAlphaData`), which checks the end
+//!   of the stream only after each whole literal or copy, so a last one that runs past the data is
+//!   accepted when it fills the plane.
 //!
-//! The speed paths (packed tables, trivial codes, the 8-bit alpha path) are left out. They give the
-//! same pixels.
+//! The speed paths (packed tables, trivial codes) are left out. They give the same pixels.
 //!
 //! Provenance: libwebp 1.6.0 (BSD 3-clause; `LICENSE-libwebp.md` in this crate).
 
 const BAD: &str = "WebP: bad lossless bitstream";
+const TRUNCATED: &str = "WebP: the lossless bitstream is truncated";
 const NUM_LITERAL_CODES: usize = 256;
 const NUM_LENGTH_CODES: usize = 24;
 const NUM_DISTANCE_CODES: usize = 40;
@@ -332,6 +335,24 @@ struct Codes {
     cache_bits: u32,
 }
 
+impl Codes {
+    /// vp8l_dec.c `GetHtreeGroupForPos`.
+    fn group_at(&self, col: usize, row: usize) -> &Group {
+        let g = match &self.meta {
+            Some((image, bits, hx)) => image[(row >> bits) * hx + (col >> bits)] as usize,
+            None => 0,
+        };
+        &self.groups[g]
+    }
+
+    /// `huffman_mask`: the group can change where `col & mask` is 0.
+    fn mask(&self) -> usize {
+        self.meta
+            .as_ref()
+            .map_or(usize::MAX, |m| (1usize << m.1) - 1)
+    }
+}
+
 /// vp8l_dec.c `ReadHuffmanCodes` + `ReadHuffmanCodesHelper`.
 fn read_codes(
     br: &mut BitReader<'_>,
@@ -346,7 +367,7 @@ fn read_codes(
     if level0 && br.bits(1) == 1 {
         let bits = 2 + br.bits(3);
         let (hx, hy) = (sub_sample(xsize, bits), sub_sample(ysize, bits));
-        let mut image = decode_stream(br, hx, hy, false)?;
+        let mut image = decode_stream(br, hx, hy, Level::Sub)?;
         for p in &mut image {
             *p = (*p >> 8) & 0xffff;
             num_max = num_max.max(*p as usize + 1);
@@ -460,22 +481,13 @@ fn decode_pixels(
             cache[key] = argb;
         }
     };
-    let group_at = |col: usize, row: usize| -> usize {
-        match &codes.meta {
-            Some((image, bits, hx)) => image[(row >> bits) * hx + (col >> bits)] as usize,
-            None => 0,
-        }
-    };
-    let mask = codes
-        .meta
-        .as_ref()
-        .map_or(usize::MAX, |m| (1usize << m.1) - 1);
+    let mask = codes.mask();
     let (mut src, mut col, mut row) = (0usize, 0usize, 0usize);
-    let mut group = &codes.groups[group_at(0, 0)];
+    let mut group = codes.group_at(0, 0);
     let len_limit = NUM_LITERAL_CODES + NUM_LENGTH_CODES;
     while src < total {
         if col & mask == 0 {
-            group = &codes.groups[group_at(col, row)];
+            group = codes.group_at(col, row);
         }
         br.fill();
         let code = br.symbol(&group.trees[0]);
@@ -521,7 +533,7 @@ fn decode_pixels(
                 row += 1;
             }
             if col & mask != 0 {
-                group = &codes.groups[group_at(col, row)];
+                group = codes.group_at(col, row);
             }
         } else if code < len_limit + cache_size {
             let argb = cache[code - len_limit];
@@ -539,7 +551,68 @@ fn decode_pixels(
     }
     br.eos = br.is_eos();
     if br.eos {
-        return Err("WebP: the lossless bitstream is truncated".into());
+        return Err(TRUNCATED.into());
+    }
+    Ok(data)
+}
+
+/// vp8l_dec.c `DecodeAlphaData`, the 8-bit path of a palette-only alpha plane: each pixel's green index
+/// (kept as ARGB green, for the colour-indexing transform). Same pixels as [`decode_pixels`], but the end
+/// of the stream is checked only after each whole literal or copy, so a last one that reads past the data
+/// is accepted when it fills the plane.
+fn decode_alpha_indices(
+    br: &mut BitReader<'_>,
+    codes: &Codes,
+    xsize: usize,
+    ysize: usize,
+) -> Result<Vec<u32>, String> {
+    let total = xsize * ysize;
+    let mut data = vec![0u32; total];
+    let mask = codes.mask();
+    let (mut pos, mut col, mut row) = (0usize, 0usize, 0usize);
+    let mut group = codes.group_at(0, 0);
+    while !br.eos && pos < total {
+        if col & mask == 0 {
+            group = codes.group_at(col, row);
+        }
+        br.fill();
+        let code = br.symbol(&group.trees[0]);
+        if code < NUM_LITERAL_CODES {
+            data[pos] = (code as u32) << 8;
+            pos += 1;
+            col += 1;
+            if col >= xsize {
+                col = 0;
+                row += 1;
+            }
+        } else if code < NUM_LITERAL_CODES + NUM_LENGTH_CODES {
+            let length = copy_distance(code - NUM_LITERAL_CODES, br);
+            let dist_symbol = br.symbol(&group.trees[4]);
+            br.fill();
+            let dist = plane_to_distance(xsize, copy_distance(dist_symbol, br));
+            if pos < dist || total - pos < length {
+                return Err(BAD.into());
+            }
+            for i in pos..pos + length {
+                data[i] = data[i - dist];
+            }
+            pos += length;
+            col += length;
+            while col >= xsize {
+                col -= xsize;
+                row += 1;
+            }
+            if pos < total && col & mask != 0 {
+                group = codes.group_at(col, row);
+            }
+        } else {
+            return Err(BAD.into());
+        }
+        br.eos = br.is_eos();
+    }
+    br.eos = br.is_eos();
+    if br.eos && pos < total {
+        return Err(TRUNCATED.into());
     }
     Ok(data)
 }
@@ -564,14 +637,23 @@ enum Transform {
     },
 }
 
+/// The image a stream codes: the VP8L image or one of its sub-images, or an alpha plane.
+#[derive(Clone, Copy, PartialEq)]
+enum Level {
+    Image,
+    Sub,
+    Alpha,
+}
+
 /// vp8l_dec.c `DecodeImageStream`: transforms (level 0 only), colour cache, codes and pixels; the result
 /// after the inverse transforms.
 fn decode_stream(
     br: &mut BitReader<'_>,
     xsize: usize,
     ysize: usize,
-    level0: bool,
+    level: Level,
 ) -> Result<Vec<u32>, String> {
+    let level0 = level != Level::Sub;
     let mut transforms = Vec::new();
     let mut seen = 0u32;
     let mut width = xsize;
@@ -585,8 +667,12 @@ fn decode_stream(
             transforms.push(match kind {
                 0 | 1 => {
                     let bits = 2 + br.bits(3);
-                    let data =
-                        decode_stream(br, sub_sample(width, bits), sub_sample(ysize, bits), false)?;
+                    let data = decode_stream(
+                        br,
+                        sub_sample(width, bits),
+                        sub_sample(ysize, bits),
+                        Level::Sub,
+                    )?;
                     if kind == 0 {
                         Transform::Predictor {
                             bits,
@@ -610,7 +696,7 @@ fn decode_stream(
                         3..=4 => 2,
                         _ => 3,
                     };
-                    let raw = decode_stream(br, num_colors, 1, false)?;
+                    let raw = decode_stream(br, num_colors, 1, Level::Sub)?;
                     // ExpandColorMap: byte-wise deltas, a black tail up to the indexable size
                     let mut palette = vec![0u32; 1 << (8 >> bits)];
                     palette[0] = raw[0];
@@ -638,7 +724,20 @@ fn decode_stream(
         }
     }
     let codes = read_codes(br, width, ysize, cache_bits, level0)?;
-    let mut data = decode_pixels(br, &codes, width, ysize)?;
+    // VP8LDecodeAlphaHeader: an alpha plane with the colour-indexing transform alone, no colour cache and
+    // one-symbol red, blue and alpha codes (`Is8bOptimizable`) is decoded by the 8-bit path
+    let eight_bit = level == Level::Alpha
+        && matches!(transforms[..], [Transform::ColorIndexing { .. }])
+        && cache_bits == 0
+        && codes
+            .groups
+            .iter()
+            .all(|g| g.trees[1..4].iter().all(|t| t[0].bits == 0));
+    let mut data = if eight_bit {
+        decode_alpha_indices(br, &codes, width, ysize)?
+    } else {
+        decode_pixels(br, &codes, width, ysize)?
+    };
     for t in transforms.iter().rev() {
         data = inverse_transform(t, &data, ysize);
     }
@@ -813,13 +912,13 @@ pub(super) fn decode_image(data: &[u8], w: usize, h: usize) -> Result<Vec<u32>, 
     if br.bits(3) != 0 || br.eos || (iw, ih) != (w, h) {
         return Err(BAD.into());
     }
-    decode_stream(&mut br, w, h, true)
+    decode_stream(&mut br, w, h, Level::Image)
 }
 
 /// A VP8L-compressed alpha plane (an image stream without header, vp8l_dec.c `VP8LDecodeAlphaHeader`):
 /// the green channel of the decoded image.
 pub(super) fn decode_alpha(data: &[u8], w: usize, h: usize) -> Result<Vec<u8>, String> {
     let mut br = BitReader::new(data);
-    let argb = decode_stream(&mut br, w, h, true)?;
+    let argb = decode_stream(&mut br, w, h, Level::Alpha)?;
     Ok(argb.iter().map(|&p| (p >> 8) as u8).collect())
 }

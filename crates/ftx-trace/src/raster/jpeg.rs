@@ -20,13 +20,22 @@
 //! - CMYK and YCCK (Pillow's mode `CMYK`);
 //! - progressive files whose low coefficients are incomplete. libjpeg smooths those (`decompress_smooth_data`).
 //!
-//! Pillow's own header walk refuses three things libjpeg would take, and they are refused here too:
+//! Pillow feeds libjpeg 64 KiB blocks. After the last row of a single-scan file, markers past the block
+//! that held the scan's last byte are never read, so they cannot fail the file. A tables-only datastream
+//! before the image is read for its tables, as Pillow re-reads the header.
+//!
+//! Pillow's own header walk refuses some things libjpeg would take, and they are refused here too:
 //! - precision other than 8;
 //! - component counts other than 1, 3 and 4;
-//! - a TEM marker before the first scan.
+//! - a TEM marker before the first scan;
+//! - a short JFIF or Adobe marker, an ICC_PROFILE chunk without its count byte, a Photoshop resource cut
+//!   off after its code.
 //!
-//! Dequantized coefficients beyond 16 bits (only crafted files have them) follow the C code. Pillow's SIMD
-//! IDCT wraps those at 16 bits instead.
+//! Two of its refusals are not ported: an EXIF resolution of length 1 and an MPF entry under 16 bytes.
+//!
+//! Dequantized coefficients beyond 16 bits follow the C code; Pillow's Neon IDCT on arm64 wraps them at 16
+//! bits. Valid files never have them, but damaged files often do (one in ten randomly damaged files in
+//! testing), and then the pixels differ from Pillow's there (they match with `JSIMD_FORCENONE=1`).
 //!
 //! Provenance: libjpeg-turbo 3.1.4.1 `src/` (IJG License and Modified BSD; `LICENSE-libjpeg-turbo.md` in this
 //! crate). This software is based in part on the work of the Independent JPEG Group.
@@ -37,6 +46,8 @@ use super::image::Bgr;
 const TRUNCATED: &str = "JPEG: the file is truncated";
 /// jdhuff.h `MIN_GET_BITS` for a 64-bit bit buffer.
 const MIN_GET_BITS: i32 = 57;
+/// Pillow's `ImageFile.MAXBLOCK`, the size of the reads that feed the decoder.
+const MAXBLOCK: usize = 65536;
 
 /// jutils.c `jpeg_natural_order`, with the 16 guard entries that absorb corrupt run lengths.
 const NATURAL: [usize; 80] = [
@@ -388,6 +399,8 @@ struct Decoder<'a> {
     max_h: usize,
     max_v: usize,
     multi_scan: bool,
+    /// Pillow's `icclist`: the ICC_PROFILE APP2 payloads since the last SOF.
+    icc: Vec<&'a [u8]>,
 }
 
 /// Decodes a JPEG as Pillow 12.3 does for `Image.open(f).convert("RGB")`, returned as OpenCV's BGR.
@@ -425,6 +438,7 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
         max_h: 1,
         max_v: 1,
         multi_scan: false,
+        icc: Vec::new(),
     };
     if !d.read_markers()? {
         return Err("JPEG: no image in the file".into());
@@ -437,8 +451,11 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
             d.decode_scan()?;
         }
     } else {
-        // Every row is out by now: jpeg_finish_decompress only looks for EOI, and Pillow accepts its
-        // suspension at the end of the file.
+        // Every row is out by now, and jpeg_finish_decompress only looks for EOI in what Pillow has fed
+        // it: ImageFile.load reads MAXBLOCK blocks from the start, and the last row came out once the block
+        // holding the scan's last byte arrived. Pillow accepts a suspension past that block.
+        let fed = d.r.pos.div_ceil(MAXBLOCK) * MAXBLOCK;
+        d.r.data = &d.r.data[..fed.min(d.r.data.len())];
         match d.read_markers() {
             Ok(true) => return Err("JPEG: a second scan in a single-scan file".into()),
             Ok(false) => {}
@@ -455,7 +472,7 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
     Ok(d.output(space))
 }
 
-impl Decoder<'_> {
+impl<'a> Decoder<'a> {
     /// jdmarker.c `read_markers`: tables up to the next SOS (true) or EOI (false).
     fn read_markers(&mut self) -> Result<bool, String> {
         loop {
@@ -463,10 +480,10 @@ impl Decoder<'_> {
                 if self.saw_soi {
                     self.r.next_marker()?;
                 } else {
-                    if !self.r.data.starts_with(&[0xFF, 0xD8]) {
+                    // first_marker: the datastream starts with SOI, right here
+                    if (self.r.byte()?, self.r.byte()?) != (0xFF, 0xD8) {
                         return Err("not a JPEG file".into());
                     }
-                    self.r.pos = 2;
                     self.r.marker = 0xD8;
                 }
             }
@@ -492,6 +509,15 @@ impl Decoder<'_> {
                     self.r.marker = 0;
                     return Ok(true);
                 }
+                0xD9 if self.in_headers => {
+                    if !self.comps.is_empty() {
+                        return Err("JPEG: an SOF marker without SOS".into());
+                    }
+                    // A tables-only datastream (jdinput.c consume_markers): jpeg_read_header returns
+                    // JPEG_HEADER_TABLES_ONLY, and Pillow calls it again. The tables stay, and the next
+                    // datastream must start with its SOI.
+                    self.saw_soi = false;
+                }
                 0xD9 => {
                     self.r.marker = 0;
                     return Ok(false);
@@ -505,8 +531,8 @@ impl Decoder<'_> {
                     }
                     self.restart_interval = self.r.word()? as usize;
                 }
-                m @ (0xE0 | 0xEE) => self.appn(m)?,
-                0xE1..=0xED | 0xEF | 0xFE | 0xDC => {
+                m @ 0xE0..=0xEF => self.appn(m)?,
+                0xFE | 0xDC => {
                     let len = self.r.word()? - 2;
                     self.r.skip(len);
                 }
@@ -544,6 +570,12 @@ impl Decoder<'_> {
             }
             _ => return Err(format!("JPEG: cannot handle {n}-layer images")),
         }
+        // JpegImagePlugin.SOF sorts the ICC_PROFILE chunks and reads the first one's chunk count
+        self.icc.sort_unstable();
+        if self.icc.first().is_some_and(|c| c.len() <= 13) {
+            return Err("JPEG: Pillow cannot read the ICC_PROFILE marker".into());
+        }
+        self.icc.clear();
         if w.checked_mul(h).is_none_or(|p| p > self.max_pixels) {
             return Err(format!(
                 "JPEG {w}×{h}: more than {} pixels",
@@ -687,9 +719,17 @@ impl Decoder<'_> {
         Ok(())
     }
 
-    /// jdmarker.c `get_interesting_appn`: JFIF (APP0) and Adobe (APP14) markers.
+    /// jdmarker.c `get_interesting_appn` for JFIF (APP0) and Adobe (APP14), `skip_variable` for the
+    /// others. Before the first scan, Pillow's header walk reads them too ([`Self::pillow_app`]).
     fn appn(&mut self, m: u8) -> Result<(), String> {
         let mut len = self.r.word()? - 2;
+        if self.in_headers {
+            self.pillow_app(m, len)?;
+        }
+        if m != 0xE0 && m != 0xEE {
+            self.r.skip(len);
+            return Ok(());
+        }
         let take = len.clamp(0, 14) as usize;
         let mut b = [0u8; 14];
         for x in &mut b[..take] {
@@ -704,6 +744,31 @@ impl Decoder<'_> {
         }
         self.r.skip(len);
         Ok(())
+    }
+
+    /// Pillow's `JpegImagePlugin.APP` on the `len` bytes at the reader: what it raises makes `Image.open`
+    /// fail, though libjpeg would decode the file. Its EXIF resolution and MPF parsing can raise too; they
+    /// are not ported.
+    fn pillow_app(&mut self, m: u8, len: i64) -> Result<(), String> {
+        let data: &'a [u8] = self.r.data;
+        let at = self.r.pos;
+        // ImageFile._safe_read
+        let s = data
+            .get(at..at + usize::try_from(len).unwrap_or(0))
+            .ok_or(TRUNCATED)?;
+        let unreadable = |what: &str| Err(format!("JPEG: Pillow cannot read the {what} marker"));
+        match m {
+            0xE0 if s.starts_with(b"JFIF") && s.len() < 7 => unreadable("JFIF"),
+            0xEE if s.starts_with(b"Adobe") && s.len() < 7 => unreadable("Adobe"),
+            0xED if s.starts_with(b"Photoshop 3.0\0") && photoshop_raises(s) => {
+                unreadable("Photoshop")
+            }
+            0xE2 if s.starts_with(b"ICC_PROFILE\0") => {
+                self.icc.push(s);
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// jdinput.c `initial_setup` and jpeg_start_decompress's checks: component geometry, the colour space,
@@ -1026,6 +1091,38 @@ impl Decoder<'_> {
         }
         Bgr { w, h, data }
     }
+}
+
+/// Whether Pillow's walk over a Photoshop APP13 payload `s` raises the IndexError it does not catch: a
+/// resource that ends right after its 8BIM signature and code, with no name length. A `struct.error`
+/// (any other short read) ends the walk quietly.
+fn photoshop_raises(s: &[u8]) -> bool {
+    let be = |at: usize, n: usize| {
+        s.get(at..at + n)
+            .map(|b| b.iter().fold(0usize, |v, &x| v << 8 | usize::from(x)))
+    };
+    let mut offset = 14;
+    while s.get(offset..offset + 4) == Some(b"8BIM") {
+        let Some(code) = be(offset + 4, 2) else {
+            return false;
+        };
+        let Some(&name_len) = s.get(offset + 6) else {
+            return true;
+        };
+        offset += 7 + usize::from(name_len);
+        offset += offset & 1;
+        let Some(size) = be(offset, 4) else {
+            return false;
+        };
+        offset += 4;
+        // ResolutionInfo is unpacked from its first 14 bytes
+        if code == 0x03ED && s.len().saturating_sub(offset).min(size) < 14 {
+            return false;
+        }
+        offset += size;
+        offset += offset & 1;
+    }
+    false
 }
 
 /// jdphuff.c `decode_mcu_AC_refine` for one block.

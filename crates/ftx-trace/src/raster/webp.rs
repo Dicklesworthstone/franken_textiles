@@ -12,6 +12,10 @@
 //!
 //! Refused here, because it is not ported: animated files (ANIM/ANMF chunks).
 //!
+//! The port follows libwebp's C code. On arm64, Pillow's libwebp runs Neon transforms instead, which give
+//! the same pixels except for coefficients beyond what an encoder writes (`TransformAC3`'s 16-bit
+//! truncation, saturating adds), so a crafted lossy file can decode differently there.
+//!
 //! Provenance: libwebp 1.6.0 (BSD 3-clause; `LICENSE-libwebp.md` in this crate).
 
 use super::image::{Bgr, over_white};
@@ -53,6 +57,8 @@ struct Frame<'a> {
 /// # Errors
 /// A damaged or truncated file, an image over `max_pixels`, or an animated file (not ported).
 pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
+    // anim_decode.c: WebPAnimDecoderNew refuses what WebPGetFeatures refuses, before it demuxes
+    let has_alpha = features_have_alpha(bytes).ok_or("WebP: bad file header")?;
     let (frame, canvas) = demux(bytes)?;
     let (w, h) = canvas;
     if w.checked_mul(h).is_none_or(|p| p > max_pixels) {
@@ -67,14 +73,13 @@ pub fn decode(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
         let alpha = frame.alpha.map(|a| decode_alpha(a, w, h)).transpose()?;
         decode_vp8(frame.payload, w, h, alpha.as_deref())?
     };
-    // _webp.c: RGBA when WebPGetFeatures reports alpha (or fails), else RGBX, which Pillow reads as RGB
-    let rgba_mode = features_have_alpha(bytes).unwrap_or(true);
+    // _webp.c: RGBA when WebPGetFeatures reports alpha, else RGBX, which Pillow reads as RGB
     let data = rgba
         .as_chunks::<4>()
         .0
         .iter()
         .flat_map(|&[r, g, b, a]| {
-            let [r, g, b] = if rgba_mode {
+            let [r, g, b] = if has_alpha {
                 over_white(r, g, b, a)
             } else {
                 [r, g, b]
@@ -96,7 +101,8 @@ fn demux(data: &[u8]) -> Result<(Frame<'_>, (usize, usize)), String> {
         return Err("not a WebP file".into());
     }
     let riff_size = le32(&data[4..]);
-    if !(8..=MAX_CHUNK_PAYLOAD).contains(&riff_size) {
+    // ReadHeader takes 8 and up, but under 12 the first chunk header cannot fit (PARSE_NEED_MORE_DATA)
+    if !(12..=MAX_CHUNK_PAYLOAD).contains(&riff_size) {
         return Err("WebP: bad RIFF size".into());
     }
     let end = riff_size + 8;
@@ -265,8 +271,10 @@ fn image_features(
     }
 }
 
-/// webp_dec.c `WebPGetFeatures(...).has_alpha` (`ParseHeadersInternal` without headers): None when it
-/// fails, which Pillow treats as alpha.
+/// webp_dec.c `WebPGetFeatures(...).has_alpha` (`ParseHeadersInternal` without headers) on the whole file,
+/// as Pillow passes it. None when it fails, and then `WebPAnimDecoderNew` (so Pillow) refuses the file.
+/// Once a VP8X chunk is read, data that runs out (`NOT_ENOUGH_DATA`) is not a failure: the flags so far
+/// are the answer.
 fn features_have_alpha(data: &[u8]) -> Option<bool> {
     if data.len() < 12 {
         return None;
@@ -287,10 +295,10 @@ fn features_have_alpha(data: &[u8]) -> Option<bool> {
     if rest.len() < 8 {
         return None;
     }
+    let vp8x = &rest[..4] == b"VP8X";
     let mut has_alpha = false;
     let mut canvas = None;
-    let mut alpha_data = false;
-    if &rest[..4] == b"VP8X" {
+    if vp8x {
         if le32(&rest[4..]) != 10 || rest.len() < 18 || riff_size == 0 {
             return None;
         }
@@ -305,46 +313,69 @@ fn features_have_alpha(data: &[u8]) -> Option<bool> {
         }
         canvas = Some((w, h));
         pos += 18;
-        // ParseOptionalChunks: up to the VP8/VP8L chunk, within the RIFF size
-        let mut total = 4 + 8 + 10;
-        loop {
-            let c = data.get(pos..pos + 8)?;
-            let size = le32(&c[4..]);
-            if size > MAX_CHUNK_PAYLOAD {
-                return None;
+    }
+    let mut alpha_data = false;
+    // Err(true) is NOT_ENOUGH_DATA, Err(false) a bitstream error
+    let parsed: Result<(), bool> = 'parse: {
+        if vp8x {
+            // ParseOptionalChunks: up to the VP8/VP8L chunk, within the RIFF size
+            let mut total = 4 + 8 + 10;
+            loop {
+                let Some(c) = data.get(pos..pos + 8) else {
+                    break 'parse Err(true);
+                };
+                let size = le32(&c[4..]);
+                if size > MAX_CHUNK_PAYLOAD {
+                    break 'parse Err(false);
+                }
+                let disk = (8 + size + 1) & !1;
+                total += disk;
+                if total > riff_size {
+                    break 'parse Err(false);
+                }
+                if &c[..4] == b"VP8 " || &c[..4] == b"VP8L" {
+                    break;
+                }
+                if data.len() - pos < disk {
+                    break 'parse Err(true);
+                }
+                alpha_data |= &c[..4] == b"ALPH";
+                pos += disk;
             }
-            total += (8 + size + 1) & !1;
-            if total > riff_size {
-                return None;
-            }
-            if &c[..4] == b"VP8 " || &c[..4] == b"VP8L" {
-                break;
-            }
-            if data.len() - pos < (8 + size + 1) & !1 {
-                return None;
-            }
-            alpha_data |= &c[..4] == b"ALPH";
-            pos += (8 + size + 1) & !1;
         }
-    }
-    let c = data.get(pos..pos + 8)?;
-    let lossless = match &c[..4] {
-        b"VP8 " => false,
-        b"VP8L" => true,
-        _ => return None,
+        // ParseVP8Header (a RIFF file whose first chunk is not VP8/VP8L/VP8X is refused by the demuxer)
+        let Some(c) = data.get(pos..pos + 8) else {
+            break 'parse Err(true);
+        };
+        let lossless = match &c[..4] {
+            b"VP8 " => false,
+            b"VP8L" => true,
+            _ => break 'parse Err(false),
+        };
+        let size = le32(&c[4..]);
+        if riff_size >= 12 && size > riff_size - 12 {
+            break 'parse Err(false);
+        }
+        let payload = &data[pos + 8..];
+        if payload.len() < if lossless { 5 } else { 10 } {
+            break 'parse Err(true);
+        }
+        let Some((w, h, vp8l_alpha)) = image_features(payload, size, lossless) else {
+            break 'parse Err(false);
+        };
+        if lossless {
+            has_alpha = vp8l_alpha;
+        }
+        if canvas.is_some_and(|c| c != (w, h)) {
+            break 'parse Err(false);
+        }
+        Ok(())
     };
-    let size = le32(&c[4..]);
-    if riff_size >= 12 && size > riff_size - 12 {
-        return None;
+    match parsed {
+        Ok(()) => Some(has_alpha || alpha_data),
+        Err(short) if short && vp8x => Some(has_alpha || alpha_data),
+        Err(_) => None,
     }
-    let (w, h, vp8l_alpha) = image_features(&data[pos + 8..], size, lossless)?;
-    if lossless {
-        has_alpha = vp8l_alpha;
-    }
-    if canvas.is_some_and(|c| c != (w, h)) {
-        return None;
-    }
-    Some(has_alpha || alpha_data)
 }
 
 // ------------------------------------------------------------------------------------------- alpha

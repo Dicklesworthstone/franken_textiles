@@ -11,7 +11,9 @@ PNGs. The load_image files cover
 - 16-bit and unit quantization tables, extreme content, the standard Huffman tables left out (libjpeg supplies
   them), extra APPn/COM segments and fill bytes;
 - damaged streams: truncations, a missing EOI, trailing junk, a marker inside the entropy data, renumbered and
-  missing restart markers, and random corruption.
+  missing restart markers, and random corruption;
+- tables-only datastreams before the image, the APPn segments Pillow's own header walk raises on, and a bad
+  marker on either side of the 64 KiB block that ends Pillow's reading after a single scan.
 
 Pillow's SIMD IDCT (Neon on arm64, AVX2 on x86-64) wraps dequantized coefficients beyond 16 bits, where its C
 code does not, so a damaged file can decode differently from machine to machine. A damaged case is therefore
@@ -242,6 +244,29 @@ def main() -> int:
             for _ in range(1 + t % 3):
                 d[int(rng.integers(sos + 20, len(d) - 2))] = int(rng.integers(0, 256))
             add(f"{name}-corrupt-{t}", bytes(d), True)
+
+    # tables-only datastreams before the image: Pillow reads the header again, keeping the tables; the new
+    # SOI forgets the DRI and Adobe markers, and must follow the EOI at once
+    tables, image = (pil(small, quality=80, subsampling=2, streamtype=t) for t in (1, 2))
+    add("tables-only-then-abbreviated", tables + image)
+    add("empty-then-full", b"\xff\xd8\xff\xd9" + base)
+    a0 = next((s, e) for m, s, e in segments(base) if m == 0xE0)
+    no_jfif = base[:a0[0]] + base[a0[1]:]              # so a remembered Adobe transform 0 would mean RGB
+    add("adobe-dri-tables-only-then-full", b"\xff\xd8" + adobe + b"\xff\xdd\x00\x04\x00\x01\xff\xd9" + no_jfif)
+    add("tables-only-junk-then-full", tables + b"\x00\x01" + base)
+    # what Pillow's own header walk raises on: a short JFIF or Adobe marker, an ICC_PROFILE chunk without its
+    # count, a Photoshop resource cut off after its code (each followed by a well-formed control)
+    for name, seg in (("jfif-short", b"\xe0\x00\x08JFIF\x00\x01"), ("jfif-7", b"\xe0\x00\x09JFIF\x00\x01\x02"),
+                      ("adobe-short", b"\xee\x00\x08Adobe\x00"), ("adobe-7", b"\xee\x00\x09Adobe\x00\x64"),
+                      ("icc-13", b"\xe2\x00\x0fICC_PROFILE\x00\x01"),
+                      ("icc-14", b"\xe2\x00\x10ICC_PROFILE\x00\x01\x01"),
+                      ("photoshop-cut", b"\xed\x00\x16Photoshop 3.0\x008BIM\x04\x04"),
+                      ("photoshop-ok", b"\xed\x00\x1cPhotoshop 3.0\x008BIM\x04\x04\x00\x00\x00\x00\x00\x00")):
+        add(f"base-{name}", base[:2] + b"\xff" + seg + base[2:])
+    # after a single scan Pillow has fed libjpeg only the 64 KiB block that held the scan's last byte, so a
+    # bad marker past it is never read: the file without EOI, zeros, then FF 02 across the boundary
+    for at in (65534, 65535):
+        add(f"base-bad-marker-at-{at}", base[:-2] + bytes(at - len(base) + 2) + b"\xff\x02")
 
     meta["skipped_simd_differs"] = skipped
     args.out_dir.mkdir(parents=True, exist_ok=True)
