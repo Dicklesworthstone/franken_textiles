@@ -71,7 +71,7 @@ const USAGE: &str = "usage:
   ftx alter true-seam PATTERN --seam S [--end start|end] --out OUT [--json]
   ftx alter cap-ease PATTERN --piece P --seams S1,S2 --target RATIO --out OUT [--json]
   ftx alter transfer-curve PATTERN --from SRC.json:INSTANCE/EDGE --to PIECE/EDGE --out OUT [--json]
-  ftx materials [list|show ID|freeze ID] [--allow-estimates] [--json]
+  ftx materials [list|show ID|freeze ID|compare ID ID] [--allow-estimates] [--json]
   ftx measure catalogue [--garment KIND] [--out FILE] [--json]
   ftx measure prior|reference --stature-mm MM [--age-months N] [--sex M|F] [--out FILE] [--json]
   ftx measure init --label NICKNAME --out FILE [--stature 92cm] [--age-months N] [--taken-on DATE] [--json]
