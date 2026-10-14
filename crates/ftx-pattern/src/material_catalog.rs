@@ -8,6 +8,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod mit;
 mod nist;
 
 /// A selection for `fabric.material`. A frozen record makes custom/edited patterns self-contained.
@@ -58,6 +59,7 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         "warp_stiffness" | "weft_stiffness" | "shear_stiffness" => "N/m",
         "bending_rigidity" | "bending_warp" | "bending_weft" | "bending_coupling"
         | "bending_twist" => "N*m",
+        "specimen_flexural_rigidity" => "N*m2",
         "poisson_warp_weft"
         | "friction_skin"
         | "friction_self"
@@ -100,6 +102,7 @@ fn factor(unit: &str, expected: &str) -> Option<f64> {
         ("g/cm3", "kg/m3") => 1000.0,
         ("kN/m", "N/m") | ("kN", "N") => 1000.0,
         ("mN*m", "N*m") => 0.001,
+        ("lbf*in2", "N*m2") => 4.448_221_615_260_5 * 0.0254 * 0.0254,
         ("%", "1") => 0.01,
         ("clo", "m2*K/W") => 0.155,
         ("tog", "m2*K/W") => 0.1,
@@ -158,6 +161,7 @@ impl Catalog {
         let measured = Self::from_json(include_str!("material_catalog/thermal-measurements.json"))?;
         catalog.materials.extend(measured.materials);
         catalog.materials.extend(nist::records());
+        catalog.materials.extend(mit::records());
         catalog.validate()?;
         Ok(catalog)
     }

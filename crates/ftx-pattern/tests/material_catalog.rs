@@ -33,7 +33,7 @@ fn selection() -> Selection {
 #[test]
 fn factual_seed_does_not_invent_physics_or_midpoints() {
     let db = Catalog::builtin().unwrap();
-    assert_eq!(db.materials.len(), 51);
+    assert_eq!(db.materials.len(), 81);
     let linen = db.get("fs/il019-dusty-lotus-softened").unwrap();
     assert!(
         (linen.require("areal_density", "kg/m2", false).unwrap()
