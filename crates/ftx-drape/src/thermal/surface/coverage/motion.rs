@@ -176,6 +176,96 @@ impl Frame {
             "domain":"same covered spatial cloth portions; no cloth remeshing or material substitution"})
     }
 
+    /// Restore geometry, material observations and the derived spatial partition without a catalog
+    /// lookup. Recompute correspondence rather than trusting saved polygons or a verification flag.
+    ///
+    /// # Errors
+    /// Changed/unsupported snapshot content or any source, projection or coverage refusal.
+    pub fn from_snapshot(value: &Value) -> Result<Self, Refusal> {
+        if value["schema"] != "ftx-thermal-motion-frame/1" {
+            return Err(invalid("unknown thermal motion frame schema"));
+        }
+        for (array, limit) in [
+            (&value["cloth_positions_m"], 196_608),
+            (&value["body_positions_m"], 196_608),
+            (&value["projection"]["layout"]["body_triangles"], 65_536),
+        ] {
+            if array
+                .as_array()
+                .is_none_or(|a| a.is_empty() || a.len() > limit)
+            {
+                return Err(invalid("thermal motion snapshot exceeds geometry budget"));
+            }
+        }
+        let source = Surface::from_snapshot(&value["source"])?;
+        let decode = |e| invalid(format!("thermal motion frame: {e}"));
+        let cloth = serde_json::from_value(value["cloth_positions_m"].clone()).map_err(decode)?;
+        let body = serde_json::from_value(value["body_positions_m"].clone()).map_err(decode)?;
+        let triangles: Vec<[usize; 3]> =
+            serde_json::from_value(value["projection"]["layout"]["body_triangles"].clone())
+                .map_err(decode)?;
+        let request = serde_json::from_value(value["request"].clone()).map_err(decode)?;
+        let frame = Self::new(source, cloth, body, &triangles, request)?;
+        if frame.snapshot() != *value {
+            return Err(invalid(
+                "thermal motion frame differs from recomputed geometry/material inputs",
+            ));
+        }
+        Ok(frame)
+    }
+
+    /// Serialize a resumable material-temperature state with its complete immutable frame. The
+    /// digest detects content changes; it is not authentication or proof of a simulation's history.
+    /// No time elapses and no temperatures are recomputed, mixed or initialized by saving.
+    ///
+    /// # Errors
+    /// State from another frame, invalid temperature cells, or serialization failure.
+    pub fn checkpoint(&self, state: &State) -> Result<Value, Refusal> {
+        self.check(state)?;
+        let mut value = json!({"schema":"ftx-thermal-motion-state/1",
+            "frame":self.snapshot(),"temperature_c":state.temperature_c()});
+        let hash = sha256_hex(&serde_json::to_vec(&value).map_err(|e| invalid(e.to_string()))?);
+        value["sha256"] = json!(hash);
+        Ok(value)
+    }
+
+    /// Restore a saved state and rebuild its exact frame, including source curves and geometric
+    /// correspondence. A material edit cannot reuse these temperatures without an explicit model.
+    ///
+    /// # Errors
+    /// Unsupported fields/schema, tampered digest/geometry, invalid cell shape or temperature domain.
+    pub fn from_checkpoint(value: &Value) -> Result<(Self, State), Refusal> {
+        if value["schema"] != "ftx-thermal-motion-state/1" {
+            return Err(invalid("unknown thermal motion state schema"));
+        }
+        let frame = Self::from_snapshot(&value["frame"])?;
+        let rows = value["temperature_c"]
+            .as_array()
+            .ok_or_else(|| invalid("thermal motion state needs temperature rows"))?;
+        if rows.len() != frame.coverage.models.len()
+            || rows
+                .iter()
+                .zip(&frame.coverage.models)
+                .any(|(row, model)| row.as_array().is_none_or(|r| r.len() != model.cells()))
+        {
+            return Err(invalid(
+                "thermal motion state has incorrect cell dimensions",
+            ));
+        }
+        let state = State {
+            frame_sha256: frame.sha256.clone(),
+            inner: CoverageState {
+                sha256: frame.coverage.sha256.clone(),
+                temperatures: serde_json::from_value(value["temperature_c"].clone())
+                    .map_err(|e| invalid(format!("thermal motion temperatures: {e}")))?,
+            },
+        };
+        if frame.checkpoint(&state)? != *value {
+            return Err(invalid("thermal motion state digest or content mismatch"));
+        }
+        Ok((frame, state))
+    }
+
     /// Total temperature cells for budgeting, excluding massless bare-body paths.
     #[must_use]
     pub fn cells(&self) -> usize {
@@ -204,6 +294,17 @@ impl Frame {
             return Err(invalid(
                 "thermal state belongs to another mapped geometry; remap explicitly",
             ));
+        }
+        if state.inner.temperatures.len() != self.coverage.models.len() {
+            return Err(invalid("thermal motion state has incorrect region count"));
+        }
+        for (row, model) in state.inner.temperatures.iter().zip(&self.coverage.models) {
+            if row.len() != model.cells() {
+                return Err(invalid("thermal motion state has incorrect cell count"));
+            }
+            for &t in row {
+                model.check_temperature(t)?;
+            }
         }
         Ok(())
     }
@@ -276,7 +377,7 @@ impl Frame {
                     .thermal_response
                     .as_ref()
                     .and_then(|r| r.specific_heat.as_ref())
-                    .map_or(1, |s| s.points.len())
+                    .map_or(1, |s| s.points.len().max(1))
             })
             .collect();
         let mut donors = vec![Vec::new(); source.patches.len()];

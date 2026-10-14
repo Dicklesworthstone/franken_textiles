@@ -438,3 +438,86 @@ fn nonuniform_identity_retains_cell_order_at_non_binary_depth_boundaries() {
         near(result.balance.absolute_residual_j, 0.);
     }
 }
+
+#[test]
+fn saved_nonuniform_state_resumes_exactly_through_heat_steps_and_repartitioning() {
+    let old = split(3);
+    let state = old
+        .steady(&[boundary(10.), boundary(30.)])
+        .unwrap()
+        .into_state();
+    let checkpoint = old.checkpoint(&state).unwrap();
+    let bytes = serde_json::to_string(&checkpoint).unwrap();
+    let (restored, saved) = Frame::from_checkpoint(&serde_json::from_str(&bytes).unwrap()).unwrap();
+    assert_eq!(restored.snapshot(), old.snapshot());
+    assert_eq!(saved.temperature_c(), state.temperature_c());
+    assert_eq!(restored.checkpoint(&saved).unwrap(), checkpoint);
+    let films = [boundary(40.), boundary(20.)];
+    let a = old.advance(&state, 0.3, &films).unwrap();
+    let b = restored.advance(&saved, 0.3, &films).unwrap();
+    assert_eq!(
+        a.heat().state.temperature_c(),
+        b.heat().state.temperature_c()
+    );
+    assert_eq!(a.heat().stored_change_j, b.heat().stored_change_j);
+    let next = one(2);
+    let a = next.remap(&old, &a.into_state()).unwrap();
+    let b = next.remap(&restored, &b.into_state()).unwrap();
+    assert_eq!(a.state.temperature_c(), b.state.temperature_c());
+    assert_eq!(a.balance.residual_j, b.balance.residual_j);
+}
+
+#[test]
+fn checkpoint_rejects_changed_polygons_materials_cells_and_uncharacterized_temperatures() {
+    use serde_json::json;
+    let frame = one(2);
+    let state = frame.initial(20.).unwrap();
+    let saved = frame.checkpoint(&state).unwrap();
+    for change in [
+        (|v: &mut Value| v["frame"]["cloth_positions_m"][0][0] = json!(1.)) as fn(&mut Value),
+        |v| v["frame"]["request"]["settings"]["max_distance_m"] = json!(0.19),
+        |v| v["frame"]["projection"]["layout"]["regions"][0]["body_fraction"] = json!(0.7),
+        |v| v["frame"]["source"]["columns"][0]["layers"][0]["allow_estimates"] = json!(false),
+        |v| v["temperature_c"][0] = json!([]),
+        |v| v["temperature_c"] = json!([]),
+        |v| v["temperature_c"][0][0] = json!(61.),
+        |v| v["temperature_c"][0][0] = json!(21.),
+        |v| v["sha256"] = json!("changed"),
+        |v| v["extra"] = json!(true),
+    ] {
+        let mut changed = saved.clone();
+        change(&mut changed);
+        assert!(Frame::from_checkpoint(&changed).is_err());
+    }
+    assert_eq!(frame.checkpoint(&state).unwrap(), saved);
+    assert!(split(2).checkpoint(&state).is_err());
+}
+
+#[test]
+fn checkpoint_restoration_validates_temperatures_even_with_a_recomputed_digest() {
+    use ftx_core::receipt::sha256_hex;
+    use serde_json::json;
+    let frame = one(1);
+    let mut saved = frame.checkpoint(&frame.initial(20.).unwrap()).unwrap();
+    saved["temperature_c"][0][0] = json!(-0.1);
+    saved.as_object_mut().unwrap().remove("sha256");
+    saved["sha256"] = json!(sha256_hex(&serde_json::to_vec(&saved).unwrap()));
+    assert!(Frame::from_checkpoint(&saved).is_err());
+}
+
+#[test]
+fn all_bare_frames_roundtrip_without_inventing_a_cloth_temperature_history() {
+    let frame = frame(
+        source(&selection()),
+        tri(0.04),
+        vec![v(2., 0., 0.), v(3., 0., 0.), v(2., 1., 0.)],
+        &[[0, 1, 2]],
+        1,
+    );
+    assert_eq!(frame.cells(), 0);
+    let state = frame.initial(20.).unwrap();
+    let checkpoint = frame.checkpoint(&state).unwrap();
+    let (restored, saved) = Frame::from_checkpoint(&checkpoint).unwrap();
+    assert!(saved.temperature_c().is_empty());
+    assert!(one(1).remap(&restored, &saved).is_err());
+}
