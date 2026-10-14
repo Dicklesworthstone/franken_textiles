@@ -115,7 +115,7 @@ impl Contact {
                 "motion needs matching endpoint counts, unchanged topology and a positive pair budget",
             ));
         }
-        validate_mesh(cloth_start, &self.cloth.triangles)?;
+        self.check_cloth(cloth_start)?;
         validate_mesh(cloth_end, &self.cloth.triangles)?;
         validate_mesh(&self.body.vertices, &self.body.triangles)?;
         validate_mesh(body_end, &self.body.triangles)?;

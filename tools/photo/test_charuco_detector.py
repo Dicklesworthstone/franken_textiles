@@ -137,6 +137,43 @@ class CharucoDetection(unittest.TestCase):
                              input=b"{}\n", capture_output=True, timeout=30, check=True)
         self.assertIn("error", json.loads(bad.stdout))
 
+    def test_calibrated_distorted_pixels_retain_original_frame_and_ids(self):
+        header, image, truth = scene()
+        h, w = image.shape
+        k = np.array([[900., 0., w/2], [0., 900., h/2], [0., 0., 1.]])
+        d = np.array([0.18, 0.02, 0.002, -0.003, 0.005])
+        header["intrinsics"] = {"focal_px": [900., 900.], "principal_px": [w/2, h/2],
+                                "distortion": {"radial": [0.18, 0.02, 0.005],
+                                               "tangential": [0.002, -0.003], "max_radius": 1.0}}
+        # Render a distorted photo from an independent OpenCV board, without calling the
+        # adapter or Rust lens implementation to obtain ground-truth corner positions.
+        y, x = np.mgrid[:h, :w]
+        pixels = np.stack((x, y), axis=-1).astype(np.float64).reshape(-1, 1, 2)
+        rectified = cv2.undistortPointsIter(pixels, k, d, None, k,
+                                          (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 60, 1e-10))
+        maps = rectified.reshape(h, w, 2).astype(np.float32)
+        sample = cv2.remap(image, maps[:, :, 0], maps[:, :, 1], cv2.INTER_LINEAR, borderValue=80)
+        x, y = ((truth - [w/2, h/2]) / [900., 900.]).T
+        r2 = x*x + y*y
+        radial = 1 + d[0]*r2 + d[1]*r2*r2 + d[4]*r2*r2*r2
+        expected = np.column_stack((900*(x*radial + 2*d[2]*x*y + d[3]*(r2+2*x*x)) + w/2,
+                                    900*(y*radial + d[2]*(r2+2*y*y) + 2*d[3]*x*y) + h/2))
+        for image in (sample, cv2.GaussianBlur(sample, (0, 0), 1.0)):
+            result = detect(header, image)
+            self.assert_corners(result, expected, 30, 0.8)
+            self.assertTrue(result["detector"]["uses_lens_intrinsics"])
+            self.assertEqual(result["detector"]["coordinate_frame"], "stored_full_resolution_pixels")
+
+    def test_malformed_and_uncertified_lenses_refuse(self):
+        for lens in ([], {}, {"focal_px": [800, True], "principal_px": [0, 0]},
+                     {"focal_px": [800, 800], "principal_px": [0, 0], "skew": 1},
+                     {"focal_px": [800, 800], "principal_px": [0, 0],
+                      "distortion": {"radial": [-1, 0, 0]}},
+                     {"focal_px": [800, 800], "principal_px": [0, 0],
+                      "distortion": {"tangential": [float("nan"), 0]}}):
+            with self.subTest(lens=lens), self.assertRaises(ValueError):
+                adapter.lens_spec(lens)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

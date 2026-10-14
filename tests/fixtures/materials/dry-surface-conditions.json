@@ -1,0 +1,17 @@
+{
+  "schema": "ftx-thermal-surface-conditions/1",
+  "boundaries": [
+    {
+      "inside_c": 30.0,
+      "outside_c": 0.0,
+      "inside_resistance_m2_k_w": 0.1,
+      "outside_resistance_m2_k_w": 0.2
+    }
+  ],
+  "transient": {
+    "initial_temperature_c": 20.0,
+    "step_seconds": 2.0,
+    "steps": 24,
+    "record_every": 4
+  }
+}

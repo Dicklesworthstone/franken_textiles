@@ -387,6 +387,11 @@ pub fn drape(
         }
     }
     report["mass_kg"] = json!(scene.solver.model.mass.iter().sum::<f64>());
+    // Missing thermal observations must not invalidate a supported mechanical drape. Legacy reports
+    // stay byte-compatible; explicit materials carry a ready-to-evaluate exchange or a refusal.
+    if report["material"]["basis"] != "legacy_uncertain" {
+        report["thermal_surface"] = crate::thermal::surface::for_drape(&scene, &report["material"]);
+    }
     Ok(DrapeRun {
         scene,
         fold,

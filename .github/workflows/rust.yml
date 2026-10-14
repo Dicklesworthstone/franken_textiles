@@ -30,6 +30,9 @@ jobs:
       - name: Test
         if: ${{ !cancelled() }}
         run: cargo test --workspace --locked
+      - name: Test supplier source adapters
+        if: ${{ !cancelled() }}
+        run: python3 -m unittest discover -s scripts -p 'test*.py' -v
       - name: Check browser bindings
         if: ${{ !cancelled() }}
         run: cargo check --target wasm32-unknown-unknown -p ftx-wasm --locked

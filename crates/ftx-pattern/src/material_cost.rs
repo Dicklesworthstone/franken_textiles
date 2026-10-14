@@ -65,6 +65,10 @@ pub struct Quote {
     pub terms: String,
     /// UTC calendar date on which the response was actually retrieved (YYYY-MM-DD).
     pub observed_on: String,
+    /// Last eligible UTC calendar date, inclusive, when explicitly bounded by the source.
+    /// Absence means no known expiry, not a guarantee of future availability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_through: Option<String>,
     /// Whether that exact offer was available then; latest unavailable does not revive an old price.
     pub available: bool,
     /// Source endpoint or evidence locator.
@@ -214,7 +218,12 @@ impl Quote {
         {
             return Err(invalid("quote needs the source SHA-256"));
         }
-        day(&self.observed_on)?;
+        let observed = day(&self.observed_on)?;
+        if let Some(expiry) = &self.valid_through
+            && day(expiry)? < observed
+        {
+            return Err(invalid("quote expired before its observation date"));
+        }
         for (name, v) in [
             ("price", self.price),
             ("quantity", self.quantity),
@@ -345,6 +354,13 @@ impl QuoteBook {
         }
         let mut offers = Vec::new();
         for q in latest.values() {
+            // Apply expiry AFTER selecting the latest observation: expired prices must not revive
+            // an older unbounded quote. Do this before width/order arithmetic for ineligible data.
+            if let Some(expiry) = &q.valid_through
+                && day(expiry)? < as_of
+            {
+                continue;
+            }
             if q.available
                 && as_of - day(&q.observed_on)? <= i64::from(scope.max_age_days)
                 && let Some(offer) = q.offer(material, scope)?
@@ -395,6 +411,7 @@ mod tests {
             quality: "first-quality".into(),
             terms: "merchandise-ex-tax-shipping".into(),
             observed_on: "2026-10-13".into(),
+            valid_through: None,
             available: true,
             source: "https://example.org/synthetic".into(),
             source_sha256: "0".repeat(64),
@@ -417,6 +434,40 @@ mod tests {
             schema: "ftx-textile-quotes/1".into(),
             quotes,
         }
+    }
+
+    #[test]
+    fn source_expiry_is_inclusive_and_cannot_revive_an_old_price() {
+        let mut old = quote();
+        old.observed_on = "2026-10-12".into();
+        let mut current = quote();
+        current.valid_through = Some("2026-10-14".into());
+        let history = book(vec![current, old]);
+        let mut s = scope();
+        s.as_of = "2026-10-14".into();
+        assert_eq!(history.evaluate(&material(), &s).unwrap().offers.len(), 1);
+        s.as_of = "2026-10-15".into();
+        let expired = history.evaluate(&material(), &s).unwrap();
+        assert!(expired.offers.is_empty());
+        assert!(expired.rate_p10_p50_p90.is_none());
+    }
+
+    #[test]
+    fn optional_expiry_roundtrips_and_invalid_or_conflicting_dates_refuse() {
+        let q = quote();
+        let legacy = serde_json::to_value(&q).unwrap();
+        assert!(legacy.get("valid_through").is_none());
+        assert_eq!(serde_json::from_value::<Quote>(legacy).unwrap(), q);
+        for expiry in ["2026-10-12", "2026-02-30", "2026-10-14T12:00:00Z"] {
+            let mut invalid = q.clone();
+            invalid.valid_through = Some(expiry.into());
+            assert!(invalid.validate().is_err());
+        }
+        let mut bounded = q.clone();
+        bounded.valid_through = Some("2026-10-20".into());
+        let wire = serde_json::to_string(&bounded).unwrap();
+        assert_eq!(serde_json::from_str::<Quote>(&wire).unwrap(), bounded);
+        assert!(book(vec![q, bounded]).validate().is_err());
     }
 
     #[test]

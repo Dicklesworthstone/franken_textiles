@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 
 use super::{Boundary, DryThermalModel, invalid, positive, temperature};
 
+mod io;
+pub(crate) use io::for_drape;
+
 /// One retained material triangle. A seam weld does not merge either triangle's reference area.
 #[derive(Clone, Copy, Debug)]
 pub struct Patch {

@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Affine, Ctx, ExportOptions, Geom, Source, cutter::cutter_ring, layout::rotation};
 
+pub mod preview;
+pub mod procurement;
+
 /// Declared roll-planning policy. Values are allowances, not calibrated machine parameters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
