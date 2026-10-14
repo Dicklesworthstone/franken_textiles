@@ -10,7 +10,7 @@ use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::{material, run::DrapeOptions};
 use ftx_pattern::Pattern;
 use ftx_pattern::material_calibration::{Input as CalibrationInput, calibrate};
-use ftx_pattern::material_catalog::Selection;
+use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
 use ftx_pattern::material_cost::{QuoteBook, Scope};
 use ftx_pattern::materials::ThermalStack;
 use ftx_pattern::textile_import::{catalog, resolve_fabric};
@@ -28,6 +28,8 @@ mod thermal_transient;
 
 #[path = "material_workbench/cutting.rs"]
 mod cutting;
+#[path = "material_workbench/relaxation.rs"]
+mod relaxation_calibration;
 
 const USAGE: &str = "ftx-materials catalog [SEARCH]
 ftx-materials show ID
@@ -36,6 +38,7 @@ ftx-materials bind PATTERN.json SELECTION.json NEW-PATTERN.json
 ftx-materials price PATTERN.json QUOTES.json SCOPE.json
 ftx-materials thermal STACK.json
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
+ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
 ftx-materials thermal-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json
@@ -107,6 +110,12 @@ fn selected(raw: &Value) -> Result<ftx_pattern::material_catalog::ResolvedMateri
         .ok_or_else(|| invalid("pattern has no explicit material selection"))
 }
 
+fn simulation_readiness(material: &ResolvedMaterial) -> Result<(), Refusal> {
+    material.mechanics()?;
+    material.membrane_relaxation()?;
+    Ok(())
+}
+
 fn bind(raw: Value, selection: &Selection, out: &str) -> Result<Value, Refusal> {
     let pattern = Pattern::new(raw);
     let errors = pattern.structure_errors();
@@ -147,7 +156,7 @@ fn bind(raw: Value, selection: &Selection, out: &str) -> Result<Value, Refusal> 
     file.write_all(&bytes).map_err(|e| io(out, e))?;
     Ok(json!({"out":out,"material_sha256":snapshot.sha256(),
         "missing_mechanics":snapshot.material().missing_mechanics(),
-        "simulation_ready":snapshot.mechanics().is_ok(),"geometry_changed":false}))
+        "simulation_ready":simulation_readiness(&snapshot).is_ok(),"geometry_changed":false}))
 }
 
 #[derive(Deserialize)]
@@ -169,7 +178,7 @@ fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
         allow_estimates,
         ..Selection::default()
     })?;
-    let mechanics = snapshot.mechanics();
+    let mechanics = simulation_readiness(&snapshot);
     Ok(
         json!({"calibration":report,"selection":snapshot.frozen_selection(),
         "simulation_ready":mechanics.is_ok(),"mechanics_refusal":mechanics.err(),
@@ -180,6 +189,10 @@ fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["calibrate-relaxation", path] => relaxation_calibration::run(path, false),
+        ["calibrate-relaxation", path, "--allow-estimates"] => {
+            relaxation_calibration::run(path, true)
+        }
         ["cut-plan", pattern, options] => cutting::plan(pattern, options),
         ["cut-price", pattern, options, quotes, market] => {
             cutting::price(pattern, options, quotes, market)
@@ -213,7 +226,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             Ok(
                 json!({"snapshot":snapshot,"selection":snapshot.frozen_selection(),
                 "missing_mechanics":snapshot.material().missing_mechanics(),
-                "simulation_ready":snapshot.mechanics().is_ok()}),
+                "simulation_ready":simulation_readiness(&snapshot).is_ok()}),
             )
         }
         ["resolve", path] => {

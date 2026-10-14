@@ -175,6 +175,26 @@ fn three_resolvable_modes_have_independent_time_coverage() {
 }
 
 #[test]
+fn noisy_forces_fit_with_explicit_residual_budgets_without_exact_interpolation() {
+    let mut raw = input(&[(1.7, 0.3), (0.65, 8.)], true);
+    for e in &mut raw.experiments {
+        for (i, s) in e.samples.iter_mut().enumerate() {
+            for (j, f) in s.nominal_n_m.iter_mut().flatten().enumerate() {
+                *f.as_mut().unwrap() += ((i * 7 + j * 11) % 13) as f64 * 0.005 - 0.03;
+            }
+        }
+    }
+    raw.max_rms_scaled = 0.1;
+    raw.max_peak_scaled = 0.2;
+    let report = calibrate(&raw).unwrap();
+    let branches = &report.material.membrane_relaxation.unwrap().branches;
+    assert!((branches[0].relaxation_time.value / 0.3 - 1.).abs() < 0.01);
+    assert!((branches[1].relaxation_time.value / 8. - 1.).abs() < 0.01);
+    assert!(report.fit.rms_scaled > 0.001);
+    assert!(report.check.unwrap().rms_scaled > 0.001);
+}
+
+#[test]
 fn unobserved_force_nodes_still_advance_the_loading_history() {
     let mut raw = input(&[(1.2, 1.)], true);
     for e in &mut raw.experiments {

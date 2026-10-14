@@ -32,6 +32,8 @@ tangent**, not the instantaneous stiffness. The original scalar or tabulated non
 the equilibrium branch. Supplying a modulus measured immediately after loading as equilibrium and
 then adding transient branches would double-count stiffness. The existing static swatch calibration
 command does not identify relaxation times or separate instantaneous and equilibrium measurements.
+The timed `ftx-materials calibrate-relaxation` workflow now identifies ratios and times from complete
+force/deformation histories with independently supplied equilibrium; see `relaxation-calibration.md`.
 
 Estimates require the material selection's existing explicit `allow_estimates` policy. Every source,
 parameter, condition and initialization choice participates in the frozen material identity. Omitting

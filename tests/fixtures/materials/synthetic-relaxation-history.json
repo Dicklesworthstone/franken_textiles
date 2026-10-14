@@ -1,0 +1,163 @@
+{
+  "schema": "ftx-relaxation-calibration/1",
+  "material": {
+    "id": "synthetic-timed-swatch",
+    "name": "Synthetic timed swatch, NOT empirical textile data",
+    "form": "woven",
+    "properties": {
+      "areal_density": {
+        "value": 0.2,
+        "unit": "kg/m2",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic known answer"
+      },
+      "warp_stiffness": {
+        "value": 1000,
+        "unit": "N/m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic EQUILIBRIUM modulus"
+      },
+      "weft_stiffness": {
+        "value": 500,
+        "unit": "N/m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic EQUILIBRIUM modulus"
+      },
+      "poisson_warp_weft": {
+        "value": 0.1,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic known answer"
+      },
+      "shear_stiffness": {
+        "value": 200,
+        "unit": "N/m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic EQUILIBRIUM modulus"
+      },
+      "bending_rigidity": {
+        "value": 0,
+        "unit": "N*m",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic zero bending"
+      },
+      "thickness": {
+        "value": 0.5,
+        "unit": "mm",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic known answer"
+      },
+      "friction_skin": {
+        "value": 0,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic frictionless interface"
+      },
+      "friction_self": {
+        "value": 0,
+        "unit": "1",
+        "source": "test",
+        "evidence": "estimate",
+        "method": "Synthetic frictionless interface"
+      }
+    },
+    "sources": {
+      "test": {
+        "reference": "test:ftx-maxwell-sheet",
+        "accessed_on": "2026-10-14",
+        "note": "Synthetic equilibrium card plus independently evaluated exponential convolution; ratios 1.7 and 0.65, times 0.3 s and 8 s. No experimental textile evidence."
+      }
+    }
+  },
+  "equilibrium_is_long_time": true,
+  "allow_estimated_equilibrium": true,
+  "allow_estimated_observations": true,
+  "replace_existing": false,
+  "method": "Independent synthetic continuous-time convolution of piecewise-linear Green strain; not laboratory measurements.",
+  "conditions": {
+    "scope": "Synthetic data; constant-condition model only"
+  },
+  "domain_source": "test",
+  "strain_range": [
+    [
+      -0.2,
+      0.3
+    ],
+    [
+      -0.2,
+      0.3
+    ],
+    [
+      -0.3,
+      0.3
+    ]
+  ],
+  "initialization": "stress_free_reference",
+  "fitted_on": "2026-10-14",
+  "time_bounds_seconds": [
+    [
+      0.05,
+      1
+    ],
+    [
+      2,
+      30
+    ]
+  ],
+  "max_rms_scaled": 1e-06,
+  "max_peak_scaled": 1e-06,
+  "experiments": [
+    {
+      "id": "ramp-hold-unload",
+      "source": "test",
+      "evidence": "estimate",
+      "partition": "fit",
+      "initialization": "stress_free_reference",
+      "samples": [
+        {"time_seconds":0,"deformation":[[1.0,0.0],[0,1.0]],"nominal_n_m":[[0.0,0.0],[0.0,0.0]],"scale_n_m":1},
+        {"time_seconds":0.01,"deformation":[[1.0029955134495867,0.0017447735074918257],[0,1.0007481979825932]],"nominal_n_m":[[10.172380075461573,1.169090783979854],[1.1634202960448619,1.7538999437862237]],"scale_n_m":1},
+        {"time_seconds":0.02,"deformation":[[1.0059821071967434,0.0034791871296330056],[0,1.0014928333527489]],"nominal_n_m":[[20.238465826758443,2.3315176321220146],[2.3090739652576318,3.48101602802658]],"scale_n_m":1},
+        {"time_seconds":0.05,"deformation":[[1.014889156509222,0.008621631183937566],[0,1.0037059666434829]],"nominal_n_m":[[49.834657447484716,5.781095182849029],[5.645097214656491,8.51019680601481]],"scale_n_m":1},
+        {"time_seconds":0.1,"deformation":[[1.0295630140987,0.016997502591252125],[0,1.0073286876217018]],"nominal_n_m":[[97.35471167803834,11.41792571934951],[10.900058359977551,16.432248783885754]],"scale_n_m":1},
+        {"time_seconds":0.2,"deformation":[[1.0583005244258363,0.033071891388307385],[0,1.0143501614334174]],"nominal_n_m":[[186.93438454546043,22.361624460315564],[20.468673784951044,30.85729716324278]],"scale_n_m":1},
+        {"time_seconds":0.5,"deformation":[[1.0583005244258363,0.033071891388307385],[0,1.0143501614334174]],"nominal_n_m":[[134.54155414602988,16.094244595162117],[14.731838602254033,22.208801912945773]],"scale_n_m":1},
+        {"time_seconds":1,"deformation":[[1.0583005244258363,0.033071891388307385],[0,1.0143501614334174]],"nominal_n_m":[[108.10321758111802,12.931615338604908],[11.836931451385164,17.844620278470096]],"scale_n_m":1},
+        {"time_seconds":2,"deformation":[[1.0583005244258363,0.033071891388307385],[0,1.0143501614334174]],"nominal_n_m":[[98.28609280675994,11.75726286183588],[10.761989968569683,16.2241054802558]],"scale_n_m":1},
+        {"time_seconds":4,"deformation":[[1.0583005244258363,0.033071891388307385],[0,1.0143501614334174]],"nominal_n_m":[[90.73417301544141,10.853880668460851],[9.935080660073671,14.977508532774378]],"scale_n_m":1},
+        {"time_seconds":8,"deformation":[[1.0,0.0],[0,1.0]],"nominal_n_m":[[-24.231264805333694,-2.7781194957884647],[-2.7781194957884647,-4.188119842897182]],"scale_n_m":1},
+        {"time_seconds":16,"deformation":[[1.0,0.0],[0,1.0]],"nominal_n_m":[[-6.050413721904218,-0.6936811781574136],[-0.6936811781574136,-1.045750519835297]],"scale_n_m":1},
+        {"time_seconds":32,"deformation":[[1.0,0.0],[0,1.0]],"nominal_n_m":[[-0.8188344547498269,-0.0938795387215234],[-0.0938795387215234,-0.14152694279626638]],"scale_n_m":1}
+      ]
+    },
+    {
+      "id": "separate-step-hold",
+      "source": "test",
+      "evidence": "estimate",
+      "partition": "check",
+      "initialization": "stress_free_reference",
+      "samples": [
+        {"time_seconds":0,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[143.8585273520063,18.37903192349699],[17.076962184244877,41.19066255496252]],"scale_n_m":1},
+        {"time_seconds":0.01,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[141.43034048928402,18.068812399582434],[16.788720284412793,40.49540571114644]],"scale_n_m":1},
+        {"time_seconds":0.02,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[139.08065946961713,17.768622600163564],[16.50979754930299,39.822627254600185]],"scale_n_m":1},
+        {"time_seconds":0.05,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[132.47734681428173,16.924998684868783],[15.725940501816433,37.93191678830094]],"scale_n_m":1},
+        {"time_seconds":0.1,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[122.8177704797784,15.690913607764617],[14.579284666973152,35.16611376958348]],"scale_n_m":1},
+        {"time_seconds":0.2,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[107.64742700084136,13.752785696809674],[12.778464189519536,30.82242618577576]],"scale_n_m":1},
+        {"time_seconds":0.5,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[82.95299299920121,10.597882061947017],[9.847070942489621,23.75172890650763]],"scale_n_m":1},
+        {"time_seconds":1,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[70.18014905138521,8.966053132568767],[8.330849574892857,20.094511537430012]],"scale_n_m":1},
+        {"time_seconds":2,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[64.77429820098385,8.275414161198785],[7.68913919285839,18.54666739985943]],"scale_n_m":1},
+        {"time_seconds":4,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[59.872960690999264,7.649230644503811],[7.10731789348263,17.14327934106363]],"scale_n_m":1},
+        {"time_seconds":8,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[53.21140712691033,6.7981660057361974],[6.316547263501743,15.235892896888627]],"scale_n_m":1},
+        {"time_seconds":16,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[46.72043725563493,5.9688947440700835],[5.54602605025719,13.377349266952015]],"scale_n_m":1},
+        {"time_seconds":32,"deformation":[[1.0392304845413265,0.024056261216234404],[0,1.0195201304026793]],"nominal_n_m":[[43.45408564081648,5.55159323468356],[5.158288430295211,12.44210274644071]],"scale_n_m":1}
+      ]
+    }
+  ]
+}
