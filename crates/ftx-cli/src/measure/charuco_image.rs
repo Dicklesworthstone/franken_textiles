@@ -213,7 +213,7 @@ fn blur(image: &Bgr, reference: &Value, square_px: f64) -> Option<f64> {
 pub(super) fn analyze(
     image: &Bgr,
     sheet_path: &str,
-    python: &str,
+    python: Option<&str>,
     intrinsics: Option<Intrinsics>,
 ) -> Result<(PhotoScale, Value), Refusal> {
     let sheet = read_json(sheet_path)?.0;
@@ -222,7 +222,12 @@ pub(super) fn analyze(
             "--sheet must be a fabric-calib-sheet/1 ChArUco sidecar",
         ));
     }
-    let response = detect(image, &sheet, python, intrinsics)?;
+    let response = match python {
+        None | Some("rust") => {
+            ftx_measure::photo::detect_charuco(&image.data, image.w, image.h, &sheet, intrinsics)?
+        }
+        Some(py) => detect(image, &sheet, py, intrinsics)?,
+    };
     let mut reference = response["reference"].clone();
     if reference["reference"] != "charuco"
         || reference["image_size_px"] != json!([image.w, image.h])
@@ -262,7 +267,7 @@ pub(super) fn annotate(report: &mut Value) {
     if report["image_input"].get("charuco_detection").is_some() {
         report["coordinate_source"] = json!("detected_charuco");
         report["notes"][0] = json!(
-            "ChArUco IDs and subpixel corners detected locally by optional OpenCV; homography, inliers and uncertainty computed in Rust. Pixels are already oriented; no EXIF transform was applied."
+            "ChArUco IDs and subpixel corners detected locally; homography, inliers and uncertainty computed in Rust. Pixels are already oriented; no EXIF transform was applied."
         );
     }
 }

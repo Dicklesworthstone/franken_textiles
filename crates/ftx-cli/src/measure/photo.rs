@@ -301,7 +301,7 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
                 let (scale, detection) = charuco_image::analyze(
                     &image,
                     sheet,
-                    option(args, "detector-python").unwrap_or("python3"),
+                    option(args, "detector-python"),
                     lens.as_ref().map(|(lens, _)| lens.intrinsics),
                 )?;
                 receipt["charuco_detection"] = detection;
