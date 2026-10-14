@@ -12,6 +12,7 @@ import datetime as dt
 from decimal import Decimal, InvalidOperation
 import hashlib
 import http.cookiejar
+from html.parser import HTMLParser
 import io
 import json
 import math
@@ -32,7 +33,7 @@ FIELDS = ("offer_id", "material_id", "supplier", "sku", "quantity", "unit",
           "minimum_quantity", "order_increment", "currency", "region", "quality", "terms")
 
 
-def load(raw: bytes) -> dict:
+def load(raw: bytes, *, object_only=True):
     def pairs(items):
         result = {}
         for key, value in items:
@@ -44,8 +45,11 @@ def load(raw: bytes) -> dict:
         raise ValueError(f"non-finite JSON number: {value}")
     if len(raw) > LIMIT:
         raise ValueError("source exceeds 4 MiB")
-    value = json.loads(raw, object_pairs_hook=pairs, parse_constant=nonfinite)
-    if not isinstance(value, dict):
+    try:
+        value = json.loads(raw, object_pairs_hook=pairs, parse_constant=nonfinite)
+    except RecursionError as error:
+        raise ValueError("JSON nesting exceeds parser bounds") from error
+    if object_only and not isinstance(value, dict):
         raise ValueError("expected a JSON object")
     return value
 
@@ -75,7 +79,7 @@ class PublicSession:
         self.next_request = {}
 
     def _get(self, url):
-        req = urllib.request.Request(url, headers={"User-Agent": AGENT, "Accept": "application/json,text/plain"})
+        req = urllib.request.Request(url, headers={"User-Agent": AGENT, "Accept": "application/json,text/csv,text/html,text/plain"})
         with self.opener.open(req, timeout=20) as response:
             if origin(response.url) != origin(url):
                 raise ValueError("source origin changed")
@@ -307,6 +311,215 @@ def extract_csv(entry: dict, source_raw: bytes, observed: dt.datetime) -> tuple[
     return quote, receipt
 
 
+class JsonLdScripts(HTMLParser):
+    """Read data scripts only: never execute JavaScript, fetch src, or expand remote contexts."""
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.scripts = []
+        self.current = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "script":
+            return
+        attributes = dict(attrs)
+        mime = attributes.get("type") or ""
+        if mime.strip().lower() == "application/ld+json":
+            if len(attributes) != len(attrs) or "src" in attributes:
+                raise ValueError("JSON-LD must be inline with unambiguous attributes")
+            if len(self.scripts) >= 64:
+                raise ValueError("too many JSON-LD scripts")
+            self.current = []
+
+    def handle_data(self, data):
+        if self.current is not None:
+            self.current.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self.current is not None:
+            self.scripts.append("".join(self.current))
+            self.current = None
+
+
+def schema_type(node, name):
+    types = node.get("@type", [])
+    types = types if isinstance(types, list) else [types]
+    return any(t in (name, "https://schema.org/" + name, "http://schema.org/" + name) for t in types)
+
+
+def jsonld_nodes(source_raw: bytes, source_format: str) -> tuple[list[dict], dict[str, dict]]:
+    if len(source_raw) > LIMIT:
+        raise ValueError("source exceeds 4 MiB")
+    if source_format == "html":
+        parser = JsonLdScripts()
+        parser.feed(source_raw.decode("utf-8-sig")); parser.close()
+        if parser.current is not None or not parser.scripts:
+            raise ValueError("missing or unclosed JSON-LD data script")
+        documents = [load(s.encode(), object_only=False) for s in parser.scripts]
+    else:
+        documents = [load(source_raw, object_only=False)]
+    nodes, identifiers = [], {}
+    stack = [(d, 0, False) for d in documents]
+    visited = 0
+    while stack:
+        value, depth, context_known = stack.pop()
+        visited += 1
+        if visited > 16384 or depth > 32:
+            raise ValueError("JSON-LD graph exceeds node/depth bounds")
+        if isinstance(value, list):
+            stack.extend((v, depth + 1, context_known) for v in value)
+        elif isinstance(value, dict):
+            if "@context" in value:
+                context = value["@context"]
+                if isinstance(context, dict) and set(context) == {"@vocab"}:
+                    context = context["@vocab"]
+                if context not in ("http://schema.org", "https://schema.org", "http://schema.org/", "https://schema.org/"):
+                    raise ValueError("unsupported JSON-LD context; aliases/remapping are not inferred")
+                context_known = True
+            if "@type" in value and not context_known:
+                raise ValueError("typed JSON-LD node lacks a supported schema.org context")
+            nodes.append(value)
+            if "@id" in value:
+                identifier = value["@id"]
+                if not isinstance(identifier, str) or not identifier:
+                    raise ValueError("invalid JSON-LD identifier")
+                if set(value) != {"@id"}:
+                    if identifier in identifiers:
+                        raise ValueError("ambiguous JSON-LD node identity")
+                    identifiers[identifier] = value
+            stack.extend((v, depth + 1, context_known) for k, v in value.items() if k != "@context")
+    return nodes, identifiers
+
+
+def validate_jsonld(entry: dict) -> None:
+    required = set(FIELDS) | {"adapter", "source_url", "basis_source", "basis_note", "basis_reviewed_on",
+                              "source_format", "offer_ref", "tax_included", "required_description_text"}
+    if set(entry) != required or entry["adapter"] != "jsonld_v1":
+        raise ValueError("JSON-LD manifest fields differ from jsonld_v1")
+    validate_basis(entry)
+    if origin(entry["source_url"]) != origin(entry["basis_source"]):
+        raise ValueError("JSON-LD and selling-basis evidence must share the supplier origin")
+    if entry["source_format"] not in ("html", "json"):
+        raise ValueError("JSON-LD source_format must be html or json")
+    if entry["offer_ref"] is not None and (not isinstance(entry["offer_ref"], str) or not entry["offer_ref"]):
+        raise ValueError("offer_ref must be null or an exact nonempty @id")
+    if entry["tax_included"] is not None and type(entry["tax_included"]) is not bool:
+        raise ValueError("tax_included must be null or a reviewed boolean")
+    fragments = entry["required_description_text"]
+    if not isinstance(fragments, list) or not fragments or any(not isinstance(s, str) or not s.strip() for s in fragments):
+        raise ValueError("JSON-LD needs reviewed product-description fragments for its selling basis")
+
+
+def valid_period(node: dict, observed: dt.datetime) -> str | None:
+    expiries = []
+    for key, before in (("priceValidUntil", False), ("validFrom", True), ("validThrough", False),
+                        ("availabilityStarts", True), ("availabilityEnds", False)):
+        if key not in node:
+            continue
+        value = node[key]
+        if not isinstance(value, str):
+            raise ValueError(f"invalid {key}")
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+            date = dt.date.fromisoformat(value)
+            valid = observed.date() >= date if before else observed.date() <= date
+            if not before:
+                expiries.append(value)
+        else:
+            if not before:
+                raise ValueError("intraday expiry cannot be represented by the calendar-date quote schema")
+            instant = dt.datetime.fromisoformat(value)
+            if instant.tzinfo is None or instant.utcoffset() is None:
+                raise ValueError("JSON-LD validity datetime needs an explicit timezone")
+            valid = observed >= instant if before else observed <= instant
+        if not valid:
+            raise ValueError(f"offer is not currently valid: {key}")
+    return min(expiries, default=None)
+
+
+def extract_jsonld(entry: dict, source_raw: bytes, observed: dt.datetime) -> tuple[dict, dict]:
+    validate_jsonld(entry)
+    observed = observation_time(entry, observed)
+    nodes, identifiers = jsonld_nodes(source_raw, entry["source_format"])
+    def resolve(node):
+        if isinstance(node, dict) and set(node) == {"@id"}:
+            node = identifiers.get(node["@id"])
+        if not isinstance(node, dict):
+            raise ValueError("missing embedded JSON-LD node; external references are not fetched")
+        return node
+    products = [n for n in nodes if schema_type(n, "Product") and n.get("sku") == entry["sku"]]
+    if len(products) != 1:
+        raise ValueError("exact JSON-LD Product SKU absent or ambiguous")
+    product = products[0]
+    description = product.get("description")
+    if not isinstance(description, str) or not all(s in description for s in entry["required_description_text"]):
+        raise ValueError("JSON-LD reviewed selling-basis description changed")
+    offered = product.get("offers")
+    offers = [resolve(n) for n in (offered if isinstance(offered, list) else [offered])]
+    if entry["offer_ref"] is not None:
+        offers = [o for o in offers if o.get("@id") == entry["offer_ref"]]
+    if len(offers) != 1 or not schema_type(offers[0], "Offer") or schema_type(offers[0], "AggregateOffer"):
+        raise ValueError("need one exact ordinary Offer, not an aggregate/minimum price")
+    offer = offers[0]
+    if "sku" in offer and offer["sku"] != entry["sku"]:
+        raise ValueError("JSON-LD Offer SKU differs from Product")
+    if "itemOffered" in offer and resolve(offer["itemOffered"]).get("sku") != entry["sku"]:
+        raise ValueError("JSON-LD Offer references a different product")
+    for key in ("eligibleCustomerType", "eligibleQuantity", "eligibleDuration", "eligibleTransactionVolume",
+                "validForMemberTier", "addOn", "includesObject", "leaseLength"):
+        if key in offer:
+            raise ValueError(f"conditional/bundled JSON-LD offer is unsupported: {key}")
+    if offer.get("businessFunction", "http://purl.org/goodrelations/v1#Sell") != "http://purl.org/goodrelations/v1#Sell":
+        raise ValueError("only ordinary sales are supported")
+    for key in ("eligibleRegion", "ineligibleRegion"):
+        if key in offer:
+            regions = offer[key] if isinstance(offer[key], list) else [offer[key]]
+            if not regions or any(not isinstance(r, str) or not r for r in regions):
+                raise ValueError("JSON-LD region geometry is not an exact market code")
+            matches = entry["region"] in regions
+            if matches != (key == "eligibleRegion"):
+                raise ValueError("JSON-LD offer excludes the reviewed market")
+    expiry = valid_period(offer, observed)
+    amounts = []
+    specifications = [offer]
+    if "priceSpecification" in offer:
+        spec = resolve(offer["priceSpecification"])
+        if not schema_type(spec, "PriceSpecification") or set(spec) - {"@id", "@type", "price", "priceCurrency", "valueAddedTaxIncluded"}:
+            raise ValueError("conditional/unit/list price specifications are unsupported")
+        if "valueAddedTaxIncluded" in spec and type(spec["valueAddedTaxIncluded"]) is not bool:
+            raise ValueError("invalid tax inclusion observation")
+        specifications.append(spec)
+    for spec in specifications:
+        if "valueAddedTaxIncluded" in spec and spec["valueAddedTaxIncluded"] is not entry["tax_included"]:
+            raise ValueError("source tax inclusion differs from the reviewed basis")
+        if "priceCurrency" in spec and spec["priceCurrency"] != entry["currency"]:
+            raise ValueError("JSON-LD currency differs from reviewed market")
+        if "price" in spec:
+            if spec.get("priceCurrency") != entry["currency"] or type(spec["price"]) not in (str, int, float):
+                raise ValueError("JSON-LD price needs its own explicit currency and scalar number")
+            amounts.append(decimal_number(str(spec["price"])))
+    if not amounts or any(a != amounts[0] for a in amounts):
+        raise ValueError("missing or conflicting JSON-LD prices")
+    if entry["tax_included"] is not None and not any("valueAddedTaxIncluded" in s for s in specifications):
+        raise ValueError("reviewed source tax-inclusion observation disappeared")
+    stock = offer.get("availability")
+    stock_values = {prefix + name: available for prefix in ("http://schema.org/", "https://schema.org/")
+                    for name, available in (("InStock", True), ("LimitedAvailability", True),
+                                             ("OutOfStock", False), ("SoldOut", False), ("Discontinued", False))}
+    if not isinstance(stock, str) or stock not in stock_values:
+        raise ValueError("JSON-LD stock missing, unknown, preorder or backorder")
+    digest = hashlib.sha256(source_raw).hexdigest()
+    quote = {key: entry[key] for key in FIELDS}
+    quote.update(price=float(amounts[0]), observed_on=observed.date().isoformat(), available=stock_values[stock],
+                 source=entry["source_url"], source_sha256=digest)
+    if expiry is not None:
+        quote["valid_through"] = expiry
+    receipt = {"schema": "ftx-source-refresh/1", "adapter": "jsonld_v1", "observed_at": observed.isoformat(),
+               "manifest_entry": entry, "source_sha256": digest, "product_ref": product.get("@id"),
+               "offer_ref": offer.get("@id"), "quantity_basis": "reviewed_manifest_not_inferred",
+               "limits": ["No execution, remote context expansion, checkout, FX or textile-physics inference.",
+                          "Declared structured data is not independent supplier/stock/terms verification."]}
+    return quote, receipt
+
+
 def refresh(manifest: dict, get, now=None) -> tuple[dict, dict[str, bytes]]:
     if (set(manifest) != {"schema", "offers"}
             or manifest["schema"] not in {"ftx-shopify-refresh/1", "ftx-textile-refresh/1"}):
@@ -322,6 +535,8 @@ def refresh(manifest: dict, get, now=None) -> tuple[dict, dict[str, bytes]]:
             validate_entry(entry)
         elif entry.get("adapter") == "csv_v1":
             validate_csv(entry)
+        elif entry.get("adapter") == "jsonld_v1":
+            validate_jsonld(entry)
         else:
             raise ValueError("unknown source adapter")
         if entry["offer_id"] in ids:
@@ -331,13 +546,17 @@ def refresh(manifest: dict, get, now=None) -> tuple[dict, dict[str, bytes]]:
     quotes, evidence = [], {}
     sources = {}
     for entry in entries:
-        if entry.get("adapter") == "csv_v1":
+        if entry.get("adapter") in ("csv_v1", "jsonld_v1"):
             url = entry["source_url"]
             if url not in sources:
                 sources[url] = (get(url), clock())
             product, observed = sources[url]
-            quote, receipt = extract_csv(entry, product, observed)
-            extension = ".csv"
+            if entry["adapter"] == "csv_v1":
+                quote, receipt = extract_csv(entry, product, observed)
+                extension = ".csv"
+            else:
+                quote, receipt = extract_jsonld(entry, product, observed)
+                extension = ".html" if entry["source_format"] == "html" else ".json"
         else:
             before = get(entry["cart_url"])
             product = get(entry["product_url"])

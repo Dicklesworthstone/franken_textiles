@@ -1,6 +1,6 @@
 # Source refresh into the existing material-price workbench
 
-`scripts/refresh_textile_prices.py` reads public Shopify Ajax product data and emits the existing
+`scripts/refresh_textile_prices.py` reads public Shopify Ajax, reviewed CSV and schema.org Product/Offer data and emits the existing
 `ftx-textile-quotes/1` format consumed by `ftx-materials price`. This is an external data-ingestion
 adapter, not a second catalog, pricing model, physics module, scheduler or checkout client.
 It requires only Python 3's standard library; the solver remains offline and deterministic.
@@ -50,7 +50,7 @@ python3 scripts/refresh_textile_prices.py manifest.json \
   --out quotes-2026-10-13T180000.json --evidence ./supplier-evidence
 cargo run -p ftx-cli --bin ftx-materials -- \
   price pattern.json quotes-2026-10-13T180000.json scope.json
-python3 -m unittest discover -s scripts -p 'test_refresh_textile_prices.py' -v
+python3 -m unittest discover -s scripts -p 'test*.py' -v
 ```
 
 The output path **must be new**. A successful run publishes one complete snapshot atomically. Any
@@ -78,7 +78,7 @@ are reviewed declarations, not properties established by the Ajax response.
 The current Rust quote schema records calendar dates. Keep intraday refreshes as separate snapshots:
 merging conflicting same-day rows into a single historical book is deliberately rejected by that schema.
 A successful fetch is not a purchase guarantee or a statistically representative world-market survey.
-No automatic recurring refresh is configured. Broader JSON-LD suppliers and policy-aware scheduling
+No automatic recurring refresh is configured. Reviewed live supplier manifests and policy-aware scheduling
 remain follow-up work. Live supplier endpoints were inaccessible from the implementation environment;
 the adapter was verified with offline response fixtures, not presented as a successful live scrape.
 
@@ -131,3 +131,60 @@ Original bytes are retained as `<sha256>.csv`; the receipt records the selected 
 current quote schema and must not be configured as unconditional offers. Authenticated feeds, conditional/negotiated prices and
 unknown quantity conventions require separate qualification. CSV tests use synthetic observations,
 not live supplier prices. The existing robots, pacing and immutable-publication policy is unchanged.
+
+## Structured Product/Offer pages (JSON-LD)
+
+The same `ftx-textile-refresh/1` manifest accepts `adapter: "jsonld_v1"`. Retain the common selling-basis
+fields and `required_description_text` from the Shopify example, remove its endpoint/variant fields,
+and add this **synthetic** source description:
+
+```json
+{
+  "adapter": "jsonld_v1",
+  "source_url": "https://example.invalid/products/exact-sheet",
+  "source_format": "html",
+  "offer_ref": null,
+  "tax_included": null
+}
+```
+
+`source_format` is `html` for inline `application/ld+json` scripts or `json` for a public JSON-LD feed.
+The reader supports object/array documents, `@graph`, nested ProductGroup variants, and local `@id`
+references. It requires exactly one Product with the manifest's exact string SKU. Its offers must
+resolve to one ordinary Offer; multiple offers require an exact `offer_ref` matching an Offer `@id`.
+The selected Offer cannot rebind the Product's SKU. Product-level minimums, AggregateOffer, preorder,
+backorder, membership, quantity-conditioned, rental and bundled prices are not converted to ordinary
+quotes. Empty, ambiguous, malformed or unsupported evidence refuses the whole snapshot.
+
+Only standard schema.org contexts (or a sole schema.org `@vocab`) are supported, without aliases or
+term remapping. JavaScript is never executed and referenced scripts, contexts and external nodes are
+never fetched. There is no browser fallback or authentication bypass. HTML must be UTF-8, with at most
+64 data scripts; graph traversal is bounded. Original HTML/JSON and source-selection receipts are
+retained by hash. All SKUs drawn from one URL use the same fetched bytes and observation timestamp.
+
+A direct Offer price or one plain PriceSpecification can supply the price, with explicit currency.
+When both exist, their amounts/currencies must agree. UnitPriceSpecification, list/sale-price arrays,
+conditional specifications and hidden conversion assumptions refuse. `tax_included` is a reviewed
+boolean when the source explicitly publishes `valueAddedTaxIncluded`, otherwise null. A conflicting
+or disappearing tax observation refuses. This checks published metadata, not checkout charges.
+Exact Product-description fragments still guard the reviewed quantity basis; JSON-LD prices do not
+establish roll length, yardage, dye lot, delivery eligibility or calibrated textile physics.
+
+### Source expiry is a purchasing constraint, not just a receipt note
+
+The quote model accepts optional `valid_through: "YYYY-MM-DD"` (last eligible UTC date, inclusive).
+Existing quotes omit it and round-trip unchanged; absence means no known expiry, not guaranteed
+future validity. JSON-LD retains the earliest dated price/offer/availability end boundary in this
+field. It rejects already-expired or not-yet-valid observations. Intraday end timestamps refuse because
+the current purchasing scope evaluates calendar dates, not instants; they are not rounded into a
+longer-lived offer. A new build is required to consume this optional field with expiry semantics.
+
+The Rust evaluator first chooses the latest observation per exact offer/scope and **then** filters
+expiry and staleness. Consequently an expired or unavailable latest offer cannot resurrect an older,
+cheaper/unbounded quote. Empty samples retain unknown cost rather than zero. This is shared by
+material-price and cutting procurement consumers; no second pricing formula was added.
+
+Primary structured-data interface reference, checked 2026-10-14: https://schema.org/Offer .
+Offline regressions cover graph/variant selection, conflicting prices, explicit stock and tax,
+conditional offers, source/quote expiry, broken JSON-LD, bounded traversal, and complete CLI evidence
+publication. They do not establish live supplier qualification or worldwide price coverage.
