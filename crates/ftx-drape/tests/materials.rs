@@ -257,3 +257,75 @@ fn piece_material_labels_drape_and_per_piece_selections_are_refused() {
         );
     }
 }
+
+#[test]
+fn swatch_identification_reaches_real_sewn_band_dynamics_without_pattern_edits() {
+    use ftx_pattern::material_calibration::{Input, calibrate};
+    use ftx_pattern::material_catalog::Selection;
+    use ftx_pattern::textile_import::catalog;
+
+    let input: Input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-swatch.json"
+    ))
+    .unwrap();
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.0,
+    };
+    let opts = DrapeOptions {
+        spacing: 24.0,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 1e-3,
+        ..DrapeOptions::default()
+    };
+    let solve = |scale: f64| {
+        let mut input = input.clone();
+        for s in &mut input.samples {
+            for p in s.nominal_n_m.iter_mut().flatten().flatten() {
+                *p *= scale;
+            }
+        }
+        let identified = calibrate(&input).unwrap();
+        let selected = catalog()
+            .unwrap()
+            .resolve(&Selection {
+                id: identified.material.id.clone(),
+                record: Some(identified.material),
+                allow_estimates: true,
+                ..Selection::default()
+            })
+            .unwrap();
+        let pattern = band(json!({"material":selected.frozen_selection()}));
+        let run = drape(&pattern, &json!({}), &body, &opts, |_| {}).unwrap();
+        (pattern, run)
+    };
+    let (pa, a) = solve(1.0);
+    let (pb, b) = solve(0.25);
+    assert_eq!(pa.raw()["pieces"], pb.raw()["pieces"]);
+    assert_eq!(pa.raw()["seams"], pb.raw()["seams"]);
+    assert_eq!(a.scene.mesh.verts2d, b.scene.mesh.verts2d);
+    assert_eq!(a.scene.weld, b.scene.weld);
+    assert_eq!(a.scene.solver.model.mass, b.scene.solver.model.mass);
+    assert_eq!(a.scene.solver.model.bending, b.scene.solver.model.bending);
+    for (qa, qb) in a
+        .scene
+        .solver
+        .model
+        .membrane
+        .q
+        .iter()
+        .flatten()
+        .zip(b.scene.solver.model.membrane.q.iter().flatten())
+    {
+        assert!((qb - qa * 0.25).abs() < 1e-8);
+    }
+    assert_ne!(a.scene.solver.x, b.scene.solver.x);
+    assert_ne!(
+        a.report["material"]["record_sha256"],
+        b.report["material"]["record_sha256"]
+    );
+}

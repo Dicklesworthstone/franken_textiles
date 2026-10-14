@@ -1,0 +1,171 @@
+{
+  "schema": "ftx-swatch-calibration/1",
+  "material": {
+    "id": "synthetic-sheet",
+    "name": "Synthetic orthotropic sheet, NOT a named textile",
+    "form": "woven",
+    "properties": {
+      "areal_density": {
+        "value": 0.2,
+        "unit": "kg/m2",
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Synthetic known-answer fixture, NOT a physical measurement"
+      },
+      "bending_rigidity": {
+        "value": 3e-05,
+        "unit": "N*m",
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Synthetic known-answer fixture, NOT a physical measurement"
+      },
+      "thickness": {
+        "value": 0.0007,
+        "unit": "m",
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Synthetic known-answer fixture, NOT a physical measurement"
+      },
+      "friction_skin": {
+        "value": 0.3,
+        "unit": "1",
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Synthetic known-answer fixture, NOT a physical measurement"
+      },
+      "friction_self": {
+        "value": 0.5,
+        "unit": "1",
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Synthetic known-answer fixture, NOT a physical measurement"
+      }
+    },
+    "sources": {
+      "synthetic": {
+        "reference": "test:orthotropic-known-answer",
+        "accessed_on": "2026-10-14",
+        "note": "Entire fixture is synthetic, generated from Q11=9000, Q22=4000, Q12=600, G=700 N/m. Not laboratory or supplier evidence."
+      }
+    }
+  },
+  "method": "Synthetic Green-strain matrix oracle: S=QE, P=FS",
+  "conditions": {
+    "purpose": "Software regression only, not an empirical material card"
+  },
+  "fitted_on": "2026-10-14",
+  "samples": [
+    {
+      "id": "warp",
+      "deformation": [
+        [
+          1.08,
+          0.0
+        ],
+        [
+          0.0,
+          0.99
+        ]
+      ],
+      "nominal_n_m": [
+        [
+          802.2564000000004,
+          0.0
+        ],
+        [
+          0.0,
+          10.018799999999976
+        ]
+      ],
+      "scale_n_m": 1.0,
+      "source": "synthetic",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "weft",
+      "deformation": [
+        [
+          0.99,
+          0.0
+        ],
+        [
+          0.0,
+          1.12
+        ]
+      ],
+      "nominal_n_m": [
+        [
+          -13.097700000000074,
+          0.0
+        ],
+        [
+          0.0,
+          563.1696000000004
+        ]
+      ],
+      "scale_n_m": 1.0,
+      "source": "synthetic",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "shear",
+      "deformation": [
+        [
+          1.0,
+          0.07
+        ],
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "nominal_n_m": [
+        [
+          4.899999999999972,
+          49.68599999999999
+        ],
+        [
+          49.00000000000001,
+          9.799999999999809
+        ]
+      ],
+      "scale_n_m": 1.0,
+      "source": "synthetic",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "held-out",
+      "deformation": [
+        [
+          1.03,
+          0.02
+        ],
+        [
+          0.01,
+          1.06
+        ]
+      ],
+      "nominal_n_m": [
+        [
+          321.4877999999998,
+          27.821200000000005
+        ],
+        [
+          26.2674,
+          282.49640000000016
+        ]
+      ],
+      "scale_n_m": 1.0,
+      "source": "synthetic",
+      "evidence": "estimate",
+      "partition": "check"
+    }
+  ],
+  "allow_estimated_observations": true,
+  "replace_existing": false,
+  "max_rms_scaled": 1e-08,
+  "max_peak_scaled": 1e-08
+}

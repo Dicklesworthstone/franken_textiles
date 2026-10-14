@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::{material, run::DrapeOptions};
 use ftx_pattern::Pattern;
+use ftx_pattern::material_calibration::{Input as CalibrationInput, calibrate};
 use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::material_cost::{QuoteBook, Scope};
 use ftx_pattern::materials::ThermalStack;
@@ -22,12 +23,15 @@ ftx-materials resolve PATTERN.json
 ftx-materials bind PATTERN.json SELECTION.json NEW-PATTERN.json
 ftx-materials price PATTERN.json QUOTES.json SCOPE.json
 ftx-materials thermal STACK.json
+ftx-materials calibrate SWATCHES.json [--allow-estimates]
 
 JSON output. `show` includes a portable selection and missing-property coverage.
 `resolve` invokes the actual drape resolver without meshing; missing mechanics refuse.
 `bind` preserves geometry and embeds a locked selection; its output path must not exist.
 `price` is a dated offer sample, not a checkout or a worldwide market price.
-`thermal` is a dry 1D layer calculation, not a human comfort or survival rating.";
+`thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
+`calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
+Fitted coefficients are estimates: --allow-estimates explicitly admits them to simulation.";
 
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
@@ -62,7 +66,8 @@ fn selected(raw: &Value) -> Result<ftx_pattern::material_catalog::ResolvedMateri
     }
     if let Some(pieces) = raw["pieces"].as_array() {
         for p in pieces {
-            if p.get("material").is_some()
+            // Match the drape resolver: a string is a cutting label, not a physical selection.
+            if p.get("material").is_some_and(|m| !m.is_string())
                 || p.get("material_id").is_some()
                 || p["fabric"].get("material").is_some()
                 || p["fabric"].get("material_id").is_some()
@@ -130,9 +135,28 @@ struct StackInput {
     boundary_resistance_m2_k_w: f64,
 }
 
+fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
+    let input: CalibrationInput = read(path)?;
+    let report = calibrate(&input)?;
+    let snapshot = catalog()?.resolve(&Selection {
+        id: report.material.id.clone(),
+        record: Some(report.material.clone()),
+        allow_estimates,
+        ..Selection::default()
+    })?;
+    let mechanics = snapshot.mechanics();
+    Ok(
+        json!({"calibration":report,"selection":snapshot.frozen_selection(),
+        "simulation_ready":mechanics.is_ok(),"mechanics_refusal":mechanics.err(),
+        "fit_claim":false,"calibration_observations_are_not_independent_garment_validation":true}),
+    )
+}
+
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["calibrate", path] => calibration(path, false),
+        ["calibrate", path, "--allow-estimates"] => calibration(path, true),
         ["catalog"] | ["catalog", _] => {
             let needle = words.get(1).copied().unwrap_or("").to_lowercase();
             let mut db = catalog()?;
@@ -228,6 +252,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn swatches_produce_a_locked_selection_for_the_actual_drape_resolver() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/materials/synthetic-swatch.json"
+        );
+        let denied = run(&["calibrate".into(), path.into()]).unwrap();
+        assert_eq!(denied["simulation_ready"], false);
+        assert_eq!(denied["selection"]["allow_estimates"], false);
+        let out = run(&["calibrate".into(), path.into(), "--allow-estimates".into()]).unwrap();
+        assert_eq!(out["simulation_ready"], true);
+        assert_eq!(out["fit_claim"], false);
+        let selection: Selection = serde_json::from_value(out["selection"].clone()).unwrap();
+        let frozen = catalog().unwrap().resolve(&selection).unwrap();
+        assert_eq!(Some(frozen.sha256()), selection.expected_sha256.as_deref());
+        let p = Pattern::new(json!({"fabric":{"material":selection}}));
+        let physical = material::resolve(&p, &DrapeOptions::default()).unwrap();
+        let q = physical.fabric.membrane(1.0).q;
+        assert!((q[0][0] - 9000.0).abs() < 1e-8);
+        assert!((q[1][1] - 4000.0).abs() < 1e-8);
+        assert!((q[2][2] - 700.0).abs() < 1e-8);
+        assert_eq!(physical.options.contact.thickness, 0.00035);
+        assert_eq!(out["calibration"]["check"]["components"], 4);
+    }
+
+    #[test]
+    fn calibration_does_not_accept_an_unrecognized_permission_flag() {
+        assert!(
+            run(&[
+                "calibrate".into(),
+                "unused.json".into(),
+                "--allow-anything".into()
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn discovery_and_real_drape_refusals_are_exposed() {
         let rows = run(&["catalog".into(), "bamboo".into()]).unwrap();
         assert_eq!(rows["materials"].as_array().unwrap().len(), 2);
@@ -255,7 +316,7 @@ mod tests {
         let out = path.to_str().unwrap();
         let raw = json!({"schema":"fabric-pattern/1","units":"mm","style":"test", "seams":[],
             "fabric":{"areal_g_m2":200,"user_note":"preserve me"},
-            "pieces":[{"id":"test","vertices":{"a":[0,0],"b":[10,0],"c":[0,10]},
+            "pieces":[{"id":"test","material":"shell","vertices":{"a":[0,0],"b":[10,0],"c":[0,10]},
                 "edges":[{"id":"ab","from":"a","to":"b"},{"id":"bc","from":"b","to":"c"},
                     {"id":"ca","from":"c","to":"a"}],"cut":{"qty":1},"grain":[[0,0],[0,10]]}]});
         let selection = Selection {
