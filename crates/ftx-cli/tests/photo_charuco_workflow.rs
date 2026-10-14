@@ -379,3 +379,285 @@ fn missing_markers_and_bad_sidecars_never_create_measurements() {
             .contains("unsupported dictionary")
     );
 }
+
+fn lens_document() -> Value {
+    json!({"schema":"ftx-photo-lens/1", "lens_id":"synthetic-brown",
+        "image_size_px":[1000,800], "rotation_cw_deg":0,
+        "calibration_evidence":"Synthetic analytic Brown lens; not a production camera calibration.",
+        "intrinsics":{"focal_px":[700.0,650.0],"principal_px":[500.0,360.0],
+            "distortion":{"radial":[0.25,0.015,0.0],"tangential":[0.004,-0.003],"max_radius":1.2}}})
+}
+
+fn lens_project([x, y]: [f64; 2]) -> [f64; 2] {
+    // A physically rigid tilted plane under the declared K, not an arbitrary projective
+    // warp that OpenCV's known-intrinsics pose interpolation must (correctly) reject.
+    let (sx, cx) = (-0.15_f64).sin_cos();
+    let (sy, cy) = 0.20_f64.sin_cos();
+    let (x, y) = (x - 110.0, y - 90.0);
+    let d = 250.0 - cx * sy * x + sx * y;
+    let u = cy * x / d;
+    let v = (sx * sy * x + cx * y) / d;
+    let r2 = u * u + v * v;
+    let radial = 1.0 + 0.25 * r2 + 0.015 * r2 * r2;
+    [
+        700.0 * (u * radial + 0.008 * u * v - 0.003 * (r2 + 2.0 * u * u)) + 500.0,
+        650.0 * (v * radial + 0.004 * (r2 + 2.0 * v * v) - 0.006 * u * v) + 360.0,
+    ]
+}
+
+fn write_json(dir: &Path, name: &str, value: &Value) {
+    std::fs::write(dir.join(name), serde_json::to_vec(value).unwrap()).unwrap();
+}
+
+fn lens_inputs(dir: &Path) {
+    write_json(dir, "lens.json", &lens_document());
+    let corners: Vec<_> = (0..35)
+        .map(|id| {
+            json!({"id":id,"point_px":lens_project([
+        (id % 7 + 1) as f64 * 22.0,(id / 7 + 1) as f64 * 22.0])})
+        })
+        .collect();
+    write_json(
+        dir,
+        "reference.json",
+        &json!({"schema":"ftx-photo-reference/1","reference":"charuco",
+        "image_size_px":[1000,800],"board":{"squares_x":8,"squares_y":6,"square_mm":22},"corners":corners}),
+    );
+    write_json(
+        dir,
+        "points.json",
+        &json!({"across_back":[lens_project([22.0,66.0]),lens_project([154.0,66.0])],
+        "off_board_length":[lens_project([10.0,150.0]),lens_project([210.0,150.0])]}),
+    );
+}
+
+const LENS_FLAGS: [&str; 6] = [
+    "--lens",
+    "lens.json",
+    "--lens-id",
+    "synthetic-brown",
+    "--rotation-cw-deg",
+    "0",
+];
+
+#[test]
+fn imported_lens_calibration_reaches_measurement_without_an_image_runtime() {
+    let dir = setup();
+    lens_inputs(&dir);
+    let mut args = vec!["measure", "photo-scale", "--reference", "reference.json"];
+    args.extend(LENS_FLAGS);
+    let scale = run(&dir, &args, 0)["result"].clone();
+    assert_eq!(scale["inliers"], 35);
+    assert!(scale.get("homography_px_to_board_mm").is_none());
+    assert!(scale["homography_undistorted_px_to_board_mm"].is_array());
+    assert_eq!(
+        scale["lens_input"]["sha256"],
+        sha256_hex(&std::fs::read(dir.join("lens.json")).unwrap())
+    );
+    args[1] = "measure-photo";
+    args.extend(["--points", "points.json", "--out", "measured.json"]);
+    let measured = run(&dir, &args, 0)["result"].clone();
+    assert_eq!(measured["records"][0]["value_mm"], 132.0);
+    assert_eq!(measured["records"][1]["value_mm"], 200.0);
+    assert_eq!(measured["photo"]["lens_input"], scale["lens_input"]);
+    assert_eq!(
+        measured["photo"]["intrinsics"],
+        lens_document()["intrinsics"]
+    );
+    run(&dir, &["measure", "validate", "measured.json"], 0);
+    let fused = run(
+        &dir,
+        &["measure", "fuse", "measured.json", "--no-priors"],
+        0,
+    );
+    assert_eq!(
+        fused["result"]["fused"]["across_back"]["primary_provenance"],
+        "PHOTO_ESTIMATED"
+    );
+    let original = std::fs::read(dir.join("lens.json")).unwrap();
+    *args.last_mut().unwrap() = "lens.json";
+    run(&dir, &args, 3);
+    assert_eq!(original, std::fs::read(dir.join("lens.json")).unwrap());
+}
+
+#[test]
+fn lens_identity_geometry_and_model_mismatches_are_atomic_refusals() {
+    let dir = setup();
+    lens_inputs(&dir);
+    let mut args = vec!["measure", "measure-photo", "--reference", "reference.json"];
+    args.extend(LENS_FLAGS);
+    args.extend(["--points", "points.json", "--out", "not-created.json"]);
+    for (field, value) in [
+        ("schema", json!("ftx-camera-calibration/1")),
+        ("lens_id", json!("another-lens")),
+        ("rotation_cw_deg", json!(90)),
+        ("image_size_px", json!([500, 400])),
+        ("calibration_evidence", json!("")),
+        (
+            "intrinsics",
+            json!({"focal_px":[700,650],"principal_px":[500,360],"distortion":{"radial":[-1,0,0]}}),
+        ),
+        (
+            "intrinsics",
+            json!({"focal_px":[700,650],"principal_px":[500,360],"distortion":{"max_radius":0.1}}),
+        ),
+        ("extra_field", json!(1)),
+    ] {
+        let mut lens = lens_document();
+        lens[field] = value;
+        write_json(&dir, "lens.json", &lens);
+        run(&dir, &args, 3);
+        assert!(!dir.join("not-created.json").exists());
+    }
+    write_json(&dir, "lens.json", &lens_document());
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("reference.json")).unwrap()).unwrap();
+    for reference in [
+        {
+            let mut reference = original.clone();
+            reference["intrinsics"] = lens_document()["intrinsics"].clone();
+            reference
+        },
+        {
+            let mut reference = original.clone();
+            reference["reference"] = json!("plain_sheet");
+            reference
+        },
+    ] {
+        write_json(&dir, "reference.json", &reference);
+        let refused = run(&dir, &args, 3);
+        assert!(
+            refused["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("without inline intrinsics")
+        );
+        assert!(!dir.join("not-created.json").exists());
+    }
+    write_json(&dir, "reference.json", &original);
+    for extra in [
+        vec!["--reference", "absent.json", "--lens-id", "synthetic-brown"],
+        vec!["--reference", "absent.json", "--rotation-cw-deg", "0"],
+        vec!["--reference", "absent.json", "--lens", "lens.json"],
+        vec!["--image", "absent.png", "--lens", "lens.json"],
+        vec![
+            "--reference",
+            "absent.json",
+            "--lens",
+            "lens.json",
+            "--lens-id",
+            "synthetic-brown",
+            "--rotation-cw-deg",
+            "45",
+        ],
+    ] {
+        let mut command = vec!["measure", "photo-scale"];
+        command.extend(extra);
+        assert_eq!(
+            run(&dir, &command, 3)["refusal"]["code"],
+            "invalid_document"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires optional OpenCV; CI runs this with --include-ignored"]
+fn actual_brown_distorted_png_uses_one_lens_for_detection_scale_and_uncertainty() {
+    let dir = setup();
+    let py = python();
+    lens_inputs(&dir);
+    let metadata = sheet(&dir, "letter");
+    let source =
+        load_png(&std::fs::read(dir.join("sheet/calib-sheet-letter.png")).unwrap()).unwrap();
+    let mut image = Gray::filled(1000, 800, 80);
+    let (sx, cx) = (-0.15_f64).sin_cos();
+    let (sy, cy) = 0.20_f64.sin_cos();
+    for y in 0..image.h {
+        for x in 0..image.w {
+            let (xd, yd) = ((x as f64 - 500.0) / 700.0, (y as f64 - 360.0) / 650.0);
+            let (mut u, mut v) = (xd, yd);
+            // Independent fixed-point inverse for this synthetic lens, not the Rust
+            // camera's Newton inverse and not an image produced by the detector.
+            for _ in 0..45 {
+                let r2 = u * u + v * v;
+                let radial = 1.0 + 0.25 * r2 + 0.015 * r2 * r2;
+                let tx = 0.008 * u * v - 0.003 * (r2 + 2.0 * u * u);
+                let ty = 0.004 * (r2 + 2.0 * v * v) - 0.006 * u * v;
+                u = (xd - tx) / radial;
+                v = (yd - ty) / radial;
+            }
+            let (a, b, c, d) = (
+                cy + u * cx * sy,
+                -u * sx,
+                sx * sy + v * cx * sy,
+                cx - v * sx,
+            );
+            let determinant = a * d - b * c;
+            let point = [
+                110.0 + 250.0 * (u * d - b * v) / determinant,
+                90.0 + 250.0 * (a * v - c * u) / determinant,
+            ];
+            if point[0] < 0.0 || point[0] >= 176.0 || point[1] < 0.0 || point[1] >= 132.0 {
+                continue;
+            }
+            let p = raster_point(point, &metadata["board"]);
+            let (ix, iy) = (p[0].floor() as usize, p[1].floor() as usize);
+            let (dx, dy) = (p[0] - ix as f64, p[1] - iy as f64);
+            let sample = |x, y| f64::from(source.at(x, y)[0]);
+            let value = (1.0 - dy) * ((1.0 - dx) * sample(ix, iy) + dx * sample(ix + 1, iy))
+                + dy * ((1.0 - dx) * sample(ix, iy + 1) + dx * sample(ix + 1, iy + 1));
+            image.data[y * image.w + x] = value.round() as u8;
+        }
+    }
+    std::fs::write(dir.join("distorted.png"), encode_png_gray(&image)).unwrap();
+    let mut args = photo_args(
+        "measure-photo",
+        "distorted.png",
+        "sheet/calib-sheet-letter.json",
+        &py,
+    );
+    args.extend(LENS_FLAGS);
+    args.extend(["--points", "points.json", "--out", "measured.json"]);
+    let measured = run(&dir, &args, 0)["result"].clone();
+    assert!(
+        (measured["records"][0]["value_mm"].as_f64().unwrap() - 132.0).abs() < 0.4,
+        "{measured}"
+    );
+    assert!(
+        (measured["records"][1]["value_mm"].as_f64().unwrap() - 200.0).abs() < 0.5,
+        "{measured}"
+    );
+    assert!(measured["photo"]["inliers"].as_u64().unwrap() >= 30);
+    assert!(measured["photo"]["reprojection_rms_px"].as_f64().unwrap() < 0.6);
+    assert_eq!(measured["photo"]["coordinate_source"], "detected_charuco");
+    assert_eq!(
+        measured["photo"]["image_input"]["charuco_detection"]["implementation"]["uses_lens_intrinsics"],
+        true
+    );
+    assert_eq!(
+        measured["photo"]["lens_input"]["sha256"],
+        sha256_hex(&std::fs::read(dir.join("lens.json")).unwrap())
+    );
+    assert!(measured["photo"].get("homography_px_to_board_mm").is_none());
+    run(&dir, &["measure", "validate", "measured.json"], 0);
+    // A size-mismatched lens is refused before invoking even an unavailable detector.
+    let mut wrong = lens_document();
+    wrong["image_size_px"] = json!([500, 400]);
+    write_json(&dir, "lens.json", &wrong);
+    let mut args = photo_args(
+        "measure-photo",
+        "distorted.png",
+        "sheet/calib-sheet-letter.json",
+        "not-installed-python",
+    );
+    args.extend(LENS_FLAGS);
+    args.extend(["--points", "points.json", "--out", "not-created.json"]);
+    let refused = run(&dir, &args, 3);
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("image_size_px")
+    );
+    assert!(!dir.join("not-created.json").exists());
+}

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
+use ftx_measure::camera::Intrinsics;
 use ftx_measure::photo::{PhotoScale, analyze_reference};
 use ftx_trace::raster::{Bgr, bgr_to_gray};
 use serde_json::{Value, json};
@@ -26,9 +27,18 @@ fn read_bounded(reader: impl Read) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn detect(image: &Bgr, sheet: &Value, python: &str) -> Result<Value, Refusal> {
+fn detect(
+    image: &Bgr,
+    sheet: &Value,
+    python: &str,
+    intrinsics: Option<Intrinsics>,
+) -> Result<Value, Refusal> {
+    if let Some(k) = intrinsics {
+        k.validate()?;
+    }
     let mut header = serde_json::to_vec(&json!({
-        "schema":"ftx-charuco-request/1", "image_size_px":[image.w,image.h], "sheet":sheet
+        "schema":"ftx-charuco-request/1", "image_size_px":[image.w,image.h], "sheet":sheet,
+        "intrinsics":intrinsics
     }))
     .map_err(|e| bad_input(e.to_string()))?;
     header.push(b'\n');
@@ -204,6 +214,7 @@ pub(super) fn analyze(
     image: &Bgr,
     sheet_path: &str,
     python: &str,
+    intrinsics: Option<Intrinsics>,
 ) -> Result<(PhotoScale, Value), Refusal> {
     let sheet = read_json(sheet_path)?.0;
     if sheet["schema"] != "fabric-calib-sheet/1" || sheet["board"]["type"] != "charuco" {
@@ -211,7 +222,7 @@ pub(super) fn analyze(
             "--sheet must be a fabric-calib-sheet/1 ChArUco sidecar",
         ));
     }
-    let response = detect(image, &sheet, python)?;
+    let response = detect(image, &sheet, python, intrinsics)?;
     let mut reference = response["reference"].clone();
     if reference["reference"] != "charuco"
         || reference["image_size_px"] != json!([image.w, image.h])
@@ -227,6 +238,14 @@ pub(super) fn analyze(
         "origin_mm":sheet["board"].get("origin_mm").cloned().unwrap_or(json!([0,0]))
     });
     reference["paper"] = sheet["paper"].clone();
+    if reference.get("intrinsics").is_some() {
+        return Err(detector_error(
+            "ChArUco detector cannot supply or override physical lens calibration",
+        ));
+    }
+    if let Some(k) = intrinsics {
+        reference["intrinsics"] = json!(k);
+    }
     let mut scale = analyze_reference(&reference)?;
     if let Some(square_px) = scale.report()["square_px"].as_f64() {
         reference["blur_sigma_px_estimate"] = json!(blur(image, &reference, square_px));
