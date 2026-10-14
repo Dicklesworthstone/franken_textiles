@@ -1,7 +1,9 @@
 """Offline primary-response fixtures; synthetic prices are NEVER advertised as live observations."""
 import copy
+import csv
 import datetime as dt
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -35,6 +37,27 @@ def raw(value):
 
 
 CART = raw(dict(currency="USD", items=[], item_count=0, token="anonymous-do-not-persist"))
+
+
+def csv_entry():
+    e = entry()
+    for key in ("product_url", "cart_url", "variant_id", "required_description_text"):
+        del e[key]
+    e.update(adapter="csv_v1", source_url="https://example.invalid/prices.csv", delimiter=",",
+             columns={key: key.upper() for key in r.CSV_FIELDS},
+             match={"SKU": "TEST-42", "MARKET": "US", "SIZE": "yardage"},
+             availability={"available": ["yes"], "unavailable": ["no"]})
+    return e
+
+
+def csv_raw(rows=None, delimiter=","):
+    rows = rows if rows is not None else [dict(SKU="TEST-42", PRICE="12.99", CURRENCY="USD", AVAILABLE="yes",
+        QUANTITY="0.5", UNIT="linear_yard", MINIMUM_QUANTITY="1.0", ORDER_INCREMENT="0.5",
+        MARKET="US", SIZE="yardage")]
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=list(rows[0]), delimiter=delimiter)
+    writer.writeheader(); writer.writerows(rows)
+    return output.getvalue().encode()
 
 
 class RefreshTests(unittest.TestCase):
@@ -147,6 +170,81 @@ class RefreshTests(unittest.TestCase):
     def test_duplicate_offer_ids_refuse_before_any_network_read(self):
         with self.assertRaises(ValueError):
             r.refresh(dict(schema="ftx-shopify-refresh/1", offers=[entry(), entry()]), lambda _: self.fail("network"))
+
+
+class CsvRefreshTests(unittest.TestCase):
+    def test_exact_offer_and_original_bytes_reach_existing_quote_contract(self):
+        data = csv_raw()
+        q, receipt = r.extract_csv(csv_entry(), data, NOW)
+        self.assertEqual(q["price"], 12.99)
+        self.assertEqual(q["quantity"], 0.5)
+        self.assertEqual(q["source_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(receipt["selected_record"], 2)
+        self.assertEqual(set(q), set(r.FIELDS) | {"price", "observed_on", "available", "source", "source_sha256"})
+
+    def test_swatch_and_other_markets_do_not_become_yardage(self):
+        row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
+        rows = [dict(row, SIZE="swatch", PRICE="0.10"), dict(row, MARKET="CA", PRICE="8.99"), row]
+        q, receipt = r.extract_csv(csv_entry(), csv_raw(rows), NOW)
+        self.assertEqual(q["price"], 12.99)
+        self.assertEqual(receipt["selected_record"], 4)
+        with self.assertRaises(ValueError): r.extract_csv(csv_entry(), csv_raw(rows[:2]), NOW)
+        with self.assertRaises(ValueError): r.extract_csv(csv_entry(), csv_raw([row, row]), NOW)
+
+    def test_basis_currency_and_stock_drift_refuse(self):
+        row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
+        for key, value in [("QUANTITY", "1"), ("UNIT", "yard"), ("MINIMUM_QUANTITY", "5"),
+                           ("ORDER_INCREMENT", "1"), ("CURRENCY", "CAD"), ("AVAILABLE", "")]:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                r.extract_csv(csv_entry(), csv_raw([dict(row, **{key: value})]), NOW)
+        q, _ = r.extract_csv(csv_entry(), csv_raw([dict(row, AVAILABLE="no")]), NOW)
+        self.assertFalse(q["available"])
+
+    def test_explicit_dialects_bom_and_quoted_cells(self):
+        row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
+        for delimiter in (",", ";", "\t"):
+            e = csv_entry(); e["delimiter"] = delimiter
+            e["match"]["NOTES"] = 'test,"quoted"\nsecond line'
+            data = b"\xef\xbb\xbf" + csv_raw([dict(row, NOTES=e["match"]["NOTES"])], delimiter)
+            self.assertEqual(r.extract_csv(e, data, NOW)[0]["price"], 12.99)
+
+    def test_malformed_structure_and_ambiguous_mapping_refuse(self):
+        for data in [b"SKU,SKU\n1,2\n", csv_raw() + b"short,row\n", csv_raw() + b'"unfinished',
+                     b"\xff", b"\0", b"x" * (r.LIMIT + 1)]:
+            with self.subTest(data=data[:50]), self.assertRaises(ValueError):
+                r.extract_csv(csv_entry(), data, NOW)
+        for change in [{"match": {}}, {"availability": {"available": ["yes"], "unavailable": ["yes"]}},
+                       {"delimiter": "|"}, {"source_url": "https://other.invalid/prices.csv"},
+                       {"columns": {key: "SAME" for key in r.CSV_FIELDS}}, {"unexpected": True}]:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                r.validate_csv(dict(csv_entry(), **change))
+
+    def test_strict_decimal_no_locale_currency_exponent_or_nonfinite_guessing(self):
+        row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
+        for price in ["", "$12.99", "1,299", "12,99", "1e2", "NaN", "Infinity", " 1", "-1", "0", "9" * 400]:
+            with self.subTest(price=price), self.assertRaises(ValueError):
+                r.extract_csv(csv_entry(), csv_raw([dict(row, PRICE=price)]), NOW)
+
+    def test_one_feed_fetch_per_snapshot_and_legacy_shopify_in_same_batch(self):
+        calls = []
+        a = csv_entry(); b = copy.deepcopy(a); b["offer_id"] = "synthetic/42/other-scope"
+        c = entry(); c["offer_id"] = "synthetic/shopify42"
+        def get(url):
+            calls.append(url)
+            return csv_raw() if url.endswith(".csv") else CART if url.endswith("cart.js") else raw(product())
+        book, evidence = r.refresh(dict(schema="ftx-textile-refresh/1", offers=[c, b, a]), get, lambda: NOW)
+        self.assertEqual(calls.count(a["source_url"]), 1)
+        self.assertEqual([q["offer_id"] for q in book["quotes"]], sorted(e["offer_id"] for e in [a, b, c]))
+        self.assertEqual(len(book["quotes"]), 3)
+        self.assertEqual(sum(k.endswith(".csv") for k in evidence), 1)
+
+    def test_invalid_adapter_old_review_and_naive_clock_refuse(self):
+        for e, now in [(dict(csv_entry(), basis_reviewed_on="2026-09-01"), NOW),
+                       (csv_entry(), NOW.replace(tzinfo=None))]:
+            with self.assertRaises(ValueError): r.extract_csv(e, csv_raw(), now)
+        with self.assertRaises(ValueError):
+            r.refresh(dict(schema="ftx-textile-refresh/1", offers=[dict(csv_entry(), adapter="guess")]),
+                      lambda _: self.fail("network"))
 
 
 if __name__ == "__main__":

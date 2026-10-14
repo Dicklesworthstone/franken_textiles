@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read public Shopify offers into the existing ftx-textile-quotes/1 workbench format.
+"""Read reviewed public supplier offers into the ftx-textile-quotes/1 workbench format.
 
 No shopping/cart mutation, credentials, browser automation, guessed units or material-law inference.
 Each successful run creates a NEW immutable quote snapshot and source-byte evidence files.
@@ -7,9 +7,12 @@ Each successful run creates a NEW immutable quote snapshot and source-byte evide
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
+from decimal import Decimal, InvalidOperation
 import hashlib
 import http.cookiejar
+import io
 import json
 import math
 import os
@@ -108,11 +111,8 @@ class PublicSession:
             self.next_request[host] = time.monotonic() + delay
 
 
-def validate_entry(entry: dict) -> None:
-    required = set(FIELDS) | {"product_url", "cart_url", "variant_id", "basis_source",
-                              "basis_note", "basis_reviewed_on", "required_description_text"}
-    if set(entry) != required:
-        raise ValueError(f"manifest entry fields differ: {sorted(set(entry) ^ required)}")
+def validate_basis(entry: dict) -> None:
+    """One selling-basis contract for all adapters; no chemistry or width inference."""
     for key in ("offer_id", "material_id", "supplier", "sku", "region", "quality", "terms", "basis_note"):
         if not isinstance(entry[key], str) or not entry[key].strip():
             raise ValueError(f"missing explicit {key}")
@@ -124,6 +124,25 @@ def validate_entry(entry: dict) -> None:
         n = entry[key]
         if type(n) not in (int, float) or not math.isfinite(n) or n <= 0:
             raise ValueError(f"{key} must be finite and positive")
+    dt.date.fromisoformat(entry["basis_reviewed_on"])
+
+
+def observation_time(entry: dict, observed: dt.datetime) -> dt.datetime:
+    if observed.tzinfo is None or observed.utcoffset() is None:
+        raise ValueError("observation timestamp must have a timezone")
+    observed = observed.astimezone(dt.timezone.utc)
+    age = (observed.date() - dt.date.fromisoformat(entry["basis_reviewed_on"])).days
+    if not 0 <= age <= 30:
+        raise ValueError("selling-basis review is future-dated or older than 30 days")
+    return observed
+
+
+def validate_entry(entry: dict) -> None:
+    required = set(FIELDS) | {"product_url", "cart_url", "variant_id", "basis_source",
+                              "basis_note", "basis_reviewed_on", "required_description_text"}
+    if set(entry) != required:
+        raise ValueError(f"manifest entry fields differ: {sorted(set(entry) ^ required)}")
+    validate_basis(entry)
     if type(entry["variant_id"]) is not int or entry["variant_id"] <= 0:
         raise ValueError("variant_id must be an exact positive integer")
     product = entry["product_url"]
@@ -135,7 +154,6 @@ def validate_entry(entry: dict) -> None:
         raise ValueError("expected locale-aware Shopify /products/HANDLE.js endpoint")
     if cart_path != product_path.split("products/")[0] + "cart.js":
         raise ValueError("cart must use the same locale prefix as the product")
-    dt.date.fromisoformat(entry["basis_reviewed_on"])
     fragments = entry["required_description_text"]
     if not isinstance(fragments, list) or not fragments or any(not isinstance(s, str) or not s.strip() for s in fragments):
         raise ValueError("at least one reviewed description fragment is required to detect selling-basis drift")
@@ -145,12 +163,7 @@ def extract(entry: dict, product_raw: bytes, cart_before_raw: bytes, cart_after_
             observed: dt.datetime) -> tuple[dict, dict]:
     """Pure adapter. Presence of an offer is not permission to substitute a different material/SKU."""
     validate_entry(entry)
-    if observed.tzinfo is None:
-        raise ValueError("observation timestamp must have a timezone")
-    observed = observed.astimezone(dt.timezone.utc)
-    age = (observed.date() - dt.date.fromisoformat(entry["basis_reviewed_on"])).days
-    if not 0 <= age <= 30:
-        raise ValueError("selling-basis review is future-dated or older than 30 days")
+    observed = observation_time(entry, observed)
     product, before, after = map(load, (product_raw, cart_before_raw, cart_after_raw))
     for cart in (before, after):
         if cart.get("currency") != entry["currency"]:
@@ -190,27 +203,149 @@ def extract(entry: dict, product_raw: bytes, cart_before_raw: bytes, cart_after_
     return quote, receipt
 
 
+CSV_FIELDS = {"sku", "price", "currency", "available", "quantity", "unit",
+              "minimum_quantity", "order_increment"}
+
+
+def decimal_number(text: str) -> Decimal:
+    """No currency-symbol, thousands-separator, exponent or locale guessing."""
+    if not isinstance(text, str) or not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", text):
+        raise ValueError("expected a plain unsigned decimal number")
+    try:
+        value = Decimal(text)
+        number = float(value)
+    except (InvalidOperation, OverflowError) as error:
+        raise ValueError("unrepresentable decimal number") from error
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError("number must be finite, positive and representable")
+    return value
+
+
+def validate_csv(entry: dict) -> None:
+    required = set(FIELDS) | {"adapter", "source_url", "basis_source", "basis_note",
+                              "basis_reviewed_on", "columns", "match", "availability", "delimiter"}
+    if set(entry) != required or entry["adapter"] != "csv_v1":
+        raise ValueError("CSV manifest fields differ from csv_v1")
+    validate_basis(entry)
+    if origin(entry["source_url"]) != origin(entry["basis_source"]):
+        raise ValueError("CSV and selling-basis evidence must share the supplier origin")
+    columns = entry["columns"]
+    if (not isinstance(columns, dict) or set(columns) != CSV_FIELDS
+            or any(not isinstance(c, str) or not c.strip() for c in columns.values())
+            or len(set(columns.values())) != len(columns)):
+        raise ValueError("CSV needs distinct, explicit column names for every observed field")
+    matches = entry["match"]
+    if (not isinstance(matches, dict) or not matches
+            or any(not isinstance(k, str) or not k.strip() or not isinstance(v, str) or not v
+                   for k, v in matches.items())
+            or matches.get(columns["sku"]) != entry["sku"]):
+        raise ValueError("CSV match must include the exact SKU column and reviewed variant/market selectors")
+    availability = entry["availability"]
+    if not isinstance(availability, dict) or set(availability) != {"available", "unavailable"}:
+        raise ValueError("CSV requires explicit available/unavailable token mappings")
+    tokens = []
+    for choices in availability.values():
+        if not isinstance(choices, list) or not choices or any(not isinstance(c, str) or not c for c in choices):
+            raise ValueError("CSV availability token lists must be nonempty")
+        tokens.extend(choices)
+    if len(tokens) != len(set(tokens)):
+        raise ValueError("CSV availability tokens overlap or repeat")
+    if entry["delimiter"] not in (",", ";", "\t"):
+        raise ValueError("CSV delimiter must explicitly be comma, semicolon or tab")
+
+
+def extract_csv(entry: dict, source_raw: bytes, observed: dt.datetime) -> tuple[dict, dict]:
+    """Select one row, checking the source quantity and unit against the reviewed material mapping."""
+    validate_csv(entry)
+    observed = observation_time(entry, observed)
+    if len(source_raw) > LIMIT:
+        raise ValueError("source exceeds 4 MiB")
+    text = source_raw.decode("utf-8-sig")
+    if "\x00" in text:
+        raise ValueError("NUL in CSV source")
+    columns = entry["columns"]
+    try:
+        reader = csv.reader(io.StringIO(text, newline=""), delimiter=entry["delimiter"], strict=True)
+        header = next(reader, [])
+        if not header or any(not h.strip() for h in header) or len(set(header)) != len(header):
+            raise ValueError("CSV needs unique nonempty column headers")
+        if not (set(columns.values()) | set(entry["match"])) <= set(header):
+            raise ValueError("reviewed CSV columns disappeared")
+        selected = []
+        for number, values in enumerate(reader, start=2):
+            if number > 100_001 or len(values) != len(header):
+                raise ValueError("CSV has too many rows or an inconsistent column count")
+            row = dict(zip(header, values))
+            if all(row[key] == value for key, value in entry["match"].items()):
+                selected.append((number, row))
+                if len(selected) > 1:
+                    raise ValueError("CSV exact offer is ambiguous; add variant/market/tier selectors")
+    except csv.Error as error:
+        raise ValueError(f"malformed CSV: {error}") from error
+    if len(selected) != 1:
+        raise ValueError("exact CSV offer absent; no similar-SKU fallback")
+    number, row = selected[0]
+    for key in ("sku", "currency", "unit"):
+        if row[columns[key]] != entry[key]:
+            raise ValueError(f"CSV {key} changed from the reviewed selling basis")
+    for key in ("quantity", "minimum_quantity", "order_increment"):
+        if decimal_number(row[columns[key]]) != Decimal(str(entry[key])):
+            raise ValueError(f"CSV {key} changed from the reviewed selling basis")
+    stock = row[columns["available"]]
+    if stock not in entry["availability"]["available"] + entry["availability"]["unavailable"]:
+        raise ValueError("unknown CSV availability; missing stock is not in stock")
+    digest = hashlib.sha256(source_raw).hexdigest()
+    quote = {key: entry[key] for key in FIELDS}
+    quote.update(price=float(decimal_number(row[columns["price"]])), observed_on=observed.date().isoformat(),
+                 available=stock in entry["availability"]["available"],
+                 source=entry["source_url"], source_sha256=digest)
+    receipt = {"schema": "ftx-source-refresh/1", "adapter": "csv_v1", "observed_at": observed.isoformat(),
+               "manifest_entry": entry, "source_sha256": digest, "selected_record": number,
+               "quantity_basis": "source_columns_checked_against_reviewed_manifest",
+               "limits": ["No FX, tax/shipping, delivery, market-survey or textile-physics claim.",
+                          "Variant, region, quality and terms require reviewed exact row selectors."]}
+    return quote, receipt
+
+
 def refresh(manifest: dict, get, now=None) -> tuple[dict, dict[str, bytes]]:
-    if set(manifest) != {"schema", "offers"} or manifest["schema"] != "ftx-shopify-refresh/1":
+    if (set(manifest) != {"schema", "offers"}
+            or manifest["schema"] not in {"ftx-shopify-refresh/1", "ftx-textile-refresh/1"}):
         raise ValueError("unsupported refresh manifest")
     entries = manifest["offers"]
     if not isinstance(entries, list) or not entries or len(entries) > 100:
         raise ValueError("manifest needs 1..100 explicitly reviewed offers")
     ids = set()
     for entry in entries:
-        validate_entry(entry)
+        if not isinstance(entry, dict):
+            raise ValueError("each reviewed offer must be an object")
+        if manifest["schema"] == "ftx-shopify-refresh/1" or "adapter" not in entry:
+            validate_entry(entry)
+        elif entry.get("adapter") == "csv_v1":
+            validate_csv(entry)
+        else:
+            raise ValueError("unknown source adapter")
         if entry["offer_id"] in ids:
             raise ValueError("duplicate offer identity in refresh manifest")
         ids.add(entry["offer_id"])
     clock = now or (lambda: dt.datetime.now(dt.timezone.utc))
     quotes, evidence = [], {}
+    sources = {}
     for entry in entries:
-        before = get(entry["cart_url"])
-        product = get(entry["product_url"])
-        after = get(entry["cart_url"])
-        quote, receipt = extract(entry, product, before, after, clock())
+        if entry.get("adapter") == "csv_v1":
+            url = entry["source_url"]
+            if url not in sources:
+                sources[url] = (get(url), clock())
+            product, observed = sources[url]
+            quote, receipt = extract_csv(entry, product, observed)
+            extension = ".csv"
+        else:
+            before = get(entry["cart_url"])
+            product = get(entry["product_url"])
+            after = get(entry["cart_url"])
+            quote, receipt = extract(entry, product, before, after, clock())
+            extension = ".json"
         quotes.append(quote)
-        evidence[quote["source_sha256"] + ".json"] = product
+        evidence[quote["source_sha256"] + extension] = product
         raw = (json.dumps(receipt, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
         evidence[hashlib.sha256(raw).hexdigest() + ".receipt.json"] = raw
     quotes.sort(key=lambda q: q["offer_id"])

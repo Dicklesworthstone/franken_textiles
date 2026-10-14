@@ -78,7 +78,7 @@ are reviewed declarations, not properties established by the Ajax response.
 The current Rust quote schema records calendar dates. Keep intraday refreshes as separate snapshots:
 merging conflicting same-day rows into a single historical book is deliberately rejected by that schema.
 A successful fetch is not a purchase guarantee or a statistically representative world-market survey.
-No automatic recurring refresh is configured. Broader JSON-LD/CSV suppliers and policy-aware scheduling
+No automatic recurring refresh is configured. Broader JSON-LD suppliers and policy-aware scheduling
 remain follow-up work. Live supplier endpoints were inaccessible from the implementation environment;
 the adapter was verified with offline response fixtures, not presented as a successful live scrape.
 
@@ -90,3 +90,44 @@ Primary interface references (checked 2026-10-13):
 The source tests cover exact variant selection, price-field distinction, currency drift, the Shopify
 hundredths representation, unavailable offers, changed/old quantity evidence, malformed JSON and
 non-finite numbers, locale/origin conflicts, anonymous-only reads, batch failure and immutable publication.
+
+## Bulk supplier CSV feeds
+
+`ftx-textile-refresh/1` accepts reviewed CSV offers alongside the unchanged Shopify entries above.
+Use `adapter: "csv_v1"` for an anonymous public UTF-8 supplier feed. This adapter emits exactly the
+same Rust quote schema; it is not a separate price database. The source must explicitly carry SKU,
+price, currency, stock, priced quantity, unit, minimum and increment. Only one exact row may match.
+
+Start with the common fields (`offer_id` through `terms`, and `basis_source`, `basis_note`,
+`basis_reviewed_on`) from the example above, remove the Shopify endpoint/variant/description fields,
+and add the following **synthetic** source description:
+
+```json
+{
+  "adapter": "csv_v1",
+  "source_url": "https://example.invalid/prices.csv",
+  "delimiter": ",",
+  "columns": {
+    "sku": "SKU", "price": "PRICE", "currency": "CURRENCY", "available": "STOCK",
+    "quantity": "QTY", "unit": "UNIT", "minimum_quantity": "MIN", "order_increment": "STEP"
+  },
+  "match": {"SKU": "EXACT-SUPPLIER-SKU", "MARKET": "US", "SIZE": "yardage"},
+  "availability": {"available": ["in stock"], "unavailable": ["out of stock"]}
+}
+```
+
+The manifest's `match` must include the exact SKU and every column needed to disambiguate color,
+variant, sample-versus-yardage or customer market. An ambiguous match refuses rather than
+selecting the cheapest or first row. The source's quantity, canonical sale unit, minimum and increment
+must equal the reviewed manifest; changing from half-yards to rolls cannot silently multiply cost.
+Prices are plain decimal numbers in major currency units, not Shopify integer hundredths. Commas,
+currency symbols, exponents, blank/unknown stock and non-finite or unrepresentable values refuse.
+Comma, semicolon and tab delimiters are explicit, not guessed; UTF-8 BOMs and properly quoted multiline
+cells are supported. Missing/duplicate headers and malformed rows refuse the entire snapshot.
+
+One supplier-feed URL is fetched once per batch and all selected rows share its bytes and timestamp.
+Original bytes are retained as `<sha256>.csv`; the receipt records the selected logical record number
+(header is record 1), source hash and mapping. Bounded quantity tiers cannot be represented by the
+current quote schema and must not be configured as unconditional offers. Authenticated feeds, conditional/negotiated prices and
+unknown quantity conventions require separate qualification. CSV tests use synthetic observations,
+not live supplier prices. The existing robots, pacing and immutable-publication policy is unchanged.
