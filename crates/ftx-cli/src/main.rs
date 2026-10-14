@@ -126,7 +126,8 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 options.insert(name.to_string(), value.clone());
                 continue;
             }
-            if measure::BOOLEAN_OPTIONS.contains(&name)
+            if name == "allow-estimates"
+                || measure::BOOLEAN_OPTIONS.contains(&name)
                 || export::BOOLEAN_OPTIONS.contains(&name)
                 || round::BOOLEAN_OPTIONS.contains(&name)
                 || trace::BOOLEAN_OPTIONS.contains(&name)
