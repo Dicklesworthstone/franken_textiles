@@ -68,6 +68,7 @@ fn fixture() -> (CalibrationInput, Vec<(Mat3, Vec3)>) {
             image_model: "pinhole_zero_skew".into(),
             lens_id: "synthetic-pinhole".into(),
             pinhole_evidence: "analytic zero-skew projection, no distortion".into(),
+            distortion_fit: None,
             reference_evidence: "synthetic 120 mm planar grid".into(),
             image_size_px: [1280, 960],
             rotation_cw_deg: 0,

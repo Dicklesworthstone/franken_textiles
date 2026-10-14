@@ -74,7 +74,10 @@ fn read_lens(args: &Args) -> Result<Option<(LensInput, Value)>, Refusal> {
             lens_id: checked.input.lens_id,
             image_size_px: checked.input.image_size_px,
             rotation_cw_deg: checked.input.rotation_cw_deg,
-            calibration_evidence: checked.input.pinhole_evidence,
+            calibration_evidence: checked
+                .input
+                .distortion_fit
+                .map_or(checked.input.pinhole_evidence, |fit| fit.model_evidence),
             intrinsics: checked.solution.unwrap().intrinsics,
         }
     } else {

@@ -287,7 +287,7 @@ fn normal(s: &System) -> (Vec<Vec<f64>>, Vec<f64>, Vec<f64>) {
     (h, g, norms)
 }
 
-fn cholesky(h: &[Vec<f64>], damping: f64, floor: f64) -> Option<Vec<Vec<f64>>> {
+pub(crate) fn cholesky(h: &[Vec<f64>], damping: f64, floor: f64) -> Option<Vec<Vec<f64>>> {
     let n = h.len();
     let mut l = vec![vec![0.0; n]; n];
     for i in 0..n {
@@ -312,7 +312,7 @@ fn cholesky(h: &[Vec<f64>], damping: f64, floor: f64) -> Option<Vec<Vec<f64>>> {
     Some(l)
 }
 
-fn solve(l: &[Vec<f64>], g: &[f64]) -> Vec<f64> {
+pub(crate) fn solve(l: &[Vec<f64>], g: &[f64]) -> Vec<f64> {
     let n = g.len();
     let mut x = vec![0.0; n];
     for i in 0..n {

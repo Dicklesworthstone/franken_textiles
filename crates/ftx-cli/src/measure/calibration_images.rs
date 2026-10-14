@@ -162,6 +162,7 @@ fn prepare(manifest: &Manifest, board: &Board) -> Result<CalibrationInput, Refus
         image_model: manifest.image_model.clone(),
         lens_id: manifest.lens_id.clone(),
         pinhole_evidence: manifest.pinhole_evidence.clone(),
+        distortion_fit: None,
         reference_evidence: manifest.reference_evidence.clone(),
         image_size_px: manifest.image_size_px,
         rotation_cw_deg: manifest.rotation_cw_deg,
