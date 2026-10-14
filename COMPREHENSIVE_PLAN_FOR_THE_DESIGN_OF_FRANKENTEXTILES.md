@@ -1,6 +1,6 @@
 # Comprehensive Plan for the Design of FrankenTextiles
 
-Version 1.0 · 2026-10-12 · plan-first: nothing below is implemented unless a later commit says so.
+Version 1.1 · 2026-10-13 · plan-first: nothing below is implemented unless a later commit says so.
 Every number in this document is a **target, a budget or a measurement taken on the reference
 implementations**, never a FrankenTextiles result.
 
@@ -33,6 +33,7 @@ implementations**, never a FrankenTextiles result.
 22. Risks and open questions
 23. Explicit exclusions
 24. Glossary
+25. Source-bearing textile platform, material substitution and manufacturing
 Appendix A. Sources
 
 ---
@@ -709,7 +710,7 @@ G2.
 | FTX-19 | Photo scale: homography, plain sheet detector, ChArUco via external detector |
 | FTX-20 | Photogrammetry core: frame identity and selection, cameras, planar sheet pose, still windows, gated triangulation, factor graph |
 | FTX-21 | Multi-frame body fit to keypoints and silhouettes (external 2D models, opt-in) |
-| FTX-22 | Tracing pattern sheets (spec 04 vectorize) |
+| FTX-22 | Tracing pattern sheets (`ftx-trace`) |
 | FTX-23 | `ftx-wasm` and the browser page; drape in the page (G4) |
 | FTX-24 | The gauntlet and release (G5) |
 
@@ -762,6 +763,142 @@ Not ported, by decision:
 - **IPC**: Incremental Potential Contact, barrier-based contact that guarantees no interpenetration.
 - **Muslin**: a test garment in cheap cloth; the ground truth for fit.
 - **MODEL_FIT**: a measurement read off a fitted body model rather than measured.
+
+---
+
+## 25. Source-bearing textile platform, material substitution and manufacturing
+
+### 25.1 Expanded product direction and one physical authority
+
+The next product horizon is a general textile design, alteration, simulation and optimization system,
+with complex costumes on human bodies as the first demanding application. It must also admit other
+woven, knitted, bonded, felted, hide, laminate and filled assemblies. This deliberately expands the
+garment-only scope stated in §1.4; it does not weaken the parity, physics, fit or performance claims in §3.
+Robotic cutting and sewing are future consumers of a verified assembly/process model, not a claim that
+exporting a cutter outline is already a manufacturing robot.
+
+The central acceptance scenario is a fixed jacket pattern on a fixed fitted body. Replace characterized
+linen with characterized cow leather, then with a characterized performance knit/blend. Without editing
+solver code, all applicable consumers must use the selected material: inertia, warp/weft/wale/course and
+bias response, grain rotation, bending, thickness, contact/friction, sewing/gathers, strain/fit reports,
+layer insulation, purchasing and eventually manufacturing constraints. Pattern geometry remains fixed
+unless an explicit subsequent design optimization changes it. Every run records the resolved material
+snapshot, source evidence, estimate policy, model limits and digest; no stale cached defaults survive a
+substitution. A missing property blocks only consumers that require it and is reported as unknown to
+the others; an incomplete commercial record is not made simulation-ready with invented values.
+
+The frankensim materials-card/consumer boundary is an architectural reference. Shared numerics can be
+lifted only with pins, provenance and tests, not by adding sibling workspace dependencies. Cross-domain
+catalog and discovery ideas from music_theory_data_tool are inspiration, not empirical textile evidence.
+Keep one canonical material-resolution boundary within the existing crates and front ends; external
+data collectors publish immutable inputs, never participate in the solver's time stepping.
+
+### 25.2 Database coverage and hierarchy
+
+Represent distinct levels rather than conflating a fiber with a finished fabric: constituent fiber;
+spun/filament yarn and sewing thread; woven/knitted/nonwoven sheet; hide and tanning/finish; laminate;
+loose fill or batt; and a garment's ordered, mechanically distinct layer assembly. Stable identifiers
+distinguish supplier, product, variant, batch, construction, finish and conditioning. Cotton, polyester,
+nylon, elastane, flax/linen, wool species, silk, hemp, cashmere, alpaca and blends belong in the family
+index, as do regenerated cellulose types (viscose/modal/lyocell) and true bamboo bast. A bamboo-derived
+viscose yarn is not silently relabelled bamboo bast. Down/feather mixtures, polyester fill, cotton/wool
+batts and technical insulation need fill-specific records, not shell parameters borrowed from woven cloth.
+Performance brands such as Vuori are recorded only at their published product/composition scope; a
+brand name or four-way-stretch claim is not a measured constitutive law or a raw-fabric sales quote.
+
+The database is sparse and extensible, not a table padded with zeroes. Each quantitative observation
+needs its unit, method, direction, specimen/conditioning context, measured/published/estimated evidence
+class, source locator and retrieval/measurement date, plus bounds or uncertainty when reported. Preserve
+original units and ranges alongside normalized values. Do not choose an unreported range midpoint or
+turn a confidence interval into a tolerance. Track source rights and permitted retention; prefer primary
+supplier specifications, open research datasets and reproducible specimen measurements.
+
+Required property families include:
+- Identity/composition and construction: fiber mass fractions; yarn tex/denier/count system, twist,
+  ply/filament, spinning; warp/weft counts, weave, crimp, knit gauge/loop structure; bonding, pile,
+  coating, tanning, wash/softener and surface treatment; sheet width, thickness under stated pressure,
+  dry/conditioned areal mass and bulk/fiber density kept distinct.
+- Mechanics/durability: directional stress-strain and shear curves, recovery and hysteresis, creep,
+  anisotropic bending, compression/loft recovery, tensile/tear/puncture/cut resistance, abrasion/pilling,
+  seam slippage/strength, dimensional change, wet response and interface-specific friction. Test-standard
+  results carry their specimen geometry and conditioning; they are not interchangeable scalar strengths.
+- Transport/safety: dry thermal conductivity/resistance, heat capacity, vapor resistance, permeability,
+  sorption/drying, wind and moisture effects, down fill power/loft, ignition/burn observations, melt/drip,
+  UV and chemical/process restrictions. Warmth marketing labels, fill power, fiber composition and areal
+  mass do not become a wearer temperature rating or a flammability/cut-protection certification.
+- Commercial/process observations: dated supplier SKU quotes, quality/region/currency/terms, actual sale
+  quantity, width, minimum and increment, availability and evidence hashes; sourced cutting, needle/thread,
+  stitch/feed/tension, pressing/adhesive and finishing constraints where documented.
+
+### 25.3 Constitutive and heterogeneous assembly work
+
+The initial effective law resolves areal mass, E-warp/E-weft, Poisson coupling, engineering shear,
+independent scalar bending, full thickness and skin/self friction. It respects material axes already
+rotated by the pattern grainline. Positive-definiteness, finite values, dimensions and explicit estimate
+admission are gates, not suggestions. Bulk fiber modulus in Pa is not sheet stiffness in N/m; solid-plate
+thickness-cubed bending is not automatically valid for a yarn/loop network.
+
+Next, add per-piece and per-layer assignments, per-element constitutive data and mass, adjacent-material
+bending rules, and interface-pair contact properties. Body offset is one half-thickness; two different
+sheets use the sum of their half-thicknesses. One global self-friction coefficient cannot characterize
+leather against satin and knit against knit. Preserve seam associations, grain/mirror transformations,
+gather compression and material hashes through remeshing and motion continuation. A lining, shell and
+fill have distinct roles; loose fill must not impersonate a membrane. Until implemented, heterogeneous
+assignments must refuse rather than silently use the global material.
+
+Then introduce independently calibrated nonlinear woven/knit response, tension/compression asymmetry,
+shear locking, history-dependent recovery, damage and directional bending, with conditioning and strain
+range validity. The constitutive interface must let solver assembly remain generic. Derivative checks,
+energy/objectivity tests, known-answer patch tests and measured drape/stretch validation precede claims
+that a construction descriptor alone predicts fabric behavior.
+
+### 25.4 Thermal coupling, purchasing and machine-aware design
+
+The current dry one-dimensional thermal stack is a comparison calculator, not body thermoregulation.
+The next thermal model must use actual layer thickness/compression, air gaps from the draped geometry,
+wind-dependent boundary films, moisture/evaporation, thermal bridges at seams and closures, transient
+storage and explicit wearer/environment boundary conditions. Validate dry layers first, then coupled
+transport, against stated measurements. Report local heat flow and uncertainty before any comfort index;
+do not claim a safe outdoor temperature from a static cloth drape or an unverified branded textile.
+
+Purchasing remains a source-observation problem separate from material physics. Compare only matching
+currency, region, quality, sale basis and tax/shipping terms; convert linear yard/metre prices through
+sourced usable width; retain order minima/increments and sample counts. Distinguish observed-offer
+p10/median/p90 from supplier-balanced statistics and from a representative market survey. Never infer
+exchange rates, hide yield or unknown shipping costs. Refresh must preserve raw evidence, timestamps,
+source policies and old snapshots on failure. Broaden beyond the initial Shopify adapter with validated
+JSON-LD, CSV and supplier-specific importers, actual primary-source manifests and scheduled refresh only
+when configured. Intraday quote-history semantics require a deliberate schema extension, not timestamp
+rewriting. Material choice should eventually drive nesting/BOM requirements and actual procurement cost.
+
+Manufacturing planning must connect material, construction and machine capability. Add seam topology,
+thread/needle/stitch/feed models, seam allowances and bulk, reinforcement, stretch differential, pucker,
+cutting direction/nap, defects and usable yield. Optimize cut layouts and sewing order against explicit
+quality/time/cost objectives and uncertainty. A robot execution adapter needs machine-specific capability
+limits, calibration, workholding/sensing, collision checks, interlocks and an explicit execution boundary.
+An unknown coating, finish or ignition characteristic cannot authorize thermal cutting or processing.
+Keep geometric export acceptance separate from process feasibility and from permission to operate hardware.
+
+### 25.5 Delivery state and next acceptance gates
+
+Implemented foundation: `ftx-pattern::materials` source-bearing records, units/evidence validation,
+effective orthotropic mechanics and dry series-layer heat-flow checks (commit `0d2f5e8`); the subsequent
+shared catalog/selection/import/drape resolver and `ftx-materials` workbench are the consumer path.
+`scripts/refresh_textile_prices.py` emits that workbench's existing `ftx-textile-quotes/1` schema with
+exact-variant/currency/basis checks and immutable evidence (commit `b82536e`). Its 15 offline tests passed;
+live supplier endpoints were inaccessible from the implementation environment, so this is not a claim
+of a successfully populated live market feed. See `docs/spec/06-textile-materials.md` and
+`docs/textile-price-refresh.md`. Existing family and supplier records are partial observations, not a
+comprehensive characterized library. No nonlinear construction, heterogeneous thermal comfort or robot
+execution capability is asserted by these foundational commits.
+
+Track the expansion in beads `ftx-tm0` through `ftx-tm8`. Prioritize (1) measured, construction-specific
+material coverage, (2) heterogeneous solver/contact assembly, and (3) the fixed-pattern substitution gate.
+That gate must verify unchanged geometry, changed mass and directional energy, contact offsets/friction,
+different reproducible dynamics, correct source hashes and no stale material reuse. Add thermal-stack
+and price-width known answers, native/wasm determinism, explicit incomplete-data refusals and separately
+reported real-specimen validation. Measured linen/leather/knit jacket comparisons are the eventual
+end-to-end acceptance, not a synthetic test dressed up as real-world fit evidence.
 
 ---
 
