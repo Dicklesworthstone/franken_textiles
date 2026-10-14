@@ -56,7 +56,8 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         "thickness" | "width" | "fiber_diameter" | "staple_length" => "m",
         "bulk_density" => "kg/m3",
         "warp_stiffness" | "weft_stiffness" | "shear_stiffness" => "N/m",
-        "bending_rigidity" | "bending_warp" | "bending_weft" => "N*m",
+        "bending_rigidity" | "bending_warp" | "bending_weft" | "bending_coupling"
+        | "bending_twist" => "N*m",
         "poisson_warp_weft"
         | "friction_skin"
         | "friction_self"

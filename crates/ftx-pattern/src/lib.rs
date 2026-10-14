@@ -10,6 +10,7 @@ pub mod alter;
 pub mod doc;
 pub mod draft;
 pub mod instance;
+pub mod material_bending;
 pub mod material_calibration;
 pub mod material_catalog;
 pub mod material_cost;
