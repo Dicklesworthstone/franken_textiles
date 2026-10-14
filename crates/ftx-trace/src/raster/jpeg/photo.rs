@@ -28,6 +28,8 @@ fn invalid(message: impl Into<String>) -> Refusal {
 struct Header {
     size: [usize; 2],
     orientation: Option<u16>,
+    /// End of the primary image: the byte after its EOI.
+    end: usize,
 }
 
 // Parse only IFD0: thumbnail/EXIF/GPS/MakerNote IFDs cannot override the primary image.
@@ -98,7 +100,7 @@ fn header(bytes: &[u8], max_pixels: usize) -> Result<Header, Refusal> {
         return Err(invalid("not a JPEG photograph"));
     }
     let mut pos = 2;
-    let (mut size, mut exif, mut value) = (None, false, None);
+    let (mut size, mut exif, mut value, mut mpf) = (None, false, None, false);
     let (mut entropy, mut saw_scan) = (false, false);
     while pos < bytes.len() {
         if entropy && bytes[pos] != 0xff {
@@ -120,7 +122,9 @@ fn header(bytes: &[u8], max_pixels: usize) -> Result<Header, Refusal> {
         }
         entropy = false;
         if marker == 0xd9 {
-            if !saw_scan || pos != bytes.len() {
+            // A multi-picture file's other images (a phone's HDR gain map) follow its primary;
+            // cv2.imread and Pillow's Image.open show the primary, so it is the photo.
+            if !saw_scan || (pos != bytes.len() && !mpf) {
                 return Err(invalid(
                     "JPEG photo must contain exactly one complete image and no trailing payload",
                 ));
@@ -128,6 +132,7 @@ fn header(bytes: &[u8], max_pixels: usize) -> Result<Header, Refusal> {
             return Ok(Header {
                 size: size.ok_or_else(|| invalid("JPEG photo has no frame"))?,
                 orientation: value,
+                end: pos,
             });
         }
         if marker == 0 || marker == 0x01 || (0xd0..=0xd8).contains(&marker) {
@@ -181,9 +186,12 @@ fn header(bytes: &[u8], max_pixels: usize) -> Result<Header, Refusal> {
                 ));
             }
             0xe2 if data.starts_with(b"MPF\0") => {
-                return Err(invalid(
-                    "multi-picture JPEG is not one identified photo; export the selected frame",
-                ));
+                if mpf || saw_scan {
+                    return Err(invalid(
+                        "JPEG photo has duplicate or late multi-picture (MPF) metadata",
+                    ));
+                }
+                mpf = true;
             }
             0xda => {
                 if size.is_none() {
@@ -221,12 +229,14 @@ fn transform(size: [usize; 2], orientation: u16) -> ([[i64; 3]; 3], [usize; 2]) 
 /// Decode one complete JPEG and apply its EXIF orientation without resampling. The ordinary
 /// [`super::decode`] remains byte-compatible with tracing's permissive, unoriented boundary.
 /// Photo input refuses known entropy repair, incomplete progressive scans, ambiguous orientation,
-/// multiple images and trailing payloads. EXIF data other than orientation is not retained.
+/// a second frame and trailing payloads; a multi-picture (MPF) file is its primary image, as
+/// cv2.imread and Pillow show it. EXIF data other than orientation is not retained.
 ///
 /// # Errors
 /// Malformed/unsupported images or metadata, decoder repair, or encoded/decoded budget excess.
 pub fn decode_photo(bytes: &[u8], max_pixels: usize) -> Result<OrientedJpeg, Refusal> {
     let header = header(bytes, max_pixels)?;
+    let bytes = &bytes[..header.end];
     let mut image = decode_impl(bytes, max_pixels, true).map_err(invalid)?;
     let (matrix, [w, h]) = transform(header.size, header.orientation.unwrap_or(1));
     if header.orientation.is_some_and(|v| v != 1) {
@@ -352,6 +362,7 @@ mod tests {
         let sof = segment(0xc0, &[8, 0, 9, 0, 7, 1, 1, 0x11, 0]);
         let sos = segment(0xda, &[1, 1, 0, 0, 63, 0]);
         let exif = segment(0xe1, &[b"Exif\0\0".to_vec(), exif(6, false)].concat());
+        let mpf = segment(0xe2, b"MPF\0anything");
         let jpeg = |metadata: &[u8]| {
             [
                 vec![0xff, 0xd8],
@@ -380,14 +391,43 @@ mod tests {
                 0xe1,
                 b"http://ns.adobe.com/xap/1.0/\0<tiff:Orientation>1</tiff:Orientation>",
             ),
-            segment(0xe2, b"MPF\0anything"),
+            [mpf.clone(), mpf.clone()].concat(),
         ] {
             assert!(header(&jpeg(&metadata), 63).is_err());
         }
         for tail in [vec![0], vec![0xff, 0xd8, 0xff, 0xd9]] {
             assert!(header(&[bytes.clone(), tail].concat(), 63).is_err());
         }
-        let late = [vec![0xff, 0xd8], sof, sos, exif, vec![0xff, 0xd9]].concat();
+        // A multi-picture file's primary ends at its EOI; the images after it are not read.
+        let primary = jpeg(&[exif.clone(), mpf.clone()].concat());
+        let multi = [primary.clone(), vec![0xff, 0xd8, 0xff, 0xd9]].concat();
+        assert_eq!(header(&multi, 63).unwrap().end, primary.len());
+        let late = [
+            vec![0xff, 0xd8],
+            sof.clone(),
+            sos.clone(),
+            exif,
+            vec![0xff, 0xd9],
+        ]
+        .concat();
         assert!(header(&late, 63).is_err());
+        let late = [vec![0xff, 0xd8], sof, sos, mpf, vec![0xff, 0xd9]].concat();
+        assert!(header(&late, 63).is_err());
+    }
+
+    #[test]
+    fn a_multi_picture_file_decodes_as_its_primary_image() {
+        // The photo fixture with an MPF segment and a second image after it, as a phone stores an
+        // HDR gain map: the same pixels as the fixture alone.
+        let photo: &[u8] =
+            include_bytes!("../../../../../tests/fixtures/photo/plain-letter-exif6.jpg");
+        let mpf = [&[0xff, 0xe2, 0x00, 0x0a][..], b"MPF\0", &[0; 4]].concat();
+        let multi = [&photo[..2], &mpf, &photo[2..], photo].concat();
+        let want = decode_photo(photo, 1 << 20).unwrap();
+        let got = decode_photo(&multi, 1 << 20).unwrap();
+        assert_eq!((got.image.w, got.image.h), (600, 800));
+        assert_eq!(got.image.data, want.image.data);
+        assert_eq!(got.exif_orientation, Some(6));
+        assert!(decode_photo(&[photo, photo].concat(), 1 << 20).is_err());
     }
 }

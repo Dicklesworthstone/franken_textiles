@@ -12,8 +12,10 @@ Show a whole, flat Letter or A4 sheet on a darker background, then click landmar
 it is displayed. A JPEG is used as a phone writes it: its EXIF orientation is applied once by an
 exact pixel permutation (as Pillow's `ImageOps.exif_transpose`), so clicks are in the displayed
 frame, and `image_input` records the orientation, the stored size and the stored-to-displayed
-pixel map. The JPEG must be one complete 8-bit frame: damaged or cut data, incomplete progressive
-scans, multi-picture (MPF) files, trailing payloads and an XMP orientation beside EXIF are refused.
+pixel map. A multi-picture (MPF) file, such as a phone's HDR photo with its gain map, is measured
+on its primary image, the one `cv2.imread` and Pillow show. The JPEG must be one complete 8-bit
+frame: damaged or cut data, incomplete progressive scans, other trailing payloads and an XMP
+orientation beside EXIF are refused.
 A PNG must be already oriented, opaque 8-bit grayscale or RGB, without EXIF metadata. HEIC/WebP,
 transparency, palette/16-bit images and animation require conversion first; the command refuses
 them rather than silently changing measurement pixels.
