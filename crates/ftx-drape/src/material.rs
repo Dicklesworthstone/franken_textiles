@@ -116,9 +116,11 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
     {
         return Err(invalid("fabric must be an object"));
     }
+    // A piece's `material` string is a cutting label (the exporters print it in cut tables, and the
+    // reference drapes every piece in pattern.fabric), so only a per-piece characterized selection is refused.
     if let Some(pieces) = raw["pieces"].as_array() {
         for p in pieces {
-            if p.get("material").is_some()
+            if p.get("material").is_some_and(|m| !m.is_string())
                 || p.get("material_id").is_some()
                 || p["fabric"].get("material").is_some()
                 || p["fabric"].get("material_id").is_some()
