@@ -892,6 +892,23 @@ of a successfully populated live market feed. See `docs/spec/06-textile-material
 comprehensive characterized library. No nonlinear construction, heterogeneous thermal comfort or robot
 execution capability is asserted by these foundational commits.
 
+The `ftx materials` CLI now exposes the unified, built-in source-bearing catalog through
+`list`, `show ID`, `compare FIRST_ID SECOND_ID` and `freeze ID`. Comparison reports only
+common, unit-matched properties for which evidence is admitted, along with independent
+mechanics readiness and missing-coefficient lists; it makes no false garment-performance
+claim. Freeze emits a content-locked, portable selection compatible with the existing
+`fabric.material` resolver. This is the operator-facing entry point for the material
+substitution workflow, **not** evidence that commercially sourced mechanical properties
+are complete or that a linen-to-leather jacket drape has been validated.
+
+Next practical product gate: take two fully characterized sheet records, freeze both,
+substitute the `fabric.material` value on an identical pattern, and assert identical
+pattern geometry and different predicted mass/contact/orthotropic energies and material
+digest. Only after that extend to construction-specific nonlinear mechanics, local
+layer-stacks and machine-process constraints. The critical data dependency is obtaining
+real specimen-level stiffness, bending, interface-friction and thickness measurements;
+supplier fiber labels alone cannot unblock the solver.
+
 Track the expansion in beads `ftx-tm0` through `ftx-tm8`. Prioritize (1) measured, construction-specific
 material coverage, (2) heterogeneous solver/contact assembly, and (3) the fixed-pattern substitution gate.
 That gate must verify unchanged geometry, changed mass and directional energy, contact offsets/friction,
