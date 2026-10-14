@@ -387,6 +387,17 @@ pub fn drape(
         }
     }
     report["mass_kg"] = json!(scene.solver.model.mass.iter().sum::<f64>());
+    let model = &scene.solver.model;
+    if !model.panel_bending_patches().is_empty() {
+        report["panel_bending"] = json!({
+            "model":ftx_pattern::material_bending::MODEL,
+            "patch_count":model.panel_bending_patches().len(),
+            "material_triangles":model.panel_bending_triangles(),
+            "panel_energy_j":model.panel_bending_patches().iter().map(|p|p.energy(&scene.solver.x)).sum::<f64>(),
+            "active_scalar_hinges":model.hinges.iter().enumerate().filter(|(i,_)| model.hinge_rigidity(*i)>0.0).count(),
+            "scope":"quasi-isometric source-panel curvature; scalar seam law retained; not finite-stretch or empirical seam validation"
+        });
+    }
     if let Some(history) = scene.solver.relaxation_report()? {
         report["membrane_history"] = history;
         report["material_settledness_note"] = json!(

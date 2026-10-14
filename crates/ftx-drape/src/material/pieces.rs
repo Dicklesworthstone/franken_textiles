@@ -152,7 +152,7 @@ pub(super) fn resolve(
     base.options.validate()?;
     let mut report = json!({
         "basis":"per_piece_characterization",
-        "model":"per_piece_green_strain_scalar_bending",
+        "model":if fabrics.iter().any(|f| f.bending_response().is_some()) {"per_piece_green_strain_tensor_panel_bending"} else {"per_piece_green_strain_scalar_bending"},
         "default_record_sha256":default_hash,
         "pieces":bindings, "records":records,
         "contact_policy":"feature-local thickness/body friction and source-bound pairwise friction; welded features use maximum-adjacent envelopes",
@@ -162,7 +162,9 @@ pub(super) fn resolve(
         "interfaces":interfaces.report,
         "self_contact_enabled":base.options.self_contact.is_some(),
         "hinge_policy":"shared curvature with each adjacent triangle's bending-area share; not an empirical seam law",
-        "not_simulated":["layer generation", "directional bending", "resolved seam cross-section", "plastic set/damage"],
+        "panel_bending_piece_count":fabrics.iter().filter(|f| f.bending_response().is_some()).count(),
+        "panel_bending_policy":"selected panels use source-topology quadratic tensor patches; scalar seam approximation is retained independently",
+        "not_simulated":["layer generation", "finite-stretch shell curvature", "resolved seam cross-section", "plastic set/damage"],
         "fit_claim":false
     });
     report["assignment_sha256"] = json!(sha256_hex(

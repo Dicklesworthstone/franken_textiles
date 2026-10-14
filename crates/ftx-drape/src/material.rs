@@ -3,6 +3,7 @@
 //! tolerances and whether self-contact is enabled. Grain rotation remains in the existing scene builder.
 
 use ftx_core::{Refusal, RefusalCode, Vec2};
+use ftx_pattern::material_bending::{BendingTensor, MODEL as BENDING_MODEL};
 use ftx_pattern::material_relaxation::CompiledRelaxation;
 use ftx_pattern::material_response::CompiledMembrane;
 use ftx_pattern::materials::Mechanics;
@@ -34,6 +35,7 @@ pub struct Fabric {
     pub bending_nm: f64,
     /// Weft stiffness, engineering shear stiffness and major Poisson ratio, when characterized.
     directional: Option<[f64; 3]>,
+    panel_bending: Option<BendingTensor>,
 }
 
 impl Default for Fabric {
@@ -43,6 +45,7 @@ impl Default for Fabric {
             tensile_n_m: 8000.0,
             bending_nm: 3e-5,
             directional: None,
+            panel_bending: None,
         }
     }
 }
@@ -76,6 +79,7 @@ impl Fabric {
             tensile_n_m: m.warp_n_m,
             bending_nm: m.bending_nm,
             directional: Some([m.weft_n_m, m.shear_n_m, m.poisson]),
+            panel_bending: None,
         }
     }
 
@@ -109,6 +113,7 @@ impl Fabric {
             tensile_n_m: number("tensile_N_m", d.tensile_n_m)?,
             bending_nm: number("bending_Nm", d.bending_nm)?,
             directional: None,
+            panel_bending: None,
         };
         fabric.validate()?;
         Ok(fabric)
@@ -120,6 +125,12 @@ impl Fabric {
         let e = self.tensile_n_m;
         let [weft, shear, poisson] = self.directional.unwrap_or([e, 0.2 * e, 0.0]);
         Membrane::orthotropic(e, weft, poisson, shear, compression)
+    }
+
+    /// Explicit grain-frame panel bending; None retains scalar hinges everywhere.
+    #[must_use]
+    pub fn bending_response(&self) -> Option<BendingTensor> {
+        self.panel_bending
     }
 }
 
@@ -239,7 +250,8 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
     // An explicit thermal consumer still applies its own evidence/coverage gates.
     let resistance = thermal.as_ref().and_then(|r| r.as_ref().ok()).copied();
     let thermal_failure = thermal.as_ref().and_then(|r| r.as_ref().err());
-    let fabric = Fabric::from_mechanics(mechanics);
+    let mut fabric = Fabric::from_mechanics(mechanics);
+    fabric.panel_bending = record.bending_response()?;
     fabric.validate()?;
     check_grains(pattern, &fabric)?;
     opts.contact.thickness = 0.5 * mechanics.thickness_m;
@@ -258,13 +270,38 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
     } else {
         "unknown"
     };
+    let mut not_simulated = vec![
+        "yarn/loop-scale homogenization",
+        "plastic set/damage",
+        "moisture and heat transport",
+        "garment thermal comfort",
+        "damage/fire",
+        "robotic sewing",
+    ];
+    if fabric.panel_bending.is_none() {
+        not_simulated.push("directional bending");
+    } else {
+        not_simulated.extend([
+            "finite-stretch shell curvature",
+            "nonlinear curvature response",
+            "measured seam bending",
+        ]);
+    }
     Ok(MaterialInputs {
         fabric,
         options: opts,
         report: json!({
             "basis":"characterized_record", "record":record, "record_sha256":record.sha256(),
             "mechanics":mechanics,
-            "model": if response.is_some() {"tabulated_green_strain_scalar_bending"} else {"orthotropic_green_strain_scalar_bending"},
+            "model": match (response.is_some(),fabric.panel_bending.is_some()) {
+                (false,false)=>"orthotropic_green_strain_scalar_bending",
+                (true,false)=>"tabulated_green_strain_scalar_bending",
+                (false,true)=>"orthotropic_green_strain_tensor_panel_bending",
+                (true,true)=>"tabulated_green_strain_tensor_panel_bending"
+            },
+            "bending_model":if fabric.panel_bending.is_some() {BENDING_MODEL} else {"scalar_hinges"},
+            "panel_bending_matrix_nm":fabric.panel_bending.map(|p| p.matrix()),
+            "bending_scope":"explicit tensor replaces interior source-panel hinges; scalar bending_rigidity remains the separate seam approximation",
             "nonlinear_strain_range": response.as_ref().map(CompiledMembrane::strain_range),
             "relaxation_law_sha256": relaxation.as_ref().map(CompiledRelaxation::fingerprint),
             "membrane_stiffness_basis": "equilibrium; optional Maxwell branches add transient response",
@@ -273,7 +310,7 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             "self_contact_enabled":opts.self_contact.is_some(),
             "dry_material_resistance_m2_k_w":resistance, "thermal_basis":thermal_basis,
             "thermal_unavailable":thermal_failure,
-            "not_simulated":["yarn/loop-scale homogenization", "directional bending", "plastic set/damage", "moisture and heat transport", "garment thermal comfort", "damage/fire", "robotic sewing"],
+            "not_simulated":not_simulated,
             "fit_claim":false
         }),
         piece_fabrics: None,

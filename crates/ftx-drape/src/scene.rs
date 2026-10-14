@@ -522,6 +522,8 @@ fn build_scene_inner(
     let mut tri_materials = Vec::new();
     let mut tri_responses = Vec::new();
     let mut triangle_owner = Vec::new();
+    let mut source_triangles = Vec::new();
+    let mut tri_bending = Vec::new();
     let low = GATHER_COMPRESSION.min(compression);
     for f in &mesh.faces {
         let t = f.map(|v| weld[v]);
@@ -530,9 +532,17 @@ fn build_scene_inner(
             continue;
         }
         tris.push(t);
+        source_triangles.push(*f);
         tri_rest.push(f.map(|v| rest[v]));
         let owner = mesh.owner[f[0]];
         triangle_owner.push(owner);
+        let sheet = match &instance_fabrics {
+            Some(field) => field
+                .get(owner)
+                .ok_or_else(|| bad("invalid bending triangle owner".into()))?,
+            None => &fabric,
+        };
+        tri_bending.push(sheet.bending_response());
         if let Some(field) = &instance_fabrics {
             if f.iter().any(|&v| mesh.owner[v] != owner) {
                 return Err(bad(
@@ -579,6 +589,9 @@ fn build_scene_inner(
         )?
     };
     model.set_compression(&tri_compression)?;
+    if tri_bending.iter().any(Option::is_some) {
+        model.set_panel_bending(&rest, &source_triangles, &weld, &tri_bending)?;
+    }
     if !tri_responses.is_empty() {
         model.set_membrane_responses(&tri_responses)?;
         model.check_membrane_domains(&x)?;
