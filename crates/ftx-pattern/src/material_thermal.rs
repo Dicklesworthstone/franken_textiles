@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::materials::{Evidence, Form, Material, Source};
 
+mod polynomial;
+pub use polynomial::PolynomialFit;
+
 /// One reported mean; standard deviation is not an uncertainty of the mean or a confidence interval.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,7 +27,7 @@ pub struct ThermalObservation {
     pub standard_deviation: Option<f64>,
 }
 
-/// Observations from one test protocol, specimen identity and conditioning state.
+/// Observations or one published fit from a single protocol, specimen and conditioning state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemperatureSeries {
@@ -40,7 +43,13 @@ pub struct TemperatureSeries {
     #[serde(default)]
     pub conditions: BTreeMap<String, String>,
     /// Strictly temperature-ordered observations. Duplicate temperatures are not averaged silently.
+    /// Empty only when `polynomial` is supplied; fitted samples never masquerade as observations.
+    #[serde(default)]
     pub points: Vec<ThermalObservation>,
+    /// Alternative bounded polynomial fit, in this series' canonical unit. Mutually exclusive with
+    /// observations, and never classified as `Measured`, even if fitted to measured data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polynomial: Option<PolynomialFit>,
 }
 
 /// Thermal characterization attached to the same material record used by other consumers.
@@ -83,7 +92,6 @@ impl TemperatureSeries {
                     || source.accessed_on.trim().is_empty()
                     || source.note.trim().is_empty()
             })
-            || !(2..=4096).contains(&self.points.len())
             || self
                 .conditions
                 .iter()
@@ -92,6 +100,17 @@ impl TemperatureSeries {
             return Err(invalid(format!(
                 "invalid sourced temperature series ({unit})"
             )));
+        }
+        if let Some(fit) = &self.polynomial {
+            if !self.points.is_empty() || self.evidence == Evidence::Measured {
+                return Err(invalid(
+                    "a thermal polynomial is a fit, not measured knots; choose exactly one representation",
+                ));
+            }
+            return fit.validate();
+        }
+        if !(2..=4096).contains(&self.points.len()) {
+            return Err(invalid("thermal observations need 2..4096 ordered samples"));
         }
         for point in &self.points {
             if !point.temperature_c.is_finite() || point.temperature_c < -273.15 {
@@ -117,7 +136,7 @@ impl TemperatureSeries {
         Ok(())
     }
 
-    /// Compile an immutable piecewise-linear law. Even measured knots do not measure interpolation.
+    /// Compile an immutable bounded law. Both interpolation and polynomial fits require consent.
     ///
     /// # Errors
     /// Invalid observations or missing explicit permission to use an interpolated estimate.
@@ -130,7 +149,7 @@ impl TemperatureSeries {
         self.validate(unit, sources)?;
         if !allow_estimates {
             return Err(invalid(
-                "temperature interpolation is an estimate; explicit opt-in required",
+                "temperature interpolation or fitting is an estimate; explicit opt-in required",
             ));
         }
         Ok(TemperatureCurve {
@@ -139,6 +158,7 @@ impl TemperatureSeries {
                 .iter()
                 .map(|p| [p.temperature_c, p.mean])
                 .collect(),
+            polynomial: self.polynomial.clone(),
         })
     }
 }
@@ -185,16 +205,20 @@ impl ThermalResponse {
     }
 }
 
-/// Validated positive piecewise-linear law, with a closed validity interval and no extrapolation.
+/// Validated positive tabulated or polynomial law, with a closed interval and no extrapolation.
 #[derive(Clone, Debug)]
 pub struct TemperatureCurve {
     points: Vec<[f64; 2]>,
+    polynomial: Option<PolynomialFit>,
 }
 
 impl TemperatureCurve {
     /// Inclusive lower and upper characterized temperatures in degrees Celsius.
     #[must_use]
     pub fn domain(&self) -> [f64; 2] {
+        if let Some(fit) = &self.polynomial {
+            return fit.domain_c;
+        }
         [self.points[0][0], self.points[self.points.len() - 1][0]]
     }
 
@@ -214,6 +238,9 @@ impl TemperatureCurve {
     /// Out-of-domain/non-finite temperature or arithmetic overflow.
     pub fn at(&self, t: f64) -> Result<f64, Refusal> {
         self.check(t)?;
+        if let Some(fit) = &self.polynomial {
+            return positive(fit.value(t), "fitted thermal value");
+        }
         let i = self.points.partition_point(|p| p[0] < t);
         if self.points[i][0] == t {
             return Ok(self.points[i][1]);
@@ -232,6 +259,9 @@ impl TemperatureCurve {
     pub fn integral(&self, from: f64, to: f64) -> Result<f64, Refusal> {
         self.check(from)?;
         self.check(to)?;
+        if let Some(fit) = &self.polynomial {
+            return fit.integral(from, to);
+        }
         let lo = from.min(to);
         let hi = from.max(to);
         let mut sum = 0.0;
