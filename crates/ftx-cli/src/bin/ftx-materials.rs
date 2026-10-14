@@ -17,6 +17,8 @@ use ftx_pattern::textile_import::{catalog, resolve_fabric};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+#[path = "material_workbench/surface.rs"]
+mod thermal_surface;
 #[path = "material_workbench/thermal.rs"]
 mod thermal_transient;
 
@@ -31,6 +33,7 @@ ftx-materials price PATTERN.json QUOTES.json SCOPE.json
 ftx-materials thermal STACK.json
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
+ftx-materials thermal-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials cut-plan PATTERN.json OPTIONS.json
 ftx-materials cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json
 ftx-materials cut-svg PATTERN.json OPTIONS.json ROLL-INDEX NEW.svg
@@ -41,6 +44,7 @@ JSON output. `show` includes a portable selection and missing-property coverage.
 `price` is a dated offer sample, not a checkout or a worldwide market price.
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
+`thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
 `cut-plan` derives material-specific roll requirements from real cut instances and sourced width.
 `cut-price` prices gross marker stock, including layout waste; missing offers remain unknown.
 `cut-svg` writes a new source-locked planning preview, not device execution code.
@@ -173,6 +177,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             cutting::price(pattern, options, quotes, market)
         }
         ["cut-svg", pattern, options, index, out] => cutting::preview(pattern, options, index, out),
+        ["thermal-surface", report, conditions] => thermal_surface::run(report, conditions),
         ["thermal-transient", path] => thermal_transient::run(path),
         ["calibrate", path] => calibration(path, false),
         ["calibrate", path, "--allow-estimates"] => calibration(path, true),
