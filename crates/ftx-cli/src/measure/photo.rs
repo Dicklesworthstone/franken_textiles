@@ -1,5 +1,8 @@
 //! Photo commands from explicit coordinates or an oriented PNG. EXIF conversion remains external.
 
+#[path = "charuco_image.rs"]
+mod charuco_image;
+
 use std::io::Read;
 use std::path::Path;
 
@@ -116,12 +119,21 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
     let names: &[&str] = if command == "sheet-pose" {
         &["reference", "out"]
     } else if command == "photo-scale" {
-        &["reference", "image", "paper", "out"]
+        &[
+            "reference",
+            "image",
+            "paper",
+            "sheet",
+            "detector-python",
+            "out",
+        ]
     } else {
         &[
             "reference",
             "image",
             "paper",
+            "sheet",
+            "detector-python",
             "points",
             "depth-offset-mm",
             "camera-distance-mm",
@@ -143,6 +155,18 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
         let code = if report["ok"] == true { 0 } else { 3 };
         return Ok((report, code));
     }
+    if option(args, "sheet").is_some()
+        && (option(args, "image").is_none()
+            || option(args, "reference").is_some()
+            || option(args, "paper").is_some())
+    {
+        return Err(bad_input(
+            "--sheet requires --image and cannot be combined with --reference or --paper",
+        ));
+    }
+    if option(args, "detector-python").is_some() && option(args, "sheet").is_none() {
+        return Err(bad_input("--detector-python requires --image and --sheet"));
+    }
     let (scale, source_key, source) = match (option(args, "reference"), option(args, "image")) {
         (Some(path), None) => {
             if option(args, "paper").is_some() {
@@ -158,12 +182,19 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
             if !["letter", "a4", "auto"].contains(&paper) {
                 return Err(bad_input("paper must be letter, a4 or auto"));
             }
-            let (image, receipt) = load_image(path, MAX_PHOTO_PIXELS)?;
-            (
-                analyze_plain_sheet(&image.data, image.w, image.h, paper)?,
-                "image_input",
-                receipt,
-            )
+            let (image, mut receipt) = load_image(path, MAX_PHOTO_PIXELS)?;
+            let scale = if let Some(sheet) = option(args, "sheet") {
+                let (scale, detection) = charuco_image::analyze(
+                    &image,
+                    sheet,
+                    option(args, "detector-python").unwrap_or("python3"),
+                )?;
+                receipt["charuco_detection"] = detection;
+                scale
+            } else {
+                analyze_plain_sheet(&image.data, image.w, image.h, paper)?
+            };
+            (scale, "image_input", receipt)
         }
         _ => {
             return Err(bad_input(
@@ -174,6 +205,7 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
     if command == "photo-scale" {
         let mut report = scale.report().clone();
         report[source_key] = source;
+        charuco_image::annotate(&mut report);
         let code = if report["ok"] == true { 0 } else { 3 };
         return Ok((report, code));
     }
@@ -195,6 +227,7 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
     let mut result = measure_photo(&scale, &points, &options)?;
     result["taken_on"] = json!(taken_on);
     result["photo"][source_key] = source;
+    charuco_image::annotate(&mut result["photo"]);
     result["photo"]["measurement_options"] = json!({
         "depth_offset_mm":options.depth_offset_mm,
         "camera_distance_mm":options.camera_distance_mm,

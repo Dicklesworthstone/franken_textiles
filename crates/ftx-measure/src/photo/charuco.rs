@@ -233,12 +233,14 @@ pub(super) fn analyze(v: &Value) -> Result<PhotoScale, Refusal> {
     report["max_residual_mm"] = json!(py::round(errors.iter().copied().fold(0.0, f64::max), 4));
     report["square_px"] = json!(py::round(square / s.mm_per_px, 2));
     report["ransac"] = json!({"threshold_mm":2.0,"max_trials":512,"seed":0,"refit":"normalized algebraic least squares"});
-    if n < 12 {
+    // Only the consensus contributes scale evidence; rejected detections cannot suppress warnings.
+    let retained = ids.len();
+    if retained < 12 {
         warnings.push(format!(
-            "TOO_FEW_CORNERS: {n} of {total}; need ≥12 for a reliable scale"
+            "TOO_FEW_CORNERS: {retained} of {total} inlier corners; need ≥12 for a reliable scale"
         ));
-    } else if 2 * n < total {
-        warnings.push(format!("PARTIAL_BOARD: {n} of {total} corners — fingers, glare or the frame edge cover the sheet"));
+    } else if 2 * retained < total {
+        warnings.push(format!("PARTIAL_BOARD: {retained} of {total} inlier corners — fingers, glare or the frame edge cover the sheet"));
     }
     if ids.len() < n {
         warnings.push(format!(
