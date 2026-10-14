@@ -35,7 +35,7 @@ round's gate), `ftx-drape` (the garment mesh, start state, cloth solver with bod
 self-contact, fold-up animation, metrics and flags), `ftx-export` (every deliverable and its checks),
 `ftx-trace` (tracing AI pattern sheets), `ftx-cli` (the `ftx` binary), `ftx-wasm` (the browser page) and
 `ftx-conformance` (oracle fixtures). Still to come: the round's re-run semantics, measuring from photos and
-photogrammetry, WebP sheets, and the gauntlet.
+photogrammetry, and the gauntlet.
 
 | Question | Answer |
 |---|---|

@@ -90,7 +90,7 @@ impl Review {
 }
 
 impl Sheet {
-    /// Trace explicit PNG or JPEG bytes. Options: channel, threshold, invert, crop [x,y,w,h], stroke,
+    /// Trace explicit PNG, JPEG or WebP bytes. Options: channel, threshold, invert, crop [x,y,w,h], stroke,
     /// min_area_frac and dashes. The 4-million-pixel browser limit is checked before decoding;
     /// an oversized image is refused, never resized. Coordinates use the native decoder's frame.
     pub fn new(png: &[u8], options: &str) -> Result<Self, Refusal> {

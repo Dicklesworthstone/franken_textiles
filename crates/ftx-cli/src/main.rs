@@ -86,7 +86,7 @@ const USAGE: &str = "usage:
             [--layout-width MM] [--keep-blank-pages] [--hpgl-rotate90] [--hpgl-mirror] [--created YYYY-MM-DDTHH:MM] [--json]
       TARGET: svg pdf letter a4 copyshop projector dxf astm aama flat-dxf hpgl cutter garmentcode embroidery all
   ftx check DIR [--pattern-ref PATTERN] [--json]
-  ftx trace IMAGE.png|.jpg --out DIR [--crop X,Y,W,H] [--channel auto|bgdist|dark|light|gray|sat|r|g|b|edge]
+  ftx trace IMAGE.png|.jpg|.webp --out DIR [--crop X,Y,W,H] [--channel auto|bgdist|dark|light|gray|sat|r|g|b|edge]
             [--invert|--no-invert] [--bg R,G,B] [--stroke PX] [--close 3] [--open PX] [--corner-deg 35]
             [--soft-deg 70] [--simplify-frac 0.003] [--smooth 1.2] [--min-area-frac 0.01]
             [--erase X,Y,W,H ...] [--no-dashes] [--px-out FILE] [--json]

@@ -186,15 +186,20 @@ fn crop_coordinates_are_preserved_and_no_image_paths_are_followed() {
     assert_eq!(result.report["source_image_size"], json!([180, 220]));
 }
 
-/// A JPEG sheet from `tests/fixtures/oracle/trace/trace_jpeg.json` traces in the browser exactly as natively,
-/// into the pieces the reference found.
+/// A JPEG and a WebP sheet from `tests/fixtures/oracle/trace/trace_{jpeg,webp}.json` trace in the browser
+/// exactly as natively, into the pieces the reference found.
 #[test]
-fn jpeg_sheets_trace_as_natively() {
+fn jpeg_and_webp_sheets_trace_as_natively() {
+    sheet_traces_as_natively("trace_jpeg", "jpeg");
+    sheet_traces_as_natively("trace_webp", "webp");
+}
+
+fn sheet_traces_as_natively(fixture: &str, key: &str) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/oracle/trace/trace_jpeg.json");
+        .join(format!("../../tests/fixtures/oracle/trace/{fixture}.json"));
     let fx: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let case = &fx["cases"][0];
-    let b64: Vec<u8> = case["input"]["jpeg"]
+    let b64: Vec<u8> = case["input"][key]
         .as_str()
         .unwrap()
         .bytes()

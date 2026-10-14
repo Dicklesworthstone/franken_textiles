@@ -221,8 +221,19 @@ fn trace_reproduces_the_reference() {
 /// gray, progressive, restart intervals and a photographed sheet; the draft byte-identical to the reference's.
 #[test]
 fn trace_reproduces_the_reference_on_jpeg() {
+    trace_sheets_reproduce("trace_jpeg", "jpeg", "sheet.jpg");
+}
+
+/// WebP sheets (`trace_webp.json`, `tools/oracle/capture_webp.py`): lossy, lossless, a transparent margin
+/// composited on white, a photographed sheet; the draft byte-identical to the reference's.
+#[test]
+fn trace_reproduces_the_reference_on_webp() {
+    trace_sheets_reproduce("trace_webp", "webp", "sheet.webp");
+}
+
+fn trace_sheets_reproduce(fixture: &str, key: &str, file: &str) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/oracle/trace/trace_jpeg.json");
+        .join(format!("../../tests/fixtures/oracle/trace/{fixture}.json"));
     let doc = PyJson::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
     let PyJson::List(cases) = doc.get("cases").unwrap() else {
         panic!("cases")
@@ -233,12 +244,12 @@ fn trace_reproduces_the_reference_on_jpeg() {
             panic!("id")
         };
         let input = c.get("input").unwrap();
-        let Some(PyJson::Str(jpeg)) = input.get("jpeg") else {
-            panic!("jpeg")
+        let Some(PyJson::Str(encoded)) = input.get(key) else {
+            panic!("{key}")
         };
-        std::fs::write(dir.join("sheet.jpg"), base64(jpeg)).unwrap();
+        std::fs::write(dir.join(file), base64(encoded)).unwrap();
         let out = format!("out-{id}");
-        let mut args = vec!["trace", "sheet.jpg", "--out", out.as_str()];
+        let mut args = vec!["trace", file, "--out", out.as_str()];
         if let Some(PyJson::Str(t)) = input.get("opts").and_then(|o| o.get("threshold")) {
             args.extend(["--threshold", t.as_str()]);
         }
@@ -250,10 +261,10 @@ fn trace_reproduces_the_reference_on_jpeg() {
         let mut meta = got.get("meta").unwrap().clone();
         let mut source = meta.get("source").unwrap().clone();
         assert!(
-            matches!(source.get("image"), Some(PyJson::Str(s)) if s.ends_with("/sheet.jpg")),
+            matches!(source.get("image"), Some(PyJson::Str(s)) if s.ends_with(&format!("/{file}"))),
             "{id}"
         );
-        source.set("image", PyJson::str("sheet.jpg"));
+        source.set("image", PyJson::str(file));
         meta.set("source", source);
         got.set("meta", meta);
         let want = c.get("output").unwrap().get("pattern").unwrap();

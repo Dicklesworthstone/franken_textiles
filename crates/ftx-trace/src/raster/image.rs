@@ -2,8 +2,8 @@
 //! semantics (Pillow 12.3: palette, gray+alpha and RGBA images composited on white with Pillow's fixed-point
 //! `alpha_composite`, 16-bit samples reduced as Pillow reduces them, the result as OpenCV's BGR).
 //!
-//! [`load_image`] also takes JPEG ([`super::jpeg`], libjpeg-turbo's decode path). WebP is refused with a
-//! repair (convert to PNG or JPEG): no decoder matching libwebp bit for bit is here.
+//! [`load_image`] also takes JPEG ([`super::jpeg`], libjpeg-turbo's decode path) and WebP ([`super::webp`],
+//! libwebp's).
 
 use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
 
@@ -226,7 +226,7 @@ fn samples(row: &[u8], n: usize, ch: usize, depth: u8) -> Vec<u16> {
 }
 
 /// Pillow's `alpha_composite` of a pixel over opaque white.
-fn over_white(r: u8, g: u8, b: u8, a: u8) -> [u8; 3] {
+pub(super) fn over_white(r: u8, g: u8, b: u8, a: u8) -> [u8; 3] {
     if a == 0 {
         return [255, 255, 255];
     }
@@ -241,11 +241,11 @@ fn over_white(r: u8, g: u8, b: u8, a: u8) -> [u8; 3] {
     [ch(r), ch(g), ch(b)]
 }
 
-/// Decodes a PNG or a JPEG sheet as the reference's `load_image` sees it ([`load_png`],
-/// [`super::jpeg::decode`]), within the default pixel budget.
+/// Decodes a PNG, JPEG or WebP sheet as the reference's `load_image` sees it ([`load_png`],
+/// [`super::jpeg::decode`], [`super::webp::decode`]), within the default pixel budget.
 ///
 /// # Errors
-/// Neither a PNG nor a JPEG (WebP named, with the repair), a damaged file or an unsupported variant.
+/// None of those formats, a damaged file or an unsupported variant.
 pub fn load_image(bytes: &[u8]) -> Result<Bgr, String> {
     load_image_with_limit(bytes, 40_000_000)
 }
@@ -258,11 +258,11 @@ pub fn load_image_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Bgr, Str
     if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
         super::jpeg::decode(bytes, max_pixels)
     } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-        Err("WebP sheets are not decoded yet: convert the image to PNG or JPEG first".into())
+        super::webp::decode(bytes, max_pixels)
     } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
         load_png_with_limit(bytes, max_pixels)
     } else {
-        Err("not a PNG or JPEG file".into())
+        Err("not a PNG, JPEG or WebP file".into())
     }
 }
 

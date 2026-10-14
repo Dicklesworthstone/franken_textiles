@@ -56,7 +56,7 @@ function startWorker() {
     }
     if (msg.type === "ready") {
       ready = true;
-      $("status").textContent = "Ready. Choose a PNG or JPEG and trace it.";
+      $("status").textContent = "Ready. Choose a PNG, JPEG or WebP and trace it.";
       controls();
       return;
     }
@@ -118,7 +118,7 @@ $("trace").onclick = async () => {
   $("names").value = "{}"; $("targets").value = "[]"; $("labels").value = "[]";
   try {
     const file = $("image").files[0];
-    if (!file || file.size > 16 * 1024 * 1024) throw new Error("Select a PNG or JPEG no larger than 16 MiB.");
+    if (!file || file.size > 16 * 1024 * 1024) throw new Error("Select a PNG, JPEG or WebP no larger than 16 MiB.");
     const options = imageOptions();
     const bytes = await file.arrayBuffer();
     if (generation !== epoch || pending !== id) return;

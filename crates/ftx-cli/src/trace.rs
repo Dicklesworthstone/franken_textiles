@@ -315,7 +315,7 @@ fn number<T: std::str::FromStr>(args: &Args, key: &str) -> Result<Option<T>, Ref
 
 /// `ftx trace IMAGE --out DIR [--crop X,Y,W,H] [--channel C] [--threshold otsu] [--bg R,G,B] [--stroke PX]
 /// [--close PX] [--open PX] [--corner-deg D] [--soft-deg D] [--simplify-frac F] [--smooth SIGMA]
-/// [--min-area-frac F] [--erase X,Y,W,H ...] [--invert | --no-invert] [--no-dashes]`: a pattern sheet (PNG or JPEG)
+/// [--min-area-frac F] [--erase X,Y,W,H ...] [--invert | --no-invert] [--no-dashes]`: a pattern sheet (PNG, JPEG or WebP)
 /// traced into an UNSCALED draft, the reference's `vectorize.py trace`. Writes `DIR/draft.pattern.json`
 /// (the reference's text) and `DIR/mask.png`, and reports each piece as the reference does; exits 3 when no
 /// piece was found. Review images use the native stroke renderer, not OpenCV's text pixels.

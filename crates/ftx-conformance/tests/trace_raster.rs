@@ -2,7 +2,8 @@
 //! `tools/oracle/capture_raster.py` from the reference's Pillow / OpenCV / numpy): every value bit for bit.
 //! - `raster_image`: `load_image` on PNGs of every bit depth and colour type (all filters, Adam7, palette and
 //!   gray/RGB transparency, partial alpha) → the BGR array.
-//! - `raster_jpeg` (`tools/oracle/capture_jpeg.py`): `load_image` on JPEGs → the BGR array, or a refusal.
+//! - `raster_jpeg` (`tools/oracle/capture_jpeg.py`) and `raster_webp` (`tools/oracle/capture_webp.py`):
+//!   `load_image` on JPEG and WebP files → the BGR array, or a refusal.
 //! - `raster_color`: Lab over every colour, the `auto` channel; gray and saturation within the HAL's level.
 //! - `raster_binarize`: Otsu thresholds and masks, elliptical structuring elements, close, open, gradient,
 //!   dilate and erode.
@@ -597,12 +598,24 @@ fn png_loading_matches_pillow() {
 /// streams. Each decodes to the reference's BGR bit for bit (its SHA-256 for larger images), or both refuse.
 #[test]
 fn jpeg_loading_matches_pillow() {
-    let fx = fixture("trace", "raster_jpeg");
+    image_loading_matches_pillow("raster_jpeg", "jpeg");
+}
+
+/// `load_image` on WebPs (`raster_webp`, `tools/oracle/capture_webp.py`): lossy and lossless, alpha
+/// composited on white, every Pillow method, cwebp's filters and segments, libvpx's token partitions, the
+/// container's variants and damaged files; bit for bit, or both refuse.
+#[test]
+fn webp_loading_matches_pillow() {
+    image_loading_matches_pillow("raster_webp", "webp");
+}
+
+fn image_loading_matches_pillow(name: &str, key: &str) {
+    let fx = fixture("trace", name);
     let (mut fails, mut decoded, mut refused) = (Vec::new(), 0, 0);
     for case in fx["cases"].as_array().unwrap() {
         let id = case["id"].as_str().unwrap();
         let out = &case["output"];
-        let got = ftx_trace::raster::load_image(&base64(case["input"]["jpeg"].as_str().unwrap()));
+        let got = ftx_trace::raster::load_image(&base64(case["input"][key].as_str().unwrap()));
         match (got, out.get("error")) {
             (Err(_), Some(_)) => refused += 1,
             (Ok(_), Some(e)) => fails.push(format!("{id}: decoded, the reference refused ({e})")),
@@ -632,9 +645,7 @@ fn jpeg_loading_matches_pillow() {
             }
         }
     }
-    println!(
-        "raster_jpeg: {decoded} decoded bit for bit, {refused} refused as the reference refuses"
-    );
+    println!("{name}: {decoded} decoded bit for bit, {refused} refused as the reference refuses");
     assert!(
         fails.is_empty(),
         "{} mismatches:\n{}",
