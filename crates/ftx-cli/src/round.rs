@@ -304,6 +304,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "round",
         &[
             "pattern",
+            "fabric",
             "measurements",
             "fit",
             "export",
@@ -358,7 +359,11 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .map(PathBuf::from)
         .or(latest)
         .ok_or_else(|| bad_input("workspace has no round with a pattern; pass --pattern P"))?;
-    let (raw, _) = read_json(&source.to_string_lossy())?;
+    let (mut raw, _) = read_json(&source.to_string_lossy())?;
+    let fabric = super::fabric::load(args)?;
+    if let Some(selected) = &fabric {
+        selected.apply(&mut raw)?;
+    }
     let body = WorkspaceBody::read(&ws, args)?;
     let data = measurements(&body.raw)?;
     let (raw, placement_notes) = if Pattern::new(raw.clone()).structure_errors().is_empty() {
@@ -414,6 +419,9 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         ));
     }
     let (n, rd) = reserve(&ws)?;
+    if let Some(selected) = &fabric {
+        selected.save(&rd)?;
+    }
     let mut notes = body.adopt(&ws, &rd, n)?;
     notes.extend(placement_notes);
     write_json(&rd.join("pattern.json"), &raw)?;
@@ -496,7 +504,8 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let basis = json!({"flat":validation.status(), "sim":sim_basis, "exports":export_basis, "measurements":ready["status"]});
     let entry = json!({"round":n, "dir":format!("rounds/{n:03}"), "note":args.options.get("note").map_or("", String::as_str),
         "auto_notes":notes, "status":state, "basis":basis, "readiness":ready, "exports":exports,
-        "pattern_meta":raw["meta"], "validation":val, "images":images, "rendering":rendering, "video":null, "viewer":viewer, "sim":sim, "at":at,
+        "pattern_meta":raw["meta"], "fabric_override":fabric.as_ref().map(|f| f.receipt().clone()),
+        "validation":val, "images":images, "rendering":rendering, "video":null, "viewer":viewer, "sim":sim, "at":at,
         "preview":format!("rounds/{n:03}/preview.svg"), "preview_dark":format!("rounds/{n:03}/preview_dark.svg")});
     write_json(&rd.join("round.json"), &entry)?;
     append(&ws, &entry)?;
