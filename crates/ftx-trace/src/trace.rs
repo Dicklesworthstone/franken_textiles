@@ -501,7 +501,7 @@ pub fn find_piece_contours(
         let k = open_px.unwrap_or_else(|| if ring { odd(1.5 * wd + 1.0, 3) } else { 5 });
         let solid_o = if k >= 2 {
             let se = Kernel::ellipse(k as usize, k as usize);
-            morph::close(&morph::open(&solid, &se), &se)
+            morph::open_close(&solid, &se)
         } else {
             solid.clone()
         };
