@@ -422,12 +422,37 @@ fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
     let q = &env["result"];
     assert_eq!(q["schema"], "fabric-qualify/1");
     assert_eq!(q["engine"], "ftx");
-    let bands = q["bands"].as_array().unwrap();
-    assert_eq!(bands.len(), 3);
-    assert_eq!(bands[0]["ease_mm"], -20.0);
-    assert_eq!(bands[1]["ease_mm"], 0.0);
-    assert_eq!(bands[2]["ease_mm"], 20.0);
+    // spec 04 §7.1's record: the rows, and the measurements file's own sha256, which the skill's
+    // `fab round` compares as `ftx round` does
+    let rows = q["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["ease_mm"], -20.0);
+    assert_eq!(rows[1]["ease_mm"], 0.0);
+    assert_eq!(rows[2]["ease_mm"], 20.0);
+    let measurements = std::fs::read(dir.join("ws/measurements.json")).unwrap();
+    assert_eq!(
+        q["measurements_sha256"],
+        ftx_core::receipt::sha256_hex(&measurements)
+    );
     assert!(dir.join("ws/qualification/qualify.json").is_file());
+    // the next round on this body and fabric finds the qualification current
+    let round = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "round", "ws", "--sim", "--sew", "40", "--drape", "0", "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(round.status.code(), Some(0 | 2)),
+        "{}",
+        String::from_utf8_lossy(&round.stderr)
+    );
+    let sim: Value = serde_json::from_slice(
+        &std::fs::read(dir.join("ws/rounds/001/sim/sim_report.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sim["tightness_qualified"], q["pass"]);
     for ease in ["-20", "+0", "+20"] {
         assert!(
             dir.join(format!("ws/qualification/band_{ease}/sim/sim_report.json"))

@@ -455,7 +455,7 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
             &rd,
             n,
             &raw,
-            &data,
+            &body.bytes,
             validation.status(),
             unscaled,
             &mut notes,
@@ -574,7 +574,7 @@ fn simulate(
     rd: &Path,
     number: u64,
     pattern: &Value,
-    data: &Value,
+    measurements_file: &[u8],
     flat: &str,
     unscaled: bool,
     notes: &mut Vec<String>,
@@ -643,8 +643,9 @@ fn simulate(
             let qdoc_ref = qdoc_owned
                 .as_ref()
                 .map(|r| r.as_ref().map_err(String::as_str));
-            let meas_bytes = serde_json::to_vec(data).map_err(|e| bad_input(e.to_string()))?;
-            let meas_sha = ftx_core::receipt::sha256_hex(&meas_bytes);
+            // spec 04 §7.2: the workspace measurements file's sha256, as `qualify` records it (and
+            // the skill's `fab qualify`), so either engine's qualification serves the other's round
+            let meas_sha = ftx_core::receipt::sha256_hex(measurements_file);
             let qual = ftx_drape::qualify::check_qualification(
                 qdoc_ref,
                 &qpath.display().to_string(),
@@ -749,7 +750,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
     let pose = super::drape_pose(args)?;
     let fabric_override = super::fabric::load(args)?;
 
-    let (data, mut pat, out, _ws_lock) = if let Some(ws) = ws_arg {
+    let (data, meas_bytes, mut pat, out, _ws_lock) = if let Some(ws) = ws_arg {
         if args.options.contains_key("out") {
             return Err(bad_input(
                 "--out cannot be combined with a workspace (workspace qualification writes to WS/qualification)",
@@ -760,7 +761,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             Some(m) => PathBuf::from(m),
             None => ws.join("measurements.json"),
         };
-        let (raw_m, _) = read_json(&meas_path.to_string_lossy())?;
+        let (raw_m, meas_bytes) = read_json(&meas_path.to_string_lossy())?;
         let data = measurements(&raw_m)?;
         let (_, prev_pat) = inventory(&ws)?;
         let pat = match args.options.get("pattern").map(PathBuf::from).or(prev_pat) {
@@ -768,18 +769,18 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
             None => json!({}),
         };
         let out = reserve_ws_qualification(&ws)?;
-        (data, pat, out, Some(lock))
+        (data, meas_bytes, pat, out, Some(lock))
     } else {
         let meas_path = super::required(args, "measurements")?;
         let out = PathBuf::from(super::required(args, "out")?);
-        let (raw_m, _) = read_json(meas_path)?;
+        let (raw_m, meas_bytes) = read_json(meas_path)?;
         let data = measurements(&raw_m)?;
         let pat = match args.options.get("pattern") {
             Some(p) => read_json(p)?.0,
             None => json!({}),
         };
         super::reserve_drape_output(&out)?;
-        (data, pat, out, None)
+        (data, meas_bytes, pat, out, None)
     };
 
     if let Some(selected) = &fabric_override {
@@ -825,7 +826,7 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
 
-    let meas_bytes = serde_json::to_vec(&data).map_err(|e| bad_input(e.to_string()))?;
+    // spec 04 §7.1: the measurements file's sha256 (what a round compares, whichever engine runs it)
     let meas_sha = ftx_core::receipt::sha256_hex(&meas_bytes);
     let spec = band_fit_spec();
     let mut rows = Vec::with_capacity(bands.len());
@@ -902,22 +903,17 @@ pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> 
         "engine": "ftx",
         "measurements_sha256": meas_sha,
         "fabric_key": fabric_key(pat.get("fabric")),
-        "bands": rows,
+        "rows": rows,
         "pass": all_pass,
     });
-    let qfile = out.join("qualify.json");
-    write_json(&qfile, &rec)?;
+    write_json(&out.join("qualify.json"), &rec)?;
+    // spec 04 §7.1's printout: a line per band, then the verdict
     let mut text = lines.join("\n");
-    if all_pass {
-        text.push_str(
-            "\nQUALIFICATION: PASS (tightness flags may gate rounds for this body and fabric)",
-        );
+    text.push_str(if all_pass {
+        "\nQUALIFIED"
     } else {
-        text.push_str(
-            "\nQUALIFICATION: FAIL (tightness flags will stay advisory — the sim did not separate the three known-answer bands)",
-        );
-    }
-    text.push_str(&format!("\nwrote {}", qfile.display()));
+        "\nNOT QUALIFIED: do not let the sim gate on tightness for this body/fabric"
+    });
     Ok((rec, if all_pass { 0 } else { 2 }, text))
 }
 
