@@ -1449,12 +1449,20 @@ mod tests {
     }
 
     /// KAT 1, barrier: zero with zero slope at the activation gap, infinite at contact, and the pair
-    /// energies' gradients and Hessians equal central differences for every pair type, including the
-    /// mollified edge–edge case.
+    /// energies' gradients and Hessians equal both nested `Dual2<12>` (to machine precision) and central
+    /// differences for every pair type, including the mollified edge–edge case.
     #[test]
     fn barrier_and_pair_calculus() {
+        use crate::ad::{Dual, Dual2, Scalar, gradcheck};
+        use crate::distance::{edge_cross_squared_as, squared_distance_as};
+
         let p = params();
         let at = |g: f64| barrier(Jet::<12>::var(g, 0), &p);
+        let at_dual2 = |g: f64| -> Dual2<12> {
+            let g = Dual2::<12>::var(g, 0);
+            let r = g - Dual2::constant(p.dhat);
+            r * r * (g * (1.0 / p.dhat)).ln() * (-p.kappa)
+        };
         let edge = at(p.dhat * (1.0 - 1e-9));
         assert!(
             edge.v.abs() < 1e-20 && edge.g[0].abs() < 1e-9,
@@ -1463,9 +1471,25 @@ mod tests {
             edge.g[0]
         );
         assert!(at(1e-9).g[0] < -1e-3, "repels near contact");
-        // Barrier derivatives against differences of the value.
+        // Barrier derivatives against nested Dual2<12>, gradcheck, and differences of the value.
         for g in [1e-5, 1e-4, 5e-4, 9e-4] {
-            let (b, h) = (at(g), 1e-9);
+            let (b, d2, h) = (at(g), at_dual2(g), 1e-9);
+            assert!(
+                (d2.value() - b.v).abs() <= 1e-12 * b.v.abs().max(1.0)
+                    && (d2.grad()[0] - b.g[0]).abs() <= 1e-12 * b.g[0].abs()
+                    && (d2.hess()[0][0] - b.h[0][0]).abs() <= 1e-12 * b.h[0][0].abs(),
+                "Dual2 barrier at {g}"
+            );
+            let gc = gradcheck(
+                |[u]: [Dual<1>; 1]| {
+                    let gv = u * g;
+                    let r = gv - Dual::constant(p.dhat);
+                    r * r * (gv * (1.0 / p.dhat)).ln() * (-p.kappa)
+                },
+                [1.0],
+                5e-6,
+            );
+            assert!(gc.pass, "barrier gradcheck at {g}: {gc:?}");
             let fd = (at(g + h).v - at(g - h).v) / (2.0 * h);
             let fd2 = (at(g + h).g[0] - at(g - h).g[0]) / (2.0 * h);
             assert!((fd - b.g[0]).abs() < 1e-6 * b.g[0].abs(), "b' at {g}");
@@ -1508,6 +1532,7 @@ mod tests {
             };
             let Some(e) = energy(&cloth_x) else { continue };
             let st = stencil(pair, &cloth_x, &contact.body, &contact.cloth);
+            let (kind, _) = classify(pair, &st.pts);
             seen.insert(match pair {
                 Pair::VertexTri { .. } => 0,
                 Pair::TriVertex { .. } => 1,
@@ -1515,6 +1540,45 @@ mod tests {
                 _ => unreachable!("self-contact is disabled in this body-contact test"),
             });
             let gscale = e.g.iter().fold(1e-12f64, |m, g| m.max(g.abs()));
+            let hscale = e.h.iter().flatten().fold(1e-12f64, |m, g| m.max(g.abs()));
+
+            // Independent nested Dual2<12> oracle over the pair's 12 coordinates.
+            let d2: Dual2<12> = squared_distance_as(st.pts, st.fixed, kind);
+            let g_d2 = d2.sqrt() - Dual2::constant(p.thickness);
+            let r_d2 = g_d2 - Dual2::constant(p.dhat);
+            let mut e_d2 = r_d2 * r_d2 * (g_d2 * (1.0 / p.dhat)).ln() * (-p.kappa);
+            if let Some(eps) = st.mollifier_eps {
+                let c_d2: Dual2<12> = edge_cross_squared_as(st.pts, st.fixed);
+                if c_d2.value() < eps {
+                    let u = c_d2 * (1.0 / eps);
+                    e_d2 = e_d2 * ((Dual2::constant(2.0) - u) * u);
+                }
+            }
+            let d2_grad = e_d2.grad();
+            let d2_hess = e_d2.hess();
+            assert!(
+                (e_d2.value() - e.v).abs() <= 1e-12 * e.v.abs().max(1.0),
+                "{pair:?} Dual2 value: {} vs {}",
+                e_d2.value(),
+                e.v
+            );
+            for i in 0..12 {
+                assert!(
+                    (d2_grad[i] - e.g[i]).abs() <= 1e-12 * gscale,
+                    "{pair:?} Dual2 grad[{i}]: {} vs {}",
+                    d2_grad[i],
+                    e.g[i]
+                );
+                for j in 0..12 {
+                    assert!(
+                        (d2_hess[i][j] - e.h[i][j]).abs() <= 1e-12 * hscale,
+                        "{pair:?} Dual2 hess[{i}][{j}]: {} vs {}",
+                        d2_hess[i][j],
+                        e.h[i][j]
+                    );
+                }
+            }
+
             if st
                 .mollifier_eps
                 .is_some_and(|eps| edge_cross_squared(st.pts, st.fixed).v < eps)
@@ -1523,7 +1587,6 @@ mod tests {
             } else {
                 // The solver's path (first-order dual distance, closed-form barrier) gives the jet's
                 // value and gradient to 1e-8 relative.
-                let (kind, _) = classify(pair, &st.pts);
                 let d2 = squared_distance_grad(st.pts, st.fixed, kind);
                 let (b, b1, _) = barrier_f64(d2.v.sqrt() - p.thickness, &p);
                 assert!((b - e.v).abs() <= 1e-8 * e.v.abs(), "{pair:?} value");
@@ -1537,7 +1600,6 @@ mod tests {
                 }
             }
             let h = 1e-9;
-            let hscale = e.h.iter().flatten().fold(1e-12f64, |m, g| m.max(g.abs()));
             for (k, cv) in st.cloth.iter().enumerate() {
                 let Some(v) = *cv else { continue };
                 for c in 0..3 {

@@ -39,10 +39,31 @@ pub fn piece_fabric(pattern: &Pattern, index: usize) -> Result<&Value, Refusal> 
             let object = f
                 .as_object()
                 .ok_or_else(|| invalid("piece.fabric must be an object"))?;
-            if object.is_empty() || object.keys().any(|k| k != "material" && k != "material_id") {
+            let has_selector =
+                object.contains_key("material") || object.contains_key("material_id");
+            if !has_selector
+                || object
+                    .keys()
+                    .any(|k| k != "material" && k != "material_id" && k != "role")
+            {
                 return Err(invalid(
                     "piece.fabric requires a complete material OR material_id selection, not partial coefficients/layers",
                 ));
+            }
+            if let Some(role) = object.get("role") {
+                match role.as_str() {
+                    Some("shell" | "lining" | "laminate") => {}
+                    Some("fill" | "loose_fill") => {
+                        return Err(invalid(
+                            "loose fill cannot be assigned as a load-bearing shell piece",
+                        ));
+                    }
+                    _ => {
+                        return Err(invalid(
+                            "piece.fabric.role must be \"shell\", \"lining\", or \"laminate\"",
+                        ));
+                    }
+                }
             }
             Ok(f)
         }
