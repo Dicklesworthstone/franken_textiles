@@ -13,7 +13,9 @@ PNGs. The load_image files cover
 - damaged streams: truncations, a missing EOI, trailing junk, a marker inside the entropy data, renumbered and
   missing restart markers, and random corruption;
 - tables-only datastreams before the image, the APPn segments Pillow's own header walk raises on, and a bad
-  marker on either side of the 64 KiB block that ends Pillow's reading after a single scan.
+  marker on either side of the 64 KiB block that ends Pillow's reading after a single scan;
+- four-component files: Pillow's CMYK, the same data as YCCK (Adobe transform 2 or 1) and with no Adobe
+  marker; a CMYK pattern sheet for the whole trace.
 
 Pillow's SIMD IDCT (Neon on arm64, AVX2 on x86-64) wraps dequantized coefficients beyond 16 bits, where its C
 code does not, so a damaged file can decode differently from machine to machine. A damaged case is therefore
@@ -267,6 +269,21 @@ def main() -> int:
     # bad marker past it is never read: the file without EOI, zeros, then FF 02 across the boundary
     for at in (65534, 65535):
         add(f"base-bad-marker-at-{at}", base[:-2] + bytes(at - len(base) + 2) + b"\xff\x02")
+    # four components: Pillow's CMYK files (Adobe transform 0), the same data read as YCCK (transform 2, and 1,
+    # which libjpeg also takes for YCCK) and without the Adobe marker (plain CMYK); Pillow unpacks "CMYK;I"
+    k_band = (np.arange(small.shape[1])[None, :] * 7 + np.arange(small.shape[0])[:, None] * 3) % 256
+    cmyk = np.dstack([small, k_band.astype(np.uint8)])
+    for sub, prog in ((0, False), (2, False), (2, True)):
+        b = io.BytesIO()
+        Image.fromarray(cmyk, "CMYK").save(b, "JPEG", quality=85, subsampling=sub, progressive=prog)
+        data, tag = b.getvalue(), f"s{sub}-p{int(prog)}"
+        add(f"cmyk-{tag}", data)
+        s, e = next((s, e) for m, s, e in segments(data) if m == 0xEE)
+        for t in (2, 1):
+            d = bytearray(data)
+            d[s + 4 + 11] = t                             # the Adobe transform byte
+            add(f"ycck{t}-{tag}", bytes(d))
+        add(f"cmyk-no-adobe-{tag}", data[:s] + data[e:])
 
     meta["skipped_simd_differs"] = skipped
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -314,6 +331,9 @@ def main() -> int:
     trace_case("navy-q80", pil(sheet(bg=(80, 35, 25), fg=(245, 245, 245))[..., ::-1].copy(), quality=80))
     trace_case("photo-adaptive", pil(sheet(light=0.4, noise=3.0)[..., ::-1].copy(), quality=85),
                threshold="adaptive")
+    b = io.BytesIO()                                    # a print-shop CMYK sheet
+    Image.fromarray(sheet()[..., ::-1].copy()).convert("CMYK").save(b, "JPEG", quality=85)
+    trace_case("cmyk-q85", b.getvalue())
     path = args.out_dir / "trace_jpeg.json"
     path.write_text(json.dumps({"schema": SCHEMA, "subsystem": "trace", "fixture": "trace_jpeg", "meta": meta,
                                 "cases": tcases}, separators=(",", ":")) + "\n")

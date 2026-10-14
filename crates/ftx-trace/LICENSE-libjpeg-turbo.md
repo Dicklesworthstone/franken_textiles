@@ -29,7 +29,6 @@ The changes from the original:
   markers are read only to the end of the block that held the scan's last byte.
 - **Not ported**, and refused instead:
   - arithmetic, lossless and hierarchical coding;
-  - CMYK and YCCK;
   - scaled output;
   - progressive block smoothing (`decompress_smooth_data`).
 - **No SIMD.** The C arithmetic is used throughout.
