@@ -1,0 +1,156 @@
+{
+  "id": "synthetic-strain-stiffening-sheet",
+  "allow_estimates": true,
+  "record": {
+    "id": "synthetic-strain-stiffening-sheet",
+    "name": "Synthetic reversible sheet, not a measured commercial textile",
+    "form": "woven",
+    "sources": {
+      "synthetic": {
+        "reference": "test:nonlinear-sheet-known-answer",
+        "accessed_on": "2026-10-14",
+        "note": "Invented test values. No empirical fabric, garment-fit or protective-performance claim."
+      }
+    },
+    "properties": {
+      "areal_density": {
+        "value": 0.2,
+        "unit": "kg/m2",
+        "source": "synthetic",
+        "evidence": "estimate",
+        "method": "Synthetic test mass"
+      },
+      "bending_rigidity": {
+        "value": 3e-05,
+        "unit": "N*m",
+        "source": "synthetic",
+        "evidence": "estimate",
+        "method": "Independent synthetic scalar bending"
+      },
+      "thickness": {
+        "value": 0.0006,
+        "unit": "m",
+        "source": "synthetic",
+        "evidence": "estimate",
+        "method": "Synthetic full sheet thickness"
+      },
+      "friction_skin": {
+        "value": 0.2,
+        "unit": "1",
+        "source": "synthetic",
+        "evidence": "estimate",
+        "method": "Synthetic body friction"
+      },
+      "friction_self": {
+        "value": 0.3,
+        "unit": "1",
+        "source": "synthetic",
+        "evidence": "estimate",
+        "method": "Synthetic same-sheet friction"
+      }
+    },
+    "membrane_response": {
+      "model": "tabulated_green_strain/1",
+      "warp": {
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Synthetic S11(E11) at E22=gamma12=0; not nominal engineering stress",
+        "conditions": {
+          "strain_measure": "Green-Lagrange",
+          "direction": "warp"
+        },
+        "points": [
+          [
+            -0.49,
+            -49
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0.05,
+            5
+          ],
+          [
+            0.2,
+            65
+          ],
+          [
+            1,
+            705
+          ]
+        ]
+      },
+      "weft": {
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Synthetic S22(E22) at E11=gamma12=0",
+        "conditions": {
+          "strain_measure": "Green-Lagrange",
+          "direction": "weft"
+        },
+        "points": [
+          [
+            -0.49,
+            -19.6
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0.05,
+            2
+          ],
+          [
+            0.2,
+            26
+          ],
+          [
+            1,
+            282
+          ]
+        ]
+      },
+      "shear": {
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Synthetic S12(gamma12) at zero normal Green strains",
+        "conditions": {
+          "strain_measure": "engineering Green shear = 2 E12"
+        },
+        "points": [
+          [
+            -1,
+            -40
+          ],
+          [
+            -0.1,
+            -1
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0.1,
+            1
+          ],
+          [
+            1,
+            40
+          ]
+        ]
+      },
+      "coupling": {
+        "value": 2,
+        "unit": "N/m",
+        "source": "synthetic",
+        "evidence": "estimate",
+        "method": "Synthetic constant reciprocal coupling"
+      },
+      "interpolation": "piecewise_linear"
+    }
+  }
+}

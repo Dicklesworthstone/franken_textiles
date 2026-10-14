@@ -11,6 +11,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::materials::{Evidence, Quantity, Source};
 
+/// Fixes work conjugacy: [E11, E22, 2 E12] versus second-Piola sheet resultants in N/m.
+pub const MODEL: &str = "tabulated_green_strain/1";
+
+/// Explicit interpolation authority; omitting it preserves the original cubic response.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Interpolation {
+    /// Monotone cubic stress, with continuous tangent and analytically integrated energy.
+    #[default]
+    MonotoneCubic,
+    /// Linear stress, analytic work, right-hand tangent at interior knots. Uses the
+    /// `frankensim`-derived core response kernel; energy is C1, not C2 at knots.
+    PiecewiseLinear,
+}
+
+impl Interpolation {
+    fn is_default(&self) -> bool {
+        *self == Self::MonotoneCubic
+    }
+}
+
 /// A signed material-axis stress curve at zero strain in the other two components.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,6 +56,9 @@ pub struct StressCurve {
 pub struct TabulatedMembrane {
     /// Must be `tabulated_green_strain/1`.
     pub model: String,
+    /// Interpolation changes the constitutive law and therefore its source-snapshot hash.
+    #[serde(default, skip_serializing_if = "Interpolation::is_default")]
+    pub interpolation: Interpolation,
     /// Warp/wale normal response, holding E22 and shear at zero.
     pub warp: StressCurve,
     /// Weft/course normal response, holding E11 and shear at zero.
@@ -103,6 +127,8 @@ struct Curve {
     range: [f64; 2],
     minimum: f64,
     origin_tangent: f64,
+    // Only the explicitly selected linear mode uses this kernel. Existing cubic arithmetic stays.
+    linear: Option<ftx_core::response_curve::ResponseCurve>,
 }
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -116,7 +142,14 @@ fn evidence(
     sources: &BTreeMap<String, Source>,
     allow: bool,
 ) -> Result<(), Refusal> {
-    if method.trim().is_empty() || !sources.contains_key(source) {
+    if method.trim().is_empty()
+        || method.len() > 4096
+        || !sources.get(source).is_some_and(|s| {
+            [&s.reference, &s.note, &s.accessed_on]
+                .iter()
+                .all(|s| !s.trim().is_empty() && s.len() <= 4096)
+        })
+    {
         return Err(invalid(
             "nonlinear membrane observation needs a method and resolved source",
         ));
@@ -130,8 +163,20 @@ fn evidence(
 }
 
 impl StressCurve {
-    fn compile(&self, sources: &BTreeMap<String, Source>, allow: bool) -> Result<Curve, Refusal> {
+    fn compile(
+        &self,
+        sources: &BTreeMap<String, Source>,
+        allow: bool,
+        interpolation: Interpolation,
+    ) -> Result<Curve, Refusal> {
         evidence(&self.source, self.evidence, &self.method, sources, allow)?;
+        if self.conditions.len() > 64
+            || self.conditions.iter().any(|(k, v)| {
+                k.trim().is_empty() || v.trim().is_empty() || k.len() > 4096 || v.len() > 4096
+            })
+        {
+            return Err(invalid("nonlinear curve conditioning metadata is invalid"));
+        }
         let p = &self.points;
         if !(3..=128).contains(&p.len()) || p.iter().flatten().any(|v| !v.is_finite()) {
             return Err(invalid(
@@ -146,6 +191,17 @@ impl StressCurve {
             return Err(invalid(
                 "stress curve must characterize both negative and positive strain",
             ));
+        }
+        if interpolation == Interpolation::PiecewiseLinear {
+            let linear = ftx_core::response_curve::ResponseCurve::new(p)?;
+            return Ok(Curve {
+                positive: Vec::new(),
+                negative: Vec::new(),
+                range: linear.domain(),
+                minimum: linear.minimum_tangent(),
+                origin_tangent: linear.evaluate(0.)?.tangent,
+                linear: Some(linear),
+            });
         }
         let slopes = p
             .windows(2)
@@ -224,12 +280,18 @@ impl StressCurve {
             range: [p[0][0], p[p.len() - 1][0]],
             minimum,
             origin_tangent: derivatives[origin],
+            linear: None,
         })
     }
 }
 
 impl Curve {
     fn evaluate(&self, strain: f64) -> [f64; 3] {
+        if let Some(linear) = &self.linear {
+            return linear
+                .evaluate(strain)
+                .map_or([f64::NAN; 3], |r| [r.energy, r.value, r.tangent]);
+        }
         let (intervals, x, sign) = if strain < 0.0 {
             (&self.negative, -strain, -1.0)
         } else {
@@ -248,6 +310,7 @@ impl Curve {
 pub struct CompiledMembrane {
     curves: [Curve; 3],
     coupling: f64,
+    interpolation: Interpolation,
 }
 
 impl TabulatedMembrane {
@@ -260,8 +323,13 @@ impl TabulatedMembrane {
         sources: &BTreeMap<String, Source>,
         allow_estimates: bool,
     ) -> Result<CompiledMembrane, Refusal> {
-        if self.model != "tabulated_green_strain/1" {
+        if self.model != MODEL {
             return Err(invalid("unknown nonlinear membrane model"));
+        }
+        if !allow_estimates {
+            return Err(invalid(
+                "tabulated constitutive interpolation requires explicit estimate consent, independently of node evidence",
+            ));
         }
         evidence(
             &self.coupling.source,
@@ -273,6 +341,10 @@ impl TabulatedMembrane {
         let k = self.coupling.value;
         if self.coupling.unit != "N/m"
             || !k.is_finite()
+            || self.coupling.conditions.len() > 64
+            || self.coupling.conditions.iter().any(|(k, v)| {
+                k.trim().is_empty() || v.trim().is_empty() || k.len() > 4096 || v.len() > 4096
+            })
             || self
                 .coupling
                 .bounds
@@ -283,11 +355,14 @@ impl TabulatedMembrane {
             ));
         }
         let curves = [
-            self.warp.compile(sources, allow_estimates)?,
-            self.weft.compile(sources, allow_estimates)?,
-            self.shear.compile(sources, allow_estimates)?,
+            self.warp
+                .compile(sources, allow_estimates, self.interpolation)?,
+            self.weft
+                .compile(sources, allow_estimates, self.interpolation)?,
+            self.shear
+                .compile(sources, allow_estimates, self.interpolation)?,
         ];
-        let stability = (k / curves[0].minimum) * (k / curves[1].minimum);
+        let stability = (k.abs() / curves[0].minimum.sqrt()) / curves[1].minimum.sqrt();
         if !stability.is_finite() || stability >= 1.0 {
             return Err(invalid(
                 "nonlinear membrane coupling exceeds the minimum directional tangent; law is not stable throughout its strain range",
@@ -296,11 +371,67 @@ impl TabulatedMembrane {
         Ok(CompiledMembrane {
             curves,
             coupling: k,
+            interpolation: self.interpolation,
         })
     }
 }
 
 impl CompiledMembrane {
+    /// Interpolation actually used by this immutable compiled law.
+    #[must_use]
+    pub fn interpolation(&self) -> Interpolation {
+        self.interpolation
+    }
+
+    /// Check physical strains before numerical gather/compression softening. Softening cannot
+    /// authorize extrapolation beyond the specimen's declared range.
+    ///
+    /// # Errors
+    /// Nonfinite or out-of-domain material-frame strain.
+    pub fn check_domain(&self, strain: [f64; 3]) -> Result<(), Refusal> {
+        for (i, (&e, c)) in strain.iter().zip(&self.curves).enumerate() {
+            if !e.is_finite() || e < c.range[0] || e > c.range[1] {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "membrane direction {i}: physical strain {e} outside characterized range [{}, {}]",
+                        c.range[0], c.range[1]
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Checked evaluation for solver and diagnostic consumers.
+    ///
+    /// # Errors
+    /// Outside the characterized strain box or unrepresentable response arithmetic.
+    pub fn try_evaluate(&self, strain: [f64; 3]) -> Result<Response, Refusal> {
+        self.check_domain(strain)?;
+        self.evaluate(strain).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::NonFinite,
+                "tabulated membrane response is not representable",
+            )
+        })
+    }
+
+    /// Reference E1,E2,nu12,G12 from the origin tangent. These numbers are for reporting and
+    /// initialization, not a substitute for the full nonlinear law during simulation.
+    ///
+    /// # Errors
+    /// Unrepresentable conversion of an otherwise finite tangent.
+    pub fn reference_moduli(&self) -> Result<[f64; 4], Refusal> {
+        let [q11, q22, c, g] = self.origin_stiffness();
+        let nu = c / q22;
+        let d = 1. - nu * (c / q11);
+        let out = [q11 * d, q22 * d, nu, g];
+        if out.iter().any(|v| !v.is_finite()) || out[0] <= 0. || out[1] <= 0. || out[3] <= 0. {
+            return Err(invalid("unrepresentable tabulated reference moduli"));
+        }
+        Ok(out)
+    }
     /// Declared raw Green-strain domain, in warp/weft/engineering-shear order. No extrapolation.
     #[must_use]
     pub fn strain_range(&self) -> [[f64; 2]; 3] {
@@ -426,5 +557,54 @@ mod tests {
             let w = law.evaluate([e, 0., 0.]).unwrap().energy;
             assert!((w - 100. * e * e).abs() < 1e-30);
         }
+    }
+
+    #[test]
+    fn explicit_linear_mode_uses_the_shared_work_consistent_kernel() {
+        let v: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-response.json"
+        ))
+        .unwrap();
+        let r: TabulatedMembrane =
+            serde_json::from_value(v["record"]["membrane_response"].clone()).unwrap();
+        let sources = serde_json::from_value(v["record"]["sources"].clone()).unwrap();
+        let law = r.compile(&sources, true).unwrap();
+        assert_eq!(law.interpolation(), Interpolation::PiecewiseLinear);
+        for (i, c) in [&r.warp, &r.weft, &r.shear].into_iter().enumerate() {
+            let numeric = ftx_core::response_curve::ResponseCurve::new(&c.points).unwrap();
+            for &[e, _] in &c.points {
+                let mut strain = [0.; 3];
+                strain[i] = e;
+                let actual = law.try_evaluate(strain).unwrap();
+                let expected = numeric.evaluate(e).unwrap();
+                assert_eq!(actual.energy, expected.energy);
+                assert_eq!(actual.stress[i], expected.value);
+                assert_eq!(actual.tangent[i][i], expected.tangent);
+            }
+        }
+        assert!(law.check_domain([1.01, 0., 0.]).is_err());
+        assert!(law.try_evaluate([0., f64::NAN, 0.]).is_err());
+    }
+
+    #[test]
+    fn interpolation_is_explicit_and_observations_do_not_certify_the_interpolant() {
+        let (mut r, sources) = fixture();
+        let wire = serde_json::to_value(&r).unwrap();
+        assert!(wire.get("interpolation").is_none());
+        assert_eq!(
+            r.compile(&sources, true).unwrap().interpolation(),
+            Interpolation::MonotoneCubic
+        );
+        r.interpolation = Interpolation::PiecewiseLinear;
+        assert_ne!(serde_json::to_value(&r).unwrap(), wire);
+        r.warp.evidence = Evidence::Published;
+        r.weft.evidence = Evidence::Published;
+        r.shear.evidence = Evidence::Published;
+        r.coupling.evidence = Evidence::Published;
+        assert!(r.compile(&sources, false).is_err());
+        let mut malformed = sources.clone();
+        malformed.values_mut().next().unwrap().reference.clear();
+        assert!(r.compile(&malformed, true).is_err());
+        assert!(r.compile(&sources, true).is_ok());
     }
 }
