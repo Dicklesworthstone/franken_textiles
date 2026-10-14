@@ -375,3 +375,74 @@ fn pose_and_still_options_are_validated_before_reserving_a_round() {
     let refusal = run(&dir, &["render", "missing", "--res", "8192x8192"], 4);
     assert_eq!(refusal["refusal"]["code"], "budget_exceeded");
 }
+
+#[test]
+fn report_rebuilds_review_html_without_adding_a_round_and_qualify_validates_inputs() {
+    let (dir, _, _) = setup();
+    run(&dir, &["report", "missing_ws"], 3);
+    run(&dir, FIRST, 0);
+    std::fs::write(dir.join("ws/report.html"), "stale placeholder").unwrap();
+    let rep = run(&dir, &["report", "ws"], 0)["result"].clone();
+    assert_eq!(rep["rounds"], 1);
+    let html = std::fs::read_to_string(dir.join("ws/report.html")).unwrap();
+    assert!(html.contains("Construction review"));
+    assert!(html.contains("Round 0 — CONVERGED"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("ws/rounds.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+
+    // ftx qualify preflight checks options and workspace arguments before loading a body.
+    run(&dir, &["qualify"], 3);
+    run(&dir, &["qualify", "ws", "--ws", "ws"], 3);
+    run(&dir, &["qualify", "--ws", "ws", "--out", "custom"], 3);
+    run(&dir, &["qualify", "--ws", "ws", "--arm-deg", "200"], 3);
+    assert!(!dir.join("ws/qualification").exists());
+}
+
+#[test]
+#[ignore = "needs the converted Anny asset"]
+fn qualify_runs_three_chest_bands_and_writes_qualify_json() {
+    let (dir, _, _) = setup_program("zouave_bolero-920");
+    run(&dir, FIRST, 0);
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["qualify", "--ws", "ws", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(out.status.code(), Some(0 | 2)),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let env: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let q = &env["result"];
+    assert_eq!(q["schema"], "fabric-qualify/1");
+    assert_eq!(q["engine"], "ftx");
+    let bands = q["bands"].as_array().unwrap();
+    assert_eq!(bands.len(), 3);
+    assert_eq!(bands[0]["ease_mm"], -20.0);
+    assert_eq!(bands[1]["ease_mm"], 0.0);
+    assert_eq!(bands[2]["ease_mm"], 20.0);
+    assert!(dir.join("ws/qualification/qualify.json").is_file());
+    for ease in ["-20", "+0", "+20"] {
+        assert!(
+            dir.join(format!("ws/qualification/band_{ease}/sim/sim_report.json"))
+                .is_file()
+        );
+    }
+    // Re-running qualify on the same workspace rotates the previous qualification directory.
+    let out2 = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["qualify", "--ws", "ws", "--json"])
+        .output()
+        .unwrap();
+    assert!(matches!(out2.status.code(), Some(0 | 2)));
+    assert!(
+        dir.join("ws/qualification.before-000/qualify.json")
+            .is_file()
+    );
+}

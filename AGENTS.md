@@ -376,10 +376,11 @@ Before committing code: `ubs $(git diff --name-only --cached)`. Fix true positiv
 
 ## Current Repository State
 
-At the time this file was written the repository contained the plan, this file, `README.md`, the four
-behaviour specifications in `docs/spec/`, `FEATURE_PARITY.md`, `LICENSE`, `.gitignore`, `.gitattributes`,
-`rust-toolchain.toml`, a workspace `Cargo.toml` with no members yet, and `.beads/` (prefix `ftx`) holding the
-plan's work breakdown. Update this section as crates land.
+The workspace contains all ten planned crates (`ftx-core`, `ftx-pattern`, `ftx-body`, `ftx-measure`,
+`ftx-drape`, `ftx-export`, `ftx-trace`, `ftx-cli`, `ftx-wasm`, `ftx-conformance`), the six behaviour and data
+specifications in `docs/spec/01…06-*.md`, the subsystem design notes in `docs/*.md`, the oracle capture and
+body-model conversion scripts in `tools/`, the captured oracle fixtures in `tests/fixtures/oracle/`, the
+browser entry in `web/`, `FEATURE_PARITY.md`, and `.beads/` (prefix `ftx`) holding the active work breakdown.
 
 ---
 

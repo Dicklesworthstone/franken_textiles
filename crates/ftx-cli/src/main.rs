@@ -22,8 +22,8 @@ mod draft;
 mod export;
 mod fabric;
 mod fold;
-mod measure;
 mod materials;
+mod measure;
 mod outfit;
 mod render;
 mod round;
@@ -61,9 +61,12 @@ const USAGE: &str = "usage:
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]
+  ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--model PATH] [--json]
   ftx render DRAPE_DIR [--res 960x540] [--json]
+  ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]
+  ftx report WS [--json]
   ftx sim-points SIMDIR --pattern P --measurements M [--json]
   ftx outfit --measurements M --sim DIR [--sim DIR ...] --out NEW_DIR [--hat P] [--seams] [--res 960x960] [--json]
   ftx alter slash-spread PATTERN --piece P --axis x|y --at MM --add MM --out OUT [--json]
@@ -77,11 +80,23 @@ const USAGE: &str = "usage:
   ftx measure init --label NICKNAME --out FILE [--stature 92cm] [--age-months N] [--taken-on DATE] [--json]
   ftx measure add FILE --name NAME --value 55cm [--value 55.5cm] [--sigma 1cm] [--provenance SOURCE] [--out FILE] [--json]
   ftx measure validate FILE [--json]
-  ftx measure photo-scale --image PNG [--paper letter|a4|auto] [--out FILE] [--json]
+  ftx measure calib-sheet --paper letter|a4 --out DIR [--squares-x N] [--squares-y N] [--square-mm MM] [--marker-mm MM] [--json]
+  ftx measure calibrate-camera FILE [--out FILE] [--json]
+  ftx measure photo-scale --image PNG [--paper letter|a4|auto] [--sheet JSON] [--out FILE] [--json]
   ftx measure photo-scale --reference JSON [--out FILE] [--json]
-  ftx measure measure-photo --image PNG|--reference JSON --points JSON [--paper letter|a4|auto]
+  ftx measure sheet-pose --image PNG --sheet JSON [--out FILE] [--json]
+  ftx measure sheet-pose --reference JSON [--calibration JSON] [--out FILE] [--json]
+  ftx measure measure-photo --image PNG|--reference JSON --points JSON [--paper letter|a4|auto] [--sheet JSON]
       [--camera-distance-mm MM] [--depth-offset-mm MM] [--click-px PX] [--bootstrap N] [--seed N]
       [--taken-on DATE] [--out FILE] [--json]
+  ftx measure girth-from-section (--from FILE | --width-mm W --depth-mm D) [--level waist|chest|hip]
+      [--sigma-width-mm SW] [--sigma-depth-mm SD] [--k K] [--k-sigma SK] [--k-ratio R] [--k-ratio-sigma SR]
+      [--clothing-mm C] [--tape-girth-mm T] [--sigma-tape-mm ST] [--name NAME] [--out FILE] [--json]
+  ftx measure triangulate FILE [--click-noise JSON] [--out FILE] [--json]
+  ftx measure bundle-adjust FILE [--iterations N] [--out FILE] [--json]
+  ftx measure fit-body FILE --out DIR [--model PATH] [--json]
+  ftx measure still-window FILE [--out FILE] [--json]
+  ftx measure video-select FILE [--out FILE] [--json]
   ftx measure fuse FILES... [--no-priors] [--out FILE] [--json]
   ftx measure ready FILES... --garment KIND [--as-of DATE] [--no-priors] [--closed-cuff] [--passes-hip]
       [--nappies|--no-nappies] [--elastic-waist] [--cuff-level knee|calf|ankle] [--cuff-opening] [--out FILE] [--json]
@@ -897,10 +912,13 @@ fn main() -> ExitCode {
     match args.positional.first().map(String::as_str) {
         Some("draft") => emit("draft", args.json, draft::cmd_draft(&args)),
         Some("render") => emit("render", args.json, render::cmd_render(&args)),
+        Some("viewer") => emit("viewer", args.json, fold::cmd_viewer(&args)),
+        Some("report") => emit("report", args.json, round::cmd_report(&args)),
         Some("sim-points") => emit("sim-points", args.json, fold::sim_points(&args)),
         Some("outfit") => emit("outfit", args.json, outfit::cmd_outfit(&args)),
         Some("validate") => emit("validate", args.json, cmd_validate(&args)),
         Some("round") => emit("round", args.json, round::cmd_round(&args)),
+        Some("qualify") => emit("qualify", args.json, round::cmd_qualify(&args)),
         Some("drape") => emit("drape", args.json, cmd_drape(&args)),
         Some("body") => emit("body", args.json, cmd_body(&args)),
         Some("alter") => emit("alter", args.json, cmd_alter(&args)),

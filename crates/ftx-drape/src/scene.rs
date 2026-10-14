@@ -99,7 +99,11 @@ pub fn placements(
             .landmark_h(&key, landmark)
             .ok_or_else(|| bad(format!("{id}: no landmark {landmark} on {key}")))?
             - y0;
-        let radius = if let Some(r) = pl.get("radius_mm").and_then(Value::as_f64) {
+        let radius = if let Some(r) = pl
+            .get("radius_mm")
+            .or_else(|| pl.get("radius"))
+            .and_then(Value::as_f64)
+        {
             r
         } else {
             let (lo, hi) = mesh.inst_range[k];
@@ -107,11 +111,16 @@ pub fn placements(
             let (hmin, hmax) = ys.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), h| {
                 (a.min(h), b.max(h))
             });
+            let clearance = pl
+                .get("clearance_mm")
+                .or_else(|| pl.get("clearance"))
+                .and_then(Value::as_f64)
+                .unwrap_or(25.0);
             linspace(hmin, hmax, 9)
                 .into_iter()
                 .map(|h| frames.section_radius(&key, h))
                 .fold(0.0, f64::max)
-                + num("clearance_mm", 25.0)
+                + clearance
         };
         out.push(WrapPlacement {
             frame,
@@ -781,5 +790,63 @@ mod grain_tests {
                 assert!((*r - expected).norm() < 1e-15);
             }
         }
+    }
+
+    struct DummyFrames;
+    impl PartFrames for DummyFrames {
+        fn frame(&self, _: &str) -> Option<PartFrame> {
+            Some(PartFrame {
+                origin: Vec3::ZERO,
+                up: Vec3::new(0.0, 0.0, 1.0),
+                front: Vec3::new(0.0, -1.0, 0.0),
+                lat: Vec3::new(1.0, 0.0, 0.0),
+            })
+        }
+        fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+            Some(500.0)
+        }
+        fn section_radius(&self, _: &str, _: f64) -> f64 {
+            80.0
+        }
+    }
+
+    #[test]
+    fn inferred_placement_clearance_and_radius_keys_are_honoured() {
+        let pattern = Pattern::new(json!({
+            "schema": "fabric-pattern/1",
+            "units": "mm",
+            "pieces": [
+                {
+                    "id": "bodice",
+                    "cut": {"qty": 1},
+                    "vertices": {"a": [0, 0], "b": [50, 0], "c": [50, 50], "d": [0, 50]},
+                    "edges": [
+                        {"id": "e0", "from": "a", "to": "b"},
+                        {"id": "e1", "from": "b", "to": "c"},
+                        {"id": "e2", "from": "c", "to": "d"},
+                        {"id": "e3", "from": "d", "to": "a"}
+                    ],
+                    "placement": {"part": "torso", "clearance": 20.0, "inferred": true}
+                },
+                {
+                    "id": "sleeve",
+                    "cut": {"qty": 1},
+                    "vertices": {"a": [0, 0], "b": [50, 0], "c": [50, 50], "d": [0, 50]},
+                    "edges": [
+                        {"id": "e0", "from": "a", "to": "b"},
+                        {"id": "e1", "from": "b", "to": "c"},
+                        {"id": "e2", "from": "c", "to": "d"},
+                        {"id": "e3", "from": "d", "to": "a"}
+                    ],
+                    "placement": {"part": "arm", "y0_landmark": "shoulder_tip", "radius": 38.95, "inferred": true}
+                }
+            ],
+            "seams": []
+        }));
+        let mesh = build_garment(&pattern, 25.0).unwrap();
+        let pl = placements(&pattern, &mesh, &DummyFrames).unwrap();
+        assert_eq!(pl.len(), 2);
+        assert!((pl[0].radius - 100.0).abs() < 1e-12);
+        assert!((pl[1].radius - 38.95).abs() < 1e-12);
     }
 }

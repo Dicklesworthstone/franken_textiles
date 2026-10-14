@@ -6,7 +6,8 @@ scaled and audited, all from the reference's `vectorize.py`: the trace itself (`
 threshold, contours, stroke centres, dashed-edge bridging, corners, edges, marks), `names.json`
 (`annotate`), the reference grammar (`measure_ref`, `resolve_side`, `twin`), `fit_scale`, the round-0
 `audit` with its label consensus, and `parse_length`. Native overlay, label-crop and audit PNGs are
-available in `review` (visual parity boundary below). Not yet: JPEG and WebP input.
+available in `review` (visual parity boundary below), and baseline/progressive 8-bit JPEG plus lossless
+and lossy VP8/VP8L/VP8X WebP inputs decode in pure Rust (`raster::jpeg`, `raster::webp`).
 
 **Units and frames.** A traced draft is in crop pixels, y up, loops counter-clockwise; `trace.to_px` maps
 piece coordinates back to source pixels and is kept current through mirroring and scaling. After scale-fit
@@ -53,7 +54,9 @@ Unicode decimal digits).
 `ftx-conformance/tests/trace_raster.rs`). `load_png`: Pillow 12.3's `load_image` semantics (palette, gray+alpha
 and RGBA composited on white with Pillow's fixed-point `alpha_composite`; 1/2/4-bit gray scaled, 16-bit gray
 clipped at 255, 16-bit colour to its high byte; gray/RGB `tRNS` ignored), every filter and Adam7: 55 PNGs
-bit-identical. JPEG and WebP are refused (convert to PNG): matching libjpeg-turbo and libwebp is not done.
+bit-identical. Baseline and progressive 8-bit JPEGs (gray and YCbCr, with EXIF orientation) and lossless/lossy
+WebP images (`VP8L`, `VP8 `, `VP8X` with alpha composited on white) decode in pure Rust (`raster::jpeg`,
+`raster::webp`); CMYK JPEGs and animated WebPs are refused.
 Colour (OpenCV 5.0 `cvtColor`, 8-bit): Lab is OpenCV's integer formula over tables built as OpenCV builds them,
 including its truncating `softfloat` cube root, bit-identical over all 16,777,216 colours; the `auto`
 channel (float32 Lab distance) bit-identical. Gray and HSV saturation are OpenCV's own fixed-point code,

@@ -27,6 +27,7 @@ pub mod metrics;
 pub mod motion;
 pub mod nearest;
 pub mod point_cache;
+pub mod qualify;
 pub mod render;
 pub mod run;
 pub mod scene;

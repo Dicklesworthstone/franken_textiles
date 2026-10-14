@@ -170,3 +170,51 @@ fn short_caches_use_every_available_frame_not_zero_padding() {
     assert_eq!(r["frames_averaged"], 2);
     assert_eq!(r["rows"][0]["final_z"], 550.0);
 }
+
+#[test]
+fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
+    let dir = setup();
+    save(
+        &dir.join("sim/sim_report.json"),
+        &json!({
+            "settled": true,
+            "gating": [],
+            "advisory": ["minor shift"],
+            "arm_deg": 35.0
+        }),
+    );
+    let mut garment_obj = String::new();
+    for i in 0..12 {
+        garment_obj.push_str(&format!("v {} -0.1 0.1 0.55 0.06 0.06\n", i as f64 * 0.01));
+    }
+    garment_obj.push_str("f 1 2 3\nf 5 6 7\nf 9 10 11\n");
+    std::fs::write(dir.join("sim/garment.obj"), &garment_obj).unwrap();
+    std::fs::write(dir.join("sim/garment_strain.obj"), &garment_obj).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["viewer", "sim", "--pattern", "p.json", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let env: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(env["result"]["vertices"], 12);
+    assert_eq!(env["result"]["source_frames"], 20);
+    let html = std::fs::read_to_string(dir.join("sim/fold_viewer.html")).unwrap();
+    assert!(html.contains("\"schema\":\"fabric-fold-viewer/1\""));
+    assert!(html.contains("<title>SYNTHETIC Fold-up</title>"));
+
+    // Custom --out path also works.
+    let out_custom = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args(["viewer", "sim", "--out", "custom/viewer.html", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out_custom.status.code(), Some(0));
+    assert!(dir.join("custom/viewer.html").is_file());
+}

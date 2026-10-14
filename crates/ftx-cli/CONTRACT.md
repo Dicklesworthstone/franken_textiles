@@ -1,9 +1,10 @@
 # ftx-cli contract
 
 **Purpose.** The `ftx` binary (plan §14): the reference's `fab` commands, so the skill's scripts can call
-FrankenTextiles subsystem by subsystem as each reaches parity. This first cut has `ftx draft`, `ftx validate`,
-`ftx drape`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export`, `ftx check`, `ftx trace`,
-`ftx annotate`, `ftx scale-fit`, `ftx audit` and immutable `ftx round` workspaces with their local review.
+FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx draft`, `ftx validate`,
+`ftx drape`, `ftx qualify`, `ftx body`, `ftx alter`, `ftx measure`, `ftx export`, `ftx check`, `ftx trace`,
+`ftx annotate`, `ftx scale-fit`, `ftx audit`, `ftx render`, `ftx viewer`, `ftx report`, `ftx sim-points`,
+`ftx outfit`, `ftx materials` and immutable `ftx round` workspaces with their local review.
 
 **Commands.**
 - `ftx draft zouave_bolero|zouave_trousers|fez --measurements M --out DIR [--style S.json] [--json]`: the
@@ -24,11 +25,22 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   exit 2 (4 for a budget stop), with no images advertised; incomplete or previous still sets are
   never reused. Failed, blocked, unscaled and inapplicable simulations do not render. New images
   use exclusive creation; the review permits only this round's six known paths and no symlinks.
-  Legacy re-run-in-place semantics, videos and qualification parity remain incomplete.
+  When `--sim` runs on a workspace, `WS/qualification/qualify.json` is checked (`check_qualification`):
+  if missing or stale, an advisory note is added (`qualification missing: run ftx qualify`); if
+  qualified, `gate_tightness` upgrades advisory `tight in <zone>` flags to gating `qualified tight in <zone>`.
   Tests: `round_workflow`, `round_review`, and `round::stills` synthetic triangle scenes; these
   tests do not certify an Anny garment's fit or solve at every requested arm angle.
+- `ftx qualify [WS | --ws WS | --measurements M --out DIR] [--pattern P] [--fabric F] [--model PATH]
+  [--body-fit PATH] [--arm-deg DEG] [--sew N] [--drape N] [--json]`: runs the three known-answer chest
+  bands (`-20`, `0`, `+20` mm ease) at zero gravity (`--sew 70 --drape 0` by default) and writes
+  `qualify.json` (`fabric-qualify/1`, spec 04 §7.1). Exit 0 when all three bands pass, 2 otherwise.
+- `ftx report WS [--json]`: regenerates `WS/report.html` from existing `WS/rounds.jsonl` without creating
+  a new round directory.
+- `ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]`: rebuilds `fold_viewer.html` from an existing
+  simulation directory (`fold.pc2`, `mesh_map.json`, `body.obj`, `sim_report.json`) without re-running
+  the cloth solver.
 - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--model PATH]
-  [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
+  [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--two-start] [--pose-end POSE] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
   casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does):
   an Anny body of the wearer's age (`wearer.age_months`) and sex (`wearer.sex`; unknown = sexes
   averaged), fitted on the drape pose to whichever of the 21 tape measurements of
@@ -54,6 +66,13 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   rather than the reference round's ignored-zero quirk (spec 04 §16). Body fitting keeps the standard
   tape reference pose; only the collision/display pose and garment placement change. Reports retain
   the actual angle. A requested pose can still fail contact/feasibility gates; it is not a fit claim.
+- `ftx outfit --layer PATTERN --layer PATTERN ... --measurements M --out DIR [--fit F ...] [--json]`:
+  sequentially drapes multiple garment layers onto the same fitted body (`docs/outfit.md`).
+- `ftx sim-points SIMDIR --pattern P --measurements M [--json]`: inspects drafted vs settled z-levels of
+  non-sleeve corners across the tail of `fold.pc2` (`docs/fold-inspection.md`).
+- `ftx materials list|show|validate|fit|thermal ... [--json]`: inspects and validates the material
+  catalogue, fits fabric parameters to cantilever/stretch tests, and computes dry/evaporative thermal
+  resistance (`docs/material-catalog.md`, `docs/material-calibration.md`, `docs/material-thermal.md`).
 - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]`:
   the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,
@@ -94,25 +113,18 @@ FrankenTextiles subsystem by subsystem as each reaches parity. This first cut ha
   printed as above; exit 0, or 2 when one fails. With the pattern the DXF sew references are recomputed and
   the DSTs' couching checked against the braid lines. A file the manifest lists but DIR lacks is a failed
   `file.missing` item (the reference raises); no manifest is a failed `manifest` item.
-- `ftx trace IMAGE.png --out DIR` with the reference's flags (`--crop`, `--channel`, `--invert`/`--no-invert`,
+- `ftx trace IMAGE --out DIR` with the reference's flags (`--crop`, `--channel`, `--invert`/`--no-invert`,
   `--threshold`, `--bg R,G,B`, `--stroke`, `--close`, `--open`, `--corner-deg`, `--soft-deg`,
-  `--simplify-frac`, `--smooth`, `--min-area-frac`, repeated `--erase X,Y,W,H`, `--no-dashes`): the
-  reference's `vectorize.py trace` on `ftx-trace`. Writes `DIR/draft.pattern.json`, byte for byte the
-  reference's for the same image, `DIR/mask.png` (the same pixels) and `DIR/trace_px.json` (each piece's
-  stroke-centre polygon in crop px, y down, closed: what the reference cuts `labels/pN.png` along; the skill
-  draws the overlay and label images from these with `vectorize.py`'s own code); prints the reference's summary
-  `{pieces [{id, mode, stroke_px, vertices, edges, curved, notches, grain, touches_border, area_px}], files,
-  bg_rgb, retries}` and exits 3 when no piece is found. Not yet: `overlay.png` and `labels/pN.png`;
-  `--threshold adaptive`, JPEG and WebP are refused (exit 3) with a repair (`ftx-cli/tests/trace_cli.rs`).
+  `--simplify-frac`, `--smooth`, `--min-area-frac`, repeated `--erase X,Y,W,H`, `--no-dashes`,
+  `--no-review-images`): the reference's `vectorize.py trace` on `ftx-trace`. Accepts PNG, baseline/progressive
+  8-bit JPEG and lossless/lossy WebP (`--threshold adaptive` or integer). Writes `DIR/draft.pattern.json`,
+  `DIR/mask.png`, `DIR/trace_px.json`, and (unless `--no-review-images` is passed) native `DIR/overlay.png`
+  and `DIR/labels/pN.png`; prints the reference's summary and exits 3 when no piece is found.
 - `ftx annotate DRAFT --names NAMES.json --out PATTERN`, `ftx scale-fit PATTERN --target REF=LEN [--target
-  …] --out PATTERN` and `ftx audit PATTERN --out DIR [--labels L.json] [--tol-mm 3] [--median-seam-mm 250]
-  [--label-tol 0.03]`: the reference's `vectorize.py annotate|scale-fit|audit` (spec 04 §10.1) on
-  `ftx-trace`, writing what the reference writes for the same inputs (`ftx-cli/tests/trace_workflow.rs`).
-  They print `{out, pieces, seams, notes}`, `{out, k, mm_per_px, targets, rms_pct, warning}` and `{summary,
-  scale_basis, findings ["F# [C] message"], files}`. Targets take units (`=10.5in`, default mm). A bad
-  `names.json`, target or reference is refused (exit 3) with the reference's message (the reference exits
-  2); `audit` exits 2 when a finding is an error (the reference exits 0) and writes only
-  `DIR/round0_audit.json` so far (the callout PNG follows the raster trace).
+  …] --out PATTERN` and `ftx audit PATTERN --out DIR [--image IMG] [--labels L.json] [--tol-mm 3]
+  [--median-seam-mm 250] [--label-tol 0.03] [--no-review-images]`: the reference's `vectorize.py
+  annotate|scale-fit|audit` (spec 04 §10.1) on `ftx-trace`, writing what the reference writes for the same
+  inputs (`ftx-cli/tests/trace_workflow.rs`), plus native `DIR/round0_audit.png` when `--image` is provided.
 
 **Output.** Human text, or with `--json` exactly one JSON envelope on stdout:
 `{"schema": "ftx-cli/1", "command", "ok", "exit", "result"}` or, for refused input,
@@ -134,10 +146,11 @@ wearer anywhere but the fitted measurements; performance at arbitrary garment si
 
 ## Measurement evidence commands
 
-`measure catalogue|prior|init|add|validate|fuse|ready|reference` delegates calculations to
-`ftx-measure`; details and examples are in `MEASUREMENTS.md`. Files written by `--out` are
-raw domain JSON, while stdout `--json` remains the CLI envelope. The CLI supplies UTC today
-unless an explicit date is given; the library is clock-free. Repeated --value readings are
-preserved. Invalid edits never replace the input; successful writes use same-directory atomic
-rename and mode 0600 on Unix. Exit 3 includes invalid measurement documents and NOT_READY.
-The evidence gate distinguishes READY_REFERENCE from ordinary readiness and makes no fit claim.
+`measure catalogue|prior|init|add|validate|fuse|ready|reference|calib-sheet|calibrate-camera|photo-scale|sheet-pose|measure-photo|girth-from-section|triangulate|bundle-adjust|fit-body|still-window|video-select`
+delegates calculations to `ftx-measure` (and `ftx-body` for `fit-body`); details and examples are in
+`MEASUREMENTS.md` and `docs/*.md`. Files written by `--out` are raw domain JSON (or SVG/PDF for
+`calib-sheet`), while stdout `--json` remains the CLI envelope. The CLI supplies UTC today unless an
+explicit date is given; the library is clock-free. Repeated `--value` readings are preserved. Invalid
+edits never replace the input; successful writes use same-directory atomic rename and mode 0600 on Unix.
+Exit 3 includes invalid measurement documents and NOT_READY. The evidence gate distinguishes
+READY_REFERENCE from ordinary readiness and makes no fit claim.

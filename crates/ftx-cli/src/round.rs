@@ -449,7 +449,17 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
         write_new(&rd.join(file), svg.as_bytes())?;
     }
     let (sim, sim_basis, viewer, budget_stop) = if wants_sim {
-        simulate(args, &rd, n, &raw, validation.status(), unscaled)?
+        simulate(
+            args,
+            &ws,
+            &rd,
+            n,
+            &raw,
+            &data,
+            validation.status(),
+            unscaled,
+            &mut notes,
+        )?
     } else {
         (None, "not run".to_string(), None, false)
     };
@@ -557,13 +567,17 @@ pub(super) fn cmd_round(args: &Args) -> Result<(Value, i32, String), Refusal> {
 
 /// Only a successful invocation in this newly reserved directory authorizes reading its report.
 /// A failed solver/output write cannot substitute a previous round's report or viewer.
+#[allow(clippy::too_many_arguments)]
 fn simulate(
     args: &Args,
+    ws: &Path,
     rd: &Path,
     number: u64,
     pattern: &Value,
+    data: &Value,
     flat: &str,
     unscaled: bool,
+    notes: &mut Vec<String>,
 ) -> Result<SimOutcome, Refusal> {
     let skipped = if flat == "BLOCKED" {
         Some("skipped (validation BLOCKED)")
@@ -615,7 +629,36 @@ fn simulate(
         Ok(report)
     });
     match outcome {
-        Ok(report) => {
+        Ok(mut report) => {
+            let qpath = ws.join("qualification/qualify.json");
+            let qdoc_owned = if regular(&qpath, false)? {
+                Some(
+                    read_json(&qpath.to_string_lossy())
+                        .map(|(v, _)| v)
+                        .map_err(|e| e.message),
+                )
+            } else {
+                None
+            };
+            let qdoc_ref = qdoc_owned
+                .as_ref()
+                .map(|r| r.as_ref().map_err(String::as_str));
+            let meas_bytes = serde_json::to_vec(data).map_err(|e| bad_input(e.to_string()))?;
+            let meas_sha = ftx_core::receipt::sha256_hex(&meas_bytes);
+            let qual = ftx_drape::qualify::check_qualification(
+                qdoc_ref,
+                &qpath.display().to_string(),
+                &ws.display().to_string(),
+                &meas_sha,
+                pattern.get("fabric"),
+            );
+            if let Some(note) = ftx_drape::qualify::gate_tightness(&mut report, &qual) {
+                notes.push(note);
+            }
+            let mut updated =
+                serde_json::to_vec_pretty(&report).map_err(|e| bad_input(e.to_string()))?;
+            updated.push(b'\n');
+            super::workspace::replace(&rd.join("sim/sim_report.json"), &updated)?;
             let basis = if ftx_pattern::truthy(&report["gating"]) {
                 "gating flags"
             } else {
@@ -642,6 +685,261 @@ fn simulate(
             ))
         }
     }
+}
+
+/// Rotates an existing workspace `qualification` directory to `qualification.before-NNN`
+/// so re-running `ftx qualify --ws WS` after a body or fabric change never deletes prior evidence.
+fn reserve_ws_qualification(ws: &Path) -> Result<PathBuf, Refusal> {
+    let out = ws.join("qualification");
+    if fs::symlink_metadata(&out).is_ok() {
+        regular(&out, true)?;
+        let mut suffix = 0u64;
+        let archive = loop {
+            let candidate = ws.join(format!("qualification.before-{suffix:03}"));
+            match fs::symlink_metadata(&candidate) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break candidate,
+                Err(e) => return Err(io(&candidate, e)),
+                Ok(_) => {}
+            }
+            suffix = suffix
+                .checked_add(1)
+                .ok_or_else(|| bad_input("qualification backup number overflow"))?;
+        };
+        fs::rename(&out, &archive).map_err(|e| io(&archive, e))?;
+    }
+    super::reserve_drape_output(&out)?;
+    Ok(out)
+}
+
+/// `ftx qualify`: run the three known-answer chest bands (`-20`, `0`, `+20` mm ease) at zero
+/// gravity (`--sew 70 --drape 0`) and write `qualify.json` (`fabric-qualify/1`, spec 04 §7.1).
+pub(super) fn cmd_qualify(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    use ftx_body::{BodyFrames, Pose, pose_deltas, skin_mesh, trimmed_skin};
+    use ftx_drape::animation::{mesh_map, pc2, seam_colours, strain_colours};
+    use ftx_drape::qualify::{
+        DEFAULT_BAND_HEIGHT_MM, QUALIFY_DRAPE_STEPS, QUALIFY_EASES, QUALIFY_SEW_STEPS,
+        band_fit_spec, band_pattern, evaluate_band, fabric_key,
+    };
+    use ftx_drape::run::{DrapeBody, DrapeOptions, drape, viewer};
+
+    known_options(
+        args,
+        "qualify",
+        &[
+            "ws",
+            "measurements",
+            "pattern",
+            "fabric",
+            "out",
+            "model",
+            "body-fit",
+            "arm-deg",
+        ],
+    )?;
+    if args.positional.len() > 2 || (args.options.contains_key("ws") && args.positional.len() > 1) {
+        return Err(bad_input(
+            "pass a workspace either with --ws WS or as a single positional argument",
+        ));
+    }
+    let ws_arg = args
+        .options
+        .get("ws")
+        .or_else(|| args.positional.get(1))
+        .map(PathBuf::from);
+    let pose = super::drape_pose(args)?;
+    let fabric_override = super::fabric::load(args)?;
+
+    let (data, mut pat, out, _ws_lock) = if let Some(ws) = ws_arg {
+        if args.options.contains_key("out") {
+            return Err(bad_input(
+                "--out cannot be combined with a workspace (workspace qualification writes to WS/qualification)",
+            ));
+        }
+        let lock = super::workspace::Workspace::open(&ws)?;
+        let meas_path = match args.options.get("measurements") {
+            Some(m) => PathBuf::from(m),
+            None => ws.join("measurements.json"),
+        };
+        let (raw_m, _) = read_json(&meas_path.to_string_lossy())?;
+        let data = measurements(&raw_m)?;
+        let (_, prev_pat) = inventory(&ws)?;
+        let pat = match args.options.get("pattern").map(PathBuf::from).or(prev_pat) {
+            Some(p) => read_json(&p.to_string_lossy())?.0,
+            None => json!({}),
+        };
+        let out = reserve_ws_qualification(&ws)?;
+        (data, pat, out, Some(lock))
+    } else {
+        let meas_path = super::required(args, "measurements")?;
+        let out = PathBuf::from(super::required(args, "out")?);
+        let (raw_m, _) = read_json(meas_path)?;
+        let data = measurements(&raw_m)?;
+        let pat = match args.options.get("pattern") {
+            Some(p) => read_json(p)?.0,
+            None => json!({}),
+        };
+        super::reserve_drape_output(&out)?;
+        (data, pat, out, None)
+    };
+
+    if let Some(selected) = &fabric_override {
+        if !pat.is_object() {
+            pat = json!({});
+        }
+        selected.apply(&mut pat)?;
+    }
+
+    let opts = DrapeOptions {
+        sew_steps: QUALIFY_SEW_STEPS,
+        drape_steps: QUALIFY_DRAPE_STEPS,
+        ..DrapeOptions::default()
+    };
+    opts.validate()?;
+
+    let mut bands = Vec::with_capacity(QUALIFY_EASES.len());
+    for ease in QUALIFY_EASES {
+        let bpat = band_pattern(&data, ease, DEFAULT_BAND_HEIGHT_MM, pat.get("fabric"))?;
+        ftx_drape::material::resolve(&Pattern::new(bpat.clone()), &opts)?;
+        bands.push((ease, bpat));
+    }
+
+    let super::body_source::PreparedBody {
+        model,
+        params,
+        description,
+        ..
+    } = super::body_source::prepare(args, Some(&data))?;
+    let rest = model.rest(&params)?;
+    let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
+    let skin = trimmed_skin(
+        &model,
+        &posed.vertices,
+        &["wrist.R", "wrist.L", "foot.R", "foot.L"],
+    )?;
+    let full = skin_mesh(&posed.vertices, &model.data().faces)?;
+    let frames = BodyFrames::new(&model, &posed)?;
+    let body = DrapeBody {
+        frames: &frames,
+        collision: (&skin.vertices, &skin.triangles),
+        display: (&full.vertices, &full.triangles),
+        arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
+    };
+
+    let meas_bytes = serde_json::to_vec(&data).map_err(|e| bad_input(e.to_string()))?;
+    let meas_sha = ftx_core::receipt::sha256_hex(&meas_bytes);
+    let spec = band_fit_spec();
+    let mut rows = Vec::with_capacity(bands.len());
+    let mut lines = Vec::with_capacity(bands.len());
+
+    for (ease, bpat) in bands {
+        let bdir = out.join(format!("band_{ease:+}"));
+        make_dir(&bdir)?;
+        let pat_path = bdir.join("pattern.json");
+        write_json(&pat_path, &bpat)?;
+        let sim_dir = bdir.join("sim");
+        super::reserve_drape_output(&sim_dir)?;
+        let pattern = Pattern::new(bpat);
+        let started = std::time::Instant::now();
+        let run = drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?;
+        let mut report = run.report.clone();
+        if let Some(selected) = &fabric_override {
+            report["fabric_override"] = selected.receipt().clone();
+        }
+        if let Some(o) = report.as_object_mut() {
+            o.insert("pattern".into(), json!(pat_path.to_string_lossy()));
+            o.insert("measurements_sha256".into(), json!(meas_sha.clone()));
+            o.insert(
+                "wall_s".into(),
+                json!((started.elapsed().as_secs_f64() * 10.0).round() / 10.0),
+            );
+            let mut b = description.clone();
+            b.insert(
+                "pose".into(),
+                json!(format!(
+                    "drape: arms at {}° and straight, hands and feet left out of contact",
+                    body.arm_deg
+                )),
+            );
+            o.insert("body".into(), Value::Object(b));
+        }
+        let html = viewer(&run, &pattern, &body, super::VIEWER_TEMPLATE).map_err(bad_input)?;
+        let mesh = &run.scene.mesh;
+        let last = run.fold.frames.last().map_or(&[][..], Vec::as_slice);
+        let style = pattern.raw()["style"].as_str().unwrap_or("");
+        super::write_drape_output(
+            &sim_dir,
+            &report,
+            &[
+                ("fold.pc2", pc2(&run.fold.frames)),
+                (
+                    "mesh_map.json",
+                    serde_json::to_vec_pretty(&mesh_map(&run.scene.mesh, &run.fold))
+                        .map_err(|e| bad_input(e.to_string()))?,
+                ),
+                ("fold_viewer.html", html.into_bytes()),
+                (
+                    "garment.obj",
+                    super::obj(last, &mesh.faces, Some(&seam_colours(mesh, style))).into_bytes(),
+                ),
+                (
+                    "garment_strain.obj",
+                    super::obj(last, &mesh.faces, Some(&strain_colours(mesh, last))).into_bytes(),
+                ),
+                (
+                    "body.obj",
+                    super::obj(&full.vertices, &full.triangles, None).into_bytes(),
+                ),
+            ],
+        )?;
+        let (row, line, _) = evaluate_band(ease, &report);
+        rows.push(row);
+        lines.push(line);
+    }
+
+    let all_pass = rows.iter().all(|r| r["pass"].as_bool() == Some(true));
+    let rec = json!({
+        "schema": "fabric-qualify/1",
+        "engine": "ftx",
+        "measurements_sha256": meas_sha,
+        "fabric_key": fabric_key(pat.get("fabric")),
+        "bands": rows,
+        "pass": all_pass,
+    });
+    let qfile = out.join("qualify.json");
+    write_json(&qfile, &rec)?;
+    let mut text = lines.join("\n");
+    if all_pass {
+        text.push_str(
+            "\nQUALIFICATION: PASS (tightness flags may gate rounds for this body and fabric)",
+        );
+    } else {
+        text.push_str(
+            "\nQUALIFICATION: FAIL (tightness flags will stay advisory — the sim did not separate the three known-answer bands)",
+        );
+    }
+    text.push_str(&format!("\nwrote {}", qfile.display()));
+    Ok((rec, if all_pass { 0 } else { 2 }, text))
+}
+
+/// `ftx report WS`: rebuilds `WS/report.html` from the saved `rounds.jsonl` ledger without running a new round.
+pub(super) fn cmd_report(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    known_options(args, "report", &[])?;
+    if args.positional.len() != 2 {
+        return Err(bad_input("ftx report needs exactly one workspace"));
+    }
+    let ws = PathBuf::from(&args.positional[1]);
+    if !regular(&ws, true)? {
+        return Err(bad_input(format!(
+            "{}: workspace directory does not exist",
+            ws.display()
+        )));
+    }
+    let _workspace = super::workspace::Workspace::open(&ws)?;
+    let entries = ledger(&ws)?;
+    report::publish(&ws)?;
+    let out = ws.join("report.html");
+    let text = format!("wrote {}", out.display());
+    Ok((json!({"report": out, "rounds": entries.len()}), 0, text))
 }
 
 #[cfg(test)]
