@@ -227,10 +227,10 @@ fn explicit_estimate_consent_is_enforced_in_the_real_drape_boundary() {
 }
 
 /// A piece's `material` string is a cutting label (the skill's rounds put one on every piece, the exporters
-/// print it), so it drapes in pattern.fabric as the reference does; a per-piece characterized selection
-/// still needs heterogeneous assembly and is refused.
+/// print it), so it drapes in pattern.fabric as the reference does; a characterized selection in its place
+/// (an object, or `material_id`) is refused and pointed at `piece.fabric`.
 #[test]
-fn piece_material_labels_drape_and_per_piece_selections_are_refused() {
+fn piece_material_labels_drape_and_misplaced_selections_are_refused() {
     let opts = DrapeOptions::default();
     let labelled = |piece: Value| {
         let mut p = band(json!({"id":"shell","tensile_N_m":8000.0}))
@@ -247,11 +247,10 @@ fn piece_material_labels_drape_and_per_piece_selections_are_refused() {
     for piece in [
         json!({"material":record(1.0)}),
         json!({"material_id":"fs_il019_natural"}),
-        json!({"fabric":{"material_id":"fs_il019_natural"}}),
     ] {
         let e = resolve(&labelled(piece.clone()), &opts).err().unwrap();
         assert!(
-            e.message.contains("heterogeneous"),
+            e.message.contains("piece.fabric.material"),
             "{piece}: {}",
             e.message
         );
