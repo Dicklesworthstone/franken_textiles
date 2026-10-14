@@ -2,9 +2,10 @@
 //! names/scale operations cannot double-mirror or double-scale it. No files or network are accessed.
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
+use ftx_export::pyjson::PyJson;
 use ftx_pattern::{Pattern, doc::PatternDoc};
 use ftx_trace::{
-    AuditOptions, OValue, TraceOptions, annotate, audit, fit_scale,
+    AuditOptions, OValue, TraceOptions, annotate_py, audit, fit_scale_py,
     raster::image::{Bgr, encode_png_gray, load_image_with_limit},
     review, trace_image,
 };
@@ -69,6 +70,8 @@ struct Target {
 pub struct Sheet {
     image: Bgr,
     draft: PatternDoc,
+    /// The same draft in the reference's key order (what `vectorize.py` reads back).
+    ordered: PyJson,
     source_sha256: String,
     diagnostics: Value,
     original: Vec<(String, Vec<u8>)>,
@@ -153,6 +156,7 @@ impl Sheet {
         Ok(Self {
             image,
             draft,
+            ordered: traced.pattern,
             source_sha256: sha256_hex(png),
             diagnostics: traced.diagnostics.to_value(),
             original,
@@ -188,7 +192,9 @@ impl Sheet {
                 ));
             }
         }
-        let mut doc = annotate(&self.draft, &names).map_err(bad)?;
+        // pattern.json is the file `vectorize.py annotate` then `scale-fit` would write, byte for byte
+        let (mut written, mut doc) =
+            annotate_py(&self.ordered, &self.draft, &names).map_err(bad)?;
         if doc.pieces.is_empty() {
             return Err(bad("annotation dropped every piece"));
         }
@@ -199,9 +205,10 @@ impl Sheet {
                 .iter()
                 .map(|t| (t.reference.clone(), t.target_mm))
                 .collect();
-            let (scaled, report) = fit_scale(&doc, &pairs).map_err(|e| bad(e.to_string()))?;
-            doc = scaled;
-            report
+            let (scaled_py, report, scaled) =
+                fit_scale_py(&written, &doc, &pairs).map_err(|e| bad(e.to_string()))?;
+            (written, doc) = (scaled_py, scaled);
+            report.to_value()
         };
         let errors = Pattern::from_doc(doc.clone()).structure_errors();
         if !errors.is_empty() {
@@ -210,7 +217,10 @@ impl Sheet {
         let audit = audit(&doc, Some(&labels), &AuditOptions::default());
         let mut files = self.original.clone();
         files.extend([
-            ("pattern.json".into(), json_bytes(&doc)?),
+            (
+                "pattern.json".into(),
+                (written.dumps(Some(1)) + "\n").into_bytes(),
+            ),
             (
                 "overlay.png".into(),
                 review::overlay(&doc, Some(&self.image))?,

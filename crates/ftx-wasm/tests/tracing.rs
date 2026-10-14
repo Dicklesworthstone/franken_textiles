@@ -95,6 +95,20 @@ fn edits_are_repeatable_and_failed_attempts_cannot_change_the_original() {
     );
     let pattern = ftx_pattern::Pattern::from_doc(doc(&first));
     assert!((ftx_trace::measure_ref(&pattern, "front/e1").unwrap() - 200.0).abs() < 0.001);
+    // pattern.json is the file `ftx annotate` then `ftx scale-fit` (and vectorize.py) write from the draft
+    let draft = std::str::from_utf8(file(&first, "draft.pattern.json")).unwrap();
+    let names_o: ftx_trace::OValue = serde_json::from_str(names).unwrap();
+    let ordered = |text: &str| ftx_export::pyjson::PyJson::parse(text).unwrap();
+    let typed = |text: &str| -> PatternDoc { serde_json::from_str(text).unwrap() };
+    let (annotated, _) = ftx_trace::annotate_py(&ordered(draft), &typed(draft), &names_o).unwrap();
+    let annotated = annotated.dumps(Some(1)) + "\n";
+    let target = [("front/e1".to_string(), 200.0)];
+    let (fitted, _, _) =
+        ftx_trace::fit_scale_py(&ordered(&annotated), &typed(&annotated), &target).unwrap();
+    assert_eq!(
+        file(&first, "pattern.json"),
+        (fitted.dumps(Some(1)) + "\n").as_bytes()
+    );
     assert!(
         sheet
             .review(
