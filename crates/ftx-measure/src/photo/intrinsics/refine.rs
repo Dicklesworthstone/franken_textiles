@@ -534,6 +534,134 @@ pub(super) fn calibrate(report: &mut CalibrationReport, mut k: Intrinsics) -> Re
     }
     Ok(())
 }
+
+/// Lens block of the inverse *joint* undamped normal matrix, not the inverse lens block.
+/// Work in the same normalized sheet and local coordinates as refinement, then convert the
+/// marginal covariance back to physical focal/principal/coefficient units.
+pub(super) fn covariance(
+    report: &CalibrationReport,
+    sigma_px: f64,
+) -> Result<super::uncertainty::IntrinsicUncertainty, Refusal> {
+    use super::uncertainty::{IntrinsicUncertainty, LENS_PARAMETERS};
+    let input = &report.input;
+    let solution = report
+        .solution
+        .as_ref()
+        .ok_or_else(|| invalid("no calibrated lens"))?;
+    let first = input.controls[0].sheet_xz_m;
+    let origin = Vec3::new(first.x, 0.0, first.y);
+    let extent = input
+        .controls
+        .iter()
+        .map(|p| (p.sheet_xz_m - first).norm())
+        .fold(0.0, f64::max);
+    let mut state = State {
+        k: solution.intrinsics,
+        poses: Vec::new(),
+    };
+    let mut observations = Vec::new();
+    for view in input.views.iter().filter(|v| v.partition == Partition::Fit) {
+        let camera = &solution
+            .sheet_poses
+            .iter()
+            .find(|p| p.frame == view.frame)
+            .ok_or_else(|| invalid("missing fitted pose for covariance"))?
+            .camera_in_sheet_frame;
+        state.poses.push(Pose {
+            r: camera.world_to_camera,
+            t: camera.world_to_camera.mul_vec(origin - camera.center_m) / extent,
+        });
+        observations.push(
+            view.corners
+                .iter()
+                .filter(|p| p.partition == Partition::Fit)
+                .map(|p| {
+                    let control = input.controls.iter().find(|c| c.id == p.id).unwrap();
+                    let q = (control.sheet_xz_m - first) / extent;
+                    Observation {
+                        point: Vec3::new(q.x, 0.0, q.y),
+                        pixel: p.pixel_px,
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    let image_scale = f64::from(input.image_size_px[0].max(input.image_size_px[1]));
+    let s = system(&state, &observations, true, image_scale)?;
+    let n = s.h.len();
+    let norms: Vec<_> = (0..n).map(|i| s.h[i][i].sqrt()).collect();
+    if norms.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        return Err(invalid("UNOBSERVABLE: zero covariance Jacobian column"));
+    }
+    let normal: Vec<Vec<_>> =
+        s.h.iter()
+            .enumerate()
+            .map(|(i, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(|(j, v)| v / (norms[i] * norms[j]))
+                    .collect()
+            })
+            .collect();
+    let l = cholesky(&normal, 0.0, PIVOT_FLOOR).ok_or_else(|| {
+        invalid("UNOBSERVABLE: undamped joint covariance matrix is ill-conditioned")
+    })?;
+    let units = [
+        state.k.focal_px.x,
+        state.k.focal_px.y,
+        image_scale,
+        image_scale,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+    ];
+    let mut covariance = [[0.0; GLOBAL]; GLOBAL];
+    for j in 0..GLOBAL {
+        let mut rhs = vec![0.0; n];
+        rhs[j] = -1.0; // bundle::solve solves H x = -rhs.
+        let column = solve(&l, &rhs);
+        for i in 0..GLOBAL {
+            covariance[i][j] =
+                column[i] * (units[i] / norms[i]) * (units[j] / norms[j]) * sigma_px.powi(2);
+        }
+    }
+    for i in 0..GLOBAL {
+        for j in 0..i {
+            let v = (covariance[i][j] + covariance[j][i]) * 0.5;
+            covariance[i][j] = v;
+            covariance[j][i] = v;
+        }
+    }
+    let sigma: [f64; GLOBAL] = std::array::from_fn(|i| covariance[i][i].sqrt());
+    if sigma.iter().any(|v| !v.is_finite() || *v <= 0.0)
+        || covariance.iter().flatten().any(|v| !v.is_finite())
+    {
+        return Err(invalid("nonfinite or nonpositive intrinsic covariance"));
+    }
+    let correlation: Vec<Vec<_>> = covariance
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            r.iter()
+                .enumerate()
+                .map(|(j, v)| v / (sigma[i] * sigma[j]))
+                .collect()
+        })
+        .collect();
+    if cholesky(&correlation, 0.0, 0.0).is_none() {
+        return Err(invalid("intrinsic covariance lost positive definiteness"));
+    }
+    Ok(IntrinsicUncertainty {
+        intrinsics: state.k,
+        covariance,
+        sigma,
+        parameters: LENS_PARAMETERS,
+        fitting_views: state.poses.len(),
+        fitting_scalar_observations: observations.iter().map(|p| 2 * p.len()).sum(),
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;

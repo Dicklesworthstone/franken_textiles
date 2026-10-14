@@ -5,6 +5,7 @@
 //! radial/tangential distortion and refine intrinsics/poses in original pixel coordinates.
 
 mod refine;
+pub mod uncertainty;
 pub use refine::{DistortionFit, RefinementReport};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -159,6 +160,9 @@ pub struct CalibrationReport {
     pub refinement: Option<RefinementReport>,
     /// Scope of the estimate.
     pub no_claim: &'static str,
+    /// Optional declared-noise covariance; absent preserves the original report format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditional_uncertainty: Option<uncertainty::CalibrationUncertainty>,
 }
 
 fn name(s: &str) -> bool {
@@ -315,6 +319,7 @@ fn conic_row(a: Vec3, b: Vec3) -> [f64; 5] {
 pub fn calibrate_camera(input: &CalibrationInput) -> Result<CalibrationReport, Refusal> {
     let input = prepare(input)?;
     let mut report = CalibrationReport {
+        conditional_uncertainty: None,
         schema: "ftx-camera-calibration/1",
         status: "UNOBSERVABLE",
         solution: None,

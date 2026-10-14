@@ -224,3 +224,209 @@ fn noisy_corners_report_their_residuals_instead_of_being_trimmed() {
             < 10.
     );
 }
+
+fn noise(sigma_px: f64) -> ftx_measure::photo::intrinsics::uncertainty::CalibrationNoise {
+    ftx_measure::photo::intrinsics::uncertainty::CalibrationNoise {
+        schema: "ftx-calibration-corner-noise/1".into(),
+        sigma_px,
+        evidence: "Synthetic known per-axis pixel noise".into(),
+        independence_evidence: "Independent synthetic draws across axes, corners and images".into(),
+    }
+}
+
+#[test]
+fn covariance_is_nonzero_at_perfect_fit_scales_with_noise_and_preserves_geometry() {
+    use ftx_measure::photo::intrinsics::uncertainty::calibrate_camera_with_uncertainty;
+    let input = fixture();
+    let plain = calibrate_camera(&input).unwrap();
+    let a = calibrate_camera_with_uncertainty(&input, &noise(0.25)).unwrap();
+    let b = calibrate_camera_with_uncertainty(&input, &noise(0.5)).unwrap();
+    assert_eq!(json!(plain.solution), json!(a.solution));
+    assert_eq!(json!(plain.refinement), json!(a.refinement));
+    let ua = a.conditional_uncertainty.as_ref().unwrap();
+    assert_eq!(ua.status, "AVAILABLE", "{ua:?}");
+    let ca = ua.estimate.as_ref().unwrap();
+    let cb = b
+        .conditional_uncertainty
+        .as_ref()
+        .unwrap()
+        .estimate
+        .as_ref()
+        .unwrap();
+    for i in 0..9 {
+        assert!(ca.sigma()[i] > 0.0 && ca.sigma()[i].is_finite());
+        for j in 0..9 {
+            assert_eq!(ca.covariance()[i][j], ca.covariance()[j][i]);
+            assert_eq!(4.0 * ca.covariance()[i][j], cb.covariance()[i][j]);
+        }
+    }
+    assert!(ca.covariance()[0][1].abs() > 0.01);
+    let mut reordered = input.clone();
+    reordered.controls.reverse();
+    reordered.views.reverse();
+    for view in &mut reordered.views {
+        view.corners.reverse();
+    }
+    let reordered = calibrate_camera_with_uncertainty(&reordered, &noise(0.25)).unwrap();
+    assert_eq!(json!(a), json!(reordered));
+    let mut changed = input;
+    for v in &mut changed.views {
+        for p in &mut v.corners {
+            if v.partition == Partition::HeldOut || p.partition == Partition::HeldOut {
+                p.pixel_px.x += 0.1;
+            }
+        }
+    }
+    let changed = calibrate_camera_with_uncertainty(&changed, &noise(0.25)).unwrap();
+    assert!(changed.solution.is_some(), "{changed:#?}");
+    assert_eq!(
+        json!(a.conditional_uncertainty),
+        json!(changed.conditional_uncertainty)
+    );
+}
+
+#[test]
+fn unavailable_or_undeclared_uncertainty_is_never_zero_precision() {
+    use ftx_measure::photo::intrinsics::uncertainty::calibrate_camera_with_uncertainty;
+    for sigma in [0.0, -1.0, f64::NAN, f64::INFINITY, 1001.] {
+        assert!(calibrate_camera_with_uncertainty(&fixture(), &noise(sigma)).is_err());
+    }
+    let mut missing = noise(0.5);
+    missing.independence_evidence.clear();
+    assert!(calibrate_camera_with_uncertainty(&fixture(), &missing).is_err());
+    let mut failed = fixture();
+    failed.views[5].corners[0].pixel_px.x += 25.;
+    let report = calibrate_camera_with_uncertainty(&failed, &noise(0.5)).unwrap();
+    assert!(report.solution.is_none());
+    let uncertainty = report.conditional_uncertainty.unwrap();
+    assert_eq!(uncertainty.status, "UNAVAILABLE");
+    assert!(uncertainty.estimate.is_none());
+    let mut pinhole = fixture();
+    pinhole.image_model = "pinhole_zero_skew".into();
+    pinhole.distortion_fit = None;
+    assert!(calibrate_camera_with_uncertainty(&pinhole, &noise(0.5)).is_err());
+    assert!(
+        json!(calibrate_camera(&fixture()).unwrap())
+            .get("conditional_uncertainty")
+            .is_none()
+    );
+}
+
+#[test]
+fn marginal_covariance_matches_independent_pixel_differences_and_svd_inverse() {
+    use ftx_measure::photo::intrinsics::uncertainty::calibrate_camera_with_uncertainty;
+    // This test assembles the full 39-column Jacobian independently in *physical* lens units
+    // and camera-centre metres, unlike refinement's log-focal/normalized-sheet coordinates.
+    let report = calibrate_camera_with_uncertainty(&fixture(), &noise(0.4)).unwrap();
+    let input = &report.input;
+    let sol = report.solution.as_ref().unwrap();
+    let k = sol.intrinsics;
+    let parameters = [
+        k.focal_px.x,
+        k.focal_px.y,
+        k.principal_px.x,
+        k.principal_px.y,
+        k.distortion.radial[0],
+        k.distortion.radial[1],
+        k.distortion.radial[2],
+        k.distortion.tangential[0],
+        k.distortion.tangential[1],
+    ];
+    let project = |v: [f64; 9], q: Vec3| {
+        let (x, y) = (q.x / q.z, q.y / q.z);
+        let r2 = x * x + y * y;
+        let radial = 1. + v[4] * r2 + v[5] * r2 * r2 + v[6] * r2 * r2 * r2;
+        [
+            v[0] * (x * radial + 2. * v[7] * x * y + v[8] * (r2 + 2. * x * x)) + v[2],
+            v[1] * (y * radial + v[7] * (r2 + 2. * y * y) + 2. * v[8] * x * y) + v[3],
+        ]
+    };
+    let mut rows = Vec::<[f64; 39]>::new();
+    for (vi, view) in input
+        .views
+        .iter()
+        .filter(|v| v.partition == Partition::Fit)
+        .enumerate()
+    {
+        let c = sol
+            .sheet_poses
+            .iter()
+            .find(|p| p.frame == view.frame)
+            .unwrap()
+            .camera_in_sheet_frame;
+        for corner in view
+            .corners
+            .iter()
+            .filter(|p| p.partition == Partition::Fit)
+        {
+            let p = input
+                .controls
+                .iter()
+                .find(|p| p.id == corner.id)
+                .unwrap()
+                .sheet_xz_m;
+            let world = Vec3::new(p.x, 0., p.y);
+            let mut jac = [[0.; 39]; 2];
+            for col in 0..15 {
+                let h = if col < 4 { 1e-3 } else { 1e-6 };
+                let evaluate = |step: f64| {
+                    let mut v = parameters;
+                    let mut rotation = c.world_to_camera;
+                    let mut center = c.center_m;
+                    if col < 9 {
+                        v[col] += step;
+                    } else {
+                        let axis = match (col - 9) % 3 {
+                            0 => Vec3::new(1., 0., 0.),
+                            1 => Vec3::new(0., 1., 0.),
+                            _ => Vec3::new(0., 0., 1.),
+                        };
+                        if col < 12 {
+                            rotation = Mat3::rotation(axis, step) * rotation;
+                        } else {
+                            center += axis * step;
+                        }
+                    }
+                    project(v, rotation.mul_vec(world - center))
+                };
+                let a = evaluate(h);
+                let b = evaluate(-h);
+                let index = if col < 9 { col } else { 9 + 6 * vi + col - 9 };
+                for r in 0..2 {
+                    jac[r][index] = (a[r] - b[r]) / (2. * h);
+                }
+            }
+            rows.extend(jac);
+        }
+    }
+    let norm: [f64; 39] =
+        std::array::from_fn(|i| rows.iter().map(|r| r[i] * r[i]).sum::<f64>().sqrt());
+    let normal: [[f64; 39]; 39] = std::array::from_fn(|i| {
+        std::array::from_fn(|j| {
+            rows.iter()
+                .map(|r| (r[i] / norm[i]) * (r[j] / norm[j]))
+                .sum()
+        })
+    });
+    let estimate = report
+        .conditional_uncertainty
+        .as_ref()
+        .unwrap()
+        .estimate
+        .as_ref()
+        .unwrap();
+    for i in 0..9 {
+        let mut unit = [0.; 39];
+        unit[i] = 1.;
+        let column = ftx_core::linalg::lstsq(&normal, &unit);
+        for j in 0..9 {
+            let want = column[j] * 0.16 / (norm[i] * norm[j]);
+            let scale = estimate.sigma()[i] * estimate.sigma()[j];
+            assert!(
+                (estimate.covariance()[i][j] - want).abs() < 1e-4 * scale,
+                "{i},{j}: {want} vs {}",
+                estimate.covariance()[i][j]
+            );
+        }
+    }
+}
