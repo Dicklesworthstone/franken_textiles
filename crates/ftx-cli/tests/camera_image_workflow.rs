@@ -110,6 +110,11 @@ Path('capture/points.json').write_text(json.dumps({'across_back':projected[3]}))
 im=cv2.imread('capture/view0.png')
 cv2.imwrite('capture/copy.png',im,[cv2.IMWRITE_PNG_COMPRESSION,0])
 cv2.imwrite('capture/blank.png',np.full((1200,1600),127,np.uint8))
+# A lens/geometry switch only in the independent view: markers remain readable, but this
+# anisotropic stretch cannot be explained by the common pinhole camera and a rigid board.
+held=cv2.imread('capture/view3.png',cv2.IMREAD_GRAYSCALE)
+A=np.array([[1.18,0,-144.],[0,1.,0],[0,0,1.]])
+cv2.imwrite('capture/inconsistent.png',cv2.warpPerspective(held,A,(1600,1200),borderValue=85))
 "#;
 
 fn render(d: &Path) {
@@ -265,5 +270,86 @@ fn image_calibration_never_drops_a_failed_view_or_counts_a_reencoded_copy_as_ind
             }
         );
         assert!(!d.join("not-created.json").exists());
+    }
+}
+
+#[test]
+#[ignore = "requires optional OpenCV Python detector"]
+fn inconsistent_held_out_pixels_reject_calibration_without_changing_fit_or_overwriting_evidence() {
+    let d = setup();
+    render(&d);
+    let good = run(&d, CALIBRATE, 0)["result"].clone();
+    let mut m = manifest();
+    m["views"][3]["image"] = json!("inconsistent.png");
+    write(&d, "capture/views.json", &m);
+    let mut args = CALIBRATE.to_vec();
+    args.extend(["--out", "rejected.json"]);
+    let rejected = run(&d, &args, 2)["result"].clone();
+    assert_eq!(rejected["status"], "REJECTED");
+    assert!(rejected["solution"].is_null());
+    assert_eq!(rejected, read(&d, "rejected.json"));
+    assert_eq!(rejected["input"]["views"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        rejected["image_acquisition"]["views"][3]["corners_detected"],
+        35
+    );
+    for field in ["constraint_pivot_ratio", "constraint_squared_residual"] {
+        assert_eq!(
+            good[field], rejected[field],
+            "held-out image changed {field}"
+        );
+    }
+    for i in 0..3 {
+        assert_eq!(good["input"]["views"][i], rejected["input"]["views"][i]);
+        assert_eq!(good["checks"][i], rejected["checks"][i]);
+    }
+    assert!(!rejected["flags"].as_array().unwrap().is_empty());
+    // A diagnostic remains rejected when reused; neither photos nor poses may treat it as K.
+    let refused = run(
+        &d,
+        &[
+            "measure",
+            "photo-scale",
+            "--image",
+            "capture/view0.png",
+            "--sheet",
+            "sheet/calib-sheet-letter.json",
+            "--lens",
+            "rejected.json",
+            "--lens-id",
+            "synthetic-pinhole",
+            "--rotation-cw-deg",
+            "0",
+            "--out",
+            "no-scale.json",
+        ],
+        3,
+    );
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("ACCEPTED")
+    );
+    assert!(!d.join("no-scale.json").exists());
+    // Atomic create-only output applies to valid and rejected acquisitions alike. Input
+    // photos, sidecars, manifests, prior diagnostics and hard-link aliases are all evidence.
+    std::fs::hard_link(d.join("capture/view0.png"), d.join("photo-alias")).unwrap();
+    for path in [
+        "capture/view0.png",
+        "sheet/calib-sheet-letter.json",
+        "capture/views.json",
+        "rejected.json",
+        "photo-alias",
+    ] {
+        let before = std::fs::read(d.join(path)).unwrap();
+        let mut args = CALIBRATE.to_vec();
+        args.extend(["--out", path]);
+        run(&d, &args, 3);
+        assert_eq!(
+            std::fs::read(d.join(path)).unwrap(),
+            before,
+            "changed {path}"
+        );
     }
 }
