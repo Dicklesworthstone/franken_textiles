@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 
 #[path = "material_workbench/coverage.rs"]
 mod thermal_coverage;
+#[path = "material_workbench/projection.rs"]
+mod thermal_projection;
 #[path = "material_workbench/surface.rs"]
 mod thermal_surface;
 #[path = "material_workbench/thermal.rs"]
@@ -37,6 +39,7 @@ ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
 ftx-materials thermal-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json
+ftx-materials thermal-map SIM_REPORT.json BODY.obj PROJECTION.json
 ftx-materials cut-plan PATTERN.json OPTIONS.json
 ftx-materials cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json
 ftx-materials cut-svg PATTERN.json OPTIONS.json ROLL-INDEX NEW.svg
@@ -48,7 +51,8 @@ JSON output. `show` includes a portable selection and missing-property coverage.
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
-`thermal-coverage` couples explicitly mapped layers and bare body areas; no automatic overlap inference.
+`thermal-coverage` couples mapped layers and bare body areas; generated geometry receipts are replayed.
+`thermal-map` derives coverage polygons from actual cloth and body geometry under a local-normal closure.
 `cut-plan` derives material-specific roll requirements from real cut instances and sourced width.
 `cut-price` prices gross marker stock, including layout waste; missing offers remain unknown.
 `cut-svg` writes a new source-locked planning preview, not device execution code.
@@ -185,6 +189,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-coverage", report, mapping, conditions] => {
             thermal_coverage::run(report, mapping, conditions)
         }
+        ["thermal-map", report, body, settings] => thermal_projection::run(report, body, settings),
         ["thermal-transient", path] => thermal_transient::run(path),
         ["calibrate", path] => calibration(path, false),
         ["calibrate", path, "--allow-estimates"] => calibration(path, true),

@@ -1,4 +1,4 @@
-//! Explicit layered coverage on a verified saved drape. No live material or inferred overlap lookup.
+//! Source-locked layered coverage; generated geometric maps are recomputed before evaluation.
 use ftx_core::{Refusal, Vec3, receipt::sha256_hex};
 use ftx_drape::thermal::{
     Boundary,
@@ -10,7 +10,7 @@ use ftx_drape::thermal::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{invalid, read};
+use super::{invalid, read, thermal_projection};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +19,8 @@ struct Mapping {
     drape_thermal_frame_sha256: String,
     body_positions_m: Vec<Vec3>,
     layout: Layout,
+    #[serde(default)]
+    projection: Option<thermal_projection::Receipt>,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +88,20 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
         ));
     }
     let source_work = source.cells();
+    let projection = map
+        .projection
+        .as_ref()
+        .map(|receipt| {
+            thermal_projection::verify(
+                &source,
+                &cloth,
+                report,
+                &map.body_positions_m,
+                &map.layout,
+                receipt,
+            )
+        })
+        .transpose()?;
     let assembly = Coverage::new(source, map.layout)?;
     let boundaries = if input.boundaries.len() == 1 {
         vec![input.boundaries[0].boundary(); assembly.body_triangle_count()]
@@ -129,6 +145,26 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
         "mapping_is_geometrically_verified":false,"comfort_claim":false,"empirical_validation_claim":false,
         "not_simulated":["automatic overlap discovery","air-gap geometry","moisture","wind-dependent films",
             "radiative exchange","compressed loft","in-plane conduction","human thermoregulation"]});
+    if let Some(projection) = projection {
+        out["projection"] = projection;
+        out["mapping_is_geometrically_verified"] = json!(true);
+        out["geometric_verification_scope"] = json!(
+            "recomputed local-normal projection on supplied body triangles; not a global nonintersecting body, air-gap or empirical validity certificate"
+        );
+        out["scope"] = json!(
+            "geometry-derived fractional body coverage with series layers and bare paths; fixed supplied poses"
+        );
+        out["not_simulated"] = json!([
+            "global body validity",
+            "surface air-gap transport",
+            "moisture",
+            "wind-dependent films",
+            "radiative exchange",
+            "compressed loft",
+            "in-plane conduction",
+            "human thermoregulation"
+        ]);
+    }
     if let Some(t) = input.transient {
         let mut state = assembly.initial(t.initial_temperature_c)?;
         let mut trace = vec![json!({"time_seconds":0.0,"stored_energy_change_j":0.0})];

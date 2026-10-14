@@ -89,18 +89,7 @@ fn sewn_report_with_law(shell_r: f64, variable: bool) -> Value {
         "fabric":{"material":sheet(0.1, variable)},"pieces":pieces,"seams":[
         {"id":"right_join","a":"front/right","b":"back/left"},
         {"id":"left_join","a":"back/right","b":"front/left"}]}));
-    let mut vertices = Vec::new();
-    for z in [-0.02, 0.12] {
-        for i in 0..16 {
-            let (s, c) = det::sin_cos(i as f64 * std::f64::consts::TAU / 16.);
-            vertices.push(Vec3::new(0.03 * c, 0.03 * s, z));
-        }
-    }
-    let mut tris = Vec::new();
-    for i in 0..16 {
-        let j = (i + 1) % 16;
-        tris.extend([[i, j, j + 16], [i, j + 16, i + 16]]);
-    }
+    let (vertices, tris) = cylinder();
     let body = Body::new(vertices, tris, 0.01).unwrap();
     drape(
         &pattern,
@@ -122,6 +111,280 @@ fn sewn_report_with_law(shell_r: f64, variable: bool) -> Value {
     )
     .unwrap()
     .report
+}
+
+fn cylinder() -> (Vec<Vec3>, Vec<[usize; 3]>) {
+    let mut vertices = Vec::new();
+    for z in [-0.02, 0.12] {
+        for i in 0..16 {
+            let (s, c) = det::sin_cos(i as f64 * std::f64::consts::TAU / 16.);
+            vertices.push(Vec3::new(0.03 * c, 0.03 * s, z));
+        }
+    }
+    let mut tris = Vec::new();
+    for i in 0..16 {
+        let j = (i + 1) % 16;
+        tris.extend([[i, j, j + 16], [i, j + 16, i + 16]]);
+    }
+    (vertices, tris)
+}
+
+fn body_obj() -> String {
+    let (vertices, faces) = cylinder();
+    let mut text = String::from("# Synthetic body in metres, actual drape collision geometry\n");
+    for p in vertices {
+        text.push_str(&format!("v {} {} {}\n", p.x, p.y, p.z));
+    }
+    for [a, b, c] in faces {
+        text.push_str(&format!("f {} {} {}\n", a + 1, b + 1, c + 1));
+    }
+    text
+}
+
+fn projection_input() -> Value {
+    json!({"schema":"ftx-drape-thermal-projection/1",
+        "instance_layers":{"front":"shell","back":"shell"},
+        "settings":{"max_distance_m":0.025,"min_normal_cosine":0.25,
+            "separation_tolerance_m":1e-8,"cells_per_layer":2,"interfaces":[]}})
+}
+
+fn map_invoke(report: &Value, body: &str, request: &Value) -> (Output, PathBuf) {
+    let root = std::env::temp_dir().join(format!(
+        "ftx-projection-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("report.json"),
+        serde_json::to_vec(report).unwrap(),
+    )
+    .unwrap();
+    fs::write(root.join("body.obj"), body).unwrap();
+    fs::write(
+        root.join("projection.json"),
+        serde_json::to_vec(request).unwrap(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_ftx-materials"))
+        .arg("thermal-map")
+        .args([
+            root.join("report.json"),
+            root.join("body.obj"),
+            root.join("projection.json"),
+        ])
+        .output()
+        .unwrap();
+    (output, root)
+}
+
+fn mapped(report: &Value) -> Value {
+    let (out, _) = map_invoke(report, &body_obj(), &projection_input());
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+#[test]
+fn automatic_map_from_actual_sewn_drape_and_body_obj_reaches_heat_solver() {
+    let r = report();
+    let m = mapped(&r);
+    let out = success(&r, &m, &conditions());
+    assert_eq!(out["mapping_is_geometrically_verified"], true);
+    assert_eq!(out["comfort_claim"], false);
+    assert!(
+        out["geometric_verification_scope"]
+            .as_str()
+            .unwrap()
+            .contains("local-normal")
+    );
+    let covered = out["steady"]["covered_area_m2"].as_f64().unwrap();
+    let body = out["steady"]["body_area_m2"].as_f64().unwrap();
+    assert!(covered > 0.001 && covered < body, "{covered} of {body}");
+    assert!(out["steady"]["bare_heat_w"].as_f64().unwrap() > 0.0);
+    assert!(
+        !m["projection"]["result"]["footprints"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(m["layout"], m["projection"]["result"]["layout"]);
+    assert_eq!(mapped(&r), m);
+    assert_eq!(success(&r, &m, &conditions()), out);
+    near(
+        out["transient"]["balance_error_j"].as_f64().unwrap(),
+        0.,
+        1e-8,
+    );
+}
+
+#[test]
+fn material_substitution_regenerates_geometric_map_without_manual_triangle_edits() {
+    let a = report();
+    let b = sewn_report(0.8);
+    assert_eq!(
+        a["thermal_surface"]["positions_m"],
+        b["thermal_surface"]["positions_m"]
+    );
+    let ma = mapped(&a);
+    let mb = mapped(&b);
+    // Same instance names and projection controls. No caller-selected triangle IDs or fractions.
+    assert_eq!(ma["projection"]["request"], mb["projection"]["request"]);
+    assert_eq!(
+        ma["projection"]["result"]["footprints"],
+        mb["projection"]["result"]["footprints"]
+    );
+    assert_ne!(
+        ma["projection"]["result"]["input_sha256"],
+        mb["projection"]["result"]["input_sha256"]
+    );
+    refused(&b, &ma, &conditions());
+    let x = success(&a, &ma, &conditions());
+    let y = success(&b, &mb, &conditions());
+    assert_eq!(
+        x["steady"]["covered_area_m2"],
+        y["steady"]["covered_area_m2"]
+    );
+    assert_eq!(x["steady"]["bare_heat_w"], y["steady"]["bare_heat_w"]);
+    assert!(
+        y["steady"]["inside_heat_w"].as_f64().unwrap()
+            < x["steady"]["inside_heat_w"].as_f64().unwrap()
+    );
+}
+
+#[test]
+fn generated_geometry_and_allocation_receipts_are_recomputed_not_trusted() {
+    let r = report();
+    let m = mapped(&r);
+    for change in [
+        (|m: &mut Value| m["layout"]["regions"][0]["body_fraction"] = json!(0.01))
+            as fn(&mut Value),
+        |m| m["layout"]["regions"][0]["layers"][0]["fraction"] = json!(0.01),
+        |m| {
+            m["projection"]["result"]["footprints"][0]["hits"][0]["mid_surface_distance_m"][0] =
+                json!(0.123)
+        },
+        |m| m["projection"]["result"]["footprints"][0]["body_polygon"][0] = json!([0.2, 0.2]),
+        |m| m["body_positions_m"][0][0] = json!(0.031),
+        |m| m["projection"]["request"]["settings"]["max_distance_m"] = json!(0.027),
+        |m| m["projection"]["request"]["instance_layers"]["front"] = json!("different"),
+    ] {
+        let mut bad = m.clone();
+        change(&mut bad);
+        refused(&r, &bad, &conditions());
+    }
+    // Merely removing the proof may retain an authored map, but cannot claim geometric verification.
+    let mut authored = m;
+    authored.as_object_mut().unwrap().remove("projection");
+    assert_eq!(
+        success(&r, &authored, &conditions())["mapping_is_geometrically_verified"],
+        false
+    );
+    authored["mapping_is_geometrically_verified"] = json!(true);
+    refused(&r, &authored, &conditions());
+}
+
+#[test]
+fn generated_maps_preserve_integrated_reference_mass_with_variable_heat_capacity() {
+    let r = sewn_report_with_law(0.4, true);
+    let m = mapped(&r);
+    let out = success(&r, &m, &conditions());
+    let mut expected = 0.0;
+    let cells = m["layout"]["cells_per_layer"].as_u64().unwrap() as usize;
+    for (i, region) in m["layout"]["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        for (j, portion) in region["layers"].as_array().unwrap().iter().enumerate() {
+            let ti = portion["cloth_triangle"].as_u64().unwrap() as usize;
+            let area = r["thermal_surface"]["model"]["patches"][ti]["reference_area_m2"]
+                .as_f64()
+                .unwrap()
+                * portion["fraction"].as_f64().unwrap();
+            for cell in 0..cells {
+                let t = out["final"]["temperature_c"][i][j * cells + cell]
+                    .as_f64()
+                    .unwrap();
+                expected += 0.2 * area / cells as f64 * (1000. * (t - 10.) + 10. * (t * t - 100.));
+            }
+        }
+    }
+    near(
+        out["transient"]["stored_energy_change_j"].as_f64().unwrap(),
+        expected,
+        1e-9,
+    );
+    near(
+        out["transient"]["net_energy_into_storage_j"]
+            .as_f64()
+            .unwrap(),
+        expected,
+        1e-8,
+    );
+    let mut outside_domain = conditions();
+    outside_domain["boundaries"][0]["outside_c"] = json!(-1.);
+    refused(&r, &m, &outside_domain);
+}
+
+#[test]
+fn map_creation_rejects_ambiguous_inputs_without_partial_output_or_file_changes() {
+    let r = report();
+    let input = projection_input();
+    let obj = body_obj();
+    let check = |r: &Value, body: &str, config: &Value| {
+        let (o, root) = map_invoke(r, body, config);
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "{}",
+            String::from_utf8_lossy(&o.stdout)
+        );
+        assert!(o.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&o.stderr).unwrap();
+        assert!(error["refusal"].is_object());
+        assert_eq!(fs::read_to_string(root.join("body.obj")).unwrap(), body);
+        for (name, expected) in [("report.json", r), ("projection.json", config)] {
+            assert_eq!(
+                serde_json::from_slice::<Value>(&fs::read(root.join(name)).unwrap()).unwrap(),
+                *expected
+            );
+        }
+    };
+    for change in [
+        (|v: &mut Value| {
+            v["instance_layers"]
+                .as_object_mut()
+                .unwrap()
+                .remove("front");
+        }) as fn(&mut Value),
+        |v| v["instance_layers"]["typo"] = json!("shell"),
+        |v| v["instance_layers"]["front"] = json!(""),
+        |v| v["settings"]["max_distance_m"] = json!(-0.1),
+        |v| v["settings"]["wind_speed"] = json!(3.),
+    ] {
+        let mut bad = input.clone();
+        change(&mut bad);
+        check(&r, &obj, &bad);
+    }
+    check(
+        &r,
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n",
+        &input,
+    );
+    check(&r, "v 0 0 0 2\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &input);
+    check(&r, "v NaN 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &input);
+    check(&r, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 4\n", &input);
+    let mut changed = r;
+    changed["thermal_surface"]["positions_m"][0][0] = json!(999.);
+    check(&changed, &obj, &input);
 }
 fn report() -> Value {
     static REPORT: OnceLock<Value> = OnceLock::new();

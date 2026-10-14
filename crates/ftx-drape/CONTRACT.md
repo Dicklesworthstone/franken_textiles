@@ -258,6 +258,7 @@ cone (tan α = μ/2 holds, +0.11 mm; tan α = 2μ slides 42 mm); KAT 9 for conta
 digest, identical native debug, release and wasm32-wasip1). KATs 4–6 are release only (26 s; 140 s
 unoptimised). Bodies and bands are built with `det::sin_cos`: the platform's `sin`/`cos` made the wasm
 digest differ.
+
 Fitted bodies (`tests/kat_fitted.rs`; the toddler fitted to the reference wearer's 21 tape readings, release,
 needs the Anny model): KAT 8 armpit wedge, the drafted bolero at 80, 92 and 116 cm with the arms at 35°: no
 gating flag, settled, every hem within ±15 mm of its drafted level (the 80 cm front hangs 13 mm higher than
@@ -312,9 +313,25 @@ catalog lookup; material/topology edits invalidate state, while pose changes do 
 partition invariance, input refusals, source-locked replay). The added direct `serde` dependency is
 the already pinned workspace 1.0.229 with std/derive, used only for layout/report serialization;
 no additional package/version or transitive dependency is introduced.
-No claim: geometry-derived overlaps, partition disjointness beyond the authored allocation contract,
-air-gap inference, in-plane conduction, tissue storage, human comfort or measured garment validation.
+For authored layouts alone, there is no claim of geometry-derived overlap or spatial disjointness.
+Neither layout mode establishes air-gap transport, in-plane conduction, tissue storage, human comfort
+or measured garment validation.
 The `ftx-materials thermal-coverage` consumer verifies saved drape/frame identity before reading
 indices, retains declared body geometry and mapping, and emits regional/bare heat and bounded
 transient histories. See `docs/thermal-coverage.md` and the actual sewn-drape CLI regressions in
 `crates/ftx-cli/tests/thermal_coverage_workflow.rs`.
+
+**Geometry-derived thermal correspondence** (`thermal::surface::projection`, `ftx-tmb`).
+`project` partitions body triangles by local-normal cloth projection using bounded convex clipping,
+retains inverse-mapped cloth subpolygons and mid-surface distance ranges, and emits the existing
+`coverage::Layout`. It enforces ordering over complete polygons and rejects grazing/crossing sheets,
+unresolved folds, horizon cuts and spatially duplicated cloth allocations even below scalar budgets.
+Physical layer identities and directed interface resistances remain explicit. The caller supplies an
+outward non-self-intersecting boundary; edge consistency is checked, not global body validity. Fixed
+ordering, the existing BVH and geometry/output budgets bound the calculation. Numerical partition
+residuals, tiny unresolved footprints and bounded allocation-roundoff corrections are reported.
+`ftx-materials thermal-map` accepts saved drape + triangular body OBJ + instance-to-layer settings;
+`thermal-coverage` recomputes generated projection receipts before reporting geometric verification
+under this closure. Tests: `thermal_projection` and the actual sewn-drape CLI workflow above. No
+automatic interface physics, true surface air-gap construction, general concave/folded correspondence,
+temperature remapping, wearer thermoregulation, measured material/fit or browser execution-parity claim.
