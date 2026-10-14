@@ -30,8 +30,9 @@ pub use drape::{
     pose_deltas, posed_skin, skin_mesh, trimmed_skin,
 };
 pub use fit::{
-    FREE, N_PHENOTYPE, N_TAPE, TAPE_FIELDS, TapeFit, TapeResidual, TapeTarget, Wearer, fit_sigma,
-    fit_stature, fit_tape, is_girth, tape_readings, tape_targets,
+    FREE, MAX_NAPPY_SIZE, N_PHENOTYPE, N_TAPE, TAPE_FIELDS, TapeFit, TapeResidual, TapeTarget,
+    Wearer, calibrate_nappy, fit_sigma, fit_stature, fit_tape, is_girth, seat_girth, tape_readings,
+    tape_targets,
 };
 pub use kinematics::Affine;
 pub use landmarks::{BodyFrames, Frame};

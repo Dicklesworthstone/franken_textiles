@@ -253,3 +253,38 @@ fn stature_and_weight_alone() {
         "a heavier toddler has a larger waist: {waists:?}"
     );
 }
+
+#[test]
+#[ignore = "needs the converted Anny model"]
+fn nappy_is_calibrated_to_seat_over_nappy() {
+    let model = model();
+    let pose = Pose::drape();
+    let wearer = Wearer {
+        years: 2.5,
+        gender: 0.5,
+        stature_mm: 920.0,
+        weight_kg: None,
+    };
+    let (bare_params, _) = ftx_body::fit_stature(&model, &wearer).unwrap();
+    let rest = model.rest(&bare_params).unwrap();
+    let posed = model
+        .pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0).unwrap())
+        .unwrap();
+    let frames = BodyFrames::new(&model, &posed).unwrap();
+    let faces: Vec<[usize; 3]> = model
+        .data()
+        .faces
+        .iter()
+        .map(|f| f.map(|i| i as usize))
+        .collect();
+    let bare_seat = ftx_body::seat_girth(&faces, &posed, &frames).unwrap();
+    let target = bare_seat + 60.0;
+    let (_, s, achieved) = ftx_body::calibrate_nappy(&model, &bare_params, &pose, target).unwrap();
+    assert!(s > 0.0 && s < ftx_body::MAX_NAPPY_SIZE, "s = {s}");
+    assert!(
+        (achieved - target).abs() < 0.05,
+        "target {target:.2} mm vs achieved {achieved:.2} mm"
+    );
+    assert!(ftx_body::calibrate_nappy(&model, &bare_params, &pose, bare_seat - 10.0).is_err());
+    assert!(ftx_body::calibrate_nappy(&model, &bare_params, &pose, bare_seat + 400.0).is_err());
+}

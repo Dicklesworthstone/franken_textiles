@@ -58,7 +58,9 @@ elbow is bent about 46° with the forearm forward, so `upperarm02` turns onto `u
 `lowerarm01` onto `upperarm02`'s, and a straight sleeve can contain the arm (a bent-elbow start crossed the
 forearm). A ramp scales every φ by t. Nappy of size s:
 `buttocks-volume-incr` += s, `hip-scale-depth-incr` += s/2 (s = 1 adds about 113 mm to a 2.5-year-old's
-torso seat girth). The skin is the closed shell enclosing the most volume (the mesh also holds two eyes
+torso seat girth); `calibrate_nappy` bisects `s` (`0..=2.0`) so `seat_girth` on the posed body matches a
+taped `seat_over_nappy` target within 0.01 mm, refusing targets outside the reachable range. The skin is
+the closed shell enclosing the most volume (the mesh also holds two eyes
 and a tongue), refused unless every edge has exactly two oppositely wound triangles, no triangle is
 degenerate and the volume is positive. `trimmed_skin` leaves out the regions skinned mostly to given
 bones and their descendants (the drape uses the wrists and feet: no garment in scope covers them, and a
@@ -112,9 +114,7 @@ non-manifold or inconsistently wound skin, a degenerate triangle), `inward_wound
 
 **No claims.** Fit quality against real people (gate G1 on held-out measurements; the fit reaches the
 targets, which says nothing about whether the shape between them is the wearer's); the WHO-calibrated
-age prior of plan §9.4 (the priors here are the population middle); fitting from the tape measurements
-not read yet (neck, across back, shoulder length, total crotch length, outseam, head) and from photos; `MODEL_FIT`
-values with σ and `ftx-body/1` output; the shape distribution's
+age prior of plan §9.4 (the priors here are the population middle); the shape distribution's
 weight and muscle priors (spec 05 §9.11); anything about the SMPL family or the `rig="anny"` preset.
 Poses are plain linear blend skinning without correctives: seated and squat bodies show webbing at the
 crotch and lose 4–6 % of their volume (2.5-year-old: −4.4 % seated, −5.4 % squat), and the skin is not

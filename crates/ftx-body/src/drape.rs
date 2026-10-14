@@ -21,8 +21,8 @@
 //!
 //! **Nappy.** Anny has no nappy; [`nappy_local_changes`] adds `buttocks-volume-incr` = s and
 //! `hip-scale-depth-incr` = s/2. On the 2.5-year reference girl s = 1 adds about 113 mm to the torso's
-//! seat girth (measured on the Python reference); calibrating s to a taped `seat_over_nappy` needs the
-//! tape functionals of FTX-09.
+//! seat girth (measured on the Python reference); [`crate::fit::calibrate_nappy`] bisects s so the posed
+//! body's [`crate::fit::seat_girth`] matches a taped `seat_over_nappy`.
 //!
 //! **Skin.** The converted mesh is four closed shells: the skin, two eyes and the tongue. [`skin_mesh`]
 //! keeps the shell enclosing the most volume and refuses it unless every edge has exactly two triangles

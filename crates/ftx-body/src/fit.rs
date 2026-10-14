@@ -322,6 +322,91 @@ fn extreme(lo: f64, hi: f64, max: bool, g: impl Fn(f64) -> Option<f64>) -> Optio
     best
 }
 
+/// Maximum nappy size parameter `s` for [`crate::drape::nappy_local_changes`] (`buttocks-volume-incr` += `s`,
+/// `hip-scale-depth-incr` += `0.5 * s`), corresponding to twice Anny's unit local-change scale (`s = 2.0`
+/// adds ~226 mm to the 2.5 y toddler seat girth).
+pub const MAX_NAPPY_SIZE: f64 = 2.0;
+
+/// The seat girth on `posed` (mm): the fullest torso girth from 20 % of the way up from the crotch to
+/// the waist, in [`SEARCH_STEP_MM`] steps (what [`tape_readings`] reads for `hip`, and what a nappy adds to).
+#[must_use]
+pub fn seat_girth(faces: &[[usize; 3]], posed: &PosedBody, frames: &BodyFrames) -> Option<f64> {
+    let (waist_h, crotch_h) = (
+        frames.landmarks.get("waist").copied()?,
+        frames.landmarks.get("crotch").copied()?,
+    );
+    let mm: Vec<Vec3> = posed.vertices.iter().map(|v| *v * 1000.0).collect();
+    let axis = [frames.torso.origin.x, frames.torso.origin.y];
+    let torso = Slicer::new(&mm, faces, SLAB_MM);
+    let g = |h: f64| torso.girth(frames.floor_z + h, axis);
+    extreme(crotch_h + 0.2 * (waist_h - crotch_h), waist_h, true, g)
+}
+
+/// Calibrates the nappy size `s` (`0.0..=MAX_NAPPY_SIZE`) on `params` so the posed body's seat girth
+/// ([`seat_girth`]) matches a taped `seat_over_nappy_mm` target (mm, within 0.01 mm), returning
+/// `(nappy_params, s, achieved_seat_mm)`.
+///
+/// # Errors
+/// [`RefusalCode::OutOfRange`] when `seat_over_nappy_mm` is non-positive, non-finite, below the bare body's
+/// seat girth (`s = 0`), or above the seat girth reached at [`MAX_NAPPY_SIZE`];
+/// [`RefusalCode::DegenerateGeometry`] when the posed body lacks a seat section; or refusals of the model.
+pub fn calibrate_nappy(
+    model: &AnnyModel,
+    params: &BodyParams,
+    pose: &Pose,
+    seat_over_nappy_mm: f64,
+) -> Result<(BodyParams, f64, f64), Refusal> {
+    if !(seat_over_nappy_mm.is_finite() && seat_over_nappy_mm > 0.0) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!("seat_over_nappy {seat_over_nappy_mm} mm must be finite and positive"),
+        ));
+    }
+    let faces: Vec<[usize; 3]> = model
+        .data()
+        .faces
+        .iter()
+        .map(|f| f.map(|i| i as usize))
+        .collect();
+    let seat_at = |s: f64| -> Result<(BodyParams, f64), Refusal> {
+        let p = crate::drape::nappy_local_changes(model, params, s)?;
+        let rest = model.rest(&p)?;
+        let posed = model.pose(&rest, &pose_deltas(model, &rest, pose, 1.0)?)?;
+        let frames = BodyFrames::new(model, &posed)?;
+        let girth = seat_girth(&faces, &posed, &frames).ok_or_else(|| {
+            Refusal::new(
+                RefusalCode::DegenerateGeometry,
+                "the posed body lacks a torso section in the seat range",
+            )
+        })?;
+        Ok((p, girth))
+    };
+    let (_, bare) = seat_at(0.0)?;
+    let (_, fullest) = seat_at(MAX_NAPPY_SIZE)?;
+    if !(bare..=fullest).contains(&seat_over_nappy_mm) {
+        return Err(Refusal::new(
+            RefusalCode::OutOfRange,
+            format!(
+                "seat_over_nappy {seat_over_nappy_mm:.1} mm is outside what a nappy reaches on this body \
+                 ({bare:.1}–{fullest:.1} mm for s in 0..={MAX_NAPPY_SIZE})"
+            ),
+        )
+        .repair("check that seat_over_nappy is at least the bare seat (hip) girth and within nappy range"));
+    }
+    let (mut lo, mut hi) = (0.0, MAX_NAPPY_SIZE);
+    for _ in 0..50 {
+        let mid = 0.5 * (lo + hi);
+        if seat_at(mid)?.1 < seat_over_nappy_mm {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let s = 0.5 * (lo + hi);
+    let (p, achieved) = seat_at(s)?;
+    Ok((p, s, achieved))
+}
+
 /// What a tape reads on `posed` (mm, in [`TAPE_FIELDS`] order), or `None` when a section around an
 /// axis is missing (a body far outside the model's range).
 #[must_use]
@@ -728,5 +813,62 @@ mod tests {
                 ("head", 480.0)
             ]
         );
+    }
+
+    #[test]
+    fn seat_girth_reads_the_fullest_section_in_the_seat_band() {
+        // A vertical square prism from z = 0 to z = 0.2 m with side 0.10 m (perimeter 400 mm),
+        // widened at z = 0.10 m to side 0.12 m (perimeter 480 mm).
+        let ring = |z: f64, half: f64| {
+            [
+                Vec3::new(-half, -half, z),
+                Vec3::new(half, -half, z),
+                Vec3::new(half, half, z),
+                Vec3::new(-half, half, z),
+            ]
+        };
+        let mut vertices = Vec::new();
+        vertices.extend(ring(0.0, 0.05));
+        vertices.extend(ring(0.10, 0.06));
+        vertices.extend(ring(0.20, 0.05));
+        let mut faces = Vec::new();
+        for base in [0usize, 4] {
+            for k in 0..4 {
+                let n = (k + 1) % 4;
+                faces.push([base + k, base + n, base + 4 + n]);
+                faces.push([base + k, base + 4 + n, base + 4 + k]);
+            }
+        }
+        let posed = PosedBody {
+            vertices,
+            bone_poses: Vec::new(),
+            transforms: Vec::new(),
+        };
+        let dummy = crate::landmarks::Frame {
+            origin: Vec3::ZERO,
+            lat: Vec3::new(1.0, 0.0, 0.0),
+            front: Vec3::new(0.0, -1.0, 0.0),
+            up: Vec3::new(0.0, 0.0, 1.0),
+        };
+        let mut landmarks = std::collections::BTreeMap::new();
+        landmarks.insert("crotch".to_string(), 20.0);
+        landmarks.insert("waist".to_string(), 180.0);
+        let frames = BodyFrames {
+            floor_z: 0.0,
+            landmarks,
+            torso: dummy,
+            arm_r: dummy,
+            leg_r: dummy,
+            tip_h: 0.0,
+            upper_arm_radius: 0.0,
+            arm_length: 0.0,
+            neck: dummy,
+            head_bone: Vec3::ZERO,
+            shoulder_joint_r: Vec3::ZERO,
+            torso_points: Vec::new(),
+            leg_points: Vec::new(),
+        };
+        let girth = seat_girth(&faces, &posed, &frames).expect("seat girth");
+        assert!((girth - 480.0).abs() < 1e-6, "got {girth}");
     }
 }
