@@ -21,6 +21,7 @@ pub mod pdf;
 pub mod pole;
 pub mod preview;
 pub mod pyjson;
+pub mod sewing;
 pub mod svg;
 pub mod text;
 pub mod union;
