@@ -1,0 +1,31 @@
+{
+  "id": "synthetic-nonlinear-sheet",
+  "name": "Synthetic reversible stress curves; NOT commercial fabric measurements",
+  "form": "woven",
+  "properties": {
+    "areal_density": {"value":0.2,"unit":"kg/m2","evidence":"estimate","source":"test","method":"Synthetic regression input"},
+    "bending_rigidity": {"value":0.00003,"unit":"N*m","evidence":"estimate","source":"test","method":"Synthetic regression input"},
+    "thickness": {"value":0.0006,"unit":"m","evidence":"estimate","source":"test","method":"Synthetic regression input"},
+    "friction_skin": {"value":0.3,"unit":"1","evidence":"estimate","source":"test","method":"Synthetic regression input"},
+    "friction_self": {"value":0.4,"unit":"1","evidence":"estimate","source":"test","method":"Synthetic regression input"}
+  },
+  "membrane_response": {
+    "model":"tabulated_green_strain/1",
+    "warp": {
+      "points":[[-0.5,-100],[-0.1,-20],[0,0],[0.03,6],[0.1,40],[0.4,500],[2,20000]],
+      "source":"test","evidence":"estimate","method":"Synthetic clamped-transverse second-Piola/Green-strain response"
+    },
+    "weft": {
+      "points":[[-0.5,-50],[-0.1,-10],[0,0],[0.03,3],[0.1,20],[0.4,250],[2,10000]],
+      "source":"test","evidence":"estimate","method":"Synthetic clamped-transverse second-Piola/Green-strain response"
+    },
+    "shear": {
+      "points":[[-2,-3000],[-0.2,-30],[-0.03,-1.2],[0,0],[0.03,1.2],[0.2,30],[2,3000]],
+      "source":"test","evidence":"estimate","method":"Synthetic second-Piola resultant versus engineering Green shear (2 E12)"
+    },
+    "coupling":{"value":10,"unit":"N/m","evidence":"estimate","source":"test","method":"Synthetic constant normal cross derivative, not a Poisson ratio"}
+  },
+  "sources": {
+    "test":{"reference":"test:nonlinear-membrane","accessed_on":"2026-10-14","note":"All coefficients and observations are synthetic, for software and numerical tests only."}
+  }
+}

@@ -13,6 +13,7 @@ pub mod instance;
 pub mod material_calibration;
 pub mod material_catalog;
 pub mod material_cost;
+pub mod material_response;
 pub mod materials;
 pub mod pattern;
 pub mod round;
