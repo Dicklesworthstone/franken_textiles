@@ -5,7 +5,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::{Pattern, doc::PatternDoc};
 use ftx_trace::{
     AuditOptions, OValue, TraceOptions, annotate, audit, fit_scale,
-    raster::image::{Bgr, encode_png_gray, load_png_with_limit},
+    raster::image::{Bgr, encode_png_gray, load_image_with_limit},
     review, trace_image,
 };
 use serde::Deserialize;
@@ -90,12 +90,12 @@ impl Review {
 }
 
 impl Sheet {
-    /// Trace explicit PNG bytes. Options: channel, threshold, invert, crop [x,y,w,h], stroke,
-    /// min_area_frac and dashes. The 4-million-pixel browser limit is checked before inflation;
+    /// Trace explicit PNG or JPEG bytes. Options: channel, threshold, invert, crop [x,y,w,h], stroke,
+    /// min_area_frac and dashes. The 4-million-pixel browser limit is checked before decoding;
     /// an oversized image is refused, never resized. Coordinates use the native decoder's frame.
     pub fn new(png: &[u8], options: &str) -> Result<Self, Refusal> {
         if png.len() > MAX_IMAGE_BYTES {
-            return Err(budget("source PNG exceeds 16 MiB"));
+            return Err(budget("source image exceeds 16 MiB"));
         }
         let options: Options = parse(options)?;
         if !["otsu", "adaptive"].contains(&options.threshold.as_str())
@@ -110,7 +110,7 @@ impl Sheet {
                 "invalid channel/threshold, area fraction (0.0001..0.5), or stroke (0.1..100 px)",
             ));
         }
-        let image = load_png_with_limit(png, 4_000_000).map_err(bad)?;
+        let image = load_image_with_limit(png, 4_000_000).map_err(bad)?;
         if let Some([x, y, w, h]) = options.crop
             && (w == 0
                 || h == 0

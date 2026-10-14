@@ -2,8 +2,8 @@
 //! semantics (Pillow 12.3: palette, gray+alpha and RGBA images composited on white with Pillow's fixed-point
 //! `alpha_composite`, 16-bit samples reduced as Pillow reduces them, the result as OpenCV's BGR).
 //!
-//! PNG only for now: JPEG and WebP decoders that match libjpeg-turbo and libwebp bit for bit are not here, so
-//! those files are refused with a repair (convert to PNG).
+//! [`load_image`] also takes JPEG ([`super::jpeg`], libjpeg-turbo's decode path). WebP is refused with a
+//! repair (convert to PNG or JPEG): no decoder matching libwebp bit for bit is here.
 
 use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
 
@@ -241,6 +241,31 @@ fn over_white(r: u8, g: u8, b: u8, a: u8) -> [u8; 3] {
     [ch(r), ch(g), ch(b)]
 }
 
+/// Decodes a PNG or a JPEG sheet as the reference's `load_image` sees it ([`load_png`],
+/// [`super::jpeg::decode`]), within the default pixel budget.
+///
+/// # Errors
+/// Neither a PNG nor a JPEG (WebP named, with the repair), a damaged file or an unsupported variant.
+pub fn load_image(bytes: &[u8]) -> Result<Bgr, String> {
+    load_image_with_limit(bytes, 40_000_000)
+}
+
+/// [`load_image`] with a caller's pixel budget, enforced before any raster is allocated.
+///
+/// # Errors
+/// As [`load_image`], and an image over `max_pixels`.
+pub fn load_image_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Bgr, String> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        super::jpeg::decode(bytes, max_pixels)
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Err("WebP sheets are not decoded yet: convert the image to PNG or JPEG first".into())
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        load_png_with_limit(bytes, max_pixels)
+    } else {
+        Err("not a PNG or JPEG file".into())
+    }
+}
+
 /// Decodes a PNG as the reference's `load_image` sees it: BGR, alpha (palette transparency, gray+alpha,
 /// RGBA) composited on white; 1-, 2- and 4-bit gray scaled to 0–255; 16-bit gray clipped at 255 and 16-bit
 /// colour reduced to its high byte (Pillow's modes `I;16` and `RGB;16B`); a gray or RGB image's `tRNS`
@@ -260,7 +285,7 @@ pub fn load_png_with_limit(bytes: &[u8], max_pixels: usize) -> Result<Bgr, Strin
         || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
     {
         return Err(
-            "JPEG and WebP sheets are not decoded yet: convert the image to PNG first".into(),
+            "a JPEG or WebP file where a PNG is needed: convert the image to PNG first".into(),
         );
     }
     if !bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {

@@ -63,8 +63,11 @@ The browser rejects PNGs over 16 MiB or four million decoded pixels **before
 inflation**; it never silently resizes. Crop rectangles must be wholly inside the
 image. Each JSON input is at most 256 KiB, with at most 64 unique scale targets
 and 512 label records. The native review's piece/geometry limits also apply; final
-review products are capped at 64 MiB. JPEG/WebP decoding, inferred labels, interactive
-curve editing and restoring a saved session are not implemented here.
+review products are capped at 64 MiB. JPEG sheets decode as the reference decodes them
+(`ftx_trace::raster::jpeg`, a port of libjpeg-turbo's decode path; the pixel budget is checked
+before any raster is allocated), and like the reference the trace ignores EXIF rotation. WebP
+decoding, inferred labels, interactive curve editing and restoring a saved session are not
+implemented here.
 
 The APIs are `tracing::Sheet::{new,review}` (native-testable, no I/O) and
 `WebTrace`/`WebTraceReview` (the wasm-bindgen boundary). Five native workflow tests

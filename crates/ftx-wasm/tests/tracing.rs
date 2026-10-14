@@ -185,3 +185,56 @@ fn crop_coordinates_are_preserved_and_no_image_paths_are_followed() {
     );
     assert_eq!(result.report["source_image_size"], json!([180, 220]));
 }
+
+/// A JPEG sheet from `tests/fixtures/oracle/trace/trace_jpeg.json` traces in the browser exactly as natively,
+/// into the pieces the reference found.
+#[test]
+fn jpeg_sheets_trace_as_natively() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/oracle/trace/trace_jpeg.json");
+    let fx: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let case = &fx["cases"][0];
+    let b64: Vec<u8> = case["input"]["jpeg"]
+        .as_str()
+        .unwrap()
+        .bytes()
+        .filter(|&c| c != b'=')
+        .collect();
+    let val = |c: u8| match c {
+        b'A'..=b'Z' => u32::from(c - b'A'),
+        b'a'..=b'z' => u32::from(c - b'a') + 26,
+        b'0'..=b'9' => u32::from(c - b'0') + 52,
+        b'+' => 62,
+        _ => 63,
+    };
+    let mut jpeg = Vec::new();
+    for chunk in b64.chunks(4) {
+        let n = chunk.iter().fold(0u32, |acc, &c| (acc << 6) | val(c)) << (6 * (4 - chunk.len()));
+        jpeg.extend(&n.to_be_bytes()[1..=chunk.len() * 6 / 8]);
+    }
+    let result = Sheet::new(&jpeg, "{}")
+        .unwrap()
+        .review("{}", "[]", "[]")
+        .unwrap();
+    let image = ftx_trace::raster::load_image(&jpeg).unwrap();
+    let native =
+        ftx_trace::trace_image(&image, Some("browser-sheet.png"), &TraceOptions::default())
+            .unwrap();
+    assert_eq!(
+        file(&result, "draft.pattern.json"),
+        (native.pattern.dumps(Some(1)) + "\n").as_bytes()
+    );
+    let ids = |pieces: &Value| -> Vec<String> {
+        pieces
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let draft: Value = serde_json::from_slice(file(&result, "draft.pattern.json")).unwrap();
+    assert_eq!(
+        ids(&draft["pieces"]),
+        ids(&case["output"]["pattern"]["pieces"])
+    );
+}

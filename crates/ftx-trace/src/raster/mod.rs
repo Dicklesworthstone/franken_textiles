@@ -7,9 +7,10 @@ pub mod distance;
 pub mod draw;
 pub mod hough;
 pub mod image;
+pub mod jpeg;
 pub mod morph;
 pub mod threshold;
 
 pub use color::{bgr_saturation, bgr_to_gray, bgr_to_lab, lab, lab_distance};
-pub use image::{Bgr, Gray, load_png};
+pub use image::{Bgr, Gray, load_image, load_png};
 pub use morph::Kernel;

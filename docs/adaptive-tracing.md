@@ -49,5 +49,5 @@ narrow images, multiple window sizes and rounding boundaries) without replacing
 the pinned reference.
 CLI regressions cover a shadowed sheet, explicit polarity, unchanged default Otsu,
 unknown methods, and the trace-to-scale-to-export boundary. This is fixture parity,
-not universal parity with every OpenCV hardware acceleration path. JPEG/WebP input,
+not universal parity with every OpenCV hardware acceleration path. WebP input,
 the remaining buffer fallback and browser tracing controls are separate work.

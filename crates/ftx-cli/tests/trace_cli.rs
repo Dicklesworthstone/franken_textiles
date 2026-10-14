@@ -203,9 +203,62 @@ fn trace_reproduces_the_reference() {
     std::fs::write(dir.join("photo.jpg"), [0xff, 0xd8, 0xff, 0xe0, 0, 16]).unwrap();
     let r = run(&dir, &["trace", "photo.jpg", "--out", "x"], 3);
     assert!(
-        r["refusal"]["message"].as_str().unwrap().contains("PNG"),
+        r["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("truncated"),
         "{r}"
     );
+    std::fs::write(dir.join("photo.webp"), b"RIFF\x10\0\0\0WEBPVP8 ").unwrap();
+    let r = run(&dir, &["trace", "photo.webp", "--out", "x"], 3);
+    assert!(
+        r["refusal"]["message"].as_str().unwrap().contains("WebP"),
+        "{r}"
+    );
+}
+
+/// JPEG sheets (`trace_jpeg.json`, captured by `tools/oracle/capture_jpeg.py`): Pillow and OpenCV encodings,
+/// gray, progressive, restart intervals and a photographed sheet; the draft byte-identical to the reference's.
+#[test]
+fn trace_reproduces_the_reference_on_jpeg() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/oracle/trace/trace_jpeg.json");
+    let doc = PyJson::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let PyJson::List(cases) = doc.get("cases").unwrap() else {
+        panic!("cases")
+    };
+    let dir = scratch();
+    for c in cases {
+        let Some(PyJson::Str(id)) = c.get("id") else {
+            panic!("id")
+        };
+        let input = c.get("input").unwrap();
+        let Some(PyJson::Str(jpeg)) = input.get("jpeg") else {
+            panic!("jpeg")
+        };
+        std::fs::write(dir.join("sheet.jpg"), base64(jpeg)).unwrap();
+        let out = format!("out-{id}");
+        let mut args = vec!["trace", "sheet.jpg", "--out", out.as_str()];
+        if let Some(PyJson::Str(t)) = input.get("opts").and_then(|o| o.get("threshold")) {
+            args.extend(["--threshold", t.as_str()]);
+        }
+        run(&dir, &args, 0);
+        let mut got = PyJson::parse(
+            &std::fs::read_to_string(dir.join(&out).join("draft.pattern.json")).unwrap(),
+        )
+        .unwrap();
+        let mut meta = got.get("meta").unwrap().clone();
+        let mut source = meta.get("source").unwrap().clone();
+        assert!(
+            matches!(source.get("image"), Some(PyJson::Str(s)) if s.ends_with("/sheet.jpg")),
+            "{id}"
+        );
+        source.set("image", PyJson::str("sheet.jpg"));
+        meta.set("source", source);
+        got.set("meta", meta);
+        let want = c.get("output").unwrap().get("pattern").unwrap();
+        assert_eq!(got.dumps(Some(1)), want.dumps(Some(1)), "{id}");
+    }
 }
 
 /// Two independently drawn rectangular outlines under a strong left-to-right lighting ramp.

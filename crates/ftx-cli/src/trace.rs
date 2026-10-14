@@ -49,7 +49,7 @@ fn source_image(args: &Args) -> Result<Option<ftx_trace::raster::Bgr>, Refusal> 
         .map(|p| {
             // Never follow a filename embedded in pattern metadata. Only --image authorizes I/O.
             let bytes = std::fs::read(p).map_err(|e| workspace::io_error(Path::new(p), e))?;
-            ftx_trace::raster::image::load_png_with_limit(&bytes, 16_000_000).map_err(bad_input)
+            ftx_trace::raster::image::load_image_with_limit(&bytes, 16_000_000).map_err(bad_input)
         })
         .transpose()
 }
@@ -315,12 +315,12 @@ fn number<T: std::str::FromStr>(args: &Args, key: &str) -> Result<Option<T>, Ref
 
 /// `ftx trace IMAGE --out DIR [--crop X,Y,W,H] [--channel C] [--threshold otsu] [--bg R,G,B] [--stroke PX]
 /// [--close PX] [--open PX] [--corner-deg D] [--soft-deg D] [--simplify-frac F] [--smooth SIGMA]
-/// [--min-area-frac F] [--erase X,Y,W,H ...] [--invert | --no-invert] [--no-dashes]`: a pattern sheet (PNG)
+/// [--min-area-frac F] [--erase X,Y,W,H ...] [--invert | --no-invert] [--no-dashes]`: a pattern sheet (PNG or JPEG)
 /// traced into an UNSCALED draft, the reference's `vectorize.py trace`. Writes `DIR/draft.pattern.json`
 /// (the reference's text) and `DIR/mask.png`, and reports each piece as the reference does; exits 3 when no
 /// piece was found. Review images use the native stroke renderer, not OpenCV's text pixels.
 pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
-    use ftx_trace::raster::image::{encode_png_gray, load_png};
+    use ftx_trace::raster::image::{encode_png_gray, load_image};
     use ftx_trace::{TraceOptions, trace_image};
     known_options(
         args,
@@ -403,7 +403,7 @@ pub(super) fn cmd_trace(args: &Args) -> Result<(Value, i32, String), Refusal> {
     };
     let bytes =
         std::fs::read(image).map_err(|e| Refusal::new(RefusalCode::Io, format!("{image}: {e}")))?;
-    let img = load_png(&bytes).map_err(|e| bad_input(format!("{image}: {e}")))?;
+    let img = load_image(&bytes).map_err(|e| bad_input(format!("{image}: {e}")))?;
     let source = std::fs::canonicalize(image)
         .map_or_else(|_| image.to_string(), |p| p.display().to_string());
     let traced = trace_image(&img, Some(&source), &opts).map_err(bad_input)?;
