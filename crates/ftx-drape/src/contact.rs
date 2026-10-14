@@ -20,7 +20,9 @@ use crate::distance::{
     squared_distance_f64, squared_distance_grad,
 };
 
+mod materials;
 mod motion;
+pub use materials::SurfaceMaterial;
 pub use motion::MotionBound;
 
 /// Contact and friction parameters.
@@ -673,6 +675,7 @@ pub struct Contact {
     /// Cloth triangles and edges.
     pub cloth: ClothTopology,
     self_params: Option<ContactParams>,
+    surface_materials: Option<materials::MaterialField>,
     /// Start creases: one-ring cloth pairs already inside the thickness when self-contact was
     /// enabled, with their own offset (half their start distance), sorted by pair.
     creases: Vec<(Pair, f64)>,
@@ -781,6 +784,7 @@ impl Contact {
                 neighbours,
             },
             self_params: None,
+            surface_materials: None,
             lag: Vec::new(),
             lag_x: Vec::new(),
             lag_h: 1.0,
@@ -799,7 +803,9 @@ impl Contact {
     /// for crossing or touching layers. An intersecting start is refused, never pushed apart silently.
     pub fn with_self_contact(mut self, x: &[Vec3], params: ContactParams) -> Result<Self, Refusal> {
         params.validate()?;
+        let params = self.material_self_params(params)?;
         self.self_params = Some(params);
+        self.creases.clear();
         // the creases' search reads every triangle, so the mesh is checked first
         self.check_cloth(x)?;
         self.creases = self.find_start_creases(x, &params);
@@ -809,6 +815,9 @@ impl Contact {
 
     /// Finite positions and non-degenerate triangles with valid vertex indices.
     fn check_cloth(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        if let Some(f) = &self.surface_materials {
+            f.validate_topology(&self.cloth, x.len())?;
+        }
         validate_mesh(x, &self.cloth.triangles)
     }
 
@@ -828,7 +837,7 @@ impl Contact {
                 let st = stencil(pair, x, &self.body, &self.cloth);
                 let (kind, _) = classify(pair, &st.pts);
                 let d = squared_distance_f64(st.pts, kind).sqrt();
-                (d <= p.thickness && d > 0.0).then_some((pair, 0.5 * d))
+                (d <= self.pair_params(pair).thickness && d > 0.0).then_some((pair, 0.5 * d))
             })
             .collect();
         out.sort_unstable_by_key(|c| c.0);
@@ -844,9 +853,15 @@ impl Contact {
     /// A pair's parameters: the body's, or the cloth–cloth ones with a start crease's own offset.
     fn pair_params(&self, pair: Pair) -> ContactParams {
         if !pair.is_self_contact() {
-            return self.params;
+            return self
+                .surface_materials
+                .as_ref()
+                .map_or(self.params, |f| f.params(pair, self.params));
         }
         let mut p = self.self_params.unwrap_or(self.params);
+        if let Some(f) = &self.surface_materials {
+            p = f.params(pair, p);
+        }
         if let Ok(i) = self.creases.binary_search_by(|(q, _)| q.cmp(&pair)) {
             p.thickness = self.creases[i].1;
         }
@@ -871,6 +886,9 @@ impl Contact {
     /// [`RefusalCode::NonFinite`], [`RefusalCode::DegenerateGeometry`] or
     /// [`RefusalCode::IntersectingStart`]. With self-contact disabled there is nothing to audit.
     pub fn audit_self_contact(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        if let Some(f) = &self.surface_materials {
+            f.validate_topology(&self.cloth, x.len())?;
+        }
         let Some(p) = self.self_params else {
             return Ok(());
         };
