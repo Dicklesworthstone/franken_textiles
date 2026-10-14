@@ -59,6 +59,17 @@ pub fn fold_up(
     if !measurements["wearer"]["age_months"].is_number() {
         return Err("the fold-up fits a body of the wearer's age: fill in the age (months)".into());
     }
+    if !self_contact_mm.is_finite() || self_contact_mm < 0.0 {
+        return Err("self-contact thickness must be finite and nonnegative".into());
+    }
+    let pat = Pattern::new(pattern.clone());
+    let mut opts = DrapeOptions::default();
+    if self_contact_mm > 0.0 {
+        let mut p = opts.contact;
+        p.thickness = self_contact_mm * 1e-3;
+        opts.self_contact = Some(p);
+    }
+    ftx_drape::material::resolve(&pat, &opts).map_err(m)?;
     let wearer = Wearer::from_measurements(measurements).map_err(m)?;
     let pose = Pose::drape();
     let fit = fit_tape(model, &wearer, &tape_targets(measurements), &pose).map_err(m)?;
@@ -78,19 +89,12 @@ pub fn fold_up(
     .map_err(m)?;
     let full = skin_mesh(&posed.vertices, &model.data().faces).map_err(m)?;
     let frames = BodyFrames::new(model, &posed).map_err(m)?;
-    let pat = Pattern::new(pattern.clone());
     let body = DrapeBody {
         frames: &frames,
         collision: (&skin.vertices, &skin.triangles),
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
-    let mut opts = DrapeOptions::default();
-    if self_contact_mm > 0.0 {
-        let mut p = opts.contact;
-        p.thickness = self_contact_mm * 1e-3;
-        opts.self_contact = Some(p);
-    }
     let run = drape(&pat, fit_spec, &body, &opts, &mut progress).map_err(m)?;
     let html = viewer(&run, &pat, &body, TEMPLATE)?;
     Ok(Fold {
