@@ -206,3 +206,62 @@ fn missing_thermal_data_preserves_mechanical_success_and_modified_receipts_refus
     changed["patches"][0]["column"] = json!(usize::MAX);
     assert!(Surface::from_snapshot(&changed).is_err());
 }
+
+#[test]
+fn temperature_series_follow_sewn_drape_without_alternative_material_lookup() {
+    use ftx_drape::thermal::{Boundary, surface::Surface};
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-variable-thermal.json"
+    ))
+    .unwrap();
+    let mut selected = sheet(1.0);
+    let record = &mut selected["record"];
+    record["thermal_response"] = fixture["layers"][0]["record"]["thermal_response"].clone();
+    for name in ["areal_density", "thickness"] {
+        record["properties"][name]["conditions"] = json!({
+            "specimen":"test:temperature-sheet", "conditioning":"synthetic-dry"
+        });
+    }
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = selected;
+    let original_geometry = raw["pieces"].clone();
+    let solved = run(&Pattern::new(raw.clone()), options());
+    assert_eq!(solved.report["thermal_surface"]["available"], true);
+    let (surface, x) = Surface::from_drape_report(&solved.report).unwrap();
+    assert_eq!(
+        surface.snapshot()["columns"][0]["schema"],
+        "ftx-dry-thermal-model/2"
+    );
+    let b = Boundary {
+        inside_c: 30.0,
+        outside_c: 0.0,
+        inside_resistance: 0.1,
+        outside_resistance: 0.2,
+    };
+    let first = surface.steady(&x, &[b]).unwrap();
+    let transient = surface
+        .advance(&surface.initial(10.0).unwrap(), &x, 1.0, &[b])
+        .unwrap();
+    assert!(transient.balance_error_j.abs() < 1e-7);
+    // Alter only the record's transport observation; drape geometry and mechanical inputs stay fixed.
+    for p in raw["fabric"]["material"]["record"]["thermal_response"]["conductivity"]["points"]
+        .as_array_mut()
+        .unwrap()
+    {
+        p["mean"] = json!(p["mean"].as_f64().unwrap() * 2.0);
+    }
+    let changed = run(&Pattern::new(raw.clone()), options());
+    let (new_surface, new_x) = Surface::from_drape_report(&changed.report).unwrap();
+    assert_eq!(original_geometry, raw["pieces"]);
+    assert_eq!(x, new_x);
+    assert_ne!(
+        surface.snapshot()["sha256"],
+        new_surface.snapshot()["sha256"]
+    );
+    assert!(new_surface.steady(&new_x, &[b]).unwrap().inside_heat_w > first.inside_heat_w);
+    assert!(
+        new_surface
+            .advance(&transient.state, &new_x, 1.0, &[b])
+            .is_err()
+    );
+}

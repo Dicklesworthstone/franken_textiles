@@ -1,0 +1,34 @@
+{
+  "schema": "ftx-thermal-transient/1",
+  "layers": [{
+    "id": "synthetic-temperature-sheet",
+    "allow_estimates": true,
+    "record": {
+      "id": "synthetic-temperature-sheet",
+      "name": "Synthetic temperature-dependent sheet — NOT measured textile data",
+      "form": "woven",
+      "properties": {
+        "areal_density": {"value": 0.2, "unit": "kg/m2", "evidence": "estimate", "source": "test", "method": "Synthetic known answer", "conditions": {"specimen": "test:temperature-sheet", "conditioning": "synthetic-dry"}},
+        "thickness": {"value": 0.001, "unit": "m", "evidence": "estimate", "source": "test", "method": "Synthetic known answer", "conditions": {"specimen": "test:temperature-sheet", "conditioning": "synthetic-dry"}}
+      },
+      "thermal_response": {
+        "specimen": "test:temperature-sheet",
+        "conditioning": "synthetic-dry",
+        "conductivity": {"unit": "W/(m*K)", "evidence": "estimate", "source": "test", "method": "Synthetic constant conductivity represented as a temperature series", "points": [{"temperature_c": 0.0, "mean": 0.0025}, {"temperature_c": 60.0, "mean": 0.0025}]},
+        "specific_heat": {"unit": "J/(kg*K)", "evidence": "estimate", "source": "test", "method": "Synthetic Cp(T) = 1000 + 20*T, with T in Celsius", "points": [{"temperature_c": 0.0, "mean": 1000.0}, {"temperature_c": 60.0, "mean": 2200.0}]}
+      },
+      "sources": {"test": {"reference": "test:temperature-sheet", "accessed_on": "2026-10-14", "note": "Synthetic mathematical test parameters only; not supplier observations, specimen measurements, comfort ratings or manufacturing qualification."}}
+    }
+  }],
+  "interface_resistance_m2_k_w": [],
+  "cells_per_layer": 1,
+  "area_m2": 2.0,
+  "inside_c": 30.0,
+  "outside_c": 0.0,
+  "inside_resistance_m2_k_w": 0.1,
+  "outside_resistance_m2_k_w": 0.2,
+  "initial_temperature_c": 10.0,
+  "step_seconds": 5.0,
+  "steps": 4,
+  "record_every": 1
+}

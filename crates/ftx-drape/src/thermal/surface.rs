@@ -1,9 +1,9 @@
 //! Material-following dry thermal columns on a deforming triangulated surface.
 //!
 //! Each triangle is an independent through-thickness column, possibly containing several explicitly
-//! assigned, coextensive layers. Resistance per CURRENT area is held at the characterized value;
-//! heat capacity belongs to REFERENCE area. Thus stretching cannot create material or stored heat.
-//! This is a declared constant-resistance closure, not a model of compressed loft, air-gap exchange,
+//! assigned, coextensive layers. Resistance per CURRENT area follows the characterized constant or
+//! temperature law; sensible heat belongs to REFERENCE mass. Stretching cannot create stored heat.
+//! This is a declared geometry closure, not a model of compressed loft, air-gap exchange,
 //! overlapping garments, in-plane conduction, wind, moisture or human thermal comfort.
 
 use std::collections::BTreeSet;
@@ -151,9 +151,18 @@ impl Surface {
                 })
             })
             .collect();
+        let geometry_policy = if self
+            .columns
+            .iter()
+            .any(|c| c.temperature_domain().is_some())
+        {
+            "characterized resistance at material temperature per current area; integrated enthalpy follows reference mass"
+        } else {
+            "fixed resistance per current area; heat capacity follows reference mass"
+        };
         json!({"schema":"ftx-thermal-surface/1", "columns":columns,
             "vertex_count":self.vertex_count,"patches":patches,
-            "geometry_policy":"fixed resistance per current area; heat capacity follows reference mass",
+            "geometry_policy":geometry_policy,
             "coupling":"independent through-thickness columns; no inferred sheet overlaps or body coverage",
             "comfort_claim":false,"empirical_validation_claim":false})
     }
@@ -170,9 +179,12 @@ impl Surface {
     /// requires initialization of a new state; remapping stored heat is an explicit separate problem.
     ///
     /// # Errors
-    /// Non-finite temperature or a temperature below absolute zero.
+    /// Non-finite temperature, below absolute zero, or outside any column's characterized interval.
     pub fn initial(&self, temperature_c: f64) -> Result<SurfaceState, Refusal> {
         temperature(temperature_c)?;
+        for column in &self.columns {
+            column.check_temperature(temperature_c)?;
+        }
         Ok(SurfaceState {
             temperature_c: self
                 .patches
@@ -250,9 +262,9 @@ impl Surface {
             let ratio = positive("deformed/reference area ratio", area / p.reference_area_m2)?;
             let column = &self.columns[p.column];
             let boundary = boundaries[p.column];
-            // C_ref/J dT/dt = L(T) is exactly the existing column's equation with dt' = J*dt.
-            // R remains per current area. Integrating source C against A_ref, NOT A_current, keeps
-            // material mass and stored heat invariant when a sheet stretches or a pose changes.
+            // Delta H_ref/(J*dt) = L(T) is exactly the column equation with dt' = J*dt.
+            // R(T) remains per current area. Integrating Cp(T) against reference mass, NOT current
+            // area, keeps material mass and stored heat invariant as a sheet stretches or changes pose.
             let state = match old {
                 Some(old) => column.advance(
                     &old.temperature_c[i],

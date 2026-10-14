@@ -114,6 +114,11 @@ fn evaluate(input: Input) -> Result<Value, Refusal> {
     if !steady_w.is_finite() {
         return Err(invalid("steady area-scaled heat overflow"));
     }
+    let accuracy_note = if model.temperature_domain().is_some() {
+        "Condition-qualified temperature interpolation; enthalpy-conservative time stepping. No extrapolation. Refine cells_per_layer and step_seconds to check discretization error; this is not garment validation."
+    } else {
+        "Constant effective layer properties; refine cells_per_layer and step_seconds to check discretization error."
+    };
     Ok(
         json!({"schema":"ftx-thermal-transient-report/1","model":model.snapshot(),
         "area_m2":input.area_m2,"step_seconds":input.step_seconds,"steps":input.steps,
@@ -124,7 +129,7 @@ fn evaluate(input: Input) -> Result<Value, Refusal> {
         "incoming_energy_j":incoming,"outgoing_energy_j":outgoing,"stored_energy_change_j":stored,
         "largest_step_energy_balance_error_j":max_balance_error,
         "comfort_claim":false,"empirical_validation_claim":false,
-        "accuracy_note":"Constant effective layer properties; refine cells_per_layer and step_seconds to check discretization error."}),
+        "accuracy_note":accuracy_note}),
     )
 }
 
@@ -183,5 +188,32 @@ mod tests {
             mutate(&mut i);
             assert!(evaluate(i).is_err());
         }
+    }
+
+    #[test]
+    fn temperature_dependent_fixture_runs_through_the_actual_cli_adapter() {
+        let input = || {
+            serde_json::from_str::<Input>(include_str!(
+                "../../../../../tests/fixtures/materials/synthetic-variable-thermal.json"
+            ))
+            .unwrap()
+        };
+        let out = evaluate(input()).unwrap();
+        assert_eq!(out["model"]["schema"], "ftx-dry-thermal-model/2");
+        assert_eq!(out["model"]["temperature_domain_c"], json!([0.0, 60.0]));
+        assert_eq!(out["trace"].as_array().unwrap().len(), 5);
+        assert!(
+            out["accuracy_note"]
+                .as_str()
+                .unwrap()
+                .contains("No extrapolation")
+        );
+        let stored = out["stored_energy_change_j"].as_f64().unwrap();
+        let incoming = out["incoming_energy_j"].as_f64().unwrap();
+        let outgoing = out["outgoing_energy_j"].as_f64().unwrap();
+        assert!((stored - incoming + outgoing).abs() < 1e-6);
+        let mut invalid = input();
+        invalid.outside_c = -10.0;
+        assert!(evaluate(invalid).is_err());
     }
 }
