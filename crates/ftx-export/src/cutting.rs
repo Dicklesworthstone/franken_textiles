@@ -1,5 +1,5 @@
 //! Grain-constrained single-ply roll markers from the same instance/cutter geometry as exports.
-//! Bounding-box shelves guarantee non-overlap without pretending to be optimal polygon nesting.
+//! Optional bounded polygon compaction improves a complete shelf marker without changing cut shapes.
 //! Source-piece selections are shared with draping; purchasing needs width, not a fictitious modulus.
 
 use std::collections::BTreeMap;
@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Affine, Ctx, ExportOptions, Geom, Source, cutter::cutter_ring, layout::rotation};
 
+pub mod nesting;
 pub mod preview;
 pub mod procurement;
 
@@ -20,7 +21,7 @@ pub mod procurement;
 pub struct CutOptions {
     /// Complete garments to cut; the pattern's own quantities are expanded exactly once.
     pub copies: usize,
-    /// Minimum separation between bounding boxes, in mm.
+    /// Minimum cut-outline separation, in mm (bounding-box separation in shelf-only mode).
     pub gap_mm: f64,
     /// Unused strip on each selvage, in mm, subtracted from the material's sourced width.
     pub edge_margin_mm: f64,
@@ -29,6 +30,9 @@ pub struct CutOptions {
     /// Optional export seam allowance override; otherwise the existing export hierarchy is used.
     #[serde(default)]
     pub seam_allowance_mm: Option<f64>,
+    /// Optional shape-aware translation search; omission retains the original shelf layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nesting: Option<nesting::NestingOptions>,
 }
 
 /// One physical cut piece in roll coordinates (mm, y along the roll, all directed grainlines +y).
@@ -61,7 +65,7 @@ pub struct RollMarker {
     pub material: ResolvedMaterial,
     /// Nominal sourced stock width, in metres, before the two declared edge margins.
     pub width_m: f64,
-    /// Required roll length, including inter-shelf gaps and both end margins, in metres.
+    /// Required roll length, including outline gaps and both end margins, in metres.
     pub length_m: f64,
     /// Gross purchased stock area width × length, NOT the sum of pattern-piece areas.
     pub stock_area_m2: f64,
@@ -75,6 +79,9 @@ pub struct RollMarker {
     pub mass_unavailable: Option<Refusal>,
     /// Placements in deterministic instance/copy order (not sewing or machine traversal order).
     pub placements: Vec<CutPlacement>,
+    /// Bounded search outcome against this marker's complete shelf baseline, when requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nesting: Option<nesting::NestingReport>,
 }
 
 /// A reproducible manufacturing geometry/BOM result. It does not authorize a cutter or sewing robot.
@@ -124,6 +131,9 @@ fn bbox(ring: &[Vec2]) -> Result<[f64; 4], Refusal> {
 
 impl CutOptions {
     fn validate(&self) -> Result<(), Refusal> {
+        if let Some(nesting) = &self.nesting {
+            nesting.validate()?;
+        }
         if !(1..=4096).contains(&self.copies) {
             return Err(bad("copies must be in 1..4096"));
         }
@@ -265,7 +275,7 @@ impl CutPlan {
             rolls,
             limitations: vec![
                 "Single-ply rectangular roll stock; on-fold pieces are physically unfolded.",
-                "One-way explicit grain, first-fit decreasing-height bounding-box shelves; not optimal polygon nesting.",
+                "One-way explicit grain; shelf baseline with optional bounded polygon compaction, never a global optimality claim.",
                 "No defect maps, pattern-repeat matching, shrinkage, finish/machine qualification or automatic layer generation.",
                 "External cut area includes interior holes; offcuts are neither reused nor claimed recoverable.",
                 "Nominal source width/density and caller margins; source uncertainty is retained, not propagated into a fit or safety guarantee.",
@@ -372,13 +382,27 @@ fn pack(
         total_area += shape.area;
     }
     placements.sort_by(|a, b| a.instance.cmp(&b.instance).then(a.copy.cmp(&b.copy)));
-    let length_m = positive(
+    let baseline_length_m = positive(
         "marker length",
         (shelves.last().ok_or_else(|| bad("empty marker"))?.y
             + shelves.last().unwrap().height
             + 2.0 * options.end_margin_mm)
             * 0.001,
     )?;
+    let nesting = options
+        .nesting
+        .as_ref()
+        .map(|search| {
+            nesting::compact(
+                &mut placements,
+                width_mm,
+                options,
+                search,
+                baseline_length_m,
+            )
+        })
+        .transpose()?;
+    let length_m = nesting.as_ref().map_or(baseline_length_m, |r| r.length_m);
     let stock_area_m2 = positive("gross stock area", width_m * length_m)?;
     let utilization = positive("marker utilization", total_area / stock_area_m2)?;
     if !total_area.is_finite() || utilization > 1.0 + 1e-10 {
@@ -399,5 +423,6 @@ fn pack(
         stock_mass_kg: mass.as_ref().ok().copied(),
         mass_unavailable: mass.err(),
         placements,
+        nesting,
     })
 }

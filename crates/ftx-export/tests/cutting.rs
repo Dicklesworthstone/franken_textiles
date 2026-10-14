@@ -35,6 +35,7 @@ fn options() -> CutOptions {
         edge_margin_mm: 5.,
         end_margin_mm: 10.,
         seam_allowance_mm: None,
+        nesting: None,
     }
 }
 fn check_marker(plan: &CutPlan) {
@@ -283,4 +284,133 @@ fn missing_density_is_unknown_not_zero_and_does_not_block_cutting() {
     let plan = CutPlan::build(&Pattern::new(raw), &options()).unwrap();
     assert!(plan.rolls[0].stock_mass_kg.is_none());
     assert!(plan.rolls[0].mass_unavailable.is_some());
+}
+
+fn concave_pair() -> Pattern {
+    let mut a = piece("elbow", 80.0, 100.0);
+    a["vertices"] = json!({"a":[0,0],"b":[80,0],"c":[80,20],"d":[20,20],"e":[20,100],"f":[0,100]});
+    a["edges"] = json!([
+        {"id":"bottom","from":"a","to":"b"},{"id":"right","from":"b","to":"c"},
+        {"id":"inner-horizontal","from":"c","to":"d"},{"id":"inner-vertical","from":"d","to":"e"},
+        {"id":"top","from":"e","to":"f"},{"id":"left","from":"f","to":"a"}]);
+    pattern(vec![a, piece("pocket", 40.0, 50.0)])
+}
+
+#[test]
+fn polygon_nesting_recovers_concave_space_and_updates_real_stock_requirements() {
+    let p = concave_pair();
+    let before = p.raw().clone();
+    let shelf = CutPlan::build(&p, &options()).unwrap();
+    let mut o = options();
+    o.nesting = Some(Default::default());
+    let nested = CutPlan::build(&p, &o).unwrap();
+    let a = &shelf.rolls[0];
+    let b = &nested.rolls[0];
+    assert!((a.length_m - 0.175).abs() < 1e-12);
+    assert!((b.length_m - 0.120).abs() < 1e-12);
+    assert_eq!(a.external_cut_area_m2, b.external_cut_area_m2);
+    assert!(b.stock_area_m2 < a.stock_area_m2 && b.stock_mass_kg < a.stock_mass_kg);
+    assert!(b.utilization > a.utilization);
+    assert_eq!(p.raw(), &before);
+    let search = b.nesting.as_ref().unwrap();
+    assert!(search.saved_length_m > 0.054 && search.accepted_moves > 0);
+    assert!(!search.optimality_claim && !search.budget_exhausted);
+    // Independent known geometry: the L occupies its bottom 20 mm and leftmost 20 mm.
+    // The rectangle is inside the empty corner, outside BOTH occupied rectangles by the full gap.
+    let elbow = b.placements.iter().find(|p| p.instance == "elbow").unwrap();
+    let pocket = b
+        .placements
+        .iter()
+        .find(|p| p.instance == "pocket")
+        .unwrap();
+    assert!(pocket.bounds_mm[0] >= elbow.bounds_mm[0] + 20.0 + o.gap_mm);
+    assert!(pocket.bounds_mm[1] >= elbow.bounds_mm[1] + 20.0 + o.gap_mm);
+    assert!(pocket.bounds_mm[2] < elbow.bounds_mm[2] && pocket.bounds_mm[3] < elbow.bounds_mm[3]);
+    for placement in &b.placements {
+        let d = placement.grain_mm[1] - placement.grain_mm[0];
+        assert!(d.x.abs() < 1e-10 && d.y > 0.0);
+    }
+}
+
+#[test]
+fn exhausted_nesting_retains_every_shelf_piece_and_never_publishes_a_trial_move() {
+    use ftx_export::cutting::nesting::NestingOptions;
+    let p = concave_pair();
+    let baseline = CutPlan::build(&p, &options()).unwrap();
+    let mut o = options();
+    o.nesting = Some(NestingOptions {
+        passes: 8,
+        work_limit: 1,
+    });
+    let result = CutPlan::build(&p, &o).unwrap();
+    assert_eq!(
+        serde_json::to_value(&baseline.rolls[0].placements).unwrap(),
+        serde_json::to_value(&result.rolls[0].placements).unwrap()
+    );
+    assert_eq!(baseline.rolls[0].length_m, result.rolls[0].length_m);
+    let report = result.rolls[0].nesting.as_ref().unwrap();
+    assert!(report.budget_exhausted);
+    assert_eq!((report.work_used, report.accepted_moves), (1, 0));
+    assert_eq!(report.saved_length_m, 0.0);
+}
+
+#[test]
+fn nesting_is_deterministic_source_order_independent_and_transform_preserving() {
+    let p = concave_pair();
+    let mut o = options();
+    o.nesting = Some(Default::default());
+    let a = CutPlan::build(&p, &o).unwrap();
+    let again = CutPlan::build(&p, &o).unwrap();
+    assert_eq!(
+        serde_json::to_value(&a).unwrap(),
+        serde_json::to_value(again).unwrap()
+    );
+    let mut raw = p.raw().clone();
+    raw["pieces"].as_array_mut().unwrap().reverse();
+    let reordered = CutPlan::build(&Pattern::new(raw), &o).unwrap();
+    assert_eq!(
+        serde_json::to_value(&a.rolls).unwrap(),
+        serde_json::to_value(reordered.rolls).unwrap()
+    );
+    let ctx = Ctx::new(&p, ExportOptions::default()).unwrap();
+    for placed in &a.rolls[0].placements {
+        let geom = ctx
+            .geom(Source::Instance(p.instance(&placed.instance).unwrap()), 6.0)
+            .unwrap();
+        let original = cutter_ring(&geom).unwrap();
+        assert_eq!(original.len(), placed.cut_mm.len());
+        for (old, new) in original.iter().zip(&placed.cut_mm) {
+            let t = placed.transform;
+            let expected = Vec2::new(
+                t[0][0] * old.x + t[0][1] * old.y + t[0][2],
+                t[1][0] * old.x + t[1][1] * old.y + t[1][2],
+            );
+            assert!((expected - *new).norm() < 1e-10);
+        }
+    }
+}
+
+#[test]
+fn nesting_policy_validation_and_rectangular_baseline_are_preserved() {
+    let p = pattern(vec![piece("a", 40.0, 100.0), piece("b", 40.0, 80.0)]);
+    let mut o = options();
+    let baseline = CutPlan::build(&p, &o).unwrap();
+    assert!(baseline.rolls[0].nesting.is_none());
+    assert!(
+        serde_json::to_value(&baseline).unwrap()["options"]
+            .get("nesting")
+            .is_none()
+    );
+    o.nesting = Some(Default::default());
+    let b = CutPlan::build(&p, &o).unwrap();
+    assert!(b.rolls[0].length_m <= baseline.rolls[0].length_m + 1e-14);
+    for (passes, work_limit) in [(0, 100), (9, 100), (1, 0), (1, 20_000_001)] {
+        o.nesting = Some(ftx_export::cutting::nesting::NestingOptions { passes, work_limit });
+        assert!(CutPlan::build(&p, &o).is_err());
+    }
+    assert!(
+        serde_json::from_value::<CutOptions>(json!({"copies":1,"gap_mm":1,
+        "edge_margin_mm":1,"end_margin_mm":1,"nesting":{"flip_grain":true}}))
+        .is_err()
+    );
 }

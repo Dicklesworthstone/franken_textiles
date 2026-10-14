@@ -66,7 +66,7 @@ is insufficient. All material-frame transforms, internal cut paths and drills ar
 
 Pieces are sorted by decreasing bounding-box height/width with deterministic identity tie-breaks, and
 placed in the first shelf with room. This is a bounded, non-overlapping rectangular-envelope layout,
-**not optimal polygon nesting**. It reports each placement and each material's nominal stock width,
+**not optimal polygon nesting**. Optional shape-aware compaction is described below. It reports each placement and each material's nominal stock width,
 required length, gross stock area, summed outer-piece area and utilization. Gross stock mass is optional:
 missing/unapproved density is a diagnostic, not zero mass and not a reason to block width-based planning.
 
@@ -77,6 +77,31 @@ minimum/increment-rounded quantity and merchandise cost. `least_observed_indepen
 present only when every roll has an eligible offer; otherwise it is null. It is a sum of the lowest
 observed whole-order costs per snapshot, not the sum of percentiles or a representative market estimate.
 Different snapshots, even sharing a product ID, are conservatively ordered separately.
+
+## Shape-aware nesting
+
+Add `"nesting": {"passes": 3, "work_limit": 1000000}` to the same cut options to search for better
+placements using actual cutter outlines, including concavities and outward notch tabs. Omitting
+`nesting` retains the shelf algorithm. An empty nesting object requests the defaults shown above.
+This is a translation-only bottom-left compaction heuristic, not an optimal no-fit-polygon solver.
+It preserves each directed grainline, mirror identity, cut path, internal path, drill and transform.
+Interior cut holes are still occupied: the planner does not put another piece inside a hole.
+
+The complete shelf marker is the initial feasible solution. Each proposed relocation lowers the
+piece's bottom edge, or moves it left at the same height, without increasing its top. Exact orientation
+predicates reject segment crossings/contact; full-resolution edge distances and containment tests
+check the requested Euclidean outline gap. No outline simplification is used for clearance checks.
+Up to 16 vertices per outline generate candidate anchors; at most 256 coordinates per axis are retained.
+This can miss good placements, but cannot justify accepting an unchecked one. New contact between
+overlapping polygon bounds is conservatively rejected even with a zero requested gap.
+
+The per-roll `nesting` report states the shelf baseline, final length and savings, accepted moves,
+work consumed, and whether the search budget was exhausted. Budget exhaustion retains the last
+fully checked, complete layout, never partially placed garment copies. `passes` is in 1..8 and
+`work_limit` in 1..20000000 per roll; work includes anchor pairs, candidate vertices, broad-phase
+pairs, and edge/containment checks. It is not a runtime or optimality guarantee. Prices, gross mass,
+utilization and SVG preview all consume the resulting marker rather than the old shelf requirements.
+The numerical gap checks are not a kerf, workholding, fabric-distortion or machine-safety guarantee.
 
 ## Scope and limits
 
