@@ -364,6 +364,9 @@ struct Comp {
     coef: Vec<[i16; 64]>,
     /// Progressive `coef_bits`: the lowest bit known per coefficient, −1 for none yet.
     known: [i32; 64],
+    /// `coef_bits` before the component's latest scan (jdphuff.c's `prev_coef_bit_ptr`), which block
+    /// smoothing uses for the rows that scan never reached.
+    prev_known: [i32; 64],
 }
 
 /// The colour space libjpeg guesses (jdapimin.c `default_decompress_parms`).
@@ -409,6 +412,10 @@ struct Decoder<'a> {
     max_h: usize,
     max_v: usize,
     multi_scan: bool,
+    /// `input_scan_number`: the SOS markers read so far.
+    scans: usize,
+    /// jdcoefct.c's `last_good_iMCU_row`: the iMCU row of the last MCU a scan began with data left.
+    last_good: usize,
     /// Pillow's `icclist`: the ICC_PROFILE APP2 payloads since the last SOF.
     icc: Vec<&'a [u8]>,
     /// Whether JFIF APP0 already set `info["dpi"]` (`jfif_unit` 1 or 2).
@@ -460,6 +467,8 @@ fn decode_impl(bytes: &[u8], max_pixels: usize, strict: bool) -> Result<Bgr, Str
         max_h: 1,
         max_v: 1,
         multi_scan: false,
+        scans: 0,
+        last_good: 0,
         icc: Vec::new(),
         jfif_dpi: false,
         exif: Vec::new(),
@@ -628,6 +637,7 @@ impl<'a> Decoder<'a> {
                 quant: None,
                 coef: Vec::new(),
                 known: [-1; 64],
+                prev_known: [0; 64],
             });
         }
         (self.w, self.h, self.progressive) = (w, h, progressive);
@@ -896,6 +906,7 @@ impl<'a> Decoder<'a> {
     /// One scan: jdinput.c `per_scan_setup` and `latch_quant_tables`, the entropy decoder's start pass, and
     /// every MCU into the coefficient buffer (jdcoefct.c `consume_data`).
     fn decode_scan(&mut self) -> Result<(), String> {
+        self.scans += 1;
         let n = self.scan.len();
         let (mcus_x, mcus_y) = if n == 1 {
             let c = &self.comps[self.scan[0]];
@@ -941,16 +952,23 @@ impl<'a> Decoder<'a> {
             al,
             restart_interval,
             next_restart,
+            last_good,
             ..
         } = self;
         (r.left, r.buf, r.insufficient) = (0, 0, false);
         let (ss, se, al, interval) = (*ss, *se, i32::from(*al), *restart_interval);
         let (p1, m1) = (1i32 << al, -1i32 << al);
+        // MCU rows per iMCU row: a component's v in a non-interleaved scan, else one
+        let mcu_rows = if n == 1 { comps[scan[0]].v } else { 1 };
         let mut togo = interval;
         let mut last_dc = [0i32; 4];
         let mut eobrun = 0u32;
         for my in 0..mcus_y {
             for mx in 0..mcus_x {
+                // consume_data, before decode_mcu and its restart
+                if !r.insufficient {
+                    *last_good = my / mcu_rows;
+                }
                 if interval != 0 {
                     if togo == 0 {
                         if eobrun != 0 {
@@ -1094,7 +1112,11 @@ impl<'a> Decoder<'a> {
                 || known[ss..=se]
                     .iter()
                     .any(|&v| v != if ah == 0 { -1 } else { i32::from(ah) });
-            self.comps[ci].known[ss..=se].fill(i32::from(al));
+            let c = &mut self.comps[ci];
+            for k in ss.min(1)..=se.max(9) {
+                c.prev_known[k] = if self.scans > 1 { c.known[k] } else { 0 };
+            }
+            c.known[ss..=se].fill(i32::from(al));
         }
         Ok(match (dc_band, ah == 0) {
             (true, true) => Mode::DcFirst(
@@ -1145,8 +1167,20 @@ impl<'a> Decoder<'a> {
                 let pw = c.wib * 8;
                 let mut plane = vec![0u8; pw * c.hib * 8];
                 let q = c.quant.map_or([0; 64], |q| q.map(|v| v as i16));
-                if smooth && c.known[1..10].iter().any(|&b| b != 0) && c.wib > 0 {
+                if smooth && c.wib > 0 {
+                    // smoothing_ok's latches: rows past the last good one take the previous scan's bits
+                    let mut latch = [0; 10];
+                    latch.copy_from_slice(&c.known[..10]);
+                    let mut prev = [-1; 10];
+                    if self.scans > 1 {
+                        prev[1..].copy_from_slice(&c.prev_known[1..10]);
+                    }
                     for imcu_row in 0..total_imcu_rows {
+                        let bits = if imcu_row > self.last_good {
+                            &prev
+                        } else {
+                            &latch
+                        };
                         let block_rows = if imcu_row + 1 < total_imcu_rows {
                             c.v
                         } else {
@@ -1168,7 +1202,7 @@ impl<'a> Decoder<'a> {
                             let r_p2 = if r_idx + 1 < last_row { by + 2 } else { r_p1 };
                             let rows = [r_m2, r_m1, by, r_p1, r_p2];
                             for bx in 0..c.wib {
-                                let ws = smooth_block(c, rows, bx);
+                                let ws = smooth_block(c, rows, bx, bits);
                                 let at = by * 8 * pw + bx * 8;
                                 idct_islow(&ws, &q, &mut plane[at..], pw);
                             }
@@ -1222,8 +1256,9 @@ impl<'a> Decoder<'a> {
     }
 }
 
-/// jdcoefct.c `decompress_smooth_data` on one block at `(rows[2], bx)` using its 5×5 DC neighbourhood.
-fn smooth_block(c: &Comp, rows: [usize; 5], bx: usize) -> [i16; 64] {
+/// jdcoefct.c `decompress_smooth_data` on one block at `(rows[2], bx)` using its 5×5 DC neighbourhood and
+/// the latched `coef_bits` of its row.
+fn smooth_block(c: &Comp, rows: [usize; 5], bx: usize, bits: &[i32; 10]) -> [i16; 64] {
     let mut ws = c.coef[rows[2] * c.stride + bx];
     let Some(q) = c.quant else { return ws };
     let last_col = c.wib - 1;
@@ -1241,7 +1276,7 @@ fn smooth_block(c: &Comp, rows: [usize; 5], bx: usize) -> [i16; 64] {
     let (dc16, dc17, dc18, dc19, dc20) = (dc(3, 0), dc(3, 1), dc(3, 2), dc(3, 3), dc(3, 4));
     let (dc21, dc22, dc23, dc24, dc25) = (dc(4, 0), dc(4, 1), dc(4, 2), dc(4, 3), dc(4, 4));
 
-    let more = c.known[1..10].iter().all(|&b| b == -1);
+    let more = bits[1..].iter().all(|&b| b == -1);
     let q00 = i64::from(q[0]);
     let apply = |ws: &mut [i16; 64], pos: usize, al: i32, num: i32| {
         if al != 0 && ws[pos] == 0 {
@@ -1271,7 +1306,7 @@ fn smooth_block(c: &Comp, rows: [usize; 5], bx: usize) -> [i16; 64] {
     } else {
         50 * (dc12 - dc14) - 7 * (dc11 - dc15)
     };
-    apply(&mut ws, 1, c.known[1], num01);
+    apply(&mut ws, 1, bits[1], num01);
 
     // Q10 (pos 8, zig 2)
     let num10 = if more {
@@ -1282,7 +1317,7 @@ fn smooth_block(c: &Comp, rows: [usize; 5], bx: usize) -> [i16; 64] {
     } else {
         50 * (dc08 - dc18) - 7 * (dc03 - dc23)
     };
-    apply(&mut ws, 8, c.known[2], num10);
+    apply(&mut ws, 8, bits[2], num10);
 
     // Q20 (pos 16, zig 3)
     let num20 = if more {
@@ -1292,7 +1327,7 @@ fn smooth_block(c: &Comp, rows: [usize; 5], bx: usize) -> [i16; 64] {
     } else {
         13 * (dc08 + dc18) - 24 * dc13 - (dc03 + dc23)
     };
-    apply(&mut ws, 16, c.known[3], num20);
+    apply(&mut ws, 16, bits[3], num20);
 
     // Q11 (pos 9, zig 4)
     let diag = dc07 + dc19 - dc09 - dc17;
@@ -1301,7 +1336,7 @@ fn smooth_block(c: &Comp, rows: [usize; 5], bx: usize) -> [i16; 64] {
     } else {
         10 * diag + (dc04 + dc10 + dc16 + dc22) - (dc02 + dc06 + dc20 + dc24)
     };
-    apply(&mut ws, 9, c.known[4], num11);
+    apply(&mut ws, 9, bits[4], num11);
 
     // Q02 (pos 2, zig 5)
     let num02 = if more {
@@ -1311,35 +1346,35 @@ fn smooth_block(c: &Comp, rows: [usize; 5], bx: usize) -> [i16; 64] {
     } else {
         13 * (dc12 + dc14) - 24 * dc13 - (dc11 + dc15)
     };
-    apply(&mut ws, 2, c.known[5], num02);
+    apply(&mut ws, 2, bits[5], num02);
 
     if more {
         // Q03 (pos 3, zig 6)
         apply(
             &mut ws,
             3,
-            c.known[6],
+            bits[6],
             2 * (dc12 - dc14) + (dc07 + dc17 - dc09 - dc19),
         );
         // Q12 (pos 10, zig 7)
         apply(
             &mut ws,
             10,
-            c.known[7],
+            bits[7],
             3 * (dc18 - dc08) + (dc07 + dc09 - dc17 - dc19),
         );
         // Q21 (pos 17, zig 8)
         apply(
             &mut ws,
             17,
-            c.known[8],
+            bits[8],
             3 * (dc14 - dc12) + (dc07 + dc17 - dc09 - dc19),
         );
         // Q30 (pos 24, zig 9)
         apply(
             &mut ws,
             24,
-            c.known[9],
+            bits[9],
             2 * (dc08 - dc18) + (dc07 + dc09 - dc17 - dc19),
         );
         // DC (pos 0)
@@ -1893,6 +1928,44 @@ mod tests {
             part.extend_from_slice(&[0xFF, 0xD9]);
             let bgr = decode(&part, 40_000_000).unwrap();
             assert_eq!(sha256_hex(&bgr.data), *want, "sub=0 k={}", k + 1);
+        }
+        // Cut in the middle of a scan: the rows that scan never reached smooth with the previous scan's
+        // coef_bits (jdcoefct.c's last_good_iMCU_row). Pillow 12.3 with JSIMD_FORCENONE=1; 592 it refuses.
+        const MID_0: [(usize, &str); 7] = [
+            (
+                364,
+                "8897011a0d8cd0e71ab4e37e6605095f42820635b8e52963af96f0a0c367c3f5",
+            ),
+            (
+                449,
+                "4e4b9b9e1931f92b58c29a19cd5fc2d777b3555fce3e5f55d6de7f93f9a229ad",
+            ),
+            (
+                534,
+                "b1893184007188c6148b14c157eb98dba4fbc99291a072f66c1dce53a7c4784c",
+            ),
+            (
+                632,
+                "6ebd3297ddf3a6a05ed543bc85dd9d6ca0bc74a7dda5355ade68f6d76e2aa229",
+            ),
+            (
+                734,
+                "103b7f8f609c64521c26ca6e30093d50c3d76f5519a4a5d1066126cae9dc8076",
+            ),
+            (
+                806,
+                "b1475fd3fc3fc921012a4c9661c0e16f99b4b7e1bddb104dd9bb3b46898874e0",
+            ),
+            (
+                886,
+                "6ee27ecf83524deffa23eda5ca48e4102cee9a00996e1c5ecab7a321bc1b21a3",
+            ),
+        ];
+        for (cut, want) in MID_0 {
+            let mut part = s0[..cut].to_vec();
+            part.extend_from_slice(&[0xFF, 0xD9]);
+            let bgr = decode(&part, 40_000_000).unwrap();
+            assert_eq!(sha256_hex(&bgr.data), want, "sub=0 cut={cut}");
         }
 
         const SUB_2_HEX: &str = "ffd8ffe000104a46494600010100000100010000ffdb00430006040506050406060506070706080a100a0a09090a140e0f0c1017141818171416161a1d251f1a1b231c1616202c20232627292a29191f2d302d283025282928ffdb0043010707070a080a130a0a13281a161a2828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828282828ffc2001108001d002503012200021101031101ffc400190000030101010000000000000000000000000506040103ffc4001801000203000000000000000000000000000306000105ffda000c03010002100310000001b113633dedf05ce06b7c1a996d9109f6a06b2b0aa8aa6c49624e12bfffc4001c1000020203010100000000000000000000000301210211130431ffda00080101000105025cd332193b217127083b6a19e821db9465b3431b4d75a997e4ccc73a68cfa98b451d723fffc4001c1100020203010100000000000000000000020300010411120521ffda0008010301013f01c94da57a89499b7703e0d54f44e8af9985843aea1af453ffc4001d110001040301010000000000000000000000010203041115211451ffda0008010201013f014afdc93da4ae86e97e12e18c1d53d2ee9af89387ffc400161000030000000000000000000000000000203140ffda0008010100063f020507ffc4001b10010100020301000000000000000000000100113110214161ffda0008010100013f21020e22529c029f7bdc80c0c6a43a49ea577b4f71cd6ef73059208d17ffda000c03010002000300000010e7802438ff00ffc400191100020301000000000000000000000000000110115121ffda0008010301013f10a4b204779052086791708fffc400191100030101010000000000000000000000000111214151ffda0008010201013f1073a133e0d2f03d023461ce3fffc4001f100100020104030100000000000000000001001121314161915171d1e1ffda0008010100013f101865a97f695c691b225dd71d477659e62e15dabe4c8d9a63300513dc20c5b610286dc5efe22020cc476db32f3b66177d6a5a66a378c36dfa869f0cb2e5c5c2d51fb2907820ac3a733fffd9";
