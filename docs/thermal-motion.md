@@ -147,17 +147,27 @@ the emitted checkpoint is readable by the same command. Split long schedules at 
 boundaries rather than deleting detail or silently truncating work.
 
 Manual area-only maps cannot initialize motion: the remapper needs verified polygons
-and oriented material cells. Changed source materials, cloth remeshing, new/lost covered
-cloth portions, invalid time or boundaries, changed receipts, unsupported geometry,
-out-of-domain temperatures and failed energy checks refuse. Unassigned cloth does not
-gain an invented temperature history. Supporting cloth entering/leaving coverage needs
-an explicit exposed-cloth reservoir/state model, not another automatic initialization.
+and oriented material cells. Changed source materials, cloth remeshing, invalid time or
+boundaries, changed receipts, unsupported geometry, out-of-domain temperatures and failed
+energy checks refuse. Body coverage itself may change. Each source cloth triangle retains
+one first-order through-thickness temperature profile for its currently uncovered material
+fraction; covered-to-exposed and exposed-to-covered transfers mix integrated enthalpy in
+reference material coordinates. No body or ambient reservoir initializes newly covered cloth.
+
+Uncovered cloth is **adiabatic by default**: stored heat is retained but no environmental
+exchange is invented. An interval may add `exposed_boundaries`. One entry broadcasts to all
+source cloth triangles; otherwise provide one entry per retained source triangle. The two
+faces are the source material column's canonical inside/outside faces, not the nearest body
+normal. Supplying exposed boundaries when no cloth is uncovered refuses, catching stale
+conditions. This is a first-order state: it does not preserve in-plane gradients between
+separate uncovered portions of one source triangle.
 
 ## Tests and no-claim boundaries
 
 `crates/ftx-drape/tests/thermal_motion.rs` tests spatial/depth remapping, independent
 nonlinear enthalpy, layer-specific laws, body-side reversal, uniform preservation,
-checkpoint restart, tamper/domain rejection and all-bare state handling. Three direct
+checkpoint restart, tamper/domain rejection, all-bare state handling, conservative
+covered/exposed/re-covered transitions and explicit exposed-face heating. Three direct
 polygon unit tests retain the failing microscopic edge, an independent rational-coordinate
 intersection answer, convex invariance and refusal of substantive concavity.
 
@@ -165,11 +175,14 @@ intersection answer, convex invariance and refusal of substantive concavity.
 sewn garment and generated body maps. The motion cases include a translated/retessellated
 body, two-to-three depth cells, reversed boundary temperatures, independent reference-mass
 energy, exact restart, relative file paths, material edits, malformed/manual maps and
-work-budget refusals. They do not measure textile behavior.
+work-budget refusals. It also checks that a fully exposed sewn garment remains adiabatic
+without `exposed_boundaries`, then heats only when those face conditions are explicitly
+supplied. They do not measure textile behavior.
 
 The model still excludes general folded/concave-body correspondence, mechanical-time
-interpolation, cloth remeshing, entering/leaving cloth history, physical air-gap transport,
-moisture, compressed loft, in-plane conduction and human thermoregulation. Compilation
+interpolation, cloth remeshing, spatially resolved in-plane exposed-cloth gradients,
+physical air-gap transport, moisture, compressed loft, in-plane conduction and human
+thermoregulation. Compilation
 for WebAssembly is not browser execution-parity evidence. Numerical conservation and
 source-locked replay are not measured garment warmth, cold-weather safety, PPE
 certification or manufacturing approval.

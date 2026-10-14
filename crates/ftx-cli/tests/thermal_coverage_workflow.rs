@@ -925,8 +925,7 @@ fn motion_cli_rejects_changed_covered_domain_manual_maps_and_invalid_time_budget
     )
     .unwrap();
     for change in [
-        (|v: &mut Value| v["frames"][1]["coverage"] = json!("bare.json")) as fn(&mut Value),
-        |v| v["frames"][1]["coverage"] = json!("manual.json"),
+        (|v: &mut Value| v["frames"][1]["coverage"] = json!("manual.json")) as fn(&mut Value),
         |v| v["frames"][1]["coverage"] = json!("corrupt.json"),
         |v| v["frames"][1]["time_seconds"] = json!(1.),
         |v| v["frames"][0]["steps"] = json!(0),
@@ -939,6 +938,37 @@ fn motion_cli_rejects_changed_covered_domain_manual_maps_and_invalid_time_budget
         change(&mut bad);
         motion_refused(&root, &bad);
     }
+    // A pose that leaves the cloth outside body coverage is now a valid material-history state.
+    // Without exposed_boundaries it is deliberately adiabatic, never reset to an ambient value.
+    let mut exposed = input.clone();
+    exposed["frames"][1]["coverage"] = json!("bare.json");
+    let out = motion_success(&root, &exposed);
+    assert!(out["final"]["temperature_c"].as_array().unwrap().is_empty());
+    assert!(
+        !out["final"]["exposed_temperature_c"][0]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let adiabatic = out["final"]["exposed_temperature_c"].clone();
+    exposed["frames"][1]["exposed_boundaries"] = json!([{
+        "inside_c":40.,"outside_c":40.,
+        "inside_resistance_m2_k_w":0.05,"outside_resistance_m2_k_w":0.05
+    }]);
+    let heated = motion_success(&root, &exposed);
+    assert_ne!(heated["final"]["exposed_temperature_c"], adiabatic);
+    assert!(
+        heated["trace"][1]["exposed_inside_heat_w"]
+            .as_f64()
+            .unwrap()
+            > 0.
+    );
+    assert!(
+        heated["energy"]["physical_stored_change_j"]
+            .as_f64()
+            .unwrap()
+            .is_finite()
+    );
     // Even a zero-temperature-cell, all-bare scene must account for body/source geometry work.
     let mut all_bare = input;
     all_bare["initial"]["coverage"] = json!("bare.json");

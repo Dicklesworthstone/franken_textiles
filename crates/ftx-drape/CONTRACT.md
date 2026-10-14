@@ -343,10 +343,14 @@ cell shape, source identity and characterized domains; a digest is not authentic
 `ftx-materials thermal-motion` chains prescribed timed poses through instantaneous
 material-polygon/depth-cell enthalpy remap and the existing heat solver, without resetting
 heat at a new pose. Physical heat and remap numerical residuals remain distinct. The
-same covered spatial material domain is required; body/depth discretization may change,
-but new/lost cloth history, material substitution and cloth remeshing refuse. A bounded
+complete source-cloth material domain is conserved while body coverage may change. Each
+source triangle retains one first-order uncovered through-thickness temperature profile;
+covered/exposed transfers preserve reference-mass enthalpy. Uncovered cloth is adiabatic
+unless the caller supplies explicit canonical-face boundaries; no ambient condition is
+inferred. Body/depth discretization may change, while material substitution and cloth
+remeshing still refuse. A bounded
 convexification removes only roundoff-scale inward polygon corners, reports the reference
 area correction and leaves original projection snapshots unchanged. Genuine nonconvexity
 and unmatched donors still refuse. Tests: `thermal_motion`, motion polygon unit cases,
-and actual saved-drape/production-CLI restart cases in `thermal_coverage_workflow`.
+and actual saved-drape/production-CLI restart/exposure cases in `thermal_coverage_workflow`.
 See `docs/thermal-motion.md` for timing, checkpoint schemas, budgets and no-claim boundaries.

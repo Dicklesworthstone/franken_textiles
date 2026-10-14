@@ -3,8 +3,9 @@
 //! Piecewise-constant donor enthalpy is integrated over polygon AND thickness-cell intersections.
 //! Average temperature is not conservative when Cp varies with temperature. This first-order remap
 //! mixes unresolved gradients; conservation and boundedness are not an accuracy/garment claim.
-//! The same spatial material domain must remain covered: newly entering/leaving cloth needs a
-//! separate exposed-cloth state model and is refused, never reset to an invented temperature.
+//! Uncovered cloth retains one canonical through-thickness profile per source triangle, so material
+//! can leave/re-enter body coverage without a temperature reset. Physical heat exchange on those
+//! exposed faces is opt-in and requires explicit boundary conditions; no ambient state is inferred.
 
 use ftx_core::{
     Refusal, Vec2, Vec3,
@@ -23,6 +24,7 @@ use projection::clip::{Work, area, bounds_overlap, intersection};
 #[derive(Clone, Debug)]
 pub struct Frame {
     coverage: Coverage,
+    exposed_models: Vec<crate::thermal::DryThermalModel>,
     projection: Projection,
     request: Request,
     cloth: Vec<Vec3>,
@@ -38,12 +40,20 @@ pub struct Frame {
 pub struct State {
     frame_sha256: String,
     inner: CoverageState,
+    // Canonical source-column inside-to-outside order. Empty only when a patch is fully covered.
+    exposed: Vec<Vec<f64>>,
 }
 impl State {
     /// Region, then inside-to-outside thermal-cell order in the owning frame.
     #[must_use]
     pub fn temperature_c(&self) -> &[Vec<f64>] {
         self.inner.temperature_c()
+    }
+
+    /// Uncovered-cloth temperatures in retained source-triangle order. Empty rows are fully covered.
+    #[must_use]
+    pub fn exposed_temperature_c(&self) -> &[Vec<f64>] {
+        &self.exposed
     }
 }
 
@@ -52,6 +62,11 @@ impl State {
 pub struct Step {
     frame_sha256: String,
     heat: CoverageStep,
+    exposed: Vec<Vec<f64>>,
+    exposed_inside_heat_w: f64,
+    exposed_outside_heat_w: f64,
+    exposed_stored_change_j: f64,
+    exposed_balance_error_j: f64,
 }
 impl Step {
     /// Existing coverage fields, including boundary heat and reference-mass storage change.
@@ -65,7 +80,69 @@ impl Step {
         State {
             frame_sha256: self.frame_sha256,
             inner: self.heat.state,
+            exposed: self.exposed,
         }
+    }
+
+    /// Heat entering uncovered cloth faces only, W. Covered/body paths are in [`Self::heat`].
+    #[must_use]
+    pub fn exposed_inside_heat_w(&self) -> f64 {
+        self.exposed_inside_heat_w
+    }
+
+    /// Updated uncovered-cloth temperature profiles in source-triangle order.
+    #[must_use]
+    pub fn exposed_temperature_c(&self) -> &[Vec<f64>] {
+        &self.exposed
+    }
+
+    /// Heat leaving uncovered cloth faces only, W.
+    #[must_use]
+    pub fn exposed_outside_heat_w(&self) -> f64 {
+        self.exposed_outside_heat_w
+    }
+
+    /// Sensible-heat change of uncovered reference material only, J.
+    #[must_use]
+    pub fn exposed_stored_change_j(&self) -> f64 {
+        self.exposed_stored_change_j
+    }
+
+    /// Heat entering all modeled textile storage paths, W. Bare-body heat is retained in the
+    /// covered report's boundary totals but cancels from [`Self::net_heat_w`].
+    #[must_use]
+    pub fn inside_heat_w(&self) -> f64 {
+        self.heat.inside_heat_w + self.exposed_inside_heat_w
+    }
+
+    /// Heat leaving all modeled textile storage paths, W.
+    #[must_use]
+    pub fn outside_heat_w(&self) -> f64 {
+        self.heat.outside_heat_w + self.exposed_outside_heat_w
+    }
+
+    /// Net heat entering covered plus uncovered textile storage, W.
+    #[must_use]
+    pub fn net_heat_w(&self) -> f64 {
+        self.heat.net_heat_w + self.exposed_inside_heat_w - self.exposed_outside_heat_w
+    }
+
+    /// Exposed storage minus its integrated boundary heat, J.
+    #[must_use]
+    pub fn exposed_balance_error_j(&self) -> f64 {
+        self.exposed_balance_error_j
+    }
+
+    /// Covered plus uncovered material sensible-heat change, J.
+    #[must_use]
+    pub fn stored_change_j(&self) -> f64 {
+        self.heat.stored_change_j + self.exposed_stored_change_j
+    }
+
+    /// Covered plus uncovered material energy-balance residual, J.
+    #[must_use]
+    pub fn balance_error_j(&self) -> f64 {
+        self.heat.balance_error_j + self.exposed_balance_error_j
     }
 }
 
@@ -76,7 +153,7 @@ pub struct Balance {
     pub from_sha256: String,
     /// Destination frame identity.
     pub to_sha256: String,
-    /// Conserved material domain, in reference m², counted once per physical cloth triangle.
+    /// Conserved complete material domain, in reference m², counted once per physical cloth triangle.
     pub reference_area_m2: f64,
     /// Largest summed donor/destination allocation residual, in reference m².
     pub allocation_residual_m2: f64,
@@ -142,6 +219,19 @@ impl Frame {
             );
         }
         let coverage = Coverage::new(source, projection.layout.clone())?;
+        let exposed_models = coverage
+            .source
+            .patches
+            .iter()
+            .map(|patch| {
+                let column = &coverage.source.columns[patch.column];
+                crate::thermal::DryThermalModel::new(
+                    vec![column.layers[0].clone()],
+                    vec![],
+                    coverage.layout.cells_per_layer,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let sha256 = sha256_hex(
             &serde_json::to_vec(&(
                 "ftx-thermal-motion-frame/1",
@@ -152,6 +242,7 @@ impl Frame {
         );
         Ok(Self {
             coverage,
+            exposed_models,
             projection,
             request,
             cloth,
@@ -230,7 +321,8 @@ impl Frame {
     pub fn checkpoint(&self, state: &State) -> Result<Value, Refusal> {
         self.check(state)?;
         let mut value = json!({"schema":"ftx-thermal-motion-state/1",
-            "frame":self.snapshot(),"temperature_c":state.temperature_c()});
+            "frame":self.snapshot(),"temperature_c":state.temperature_c(),
+            "exposed_temperature_c":state.exposed_temperature_c()});
         let hash = sha256_hex(&serde_json::to_vec(&value).map_err(|e| invalid(e.to_string()))?);
         value["sha256"] = json!(hash);
         Ok(value)
@@ -259,6 +351,18 @@ impl Frame {
                 "thermal motion state has incorrect cell dimensions",
             ));
         }
+        let legacy = value.get("exposed_temperature_c").is_none();
+        let exposed: Vec<Vec<f64>> = if legacy {
+            if frame.has_exposed_cloth() {
+                return Err(invalid(
+                    "legacy thermal motion checkpoint has no uncovered-cloth temperature state",
+                ));
+            }
+            vec![Vec::new(); frame.coverage.source.patches.len()]
+        } else {
+            serde_json::from_value(value["exposed_temperature_c"].clone())
+                .map_err(|e| invalid(format!("exposed thermal motion temperatures: {e}")))?
+        };
         let state = State {
             frame_sha256: frame.sha256.clone(),
             inner: CoverageState {
@@ -266,17 +370,34 @@ impl Frame {
                 temperatures: serde_json::from_value(value["temperature_c"].clone())
                     .map_err(|e| invalid(format!("thermal motion temperatures: {e}")))?,
             },
+            exposed,
         };
-        if frame.checkpoint(&state)? != *value {
+        let expected = if legacy {
+            let mut expected = json!({"schema":"ftx-thermal-motion-state/1",
+                "frame":frame.snapshot(),"temperature_c":state.temperature_c()});
+            expected["sha256"] = json!(sha256_hex(
+                &serde_json::to_vec(&expected).map_err(|e| invalid(e.to_string()))?
+            ));
+            expected
+        } else {
+            frame.checkpoint(&state)?
+        };
+        if expected != *value {
             return Err(invalid("thermal motion state digest or content mismatch"));
         }
         Ok((frame, state))
     }
 
-    /// Total temperature cells for budgeting, excluding massless bare-body paths.
+    /// Total temperature cells for budgeting, including currently uncovered cloth state.
     #[must_use]
     pub fn cells(&self) -> usize {
         self.coverage.cells()
+            + self
+                .exposed_fractions()
+                .into_iter()
+                .filter(|f| *f > 0.)
+                .count()
+                * self.coverage.layout.cells_per_layer
     }
 
     /// Required boundary-array length.
@@ -285,14 +406,40 @@ impl Frame {
         self.coverage.body_triangle_count()
     }
 
+    /// Number of retained source cloth triangles; exposed-boundary arrays follow this order.
+    #[must_use]
+    pub fn cloth_triangle_count(&self) -> usize {
+        self.coverage.source.patches.len()
+    }
+
+    /// Whether this frame contains any cloth outside mapped body coverage.
+    #[must_use]
+    pub fn has_exposed_cloth(&self) -> bool {
+        self.exposed_fractions().into_iter().any(|f| f > 0.)
+    }
+
     /// Start a new simulation at an explicitly supplied temperature; never called implicitly on remap.
     ///
     /// # Errors
     /// Invalid or uncharacterized temperature.
     pub fn initial(&self, t: f64) -> Result<State, Refusal> {
+        let exposed = self
+            .exposed_fractions()
+            .into_iter()
+            .zip(&self.exposed_models)
+            .map(|(fraction, model)| {
+                if fraction > 0. {
+                    model.check_temperature(t)?;
+                    Ok(vec![t; model.cells()])
+                } else {
+                    Ok(Vec::new())
+                }
+            })
+            .collect::<Result<Vec<_>, Refusal>>()?;
         Ok(State {
             frame_sha256: self.sha256.clone(),
             inner: self.coverage.initial(t)?,
+            exposed,
         })
     }
 
@@ -313,6 +460,30 @@ impl Frame {
                 model.check_temperature(t)?;
             }
         }
+        let fractions = self.exposed_fractions();
+        if state.exposed.len() != fractions.len() {
+            return Err(invalid(
+                "thermal motion state has incorrect exposed-triangle count",
+            ));
+        }
+        for (((row, fraction), model), patch) in state
+            .exposed
+            .iter()
+            .zip(fractions)
+            .zip(&self.exposed_models)
+            .zip(&self.coverage.source.patches)
+        {
+            let expected = if fraction > 0. { model.cells() } else { 0 };
+            if row.len() != expected {
+                return Err(invalid(format!(
+                    "exposed thermal state for cloth triangle {} has incorrect cell count",
+                    patch.vertices[0]
+                )));
+            }
+            for &t in row {
+                model.check_temperature(t)?;
+            }
+        }
         Ok(())
     }
 
@@ -321,9 +492,19 @@ impl Frame {
     /// # Errors
     /// Invalid boundaries or failed existing thermal solve.
     pub fn steady(&self, boundaries: &[Boundary]) -> Result<Step, Refusal> {
+        if self.has_exposed_cloth() {
+            return Err(invalid(
+                "steady thermal motion with exposed cloth requires explicit exposed-face boundaries",
+            ));
+        }
         Ok(Step {
             frame_sha256: self.sha256.clone(),
             heat: self.coverage.steady(&self.cloth, &self.body, boundaries)?,
+            exposed: vec![Vec::new(); self.coverage.source.patches.len()],
+            exposed_inside_heat_w: 0.,
+            exposed_outside_heat_w: 0.,
+            exposed_stored_change_j: 0.,
+            exposed_balance_error_j: 0.,
         })
     }
 
@@ -347,7 +528,98 @@ impl Frame {
                 seconds,
                 boundaries,
             )?,
+            exposed: state.exposed.clone(),
+            exposed_inside_heat_w: 0.,
+            exposed_outside_heat_w: 0.,
+            exposed_stored_change_j: 0.,
+            exposed_balance_error_j: 0.,
         })
+    }
+
+    /// Advance covered paths plus uncovered cloth faces under explicitly supplied face conditions.
+    /// Exposed-boundary order is retained source-cloth triangle order. A fully covered triangle's
+    /// boundary is validated but contributes no heat. Omitting these conditions via [`Self::advance`]
+    /// keeps uncovered cloth adiabatic rather than inventing an ambient reservoir.
+    ///
+    /// # Errors
+    /// Any covered solve error, wrong boundary count, invalid cloth geometry or exposed solve error.
+    pub fn advance_with_exposed(
+        &self,
+        state: &State,
+        seconds: f64,
+        boundaries: &[Boundary],
+        exposed_boundaries: &[Boundary],
+    ) -> Result<Step, Refusal> {
+        self.check(state)?;
+        if exposed_boundaries.len() != self.coverage.source.patches.len() {
+            return Err(invalid(
+                "exposed thermal motion needs one face boundary per source cloth triangle",
+            ));
+        }
+        let heat =
+            self.coverage
+                .advance(&state.inner, &self.cloth, &self.body, seconds, boundaries)?;
+        let fractions = self.exposed_fractions();
+        let mut exposed = Vec::with_capacity(fractions.len());
+        let mut inside = 0.;
+        let mut outside = 0.;
+        let mut stored = 0.;
+        let mut error = 0.;
+        for (i, (((fraction, model), old), boundary)) in fractions
+            .into_iter()
+            .zip(&self.exposed_models)
+            .zip(&state.exposed)
+            .zip(exposed_boundaries)
+            .enumerate()
+        {
+            if fraction <= 0. {
+                exposed.push(Vec::new());
+                continue;
+            }
+            let patch = &self.coverage.source.patches[i];
+            let [a, b, c] = patch.vertices.map(|v| self.cloth[v]);
+            let current_area = 0.5 * (b - a).cross(c - a).norm();
+            if !current_area.is_finite() || current_area <= 0. {
+                return Err(invalid("exposed cloth triangle has invalid current area"));
+            }
+            let ratio = current_area / patch.reference_area_m2;
+            if !ratio.is_finite() || ratio <= 0. {
+                return Err(invalid(
+                    "exposed cloth current/reference area ratio is invalid",
+                ));
+            }
+            let next = model.advance(old, seconds * ratio, *boundary)?;
+            let current = current_area * fraction;
+            let reference = patch.reference_area_m2 * fraction;
+            inside += current * next.inside_flux_w_m2;
+            outside += current * next.outside_flux_w_m2;
+            stored += reference * next.stored_change_j_m2;
+            error += reference * next.balance_error_j_m2;
+            exposed.push(next.temperature_c);
+        }
+        if [inside, outside, stored, error]
+            .iter()
+            .any(|v| !v.is_finite())
+        {
+            return Err(invalid("exposed cloth heat accumulation overflow"));
+        }
+        Ok(Step {
+            frame_sha256: self.sha256.clone(),
+            heat,
+            exposed,
+            exposed_inside_heat_w: inside,
+            exposed_outside_heat_w: outside,
+            exposed_stored_change_j: stored,
+            exposed_balance_error_j: error,
+        })
+    }
+
+    fn exposed_fractions(&self) -> Vec<f64> {
+        self.coverage
+            .allocated
+            .iter()
+            .map(|allocated| (1. - allocated).max(0.))
+            .collect()
     }
 
     /// Conservatively transfer old temperatures into this frame using material-coordinate overlap.
@@ -400,6 +672,14 @@ impl Frame {
                 }
             }
         }
+        for (patch, row) in state.exposed.iter().enumerate() {
+            for &t in row {
+                laws[source.patches[patch].column].check_temperature(t)?;
+                zeros[patch] = Some(zeros[patch].map_or(t, |v| v.min(t)));
+            }
+        }
+        let old_exposed = old.exposed_fractions();
+        let new_exposed = self.exposed_fractions();
         let mut work = Work::default();
         let (old_polygons, old_roundoff) = old.material_polygons(&mut work)?;
         let (polygons, new_roundoff) = self.material_polygons(&mut work)?;
@@ -410,6 +690,7 @@ impl Frame {
             .iter()
             .map(|r| vec![0.; r.layers.len()])
             .collect();
+        let mut exposed_used = vec![0.; source.patches.len()];
         let mut output = Vec::new();
         let mut destination_error = 0.;
         for (r, region) in self.coverage.layout.regions.iter().enumerate() {
@@ -437,6 +718,27 @@ impl Frame {
                     received += f;
                     intersections.push((s, k, f));
                 }
+                let mut from_exposed = p.fraction - received;
+                let tol = 5e-10 * p.fraction + 64. * f64::EPSILON;
+                if from_exposed < 0. && from_exposed.abs() <= tol {
+                    from_exposed = 0.;
+                }
+                if from_exposed > 0. {
+                    if old_exposed[p.cloth_triangle] <= 0.
+                        || state.exposed[p.cloth_triangle].is_empty()
+                    {
+                        return Err(invalid(
+                            "newly covered cloth has no retained exposed thermal history",
+                        ));
+                    }
+                    exposed_used[p.cloth_triangle] += from_exposed;
+                    if exposed_used[p.cloth_triangle] > old_exposed[p.cloth_triangle] + tol {
+                        return Err(invalid(
+                            "coverage consumes more exposed material than the source triangle owns",
+                        ));
+                    }
+                    received += from_exposed;
+                }
                 check_fraction(received, p.fraction)?;
                 destination_error += (received - p.fraction).abs()
                     * source.patches[p.cloth_triangle].reference_area_m2;
@@ -445,24 +747,24 @@ impl Frame {
                     let mut inputs = Vec::new();
                     let [a, b] = depth(j, m, self.reverse[r][l]);
                     for &(s, k, f) in &intersections {
-                        // Only potentially intersecting donor depth cells are visited. This avoids
-                        // O(n*m) work when changing a fine through-thickness discretization.
-                        let start = (a * n as f64).floor() as usize;
-                        let end = ((b * n as f64).ceil() as usize).min(n);
-                        for canonical in start..end {
-                            work.add(1)?;
-                            let overlap = b.min((canonical + 1) as f64 / n as f64)
-                                - a.max(canonical as f64 / n as f64);
-                            if overlap <= 0. {
-                                continue;
-                            }
-                            let i = if old.reverse[s][k] {
-                                n - 1 - canonical
-                            } else {
-                                canonical
-                            };
-                            inputs.push((f * overlap, state.inner.temperatures[s][k * n + i]));
-                        }
+                        add_depth_inputs(
+                            &mut inputs,
+                            f,
+                            [a, b],
+                            old.reverse[s][k],
+                            &state.inner.temperatures[s][k * n..(k + 1) * n],
+                            &mut work,
+                        )?;
+                    }
+                    if from_exposed > 0. {
+                        add_depth_inputs(
+                            &mut inputs,
+                            from_exposed,
+                            [a, b],
+                            false,
+                            &state.exposed[p.cloth_triangle],
+                            &mut work,
+                        )?;
                     }
                     values.push(mix(
                         law,
@@ -474,12 +776,95 @@ impl Frame {
             }
             output.push(values);
         }
+
+        // The uncovered state is the material complement of destination coverage. It receives the
+        // unused portions of every old covered polygon plus old exposed material not consumed above.
+        let mut exposed = Vec::with_capacity(source.patches.len());
         let mut donor_error = 0.;
-        for (r, region) in old.coverage.layout.regions.iter().enumerate() {
-            for (l, p) in region.layers.iter().enumerate() {
-                check_fraction(used[r][l], p.fraction)?;
-                donor_error += (used[r][l] - p.fraction).abs()
-                    * source.patches[p.cloth_triangle].reference_area_m2;
+        for patch in 0..source.patches.len() {
+            let expected = new_exposed[patch];
+            if expected <= 0. {
+                exposed.push(Vec::new());
+                continue;
+            }
+            let old_remaining = old_exposed[patch] - exposed_used[patch];
+            let tol = 5e-10 * old_exposed[patch].max(1e-30) + 64. * f64::EPSILON;
+            if old_remaining < -tol {
+                return Err(invalid(
+                    "exposed material allocation underflow during remap",
+                ));
+            }
+            let old_remaining = old_remaining.max(0.);
+            let mut covered_remaining = Vec::new();
+            let mut received = old_remaining;
+            for &(s, k) in &donors[patch] {
+                let fraction = old.coverage.layout.regions[s].layers[k].fraction;
+                let remaining = fraction - used[s][k];
+                let local_tol = 5e-10 * fraction + 64. * f64::EPSILON;
+                if remaining < -local_tol {
+                    return Err(invalid(
+                        "covered material allocation underflow during remap",
+                    ));
+                }
+                let remaining = remaining.max(0.);
+                received += remaining;
+                covered_remaining.push((s, k, remaining));
+            }
+            check_fraction(received, expected)?;
+            destination_error +=
+                (received - expected).abs() * source.patches[patch].reference_area_m2;
+            donor_error += ((old_remaining + exposed_used[patch]) - old_exposed[patch]).abs()
+                * source.patches[patch].reference_area_m2;
+            let law = &laws[source.patches[patch].column];
+            let mut row = Vec::with_capacity(m);
+            for j in 0..m {
+                let a = j as f64 / m as f64;
+                let b = (j + 1) as f64 / m as f64;
+                let mut inputs = Vec::new();
+                if old_remaining > 0. {
+                    add_depth_inputs(
+                        &mut inputs,
+                        old_remaining,
+                        [a, b],
+                        false,
+                        &state.exposed[patch],
+                        &mut work,
+                    )?;
+                }
+                for &(s, k, remaining) in &covered_remaining {
+                    if remaining <= 0. {
+                        continue;
+                    }
+                    add_depth_inputs(
+                        &mut inputs,
+                        remaining,
+                        [a, b],
+                        old.reverse[s][k],
+                        &state.inner.temperatures[s][k * n..(k + 1) * n],
+                        &mut work,
+                    )?;
+                }
+                row.push(mix(
+                    law,
+                    &inputs,
+                    costs[source.patches[patch].column],
+                    &mut work,
+                )?);
+            }
+            exposed.push(row);
+        }
+        // Fully covered destination patches still require every old covered/exposed donor to be
+        // consumed by covered recipients. This catches spatial overlap mistakes that scalar totals hide.
+        for patch in 0..source.patches.len() {
+            if new_exposed[patch] > 0. {
+                continue;
+            }
+            check_fraction(exposed_used[patch], old_exposed[patch])?;
+            for &(s, k) in &donors[patch] {
+                let fraction = old.coverage.layout.regions[s].layers[k].fraction;
+                check_fraction(used[s][k], fraction)?;
+                donor_error +=
+                    (used[s][k] - fraction).abs() * source.patches[patch].reference_area_m2;
             }
         }
         let next = State {
@@ -488,9 +873,10 @@ impl Frame {
                 sha256: self.coverage.sha256.clone(),
                 temperatures: output,
             },
+            exposed,
         };
-        let before = old.energy(&state.inner, &laws, &zeros, &costs, &mut work)?;
-        let after = self.energy(&next.inner, &laws, &zeros, &costs, &mut work)?;
+        let before = old.energy(state, &laws, &zeros, &costs, &mut work)?;
+        let after = self.energy(&next, &laws, &zeros, &costs, &mut work)?;
         let mut absolute_residual = 0.;
         for (&a, &b) in before.iter().zip(&after) {
             let error = (b - a).abs();
@@ -501,12 +887,10 @@ impl Frame {
         }
         let before_j = before.iter().sum::<f64>();
         let after_j = after.iter().sum::<f64>();
-        let reference_area_m2 = old
-            .coverage
-            .allocated
+        let reference_area_m2 = source
+            .patches
             .iter()
-            .zip(&source.patches)
-            .map(|(f, p)| f * p.reference_area_m2)
+            .map(|p| p.reference_area_m2)
             .sum::<f64>();
         let balance = Balance {
             from_sha256: old.sha256.clone(),
@@ -566,7 +950,7 @@ impl Frame {
 
     fn energy(
         &self,
-        state: &CoverageState,
+        state: &State,
         laws: &[ThermalLaw],
         zeros: &[Option<f64>],
         costs: &[usize],
@@ -579,13 +963,31 @@ impl Frame {
             for (l, p) in region.layers.iter().enumerate() {
                 let patch = &source.patches[p.cloth_triangle];
                 let zero = zeros[p.cloth_triangle]
-                    .ok_or_else(|| invalid("newly covered cloth has no thermal history"))?;
+                    .ok_or_else(|| invalid("material triangle has no thermal history"))?;
                 let scale = patch.reference_area_m2 * p.fraction / n as f64;
-                for &t in &state.temperatures[r][l * n..(l + 1) * n] {
+                for &t in &state.inner.temperatures[r][l * n..(l + 1) * n] {
                     work.add(costs[patch.column])?;
                     energy[p.cloth_triangle] +=
                         scale * laws[patch.column].sensible_change(zero, t)?;
                 }
+            }
+        }
+        for (patch_index, (&fraction, row)) in self
+            .exposed_fractions()
+            .iter()
+            .zip(&state.exposed)
+            .enumerate()
+        {
+            if fraction <= 0. {
+                continue;
+            }
+            let patch = &source.patches[patch_index];
+            let zero = zeros[patch_index]
+                .ok_or_else(|| invalid("exposed material triangle has no thermal history"))?;
+            let scale = patch.reference_area_m2 * fraction / n as f64;
+            for &t in row {
+                work.add(costs[patch.column])?;
+                energy[patch_index] += scale * laws[patch.column].sensible_change(zero, t)?;
             }
         }
         Ok(energy)
@@ -651,11 +1053,45 @@ fn check_fraction(received: f64, expected: f64) -> Result<(), Refusal> {
     if !received.is_finite() || (received - expected).abs() > 5e-10 * expected + 64. * f64::EPSILON
     {
         return Err(invalid(format!(
-            "covered material domain changed (received {received:.17e}, expected {expected:.17e}); entering/leaving cloth has no modeled thermal history",
+            "material allocation changed unexpectedly (received {received:.17e}, expected {expected:.17e})",
         )));
+    }
+    if expected == 0. {
+        return Ok(());
     }
     if received <= 0. {
         return Err(invalid("destination has no thermal donor"));
+    }
+    Ok(())
+}
+
+fn add_depth_inputs(
+    inputs: &mut Vec<(f64, f64)>,
+    fraction: f64,
+    interval: [f64; 2],
+    reverse: bool,
+    temperatures: &[f64],
+    work: &mut Work,
+) -> Result<(), Refusal> {
+    let n = temperatures.len();
+    if n == 0 {
+        return Err(invalid("thermal donor has no depth cells"));
+    }
+    let [a, b] = interval;
+    let start = (a * n as f64).floor() as usize;
+    let end = ((b * n as f64).ceil() as usize).min(n);
+    for (canonical, _) in temperatures.iter().enumerate().take(end).skip(start) {
+        work.add(1)?;
+        let overlap = b.min((canonical + 1) as f64 / n as f64) - a.max(canonical as f64 / n as f64);
+        if overlap <= 0. {
+            continue;
+        }
+        let i = if reverse {
+            n - 1 - canonical
+        } else {
+            canonical
+        };
+        inputs.push((fraction * overlap, temperatures[i]));
     }
     Ok(())
 }

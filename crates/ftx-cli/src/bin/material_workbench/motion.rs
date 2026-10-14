@@ -44,6 +44,10 @@ struct Interval {
     coverage: String,
     /// Right-endpoint fields used throughout this interval; no implicit pose interpolation.
     boundaries: Vec<Film>,
+    /// Optional source-cloth face conditions for material currently outside body coverage.
+    /// One broadcasts to every source cloth triangle; otherwise retain source-triangle order.
+    #[serde(default)]
+    exposed_boundaries: Vec<Film>,
     steps: usize,
 }
 #[derive(Deserialize, Serialize)]
@@ -203,6 +207,7 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
             || steps > 100_000
             || f.boundaries.is_empty()
             || f.boundaries.len() > 65_536
+            || f.exposed_boundaries.len() > 65_536
             || last_time.is_some_and(|t| f.time_seconds <= t)
         {
             return Err(invalid(
@@ -269,6 +274,24 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                 "motion needs one boundary or one per destination body triangle",
             ));
         };
+        let exposed_boundaries: Option<Vec<Boundary>> = if f.exposed_boundaries.is_empty() {
+            None
+        } else if !next.has_exposed_cloth() {
+            return Err(invalid(
+                "exposed boundaries were supplied but the destination frame has no uncovered cloth",
+            ));
+        } else if f.exposed_boundaries.len() == 1 {
+            Some(vec![
+                f.exposed_boundaries[0].boundary();
+                next.cloth_triangle_count()
+            ])
+        } else if f.exposed_boundaries.len() == next.cloth_triangle_count() {
+            Some(f.exposed_boundaries.iter().map(Film::boundary).collect())
+        } else {
+            return Err(invalid(
+                "motion needs one exposed boundary or one per source cloth triangle",
+            ));
+        };
         let remap = if frame.sha256() == next.sha256() {
             None
         } else {
@@ -288,18 +311,21 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
         let mut interval_stored = 0.;
         let mut interval_net = 0.;
         for j in 0..f.steps {
-            let step = frame.advance(&state, dt, &boundaries)?;
+            let step = match &exposed_boundaries {
+                Some(exposed) => frame.advance_with_exposed(&state, dt, &boundaries, exposed)?,
+                None => frame.advance(&state, dt, &boundaries)?,
+            };
             let heat = step.heat();
-            totals.incoming_energy_j += dt * heat.inside_heat_w;
-            totals.outgoing_energy_j += dt * heat.outside_heat_w;
+            totals.incoming_energy_j += dt * step.inside_heat_w();
+            totals.outgoing_energy_j += dt * step.outside_heat_w();
             // Accumulate storage heat before adding the cancelling bare-body path to each total.
-            totals.net_boundary_energy_j += dt * heat.net_heat_w;
-            totals.physical_stored_change_j += heat.stored_change_j;
+            totals.net_boundary_energy_j += dt * step.net_heat_w();
+            totals.physical_stored_change_j += step.stored_change_j();
             totals.largest_step_balance_error_j = totals
                 .largest_step_balance_error_j
-                .max(heat.balance_error_j.abs());
-            interval_stored += heat.stored_change_j;
-            interval_net += dt * heat.net_heat_w;
+                .max(step.balance_error_j().abs());
+            interval_stored += step.stored_change_j();
+            interval_net += dt * step.net_heat_w();
             totals.check()?;
             if !interval_stored.is_finite() || !interval_net.is_finite() {
                 return Err(invalid("motion interval energy overflow"));
@@ -311,8 +337,11 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                     "partition_roundoff_m2":frame.projection().partition_roundoff_m2,
                     "unresolved_footprint_area_m2":frame.projection().unresolved_footprint_area_m2,
                     "covered_area_m2":heat.covered_area_m2,"bare_heat_w":heat.bare_heat_w,
-                    "inside_heat_w":heat.inside_heat_w,"outside_heat_w":heat.outside_heat_w,
-                    "net_heat_w":heat.net_heat_w,"physical_stored_change_j":interval_stored,
+                    "inside_heat_w":step.inside_heat_w(),"outside_heat_w":step.outside_heat_w(),
+                    "covered_inside_heat_w":heat.inside_heat_w,"covered_outside_heat_w":heat.outside_heat_w,
+                    "exposed_inside_heat_w":step.exposed_inside_heat_w(),
+                    "exposed_outside_heat_w":step.exposed_outside_heat_w(),
+                    "net_heat_w":step.net_heat_w(),"physical_stored_change_j":interval_stored,
                     "net_boundary_energy_j":interval_net,"heat_balance_error_j":interval_stored-interval_net});
                 trace_bytes = trace_bytes
                     .checked_add(
@@ -325,6 +354,12 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                 trace.push(entry);
                 if i + 1 == input.frames.len() {
                     final_field = thermal_coverage::field(heat);
+                    final_field["exposed_temperature_c"] = json!(step.exposed_temperature_c());
+                    final_field["exposed_inside_heat_w"] = json!(step.exposed_inside_heat_w());
+                    final_field["exposed_outside_heat_w"] = json!(step.exposed_outside_heat_w());
+                    final_field["total_inside_heat_w"] = json!(step.inside_heat_w());
+                    final_field["total_outside_heat_w"] = json!(step.outside_heat_w());
+                    final_field["total_stored_change_j"] = json!(step.stored_change_j());
                 }
             }
             state = step.into_state();
@@ -340,9 +375,10 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
         "energy":totals,"heat_balance_error_j":totals.physical_stored_change_j-totals.net_boundary_energy_j,
         "material_energy_change_including_remap_j":totals.physical_stored_change_j+totals.signed_remap_residual_j,
         "checkpoint":checkpoint,"cell_geometry_steps":work,"geometry_remap_operations":geometric_work,
-        "scope":"prescribed right-endpoint poses and boundary fields; instantaneous conservative remap, then backward-Euler heat substeps",
+        "scope":"prescribed right-endpoint poses and boundary fields; conservative covered/exposed material remap, then backward-Euler heat substeps",
         "energy_scope":"this invocation only; remap error is numerical, not boundary heat",
-        "not_simulated":["interpolated mechanical motion","entering/leaving cloth thermal history",
+        "exposed_boundary_policy":"uncovered cloth is adiabatic unless exposed_boundaries are explicitly supplied for an interval",
+        "not_simulated":["interpolated mechanical motion","in-plane gradients within one exposed source-triangle fraction",
             "cloth remeshing","moisture","compression","air-gap transport","human thermoregulation"],
         "comfort_claim":false,"empirical_validation_claim":false}),
     )?;

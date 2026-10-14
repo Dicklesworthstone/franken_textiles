@@ -229,7 +229,7 @@ fn moving_cloth_keeps_material_heat_not_the_temperature_of_its_new_body_triangle
 }
 
 #[test]
-fn equal_area_disjoint_material_domains_refuse_instead_of_exchanging_unrelated_temperatures() {
+fn equal_area_disjoint_covered_regions_exchange_through_retained_exposed_material_history() {
     let old = frame(
         source(&selection()),
         tri(0.04),
@@ -245,13 +245,16 @@ fn equal_area_disjoint_material_domains_refuse_instead_of_exchanging_unrelated_t
         1,
     );
     let state = old.initial(20.).unwrap();
-    let err = new.remap(&old, &state).unwrap_err();
-    assert!(err.to_string().contains("material domain changed"), "{err}");
+    let transfer = new.remap(&old, &state).unwrap();
+    assert_eq!(transfer.state.temperature_c(), &[vec![20.]]);
+    assert_eq!(transfer.state.exposed_temperature_c(), &[vec![20.]]);
+    near(transfer.balance.absolute_residual_j, 0.);
+    near(transfer.balance.reference_area_m2, 0.5);
     assert_eq!(state.temperature_c(), &[vec![20.]]);
 }
 
 #[test]
-fn entering_and_leaving_cloth_both_refuse_atomically() {
+fn entering_and_leaving_body_coverage_preserves_complete_material_state_atomically() {
     let old = one(1);
     let new = frame(
         source(&selection()),
@@ -260,8 +263,14 @@ fn entering_and_leaving_cloth_both_refuse_atomically() {
         &[[0, 1, 2]],
         1,
     );
-    assert!(new.remap(&old, &old.initial(20.).unwrap()).is_err());
-    assert!(old.remap(&new, &new.initial(20.).unwrap()).is_err());
+    let left = new.remap(&old, &old.initial(20.).unwrap()).unwrap();
+    assert_eq!(left.state.temperature_c(), &[vec![20.]]);
+    assert_eq!(left.state.exposed_temperature_c(), &[vec![20.]]);
+    near(left.balance.absolute_residual_j, 0.);
+    let returned = old.remap(&new, &left.state).unwrap();
+    assert_eq!(returned.state.temperature_c(), &[vec![20.]]);
+    assert!(returned.state.exposed_temperature_c()[0].is_empty());
+    near(returned.balance.absolute_residual_j, 0.);
 }
 
 #[test]
@@ -506,7 +515,7 @@ fn checkpoint_restoration_validates_temperatures_even_with_a_recomputed_digest()
 }
 
 #[test]
-fn all_bare_frames_roundtrip_without_inventing_a_cloth_temperature_history() {
+fn all_bare_frames_roundtrip_with_explicit_uncovered_cloth_temperature_history() {
     let frame = frame(
         source(&selection()),
         tri(0.04),
@@ -514,10 +523,52 @@ fn all_bare_frames_roundtrip_without_inventing_a_cloth_temperature_history() {
         &[[0, 1, 2]],
         1,
     );
-    assert_eq!(frame.cells(), 0);
+    assert_eq!(frame.cells(), 1);
     let state = frame.initial(20.).unwrap();
     let checkpoint = frame.checkpoint(&state).unwrap();
     let (restored, saved) = Frame::from_checkpoint(&checkpoint).unwrap();
     assert!(saved.temperature_c().is_empty());
-    assert!(one(1).remap(&restored, &saved).is_err());
+    assert_eq!(saved.exposed_temperature_c(), &[vec![20.]]);
+    let covered = one(1).remap(&restored, &saved).unwrap();
+    assert_eq!(covered.state.temperature_c(), &[vec![20.]]);
+    assert!(covered.state.exposed_temperature_c()[0].is_empty());
+    near(covered.balance.absolute_residual_j, 0.);
+}
+
+#[test]
+fn uncovered_cloth_heats_only_under_explicit_face_conditions_and_reenters_with_that_heat() {
+    let covered = one(2);
+    let bare = frame(
+        source(&selection()),
+        tri(0.04),
+        vec![v(2., 0., 0.), v(3., 0., 0.), v(2., 1., 0.)],
+        &[[0, 1, 2]],
+        2,
+    );
+    let initial = covered.initial(10.).unwrap();
+    let exposed = bare.remap(&covered, &initial).unwrap().state;
+    assert_eq!(exposed.exposed_temperature_c(), &[vec![10., 10.]]);
+
+    let adiabatic = bare.advance(&exposed, 1., &[boundary(10.)]).unwrap();
+    assert_eq!(adiabatic.exposed_temperature_c(), &[vec![10., 10.]]);
+    assert_eq!(adiabatic.exposed_stored_change_j(), 0.);
+
+    let face = Boundary {
+        inside_c: 40.,
+        outside_c: 40.,
+        inside_resistance: 0.05,
+        outside_resistance: 0.05,
+    };
+    let heated = bare
+        .advance_with_exposed(&exposed, 2., &[boundary(10.)], &[face])
+        .unwrap();
+    assert!(heated.exposed_inside_heat_w() > 0.);
+    assert!(heated.exposed_stored_change_j() > 0.);
+    assert!(heated.exposed_balance_error_j().abs() < 1e-8);
+    assert!(heated.exposed_temperature_c()[0].iter().all(|&t| t > 10.));
+
+    let returned = covered.remap(&bare, &heated.into_state()).unwrap();
+    assert!(returned.state.temperature_c()[0].iter().all(|&t| t > 10.));
+    assert!(returned.state.exposed_temperature_c()[0].is_empty());
+    near(returned.balance.absolute_residual_j, 0.);
 }
