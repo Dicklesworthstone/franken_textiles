@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 use crate::elements::Membrane;
 use crate::run::DrapeOptions;
 
+mod pieces;
+
 /// Effective sheet coefficients; legacy defaults reproduce spec 04 §5.3 exactly.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fabric {
@@ -163,6 +165,8 @@ pub struct MaterialInputs {
     pub options: DrapeOptions,
     /// Evidence snapshot, effective bundle and explicit model limits.
     pub report: Value,
+    // Indexed by source piece, not vertex: seam welding must never merge material identities.
+    pub(crate) piece_fabrics: Option<Vec<Fabric>>,
 }
 
 /// Resolves `pattern.fabric` for every ordinary drape consumer. Material selection supersedes caller
@@ -170,7 +174,7 @@ pub struct MaterialInputs {
 /// stay numerical run options. Body offset = t/2; same-cloth offset = t, not twice t.
 ///
 /// # Errors
-/// Invalid input/options, incomplete characterization or unsupported per-piece material assignment.
+/// Invalid input/options, incomplete characterization, or unsupported layer/interface assignments.
 pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInputs, Refusal> {
     options.validate()?;
     let raw = pattern.raw();
@@ -179,20 +183,13 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
     {
         return Err(invalid("fabric must be an object"));
     }
-    // The reference uses a string material label in cutting tables, not as a constitutive selection.
-    if let Some(pieces) = raw["pieces"].as_array() {
-        for p in pieces {
-            if p.get("material").is_some_and(|m| !m.is_string())
-                || p.get("material_id").is_some()
-                || p["fabric"].get("material").is_some()
-                || p["fabric"].get("material_id").is_some()
-            {
-                return Err(invalid(
-                    "per-piece materials need heterogeneous assembly; use a uniform pattern.fabric material until that is implemented",
-                ));
-            }
-        }
-    }
+    pieces::resolve(pattern, resolve_uniform(pattern, options)?)
+}
+
+// This helper deliberately does not inspect pieces: each explicitly selected sheet uses this same
+// canonical evidence/units/thermal policy before its coefficients enter the element field.
+fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInputs, Refusal> {
+    let raw = pattern.raw();
     let mut opts = *options;
     let Some(record) = resolve_fabric(&raw["fabric"])? else {
         let fabric = Fabric::of(pattern)?;
@@ -202,6 +199,7 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
             options: opts,
             report: json!({"basis":"legacy_uncertain", "model":"orthotropic_green_strain_scalar_bending",
                 "note":"Legacy defaults/declarations are not characterized textile properties."}),
+            piece_fabrics: None,
         });
     };
     let mechanics = record.mechanics()?;
@@ -250,6 +248,7 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
             "not_simulated":["yarn/loop-scale nonlinear response", "directional bending", "moisture and heat transport", "garment thermal comfort", "damage/fire", "robotic sewing"],
             "fit_claim":false
         }),
+        piece_fabrics: None,
     })
 }
 

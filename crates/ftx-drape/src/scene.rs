@@ -14,7 +14,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, det};
 use ftx_pattern::{Pattern, truthy};
 use serde_json::Value;
 
-use crate::cloth::{ClothModel, SolveReport, Solver};
+use crate::cloth::{ClothModel, SheetMaterial, SolveReport, Solver};
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::elements::ElasticSegment;
 use crate::garment::GarmentMesh;
@@ -176,6 +176,8 @@ pub struct Scene {
     pub weld: Vec<usize>,
     /// Triangles dropped because welding collapsed them.
     pub collapsed: usize,
+    /// Source instance of each retained solver triangle (indexes `mesh.instances`), after collapse.
+    pub triangle_owner: Vec<usize>,
     /// Start crossings untangled, per round.
     pub untangled: Vec<usize>,
     /// The cloth offset the contact ramps up to (m).
@@ -346,9 +348,84 @@ pub fn build_scene(
     contact: ContactParams,
     elastic: Option<&ElasticCasing>,
 ) -> Result<Scene, Refusal> {
+    if pattern.raw()["pieces"]
+        .as_array()
+        .is_some_and(|ps| ps.iter().any(|p| p.get("fabric").is_some()))
+    {
+        return Err(bad(
+            "per-piece fabrics require the resolved drape pipeline, not a uniform Fabric argument"
+                .into(),
+        ));
+    }
+    build_scene_inner(
+        pattern,
+        mesh,
+        frames,
+        skin_vertices,
+        skin_triangles,
+        fabric,
+        compression,
+        contact,
+        elastic,
+        None,
+    )
+}
+
+pub(crate) fn build_scene_resolved(
+    pattern: &Pattern,
+    mesh: GarmentMesh,
+    frames: &dyn PartFrames,
+    skin_vertices: &[Vec3],
+    skin_triangles: &[[usize; 3]],
+    material: &crate::material::MaterialInputs,
+    elastic: Option<&ElasticCasing>,
+) -> Result<Scene, Refusal> {
+    build_scene_inner(
+        pattern,
+        mesh,
+        frames,
+        skin_vertices,
+        skin_triangles,
+        material.fabric,
+        material.options.compression,
+        material.options.contact,
+        elastic,
+        material.piece_fabrics.as_deref(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_scene_inner(
+    pattern: &Pattern,
+    mesh: GarmentMesh,
+    frames: &dyn PartFrames,
+    skin_vertices: &[Vec3],
+    skin_triangles: &[[usize; 3]],
+    fabric: Fabric,
+    compression: f64,
+    contact: ContactParams,
+    elastic: Option<&ElasticCasing>,
+    piece_fabrics: Option<&[Fabric]>,
+) -> Result<Scene, Refusal> {
     fabric.validate()?;
     fabric.membrane(compression).validate()?;
     let rest = grain_rest(pattern, &mesh, fabric.requires_grain())?;
+    let instance_fabrics: Option<Vec<Fabric>> = piece_fabrics
+        .map(|materials| {
+            mesh.instances
+                .iter()
+                .map(|id| {
+                    let instance = pattern
+                        .instance(id)
+                        .ok_or_else(|| bad(format!("no instance {id}")))?;
+                    materials
+                        .get(instance.piece_index)
+                        .copied()
+                        .ok_or_else(|| bad(format!("no material for instance {id}")))
+                })
+                .collect::<Result<_, Refusal>>()
+        })
+        .transpose()?;
     let casing = elastic.and_then(|e| mesh.instances.iter().position(|i| *i == e.instance));
     let places = placements(pattern, &mesh, frames)?;
     let wrapped = wrapped_positions(&mesh, &places);
@@ -377,6 +454,8 @@ pub fn build_scene(
     // Gather zones (the reference's vertex-weighted structural stiffness): compression drops from the
     // cloth's factor to GATHER_COMPRESSION at a gathered seam, linearly in the element's mean weight.
     let mut tri_compression = Vec::new();
+    let mut tri_materials = Vec::new();
+    let mut triangle_owner = Vec::new();
     let low = GATHER_COMPRESSION.min(compression);
     for f in &mesh.faces {
         let t = f.map(|v| weld[v]);
@@ -386,6 +465,23 @@ pub fn build_scene(
         }
         tris.push(t);
         tri_rest.push(f.map(|v| rest[v]));
+        let owner = mesh.owner[f[0]];
+        triangle_owner.push(owner);
+        if let Some(field) = &instance_fabrics {
+            if f.iter().any(|&v| mesh.owner[v] != owner) {
+                return Err(bad(
+                    "a rest triangle cannot mix source-piece identities".into()
+                ));
+            }
+            let m = field
+                .get(owner)
+                .ok_or_else(|| bad("invalid triangle owner".into()))?;
+            tri_materials.push(SheetMaterial {
+                membrane: m.membrane(compression),
+                areal_kg_m2: m.areal_kg_m2,
+                bending_nm: m.bending_nm,
+            });
+        }
         if casing == Some(mesh.owner[f[0]]) {
             // a casing at its cut length, drawn up by its elastic: gathered all through
             tri_compression.push(low);
@@ -394,14 +490,18 @@ pub fn build_scene(
             tri_compression.push(low + w * (compression - low));
         }
     }
-    let mut model = ClothModel::from_triangles(
-        next,
-        &tris,
-        &tri_rest,
-        fabric.membrane(compression),
-        fabric.bending_nm,
-        fabric.areal_kg_m2,
-    )?;
+    let mut model = if instance_fabrics.is_some() {
+        ClothModel::from_material_triangles(next, &tris, &tri_rest, &tri_materials)?
+    } else {
+        ClothModel::from_triangles(
+            next,
+            &tris,
+            &tri_rest,
+            fabric.membrane(compression),
+            fabric.bending_nm,
+            fabric.areal_kg_m2,
+        )?
+    };
     model.set_compression(&tri_compression)?;
     let mut elastic_rings = Vec::new();
     if let Some(e) = elastic {
@@ -444,6 +544,7 @@ pub fn build_scene(
         start,
         weld,
         collapsed,
+        triangle_owner,
         untangled,
         target_thickness: contact.thickness,
         solver,

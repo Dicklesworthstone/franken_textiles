@@ -17,8 +17,7 @@ use crate::garment::build_garment;
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{
-    Fabric, PartFrames, PhaseReport, Scene, build_scene, casing_at_cut_length, elastic_casing,
-    run_phase,
+    Fabric, PartFrames, PhaseReport, Scene, casing_at_cut_length, elastic_casing, run_phase,
 };
 use crate::start::{edge_strain, face_edges};
 
@@ -244,15 +243,13 @@ pub fn drape(
             "no piece has a fold-up placement: nothing to drape (the pattern is judged flat)",
         ));
     }
-    let mut scene = build_scene(
+    let mut scene = crate::scene::build_scene_resolved(
         pattern,
         mesh,
         body.frames,
         body.collision.0,
         body.collision.1,
-        fabric,
-        opts.compression,
-        opts.contact,
+        &material,
         elastic.as_ref(),
     )?;
     if let Some(p) = opts.self_contact {
@@ -331,6 +328,37 @@ pub fn drape(
     );
     add_run_fields(&mut report, &scene, &fabric, opts, body.arm_deg, pattern);
     report["material"] = material.report;
+    if let Some(fabrics) = &material.piece_fabrics {
+        report["fabric"] = json!({"basis":"per_piece", "see":"material.records"});
+        let mut area = vec![0.0; scene.mesh.instances.len()];
+        for (e, &owner) in scene
+            .solver
+            .model
+            .membranes
+            .iter()
+            .zip(&scene.triangle_owner)
+        {
+            area[owner] += e.area;
+        }
+        let instances: Vec<Value> = scene
+            .mesh
+            .instances
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                // The mesh and the materials were resolved against this same source-piece numbering.
+                let p = pattern
+                    .instance(id)
+                    .expect("scene instance exists")
+                    .piece_index;
+                json!({"instance":id, "piece_index":p,
+                "record_sha256":report["material"]["pieces"][p]["record_sha256"],
+                "rest_area_m2":area[i], "mass_kg":area[i]*fabrics[p].areal_kg_m2})
+            })
+            .collect();
+        report["material"]["instances"] = json!(instances);
+        report["material"]["triangle_instance"] = json!(scene.triangle_owner);
+    }
     report["mass_kg"] = json!(scene.solver.model.mass.iter().sum::<f64>());
     Ok(DrapeRun {
         scene,
