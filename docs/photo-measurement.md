@@ -2,10 +2,11 @@
 
 The photo commands turn **a reference sheet and landmark clicks** into `fabric-measurements/1`
 records for the existing fusion and readiness commands. They run locally without uploading
-images. Supply an oriented PNG for automatic plain-paper detection, or explicit reference
-coordinates. Neither path infers body landmarks, applies EXIF orientation, or establishes fit.
+images. Supply an oriented PNG and a calibration-sheet sidecar for ChArUco detection, an
+oriented PNG for plain-paper detection, or explicit reference coordinates. None of these
+paths infers body landmarks, applies EXIF orientation, or establishes fit.
 
-## Detect a sheet directly from a PNG
+## Detect plain paper directly from a PNG
 
 Show a whole, flat Letter or A4 sheet on a darker background. Apply the photograph's orientation
 before export, then click landmarks on that same image. Use an opaque 8-bit grayscale or RGB PNG,
@@ -31,6 +32,76 @@ not the image itself. Measurement uses the unrounded calibration and bootstraps 
 samples, rather than treating detected corners as manual clicks. Review warnings and the detected
 outline: a bright rectangle is not proof of nominal paper size, and scale applies only in the
 sheet's plane. A failed detector can emit a diagnostic scale report, never measurement records.
+
+## Detect a ChArUco calibration board directly from a PNG
+
+Generate the board and keep its JSON sidecar with the printed sheet. Print at **100% / Actual
+size**, disable fit-to-page, and verify both the 100 mm and 4 in bars with a ruler. A good
+homography cannot detect a uniformly mis-scaled print. Letter uses an 8 by 6 board; A4 uses
+8 by 7. The generator defaults to 22 mm squares, 16 mm markers, `DICT_4X4_50` and the
+non-legacy checkerboard layout.
+
+```bash
+ftx measure calib-sheet --paper letter --out calibration --json
+```
+
+This creates `calib-sheet-letter.png`, `.pdf` and `.json` in a new directory. Photograph
+**one** flat board, then export the oriented, opaque PNG under the same pixel restrictions
+as the plain-paper path. The sidecar describes the physical board, not the dimensions or
+position of that board in the photograph.
+
+The optional detector uses a local Python environment with OpenCV. Nothing is downloaded or
+installed implicitly by `ftx`; the measurement library itself has no Python/OpenCV dependency.
+The tested dependency can be installed in a separate environment:
+
+```bash
+python3 -m venv .venv-charuco
+.venv-charuco/bin/python -m pip install opencv-python-headless==4.13.0.92
+
+ftx measure photo-scale --image oriented.png \
+  --sheet calibration/calib-sheet-letter.json \
+  --detector-python .venv-charuco/bin/python --out scale.json --json
+
+ftx measure measure-photo --image oriented.png \
+  --sheet calibration/calib-sheet-letter.json \
+  --detector-python .venv-charuco/bin/python --points points.json \
+  --camera-distance-mm 2500 --click-px 3 --bootstrap 200 --seed 0 \
+  --out photo-measurements.json --json
+```
+
+`--detector-python` defaults to `python3`; it names an executable, not a shell command.
+`--sheet` selects ChArUco detection and requires `--image`. It cannot be combined with
+`--paper` or `--reference`; `--detector-python` is only valid with `--sheet`. Without
+`--sheet`, the existing plain-paper behavior is unchanged and does not start Python.
+
+The adapter is embedded in the binary and runs in isolated Python mode. Rust decodes and
+hashes the photograph once, then passes the same full-resolution BGR pixels to the detector
+through stdin. OpenCV identifies physical chessboard corner IDs and refines their pixel
+positions. It does **not** fit the measurement homography. Rust validates the returned frame
+and IDs, rebuilds the metric board from the original sidecar, and uses the same deterministic
+RANSAC, unrounded homography and inlier bootstrap as imported ChArUco evidence. Rust also
+computes the Sobel/percentile blur diagnostic on the board region.
+
+The scale report says `coordinate_source: "detected_charuco"`. Its
+`image_input.charuco_detection` receipt retains the complete sidecar, detected reference
+coordinates, marker IDs, OpenCV version, detector settings, embedded-adapter SHA-256 and blur
+method. It retains no photograph pixels. Measurement reports carry the same receipt, so a
+scale and its uncertainty can be traced to the original image hash and board configuration.
+
+**No fallback:** a plain rectangle, unreadable markers or failed OpenCV installation never
+silently becomes a plain-paper calibration when `--sheet` was requested. Unsupported or
+inconsistent board metadata, duplicate marker IDs from multiple boards, IDs outside the
+selected board, and invalid detector output are refusals. Fewer than six identified corners
+or a failed stable six-inlier homography produces no usable calibration; measurement then
+refuses without creating an output. Twelve well-spread **inlier** corners are recommended;
+rejected detections cannot suppress the sparse/partial-board warnings. Even an accepted
+six-corner scale can fail the measurement bootstrap stability gate described below.
+
+The adapter has a 30-second execution deadline, a 64 KiB request-header limit and a 256 KiB
+limit on each output stream, in addition to the photo budgets above. Budget exhaustion is a
+refusal, not permission to drop corners, resize the image or reuse a previous calibration.
+OpenCV remains an optional external detector as permitted by plan section 10.1 / `ftx-0eq`;
+this is not a native Rust ChArUco detector or a browser image-detection implementation.
 
 ## Plain Letter or A4 paper
 
@@ -124,7 +195,8 @@ An external detector can supply a `ftx-photo-reference/1` document with:
 
 This minimal example can establish a homography, but **supply at least twelve well-spread
 corners for measurement**. Sparse detections can fail the bootstrap stability requirement.
-Use the same `photo-scale` and `measure-photo` commands; no separate image runtime is needed.
+Use the same `photo-scale` and `measure-photo` commands with `--reference`; no separate
+image runtime is needed for imported detections.
 
 IDs are zero-based, row-major internal chessboard corners: board position is
 `[(id % (squares_x - 1) + 1) * square_mm, (id / (squares_x - 1) + 1) * square_mm]`.
@@ -164,6 +236,32 @@ Failed measurement requests create no measurement output. With `--out`, the file
 domain JSON; `--json` stdout contains the existing `ftx-cli/1` envelope. Without `--json`, a
 successful write reports `wrote FILE` on stderr and leaves stdout empty.
 
-Automatic ChArUco marker detection and calibration-sheet generation remain unfinished portions
-of FTX-19. The PNG detector is tested against synthetic scenes; OpenCV image-oracle parity and
-real-wearer measurement accuracy have not been established.
+## Synthetic conformance and CLI regression coverage
+
+The independent OpenCV-rendered synthetic tests cover Letter/A4 boards, even-row legacy
+layout, rotations, perspective, noise, blur, partial occlusion, physical corner identity,
+wrong dictionaries/layouts, duplicate boards, malformed sidecars and the subprocess wire
+protocol. The end-to-end Rust CLI tests additionally use the actual `calib-sheet` generator,
+independently calculated 88 mm landmark pairs and a known projective camera. They verify
+scale, inlier counts, click/depth uncertainty, bootstrap acceptance, repeatability,
+validation/fusion, provenance, input protection and explicit failures.
+
+```bash
+.venv-charuco/bin/python tools/photo/test_charuco_detector.py
+FTX_DETECTOR_PYTHON="$PWD/.venv-charuco/bin/python" \
+  cargo test -p ftx-cli --test photo_charuco_workflow -- --include-ignored
+cargo test -p ftx-cli --test photo_image_workflow --test photo_workflow
+cargo test -p ftx-cli --bin ftx charuco_image
+cargo test -p ftx-measure --test photo --test charuco_evidence
+```
+
+Set `FTX_DETECTOR_PYTHON` to an **absolute** interpreter path when running the CLI tests:
+their working directories are temporary fixture directories. The three tests that require
+OpenCV are explicitly ignored by default; the `ChArUco photo conformance` CI workflow installs
+the pinned backend and runs them with `--include-ignored`. Plain-paper, imported-coordinate,
+option-conflict and absent-backend tests remain runnable without OpenCV.
+
+This establishes synthetic known-answer detection and an executable external-detector
+workflow, not identical upstream image-oracle/RANSAC results on arbitrary noisy scenes,
+NumPy bootstrap-stream parity, native Rust detector qualification or real-wearer measurement
+accuracy. Those broader qualification claims remain separate from the implemented image path.
