@@ -15,6 +15,7 @@ use super::{Boundary, DryThermalModel, invalid, positive, temperature};
 
 pub mod coverage;
 mod io;
+pub mod projection;
 pub(crate) use io::for_drape;
 
 /// One retained material triangle. A seam weld does not merge either triangle's reference area.
