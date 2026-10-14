@@ -426,12 +426,13 @@ impl Solver {
     }
 
     /// Adds contact with a static body. The cloth must start clear of it (IPC needs an
-    /// intersection-free start).
+    /// intersection-free start). Replacing a collider retains source-bound sheet assignments and
+    /// self-contact enablement, but resets friction history. Changed cloth topology requires rebinding.
     ///
     /// # Errors
     /// [`RefusalCode::IntersectingStart`] when some cloth–body gap is not positive, an edge of either
     /// mesh passes through the other, or a piece lies inside a closed body;
-    /// [`RefusalCode::NonFinite`] for a non-finite position.
+    /// [`RefusalCode::NonFinite`] for a non-finite position; a refusal for stale material topology.
     pub fn with_contact(mut self, body: Body, params: ContactParams) -> Result<Self, Refusal> {
         params.validate()?;
         let self_params = self.contact.as_ref().and_then(Contact::self_contact_params);
@@ -456,7 +457,8 @@ impl Solver {
             .collect();
         let contact = Contact::new(body, params, tris, |a, b| {
             lengths.get(&(a.min(b), a.max(b))).copied().unwrap_or(1e-3)
-        });
+        })
+        .retain_surface_materials(self.contact.as_ref(), &self.x)?;
         if let Some((g, pair, at)) = contact.closest_pair(&self.x, params.dhat)
             && (g.is_nan() || g <= 0.0)
         {

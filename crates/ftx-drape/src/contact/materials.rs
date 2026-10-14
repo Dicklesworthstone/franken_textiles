@@ -164,9 +164,32 @@ impl MaterialField {
 }
 
 impl Contact {
+    /// Reconstructing a collider must not discard the cloth's source-bound physical assignment.
+    /// Install it before the new body's offset audit, so thin panels are not checked against a
+    /// different panel's broad-phase envelope. Friction history is intentionally not transferred.
+    pub(crate) fn retain_surface_materials(
+        mut self,
+        previous: Option<&Self>,
+        x: &[Vec3],
+    ) -> Result<Self, Refusal> {
+        if let Some(field) = previous.and_then(|c| c.surface_materials.as_ref()) {
+            field.validate_topology(&self.cloth, x.len())?;
+            self.params.thickness = field.max_half();
+            self.params.mu = field
+                .surfaces
+                .iter()
+                .map(|s| s.friction_body)
+                .fold(0.0, f64::max);
+            self.surface_materials = Some(field.clone());
+            self.params.validate()?;
+        }
+        Ok(self)
+    }
+
     /// Bind sheet contact to the actual triangle topology and audit the full physical offsets.
     /// The returned contact owns its assignment and retains it when cloned for motion continuation.
-    /// Rebuilding contact with `Contact::new`/`Solver::with_contact` requires an explicit rebind.
+    /// `Solver::with_contact` retains assignments when replacing a collider; constructing a fresh
+    /// `Contact::new` requires an explicit bind. Changed cloth topology always requires a rebind.
     /// Global parameters become broad-phase envelopes, NOT the coefficients of every pair.
     /// At multi-material seam vertices/edges the maximum adjacent envelope is used explicitly.
     /// No friction matrix is needed for body-only contact; enabling self-contact requires one.

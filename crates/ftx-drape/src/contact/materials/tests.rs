@@ -214,3 +214,100 @@ fn homogeneous_contact_retains_the_original_coefficients_and_energy() {
         assert_eq!(a.hess, b.hess);
     }
 }
+
+fn solver_with_materials(c: Contact, x: Vec<Vec3>) -> crate::Solver {
+    use crate::{ClothModel, Membrane, Solver};
+    use ftx_core::Vec2;
+    let rest: Vec<_> = c
+        .cloth
+        .triangles
+        .iter()
+        .map(|t| t.map(|i| Vec2::new(x[i].x, x[i].y)))
+        .collect();
+    let model = ClothModel::from_triangles(
+        x.len(),
+        &c.cloth.triangles,
+        &rest,
+        Membrane::orthotropic(100., 50., 0.2, 20., 1.),
+        1e-4,
+        0.2,
+    )
+    .unwrap();
+    let fixed = vec![[false; 3]; x.len()];
+    let mut solver = Solver::new(model, x, &fixed, Vec3::ZERO);
+    solver.contact = Some(c);
+    solver
+}
+
+#[test]
+fn collider_replacement_preserves_unlike_sheet_interfaces_and_dynamics() {
+    let (c, x) = layers(0.9);
+    let before = c.pair_params(Pair::SelfVertexTri { cv: 0, ct: 1 });
+    // The hand-built contact fixture used constant edge lengths. Reconstruct those from the
+    // membrane rest geometry before comparing solver arithmetic across identical rebuilds.
+    let original = solver_with_materials(c.clone(), x.clone())
+        .with_contact(Body::empty(), params())
+        .unwrap();
+    let replaced = original
+        .clone()
+        .with_contact(Body::empty(), params())
+        .unwrap();
+    let contact = replaced.contact.as_ref().unwrap();
+    assert!(contact.has_surface_materials());
+    assert_eq!(
+        before,
+        contact.pair_params(Pair::SelfVertexTri { cv: 0, ct: 1 })
+    );
+    assert_eq!(c.min_self_gap(&x, 0.002), contact.min_self_gap(&x, 0.002));
+    let (mut a, mut b) = (original, replaced);
+    a.step(0.001).unwrap();
+    b.step(0.001).unwrap();
+    assert_eq!(a.x, b.x);
+    assert_eq!(a.v, b.v);
+}
+
+#[test]
+fn replacement_body_audits_thin_panels_at_their_own_offset() {
+    let x = [triangle(-0.03, 0.0015), triangle(0.03, 0.0035)].concat();
+    let c = contact(Body::empty())
+        .with_surface_materials(&x, &[0, 1], &surfaces(), None)
+        .unwrap();
+    let mut numerical = params();
+    numerical.dhat = 0.0008;
+    numerical.mu = 99.; // Material friction remains the authority.
+    let solver = solver_with_materials(c, x.clone())
+        .with_contact(floor(), numerical)
+        .unwrap();
+    let c = solver.contact.as_ref().unwrap();
+    assert!(c.has_surface_materials());
+    assert!((c.min_gap(&x, 0.002).unwrap() - 0.0005).abs() < 1e-15);
+    assert_eq!(c.pair_params(Pair::VertexTri { cv: 0, bt: 0 }).mu, 0.1);
+    assert_eq!(c.params.dhat, numerical.dhat);
+    let mut overlapping = floor();
+    for p in &mut overlapping.vertices {
+        p.z += 0.0006;
+    }
+    assert!(solver.with_contact(overlapping, numerical).is_err());
+}
+
+#[test]
+fn collider_replacement_and_swept_motion_refuse_stale_material_topology() {
+    let (c, x) = layers(0.9);
+    let mut solver = solver_with_materials(c.clone(), x.clone());
+    solver.model.membranes.swap(0, 1);
+    assert!(
+        solver
+            .with_contact(Body::empty(), params())
+            .unwrap_err()
+            .message
+            .contains("topology changed")
+    );
+    let mut c = c;
+    c.cloth.triangles.swap(0, 1); // Same edge set but different source-material ownership.
+    assert!(
+        c.motion_bound(&x, &x, &[], 1000)
+            .unwrap_err()
+            .message
+            .contains("topology changed")
+    );
+}
