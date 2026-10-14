@@ -301,8 +301,13 @@ conservation, receipt tampering and input-file preservation.
 
 This is a delivered slice of plan §25.6 / bead `ftx-tmb`, not closure of its broader
 geometric and empirical requirements. Local-normal overlap partitions are implemented;
-general folded/concave-body correspondence, physical air-gap construction, topology
-changes and temperature remapping, in-plane conduction, radiation, moisture, wind,
+general folded/concave-body correspondence, physical air-gap construction, arbitrary
+cloth topology changes, in-plane conduction, radiation, moisture, wind,
 compressed loft and tissue/metabolic thermoregulation are not implemented here.
 Native tests and wasm32 compilation do not establish browser execution parity,
 measured warmth, fire safety, PPE certification or machine-process permission.
+
+For prescribed pose sequences, conservative material-temperature remapping and resumable
+heat histories, use `ftx-materials thermal-motion`; see [thermal-motion.md](thermal-motion.md).
+This path requires geometry-derived maps and an unchanged covered material domain, not
+arbitrary appearance/disappearance of cloth or automatic temperature initialization.

@@ -4,10 +4,10 @@ use ftx_drape::thermal::{
     Boundary,
     surface::{
         Surface,
-        coverage::{Coverage, CoverageStep, Layout},
+        coverage::{Coverage, CoverageStep, Layout, motion::Frame},
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{invalid, read, thermal_projection};
@@ -23,16 +23,16 @@ struct Mapping {
     projection: Option<thermal_projection::Receipt>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Film {
+pub(super) struct Film {
     inside_c: f64,
     outside_c: f64,
     inside_resistance_m2_k_w: f64,
     outside_resistance_m2_k_w: f64,
 }
 impl Film {
-    fn boundary(&self) -> Boundary {
+    pub(super) fn boundary(&self) -> Boundary {
         Boundary {
             inside_c: self.inside_c,
             outside_c: self.outside_c,
@@ -59,13 +59,43 @@ struct Conditions {
     transient: Option<Transient>,
 }
 
-fn field(step: &CoverageStep) -> Value {
+pub(super) fn field(step: &CoverageStep) -> Value {
     json!({"regions":step.regions,"body":step.body,"temperature_c":step.state.temperature_c(),
         "body_area_m2":step.body_area_m2,"covered_area_m2":step.covered_area_m2,
         "bare_heat_w":step.bare_heat_w,"inside_heat_w":step.inside_heat_w,
         "outside_heat_w":step.outside_heat_w,"net_heat_w":step.net_heat_w,
         "stored_change_j":step.stored_change_j,"balance_error_j":step.balance_error_j,
         "unassigned_cloth_reference_area_m2":step.unassigned_cloth_reference_area_m2})
+}
+
+/// Reuse saved-drape verification and the exact geometric-map replay for moving heat histories.
+pub(super) fn motion_frame(report: &Value, mapping: &Value) -> Result<(Frame, usize), Refusal> {
+    let map: Mapping =
+        serde_json::from_value(mapping.clone()).map_err(|e| invalid(e.to_string()))?;
+    if map.schema != "ftx-drape-thermal-coverage/1" {
+        return Err(invalid("unknown thermal coverage mapping schema"));
+    }
+    let (source, cloth) = Surface::from_drape_report(report)?;
+    if report["thermal_surface"]["sha256"].as_str() != Some(&map.drape_thermal_frame_sha256) {
+        return Err(invalid(
+            "coverage mapping belongs to a different drape thermal frame",
+        ));
+    }
+    let work = source.cells();
+    let receipt = map.projection.as_ref().ok_or_else(|| {
+        invalid(
+            "thermal motion requires geometric thermal-map output, not a manual coverage layout",
+        )
+    })?;
+    let frame = thermal_projection::motion_frame(
+        source,
+        cloth,
+        report,
+        map.body_positions_m,
+        &map.layout,
+        receipt,
+    )?;
+    Ok((frame, work))
 }
 
 fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value, Refusal> {

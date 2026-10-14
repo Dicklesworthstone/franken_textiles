@@ -1,91 +1,175 @@
-# Thermal continuity across moving coverage maps
+# Heat histories through prescribed garment poses
 
-The `thermal::surface::coverage::motion` module transfers a temperature state between
-geometry-derived coverage partitions without restarting the thermal simulation. It uses
-the existing material laws, polygon clipping and layered finite-volume solver.
+`ftx-materials thermal-motion MOTION.json` connects saved geometric coverage maps to the
+existing conservative material-coordinate remapper and thermal solvers. It carries
+nonuniform temperature through pose changes, body retessellation and depth-cell changes,
+and writes a resumable state. It does not reset a garment to a reservoir temperature at
+each pose. No material names or alternate constitutive models enter the solver.
 
-`Frame::new` computes correspondence from a frozen source surface, current cloth/body
-positions, body triangles and a projection request. Its fields are private: an authored
-polygon or a matching scalar area is not a geometrically verified remap stencil.
-`initial` begins at an explicit temperature, `advance` performs a physical heat step,
-and `remap` transfers a previous frame's state without advancing time. State carries
-both the coverage identity and the actual mapped geometry identity. Equal area fractions
-alone do not permit using a state from a different geometric frame.
+## Run a sequence
 
-## Conservative material-coordinate transfer
+First generate each pose's mapping with the existing command:
 
-Cloth triangle identity and reference geometry remain fixed. The body may move or be
-retessellated, cloth may move or stretch, the coverage partition may split or merge, and
-the number of cells through each material's thickness may change. Each donor cell holds
-a piecewise-constant material temperature. The transfer stencil is the intersection of
-its cloth-barycentric polygon with a destination polygon, times the intersection of
-their normalized through-thickness intervals.
-
-For donor weights `w_i` and source-specific reference-area enthalpy `H(T)`, the new
-temperature satisfies:
-
-```
-H(T_new) = sum(w_i * H(T_i)) / sum(w_i)
-H(T) - H(T_ref) = areal_mass * integral(T_ref..T, Cp(u) du)
+```sh
+ftx-materials thermal-map rest/sim_report.json rest/body.obj projection.json > rest-map.json
+ftx-materials thermal-map posed/sim_report.json posed/body.obj projection.json > posed-map.json
+ftx-materials thermal-motion motion.json > heat-run.new.json
 ```
 
-The existing temperature law integrates the declared piecewise-linear heat capacity.
-Positive heat capacity provides a monotone inverse, bracketed by donor temperatures.
-Each material is treated independently; a lining cannot donate its specific-heat law to
-a shell. Temperatures are never interpolated directly when heat capacity varies with
-temperature. Material-normal orientation maps the depth cells: viewing the opposite
-side of a triangle reverses cell order instead of exchanging the material's two faces.
+Use fresh output filenames to retain earlier runs. The referenced drape reports need
+complete thermal material selections. `projection.json` and each map use the schemas in
+[thermal-coverage.md](thermal-coverage.md). A pose may use a different projection request
+or depth discretization, but the source cloth topology, reference areas, material
+snapshots and physical layer identities must remain the same. The covered **spatial
+material domain** must also remain the same; equal aggregate areas are not sufficient.
 
-This is a **first-order conservative remap**, not a reversible interpolation. Merging
-different donor temperatures mixes unresolved gradients. Refinement cannot recover
-those lost gradients. Energy conservation and the donor maximum principle do not prove
-spatial/time convergence, empirical fabric accuracy or garment comfort.
+Example `motion.json` (geometry paths relative to this file's directory):
 
-The integral-over-intersections approach is standard conservative-remapping background,
-not a claim to implement the higher-order algorithms in these references:
+```json
+{
+  "schema": "ftx-thermal-motion/1",
+  "initial": {
+    "kind": "uniform",
+    "time_seconds": 0.0,
+    "drape_report": "rest/sim_report.json",
+    "coverage": "rest-map.json",
+    "temperature_c": 10.0
+  },
+  "frames": [
+    {
+      "time_seconds": 2.0,
+      "drape_report": "rest/sim_report.json",
+      "coverage": "rest-map.json",
+      "boundaries": [{
+        "inside_c": 30.0,
+        "outside_c": 0.0,
+        "inside_resistance_m2_k_w": 0.1,
+        "outside_resistance_m2_k_w": 0.2
+      }],
+      "steps": 4
+    },
+    {
+      "time_seconds": 4.0,
+      "drape_report": "posed/sim_report.json",
+      "coverage": "posed-map.json",
+      "boundaries": [{
+        "inside_c": 0.0,
+        "outside_c": 30.0,
+        "inside_resistance_m2_k_w": 0.1,
+        "outside_resistance_m2_k_w": 0.2
+      }],
+      "steps": 4
+    }
+  ]
+}
+```
 
-- Dukowicz and Kodis, *Accurate Conservative Remapping (Rezoning) for Arbitrary
-  Lagrangian–Eulerian Computations*, 1987, DOI 10.1137/0908037.
-- Klima, Kucharik and Shashkov, *Combined swept region and intersection-based
-  single-material remapping method*, 2017, DOI 10.1002/fld.4384.
+These temperatures, film resistances and times are illustrative, not a measured garment
+experiment. Temperatures must lie in the materials' common validity interval. One
+boundary entry broadcasts to all body triangles; otherwise supply exactly one entry
+per destination body triangle in the map's retained order. Boundary values may change
+between intervals. No wind model or film coefficient is inferred.
 
-## Accounting and refusal boundaries
+**Times are physical seconds**, finite, nonnegative and strictly increasing. `steps`
+subdivides an interval into equal backward-Euler heat steps. The destination geometry
+and boundary fields apply throughout that interval (right-endpoint, frozen-pose
+approximation). Correspondence changes instantaneously before its heat steps, with no
+elapsed time during remapping. This does not interpolate mechanical motion. Simulation
+playback frame numbers or frame rates do not establish physical timestamps.
 
-Both donor and destination portions must be completely matched in material coordinates.
-Equal total areas are insufficient: spatially disjoint domains refuse. The only allowance
-is the projection's numerical area correction, bounded per portion by
-`5e-10 * fraction + 64 * f64::EPSILON`. The actual reference-area residual is reported.
-This tolerance is not permission to add a meaningful uncharacterized area.
+## Resume without temperature reset
 
-Each source triangle has a declared enthalpy zero (its minimum donor temperature).
-The transfer report retains those zeroes, before/after energies, signed residual and the
-sum of absolute **per-triangle** residuals, so compensating material errors cannot hide.
-The per-triangle acceptance is `2e-9 * (1 + |before| + |after|)` J; that is a numerical
-guard, not measurement uncertainty. Remap error is not physical boundary heat.
-Polygon, cell-intersection and thermal-law work share a bounded five-million-operation
-budget, including characterization-table length. No partial state is returned on error.
+A continuation manifest replaces `initial` with:
 
-Source observations/evidence policy, cloth triangle topology, reference areas and physical
-layer identities must remain unchanged. Material substitution starts a new explicit
-simulation; it does not reinterpret stored energy belonging to another fabric.
+```json
+{"kind": "resume", "checkpoint": "heat-run.new.json"}
+```
 
-**The same spatial cloth domain must remain covered.** Regions of cloth may be unassigned
-in both maps, but a previously unassigned portion has no modeled thermal history. Cloth
-entering or leaving the modeled domain therefore refuses. An exposed-cloth thermal state
-and appropriate boundary conditions are needed before supporting that transition. The
-code never silently freezes, deletes, or resets the energy of entering/leaving cloth.
+Keep the normal top-level schema and `frames`, whose first time must be strictly after
+the saved time. The complete previous report can be supplied directly, or its
+`checkpoint` object can be saved separately. There is no need to extract temperature
+arrays, reselect materials, or manually reconstruct a geometric frame.
 
-All the projection's geometric restrictions remain: outward, non-self-intersecting body
-geometry is a caller precondition; ambiguous folds, grazing sheets and unresolved layer
-order refuse. No air-gap law, moisture, compression, tissue storage, mechanical-work
-heating, phase change or thermoregulating human model is added by remapping.
+The `ftx-thermal-motion-checkpoint/1` wrapper retains physical time and a
+`ftx-thermal-motion-state/1` library checkpoint. Restoration rebuilds the source-locked
+surface, reruns the geometric projection and compares the complete frame before
+admitting the exact saved temperature rows. Cell dimensions and material temperature
+domains are checked even when an input's digest has been recomputed. Hashes detect
+content changes; they are not authentication or proof that a history was physically
+simulated. A source-material edit must start a separately initialized experiment,
+not reuse this state through an implicit conversion.
 
-## Executable checks
+Splitting a sequence at an interval boundary and resuming with the same remaining
+intervals/substeps reproduces the uninterrupted final checkpoint in the CLI regression.
+Energy totals in each report cover **that invocation only**. Sum physical-energy totals
+across segments; do not count the prior segment again as part of a resumed run.
 
-`crates/ftx-drape/tests/thermal_motion.rs` covers independent nonlinear-enthalpy mixing,
-body retessellation, moving hot cloth onto a colder body region, through-thickness
-refinement/coarsening, material-side reversal, separate lining/shell laws, deterministic
-repetition, uniform-state preservation, same-area/different-domain refusal, entering and
-leaving material, changed-source/state refusal, and continued physical heat evolution.
-All inputs are explicitly synthetic. Native tests and wasm compilation are separate
-from browser execution parity and physical garment validation.
+## Conservation and output
+
+The `ftx-thermal-motion-report/1` result includes input/geometry identities, a per-interval
+trace, final per-region and per-body-triangle heat fields, a complete checkpoint, work
+counts, numerical residuals and explicit scope. No successful partial report is emitted
+when a later interval refuses; inputs and previous checkpoints are not modified.
+
+Remapping intersects material-coordinate polygons and through-thickness cell intervals,
+then averages **specific-heat integrals**, not temperatures. Stored heat follows allocated
+reference mass, not current cloth or body area. The positive heat-capacity law is inverted
+within the donor temperature range. It is a first-order mixing operation: coarsening
+loses unresolved gradients, and remapping back cannot recreate them. Projection and
+remap accuracy must be studied separately from physical time-step refinement.
+
+The trace reports remap energy separately from physical boundary heat:
+
+- `physical_stored_change_j` and `net_boundary_energy_j` are the time-integrated heat
+  calculation. The net is accumulated before cancellation of bare-body heat paths.
+- `signed_remap_residual_j` and `absolute_remap_residual_j` describe numerical transfer
+  imbalance, **not** an environmental heat source. Per-cloth errors cannot cancel out
+  unnoticed. `material_energy_change_including_remap_j` includes this residual explicitly.
+- `polygon_roundoff_m2` records area changes from canonicalizing floating-point inward
+  corners in mathematically convex material footprints. Original geometric receipts
+  remain unchanged. Genuine nonconvex polygons refuse; material-allocation and energy
+  acceptance tolerances are not relaxed to accommodate missing donors.
+
+The polygon correction addresses a real sewn-band regression: inverse barycentric
+roundoff created a microscopic inward edge whose infinite clipping plane discarded a
+finite donor wedge. Exact-sign convex hulls are admitted only when their area difference
+is within the stated floating-point bound; the original observation/map is never edited.
+
+## Limits and refusal boundaries
+
+There are at most 128 destination intervals, 100,000 total substeps, ten million combined
+cell/geometry steps and twenty million projection/remap operations per invocation.
+Existing per-projection/remap limits also apply. Bare scenes still consume geometry
+budget. Referenced files are limited to 64 MiB each and 256 MiB total bytes read, including
+repeated reads; the manifest uses the existing 64 MiB input limit. Compact interval
+traces are bounded to 16 MiB and complete pretty-printed reports to less than 64 MiB so
+the emitted checkpoint is readable by the same command. Split long schedules at interval
+boundaries rather than deleting detail or silently truncating work.
+
+Manual area-only maps cannot initialize motion: the remapper needs verified polygons
+and oriented material cells. Changed source materials, cloth remeshing, new/lost covered
+cloth portions, invalid time or boundaries, changed receipts, unsupported geometry,
+out-of-domain temperatures and failed energy checks refuse. Unassigned cloth does not
+gain an invented temperature history. Supporting cloth entering/leaving coverage needs
+an explicit exposed-cloth reservoir/state model, not another automatic initialization.
+
+## Tests and no-claim boundaries
+
+`crates/ftx-drape/tests/thermal_motion.rs` tests spatial/depth remapping, independent
+nonlinear enthalpy, layer-specific laws, body-side reversal, uniform preservation,
+checkpoint restart, tamper/domain rejection and all-bare state handling. Three direct
+polygon unit tests retain the failing microscopic edge, an independent rational-coordinate
+intersection answer, convex invariance and refusal of substantive concavity.
+
+`crates/ftx-cli/tests/thermal_coverage_workflow.rs` runs the actual binary on a synthetic
+sewn garment and generated body maps. The motion cases include a translated/retessellated
+body, two-to-three depth cells, reversed boundary temperatures, independent reference-mass
+energy, exact restart, relative file paths, material edits, malformed/manual maps and
+work-budget refusals. They do not measure textile behavior.
+
+The model still excludes general folded/concave-body correspondence, mechanical-time
+interpolation, cloth remeshing, entering/leaving cloth history, physical air-gap transport,
+moisture, compressed loft, in-plane conduction and human thermoregulation. Compilation
+for WebAssembly is not browser execution-parity evidence. Numerical conservation and
+source-locked replay are not measured garment warmth, cold-weather safety, PPE
+certification or manufacturing approval.

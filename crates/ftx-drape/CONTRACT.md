@@ -335,3 +335,18 @@ residuals, tiny unresolved footprints and bounded allocation-roundoff correction
 under this closure. Tests: `thermal_projection` and the actual sewn-drape CLI workflow above. No
 automatic interface physics, true surface air-gap construction, general concave/folded correspondence,
 temperature remapping, wearer thermoregulation, measured material/fit or browser execution-parity claim.
+
+**Resumable thermal motion** (`thermal::surface::coverage::motion`, `ftx-tmb`).
+`Frame::checkpoint` and `Frame::from_checkpoint` retain/rebuild the complete material and
+geometric frame and exact cell temperatures. Restoration reruns projection and enforces
+cell shape, source identity and characterized domains; a digest is not authentication.
+`ftx-materials thermal-motion` chains prescribed timed poses through instantaneous
+material-polygon/depth-cell enthalpy remap and the existing heat solver, without resetting
+heat at a new pose. Physical heat and remap numerical residuals remain distinct. The
+same covered spatial material domain is required; body/depth discretization may change,
+but new/lost cloth history, material substitution and cloth remeshing refuse. A bounded
+convexification removes only roundoff-scale inward polygon corners, reports the reference
+area correction and leaves original projection snapshots unchanged. Genuine nonconvexity
+and unmatched donors still refuse. Tests: `thermal_motion`, motion polygon unit cases,
+and actual saved-drape/production-CLI restart cases in `thermal_coverage_workflow`.
+See `docs/thermal-motion.md` for timing, checkpoint schemas, budgets and no-claim boundaries.

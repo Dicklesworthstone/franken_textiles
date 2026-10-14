@@ -7,6 +7,7 @@ use ftx_drape::{
     thermal::surface::{
         Surface,
         coverage::Layout,
+        coverage::motion::Frame,
         projection::{self, Projection, Request, Settings},
     },
 };
@@ -42,6 +43,10 @@ fn project(
     faces: &[[usize; 3]],
     input: &Input,
 ) -> Result<Projection, Refusal> {
+    projection::project(source, cloth, body, faces, &request(report, input)?)
+}
+
+fn request(report: &Value, input: &Input) -> Result<Request, Refusal> {
     if input.schema != "ftx-drape-thermal-projection/1" {
         return Err(invalid("unknown drape thermal projection schema"));
     }
@@ -77,17 +82,11 @@ fn project(
             .ok_or_else(|| invalid("invalid drape instance owner"))?;
         layers.push(input.instance_layers[name].clone());
     }
-    projection::project(
-        source,
-        cloth,
-        body,
-        faces,
-        &Request {
-            schema: "ftx-thermal-projection/1".into(),
-            cloth_layers: layers,
-            settings: input.settings.clone(),
-        },
-    )
+    Ok(Request {
+        schema: "ftx-thermal-projection/1".into(),
+        cloth_layers: layers,
+        settings: input.settings.clone(),
+    })
 }
 
 // The renderer also accepts polygon fans and homogeneous vertices. Do not silently reinterpret
@@ -191,14 +190,6 @@ pub(super) fn verify(
     layout: &Layout,
     receipt: &Receipt,
 ) -> Result<Value, Refusal> {
-    if receipt.body_obj_sha256.len() != 64
-        || !receipt
-            .body_obj_sha256
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit())
-    {
-        return Err(invalid("invalid imported body OBJ identity"));
-    }
     let result = project(
         source,
         cloth,
@@ -207,7 +198,43 @@ pub(super) fn verify(
         &layout.body_triangles,
         &receipt.request,
     )?;
-    if serde_json::to_value(&result).map_err(|e| invalid(e.to_string()))? != receipt.result
+    verify_result(&result, layout, receipt)
+}
+
+/// A moving state requires the actual polygons and material orientation, not a manual area budget.
+pub(super) fn motion_frame(
+    source: Surface,
+    cloth: Vec<Vec3>,
+    report: &Value,
+    body: Vec<Vec3>,
+    layout: &Layout,
+    receipt: &Receipt,
+) -> Result<Frame, Refusal> {
+    let frame = Frame::new(
+        source,
+        cloth,
+        body,
+        &layout.body_triangles,
+        request(report, &receipt.request)?,
+    )?;
+    verify_result(frame.projection(), layout, receipt)?;
+    Ok(frame)
+}
+
+fn verify_result(
+    result: &Projection,
+    layout: &Layout,
+    receipt: &Receipt,
+) -> Result<Value, Refusal> {
+    if receipt.body_obj_sha256.len() != 64
+        || !receipt
+            .body_obj_sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(invalid("invalid imported body OBJ identity"));
+    }
+    if serde_json::to_value(result).map_err(|e| invalid(e.to_string()))? != receipt.result
         || serde_json::to_value(&result.layout).map_err(|e| invalid(e.to_string()))?
             != serde_json::to_value(layout).map_err(|e| invalid(e.to_string()))?
     {

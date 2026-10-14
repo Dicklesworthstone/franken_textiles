@@ -677,3 +677,272 @@ fn sewn_temperature_laws_reach_the_cli_and_conserve_integrated_reference_enthalp
     c["boundaries"][0]["outside_c"] = json!(-1.);
     refused(&report, &mapping, &c);
 }
+
+fn body_pose(dz: f64, refine: bool) -> String {
+    let (mut vertices, faces) = cylinder();
+    for p in &mut vertices {
+        p.z += dz;
+    }
+    let mut triangles = Vec::new();
+    for [a, b, c] in faces {
+        if refine {
+            let index = vertices.len();
+            vertices.push((vertices[a] + vertices[b] + vertices[c]) / 3.);
+            triangles.extend([[a, b, index], [b, c, index], [c, a, index]]);
+        } else {
+            triangles.push([a, b, c]);
+        }
+    }
+    let mut text = String::from("# Synthetic prescribed body pose; not a measured motion\n");
+    for p in vertices {
+        text.push_str(&format!("v {} {} {}\n", p.x, p.y, p.z));
+    }
+    for [a, b, c] in triangles {
+        text.push_str(&format!("f {} {} {}\n", a + 1, b + 1, c + 1));
+    }
+    text
+}
+fn motion_map(report: &Value, dz: f64, refine: bool, cells: usize) -> Value {
+    let mut request = projection_input();
+    request["settings"]["cells_per_layer"] = json!(cells);
+    let (output, _) = map_invoke(report, &body_pose(dz, refine), &request);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+fn motion_case(variable: bool) -> (PathBuf, Value, Value) {
+    let r = sewn_report_with_law(0.4, variable);
+    let (output, root) = map_invoke(&r, &body_obj(), &projection_input());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::write(root.join("start.json"), output.stdout).unwrap();
+    let moved = motion_map(&r, 0.003, true, 3);
+    fs::write(root.join("moved.json"), serde_json::to_vec(&moved).unwrap()).unwrap();
+    let cold = conditions()["boundaries"].clone();
+    let mut reversed = cold.clone();
+    reversed[0]["inside_c"] = json!(0.);
+    reversed[0]["outside_c"] = json!(30.);
+    let input = json!({"schema":"ftx-thermal-motion/1",
+        "initial":{"kind":"uniform","time_seconds":0.,"drape_report":"report.json",
+            "coverage":"start.json","temperature_c":10.},
+        "frames":[{"time_seconds":2.,"drape_report":"report.json","coverage":"start.json",
+            "boundaries":cold,"steps":4},
+            {"time_seconds":4.,"drape_report":"report.json","coverage":"moved.json",
+            "boundaries":reversed,"steps":4}]});
+    (root, input, r)
+}
+fn motion_invoke(root: &std::path::Path, input: &Value) -> Output {
+    let path = root.join(format!(
+        "motion-{}.json",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::write(&path, serde_json::to_vec(input).unwrap()).unwrap();
+    Command::new(env!("CARGO_BIN_EXE_ftx-materials"))
+        .current_dir(std::env::temp_dir())
+        .arg("thermal-motion")
+        .arg(path)
+        .output()
+        .unwrap()
+}
+fn motion_success(root: &std::path::Path, input: &Value) -> Value {
+    let output = motion_invoke(root, input);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+fn motion_refused(root: &std::path::Path, input: &Value) {
+    let report = fs::read(root.join("report.json")).unwrap();
+    let output = motion_invoke(root, input);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "failure must not publish earlier successful intervals"
+    );
+    assert!(serde_json::from_slice::<Value>(&output.stderr).unwrap()["refusal"].is_object());
+    assert_eq!(report, fs::read(root.join("report.json")).unwrap());
+}
+
+#[test]
+fn timed_motion_cli_carries_actual_sewn_drape_heat_across_body_pose_and_cell_changes() {
+    let (root, input, r) = motion_case(true);
+    let out = motion_success(&root, &input);
+    assert_eq!(out, motion_success(&root, &input));
+    assert_eq!(out["schema"], "ftx-thermal-motion-report/1");
+    assert_eq!(out["trace"].as_array().unwrap().len(), 2);
+    assert!(out["trace"][0]["remap"].is_null()); // exact identity does not numerically mix cells
+    assert!(out["trace"][1]["remap"].is_object());
+    assert_eq!(out["checkpoint"]["time_seconds"], 4.);
+    assert_eq!(
+        out["checkpoint"]["state"]["frame"]["source"],
+        r["thermal_surface"]["model"]
+    );
+    let frame = &out["checkpoint"]["state"]["frame"];
+    assert_eq!(frame["request"]["settings"]["cells_per_layer"], 3);
+    // An independently integrated Cp(T)=1000+20*T, times rho_A=0.2 and reference area,
+    // checks TOTAL final stored heat, including any tiny remap error, against the initial 10 C.
+    let mut energy = 0.;
+    for (i, region) in frame["projection"]["layout"]["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        for (j, p) in region["layers"].as_array().unwrap().iter().enumerate() {
+            let id = p["cloth_triangle"].as_u64().unwrap() as usize;
+            let reference = frame["source"]["patches"][id]["reference_area_m2"]
+                .as_f64()
+                .unwrap();
+            let fraction = p["fraction"].as_f64().unwrap();
+            for cell in 0..3 {
+                let t = out["final"]["temperature_c"][i][j * 3 + cell]
+                    .as_f64()
+                    .unwrap();
+                energy += reference * fraction / 3. * (200. * (t - 10.) + 2. * (t * t - 100.));
+            }
+        }
+    }
+    near(
+        out["material_energy_change_including_remap_j"]
+            .as_f64()
+            .unwrap(),
+        energy,
+        1e-8,
+    );
+    near(out["heat_balance_error_j"].as_f64().unwrap(), 0., 1e-8);
+    near(
+        out["energy"]["absolute_remap_residual_j"].as_f64().unwrap(),
+        0.,
+        1e-8,
+    );
+    assert_eq!(out["empirical_validation_claim"], false);
+}
+
+#[test]
+fn motion_cli_restart_matches_uninterrupted_state_without_resetting_temperatures() {
+    let (root, input, _) = motion_case(true);
+    let complete = motion_success(&root, &input);
+    let mut first = input.clone();
+    first["frames"].as_array_mut().unwrap().truncate(1);
+    let first = motion_success(&root, &first);
+    fs::write(
+        root.join("previous-run.json"),
+        serde_json::to_vec_pretty(&first).unwrap(),
+    )
+    .unwrap();
+    let mut resume = input.clone();
+    resume["initial"] = json!({"kind":"resume","checkpoint":"previous-run.json"});
+    resume["frames"] = json!([input["frames"][1]]);
+    let second = motion_success(&root, &resume);
+    assert_eq!(complete["checkpoint"], second["checkpoint"]);
+    assert_eq!(complete["final"], second["final"]);
+    assert_eq!(second["from_time_seconds"], 2.);
+    for key in [
+        "incoming_energy_j",
+        "outgoing_energy_j",
+        "physical_stored_change_j",
+        "net_boundary_energy_j",
+    ] {
+        near(
+            complete["energy"][key].as_f64().unwrap(),
+            first["energy"][key].as_f64().unwrap() + second["energy"][key].as_f64().unwrap(),
+            1e-12,
+        );
+    }
+    // Deliberate uniform reinitialization is a NEW simulation and must give a different result.
+    resume["initial"] = json!({"kind":"uniform","time_seconds":2.,"drape_report":"report.json",
+        "coverage":"start.json","temperature_c":10.});
+    assert_ne!(
+        second["final"]["temperature_c"],
+        motion_success(&root, &resume)["final"]["temperature_c"]
+    );
+}
+
+#[test]
+fn motion_cli_refuses_tampered_checkpoints_and_material_substitution_mid_history() {
+    let (root, input, r) = motion_case(false);
+    let mut first = input.clone();
+    first["frames"].as_array_mut().unwrap().truncate(1);
+    let saved = motion_success(&root, &first);
+    let mut broken = saved.clone();
+    broken["checkpoint"]["state"]["temperature_c"][0][0] = json!(999.);
+    fs::write(
+        root.join("broken.json"),
+        serde_json::to_vec(&broken).unwrap(),
+    )
+    .unwrap();
+    let mut resume = input.clone();
+    resume["initial"] = json!({"kind":"resume","checkpoint":"broken.json"});
+    resume["frames"] = json!([input["frames"][1]]);
+    motion_refused(&root, &resume);
+    // Valid new material + valid geometric mapping still cannot inherit the previous heat state.
+    let other = sewn_report(0.8);
+    assert_eq!(
+        r["thermal_surface"]["positions_m"],
+        other["thermal_surface"]["positions_m"]
+    );
+    fs::write(root.join("other.json"), serde_json::to_vec(&other).unwrap()).unwrap();
+    fs::write(
+        root.join("other-map.json"),
+        serde_json::to_vec(&mapped(&other)).unwrap(),
+    )
+    .unwrap();
+    let mut changed = input;
+    changed["frames"][1]["drape_report"] = json!("other.json");
+    changed["frames"][1]["coverage"] = json!("other-map.json");
+    motion_refused(&root, &changed);
+}
+
+#[test]
+fn motion_cli_rejects_changed_covered_domain_manual_maps_and_invalid_time_budgets() {
+    let (root, input, r) = motion_case(false);
+    let bare = motion_map(&r, 0.3, false, 2);
+    assert!(bare["layout"]["regions"].as_array().unwrap().is_empty());
+    fs::write(root.join("bare.json"), serde_json::to_vec(&bare).unwrap()).unwrap();
+    fs::write(
+        root.join("manual.json"),
+        serde_json::to_vec(&mapping(&r)).unwrap(),
+    )
+    .unwrap();
+    let mut corrupt: Value =
+        serde_json::from_slice(&fs::read(root.join("start.json")).unwrap()).unwrap();
+    corrupt["projection"]["result"]["layout"]["regions"][0]["body_fraction"] = json!(0.1);
+    fs::write(
+        root.join("corrupt.json"),
+        serde_json::to_vec(&corrupt).unwrap(),
+    )
+    .unwrap();
+    for change in [
+        (|v: &mut Value| v["frames"][1]["coverage"] = json!("bare.json")) as fn(&mut Value),
+        |v| v["frames"][1]["coverage"] = json!("manual.json"),
+        |v| v["frames"][1]["coverage"] = json!("corrupt.json"),
+        |v| v["frames"][1]["time_seconds"] = json!(1.),
+        |v| v["frames"][0]["steps"] = json!(0),
+        |v| v["frames"][0]["steps"] = json!(100_001),
+        |v| v["frames"][1]["boundaries"] = json!([]),
+        |v| v["frames"][1]["boundaries"][0]["inside_c"] = json!(-274.),
+        |v| v["initial"]["temperature_c"] = json!(-274.),
+    ] {
+        let mut bad = input.clone();
+        change(&mut bad);
+        motion_refused(&root, &bad);
+    }
+    // Even a zero-temperature-cell, all-bare scene must account for body/source geometry work.
+    let mut all_bare = input;
+    all_bare["initial"]["coverage"] = json!("bare.json");
+    all_bare["frames"] = json!([{"time_seconds":1.,"drape_report":"report.json","coverage":"bare.json",
+        "steps":100_000,"boundaries":conditions()["boundaries"]}]);
+    motion_refused(&root, &all_bare);
+}

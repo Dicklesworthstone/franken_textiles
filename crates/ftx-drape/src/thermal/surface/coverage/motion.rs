@@ -6,7 +6,11 @@
 //! The same spatial material domain must remain covered: newly entering/leaving cloth needs a
 //! separate exposed-cloth state model and is refused, never reset to an invented temperature.
 
-use ftx_core::{Refusal, Vec3, receipt::sha256_hex};
+use ftx_core::{
+    Refusal, Vec2, Vec3,
+    exact::{Sign, orient2d},
+    receipt::sha256_hex,
+};
 use ftx_pattern::material_thermal::ThermalLaw;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -76,6 +80,9 @@ pub struct Balance {
     pub reference_area_m2: f64,
     /// Largest summed donor/destination allocation residual, in reference m².
     pub allocation_residual_m2: f64,
+    /// Summed absolute reference-area changes when convexifying roundoff-scale inward corners.
+    /// Original projection receipts are retained unchanged; genuine nonconvexity is refused.
+    pub polygon_roundoff_m2: f64,
     /// One enthalpy zero per source triangle (minimum donor temperature), or None when unassigned.
     pub reference_temperature_c: Vec<Option<f64>>,
     /// Sensible heat above those explicitly retained zeroes, before the remap, J.
@@ -394,6 +401,8 @@ impl Frame {
             }
         }
         let mut work = Work::default();
+        let (old_polygons, old_roundoff) = old.material_polygons(&mut work)?;
+        let (polygons, new_roundoff) = self.material_polygons(&mut work)?;
         let mut used: Vec<Vec<f64>> = old
             .coverage
             .layout
@@ -406,12 +415,12 @@ impl Frame {
         for (r, region) in self.coverage.layout.regions.iter().enumerate() {
             let mut values = Vec::new();
             for (l, p) in region.layers.iter().enumerate() {
-                let polygon = &self.projection.footprints[r].hits[l].cloth_polygon;
+                let polygon = &polygons[r][l];
                 let mut intersections = Vec::new();
                 let mut received = 0.;
                 for &(s, k) in &donors[p.cloth_triangle] {
                     work.add(1)?;
-                    let other = &old.projection.footprints[s].hits[k].cloth_polygon;
+                    let other = &old_polygons[s][k];
                     if !bounds_overlap(polygon, other) {
                         continue;
                     }
@@ -504,6 +513,7 @@ impl Frame {
             to_sha256: self.sha256.clone(),
             reference_area_m2,
             allocation_residual_m2: donor_error.max(destination_error),
+            polygon_roundoff_m2: old_roundoff + new_roundoff,
             reference_temperature_c: zeros,
             before_j,
             after_j,
@@ -518,6 +528,7 @@ impl Frame {
             before_j,
             after_j,
             balance.residual_j,
+            balance.polygon_roundoff_m2,
             absolute_residual,
         ]
         .iter()
@@ -529,6 +540,28 @@ impl Frame {
             state: next,
             balance,
         })
+    }
+
+    fn material_polygons(&self, work: &mut Work) -> Result<(MaterialPolygons, f64), Refusal> {
+        let mut roundoff = 0.;
+        let polygons = self
+            .projection
+            .footprints
+            .iter()
+            .map(|fp| {
+                fp.hits
+                    .iter()
+                    .map(|hit| {
+                        let (polygon, delta) = convex_roundoff(&hit.cloth_polygon, work)?;
+                        roundoff += 2.
+                            * delta
+                            * self.coverage.source.patches[hit.cloth_triangle].reference_area_m2;
+                        Ok(polygon)
+                    })
+                    .collect::<Result<Vec<_>, Refusal>>()
+            })
+            .collect::<Result<Vec<_>, Refusal>>()?;
+        Ok((polygons, roundoff))
     }
 
     fn energy(
@@ -559,14 +592,67 @@ impl Frame {
     }
 }
 
+type MaterialPolygons = Vec<Vec<Vec<Vec2>>>;
+
+// Projection polygons are convex by construction, but inverse barycentric arithmetic can leave
+// almost-duplicate corners with an inward turn. Treating that tiny edge as an infinite clip line
+// can erase a finite donor wedge. An exact-sign hull removes only numerically insignificant dents;
+// it does not round coordinates, weaken the material-domain test or repair genuine nonconvexity.
+fn convex_roundoff(p: &[Vec2], work: &mut Work) -> Result<(Vec<Vec2>, f64), Refusal> {
+    if !(3..=256).contains(&p.len())
+        || p.iter()
+            .any(|v| !v.is_finite() || v.x.abs() > 2. || v.y.abs() > 2.)
+    {
+        return Err(invalid(
+            "invalid material-coordinate polygon for heat remapping",
+        ));
+    }
+    work.add(p.len() * 10)?;
+    let mut sorted = p.to_vec();
+    sorted.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    sorted.dedup();
+    let mut hull: Vec<Vec2> = Vec::new();
+    let mut append = |points: &mut dyn Iterator<Item = &Vec2>| {
+        let start = hull.len();
+        for &c in points {
+            while hull.len() >= start + 2 {
+                let a = hull[hull.len() - 2];
+                let b = hull[hull.len() - 1];
+                if orient2d([a.x, a.y], [b.x, b.y], [c.x, c.y]) == Sign::Positive {
+                    break;
+                }
+                hull.pop();
+            }
+            hull.push(c);
+        }
+        hull.pop();
+    };
+    append(&mut sorted.iter());
+    append(&mut sorted.iter().rev());
+    let original = area(p);
+    let corrected = area(&hull);
+    let delta = (corrected - original).abs();
+    if !original.is_finite()
+        || !corrected.is_finite()
+        || original <= 0.
+        || corrected <= 0.
+        || delta > 128. * f64::EPSILON * (1. + original.abs())
+    {
+        return Err(invalid(
+            "material polygon is nonconvex beyond floating-point roundoff",
+        ));
+    }
+    Ok((hull, delta))
+}
+
 fn check_fraction(received: f64, expected: f64) -> Result<(), Refusal> {
     // Explicit numerical allowance for the projection's bounded allocation-roundoff corrections.
     // Never normalize away a genuinely entering/leaving portion or a spatial gap.
     if !received.is_finite() || (received - expected).abs() > 5e-10 * expected + 64. * f64::EPSILON
     {
-        return Err(invalid(
-            "covered material domain changed; entering/leaving cloth has no modeled thermal history",
-        ));
+        return Err(invalid(format!(
+            "covered material domain changed (received {received:.17e}, expected {expected:.17e}); entering/leaving cloth has no modeled thermal history",
+        )));
     }
     if received <= 0. {
         return Err(invalid("destination has no thermal donor"));
@@ -646,4 +732,79 @@ fn mix(
         return Err(invalid("enthalpy inverse did not converge"));
     }
     Ok(t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn microscopic_inward_edge_cannot_delete_a_finite_remap_donor() {
+        // Retained from the sewn-band CLI regression: inverse barycentric rounding puts two
+        // nearly coincident corners in an inward turn. Treating that microscopic edge as an
+        // infinite clipping plane removes a donor about 5.14e-8 of the material triangle.
+        let target = [
+            Vec2::new(0.141_542_294_724_737_98, 0.000_965_775_692_924_402_1),
+            Vec2::new(4.273_511_510_613_281e-14, 5.463_578_223_132_216e-16),
+            Vec2::new(0.141_381_797_130_168_27, -5.922_597_980_646_374e-16),
+        ];
+        let donor = [
+            Vec2::new(0.002_742_812_421_032_216, 2.776_217_803_427_988e-16),
+            Vec2::new(0.002_744_394_779_058_933_5, 1.872_563_797_723_176_4e-5),
+            Vec2::new(1.333_450_065_677_077e-15, 2.659_877_951_251_099e-16),
+            Vec2::new(1.365_249_613_424_237_6e-15, 2.902_447_992_725_097_4e-16),
+        ];
+        let mut work = Work::default();
+        let broken = intersection(&target, &donor, &mut work).unwrap();
+        assert!(area(&broken).abs() < 1e-12);
+        let (target, _) = convex_roundoff(&target, &mut work).unwrap();
+        let (fixed, correction) = convex_roundoff(&donor, &mut work).unwrap();
+        let overlap = intersection(&target, &fixed, &mut work).unwrap();
+        assert!(correction < 1e-18);
+        // Independent rational-coordinate half-plane intersection, starting from these exact
+        // f64 inputs, gives this doubled area. The tiny boundary truncation is real, not zero.
+        assert!((2. * area(&overlap) - 5.136_091_243_263_29e-8).abs() < 1e-20);
+        assert!((area(&fixed) - area(&donor)).abs() < 1e-18);
+    }
+
+    #[test]
+    fn convex_roundoff_preserves_convex_domain_despite_duplicates_and_cycle_origin() {
+        let original = [
+            Vec2::new(0., 0.),
+            Vec2::new(0.5, 0.),
+            Vec2::new(0.5, 0.),
+            Vec2::new(1., 0.),
+            Vec2::new(0., 1.),
+            Vec2::new(0., 0.),
+        ];
+        for start in 0..original.len() {
+            let mut p = original.to_vec();
+            p.rotate_left(start);
+            let (hull, correction) = convex_roundoff(&p, &mut Work::default()).unwrap();
+            assert_eq!(hull.len(), 3);
+            assert_eq!(area(&hull), 0.5);
+            assert_eq!(correction, 0.);
+        }
+    }
+
+    #[test]
+    fn roundoff_admission_is_not_a_repair_for_nonconvex_or_invalid_material_geometry() {
+        let concave = [
+            Vec2::new(0., 0.),
+            Vec2::new(1., 0.),
+            Vec2::new(0.25, 0.25),
+            Vec2::new(0., 1.),
+        ];
+        assert!(convex_roundoff(&concave, &mut Work::default()).is_err());
+        let triangle = [Vec2::new(0., 0.), Vec2::new(1., 0.), Vec2::new(0., 1.)];
+        let mut clockwise = triangle;
+        clockwise.reverse();
+        assert!(convex_roundoff(&clockwise, &mut Work::default()).is_err());
+        for v in [f64::NAN, f64::INFINITY, 3.] {
+            let mut p = triangle;
+            p[0].x = v;
+            assert!(convex_roundoff(&p, &mut Work::default()).is_err());
+        }
+        assert!(convex_roundoff(&[Vec2::ZERO; 3], &mut Work::default()).is_err());
+    }
 }
