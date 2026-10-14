@@ -30,6 +30,7 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "update-measurements",
             "as-of",
             "no-priors",
+            "fabric",
         ],
     )?;
     if args.positional.len() != 2 {
@@ -61,12 +62,41 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         None => None,
     };
     let out = PathBuf::from(required(args, "out")?);
-    let (pat, spec) = draft(program, &meas, style.as_ref())?;
-    make_dir(&out)?;
+    let fabric = super::fabric::load(args)?;
+    let (mut pat, spec) = draft(program, &meas, style.as_ref())?;
+    if let Some(selected) = &fabric {
+        selected.apply(&mut pat)?;
+    }
     let (pp, sp) = (out.join("pattern.json"), out.join("fit_spec.json"));
     let errs = Pattern::new(pat.clone()).structure_errors();
-    write(&pp, &pat)?;
-    write(&sp, &spec)?;
+    if let Some(selected) = &fabric {
+        match std::fs::symlink_metadata(&out) {
+            Ok(_) => {
+                return Err(bad_input(
+                    "draft --fabric requires a fresh output directory; existing evidence is never overwritten",
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(workspace::io_error(&out, e)),
+        }
+        if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+            make_dir(parent)?;
+        }
+        std::fs::create_dir(&out).map_err(|e| workspace::io_error(&out, e))?;
+        selected.save(&out)?;
+        workspace::write_new(
+            &sp,
+            (PyJson::from_value(&spec).dumps(Some(1)) + "\n").as_bytes(),
+        )?;
+        workspace::write_new(
+            &pp,
+            (PyJson::from_value(&pat).dumps(Some(1)) + "\n").as_bytes(),
+        )?;
+    } else {
+        make_dir(&out)?;
+        write(&pp, &pat)?;
+        write(&sp, &spec)?;
+    }
     let result = json!({
         "pattern": pp.display().to_string(),
         "fit_spec": sp.display().to_string(),
@@ -90,7 +120,11 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
         .get("style")
         .map(|p| read_json(p).map(|x| x.0))
         .transpose()?;
-    let (pat, spec) = draft(program, &evidence.value, style.as_ref())?;
+    let fabric = super::fabric::load(args)?;
+    let (mut pat, spec) = draft(program, &evidence.value, style.as_ref())?;
+    if let Some(selected) = &fabric {
+        selected.apply(&mut pat)?;
+    }
     let errs = Pattern::new(pat.clone()).structure_errors();
     let readiness = ftx_measure::round_readiness(&pat, &evidence.value, &date);
     // Do not silently repair or replace an unreadable existing workspace contract.
@@ -101,6 +135,9 @@ fn draft_workspace(args: &Args, program: &str) -> Result<(Value, i32, String), R
     let ws = workspace::Workspace::open(&root)?;
     let note = ws.adopt(&evidence, update)?;
     let (number, dir) = ws.reserve_round()?;
+    if let Some(selected) = &fabric {
+        selected.save(&dir)?;
+    }
     workspace::write_json(&dir.join("pattern.json"), &pat)?;
     workspace::write_json(&dir.join("fit_spec.json"), &spec)?;
     workspace::write_new(&dir.join("measurements.json"), &evidence.bytes)?;
