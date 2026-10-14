@@ -100,13 +100,19 @@ ells and slivers; every ring GEOS's, 27 bit-identical, the rest within 1.2e-13 p
 cases: self-crossing curves, an eroded triangle, a split dumbbell, spike/pinch/bowtie clean-ups, holes,
 multipolygons, traced strokes 3–9 px, outlines with a one-pixel leader, 23 and 40 tied holes, a near-collinear
 spike, point rings, coordinates of 1e155 and 1e-170, a distance of 1e160, −0.0; the polygons, their order,
-every ring's start and length and the holes GEOS's, 53 bit-identical). Not matched: (1) joins built from
-`atan2`, `sin` and `cos` (round, limited mitre, a point's circle) differ from macOS libm in the last bits
-(`det::` keeps every target equal); (2) where GEOS's full-precision attempt throws a `TopologyException` and
-`BufferOp` retries with a snap-rounding noder at 12 significant digits (3 of the 72: offsets of the dozens of
-touching parts a one-pixel leader leaves after the clean-up, only with `--open` 0 or 1), the buffer refuses as
-GEOS's first attempt did and the trace refuses (the skill then runs `vectorize.py`); (3) an unclosed two-point
-ring (a closed shell or hole never is one) has no curve. A non-finite distance refuses, as GEOS does. Plus
+every ring's start and length and the holes GEOS's, 56 bit-identical). Where GEOS's full-precision attempt
+throws a `TopologyException`, its retry (`BufferOp::bufferReducedPrecision`) is ported: the curves made
+precise at 12 significant digits of the envelope, then 11, down to 6 (the digits from a correctly rounded `ln`,
+as macOS's `log` gives them beside the powers of ten), snap-rounded (`ScaledNoder` around `SnapRoundingNoder`:
+hot pixels at the vertices and intersections, `SnapRoundingIntersectionAdder`'s near-vertex nodes, every
+segment noded at the pixels it crosses) into the same graph. 3 of the 72 need it (offsets of the dozens of
+touching parts a one-pixel leader leaves after the clean-up, with `--open` 0 or 1), bit-identical; so are 996
+of 1,012 fuzzed retries (stars with one-pixel leaders), and all 1,012 with the platform's libm in place of
+`det::` (the other 16 turn on (1)). Not matched: (1) joins built from `atan2`, `sin` and `cos` (round, limited
+mitre, a point's circle) differ from macOS libm in the last bits (`det::` keeps every target equal; macOS's
+`sin` and `cos` are not correctly rounded either, on about 4 % of arguments). At an exact reversal the limited
+mitre's bevel ends lie on the offset lines, so that last bit decides the join; (2) an unclosed two-point ring (a
+closed shell or hole never is one) has no curve. A non-finite distance refuses, as GEOS does. Plus
 `LineString.distance` and `project(normalized=True)` for points.
 
 **Trace** (`trace.rs`, spec 04 §10.2–10.9). `trace_image` in the reference's order: crop, erase (painted

@@ -71,8 +71,9 @@ display as question marks. Source label crops contain no generated text.
 
 Tracing geometry, masks, annotation documents, audit findings and scale-fit are
 unchanged. Passing a visual review does not establish scale, sewability or fit;
-UNSCALED traces still cannot produce true-size exports. The reduced-precision
-buffer retry remains incomplete (JPEG and WebP: `ftx_trace::raster::{jpeg, webp}`). The
+UNSCALED traces still cannot produce true-size exports. JPEG and WebP sheets
+decode through `ftx_trace::raster::{jpeg, webp}`, and GEOS's reduced-precision
+buffer retry is ported (`ftx-trace` CONTRACT). The
 I/O-free `ftx_trace::review::{overlay, label_crops, audit_image}` APIs build for
 WebAssembly, but this change does not add browser-page controls or wire the
 separate skill repository to the native images.

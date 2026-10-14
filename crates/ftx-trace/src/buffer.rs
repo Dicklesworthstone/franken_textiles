@@ -48,9 +48,48 @@ pub(crate) fn orientation(p1: Vec2, p2: Vec2, q: Vec2) -> i32 {
     }
 }
 
-fn dist(a: Vec2, b: Vec2) -> f64 {
+/// GEOS `Coordinate::distance`.
+pub(crate) fn dist(a: Vec2, b: Vec2) -> f64 {
     let (dx, dy) = (a.x - b.x, a.y - b.y);
     (dx * dx + dy * dy).sqrt()
+}
+
+/// A FIXED GEOS `PrecisionModel` (`PrecisionModel(scale)`, `setScale`): nearly integral scales and grid
+/// sizes snap to the integer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Fixed {
+    scale: f64,
+    grid: f64,
+}
+
+impl Fixed {
+    pub(crate) fn new(scale: f64) -> Self {
+        let snap = |v: f64| {
+            let r = v.round();
+            if (v - r).abs() < 1e-5 { r } else { v }
+        };
+        if scale < 1.0 {
+            Self {
+                scale,
+                grid: snap(1.0 / scale),
+            }
+        } else {
+            let scale = snap(scale);
+            Self {
+                scale,
+                grid: 1.0 / scale,
+            }
+        }
+    }
+
+    /// `PrecisionModel::makePrecise`.
+    fn precise(self, v: f64) -> f64 {
+        if self.grid > 1.0 {
+            buffer_graph::java_round(v / self.grid) * self.grid
+        } else {
+            buffer_graph::java_round(v * self.scale) / self.scale
+        }
+    }
 }
 
 /// GEOS `Distance::pointToSegment`.
@@ -106,6 +145,10 @@ impl Dd {
         self.add(-o.0, -o.1)
     }
 
+    fn add_dd(self, o: Self) -> Self {
+        self.add(o.0, o.1)
+    }
+
     fn mul(self, o: Self) -> Self {
         let (hi, lo, yhi, ylo) = (self.0, self.1, o.0, o.1);
         let mut c0 = Self::SPLIT * hi;
@@ -144,6 +187,50 @@ impl Dd {
     fn value(self) -> f64 {
         self.0 + self.1
     }
+}
+
+/// ln(x) correctly rounded (but for hard cases of ~2⁻⁵⁰ odds): the atanh series in double-double. macOS's
+/// `log`, which GEOS's envelope digits use, is correctly rounded beside the powers of ten where those
+/// digits turn (2,267 of 2,268 neighbours checked against mpmath); `det::ln` is up to 3 ulp off there.
+fn ln_correctly_rounded(x: f64) -> f64 {
+    if x.is_nan() || x < 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if x.is_infinite() {
+        return x;
+    }
+    // x = m 2^e with m in [√½, √2)
+    let (x, bias) = if x < f64::MIN_POSITIVE {
+        (x * 18_014_398_509_481_984.0, -54) // 2⁵⁴: subnormals normalized
+    } else {
+        (x, 0)
+    };
+    let bits = x.to_bits();
+    let mut e = ((bits >> 52) & 0x7ff) as i32 - 1023 + bias;
+    let mut m = f64::from_bits((bits & 0x000f_ffff_ffff_ffff) | 0x3ff0_0000_0000_0000);
+    if m > std::f64::consts::SQRT_2 {
+        m /= 2.0;
+        e += 1;
+    }
+    // ln m = 2 atanh s, s = (m − 1)/(m + 1), |s| ≤ 0.1716
+    let s = Dd(m - 1.0, 0.0).div(Dd(m, 0.0).add(1.0, 0.0));
+    let s2 = s.mul(s);
+    let (mut term, mut sum) = (s, s);
+    for k in 1..=24 {
+        term = term.mul(s2);
+        sum = sum.add_dd(term.div(Dd(f64::from(2 * k + 1), 0.0)));
+    }
+    let ln2 = Dd(
+        f64::from_bits(0x3FE6_2E42_FEFA_39EF),
+        f64::from_bits(0x3C7A_BC9E_3B39_803F),
+    );
+    Dd(f64::from(e), 0.0)
+        .mul(ln2)
+        .add_dd(sum.add_dd(sum))
+        .value()
 }
 
 /// `CGAlgorithmsDD::intersection` of the lines `p1 p2` and `q1 q2` (`None` when parallel).
@@ -361,10 +448,12 @@ struct SegGen {
     s2: Vec2,
     off0: (Vec2, Vec2),
     off1: (Vec2, Vec2),
+    /// The working precision model (none: floating).
+    pm: Option<Fixed>,
 }
 
 impl SegGen {
-    fn new(d: f64, join: Join, left: bool) -> Self {
+    fn new(d: f64, join: Join, left: bool, pm: Option<Fixed>) -> Self {
         // shapely's quad_segs (16 unless given): round joins, and a point's circle under any join
         let quad = match join {
             Join::Round(q) => q.max(1),
@@ -387,10 +476,15 @@ impl SegGen {
             s2: Vec2::new(0.0, 0.0),
             off0: (Vec2::new(0.0, 0.0), Vec2::new(0.0, 0.0)),
             off1: (Vec2::new(0.0, 0.0), Vec2::new(0.0, 0.0)),
+            pm,
         }
     }
 
+    /// `OffsetSegmentString::addPt`: made precise, then dropped if it nearly repeats the last point.
     fn add(&mut self, p: Vec2) {
+        let p = self
+            .pm
+            .map_or(p, |pm| Vec2::new(pm.precise(p.x), pm.precise(p.y)));
         if let Some(&last) = self.pts.last()
             && dist(p, last) < self.d * 1.0e-4
         {
@@ -592,7 +686,7 @@ pub(crate) fn ring_signed_area(c: &[Vec2]) -> f64 {
 }
 
 /// GEOS's raw ring offset curve (closed) of a polygon's shell at `distance` (negative: inward).
-fn raw_ring_curve(shell: &[Vec2], distance: f64, join: Join) -> Vec<Vec2> {
+fn raw_ring_curve(shell: &[Vec2], distance: f64, join: Join, pm: Option<Fixed>) -> Vec<Vec2> {
     // the shell as a closed sequence without repeated or non-finite points
     let mut coords: Vec<Vec2> = Vec::with_capacity(shell.len() + 1);
     for &p in shell.iter().chain(shell.first()) {
@@ -617,7 +711,7 @@ fn raw_ring_curve(shell: &[Vec2], distance: f64, join: Join) -> Vec<Vec2> {
         return Vec::new();
     }
     let n = simp.len() - 1;
-    let mut g = SegGen::new(d, join, left);
+    let mut g = SegGen::new(d, join, left, pm);
     g.init(simp[n - 1], simp[0]);
     for (i, &p) in simp.iter().enumerate().skip(1) {
         g.next(p, i != 1);
@@ -696,7 +790,13 @@ fn ring_curve_inverted(ring: &[Vec2], distance: f64, curve: &[Vec2]) -> bool {
 
 /// `BufferCurveSetBuilder::addPolygonRingSide`: a ring's raw curve and its depth delta. A clockwise
 /// shell has the polygon on its right (delta −1), a hole on its left; counter-clockwise rings swap.
-fn ring_curve(ring: &[Vec2], distance: f64, hole: bool, join: Join) -> Option<Curve> {
+fn ring_curve(
+    ring: &[Vec2],
+    distance: f64,
+    hole: bool,
+    join: Join,
+    pm: Option<Fixed>,
+) -> Option<Curve> {
     // GEOS 3.14's `LinearRing::MINIMUM_VALID_SIZE` is 3
     if distance == 0.0 && ring.len() < 3 {
         return None;
@@ -708,7 +808,7 @@ fn ring_curve(ring: &[Vec2], distance: f64, hole: bool, join: Join) -> Option<Cu
     } else if ring.len() == 1 {
         // `getRingCurve` → `getLineCurve` → `computePointCurve`: a round cap is the point's circle
         // (`createCircle`, clockwise from due east), whichever side and sign
-        let mut g = SegGen::new(distance.abs(), join, true);
+        let mut g = SegGen::new(distance.abs(), join, true, pm);
         let p = ring[0];
         g.add(Vec2::new(p.x + distance.abs(), p.y));
         g.fillet_angles(p, 0.0, 2.0 * PI, true);
@@ -723,7 +823,7 @@ fn ring_curve(ring: &[Vec2], distance: f64, hole: bool, join: Join) -> Option<Cu
         return None; // an unclosed two-point ring cannot come from a closed shell or hole
     } else {
         // a hole is offset to the other side
-        raw_ring_curve(ring, if hole { -distance } else { distance }, join)
+        raw_ring_curve(ring, if hole { -distance } else { distance }, join, pm)
     };
     (pts.len() >= 2 && !ring_curve_inverted(ring, distance, &pts)).then_some(Curve { pts, delta })
 }
@@ -731,13 +831,62 @@ fn ring_curve(ring: &[Vec2], distance: f64, hole: bool, join: Join) -> Option<Cu
 /// shapely `MultiPolygon(polygons).buffer(distance, join_style=…)` (GEOS 3.14.1 `BufferOp`; shells and
 /// holes of any orientation): the result polygons, rings closed, in GEOS's order with GEOS's starts.
 /// `distance` 0 is the classic clean-up: spikes and zero-width necks fall away, a pinched shape splits.
+/// Where the topology fails at full precision, GEOS's retry (`BufferOp::bufferReducedPrecision`): the curves
+/// made precise at 12 significant digits of the buffer's envelope, then 11, down to 6, and snap-rounded.
 ///
 /// # Errors
-/// A non-finite shell, or a topology GEOS would refuse at full precision.
+/// A non-finite shell, or a topology GEOS refuses at every precision.
 pub fn buffer(polygons: &[Polygon], distance: f64, join: Join) -> Result<Vec<Polygon>, String> {
     if !distance.is_finite() {
         return Err("buffer: distance must be a finite value".into());
     }
+    let full = raw_curves(polygons, distance, join, None)?;
+    if full.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut err = match buffer_graph::polygons(&full) {
+        Ok(result) => return Ok(result),
+        Err(e) => e,
+    };
+    for digits in (6..=12).rev() {
+        let pm = Fixed::new(precision_scale_factor(polygons, distance, digits));
+        let curves = raw_curves(polygons, distance, join, Some(pm))?;
+        if curves.is_empty() {
+            return Ok(Vec::new());
+        }
+        match buffer_graph::polygons_snap_rounded(&curves, pm.scale) {
+            Ok(result) => return Ok(result),
+            Err(e) => err = e,
+        }
+    }
+    Err(err)
+}
+
+/// `BufferOp::precisionScaleFactor`: the power of ten that keeps `digits` significant digits over the
+/// input's envelope grown by twice a positive distance.
+fn precision_scale_factor(polygons: &[Polygon], distance: f64, digits: i32) -> f64 {
+    let env_max = polygons
+        .iter()
+        .flat_map(|p| p.shell.iter().chain(p.holes.iter().flatten()))
+        .filter(|p| p.is_finite())
+        .fold(0.0_f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+    let buf_env_max = env_max + 2.0 * if distance > 0.0 { distance } else { 0.0 };
+    // the smallest power of ten above the envelope (`std::log(10.0)` is LN_10); `std::pow(10.0, n)` is
+    // exact or correctly rounded
+    let env_digits = (ln_correctly_rounded(buf_env_max) / std::f64::consts::LN_10 + 1.0) as i32;
+    format!("1e{}", digits.saturating_sub(env_digits))
+        .parse()
+        .unwrap_or(1.0)
+}
+
+/// `BufferCurveSetBuilder::getCurves`: every ring's raw curve and depth delta, the points made precise by
+/// the working precision model.
+fn raw_curves(
+    polygons: &[Polygon],
+    distance: f64,
+    join: Join,
+    pm: Option<Fixed>,
+) -> Result<Vec<Curve>, String> {
     let mut curves = Vec::new();
     for poly in polygons {
         if poly.shell.is_empty() {
@@ -754,19 +903,22 @@ pub fn buffer(polygons: &[Polygon], distance: f64, join: Join) -> Result<Vec<Pol
         if distance <= 0.0 && coords.len() < 3 {
             continue;
         }
-        curves.extend(ring_curve(&coords, distance, false, join));
+        curves.extend(ring_curve(&coords, distance, false, join, pm));
         for hole in &poly.holes {
             let hole = closed(hole);
             if distance > 0.0 && ring_fully_eroded(&hole, true, distance) {
                 continue;
             }
-            curves.extend(ring_curve(&without_repeats(&hole), distance, true, join));
+            curves.extend(ring_curve(
+                &without_repeats(&hole),
+                distance,
+                true,
+                join,
+                pm,
+            ));
         }
     }
-    if curves.is_empty() {
-        return Ok(Vec::new());
-    }
-    buffer_graph::polygons(&curves)
+    Ok(curves)
 }
 
 /// `RepeatedPointRemover::removeRepeatedAndInvalidPoints` (`RepeatedInvalidPointFilter`, tolerance 0): a
@@ -835,6 +987,81 @@ pub fn line_project_normalized(line: &[Vec2], p: Vec2) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The retry's scale: GEOS's envelope digits `(int)(log(x)/log(10) + 1)` as macOS's libm gives them at
+    /// 10^k and three ulps either side (k = −8 … 14), and `ln` bits against mpmath at 200 bits.
+    #[test]
+    fn retry_scale_digits_match_geos_beside_powers_of_ten() {
+        const DIGITS: [[i32; 7]; 23] = [
+            [-7, -7, -7, -7, -6, -6, -6],
+            [-6, -6, -6, -6, -6, -6, -6],
+            [-5, -5, -4, -4, -4, -4, -4],
+            [-4, -4, -4, -4, -4, -4, -4],
+            [-3, -3, -3, -2, -2, -2, -2],
+            [-2, -2, -1, -1, -1, -1, -1],
+            [-1, -1, -1, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 1, 1, 1, 1, 1],
+            [1, 1, 1, 2, 2, 2, 2],
+            [2, 2, 2, 3, 3, 3, 3],
+            [3, 3, 3, 3, 3, 4, 4],
+            [4, 4, 4, 5, 5, 5, 5],
+            [6, 6, 6, 6, 6, 6, 6],
+            [6, 6, 6, 6, 6, 6, 6],
+            [8, 8, 8, 8, 8, 8, 8],
+            [8, 8, 8, 9, 9, 9, 9],
+            [9, 9, 9, 9, 9, 9, 9],
+            [11, 11, 11, 11, 11, 11, 11],
+            [11, 11, 12, 12, 12, 12, 12],
+            [12, 12, 12, 12, 12, 12, 12],
+            [13, 13, 13, 13, 13, 13, 13],
+            [15, 15, 15, 15, 15, 15, 15],
+        ];
+        for (row, k) in DIGITS.iter().zip(-8..=14) {
+            let p: f64 = format!("1e{k}").parse().unwrap();
+            for (&want, j) in row.iter().zip(-3_i64..=3) {
+                let x = f64::from_bits(p.to_bits().wrapping_add_signed(j));
+                let got = (ln_correctly_rounded(x) / std::f64::consts::LN_10 + 1.0) as i32;
+                assert_eq!(got, want, "10^{k} {j:+} ulp");
+            }
+        }
+        const LN: [(u64, u64); 30] = [
+            (0x4092_9752_b1a6_e261, 0x401c_5386_215b_48b3),
+            (0x40a5_424d_267a_52bb, 0x401f_a29f_1e71_30cb),
+            (0x409c_e720_e785_cadc, 0x401e_175e_f35a_827f),
+            (0x40a7_9735_53a4_f2bf, 0x4020_0698_578a_4c30),
+            (0x40a8_7135_e513_7dbc, 0x4020_18c0_5bdc_b76f),
+            (0x4074_7a75_502b_dcf5, 0x4017_2af6_cbd0_d266),
+            (0x4050_7663_8cfc_be39, 0x4010_bfdf_b355_17ef),
+            (0x40b0_5b58_d756_6ef2, 0x4020_adfd_3be4_0859),
+            (0x4094_431c_2338_119e, 0x401c_aba9_3119_8c37),
+            (0x4092_4ea6_5c6b_277e, 0x401c_43c4_689a_9f5e),
+            (0x40b3_7239_668d_e494, 0x4021_0691_75d8_d34a),
+            (0x40a2_5ea5_4aa0_49db, 0x401f_0d09_f924_1877),
+            (0x4023_ffff_ffff_ffff, 0x4002_6bb1_bbb5_5515),
+            (0x4024_0000_0000_0000, 0x4002_6bb1_bbb5_5516),
+            (0x4024_0000_0000_0001, 0x4002_6bb1_bbb5_5516),
+            (0x4058_ffff_ffff_ffff, 0x4012_6bb1_bbb5_5515),
+            (0x4059_0000_0000_0000, 0x4012_6bb1_bbb5_5516),
+            (0x4059_0000_0000_0001, 0x4012_6bb1_bbb5_5516),
+            (0x408f_3fff_ffff_ffff, 0x401b_a18a_998f_ffa0),
+            (0x408f_4000_0000_0000, 0x401b_a18a_998f_ffa0),
+            (0x408f_4000_0000_0001, 0x401b_a18a_998f_ffa0),
+            (0x40c3_87ff_ffff_ffff, 0x4022_6bb1_bbb5_5515),
+            (0x40c3_8800_0000_0000, 0x4022_6bb1_bbb5_5516),
+            (0x40c3_8800_0000_0001, 0x4022_6bb1_bbb5_5516),
+            (0x0000_0000_0000_0001, 0xc087_4385_446d_71c3),
+            (0x0010_0000_0000_0000, 0xc086_232b_dd7a_bcd2),
+            (0x3ff0_0000_0000_0000, 0x0000_0000_0000_0000),
+            (0x4000_0000_0000_0000, 0x3fe6_2e42_fefa_39ef),
+            (0x3fe0_0000_0000_0000, 0xbfe6_2e42_fefa_39ef),
+            (0x7fef_ffff_ffff_ffff, 0x4086_2e42_fefa_39ef),
+        ];
+        for (x, want) in LN {
+            let got = ln_correctly_rounded(f64::from_bits(x));
+            assert_eq!(got.to_bits(), want, "ln({:e})", f64::from_bits(x));
+        }
+    }
 
     /// A single point or a doubled segment (a one-pixel blob traced with no opening) never panics.
     #[test]

@@ -741,7 +741,7 @@ fn colour_conversions_match_opencv() {
 /// clean-up of spikes, pinches and bowties, holes, multipolygons, traced stroke outlines. The polygons, their
 /// order, every ring's start and length and the holes are GEOS's; coordinates are bit-identical except where a
 /// join's `atan2`/`sin`/`cos` reach the last bits (1e-9 relative). Where GEOS needed its reduced-precision
-/// retry, the buffer refuses as GEOS's first attempt did.
+/// retry, the snap-rounded result is bit-identical.
 #[test]
 fn buffer_topology_matches_geos() {
     use ftx_core::Vec2;
@@ -768,7 +768,7 @@ fn buffer_topology_matches_geos() {
                     && (p.y - q.y).abs() <= 1e-9 * q.y.abs().max(1.0)
             })
     };
-    let (mut exact, mut fails) = (0, Vec::new());
+    let (mut exact, mut retried, mut fails) = (0, 0, Vec::new());
     let cases = fx["cases"].as_array().unwrap();
     for case in cases {
         let (inp, out, id) = (
@@ -783,14 +783,9 @@ fn buffer_topology_matches_geos() {
             Join::Round(16)
         };
         let got = buffer(&polys, inp["distance"].as_f64().unwrap(), join);
-        if out["reduced_precision"] == true {
-            if got.is_ok() {
-                fails.push(format!(
-                    "{id}: GEOS needed its reduced-precision retry; this did not refuse"
-                ));
-            }
-            continue;
-        }
+        // the retry's coordinates are on its grid: bit-identical or wrong
+        let retry = out["reduced_precision"] == true;
+        retried += usize::from(retry);
         let want: Vec<Polygon> = out["polygons"]
             .as_array()
             .unwrap()
@@ -807,7 +802,7 @@ fn buffer_topology_matches_geos() {
                             && g.holes.len() == w.holes.len()
                             && g.holes.iter().zip(&w.holes).all(|(a, b)| close(a, b))
                     });
-                if !same {
+                if !same || retry {
                     fails.push(format!(
                         "{id}: {} polygons ({:?} points) vs {} ({:?})",
                         got.len(),
@@ -819,6 +814,9 @@ fn buffer_topology_matches_geos() {
             }
         }
     }
-    println!("{exact} of {} buffers bit-identical", cases.len());
+    println!(
+        "{exact} of {} buffers bit-identical ({retried} through the reduced-precision retry)",
+        cases.len()
+    );
     assert!(fails.is_empty(), "{}", fails.join("\n"));
 }

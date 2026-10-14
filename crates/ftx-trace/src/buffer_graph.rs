@@ -10,14 +10,17 @@
 //! subgraph's rightmost edge (`RightmostEdgeFinder`) takes the depth outside it (`SubgraphDepthLocater`
 //! over the subgraphs already built), and the depths spread around each node's star
 //! (`DirectedEdgeStar::computeDepths`). The result's rings, their starts and their order are GEOS's. A
-//! topology GEOS refuses (and retries at a reduced precision) is an error here.
+//! topology GEOS refuses (its `TopologyException`) is an error here. For GEOS's reduced-precision retry the
+//! same graph is built from the curves snap-rounded instead (`ScaledNoder` around `SnapRoundingNoder`:
+//! `HotPixel`, `HotPixelIndex`, `SnapRoundingIntersectionAdder`).
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, HashMap};
 
 use ftx_core::Vec2;
 
-use crate::buffer::{orientation, ring_signed_area, segment_intersections};
+use crate::buffer::{dist, orientation, point_to_segment, ring_signed_area, segment_intersections};
 
 /// A polygon: its shell and holes, each closed (first point repeated).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -174,6 +177,25 @@ impl<'a> NodeList<'a> {
             .dedup_by(|b, a| compare_nodes(a, b) == Ordering::Equal);
     }
 
+    /// `NodedSegmentString::getNodedCoordinates` (`SegmentNodeList::getSplitCoordinates`): the string with its
+    /// nodes in, endpoints added but not the collapses, repeated points dropped.
+    fn split_coordinates(mut self) -> Vec<Vec2> {
+        let pts = self.pts;
+        let last = pts.len() - 1;
+        self.add(pts[0], 0);
+        self.add(pts[last], last);
+        self.prepare();
+        let mut out = vec![self.nodes[0].pt];
+        for w in self.nodes.windows(2) {
+            for p in split_edge(pts, w[0], w[1]) {
+                if out.last() != Some(&p) {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    }
+
     /// `SegmentNodeList::addSplitEdges`: the endpoints and the collapses (`A B A`) become nodes too.
     fn split_edges(mut self) -> Vec<Vec<Vec2>> {
         let pts = self.pts;
@@ -202,30 +224,35 @@ impl<'a> NodeList<'a> {
         self.prepare();
         self.nodes
             .windows(2)
-            .map(|w| {
-                let (e0, e1) = (w[0], w[1]);
-                if e0.seg == e1.seg {
-                    return vec![e0.pt, e1.pt];
-                }
-                let use_end = e1.interior || e1.pt != pts[e1.seg];
-                let mut out = vec![e0.pt];
-                out.extend_from_slice(&pts[e0.seg + 1..=e1.seg]);
-                if use_end {
-                    out.push(e1.pt);
-                }
-                out
-            })
+            .map(|w| split_edge(pts, w[0], w[1]))
             .collect()
     }
 }
 
-/// `MCIndexNoder` + `IntersectionAdder` over every pair of segments whose envelopes meet, each pair as
-/// the noder meets it (the earlier curve, or the earlier segment, first); the curves' split edges.
-fn node(curves: &[Curve]) -> Vec<Vec<Vec<Vec2>>> {
-    let mut lists: Vec<NodeList> = curves.iter().map(|c| NodeList::new(&c.pts)).collect();
+/// `SegmentNodeList::createSplitEdgePts`: the edge between two consecutive nodes.
+fn split_edge(pts: &[Vec2], e0: SegNode, e1: SegNode) -> Vec<Vec2> {
+    if e0.seg == e1.seg {
+        return vec![e0.pt, e1.pt];
+    }
+    let use_end = e1.interior || e1.pt != pts[e1.seg];
+    let mut out = vec![e0.pt];
+    out.extend_from_slice(&pts[e0.seg + 1..=e1.seg]);
+    if use_end {
+        out.push(e1.pt);
+    }
+    out
+}
+
+/// Every pair of segments (string, segment) whose envelopes come within `tol` of each other, as the noder
+/// meets it: the earlier string, or the earlier segment, first.
+fn segment_pairs(
+    strings: &[&[Vec2]],
+    tol: f64,
+    mut visit: impl FnMut((usize, usize), (usize, usize)),
+) {
     let mut segs: Vec<(usize, usize, [f64; 4])> = Vec::new();
-    for (c, curve) in curves.iter().enumerate() {
-        for (i, w) in curve.pts.windows(2).enumerate() {
+    for (c, pts) in strings.iter().enumerate() {
+        for (i, w) in pts.windows(2).enumerate() {
             let (a, b) = (w[0], w[1]);
             segs.push((
                 c,
@@ -238,30 +265,276 @@ fn node(curves: &[Curve]) -> Vec<Vec<Vec<Vec2>>> {
     for k in 0..segs.len() {
         for l in k + 1..segs.len() {
             let (s, t) = (segs[k], segs[l]);
-            if t.2[0] > s.2[1] {
+            if t.2[0] > s.2[1] + tol {
                 break;
             }
-            if t.2[3] < s.2[2] || t.2[2] > s.2[3] {
+            if t.2[3] < s.2[2] - tol || t.2[2] > s.2[3] + tol {
                 continue;
             }
-            let (a, b) = if (s.0, s.1) < (t.0, t.1) {
-                (s, t)
+            if (s.0, s.1) < (t.0, t.1) {
+                visit((s.0, s.1), (t.0, t.1));
             } else {
-                (t, s)
-            };
-            let (pa, pb) = (&curves[a.0].pts, &curves[b.0].pts);
-            let (n, x) = segment_intersections(pa[a.1], pa[a.1 + 1], pb[b.1], pb[b.1 + 1]);
-            // adjacent segments of one curve share a vertex: not a node when it is all they share
-            if n == 0 || (a.0 == b.0 && n == 1 && a.1.abs_diff(b.1) == 1) {
-                continue;
-            }
-            for &p in &x[..usize::from(n)] {
-                lists[a.0].add_intersection(p, a.1);
-                lists[b.0].add_intersection(p, b.1);
+                visit((t.0, t.1), (s.0, s.1));
             }
         }
     }
+}
+
+/// `MCIndexNoder` + `IntersectionAdder` over every pair of segments whose envelopes meet; the curves' split
+/// edges.
+fn node(curves: &[Curve]) -> Vec<Vec<Vec<Vec2>>> {
+    let strings: Vec<&[Vec2]> = curves.iter().map(|c| c.pts.as_slice()).collect();
+    let mut lists: Vec<NodeList> = strings.iter().map(|s| NodeList::new(s)).collect();
+    segment_pairs(&strings, 0.0, |a, b| {
+        let (pa, pb) = (strings[a.0], strings[b.0]);
+        let (n, x) = segment_intersections(pa[a.1], pa[a.1 + 1], pb[b.1], pb[b.1 + 1]);
+        // adjacent segments of one curve share a vertex: not a node when it is all they share
+        if n == 0 || (a.0 == b.0 && n == 1 && a.1.abs_diff(b.1) == 1) {
+            return;
+        }
+        for &p in &x[..usize::from(n)] {
+            lists[a.0].add_intersection(p, a.1);
+            lists[b.0].add_intersection(p, b.1);
+        }
+    });
     lists.into_iter().map(NodeList::split_edges).collect()
+}
+
+// ===================================================================================== snap-rounding
+
+/// GEOS `util::round` (`java_math_round`): to the nearest integer, halves up.
+pub(crate) fn java_round(v: f64) -> f64 {
+    let n = v.trunc();
+    let f = (v - n).abs();
+    if v >= 0.0 {
+        if f < 0.5 {
+            v.floor()
+        } else if f > 0.5 {
+            v.ceil()
+        } else {
+            n + 1.0
+        }
+    } else if f < 0.5 {
+        v.ceil()
+    } else if f > 0.5 {
+        v.floor()
+    } else {
+        n
+    }
+}
+
+fn round_pt(p: Vec2) -> Vec2 {
+    Vec2::new(java_round(p.x), java_round(p.y))
+}
+
+/// `HotPixelIndex` at scale 1: one pixel per integer point, a node once two points or an intersection
+/// fall in it. The pixels a query visits do not depend on GEOS's shuffled KdTree, nor does the result.
+#[derive(Default)]
+struct Pixels {
+    at: BTreeMap<(i64, i64), usize>,
+    pts: Vec<Vec2>,
+    node: Vec<bool>,
+}
+
+impl Pixels {
+    /// `HotPixelIndex::add`: a second point in a pixel makes it a node.
+    fn add(&mut self, p: Vec2) -> usize {
+        let r = round_pt(p);
+        match self.at.entry((r.x as i64, r.y as i64)) {
+            Entry::Occupied(e) => {
+                self.node[*e.get()] = true;
+                *e.get()
+            }
+            Entry::Vacant(e) => {
+                e.insert(self.pts.len());
+                self.pts.push(r);
+                self.node.push(false);
+                self.pts.len() - 1
+            }
+        }
+    }
+
+    /// `HotPixelIndex::query`: the pixels within a pixel of the segment's envelope.
+    fn near(&self, p0: Vec2, p1: Vec2) -> Vec<usize> {
+        let lo = |a: f64, b: f64| (a.min(b) - 1.0).floor() as i64;
+        let hi = |a: f64, b: f64| (a.max(b) + 1.0).ceil() as i64;
+        let (y0, y1) = (lo(p0.y, p1.y), hi(p0.y, p1.y));
+        self.at
+            .range((lo(p0.x, p1.x), i64::MIN)..=(hi(p0.x, p1.x), i64::MAX))
+            .filter(|((_, y), _)| (y0..=y1).contains(y))
+            .map(|(_, &h)| h)
+            .collect()
+    }
+}
+
+/// `HotPixel::intersects(p)`: the pixel around `h`, its top and right sides open.
+fn pixel_has(h: Vec2, p: Vec2) -> bool {
+    !(p.x >= h.x + 0.5 || p.x < h.x - 0.5 || p.y >= h.y + 0.5 || p.y < h.y - 0.5)
+}
+
+/// `HotPixel::intersectsScaled`: whether the segment meets the pixel around `h`.
+fn pixel_meets(h: Vec2, p0: Vec2, p1: Vec2) -> bool {
+    // oriented in positive x
+    let (p, q) = if p0.x > p1.x { (p1, p0) } else { (p0, p1) };
+    let (maxx, minx, maxy, miny) = (h.x + 0.5, h.x - 0.5, h.y + 0.5, h.y - 0.5);
+    if p.x.min(q.x) >= maxx || p.x.max(q.x) < minx || p.y.min(q.y) >= maxy || p.y.max(q.y) < miny {
+        return false;
+    }
+    // vertical or horizontal segments meet the interior or the left or bottom side
+    if p.x == q.x || p.y == q.y {
+        return true;
+    }
+    let ul = orientation(p, q, Vec2::new(minx, maxy));
+    if ul == 0 {
+        return p.y >= q.y; // an upward segment through the corner misses the interior
+    }
+    let ur = orientation(p, q, Vec2::new(maxx, maxy));
+    if ur == 0 {
+        return p.y <= q.y;
+    }
+    if ul != ur {
+        return true; // crosses the top side
+    }
+    let ll = orientation(p, q, Vec2::new(minx, miny));
+    if ll == 0 || ll != ul {
+        return true; // the lower left corner, or across the left side
+    }
+    let lr = orientation(p, q, Vec2::new(maxx, miny));
+    if lr == 0 {
+        return p.y >= q.y;
+    }
+    ll != lr || lr != ur // across the bottom or the right side
+}
+
+/// `SnapRoundingIntersectionAdder::isNearSegmentInterior`.
+fn near_interior(p: Vec2, p0: Vec2, p1: Vec2, tol: f64) -> bool {
+    dist(p, p0) >= tol && dist(p, p1) >= tol && point_to_segment(p, p0, p1) < tol
+}
+
+/// `BufferOp::bufferFixedPrecision`'s noder: `ScaledNoder` (the curves onto the grid of `scale`, repeated
+/// points dropped, and back after) around a `SnapRoundingNoder` at scale 1, which puts hot pixels on the
+/// intersections (`SnapRoundingIntersectionAdder`, near vertices within a hundredth of a pixel too) and the
+/// vertices, rounds every curve and nodes it at the pixels it crosses. The surviving curves' depth deltas
+/// and split edges.
+fn snap_round(curves: &[Curve], scale: f64) -> Vec<(i32, Vec<Vec<Vec2>>)> {
+    let scaled = scale != 1.0;
+    let strings: Vec<Vec<Vec2>> = curves
+        .iter()
+        .map(|c| {
+            if !scaled {
+                return c.pts.clone();
+            }
+            let mut pts: Vec<Vec2> = c
+                .pts
+                .iter()
+                .map(|p| Vec2::new(java_round(p.x * scale), java_round(p.y * scale)))
+                .collect();
+            pts.dedup();
+            pts
+        })
+        .collect();
+    // addIntersectionPixels: MCIndexNoder at the nearness tolerance (a pixel over INTERSECTION_NEARNESS_FACTOR)
+    let tol = 1.0 / 100.0;
+    let refs: Vec<&[Vec2]> = strings.iter().map(Vec::as_slice).collect();
+    let mut lists: Vec<NodeList> = refs.iter().map(|s| NodeList::new(s)).collect();
+    let mut nodes = Vec::new();
+    segment_pairs(&refs, tol, |a, b| {
+        let (sa, sb) = (refs[a.0], refs[b.0]);
+        let (a0, a1, b0, b1) = (sa[a.1], sa[a.1 + 1], sb[b.1], sb[b.1 + 1]);
+        let (n, x) = segment_intersections(a0, a1, b0, b1);
+        let x = &x[..usize::from(n)];
+        let interior = |s: Vec2, e: Vec2| x.iter().any(|&p| p != s && p != e);
+        if n > 0 && (interior(a0, a1) || interior(b0, b1)) {
+            for &p in x {
+                nodes.push(p);
+                lists[a.0].add_intersection(p, a.1);
+                lists[b.0].add_intersection(p, b.1);
+            }
+            return;
+        }
+        // a vertex very near the other segment's interior counts as an intersection
+        for (p, s0, s1, (c, i)) in [
+            (a0, b0, b1, b),
+            (a1, b0, b1, b),
+            (b0, a0, a1, a),
+            (b1, a0, a1, a),
+        ] {
+            if near_interior(p, s0, s1, tol) {
+                nodes.push(p);
+                lists[c].add_intersection(p, i);
+            }
+        }
+    });
+    let mut pixels = Pixels::default();
+    for &p in &nodes {
+        let h = pixels.add(p);
+        pixels.node[h] = true;
+    }
+    for s in &strings {
+        for &p in s {
+            pixels.add(p);
+        }
+    }
+    // computeSnaps: each curve with its intersections, rounded, noded at the pixels its segments cross
+    let noded: Vec<Vec<Vec2>> = lists.into_iter().map(NodeList::split_coordinates).collect();
+    let rounded: Vec<Vec<Vec2>> = noded
+        .iter()
+        .map(|pts| {
+            let mut r: Vec<Vec2> = pts.iter().map(|&p| round_pt(p)).collect();
+            r.dedup();
+            r
+        })
+        .collect();
+    let mut snapped: Vec<(i32, NodeList)> = Vec::new();
+    for ((pts, round), curve) in noded.iter().zip(&rounded).zip(curves) {
+        if round.len() <= 1 {
+            continue; // collapsed to a point
+        }
+        let mut list = NodeList::new(round);
+        let mut seg = 0;
+        for w in pts.windows(2) {
+            if round_pt(w[1]) == round[seg] {
+                continue; // the segment collapsed
+            }
+            for h in pixels.near(w[0], w[1]) {
+                let hp = pixels.pts[h];
+                // a pixel that only holds one of the segment's own vertices is not a node (yet)
+                if !pixels.node[h] && (pixel_has(hp, w[0]) || pixel_has(hp, w[1])) {
+                    continue;
+                }
+                if pixel_meets(hp, w[0], w[1]) {
+                    list.add_intersection(hp, seg);
+                    pixels.node[h] = true;
+                }
+            }
+            seg += 1;
+        }
+        snapped.push((curve.delta, list));
+    }
+    // addVertexNodeSnaps: the vertices in pixels that became nodes
+    for (_, list) in &mut snapped {
+        let pts = list.pts;
+        for (i, &p) in pts.iter().enumerate().take(pts.len() - 1).skip(1) {
+            if let Some(&h) = pixels.at.get(&(p.x as i64, p.y as i64))
+                && pixels.node[h]
+                && pixels.pts[h] == p
+            {
+                list.add_intersection(p, i);
+            }
+        }
+    }
+    snapped
+        .into_iter()
+        .map(|(delta, list)| {
+            let mut edges = list.split_edges();
+            if scaled {
+                for p in edges.iter_mut().flatten() {
+                    *p = Vec2::new(p.x / scale + 0.0, p.y / scale + 0.0);
+                }
+            }
+            (delta, edges)
+        })
+        .collect()
 }
 
 // ============================================================================================= graph
@@ -941,10 +1214,20 @@ fn containing_shell(g: &Graph, hole: usize, shells: &[usize]) -> usize {
 
 /// The polygons GEOS's `BufferBuilder` builds from these raw curves, in its order.
 pub(crate) fn polygons(curves: &[Curve]) -> Result<Vec<Polygon>, String> {
+    build(curves.iter().map(|c| c.delta).zip(node(curves)).collect())
+}
+
+/// The same with the curves snap-rounded onto the grid of `scale` (`BufferOp::bufferFixedPrecision`).
+pub(crate) fn polygons_snap_rounded(curves: &[Curve], scale: f64) -> Result<Vec<Polygon>, String> {
+    build(snap_round(curves, scale))
+}
+
+/// `BufferBuilder::buffer` from the noded curves (depth delta, split edges) on.
+fn build(noded: Vec<(i32, Vec<Vec<Vec2>>)>) -> Result<Vec<Polygon>, String> {
     // noded edges, coincident ones merged (`computeNodedEdges`, `insertUniqueEdge`)
     let mut edges: Vec<Edge> = Vec::new();
     let mut seen: HashMap<Vec<(u64, u64)>, usize> = HashMap::new();
-    for (curve, split) in curves.iter().zip(node(curves)) {
+    for (delta, split) in noded {
         for mut pts in split {
             pts.dedup();
             if pts.len() < 2 {
@@ -964,14 +1247,11 @@ pub(crate) fn polygons(curves: &[Curve]) -> Result<Vec<Polygon>, String> {
             match seen.get(&canon) {
                 Some(&k) => {
                     let same = edges[k].pts == pts;
-                    edges[k].delta += if same { curve.delta } else { -curve.delta };
+                    edges[k].delta += if same { delta } else { -delta };
                 }
                 None => {
                     seen.insert(canon, edges.len());
-                    edges.push(Edge {
-                        pts,
-                        delta: curve.delta,
-                    });
+                    edges.push(Edge { pts, delta });
                 }
             }
         }
