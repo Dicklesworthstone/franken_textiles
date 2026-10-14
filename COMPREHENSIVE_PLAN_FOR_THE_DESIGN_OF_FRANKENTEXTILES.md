@@ -676,7 +676,7 @@ The usual wearer is a young child. Therefore:
 | **0** | Workspace, `ftx-core`, oracle capture harness; Anny conversion and Rust forward model; drape core without contact (membrane, bending, sparse LDLᵀ, Newton) with tests 2–3 | G1a; drape tests 2–3 |
 | **1** | Pattern model, validation, alteration, drafting, measurements (fusion, readiness); body tape functionals and fitting; contact (distances, barrier, CCD, BVH, friction), garment scene, metrics and flags | G1b; drape tests 1, 4–6; parity fixtures for spec 01–02 |
 | **2** | Exports (SVG, PDF, DXF, HPGL, cutter, GarmentCode, DST, checks); the `ftx` CLI and round; the skill calls `ftx`; drape on fitted bodies | G2; G3 |
-| **3** | Photo scale (homography, plain sheet, ChArUco through an external detector), photogrammetry core, multi-frame body fit | Synthetic-scene fixtures; a real-photo check with a ruler in frame |
+| **3** | Photo scale (homography, plain sheet detector, ChArUco through an external detector), photogrammetry core, multi-frame body fit | Synthetic-scene fixtures; a real-photo check with a ruler in frame |
 | **4** | Tracing; wasm and the browser page; outfit and viewer from `ftx` | G4 |
 | **5** | The gauntlet; retirement of the reference's ported scripts; release | G5 |
 
@@ -700,7 +700,7 @@ G2.
 | FTX-09 | Tape functionals on the body and fitting from tape and from age/sex/height/weight/BMI (G1b) |
 | FTX-10 | Poses (arm angles, seated, squat, nappy volume) and the body export for the drape |
 | FTX-11 | Drape core: inertia, orthotropic membrane, bending, sparse LDLᵀ, projected Newton; tests 2–3 |
-| FTX-12 | Contact: distances with derivatives, barrier, CCD, BVH, lagged friction; tests 1, 4–6 |
+| FTX-12 | Contact: distances with derivatives, barrier, CCD, BVH, friction; tests 1, 4–6 |
 | FTX-13 | Garment scene: meshing, wrap and pre-sew start, welded seams, gathers, elastic; outputs and metrics/flags per spec 04 |
 | FTX-14 | Drape on fitted bodies: elastic ladder, armpit wedge, two-start spread (G2) |
 | FTX-15 | Export geometry and SVG: seam-allowance outlines, notches, grain, labels, layouts |
@@ -1028,6 +1028,69 @@ compression/moisture laws (`ftx-tmc`) are still required before whole-wearer hea
 distribution coverage/refresh (`ftx-tm6`) and material-qualified cutting/sewing constraints (`ftx-tm7`)
 remain separate product gates. Neither this temperature-law delivery nor its partial catalog authorizes
 robot execution, establishes fire/cut resistance, or supplies an outdoor comfort/safety temperature.
+
+---
+
+### 25.8 Measured catalog breadth and material-aware sewing: delivered integration and next gates
+
+The 2026-10-14 continuation delivers two additional parts of the requested common materials
+platform, without introducing another material database or a parallel physics authority:
+
+- **Measured specimen breadth (`629694b`).** The canonical built-in catalog now has 81 records,
+  including 30 distinct specimens and 60 published observations from the MIT ICCV2013 fabric
+  dataset. The primary table covers linen, cotton, wool, silk, Lycra-labelled specimens, denim,
+  corduroy, fleece, faux fur, velvet, canvas, nylon rip stop, terry knit, laminated cotton, pleather,
+  backed vinyl and upholstery. Original units, specimen IDs, aggregation qualifiers and source
+  citations survive normalized selection and portable snapshots. These are numerical summary-table
+  facts, not an ingested raw-replicate archive or permission to redistribute the source media.
+  Test-specimen flexural rigidity is `N*m2`, not sheet bending rigidity `N*m`; absent coupon geometry
+  prevents automatic conversion. Labels do not establish blend fractions. See
+  `docs/mit-fabric-measurements.md`. The 30 records remain partially characterized, not new fully
+  drape-ready or thermal-ready presets.
+- **Material-following sewing (`7444388`, `e6a1567`; `ftx-sp1`).** `ftx-materials sew-plan` and
+  `ftx_export::sewing::SewPlan` resolve the same per-piece selections used by draping and cutting.
+  Actual seam curves, reverse/mirror conventions, edge junctions and matched notches determine
+  paired stations and local differential feed. Explicit complete seam passes retain a deterministic
+  precedence order, needle/thread identifiers, declared ply counts, stitch limits and machine
+  envelope. Sourced thickness and its reported upper bound, when present, determine the uncompressed
+  stack; edge/piece/export allowances and both-side advances are checked without changing geometry.
+  A material-only change can therefore invalidate machine feasibility without solver or pattern
+  edits. Simulation-only omission/scaling cannot alter manufacturing pieces. Unknown thickness,
+  implicit layer stacks, unmatched notches, cyclic/partial jobs and excessive allocations refuse.
+  `docs/material-sewing-plans.md` provides the executable fixture and exact command.
+
+These deliveries extend the end-to-end material-swap architecture requested in §25.1–25.4. They do
+not turn a fiber name, marketing warmth claim or partially measured specimen into an effective
+fabric law. Existing purchasing history/percentiles, roll cutting, nonlinear mechanics and thermal
+transport continue to use their existing source-bearing material paths. Any new property must
+retain specimen/construction, dimensional meaning, conditions and evidence policy before a relevant
+consumer can use it; otherwise that consumer remains unavailable rather than guessing.
+
+**Next high-impact acceptance gates:**
+
+1. **Raw specimen upgrade (`ftx-md1`, under `ftx-tm2`).** Obtain retained source data and matched
+   coupon geometry, direction, conditioning and replicate metadata. Reproduce the published table
+   independently, and derive effective sheet parameters only with the required geometry and
+   uncertainty. Complete matched thickness, membrane response, directional bending and pair friction
+   for linen, treated cowhide and performance-knit specimens; do not combine similarly named lots.
+2. **Qualified sewing and machine handoff (`ftx-sp2`, under `ftx-tm7`).** Add measured seam coupons
+   tied to exact lots/finishes, layer order, needle, thread, stitch class, feed/tension/speed,
+   workholding and presser-foot compression. Extend one forward pass to explicit multi-pass,
+   locking/backtack and fold recipes with physically accessible assembly topology. Compare held-out
+   pucker, seam slippage/strength and penetration measurements; material substitution must rerun
+   these qualification checks. Calibrated machine coordinates, kinematics, collision checks,
+   sensing, interlocks and operator-approved envelopes precede any hardware execution.
+3. **Unchanged-pattern empirical comparison (`ftx-tm8`).** Use those matched records to test the
+   same jacket on the same body across linen, cowhide and performance knit, including mechanical
+   drape, thermal exchange and manufacturability. Retain the independent thermal gates in §25.7,
+   and distinguish software propagation/conservation from agreement with measured garments.
+
+The sewing output always sets `hardware_execution_authorized` and
+`physical_seam_quality_validated` to false. Eight core and three real-binary regressions establish
+software behavior, including material-swap refusal and identical CLI/library output. The measured
+catalog tranche has separate identity/unit/provenance tests. Neither these tests nor passing native
+or wasm builds closes the physical-validation, whole-wearer warmth, fire/cut-resistance or qualified
+robotics gates. `ftx-tm0`, `ftx-tm2`, `ftx-tm7` and `ftx-tm8` remain open.
 
 ---
 
