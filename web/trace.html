@@ -31,7 +31,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; max-hei
 <p class="warning">Review images are <strong>not for cutting</strong>. A traced drawing starts UNSCALED. Known lengths establish scale, not sewability or fit. After review, download <code>pattern.json</code> and load it as “Someone else's pattern” in the <a href="index.html">Pattern Workbench</a> with your measurements.</p>
 <section id="source"><h2>1. Choose and trace a sheet</h2>
 <label>PNG, JPEG or WebP image (up to 16 MiB and 4 million decoded pixels)<input type="file" id="image" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"></label>
-<p>Use an already correctly oriented image: like the Python skill, the trace ignores a photo's EXIF rotation. Transparent areas count as white. Oversized inputs are refused, not automatically resized. Convert HEIC or animated WebP to PNG or JPEG before opening. Changing the source or settings resets the edits below.</p>
+<p>Use an already correctly oriented image: like the Python skill, the trace ignores a photo's EXIF rotation. Transparent areas count as white. Oversized inputs are refused, not automatically resized. An animated WebP gives its first frame. Convert HEIC to PNG or JPEG before opening. Changing the source or settings resets the edits below.</p>
 <div class="row">
 <label>Channel<select id="channel"><option>auto</option><option>bgdist</option><option>dark</option><option>light</option><option>gray</option><option>sat</option><option>r</option><option>g</option><option>b</option><option>edge</option></select></label>
 <label>Threshold<select id="threshold"><option value="otsu">Otsu (global)</option><option value="adaptive">Gaussian (uneven lighting)</option></select></label>

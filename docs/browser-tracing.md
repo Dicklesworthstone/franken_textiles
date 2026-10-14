@@ -16,7 +16,7 @@ browser persistence. Only the application module is fetched.
 
 ## Workflow
 
-Choose an already correctly oriented PNG and press **Trace PNG**. The controls
+Choose an already correctly oriented PNG, JPEG or WebP and press **Trace sheet**. The controls
 expose the native channels, global Otsu or adaptive Gaussian threshold, polarity,
 optional crop/stroke width, area floor and dashed-line bridging. Inspect the
 overlay and unannotated source-label crops before interpreting printed labels.
@@ -66,10 +66,10 @@ and 512 label records. The native review's piece/geometry limits also apply; fin
 review products are capped at 64 MiB. JPEG (CMYK too) and WebP sheets decode as the reference decodes
 them (`ftx_trace::raster::{jpeg, webp}`, ports of libjpeg-turbo's and libwebp's decode paths; the pixel
 budget is checked before any raster is allocated). A WebP's transparency is composited on white, as
-`load_image` does, and like the reference the trace ignores EXIF rotation. The review's `pattern.json` is
-byte for byte the file `vectorize.py annotate` and then `scale-fit` write (`ftx_trace::py_order`).
-Animated WebP, inferred labels, interactive curve editing and restoring a saved session are not
-implemented here.
+`load_image` does; an animated WebP gives its first frame, as `Image.open` shows it. Like the reference,
+the trace ignores EXIF rotation. The review's `pattern.json` is byte for byte the file `vectorize.py
+annotate` and then `scale-fit` write (`ftx_trace::py_order`). Inferred labels, interactive curve editing
+and restoring a saved session are not implemented here.
 
 The APIs are `tracing::Sheet::{new,review}` (native-testable, no I/O) and
 `WebTrace`/`WebTraceReview` (the wasm-bindgen boundary). Five native workflow tests

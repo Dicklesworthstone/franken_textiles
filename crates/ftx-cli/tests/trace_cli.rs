@@ -225,7 +225,8 @@ fn trace_reproduces_the_reference_on_jpeg() {
 }
 
 /// WebP sheets (`trace_webp.json`, `tools/oracle/capture_webp.py`): lossy, lossless, a transparent margin
-/// composited on white, a photographed sheet; the draft byte-identical to the reference's.
+/// composited on white, a photographed sheet, an animation's offset first frame; the draft byte-identical to
+/// the reference's.
 #[test]
 fn trace_reproduces_the_reference_on_webp() {
     trace_sheets_reproduce("trace_webp", "webp", "sheet.webp");
