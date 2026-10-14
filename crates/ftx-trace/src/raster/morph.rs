@@ -125,6 +125,9 @@ fn windows(row: &[u8], dx0: i64, dx1: i64, dilate: bool, s: &mut Scratch, out: &
 /// nothing counts, and a pixel whose kernel reaches no pixel takes the default border (255 for erosion,
 /// 0 for dilation).
 fn apply(img: &Gray, k: &Kernel, dilate: bool) -> Gray {
+    if img.w > 0 && img.data.iter().all(|&v| v == 0 || v == 255) {
+        return apply_binary(img, k, dilate);
+    }
     let (w, h) = (img.w, img.h);
     let neutral = if dilate { 0 } else { 255 };
     let runs = k.runs();
@@ -156,6 +159,135 @@ fn apply(img: &Gray, k: &Kernel, dilate: bool) -> Gray {
         h: img.h,
         data,
     }
+}
+
+/// Positions in a row, as sorted, disjoint `[start, end)` runs.
+type Runs = Vec<(i64, i64)>;
+
+/// Beyond any row: a run reaching past the image on either side.
+const FAR: i64 = 1 << 40;
+
+/// [`apply`] on an image of 0s and 255s, by runs of 255: an erosion keeps the positions whose window lies
+/// inside a run (pixels outside the image count as 255), a dilation those whose window meets one; the
+/// kernel rows' results are then intersected (erosion) or united (dilation). Minima and maxima of 0s and
+/// 255s are exactly these, so the bytes equal the general path's, in time proportional to the runs.
+fn apply_binary(img: &Gray, k: &Kernel, dilate: bool) -> Gray {
+    let (w, h) = (img.w as i64, img.h as i64);
+    let kernel_runs = k.runs();
+    let rows: Vec<Runs> = img.data.chunks_exact(img.w).map(ink_runs).collect();
+    let mut data = vec![0u8; img.data.len()];
+    for (y, out) in data.chunks_exact_mut(img.w).enumerate() {
+        let mut acc: Option<Runs> = None;
+        for &(dy, dx0, dx1) in &kernel_runs {
+            let yy = y as i64 + dy;
+            if !(0..h).contains(&yy) {
+                continue;
+            }
+            let row = &rows[yy as usize];
+            let moved = if dilate {
+                grow(row, dx0, dx1, w)
+            } else {
+                shrink(row, dx0, dx1, w)
+            };
+            acc = Some(match acc {
+                None => moved,
+                Some(a) if dilate => unite(&a, &moved),
+                Some(a) => intersect(&a, &moved),
+            });
+        }
+        // no kernel row reaching the image: the default border
+        let set = acc.unwrap_or_else(|| if dilate { Vec::new() } else { vec![(0, w)] });
+        for (s, e) in set {
+            out[s as usize..e as usize].fill(255);
+        }
+    }
+    Gray {
+        w: img.w,
+        h: img.h,
+        data,
+    }
+}
+
+/// The runs of 255 in a row of 0s and 255s.
+fn ink_runs(row: &[u8]) -> Runs {
+    let mut runs = Vec::new();
+    let mut x = 0;
+    while x < row.len() {
+        if row[x] == 255 {
+            let s = x;
+            while x < row.len() && row[x] == 255 {
+                x += 1;
+            }
+            runs.push((s as i64, x as i64));
+        } else {
+            x += 1;
+        }
+    }
+    runs
+}
+
+/// Erosion of one row by the window `[x + dx0, x + dx1)`: the outside of the image extends the runs
+/// that touch it, then each run `[a, b)` keeps `[a - dx0, b - dx1 + 1)`; clipped to the row.
+fn shrink(runs: &Runs, dx0: i64, dx1: i64, w: i64) -> Runs {
+    let mut ext = runs.clone();
+    match ext.first_mut() {
+        Some(first) if first.0 == 0 => first.0 = -FAR,
+        _ => ext.insert(0, (-FAR, 0)),
+    }
+    match ext.last_mut() {
+        Some(last) if last.1 == w => last.1 = FAR,
+        _ => ext.push((w, FAR)),
+    }
+    ext.iter()
+        .map(|&(a, b)| ((a - dx0).max(0), (b - dx1 + 1).min(w)))
+        .filter(|&(a, b)| a < b)
+        .collect()
+}
+
+/// Dilation of one row by the window `[x + dx0, x + dx1)`: each run `[a, b)` reaches
+/// `[a - dx1 + 1, b - dx0)`, merged and clipped to the row.
+fn grow(runs: &Runs, dx0: i64, dx1: i64, w: i64) -> Runs {
+    let mut out: Runs = Vec::with_capacity(runs.len());
+    for &(a, b) in runs {
+        let (s, e) = ((a - dx1 + 1).max(0), (b - dx0).min(w));
+        if s >= e {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => out.push((s, e)),
+        }
+    }
+    out
+}
+
+fn intersect(a: &Runs, b: &Runs) -> Runs {
+    let (mut i, mut j, mut out) = (0, 0, Vec::new());
+    while i < a.len() && j < b.len() {
+        let (s, e) = (a[i].0.max(b[j].0), a[i].1.min(b[j].1));
+        if s < e {
+            out.push((s, e));
+        }
+        if a[i].1 < b[j].1 {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
+}
+
+fn unite(a: &Runs, b: &Runs) -> Runs {
+    let mut all: Runs = a.iter().chain(b).copied().collect();
+    all.sort_unstable();
+    let mut out: Runs = Vec::with_capacity(all.len());
+    for (s, e) in all {
+        match out.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => out.push((s, e)),
+        }
+    }
+    out
 }
 
 /// `erode(img, k)`.
@@ -310,6 +442,53 @@ mod tests {
                     apply(&img, &k, dilate),
                     naive(&img, &k, dilate),
                     "case {case}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn runs_of_ink_erode_and_dilate_as_the_definition() {
+        let mut state = 0x1B87_3593_CC9E_2D51_u64;
+        let mut next = |m: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % m
+        };
+        for case in 0..600 {
+            let (w, h) = (1 + next(50) as usize, 1 + next(40) as usize);
+            // pixel noise, filled blobs (touching the border too), all ink, no ink
+            let mut data = vec![if case % 7 == 5 { 255 } else { 0u8 }; w * h];
+            match case % 7 {
+                0 | 1 => data
+                    .iter_mut()
+                    .for_each(|v| *v = if next(3) == 0 { 0 } else { 255 }),
+                2..=4 => {
+                    for _ in 0..1 + next(5) {
+                        let (bx, by) = (next(w as u64) as usize, next(h as u64) as usize);
+                        let (bw, bh) = (1 + next(25) as usize, 1 + next(25) as usize);
+                        for y in by..(by + bh).min(h) {
+                            for x in bx..(bx + bw).min(w) {
+                                data[y * w + x] = 255;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            let img = Gray { w, h, data };
+            let (kw, kh) = (1 + next(35) as usize, 1 + next(35) as usize);
+            let k = if case % 3 == 0 {
+                Kernel::rect(kw, kh)
+            } else {
+                Kernel::ellipse(kw, kh)
+            };
+            for dilate in [false, true] {
+                assert_eq!(
+                    apply(&img, &k, dilate),
+                    naive(&img, &k, dilate),
+                    "case {case} dilate {dilate}"
                 );
             }
         }
