@@ -3,12 +3,12 @@ use ftx_core::{Refusal, Vec2};
 
 use super::invalid;
 
-pub(super) const AREA_EPS: f64 = 1e-12;
+pub(in crate::thermal::surface) const AREA_EPS: f64 = 1e-12;
 
 #[derive(Default)]
-pub(super) struct Work(pub usize);
+pub(in crate::thermal::surface) struct Work(pub usize);
 impl Work {
-    pub(super) fn add(&mut self, n: usize) -> Result<(), Refusal> {
+    pub(in crate::thermal::surface) fn add(&mut self, n: usize) -> Result<(), Refusal> {
         self.0 = self
             .0
             .checked_add(n)
@@ -20,7 +20,7 @@ impl Work {
     }
 }
 
-pub(super) fn area(p: &[Vec2]) -> f64 {
+pub(in crate::thermal::surface) fn area(p: &[Vec2]) -> f64 {
     if p.len() < 3 {
         return 0.0;
     }
@@ -31,7 +31,7 @@ pub(super) fn area(p: &[Vec2]) -> f64 {
         * 0.5
 }
 
-pub(super) fn ccw(mut p: Vec<Vec2>) -> Vec<Vec2> {
+pub(in crate::thermal::surface) fn ccw(mut p: Vec<Vec2>) -> Vec<Vec2> {
     if area(&p) < 0.0 {
         p.reverse();
     }
@@ -39,7 +39,7 @@ pub(super) fn ccw(mut p: Vec<Vec2>) -> Vec<Vec2> {
 }
 
 // Both half-polygons retain their parent's winding. Boundary-only intersections have zero area.
-pub(super) fn split(
+pub(in crate::thermal::surface) fn split(
     p: &[Vec2],
     a: Vec2,
     b: Vec2,
@@ -87,7 +87,7 @@ pub(super) fn split(
     Ok((inside, outside))
 }
 
-pub(super) fn intersection(
+pub(in crate::thermal::surface) fn intersection(
     p: &[Vec2],
     clip: &[Vec2],
     work: &mut Work,
@@ -102,7 +102,7 @@ pub(super) fn intersection(
     Ok(p)
 }
 
-pub(super) fn barycentric(p: Vec2, tri: [Vec2; 3]) -> Result<Vec2, Refusal> {
+pub(in crate::thermal::surface) fn barycentric(p: Vec2, tri: [Vec2; 3]) -> Result<Vec2, Refusal> {
     let a = tri[1] - tri[0];
     let b = tri[2] - tri[0];
     let d = a.cross(b);
@@ -114,7 +114,7 @@ pub(super) fn barycentric(p: Vec2, tri: [Vec2; 3]) -> Result<Vec2, Refusal> {
     Ok(result)
 }
 
-pub(super) fn bounds_overlap(a: &[Vec2], b: &[Vec2]) -> bool {
+pub(in crate::thermal::surface) fn bounds_overlap(a: &[Vec2], b: &[Vec2]) -> bool {
     let bounds = |p: &[Vec2]| {
         p.iter().fold(
             [

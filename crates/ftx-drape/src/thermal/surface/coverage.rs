@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 use super::{Boundary, DryThermalModel, Surface, invalid, positive};
 use crate::thermal::{nonnegative, temperature};
 
+pub mod motion;
+
 /// A disjoint portion of one retained cloth triangle, assigned to a named physical layer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

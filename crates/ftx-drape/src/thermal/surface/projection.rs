@@ -14,7 +14,7 @@ use super::coverage::{Coverage, Layout, Portion, Region};
 use super::{Surface, invalid, positive};
 use crate::bvh::{QueryBvh, overlaps};
 
-mod clip;
+pub(super) mod clip;
 use clip::{AREA_EPS, Work, area, barycentric, ccw, intersection, split};
 
 /// An explicit adjacent-layer resistance, not inferred from a geometric separation.

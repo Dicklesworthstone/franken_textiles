@@ -1,0 +1,548 @@
+//! Material-coordinate transfer between geometric coverage partitions, with no elapsed heat step.
+//!
+//! Piecewise-constant donor enthalpy is integrated over polygon AND thickness-cell intersections.
+//! Average temperature is not conservative when Cp varies with temperature. This first-order remap
+//! mixes unresolved gradients; conservation and boundedness are not an accuracy/garment claim.
+//! The same spatial material domain must remain covered: newly entering/leaving cloth needs a
+//! separate exposed-cloth state model and is refused, never reset to an invented temperature.
+
+use ftx_core::{Refusal, Vec3, receipt::sha256_hex};
+use ftx_pattern::material_thermal::ThermalLaw;
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use super::{Boundary, Coverage, CoverageState, CoverageStep, Surface, invalid};
+use crate::thermal::surface::projection::{self, Projection, Request};
+use projection::clip::{Work, area, bounds_overlap, intersection};
+
+/// One derived geometric partition and its frozen poses. No mutable projection enters the remapper.
+#[derive(Clone, Debug)]
+pub struct Frame {
+    coverage: Coverage,
+    projection: Projection,
+    request: Request,
+    cloth: Vec<Vec3>,
+    body: Vec<Vec3>,
+    // Temperature cell order in a coverage column is body-outward. This flag connects it to the
+    // persistent oriented cloth triangle, so approaching the other side reverses the cell index.
+    reverse: Vec<Vec<bool>>,
+    sha256: String,
+}
+
+/// Temperatures bound to both a coverage assembly AND the geometry that located its subpolygons.
+#[derive(Clone, Debug)]
+pub struct State {
+    frame_sha256: String,
+    inner: CoverageState,
+}
+impl State {
+    /// Region, then inside-to-outside thermal-cell order in the owning frame.
+    #[must_use]
+    pub fn temperature_c(&self) -> &[Vec<f64>] {
+        self.inner.temperature_c()
+    }
+}
+
+/// A physical heat step, separate from an instantaneous repartition/remap.
+#[derive(Clone, Debug)]
+pub struct Step {
+    frame_sha256: String,
+    heat: CoverageStep,
+}
+impl Step {
+    /// Existing coverage fields, including boundary heat and reference-mass storage change.
+    #[must_use]
+    pub fn heat(&self) -> &CoverageStep {
+        &self.heat
+    }
+    /// Retain the temperature state for the next physical step or geometric remap.
+    #[must_use]
+    pub fn into_state(self) -> State {
+        State {
+            frame_sha256: self.frame_sha256,
+            inner: self.heat.state,
+        }
+    }
+}
+
+/// Numerical accounting for an instantaneous remap; this is not heat supplied by the environment.
+#[derive(Clone, Debug, Serialize)]
+pub struct Balance {
+    /// Source frame identity.
+    pub from_sha256: String,
+    /// Destination frame identity.
+    pub to_sha256: String,
+    /// Conserved material domain, in reference m², counted once per physical cloth triangle.
+    pub reference_area_m2: f64,
+    /// Largest summed donor/destination allocation residual, in reference m².
+    pub allocation_residual_m2: f64,
+    /// One enthalpy zero per source triangle (minimum donor temperature), or None when unassigned.
+    pub reference_temperature_c: Vec<Option<f64>>,
+    /// Sensible heat above those explicitly retained zeroes, before the remap, J.
+    pub before_j: f64,
+    /// Sensible heat above the SAME zeroes, after the remap, J.
+    pub after_j: f64,
+    /// Signed after-minus-before; never added to physical boundary heat.
+    pub residual_j: f64,
+    /// Sum of absolute per-cloth-triangle energy residuals; opposite errors cannot cancel.
+    pub absolute_residual_j: f64,
+    /// Bounded polygon, thickness-cell and thermal-law evaluation work.
+    pub operations: usize,
+}
+
+/// New mapped state and its conservative-transfer accounting. A failure returns neither.
+#[derive(Clone, Debug)]
+pub struct Transfer {
+    /// State belonging to the destination frame, ready for [`Frame::advance`].
+    pub state: State,
+    /// Independent remap energy and material-area balance.
+    pub balance: Balance,
+}
+
+impl Frame {
+    /// Derive a coverage partition from actual geometry using the existing projection closure.
+    /// Material topology/reference areas remain immutable; body triangulation may change per frame.
+    ///
+    /// # Errors
+    /// Every existing projection/coverage refusal, including ambiguity and geometry/work budgets.
+    pub fn new(
+        source: Surface,
+        cloth: Vec<Vec3>,
+        body: Vec<Vec3>,
+        body_triangles: &[[usize; 3]],
+        request: Request,
+    ) -> Result<Self, Refusal> {
+        let projection = projection::project(&source, &cloth, &body, body_triangles, &request)?;
+        let mut reverse = Vec::new();
+        for region in &projection.layout.regions {
+            let [a, b, c] = body_triangles[region.body_triangle].map(|i| body[i]);
+            let normal = (b - a).cross(c - a);
+            let normal = normal / normal.norm();
+            reverse.push(
+                region
+                    .layers
+                    .iter()
+                    .map(|p| {
+                        let [a, b, c] = source.patches[p.cloth_triangle].vertices.map(|i| cloth[i]);
+                        let cloth_normal = (b - a).cross(c - a);
+                        let cosine = (cloth_normal / cloth_normal.norm()).dot(normal);
+                        if !cosine.is_finite() || cosine == 0.0 {
+                            return Err(invalid("unresolved material-normal orientation in remap"));
+                        }
+                        Ok(cosine < 0.0)
+                    })
+                    .collect::<Result<Vec<_>, Refusal>>()?,
+            );
+        }
+        let coverage = Coverage::new(source, projection.layout.clone())?;
+        let sha256 = sha256_hex(
+            &serde_json::to_vec(&(
+                "ftx-thermal-motion-frame/1",
+                &coverage.sha256,
+                &projection.input_sha256,
+            ))
+            .map_err(|e| invalid(e.to_string()))?,
+        );
+        Ok(Self {
+            coverage,
+            projection,
+            request,
+            cloth,
+            body,
+            reverse,
+            sha256,
+        })
+    }
+
+    /// Immutable derived geometry, allocations, numerical resolution and input identity.
+    #[must_use]
+    pub fn projection(&self) -> &Projection {
+        &self.projection
+    }
+
+    /// Frame identity, including source observations, geometry and request.
+    #[must_use]
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    /// Full frozen input receipt. Source geometry validity remains the projection's caller contract.
+    #[must_use]
+    pub fn snapshot(&self) -> Value {
+        json!({"schema":"ftx-thermal-motion-frame/1", "sha256":self.sha256,
+            "source":self.coverage.source.snapshot(), "cloth_positions_m":self.cloth,
+            "body_positions_m":self.body,"request":self.request,"projection":self.projection,
+            "remap":"first-order material-polygon and thickness-cell enthalpy intersections",
+            "domain":"same covered spatial cloth portions; no cloth remeshing or material substitution"})
+    }
+
+    /// Total temperature cells for budgeting, excluding massless bare-body paths.
+    #[must_use]
+    pub fn cells(&self) -> usize {
+        self.coverage.cells()
+    }
+
+    /// Required boundary-array length.
+    #[must_use]
+    pub fn body_triangle_count(&self) -> usize {
+        self.coverage.body_triangle_count()
+    }
+
+    /// Start a new simulation at an explicitly supplied temperature; never called implicitly on remap.
+    ///
+    /// # Errors
+    /// Invalid or uncharacterized temperature.
+    pub fn initial(&self, t: f64) -> Result<State, Refusal> {
+        Ok(State {
+            frame_sha256: self.sha256.clone(),
+            inner: self.coverage.initial(t)?,
+        })
+    }
+
+    fn check(&self, state: &State) -> Result<(), Refusal> {
+        if state.frame_sha256 != self.sha256 || state.inner.sha256 != self.coverage.sha256 {
+            return Err(invalid(
+                "thermal state belongs to another mapped geometry; remap explicitly",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Solve steady temperatures on this geometry, for initialization/verification when appropriate.
+    ///
+    /// # Errors
+    /// Invalid boundaries or failed existing thermal solve.
+    pub fn steady(&self, boundaries: &[Boundary]) -> Result<Step, Refusal> {
+        Ok(Step {
+            frame_sha256: self.sha256.clone(),
+            heat: self.coverage.steady(&self.cloth, &self.body, boundaries)?,
+        })
+    }
+
+    /// Advance on the frozen geometry for a declared duration. Remapping itself advances no time.
+    ///
+    /// # Errors
+    /// State from a different geometric frame, invalid time/boundaries or failed thermal solve.
+    pub fn advance(
+        &self,
+        state: &State,
+        seconds: f64,
+        boundaries: &[Boundary],
+    ) -> Result<Step, Refusal> {
+        self.check(state)?;
+        Ok(Step {
+            frame_sha256: self.sha256.clone(),
+            heat: self.coverage.advance(
+                &state.inner,
+                &self.cloth,
+                &self.body,
+                seconds,
+                boundaries,
+            )?,
+        })
+    }
+
+    /// Conservatively transfer old temperatures into this frame using material-coordinate overlap.
+    /// Body mesh/pose, region ordering and through-thickness discretization may change. No source
+    /// material, cloth topology, physical-layer identity or covered material domain may change.
+    ///
+    /// # Errors
+    /// Changed source/physical identity, entering/leaving cloth, unmatched spatial partitions,
+    /// work-budget exhaustion, out-of-domain temperatures, or failed local/global energy balance.
+    pub fn remap(&self, old: &Self, state: &State) -> Result<Transfer, Refusal> {
+        old.check(state)?;
+        if self.coverage.source.sha256 != old.coverage.source.sha256
+            || self.request.cloth_layers != old.request.cloth_layers
+        {
+            return Err(invalid(
+                "remap requires unchanged source material, cloth topology and layer identities",
+            ));
+        }
+        let source = &self.coverage.source;
+        let laws = source
+            .columns
+            .iter()
+            .map(|column| {
+                let m = &column.layers[0];
+                ThermalLaw::from_material(m.material(), m.allows_estimates())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let costs: Vec<_> = source
+            .columns
+            .iter()
+            .map(|column| {
+                column.layers[0]
+                    .material()
+                    .thermal_response
+                    .as_ref()
+                    .and_then(|r| r.specific_heat.as_ref())
+                    .map_or(1, |s| s.points.len())
+            })
+            .collect();
+        let mut donors = vec![Vec::new(); source.patches.len()];
+        let mut zeros = vec![None::<f64>; source.patches.len()];
+        let n = old.coverage.layout.cells_per_layer;
+        let m = self.coverage.layout.cells_per_layer;
+        for (r, region) in old.coverage.layout.regions.iter().enumerate() {
+            for (l, p) in region.layers.iter().enumerate() {
+                donors[p.cloth_triangle].push((r, l));
+                for &t in &state.inner.temperatures[r][l * n..(l + 1) * n] {
+                    laws[source.patches[p.cloth_triangle].column].check_temperature(t)?;
+                    zeros[p.cloth_triangle] = Some(zeros[p.cloth_triangle].map_or(t, |v| v.min(t)));
+                }
+            }
+        }
+        let mut work = Work::default();
+        let mut used: Vec<Vec<f64>> = old
+            .coverage
+            .layout
+            .regions
+            .iter()
+            .map(|r| vec![0.; r.layers.len()])
+            .collect();
+        let mut output = Vec::new();
+        let mut destination_error = 0.;
+        for (r, region) in self.coverage.layout.regions.iter().enumerate() {
+            let mut values = Vec::new();
+            for (l, p) in region.layers.iter().enumerate() {
+                let polygon = &self.projection.footprints[r].hits[l].cloth_polygon;
+                let mut intersections = Vec::new();
+                let mut received = 0.;
+                for &(s, k) in &donors[p.cloth_triangle] {
+                    work.add(1)?;
+                    let other = &old.projection.footprints[s].hits[k].cloth_polygon;
+                    if !bounds_overlap(polygon, other) {
+                        continue;
+                    }
+                    let overlap = 2. * area(&intersection(polygon, other, &mut work)?).max(0.);
+                    if overlap == 0. {
+                        continue;
+                    }
+                    let f = old.coverage.layout.regions[s].layers[k].fraction * overlap
+                        / (2. * area(other));
+                    if !f.is_finite() || f <= 0. {
+                        return Err(invalid("remap intersection fraction overflow"));
+                    }
+                    used[s][k] += f;
+                    received += f;
+                    intersections.push((s, k, f));
+                }
+                check_fraction(received, p.fraction)?;
+                destination_error += (received - p.fraction).abs()
+                    * source.patches[p.cloth_triangle].reference_area_m2;
+                let law = &laws[source.patches[p.cloth_triangle].column];
+                for j in 0..m {
+                    let mut inputs = Vec::new();
+                    let [a, b] = depth(j, m, self.reverse[r][l]);
+                    for &(s, k, f) in &intersections {
+                        // Only potentially intersecting donor depth cells are visited. This avoids
+                        // O(n*m) work when changing a fine through-thickness discretization.
+                        let start = (a * n as f64).floor() as usize;
+                        let end = ((b * n as f64).ceil() as usize).min(n);
+                        for canonical in start..end {
+                            work.add(1)?;
+                            let overlap = b.min((canonical + 1) as f64 / n as f64)
+                                - a.max(canonical as f64 / n as f64);
+                            if overlap <= 0. {
+                                continue;
+                            }
+                            let i = if old.reverse[s][k] {
+                                n - 1 - canonical
+                            } else {
+                                canonical
+                            };
+                            inputs.push((f * overlap, state.inner.temperatures[s][k * n + i]));
+                        }
+                    }
+                    values.push(mix(
+                        law,
+                        &inputs,
+                        costs[source.patches[p.cloth_triangle].column],
+                        &mut work,
+                    )?);
+                }
+            }
+            output.push(values);
+        }
+        let mut donor_error = 0.;
+        for (r, region) in old.coverage.layout.regions.iter().enumerate() {
+            for (l, p) in region.layers.iter().enumerate() {
+                check_fraction(used[r][l], p.fraction)?;
+                donor_error += (used[r][l] - p.fraction).abs()
+                    * source.patches[p.cloth_triangle].reference_area_m2;
+            }
+        }
+        let next = State {
+            frame_sha256: self.sha256.clone(),
+            inner: CoverageState {
+                sha256: self.coverage.sha256.clone(),
+                temperatures: output,
+            },
+        };
+        let before = old.energy(&state.inner, &laws, &zeros, &costs, &mut work)?;
+        let after = self.energy(&next.inner, &laws, &zeros, &costs, &mut work)?;
+        let mut absolute_residual = 0.;
+        for (&a, &b) in before.iter().zip(&after) {
+            let error = (b - a).abs();
+            if !error.is_finite() || error > 2e-9 * (1. + a.abs() + b.abs()) {
+                return Err(invalid("material-local remap enthalpy balance failed"));
+            }
+            absolute_residual += error;
+        }
+        let before_j = before.iter().sum::<f64>();
+        let after_j = after.iter().sum::<f64>();
+        let reference_area_m2 = old
+            .coverage
+            .allocated
+            .iter()
+            .zip(&source.patches)
+            .map(|(f, p)| f * p.reference_area_m2)
+            .sum::<f64>();
+        let balance = Balance {
+            from_sha256: old.sha256.clone(),
+            to_sha256: self.sha256.clone(),
+            reference_area_m2,
+            allocation_residual_m2: donor_error.max(destination_error),
+            reference_temperature_c: zeros,
+            before_j,
+            after_j,
+            residual_j: after_j - before_j,
+            absolute_residual_j: absolute_residual,
+            operations: work.0,
+        };
+        if [
+            reference_area_m2,
+            donor_error,
+            destination_error,
+            before_j,
+            after_j,
+            balance.residual_j,
+            absolute_residual,
+        ]
+        .iter()
+        .any(|x| !x.is_finite())
+        {
+            return Err(invalid("remap balance accumulation overflow"));
+        }
+        Ok(Transfer {
+            state: next,
+            balance,
+        })
+    }
+
+    fn energy(
+        &self,
+        state: &CoverageState,
+        laws: &[ThermalLaw],
+        zeros: &[Option<f64>],
+        costs: &[usize],
+        work: &mut Work,
+    ) -> Result<Vec<f64>, Refusal> {
+        let source = &self.coverage.source;
+        let n = self.coverage.layout.cells_per_layer;
+        let mut energy = vec![0.; source.patches.len()];
+        for (r, region) in self.coverage.layout.regions.iter().enumerate() {
+            for (l, p) in region.layers.iter().enumerate() {
+                let patch = &source.patches[p.cloth_triangle];
+                let zero = zeros[p.cloth_triangle]
+                    .ok_or_else(|| invalid("newly covered cloth has no thermal history"))?;
+                let scale = patch.reference_area_m2 * p.fraction / n as f64;
+                for &t in &state.temperatures[r][l * n..(l + 1) * n] {
+                    work.add(costs[patch.column])?;
+                    energy[p.cloth_triangle] +=
+                        scale * laws[patch.column].sensible_change(zero, t)?;
+                }
+            }
+        }
+        Ok(energy)
+    }
+}
+
+fn check_fraction(received: f64, expected: f64) -> Result<(), Refusal> {
+    // Explicit numerical allowance for the projection's bounded allocation-roundoff corrections.
+    // Never normalize away a genuinely entering/leaving portion or a spatial gap.
+    if !received.is_finite() || (received - expected).abs() > 5e-10 * expected + 64. * f64::EPSILON
+    {
+        return Err(invalid(
+            "covered material domain changed; entering/leaving cloth has no modeled thermal history",
+        ));
+    }
+    if received <= 0. {
+        return Err(invalid("destination has no thermal donor"));
+    }
+    Ok(())
+}
+
+fn depth(i: usize, n: usize, reverse: bool) -> [f64; 2] {
+    let i = if reverse { n - 1 - i } else { i };
+    [i as f64 / n as f64, (i + 1) as f64 / n as f64]
+}
+
+fn mix(
+    law: &ThermalLaw,
+    inputs: &[(f64, f64)],
+    knots: usize,
+    work: &mut Work,
+) -> Result<f64, Refusal> {
+    if inputs.is_empty() {
+        return Err(invalid("empty enthalpy transfer stencil"));
+    }
+    work.add(inputs.len())?;
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    let mut weight = 0.;
+    for &(w, t) in inputs {
+        if !w.is_finite() || w <= 0. {
+            return Err(invalid("invalid enthalpy transfer weight"));
+        }
+        law.check_temperature(t)?;
+        lo = lo.min(t);
+        hi = hi.max(t);
+        weight += w;
+    }
+    if !weight.is_finite() || weight <= 0. {
+        return Err(invalid("enthalpy transfer weight overflow"));
+    }
+    if lo == hi {
+        return Ok(lo);
+    }
+    // Curve integration visits its knots. Bound this work too, not just the number of stencil
+    // entries, so a long characterization table cannot evade the remap budget.
+    work.add(
+        knots
+            .checked_mul(inputs.len() + 132)
+            .ok_or_else(|| invalid("remap work overflow"))?,
+    )?;
+    let zero = lo;
+    let target = inputs
+        .iter()
+        .map(|&(w, t)| Ok((w / weight) * law.sensible_change(zero, t)?))
+        .collect::<Result<Vec<_>, Refusal>>()?
+        .iter()
+        .sum::<f64>();
+    if !target.is_finite() {
+        return Err(invalid("enthalpy average overflow"));
+    }
+    // Positive Cp gives a strictly monotone inverse. Bracket by donor temperatures, not by an
+    // extrapolated material domain; 128 bounded bisections preserve the donor maximum principle.
+    for _ in 0..128 {
+        let t = lo / 2. + hi / 2.;
+        if t == lo || t == hi {
+            break;
+        }
+        if law.sensible_change(zero, t)? < target {
+            lo = t;
+        } else {
+            hi = t;
+        }
+    }
+    let error_lo = (law.sensible_change(zero, lo)? - target).abs();
+    let error_hi = (law.sensible_change(zero, hi)? - target).abs();
+    let t = if error_lo <= error_hi { lo } else { hi };
+    let tolerance = 256. * f64::EPSILON * law.capacity_at(t)? * (1. + zero.abs() + t.abs())
+        + 1e-12 * (1. + target.abs());
+    if !tolerance.is_finite() || error_lo.min(error_hi) > tolerance {
+        return Err(invalid("enthalpy inverse did not converge"));
+    }
+    Ok(t)
+}
