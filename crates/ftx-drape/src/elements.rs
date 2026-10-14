@@ -13,7 +13,7 @@
 //!   `½·B·w·|Σᵢ Kᵢ xᵢ|²` with cotangent weights K from the flat rest shape. Its Hessian is constant and
 //!   positive semidefinite, which suits Newton.
 
-use ftx_core::{Vec2, Vec3};
+use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 
 /// Orthotropic membrane material (resultants in N/m, so thickness is folded in).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,6 +27,53 @@ pub struct Membrane {
 }
 
 impl Membrane {
+    /// Check the constitutive assumptions used by the element's PSD shortcut before assembly.
+    ///
+    /// # Errors
+    /// Non-finite, asymmetric or non-positive-definite stiffness, invalid compression or transition.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        let bad = || {
+            Refusal::new(
+                RefusalCode::OutOfRange,
+                "membrane needs finite symmetric positive-definite stiffness, compression in (0,1] and positive transition",
+            )
+        };
+        if self.q.iter().flatten().any(|v| !v.is_finite())
+            || self
+                .compression
+                .iter()
+                .any(|c| !c.is_finite() || *c <= 0.0 || *c > 1.0)
+            || !self.transition.is_finite()
+            || self.transition <= 0.0
+        {
+            return Err(bad());
+        }
+        // Scale before Cholesky so validation itself does not overflow for a finite matrix.
+        let scale = self.q.iter().flatten().map(|x| x.abs()).fold(0.0, f64::max);
+        if scale == 0.0 {
+            return Err(bad());
+        }
+        let mut lower = [[0.0; 3]; 3];
+        for i in 0..3 {
+            for j in 0..=i {
+                if self.q[i][j] != self.q[j][i] {
+                    return Err(bad());
+                }
+                let r =
+                    self.q[i][j] / scale - (0..j).map(|k| lower[i][k] * lower[j][k]).sum::<f64>();
+                if i == j {
+                    if !r.is_finite() || r <= 0.0 {
+                        return Err(bad());
+                    }
+                    lower[i][j] = r.sqrt();
+                } else {
+                    lower[i][j] = r / lower[j][j];
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// From warp and weft Young's moduli E1, E2 (N/m), the major Poisson ratio ν12, the shear (bias)
     /// modulus G12 (N/m) and a compression factor applied to both directions.
     #[must_use]

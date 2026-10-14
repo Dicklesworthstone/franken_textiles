@@ -139,24 +139,14 @@ pub fn wrapped_positions(mesh: &GarmentMesh, placements: &[WrapPlacement]) -> Ve
 
 /// Each instance's rest coordinates in metres with its grainline along +u (a rotation; `sim_scale`
 /// and mirroring are already in the mesh, so the grain is scaled and mirrored the same way).
-fn grain_rest(pattern: &Pattern, mesh: &GarmentMesh) -> Vec<Vec2> {
+fn grain_rest(pattern: &Pattern, mesh: &GarmentMesh, required: bool) -> Result<Vec<Vec2>, Refusal> {
     let mut rest = vec![Vec2::ZERO; mesh.verts2d.len()];
     for (k, id) in mesh.instances.iter().enumerate() {
-        let Some(inst) = pattern.instance(id) else {
-            continue;
-        };
+        let inst = pattern
+            .instance(id)
+            .ok_or_else(|| bad(format!("mesh refers to missing pattern instance {id}")))?;
         let piece = &pattern.raw()["pieces"][inst.piece_index];
-        let g = &piece["grain"];
-        let mut d = Vec2::new(
-            g[1][0].as_f64().unwrap_or(0.0) - g[0][0].as_f64().unwrap_or(0.0),
-            g[1][1].as_f64().unwrap_or(1.0) - g[0][1].as_f64().unwrap_or(0.0),
-        );
-        if let Some(sc) = piece.get("sim_scale").filter(|v| truthy(v)) {
-            d = Vec2::new(
-                d.x * sc[0].as_f64().unwrap_or(1.0),
-                d.y * sc[1].as_f64().unwrap_or(1.0),
-            );
-        }
+        let mut d = crate::material::grain_direction(piece, required)?;
         if inst.mirrored {
             d.x = -d.x;
         }
@@ -171,7 +161,7 @@ fn grain_rest(pattern: &Pattern, mesh: &GarmentMesh) -> Vec<Vec2> {
             rest[i] = Vec2::new(c * p.x - s * p.y, s * p.x + c * p.y);
         }
     }
-    rest
+    Ok(rest)
 }
 
 /// A garment ready to drape: the mesh, its start state, the weld map and the solver.
@@ -356,6 +346,9 @@ pub fn build_scene(
     contact: ContactParams,
     elastic: Option<&ElasticCasing>,
 ) -> Result<Scene, Refusal> {
+    fabric.validate()?;
+    fabric.membrane(compression).validate()?;
+    let rest = grain_rest(pattern, &mesh, fabric.requires_grain())?;
     let casing = elastic.and_then(|e| mesh.instances.iter().position(|i| *i == e.instance));
     let places = placements(pattern, &mesh, frames)?;
     let wrapped = wrapped_positions(&mesh, &places);
@@ -380,7 +373,6 @@ pub fn build_scene(
     for (v, &w) in weld.iter().enumerate() {
         x[w] = start.relaxed[v];
     }
-    let rest = grain_rest(pattern, &mesh);
     let (mut tris, mut tri_rest, mut collapsed) = (Vec::new(), Vec::new(), 0);
     // Gather zones (the reference's vertex-weighted structural stiffness): compression drops from the
     // cloth's factor to GATHER_COMPRESSION at a gathered seam, linearly in the element's mean weight.
@@ -626,4 +618,34 @@ pub fn instance_ranges(mesh: &GarmentMesh) -> BTreeMap<String, (usize, usize)> {
         .cloned()
         .zip(mesh.inst_range.iter().copied())
         .collect()
+}
+
+#[cfg(test)]
+mod grain_tests {
+    use super::*;
+    use crate::garment::build_garment;
+    use serde_json::json;
+
+    #[test]
+    fn material_axes_scale_then_mirror_with_each_instance() {
+        let pattern = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
+            "pieces":[{"id":"p","cut":{"qty":2},"sim_scale":[2,0.5],
+                "grain":{"p0":[0,0],"p1":[3,4]},
+                "vertices":{"a":[0,0],"b":[40,0],"c":[40,20],"d":[0,20]},
+                "edges":[{"id":"e0","from":"a","to":"b"},{"id":"e1","from":"b","to":"c"},
+                    {"id":"e2","from":"c","to":"d"},{"id":"e3","from":"d","to":"a"}],
+                "placement":{"part":"torso"}}],"seams":[]}));
+        let mesh = build_garment(&pattern, 15.).unwrap();
+        let rest = grain_rest(&pattern, &mesh, true).unwrap();
+        assert_eq!(mesh.instances.len(), 2);
+        for (k, id) in mesh.instances.iter().enumerate() {
+            let mirrored = pattern.instance(id).unwrap().mirrored;
+            let direction = Vec2::new(if mirrored { -6. } else { 6. }, 2.).normalized();
+            let (lo, hi) = mesh.inst_range[k];
+            for (p, r) in mesh.verts2d[lo..hi].iter().zip(&rest[lo..hi]) {
+                let expected = Vec2::new(direction.dot(*p), direction.cross(*p)) * 1e-3;
+                assert!((*r - expected).norm() < 1e-15);
+            }
+        }
+    }
 }
