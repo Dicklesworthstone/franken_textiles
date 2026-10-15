@@ -1094,6 +1094,87 @@ robotics gates. `ftx-tm0`, `ftx-tm2`, `ftx-tm7` and `ftx-tm8` remain open.
 
 ---
 
+### 25.9 Capability-specific garment exchange and the next material-swap delivery
+
+The section 25.1 rule that missing data blocks only the consumers that need it now reaches geometric
+garment/body exchange. `SteadyCoverage` (`bae3525`) accepts the same frozen sheet selections and
+shared fractional coverage layout without requiring heat capacity or inventing transient storage.
+Each series layer uses its allocated current cloth area; films and interfaces use the covered body
+area. Covered body area is counted once, while uncovered fractions remain explicit bare parallel
+paths. Temperature-qualified conductivity uses the existing integrated Fourier solver, per-material
+domains and original-equation residuals. Frozen observations are never rewritten to account for a
+pose or an area change. The output exposes unassigned cloth rather than silently counting it as body
+coverage. This closes a software dependency, not a material-characterization gap.
+
+The shared geometric bridge (`cbeafb4`) reuses actual retained cloth triangles, local-normal polygon
+clipping, inverse cloth allocations, physical layer order and finite-thickness gap evaluation for
+both storage-bearing and conduction-only surfaces. `7750faf` connects it to the native and browser
+workbench through one file-free request evaluator. Both `ftx materials thermal-steady-coverage` and
+`ftx-materials thermal-steady-coverage` accept a saved drape, explicit body/layer map and boundary
+conditions, or a source-complete frozen replay request. The wasm-bindgen export is
+`thermal_steady_coverage`. Every evaluation recomputes coverage from its retained geometry and
+selected material records; it does not reuse an older pose's polygons or substitute a newer catalog
+entry behind a stable name. Spatially varying boundary conditions are bound to the exact body mesh.
+Unrelated saved-report metadata is omitted from the portable request. See
+`docs/steady-thermal-coverage.md` and its executable fixtures.
+
+Material substitution therefore has a further end-to-end consumer: change the existing pattern
+selection, rerun draping, and the same new report updates geometric overlap, source-thickness-driven
+admitted gas gaps, series transport and signed body heat fields without changing solver code. A
+transport-only substitution on an actual sewn-drape fixture preserves mechanical trajectories and
+clipped footprints while changing power and source identities. This test uses synthetic coefficients
+and a local prescribed-temperature body patch. It is not an empirical linen/leather/knit jacket
+comparison. A conductivity-only specimen may also be evaluated on explicitly supplied geometry,
+but it does not acquire missing mechanical parameters or become drape-ready.
+
+**Data and capability policy remains unchanged.** The database coverage in section 25.2 applies to
+fiber, yarn/thread, woven and knitted constructions, nonwovens, hides/finishes, laminates and fills.
+Cotton, polyester/blends, wool, linen, regenerated-cellulose and bamboo distinctions, silk, leather,
+performance-branded products, down and synthetic/cotton/wool fill must remain construction- and
+specimen-specific. Source-bearing property families and dated comparable-offer p10/median/p90 are
+still required; a populated identity record is not a complete effective fabric law. This delivery
+adds no invented material measurements, new worldwide price survey or generic brand-based physics.
+One canonical material authority continues to feed mechanical, transport, procurement and process
+consumers, each with its own readiness and missing-data report.
+
+The following focused beads supplement, rather than close, the larger material-platform gates:
+
+1. **Delivered conductivity-only coverage (`ftx-cv1`).** Shared area allocation, exact steady series
+   transport, retained-geometry projection, native/browser workbench and frozen replay. Numerical
+   checks include unequal areas, partial exposure, nonlinear conductivity, source-qualified HFM
+   transport without heat capacity, material substitution and explicit malformed/stale-input
+   refusals. Physical validation and whole-wearer claims remain outside this completed slice.
+2. **Qualified full-garment body coverage (`ftx-cv2`, P0; supports `ftx-tmb` and `ftx-tm8`).** Extend
+   the local synthetic propagation proof to independently checked full-jacket topology and measured
+   boundary exchange using matched material lots. Test body winding, self-intersections, open
+   boundaries, folds, sewn layers, exposed areas and pose changes. Report cloth/body allocation,
+   spatial convergence, horizon/normal-closure sensitivity and all unresolved regions. Compare
+   local heat fields and total exchange against held-out measurements with declared uncertainty;
+   do not fit the held-out garment. Couple to the matched data gates `ftx-tm2` and `ftx-tmf`.
+3. **Qualified exterior convection and radiation (`ftx-cv3`, P1; a concrete `ftx-tmc` slice).** Add
+   environment-dependent boundary exchange driven by declared air state/wind and source-qualified
+   surface properties, including finish-dependent emissivity. Solve boundary face temperatures
+   consistently with the existing nonlinear material columns. Separate convection, radiation and
+   conduction terms, enforce their validity domains, and retain signed energy residuals. Establish
+   limiting-case, reversed-flow and held-out boundary experiments before replacing prescribed films
+   or publishing warmth indices. Moisture, compression and human thermoregulation remain separate
+   gates; a dry gas approximation is not silently promoted to a ventilated garment model.
+4. **Integrated browser material-swap workbench (`ftx-cv4`, P1).** Use the existing shared resolution
+   and wasm APIs to select source-locked shell/lining/fill records, show capability-specific gaps,
+   rerun drape and coverage, and inspect changed mechanics, heat, cut requirements, comparable cost
+   and sewing feasibility for the same authored pattern. Invalidate outputs when their material,
+   pose, environment or process inputs change; never patch missing coefficients from a family label.
+   Build the operator workflow rather than a second database or browser-only physics implementation.
+   Keep machine planning distinct from hardware execution authorization.
+
+The higher-priority matched specimen characterization, uncertainty-qualified experimental results
+and qualified manufacturing work in `ftx-tm2`, `ftx-tme`, `ftx-tmf`, `ftx-md1` and `ftx-sp2` remain
+open. All current coverage results explicitly decline comfort, empirical validation and propagated
+measurement-uncertainty claims. A complete material-driven product requires these data and physical
+acceptance gates, not merely additional property names or a more convincing visualization.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -287,3 +287,80 @@ fn missing_spectral_face_conditioning_domains_and_evidence_refuse_without_affect
         );
     }
 }
+
+#[test]
+fn surface_exchange_uses_current_areas_and_binds_the_outermost_layer() {
+    use ftx_core::Vec3;
+    use ftx_drape::thermal::{steady::surface::SteadySurface, surface::Patch};
+    let make = |outer_eps| {
+        SteadySurface::new(
+            vec![build(
+                &[record(0.1, 0.01), record(0.3, outer_eps)],
+                vec![0.1],
+            )],
+            3,
+            vec![Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            }],
+        )
+        .unwrap()
+    };
+    let s = make(0.8);
+    let b = [boundary(35., 5., 0.1)];
+    let e = [environment(3., 5., Some(-10.))];
+    let x = [Vec3::ZERO, Vec3::new(1., 0., 0.), Vec3::new(0., 1., 0.)];
+    let first = s.solve_exterior(&x, &b, &e).unwrap();
+    let mut larger = x;
+    larger[1].x = 2.;
+    let doubled = s.solve_exterior(&larger, &b, &e).unwrap();
+    near(doubled.steady.power_w, first.steady.power_w * 2.);
+    near(doubled.convective_power_w, first.convective_power_w * 2.);
+    near(doubled.radiative_power_w, first.radiative_power_w * 2.);
+    near(
+        first.steady.power_w,
+        first.convective_power_w + first.radiative_power_w,
+    );
+    let moved = x.map(|v| Vec3::new(v.z, v.x, v.y) + Vec3::new(0.4, 0.5, 0.6));
+    near(
+        s.solve_exterior(&moved, &b, &e).unwrap().steady.power_w,
+        first.steady.power_w,
+    );
+    assert!(
+        make(0.05)
+            .solve_exterior(&x, &b, &e)
+            .unwrap()
+            .steady
+            .power_w
+            < first.steady.power_w
+    );
+    assert!(s.solve_exterior(&x, &b, &[]).is_err());
+    assert!(s.solve_exterior(&x, &[], &e).is_err());
+    assert!(s.solve_exterior(&[Vec3::ZERO; 3], &b, &e).is_err());
+}
+
+#[test]
+fn explicit_boundary_estimate_permission_does_not_relax_material_evidence() {
+    use ftx_pattern::materials::Evidence;
+    let mut s = record(0.4, 0.8);
+    s.allow_estimates = false;
+    s.record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("thermal_resistance")
+        .unwrap()
+        .evidence = Evidence::Published;
+    let model = build(&[s], vec![]);
+    assert!(
+        model
+            .solve_exterior(boundary(35., 5., 0.1), &environment(3., 5., Some(-10.)))
+            .is_err()
+    );
+    assert!(
+        model
+            .solve_exterior(boundary(35., 5., 0.1), &environment(3., 5., None))
+            .is_ok()
+    );
+}

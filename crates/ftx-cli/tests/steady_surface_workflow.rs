@@ -191,3 +191,85 @@ fn primary_discovery_agrees_with_workbench_on_condition_qualified_readiness() {
         }
     }
 }
+
+#[test]
+fn both_binaries_admit_exterior_convection_without_inventing_missing_emissivity() {
+    let example: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+    ))
+    .unwrap();
+    let report: Value = serde_json::from_str(REPORT).unwrap();
+    let mut conditions: Value = serde_json::from_str(CONDITIONS).unwrap();
+    conditions["boundaries"][0]["outside_c"] = json!(5.);
+    conditions["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.);
+    conditions["exterior_exchange"] = json!([example["exterior_exchange"]]);
+    for main in [false, true] {
+        // The original fixture has resistance only, not an emissivity measurement.
+        assert!(!invoke(main, &report, &conditions, &[]).status.success());
+        let mut conv = conditions.clone();
+        conv["exterior_exchange"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("radiation");
+        let output = success(&invoke(main, &report, &conv, &[]));
+        let library: SurfaceConditions = serde_json::from_value(conv.clone()).unwrap();
+        assert_eq!(output, library.evaluate(&report).unwrap());
+        let through = output["steady"]["power_w"].as_f64().unwrap();
+        let expected = 0.5 * 25. / (0.4 + 0.1 + 1. / 3.) + 0.5 * 25. / (0.8 + 0.1 + 1. / 3.);
+        assert!((through - expected).abs() < 1e-8);
+        assert_eq!(output["exterior_exchange"]["radiative_power_w"], 0.);
+        assert_eq!(
+            output,
+            success(&invoke(
+                main,
+                &output["request"]["report"],
+                &output["request"]["conditions"],
+                &[]
+            ))
+        );
+        // Nonuniform exterior assumptions require the exact column identity, independently of films.
+        conv["exterior_exchange"] =
+            json!([conv["exterior_exchange"][0], conv["exterior_exchange"][0]]);
+        assert!(!invoke(main, &report, &conv, &[]).status.success());
+        conv["model_sha256"] = report["steady_thermal_surface"]["model"]["sha256"].clone();
+        assert!(invoke(main, &report, &conv, &[]).status.success());
+        conv["exterior_exchange"] = json!([]);
+        assert!(!invoke(main, &report, &conv, &[]).status.success());
+    }
+}
+
+#[test]
+fn both_stack_binaries_follow_finish_changes_with_frozen_optical_evidence() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+    );
+    let a = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .args(["materials", "thermal-steady", path, "--json"])
+        .output()
+        .unwrap();
+    let b = Command::new(env!("CARGO_BIN_EXE_ftx-materials"))
+        .args(["thermal-steady", path])
+        .output()
+        .unwrap();
+    let result = success(&a);
+    assert_eq!(result, success(&b));
+    let input: ftx_drape::thermal::steady::request::Request =
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(
+        result,
+        input
+            .evaluate(&ftx_pattern::materials::Catalog::builtin().unwrap())
+            .unwrap()
+    );
+    let t = result["exterior_exchange"]["surface_c"].as_f64().unwrap();
+    let q = result["state"]["flux_w_m2"].as_f64().unwrap();
+    let fourth = |t: f64| {
+        let k = t + 273.15;
+        k * k * k * k
+    };
+    let independent = 3. * (t - 5.) + 0.8 * 5.670_374_419e-8 * (fourth(t) - fourth(-10.));
+    assert!((q - independent).abs() < 1e-8);
+    assert!((q - (35. - t) / 0.5).abs() < 1e-8);
+    assert_eq!(result["storage_required"], false);
+}

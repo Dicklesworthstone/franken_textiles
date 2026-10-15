@@ -440,3 +440,53 @@ fn actual_sewn_drape_material_swap_reprojects_local_body_coverage_without_storag
     let frozen: Request = serde_json::from_value(two["request"].clone()).unwrap();
     assert_eq!(frozen.evaluate().unwrap(), two);
 }
+
+#[test]
+fn finish_only_changes_follow_an_actual_sewn_drape_into_exterior_exchange() {
+    use ftx_drape::thermal::steady::request::SurfaceConditions;
+    let example: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+    ))
+    .unwrap();
+    let mut material = thermal_sheet(0.4, 1000.);
+    material["record"]["properties"]["emissivity"] =
+        example["layers"][0]["record"]["properties"]["emissivity"].clone();
+    material["record"]["properties"]["emissivity"]["source"] = json!("test");
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = material.clone();
+    let first = run(&Pattern::new(raw.clone()), options());
+    material["record"]["properties"]["emissivity"]["value"] = json!(0.05);
+    raw["pieces"][1]["fabric"] = json!({"material":material});
+    let second = run(&Pattern::new(raw), options());
+    assert_eq!(first.scene.solver.x, second.scene.solver.x);
+    let conditions: SurfaceConditions = serde_json::from_value(json!({
+        "schema":"ftx-steady-surface-conditions/1",
+        "boundaries":[{"inside_c":35.,"outside_c":5.,
+            "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.}],
+        "exterior_exchange":[example["exterior_exchange"]]
+    }))
+    .unwrap();
+    let a = conditions.evaluate(&first.report).unwrap();
+    let b = conditions.evaluate(&second.report).unwrap();
+    assert_eq!(a["positions_m"], b["positions_m"]);
+    assert_eq!(a["steady"]["area_m2"], b["steady"]["area_m2"]);
+    assert!(a["steady"]["power_w"].as_f64().unwrap() > b["steady"]["power_w"].as_f64().unwrap());
+    assert_ne!(a["model_sha256"], b["model_sha256"]);
+    let exchange = &b["exterior_exchange"];
+    let residual = b["steady"]["power_w"].as_f64().unwrap()
+        - exchange["convective_power_w"].as_f64().unwrap()
+        - exchange["radiative_power_w"].as_f64().unwrap();
+    assert!(residual.abs() < 1e-10);
+    let frozen: SurfaceConditions =
+        serde_json::from_value(b["request"]["conditions"].clone()).unwrap();
+    assert_eq!(b, frozen.evaluate(&b["request"]["report"]).unwrap());
+    assert!(frozen.evaluate(&first.report).is_err());
+    // A finish cannot change the old fixed-film computation when radiation is not selected.
+    let mut old = conditions.clone();
+    old.exterior_exchange = None;
+    old.boundaries[0].outside_resistance_m2_k_w = 0.2;
+    assert_eq!(
+        old.evaluate(&first.report).unwrap()["steady"]["power_w"],
+        old.evaluate(&second.report).unwrap()["steady"]["power_w"]
+    );
+}

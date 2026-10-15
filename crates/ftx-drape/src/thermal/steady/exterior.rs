@@ -66,6 +66,8 @@ pub struct ExteriorState {
     pub convective_flux_w_m2: f64,
     /// Signed radiation per current OUTER cloth area, W/m².
     pub radiative_flux_w_m2: f64,
+    /// False means radiation was explicitly omitted, not that a zero emissivity was measured.
+    pub radiation_enabled: bool,
     /// Current outer cloth area / model reference area; one for independent equal-area columns.
     pub outer_area_per_model_area: f64,
     /// Conduction minus the area-scaled sum of convection/radiation, W/m² of model area.
@@ -285,6 +287,7 @@ impl SteadyConductionModel {
                             surface_c: t,
                             convective_flux_w_m2: convective,
                             radiative_flux_w_m2: radiative,
+                            radiation_enabled: exterior.radiation.is_some(),
                             outer_area_per_model_area,
                         });
                     }

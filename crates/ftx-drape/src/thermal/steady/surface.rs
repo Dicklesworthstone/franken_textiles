@@ -3,6 +3,7 @@
 //! Uses the same source receipts, triangle ownership and geometry as mechanical draping. A column
 //! contains explicitly coextensive layers; nearby sheets do not imply a stack or body coverage.
 
+use super::exterior::{Exterior, ExteriorState};
 use super::{Boundary, SteadyConductionModel, SteadyState, invalid, positive};
 use crate::{
     run::DrapeRun,
@@ -47,6 +48,19 @@ pub struct SurfaceSolution {
     pub area_m2: f64,
     /// Signed sum of patch powers, not an inferred whole-wearer heat loss.
     pub power_w: f64,
+}
+
+/// Exposed-face exchange over the same retained cloth areas; not a body-coverage calculation.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExteriorSolution {
+    /// Original conduction field and patch powers in unchanged retained order.
+    pub steady: SurfaceSolution,
+    /// Exterior temperature and signed flux contributions per material column.
+    pub columns: Vec<ExteriorState>,
+    /// Signed convection integrated over current cloth area, W.
+    pub convective_power_w: f64,
+    /// Signed ambient radiation integrated over current cloth area, W.
+    pub radiative_power_w: f64,
 }
 
 impl SteadySurface {
@@ -203,6 +217,70 @@ impl SteadySurface {
             .zip(boundaries)
             .map(|(c, &b)| c.solve(b))
             .collect::<Result<_, _>>()?;
+        self.integrate(areas, columns)
+    }
+
+    /// Couple each column to its declared environment and selected outermost textile face.
+    /// Both input arrays must contain exactly one entry per frozen column. Convection/radiation
+    /// powers use the same current triangle areas as the through-conduction powers.
+    ///
+    /// # Errors
+    /// Invalid geometry/counts, missing or denied optical data, unsupported temperatures or fluxes.
+    pub fn solve_exterior(
+        &self,
+        positions: &[Vec3],
+        boundaries: &[Boundary],
+        exterior: &[Exterior],
+    ) -> Result<ExteriorSolution, Refusal> {
+        if boundaries.len() != self.columns.len() || exterior.len() != self.columns.len() {
+            return Err(invalid(
+                "steady exterior needs one boundary and environment per column",
+            ));
+        }
+        let areas = self.areas(positions)?;
+        let columns: Vec<_> = self
+            .columns
+            .iter()
+            .zip(boundaries)
+            .zip(exterior)
+            .map(|((c, &b), e)| c.solve_exterior(b, e))
+            .collect::<Result<_, _>>()?;
+        let steady = self.integrate(
+            areas,
+            columns.iter().map(|c| c.conduction.clone()).collect(),
+        )?;
+        let mut convective_power_w = 0.0;
+        let mut radiative_power_w = 0.0;
+        for p in &steady.patches {
+            let c = &columns[p.column];
+            let conv = p.area_m2 * c.convective_flux_w_m2;
+            let rad = p.area_m2 * c.radiative_flux_w_m2;
+            if !conv.is_finite()
+                || !rad.is_finite()
+                || (conv == 0.0 && c.convective_flux_w_m2 != 0.0)
+                || (rad == 0.0 && c.radiative_flux_w_m2 != 0.0)
+            {
+                return Err(invalid("exterior patch power overflow or underflow"));
+            }
+            convective_power_w += conv;
+            radiative_power_w += rad;
+        }
+        if !convective_power_w.is_finite() || !radiative_power_w.is_finite() {
+            return Err(invalid("exterior surface power overflow"));
+        }
+        Ok(ExteriorSolution {
+            steady,
+            columns,
+            convective_power_w,
+            radiative_power_w,
+        })
+    }
+
+    fn integrate(
+        &self,
+        areas: Vec<f64>,
+        columns: Vec<SteadyState>,
+    ) -> Result<SurfaceSolution, Refusal> {
         let mut patches = Vec::with_capacity(self.patches.len());
         let mut area_m2 = 0.0;
         let mut power_w = 0.0;
