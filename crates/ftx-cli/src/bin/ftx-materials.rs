@@ -28,12 +28,12 @@ mod thermal_surface;
 #[path = "material_workbench/thermal.rs"]
 mod thermal_transient;
 
+#[path = "material_workbench/bending.rs"]
+mod bending_calibration;
 #[path = "material_workbench/cutting.rs"]
 mod cutting;
 #[path = "material_workbench/relaxation.rs"]
 mod relaxation_calibration;
-#[path = "material_workbench/bending.rs"]
-mod bending_calibration;
 
 const USAGE: &str = "ftx-materials catalog [SEARCH]
 ftx-materials show ID

@@ -24,7 +24,8 @@ fn material() -> Material {
             Source {
                 reference: "test:synthetic-bending-oracle".into(),
                 accessed_on: "2026-10-15".into(),
-                note: "Independent synthetic moment/curvature oracle; not measured fabric data".into(),
+                note: "Independent synthetic moment/curvature oracle; not measured fabric data"
+                    .into(),
             },
         )]),
     }
@@ -176,7 +177,6 @@ fn replacement_and_estimated_observation_require_explicit_consent() {
     raw.allow_estimated_observations = true;
     assert!(calibrate(&raw).is_ok());
 }
-
 
 #[test]
 fn jointly_recovers_stiffness_and_unloaded_preferred_curvature() {

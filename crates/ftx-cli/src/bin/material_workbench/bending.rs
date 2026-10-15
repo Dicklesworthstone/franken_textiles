@@ -44,8 +44,7 @@ mod tests {
 
         let admitted = run(path, true).unwrap();
         assert_eq!(admitted["simulation_ready"], true);
-        let selection: Selection =
-            serde_json::from_value(admitted["selection"].clone()).unwrap();
+        let selection: Selection = serde_json::from_value(admitted["selection"].clone()).unwrap();
         let resolved = catalog().unwrap().resolve(&selection).unwrap();
         let bending = resolved.bending_response().unwrap().unwrap();
         let d = bending.matrix();
@@ -53,7 +52,7 @@ mod tests {
         assert!((d[1][1] - 1.5e-4).abs() < 1e-12);
         assert!((d[0][1] - 5.0e-5).abs() < 1e-12);
         assert!((d[2][2] - 8.0e-5).abs() < 1e-12);
-        let preferred = bending.preferred_curvature_m_inv();
+        let preferred = bending.preferred_curvature();
         assert!((preferred[0] - 1.0).abs() < 1e-10);
         assert!((preferred[1] + 0.5).abs() < 1e-10);
         assert!((preferred[2] - 0.25).abs() < 1e-10);

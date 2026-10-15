@@ -368,8 +368,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     let mut check_errors = Vec::new();
     let mut predictions = Vec::new();
     for s in &input.samples {
-        let k: [f64; 3] =
-            std::array::from_fn(|i| s.curvature_m_inv[i] - preferred[i]);
+        let k: [f64; 3] = std::array::from_fn(|i| s.curvature_m_inv[i] - preferred[i]);
         let predicted = [
             matrix[0][0] * k[0] + matrix[0][1] * k[1],
             matrix[1][0] * k[0] + matrix[1][1] * k[1],
@@ -408,7 +407,9 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     let source_id = format!("bending-fit-{digest}");
     let mut material = input.material.clone();
     if material.sources.contains_key(&source_id) {
-        return Err(invalid("bending calibration receipt source ID already exists"));
+        return Err(invalid(
+            "bending calibration receipt source ID already exists",
+        ));
     }
     material.sources.insert(
         source_id.clone(),
