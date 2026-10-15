@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
-use ftx_pattern::material_catalog::Selection;
+use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
 use ftx_pattern::materials::Form;
 use ftx_pattern::textile_import::{piece_fabric, resolve_fabric};
 use ftx_pattern::{Pattern, SeamPairs};
@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Ctx, ExportOptions, edge_sa};
 
+pub mod assembly;
 pub mod preview;
 pub mod program;
+use assembly::{AssemblyReceipt, FlatAssembly};
 use program::{Backtack, FeedDirection, ReverseFeed, StitchRun};
 pub mod path;
 use path::{OffsetPath, PathReceipt};
@@ -51,8 +53,12 @@ pub struct SewingPass {
     pub seam: String,
     /// Upper bound on each side's stitch advance, not a guarantee of uniform pitch.
     pub max_stitch_mm: f64,
-    /// Number of plies of each selected side material at the needle, including declared folds.
-    pub plies: [u32; 2],
+    /// Legacy declared ply counts. Supply this OR an explicit flat-fold assembly, never both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plies: Option<[u32; 2]>,
+    /// Placed/folded source pieces from which the actual needle stack is derived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<FlatAssembly>,
     /// Required allowance on both sides, in mm; no fold or seam recipe is guessed.
     pub minimum_allowance_mm: f64,
     /// Requested continuous stitch rate.
@@ -117,9 +123,12 @@ pub struct PlannedSeam {
     /// Offset polylines and source correspondence; absent on legacy centerline operations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathReceipt>,
+    /// Shared needle coordinates and material-following plies in a declared flat-fold assembly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<AssemblyReceipt>,
     /// Side-b / side-a feed ratio for each interval between consecutive stations.
     pub feed_b_over_a: Vec<f64>,
-    /// Declared ply counts times sourced, uncompressed thicknesses (mm).
+    /// Declared or geometrically derived uncompressed stack thickness (mm).
     pub stack_mm: f64,
     /// Ordered directed runs indexing `stations`; present for version-2 jobs, including lock travel.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -133,7 +142,7 @@ pub struct PlannedSeam {
 /// Deterministic, source-locked manufacturing review plan. Never hardware execution permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
-    /// `/1` for legacy jobs, `/2` for directed jobs, `/3` for offset stitch-line jobs.
+    /// `/1` legacy, `/2` directed, `/3` offset paths, `/4` explicit flat-fold assemblies.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
     pub pattern_sha256: String,
@@ -242,7 +251,10 @@ impl SewPlan {
                 return Err(bad("sewing pass IDs must be nonempty and unique"));
             }
             if !within(pass.max_stitch_mm, [0.01, 1000.0])
-                || pass.plies.iter().any(|&n| n == 0 || n > 64)
+                || pass.plies.is_some() == pass.assembly.is_some()
+                || pass
+                    .plies
+                    .is_some_and(|p| p.iter().any(|&n| n == 0 || n > 64))
                 || !pass.minimum_allowance_mm.is_finite()
                 || pass.minimum_allowance_mm < 0.0
                 || !positive(pass.stitches_per_minute)
@@ -292,7 +304,9 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if options.passes.iter().any(|p| p.stitch_path.is_some()) {
+            schema: if options.passes.iter().any(|p| p.assembly.is_some()) {
+                "ftx-sewing-plan/4"
+            } else if options.passes.iter().any(|p| p.stitch_path.is_some()) {
                 "ftx-sewing-plan/3"
             } else if advanced {
                 "ftx-sewing-plan/2"
@@ -313,6 +327,7 @@ impl SewPlan {
         let mut done = BTreeSet::new();
         let mut budget = 0usize;
         let mut geometry_work = 0usize;
+        let mut assembly_slots = 0usize;
         while !remaining.is_empty() {
             let id = remaining
                 .iter()
@@ -382,8 +397,35 @@ impl SewPlan {
             if stations.notch_match.starts_with("count-mismatch") {
                 return Err(bad(format!("{id}: notches must pair before sewing")));
             }
-            let stack = sides[0].thickness_mm * f64::from(pass.plies[0])
-                + sides[1].thickness_mm * f64::from(pass.plies[1]);
+            let assembly = pass
+                .assembly
+                .as_ref()
+                .map(|a| {
+                    a.compile(
+                        pattern,
+                        &ctx,
+                        [ra, rb],
+                        &stations,
+                        &mut out.materials,
+                        &mut geometry_work,
+                    )
+                })
+                .transpose()?;
+            let stack = if let Some(a) = &assembly {
+                assembly_slots =
+                    assembly_slots.saturating_add(a.layers.len().saturating_mul(a.needle_mm.len()));
+                if assembly_slots > MAX_STATIONS {
+                    return Err(Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        "sewing job material preimage budget exceeded",
+                    ));
+                }
+                a.stack_mm
+            } else {
+                let plies = pass.plies.expect("validated exclusive ply policy");
+                sides[0].thickness_mm * f64::from(plies[0])
+                    + sides[1].thickness_mm * f64::from(plies[1])
+            };
             if !positive(stack)
                 || stack > machine.max_stack_mm
                 || sides
@@ -418,6 +460,7 @@ impl SewPlan {
                 sides,
                 stations,
                 path,
+                assembly,
                 feed_b_over_a: feeds,
                 stack_mm: stack,
                 runs: if out.schema != "ftx-sewing-plan/1" {
@@ -455,29 +498,8 @@ impl SewPlan {
                 "too many seam-side edges",
             ));
         }
-        let selected =
-            resolve_fabric(piece_fabric(pattern, instance.piece_index)?)?.ok_or_else(|| {
-                bad(format!(
-                    "{reference}: sewing needs a source-bearing material selection"
-                ))
-            })?;
-        let material = selected.material();
-        if matches!(material.form, Form::Fiber | Form::Yarn | Form::Fill) {
-            return Err(bad(format!(
-                "{reference}: sewing requires an identified sheet/hide, not loose fill or yarn"
-            )));
-        }
-        let thickness = material.require("thickness", "m", selected.allows_estimates())?;
-        let bounds = material.properties["thickness"].bounds;
-        let thickness_mm = bounds.map_or(thickness, |v| v[1]) * 1000.0;
-        if !positive(thickness)
-            || !positive(thickness_mm)
-            || bounds.is_some_and(|v| !positive(v[0]))
-        {
-            return Err(bad(format!(
-                "{reference}: thickness must be finite and positive"
-            )));
-        }
+        let (selected, thickness_mm, uses_thickness_upper_bound) =
+            sheet(pattern, instance.piece_index)?;
         let piece = &pattern.doc.as_ref().expect("validated pattern").pieces[instance.piece_index];
         let mut allowance_mm = f64::INFINITY;
         for id in edges {
@@ -496,8 +518,27 @@ impl SewPlan {
             reference: reference.into(),
             material_sha256,
             thickness_mm,
-            uses_thickness_upper_bound: bounds.is_some(),
+            uses_thickness_upper_bound,
             allowance_mm,
         })
     }
+}
+
+// One thickness authority for legacy seam sides AND every additional folded/lining ply.
+fn sheet(pattern: &Pattern, piece_index: usize) -> Result<(ResolvedMaterial, f64, bool), Refusal> {
+    let selected = resolve_fabric(piece_fabric(pattern, piece_index)?)?
+        .ok_or_else(|| bad("sewing needs a source-bearing material selection"))?;
+    let material = selected.material();
+    if matches!(material.form, Form::Fiber | Form::Yarn | Form::Fill) {
+        return Err(bad(
+            "sewing requires an identified sheet/hide, not loose fill or yarn",
+        ));
+    }
+    let thickness = material.require("thickness", "m", selected.allows_estimates())?;
+    let bounds = material.properties["thickness"].bounds;
+    let thickness_mm = bounds.map_or(thickness, |v| v[1]) * 1000.0;
+    if !positive(thickness) || !positive(thickness_mm) || bounds.is_some_and(|v| !positive(v[0])) {
+        return Err(bad("thickness must be finite and positive"));
+    }
+    Ok((selected, thickness_mm, bounds.is_some()))
 }

@@ -23,6 +23,9 @@ pub struct StitchStep {
     pub a_mm: Vec2,
     /// Destination on side b, in its own source instance's local millimetres.
     pub b_mm: Vec2,
+    /// Shared assembly destination when explicitly registered/folded; not machine coordinates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assembly_mm: Option<Vec2>,
     /// Signed material arclength advances [a, b], in mm; reverse feed makes both negative.
     pub advance_mm: [f64; 2],
     /// Absolute side-b / side-a advance, never inverted by reversal.
@@ -36,7 +39,7 @@ pub struct StitchStep {
 /// Fully expanded geometric stitch travel for software/CAM review. No device commands or permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewProgram {
-    /// `/1` for centerline jobs; `/2` retains offset geometry and source correspondence.
+    /// `/1` centerline, `/2` offset geometry, `/3` shared flat-fold needle/material correspondence.
     pub schema: &'static str,
     /// Original inputs, frozen source materials, paired station tables and directed operation order.
     pub plan: SewPlan,
@@ -60,7 +63,8 @@ impl SewProgram {
         }
         // Legacy jobs get an explicit forward run here, but `SewPlan::build` keeps their v1 output.
         let offset = plan.schema == "ftx-sewing-plan/3";
-        if !offset {
+        let assembly = plan.schema == "ftx-sewing-plan/4";
+        if !offset && !assembly {
             plan.schema = "ftx-sewing-plan/2";
         }
         let mut stitches = Vec::with_capacity(plan.stitch_intervals);
@@ -92,6 +96,7 @@ impl SewProgram {
                         to_station: to,
                         a_mm: seam.stations.a[to],
                         b_mm: seam.stations.b[to],
+                        assembly_mm: seam.assembly.as_ref().map(|a| a.needle_mm[to]),
                         advance_mm,
                         feed_b_over_a: advance_mm[1] / advance_mm[0],
                         feed_seconds: 60.0 / seam.pass.stitches_per_minute,
@@ -105,7 +110,9 @@ impl SewProgram {
             return Err(bad("inconsistent sewing program interval accounting"));
         }
         Ok(Self {
-            schema: if offset {
+            schema: if assembly {
+                "ftx-sewing-program/3"
+            } else if offset {
                 "ftx-sewing-program/2"
             } else {
                 "ftx-sewing-program/1"
