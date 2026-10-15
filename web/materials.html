@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Material workbench · FrankenTextiles</title>
+<style>
+:root{color-scheme:light;--ink:#172c36;--accent:#145b68;--line:#cbd9dc;--paper:#f3f6f5}
+*{box-sizing:border-box}body{margin:0;font:16px/1.55 system-ui,sans-serif;background:var(--paper);color:var(--ink)}
+main{max-width:1180px;margin:auto;padding:28px}h1{margin:.2em 0;font-size:2.1rem}h2{font-size:1.25rem}h3{font-size:1.05rem}
+a{color:var(--accent)}header{margin-bottom:24px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+section{background:white;border:1px solid var(--line);padding:20px;border-radius:10px;margin:16px 0}
+label{display:block;margin:12px 0}input,select,textarea,button{font:inherit;max-width:100%}input[type=file]{display:block;width:100%}
+select,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius:4px}textarea{font-family:monospace;font-size:13px}
+button{background:var(--accent);color:white;border:0;border-radius:5px;padding:9px 15px;cursor:pointer;margin:5px 5px 5px 0}button:disabled{opacity:.45;cursor:default}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;background:var(--paper);padding:12px;font-size:13px}
+small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:7px;text-align:left;border-bottom:1px solid var(--line)}
+.links a{display:inline-block;margin:8px 16px 8px 0}iframe{width:100%;height:520px;border:1px solid var(--line)}img{max-width:100%;max-height:440px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}main{padding:14px}}
+</style>
+</head>
+<body><main>
+<header><a href="index.html">Drafting &amp; fitting</a> · <a href="trace.html">Pattern tracing</a>
+<h1>Material workbench</h1>
+<p>Keep the pattern. Change the material. Recompute from one frozen source of truth.</p>
+<p class="note">Your selected files stay in this tab, not in browser storage or on a server. The fold-up viewer loads its existing Three.js library from a CDN. A catalog entry is not necessarily fully characterized. Calculated drape, heat and process plans are not measured fit, warmth ratings or hardware authorization.</p>
+<p id="status" role="status">Loading local engine…</p><p id="error" role="alert" hidden></p>
+<button id="cancel" disabled>Cancel current operation</button></header>
+<div class="grid">
+<section><h2>1. Inspect materials</h2>
+<label>Search the built-in catalog <input id="query" type="search" placeholder="linen, wool, leather, knit…"></label>
+<button id="search" data-command="catalog">Search</button>
+<label>Catalog record <select id="catalog" size="7" aria-label="Catalog records"></select></label>
+<label>Or load a source-bearing selection JSON <input id="selectionFile" type="file" accept=".json,application/json"></label>
+<label>Selection to inspect <textarea id="selection" rows="5" spellcheck="false">{"id":"fs/il019-dusty-lotus-softened","allow_estimates":false}</textarea></label>
+<p class="note">Estimates stay disabled unless this selection explicitly sets <code>allow_estimates</code> to <code>true</code>. A digest-locked selection cannot be edited in place; author a new selection deliberately.</p>
+<button id="inspect" data-command="inspect">Inspect sources &amp; capabilities</button>
+<div id="capabilities"></div><details><summary>Original observations, normalized units and sources</summary><pre id="detail"></pre></details>
+</section>
+<section><h2>2. Bind the same pattern</h2>
+<label>Original pattern JSON <input id="patternFile" type="file" accept=".json,application/json"></label>
+<p id="patternName">No pattern loaded. Export pattern.json from the drafting page or load an existing pattern.</p>
+<label>Assign the inspected selection to <select id="target"><option value="">Pattern default (preserve explicit piece choices)</option></select></label>
+<button id="assign" disabled>Assign inspected material</button><button id="reset" disabled>Clear pending assignments</button>
+<pre id="edits">No pending substitutions.</pre>
+<p class="note">Source-piece assignments affect all mirrored/cut instances of that piece. Existing roles, grain, seams and pair-friction evidence remain unchanged. Unknown material interfaces must be characterized, not guessed.</p>
+<button id="bind" data-command="bind" disabled>Freeze selections &amp; bind</button>
+<div id="boundSummary"></div><div id="bindFiles" class="links"></div>
+</section></div>
+<section><h2>3. Recompute supported consumers</h2>
+<p>All operations below use the current bound pattern. Each checks its own missing-data and geometry constraints; changing inputs withdraws affected outputs immediately.</p>
+<div class="grid"><div>
+<h3>Fit, exports and mechanical drape</h3>
+<label>Measurements JSON <input id="measurements" type="file" accept=".json,application/json"></label>
+<label>Fit specification JSON <input id="fit" type="file" accept=".json,application/json"></label>
+<button id="exports" data-command="exports" disabled>Validate &amp; regenerate exports</button>
+<label>Local converted body model (.ftxbody) <input id="body" type="file" accept=".ftxbody"></label>
+<label><input id="selfContact" type="checkbox" checked> Enable cloth self-contact (requires unlike-material pair evidence)</label>
+<button id="fold" data-command="fold" disabled>Re-drape on this body</button>
+</div><div>
+<h3>Cutting, purchasing and sewing</h3>
+<label>Roll-planning options JSON <input id="cutOptions" type="file" accept=".json,application/json"></label>
+<button id="cut" data-command="cut" disabled>Plan rolls &amp; preview</button>
+<label>Dated quote book JSON <input id="quotes" type="file" accept=".json,application/json"></label>
+<label>Comparable market scope JSON <input id="market" type="file" accept=".json,application/json"></label>
+<button id="price" data-command="price" disabled>Compare whole-order costs</button>
+<label>Sewing recipe and machine limits JSON <input id="sewOptions" type="file" accept=".json,application/json"></label>
+<button id="sew" data-command="sew" disabled>Evaluate sewing &amp; stitch paths</button>
+</div></div>
+<h3>Thermal exchange on this drape</h3>
+<p class="note">Run a fresh drape above first. These conditions use the existing native JSON schemas; no air-gap, body-layer or environmental data is inferred by the page.</p>
+<div class="grid"><div><label>Steady surface conditions JSON <input id="heatConditions" type="file" accept=".json,application/json"></label>
+<button id="heat" data-command="heat" disabled>Evaluate independent sheet heat</button></div>
+<div><label>Body geometry / instance layer map JSON <input id="map" type="file" accept=".json,application/json"></label>
+<label>Coverage conditions JSON <input id="coverageConditions" type="file" accept=".json,application/json"></label>
+<button id="coverage" data-command="coverage" disabled>Recompute layered body coverage</button></div></div>
+</section>
+<section><h2>Current results</h2><pre id="progress" aria-live="polite"></pre>
+<div id="outputs"></div><iframe id="viewer" title="Current material drape" sandbox="allow-scripts" hidden></iframe>
+<img id="marker" alt="First material roll preview" hidden></section>
+</main><script type="module" src="materials-page.js"></script></body></html>

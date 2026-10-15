@@ -1,0 +1,119 @@
+# Local browser material workbench
+
+`web/materials.html`, linked from the main drafting page, connects material selection to the existing
+native engines. Build `web/pkg` with `sh tools/build_web.sh`, serve `web/` with
+`python3 -m http.server -d web 8000`, and open `http://localhost:8000/materials.html`.
+The build needs the repository's pinned Rust toolchain, wasm target and wasm-bindgen CLI; the page
+has no Python or native-library runtime dependency. It does not install or operate a machine.
+
+## Select once, reuse the existing consumers
+
+Search the unified built-in catalog, select an exact record, and inspect its original observations,
+normalized units, conditioning, sources and independent capability refusals. Alternatively, load a
+portable `Selection` JSON containing a local characterization record. The page does not fetch supplier
+pages or add a second database. Estimates remain disabled unless the selection explicitly admits them.
+A source-locked record cannot be modified while keeping its old digest.
+
+Load an original `fabric-pattern/1` pattern and assign an inspected selection to its default or an exact
+source-piece ID. A source-piece assignment affects that piece's mirrored/cut instances. Freeze and bind
+creates a new in-memory pattern through `ftx_pattern::material_binding::Changes`; it never edits the
+uploaded file. It freezes all effective selections, including untouched explicit pieces. Changing the
+default preserves an already assigned lining or cuff. Grain, vertices, curves, seams, simulation roles,
+cut quantities and source-bound pair friction are not rewritten. Missing unlike-material interface
+evidence stays missing rather than being relabelled for the new material.
+
+`material-bindings.json` contains original/bound pattern hashes, the selected identity per source piece
+and the production drape resolver's result with and without self-contact. These are material-input
+checks, not evidence that meshing, contact or a complete simulation will succeed. Partial materials
+can still be selected for a supported manufacturing or thermal consumer. No missing coefficient is
+filled from a fiber name, construction label or a brand.
+
+The bridge retains a `pattern_json` string and original Rust drape/report JSON. JavaScript parses
+copies for display but does **not** reserialize source-bound numeric data for subsequent consumers or
+downloads. Otherwise values such as `1.0` and `-0.0` change representation and invalidate the existing
+material/geometry receipts. Nested coverage requests preserve validated JSON fragments verbatim;
+they do not replace the hash checks or manufacture new receipts.
+The existing drafting worker and its `sim_report.json` download use the same lossless rule.
+
+The remaining operations consume this same bound pattern:
+
+| Operation | Additional local inputs | Existing authority and output |
+|---|---|---|
+| Validate/export | Measurements and fit-specification JSON | `ftx_wasm::page::run`; current verdict basis, measurement readiness and checked export ZIP. No implicit drape/fit claim. |
+| Mechanical drape | Measurements, fit specification, converted `.ftxbody` model | Existing `fold_up` fits the same supplied body model and invokes the production drape engine. Current report and fold-up viewer, or an explicit refusal. |
+| Cutting | `CutOptions` JSON | `ftx_export::cutting::CutPlan`; all material-specific roll requirements and a bounded first-roll SVG preview. Not a machine-coordinate program or proof of optimal nesting. |
+| Purchasing | Cut options, dated `QuoteBook`, comparable `Market` scope | Existing marker procurement evaluates gross stock including layout waste and order terms. Missing offers remain unknown, not zero-cost purchases. No checkout or live refresh runs in the page. |
+| Sewing | Complete `SewOptions` recipes and machine envelope | Existing `SewProgram`; every declared stitch interval and process refusals. Execution remains unauthorized. |
+| Independent sheet heat | A fresh workbench drape and `SurfaceConditions` JSON | Existing `thermal_steady_surface`; material-following fields, optional declared exterior exchange and source-locked replay. |
+| Layered body coverage | A fresh workbench drape, body/instance-layer map and coverage conditions | Existing `thermal_steady_coverage`; recomputed overlaps, covered/bare accounting and exposed-face exchange. No guessed layer map or environmental data. |
+
+Material and source data requirements are unchanged. See `material-sewing-plans.md`,
+`material-platform-progress.md`, `steady-conduction.md`, `steady-thermal-coverage.md`,
+`exterior-thermal-exchange.md`, and `textile-price-refresh.md` for their input semantics and limitations.
+The UI deliberately asks for the existing JSON contracts rather than inventing convenient physical
+constants. The synthetic sewing pattern/options under `tests/fixtures/materials/` illustrate process
+inputs, not a real qualified textile or recommended machine configuration.
+
+## State, privacy and failure behavior
+
+The original pattern is retained separately from pending assignments and the bound result. Assigning
+another material immediately withdraws the bound output and all dependent drape/heat/process/cost
+outputs. A change to body or measurements withdraws drape and heat; changing only thermal conditions
+withdraws that heat result but preserves mechanics. Changing stock options withdraws cutting and cost;
+quote/market changes withdraw cost only. Results are explicitly current-input results, not an unlabeled
+comparison with an old run. Previously downloaded files remain the user's own saved versions.
+
+Each worker request includes the necessary current inputs. Epoch and request identities discard late
+responses, and revision checks discard stale asynchronous file reads. Cancel terminates the worker,
+including synchronous Rust calculations, and starts a new one. Failed replacements do not republish a
+previous success. Temporary WASM body/fold/export objects are freed on both successful and failed
+operations; a WASM trap requires a fresh engine. Withdrawn download URLs are revoked. Inputs remain
+in this tab: no localStorage, sessionStorage, indexedDB, server upload, device connection or background
+refresh. The existing fold viewer uses a Three.js CDN, explicitly disclosed on the page; its sandbox
+cannot access the parent workbench. Closing the tab drops this unsaved session.
+
+Combined JSON requests are limited to 64 MiB and each body-model input to 256 MiB, followed by the
+existing native geometry, candidate, solver, stitch and allocation limits. Ordinary incomplete data
+produces the specific native refusal rather than a generic success. A numerical result is not empirical
+textile validation, a real-person fit claim, a warmth/safety rating or a hardware approval.
+
+## Checks and delivery scope
+
+`cargo test -p ftx-wasm --test materials --test manufacturing` exercises the actual shared Rust
+binding, downstream material resolver, cutting, SVG, sewing and procurement APIs. Seven new regressions
+cover source freezing, geometry and explicit-piece preservation, width-driven stock changes,
+thickness-driven sewing refusal, separate partial-record capabilities, missing pair evidence and
+combined input budgets and lossless floating-point JSON identity. Existing manufacturing tests remain independent.
+
+`node --experimental-vm-modules --test tools/check_trace_frontend.cjs` includes ten new tests of the
+actual material page and worker with **explicit DOM/WASM doubles**. They test lifecycle and input
+routing, not physical results or browser execution: stale worker messages/file reads, catalog identity
+changes, cancel, dependent-output withdrawal, native-handle cleanup, initialization/trap failures,
+blocked exports and page-exit download cleanup.
+
+`node --experimental-vm-modules tools/check_materials_wasm.cjs --native target/debug/ftx-materials`
+executes the **actual compiled browser WASM and actual worker** under Node, without a mocked numerical
+engine. It compares binding (including negative-zero coordinates), stock, SVG, sewing, procurement,
+and source-locked thermal surface/coverage results against the native executable. This is runtime
+WASM/native agreement on those cases, not browser navigation, fitted-body or empirical validation.
+
+`tools/check_materials_web.cjs` is the separate real Chromium/WASM lane:
+
+```sh
+sh tools/build_web.sh
+cargo build -p ftx-cli
+NODE_PATH=$(npm root -g) node tools/check_materials_web.cjs --native target/debug/ftx-materials
+```
+
+It needs the Playwright Node package and Chromium (or `CHROMIUM_EXECUTABLE` pointing to an installed
+Chromium). It compares browser binding, cutting, preview, sewing and procurement with the real native
+binary and tests changed-material refusal/output invalidation. Source-locked synthetic thermal reports
+exercise the actual worker/WASM surface and coverage APIs against native results. They are explicitly
+not freshly fitted body drapes. The existing `tools/check_web.cjs --model PATH.ftxbody` lane remains
+necessary for successful model-backed browser draping; no model asset or private wearer record is
+bundled by this feature.
+
+This delivers the local operator integration slice of plan §25.9. It does not close the full empirical
+linen/leather/knit garment gate, acquire new measured records, qualify live supplier coverage, or provide
+interactive body/layer-map editing, a simultaneous scenario comparison, transient UI controls or
+robot execution. Those remain distinct follow-on capabilities, not inferred from a working page.

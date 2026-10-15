@@ -69,7 +69,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   <h1>Pattern Workbench</h1>
   <p class="mut">Draft a sewing pattern from measurements, check every seam and fit point, and download print-at-home
     PDFs and cutter files. It runs FrankenTextiles in this page (Rust compiled to WebAssembly, about 2 MB), so
-    nothing you type leaves your browser. You can also <a href="trace.html">trace, name and scale a PNG pattern
+    nothing you type leaves your browser. Open the <a href="materials.html">material workbench</a> to inspect
+    source records, change per-piece materials, and recompute drape, heat, cutting, sewing and costs.
+    You can also <a href="trace.html">trace, name and scale a PNG pattern
     sheet</a>, then load its pattern JSON here for garment and measurement checks.</p>
 
   <section>
@@ -335,13 +337,16 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       $("foldLog").textContent += msg.text + "\n"; $("foldLog").scrollTop = $("foldLog").scrollHeight;
     } else if (msg.type === "folded") {
       folding = false; foldButton(); status("Folded.");
+      if (typeof msg.reportText !== "string") {
+        status(""); showError("Reload this page and its worker: the lossless drape report is missing."); finished(); return;
+      }
       $("errorBox").classList.add("hidden");
       const r = msg.report, gating = r.gating || [], advisory = (r.flags || []).filter((f) => !gating.includes(f));
       $("foldSummary").innerHTML = `<b>${gating.length ? "Gating flags" : r.settled ? "Settled, no gating flag" : "Not settled"}</b>`
         + (gating.length ? "<br>" + gating.map(esc).join("<br>") : "")
         + (advisory.length ? `<br><span class="mut">${advisory.map(esc).join("<br>")}</span>` : "");
       const u = URL.createObjectURL(new Blob([msg.viewer], { type: "text/html" }));
-      const ru = URL.createObjectURL(new Blob([JSON.stringify(r, null, 2)], { type: "application/json" }));
+      const ru = URL.createObjectURL(new Blob([msg.reportText], { type: "application/json" }));
       foldUrls.push(u, ru);
       $("foldSummary").innerHTML += `<br><a download="fold_viewer.html" href="${u}">fold_viewer.html</a> · <a download="sim_report.json" href="${ru}">sim_report.json</a>`;
       $("foldView").src = u; $("foldView").classList.remove("hidden");

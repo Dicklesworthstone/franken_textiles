@@ -203,3 +203,29 @@ fn combined_input_budget_precedes_json_parsing() {
         ftx_core::RefusalCode::BudgetExceeded
     );
 }
+
+#[test]
+fn portable_pattern_text_preserves_float_and_negative_zero_receipt_identity() {
+    use ftx_core::receipt::sha256_hex;
+    let mut raw: Value = serde_json::from_str(PATTERN).unwrap();
+    raw["pieces"][0]["vertices"]["a"] = json!([-0.0, 0.0]);
+    let original = serde_json::to_string(&raw).unwrap();
+    let result = bind(&raw, &changes(selection(0.1, 0.4)));
+    assert_eq!(
+        result["source_pattern_sha256"],
+        sha256_hex(original.as_bytes())
+    );
+    let text = result["pattern_json"].as_str().unwrap();
+    assert!(text.contains("-0.0"));
+    assert_eq!(result["pattern_sha256"], sha256_hex(text.as_bytes()));
+    assert_eq!(
+        serde_json::from_str::<Value>(text).unwrap(),
+        result["pattern"]
+    );
+    let replay: Value = serde_json::from_str(
+        &materials::bind(text, "{\"schema\":\"ftx-material-bindings/1\"}").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(replay["pattern_json"], result["pattern_json"]);
+    assert_eq!(replay["pattern_sha256"], result["pattern_sha256"]);
+}

@@ -1,0 +1,125 @@
+// Actual Chromium + compiled WASM, compared with the real native materials executable.
+// No model asset is bundled: successful body fitting/drape requires the separate existing model lane.
+// tools/build_web.sh && cargo build -p ftx-cli
+// NODE_PATH=$(npm root -g) node tools/check_materials_web.cjs --native target/debug/ftx-materials
+// Optional CHROMIUM_EXECUTABLE chooses an already installed Chromium binary.
+const { chromium } = require('playwright');
+const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
+const root = path.resolve(__dirname, '..'), web = path.join(root, 'web');
+const index = process.argv.indexOf('--native');
+const native = path.resolve(index < 0 ? path.join(root, 'target/debug/ftx-materials') : process.argv[index + 1]);
+const fixture = n => path.join(root, 'tests/fixtures/materials', n);
+const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
+const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
+const write = (name, value) => { const file = path.join(work, name); fs.writeFileSync(file, JSON.stringify(value)); return file; };
+const invoke = (...args) => execFileSync(native, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+function sheet(width, thickness) {
+  const s = load('synthetic-sewing-pattern.json').fabric.material;
+  for (const [key, value, unit] of [
+    ['width',width,'m'], ['thickness',thickness,'mm'], ['areal_density',0.2,'kg/m2'],
+    ['warp_stiffness',8000,'N/m'], ['weft_stiffness',4000,'N/m'], ['poisson_warp_weft',0.2,'1'],
+    ['shear_stiffness',1000,'N/m'], ['bending_rigidity',1e-4,'N*m'], ['friction_skin',0.3,'1'], ['friction_self',0.3,'1']
+  ]) s.record.properties[key] = { value, unit, evidence:'estimate', source:'test', method:'Artificial browser software test, not measured data' };
+  return s;
+}
+const server = http.createServer((req, res) => {
+  if (req.url === '/favicon.ico') { res.writeHead(204); return res.end(); }
+  const target = path.resolve(web, '.' + new URL(req.url, 'http://localhost').pathname);
+  if (!target.startsWith(web + path.sep) && target !== web) { res.writeHead(403); return res.end(); }
+  const file = target === web ? path.join(web, 'index.html') : target;
+  const mime = { '.html':'text/html', '.js':'text/javascript', '.wasm':'application/wasm' }[path.extname(file)] || 'application/octet-stream';
+  fs.readFile(file, (e, data) => { res.writeHead(e ? 404 : 200, { 'Content-Type':mime }); res.end(e ? 'not found' : data); });
+});
+(async () => {
+  assert.ok(fs.existsSync(path.join(web, 'pkg/ftx_wasm_bg.wasm')), 'Build web/pkg first');
+  assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
+  const page = await browser.newPage({ viewport:{width:1280,height:900} }), errors = [], external = [], methods = [];
+  page.on('pageerror', e => errors.push(String(e)));
+  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('request', r => { methods.push(r.method()); if (!r.url().startsWith(origin) && !r.url().startsWith('blob:')) external.push(r.url()); });
+  const input = async (id, value) => page.setInputFiles('#'+id, { name:id+'.json', mimeType:'application/json', buffer:Buffer.from(JSON.stringify(value)) });
+  const run = async id => {
+    await page.click('#'+id);
+    const op = id === 'search' ? 'catalog' : id;
+    await page.waitForFunction(op => new RegExp(`^${op} (complete|refused)`).test(document.getElementById('status').textContent), op, { timeout:120000 });
+    return await page.locator('#error').isVisible() ? page.textContent('#error') : '';
+  };
+  const download = name => page.locator(`a[download="${name}"]`).evaluate(async a => await (await fetch(a.href)).text());
+  const assign = async selection => {
+    await page.fill('#selection', JSON.stringify(selection)); assert.equal(await run('inspect'), '');
+    await page.click('#assign'); assert.equal(await page.locator('a[download="cut-plan.json"]').count(), 0);
+    assert.equal(await run('bind'), ''); return JSON.parse(await download('pattern.json'));
+  };
+  try {
+    await page.goto(origin); await page.click('a[href="materials.html"]');
+    await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    await page.fill('#query','cotton'); assert.equal(await run('search'), '');
+    assert.ok(await page.locator('#catalog option').count() > 0);
+    await page.fill('#selection', JSON.stringify({id:'fsri/hfm/cotton-sheet/dry/220330-r1',allow_estimates:true}));
+    assert.equal(await run('inspect'), '');
+    const caps = await page.locator('#capabilities').textContent();
+    assert.match(caps, /steady conductionCoefficient inputs available/);
+    assert.match(caps, /specific_heat|areal_density|characterization/);
+    await page.setInputFiles('#patternFile', fixture('synthetic-sewing-pattern.json'));
+    await page.waitForFunction(() => !document.getElementById('assign').disabled);
+    let bound = await assign(sheet(0.1,0.4));
+    assert.deepEqual(bound.pieces, load('synthetic-sewing-pattern.json').pieces);
+    const boundPath = write('bound.json',bound), selectionPath = write('selection.json',sheet(0.1,0.4));
+    invoke('bind',fixture('synthetic-sewing-pattern.json'),selectionPath,path.join(work,'native-bound.json'));
+    assert.deepEqual(bound,JSON.parse(fs.readFileSync(path.join(work,'native-bound.json'),'utf8')));
+    const cut = {copies:1,gap_mm:2,edge_margin_mm:0,end_margin_mm:0};
+    await input('cutOptions',cut); const cutPath = write('cut.json',cut);
+    assert.equal(await run('cut'),''); const marker = JSON.parse(await download('cut-plan.json'));
+    assert.deepEqual(marker,JSON.parse(invoke('cut-plan',boundPath,cutPath)));
+    invoke('cut-svg',boundPath,cutPath,'0',path.join(work,'native-roll.svg'));
+    assert.equal(await download('roll-0.svg'),fs.readFileSync(path.join(work,'native-roll.svg'),'utf8'));
+    await page.setInputFiles('#sewOptions',fixture('synthetic-sewing-options.json')); assert.equal(await run('sew'),'');
+    assert.deepEqual(JSON.parse(await download('sewing-program.json')),JSON.parse(invoke('sew-stitches',boundPath,fixture('synthetic-sewing-options.json'))));
+    const quotes = {schema:'ftx-textile-quotes/1',quotes:[]}, market = {currency:'USD',region:'US',quality:'test',terms:'test',as_of:'2026-10-15',max_age_days:30};
+    await input('quotes',quotes); await input('market',market); assert.equal(await run('price'),'');
+    const cost = JSON.parse(await download('cut-price.json'));
+    assert.equal(cost.complete_offer_coverage,false); assert.equal(cost.least_observed_independent_order_total,null);
+    assert.deepEqual(cost,JSON.parse(invoke('cut-price',boundPath,cutPath,write('quotes.json',quotes),write('market.json',market))));
+    await page.screenshot({path:path.join(work,'workbench.png'),fullPage:true});
+    bound = await assign(sheet(0.06,2));
+    assert.deepEqual(bound.pieces,load('synthetic-sewing-pattern.json').pieces);
+    assert.equal(await page.locator('a[download="sewing-program.json"]').count(),0);
+    assert.equal(await run('cut'),''); const changed = JSON.parse(await download('cut-plan.json'));
+    assert.ok(changed.rolls[0].length_m > marker.rolls[0].length_m);
+    assert.match(await run('sew'),/stack/); assert.equal(await page.locator('a[download="sewing-program.json"]').count(),0);
+    // Execute the actual thermal worker on an explicitly synthetic frozen report, not a claimed body drape.
+    const worker = async msg => page.evaluate(msg => new Promise((resolve,reject) => {
+      const w = new Worker('./materials-worker.js',{type:'module'});
+      const timer = setTimeout(() => {w.terminate();reject(Error('worker timeout'));},60000);
+      w.onmessage = ({data}) => { if(data.type==='ready') w.postMessage({...msg,request:99});
+        else if(data.type==='result'||data.type==='error'||data.type==='loadError') {clearTimeout(timer);w.terminate();resolve(data);} };
+      w.onerror = e => {clearTimeout(timer);w.terminate();reject(Error(e.message));};
+    }), msg);
+    const report = fs.readFileSync(fixture('synthetic-steady-surface-report.json'),'utf8');
+    const conditions = fs.readFileSync(fixture('steady-surface-conditions.json'),'utf8');
+    const heat = await worker({type:'heat',report,conditions});
+    assert.equal(heat.type,'result');
+    assert.deepEqual(heat.result,JSON.parse(invoke('thermal-steady-surface',fixture('synthetic-steady-surface-report.json'),fixture('steady-surface-conditions.json'))));
+    const coverage = await worker({type:'coverage',report,
+      map:fs.readFileSync(fixture('steady-coverage-map.json'),'utf8'),
+      conditions:fs.readFileSync(fixture('steady-coverage-conditions.json'),'utf8')});
+    assert.equal(coverage.type,'result');
+    assert.deepEqual(coverage.result,JSON.parse(invoke('thermal-steady-coverage',fixture('synthetic-steady-surface-report.json'),fixture('steady-coverage-map.json'),fixture('steady-coverage-conditions.json'))));
+    const badModel = await worker({type:'fold',bytes:new ArrayBuffer(8),pattern:JSON.stringify(bound),fit:'{}',measurements:'{}',selfContactMm:2});
+    assert.equal(badModel.type,'error');
+    await page.setInputFiles('#patternFile',{name:'bad.json',mimeType:'application/json',buffer:Buffer.from('{')});
+    await page.waitForFunction(() => !document.getElementById('error').hidden);
+    assert.equal(await page.locator('a[download="pattern.json"]').count(),0); assert.equal(await page.isDisabled('#bind'),true);
+    assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
+    console.log('PASS: real browser catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, invalidation and model refusal.');
+    console.log('No successful model-backed browser drape or real textile validation asserted. Artifacts:',work);
+  } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
+})().catch(e => { console.error(e); server.close(); process.exitCode=1; });

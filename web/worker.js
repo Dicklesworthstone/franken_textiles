@@ -67,10 +67,12 @@ onmessage = async (ev) => {
     if (msg.type === "fold") {
       if (!body || !docs) throw new Error("load the body model and run a round first");
       const fold = ftx.fold_up(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm);
-      const report = JSON.parse(fold.report());
-      const viewer = fold.viewer();
-      fold.free();
-      return postMessage({ type: "folded", report, viewer });
+      try {
+        const reportText = fold.report(); // preserve numerical JSON for source-locked thermal replay
+        const report = JSON.parse(reportText);
+        const viewer = fold.viewer();
+        return postMessage({ type: "folded", report, reportText, viewer });
+      } finally { fold.free(); }
     }
   } catch (e) {
     const full = String((e && e.message) || e).trim();

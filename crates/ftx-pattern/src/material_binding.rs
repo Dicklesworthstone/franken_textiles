@@ -132,9 +132,12 @@ impl Changes {
             assignments.push(json!({"piece_id":original["id"], "material_id":selected.material().id,
                 "material_sha256":selected.sha256(), "inherited_default":raw["pieces"][i].get("fabric").is_none()}));
         }
+        // Retain Rust's numerical JSON representation through JavaScript. Parsing/stringifying a
+        // geometry coordinate such as -0.0 or 1.0 in JS can change a source-bound report's identity.
+        let pattern_json = serde_json::to_string(&raw).map_err(|e| invalid(e.to_string()))?;
         Ok(
             json!({"schema":"ftx-bound-material-pattern/1", "source_pattern_sha256":hash(source)?,
-            "pattern_sha256":hash(&raw)?, "pattern":raw, "pieces":assignments,
+            "pattern_sha256":hash(&raw)?, "pattern":raw, "pattern_json":pattern_json,"pieces":assignments,
             "geometry_changed":false, "physical_validation_claim":false,
             "note":"Only fabric selections changed. Geometry, roles and pair-friction evidence were not rewritten; each consumer must validate its own inputs."}),
         )
