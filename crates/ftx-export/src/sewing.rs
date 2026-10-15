@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Ctx, ExportOptions, edge_sa};
 
+pub mod program;
+use program::{Backtack, FeedDirection, ReverseFeed, StitchRun};
+
 const MAX_OPERATIONS: usize = 4096;
 const MAX_STATIONS: usize = 250_000;
 
@@ -29,12 +32,18 @@ pub struct SewingMachine {
     pub max_stack_mm: f64,
     /// Maximum continuous stitch rate; handling and acceleration are not modeled.
     pub max_stitches_per_minute: f64,
+    /// Explicit reverse-feed envelope; omission refuses every reverse movement, including locks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reverse: Option<ReverseFeed>,
 }
 
-/// One declared pass over an existing seam. All pattern seams must have exactly one pass.
+/// One declared pass over an existing seam. Every seam needs at least one pass.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SewingPass {
+    /// Unique operation ID. Omission uses the seam ID for legacy one-pass jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Exact pattern seam ID.
     pub seam: String,
     /// Upper bound on each side's stitch advance, not a guarantee of uniform pitch.
@@ -49,7 +58,13 @@ pub struct SewingPass {
     pub needle: String,
     /// Operator-selected thread identifier; consumption/strength are not inferred.
     pub thread: String,
-    /// Seam IDs which must finish first. Omission adds no physical-accessibility claim.
+    /// Traversal through the canonical paired station table, not the pattern seam's b-side reversal.
+    #[serde(default, skip_serializing_if = "FeedDirection::is_forward")]
+    pub direction: FeedDirection,
+    /// Explicit start/end lock lengths in existing station intervals; never inferred from material.
+    #[serde(default, skip_serializing_if = "Backtack::is_empty")]
+    pub backtack: Backtack,
+    /// Operation IDs which must finish first. Omission adds no physical-accessibility claim.
     #[serde(default)]
     pub after: Vec<String>,
 }
@@ -60,7 +75,7 @@ pub struct SewingPass {
 pub struct SewOptions {
     /// Declared machine configuration.
     pub machine: SewingMachine,
-    /// One explicit pass for every seam, including seams omitted from a simulation.
+    /// Explicit passes covering every seam, including seams omitted from a simulation.
     pub passes: Vec<SewingPass>,
     /// Default flat seam-walk tolerance in mm; existing per-seam tolerances take precedence.
     pub seam_tolerance_mm: f64,
@@ -97,7 +112,10 @@ pub struct PlannedSeam {
     pub feed_b_over_a: Vec<f64>,
     /// Declared ply counts times sourced, uncompressed thicknesses (mm).
     pub stack_mm: f64,
-    /// One forward stitch interval per pair of consecutive stations; no locking/backtack stitches.
+    /// Ordered directed runs indexing `stations`; present for version-2 jobs, including lock travel.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<StitchRun>,
+    /// All traversed stitch intervals, counting each lock/reinforcement traversal separately.
     pub stitch_intervals: usize,
     /// Continuous feed time at the requested rate (seconds), excluding handling/acceleration.
     pub feed_seconds: f64,
@@ -106,7 +124,7 @@ pub struct PlannedSeam {
 /// Deterministic, source-locked manufacturing review plan. Never hardware execution permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
-    /// `ftx-sewing-plan/1`.
+    /// `ftx-sewing-plan/1` for legacy jobs, `/2` when operation IDs/reverse/locks are requested.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
     pub pattern_sha256: String,
@@ -114,9 +132,9 @@ pub struct SewPlan {
     pub options: SewOptions,
     /// Portable selections, indexed by resolved digest; no dependence on a future live catalog.
     pub materials: BTreeMap<String, Selection>,
-    /// Stable topological order, seam-ID order to break ties; not an inferred assembly strategy.
+    /// Stable topological order, operation-ID order to break ties; may repeat a source seam.
     pub seams: Vec<PlannedSeam>,
-    /// Total forward stitch intervals, not thread consumption.
+    /// Total traversed stitch intervals, including locks; not thread consumption.
     pub stitch_intervals: usize,
     /// Sum of the continuous feed times, never a complete manufacturing cycle-time estimate.
     pub feed_seconds: f64,
@@ -142,6 +160,14 @@ fn within(x: f64, limits: [f64; 2]) -> bool {
     // Arithmetic tolerance only: not a concealed machine/process allowance.
     let eps = |limit: f64| 1e-10 * x.abs().max(limit.abs());
     positive(x) && x >= limits[0] - eps(limits[0]) && x <= limits[1] + eps(limits[1])
+}
+
+impl SewingPass {
+    /// Stable dependency identity; two passes on one seam must have distinct operation IDs.
+    #[must_use]
+    pub fn operation_id(&self) -> &str {
+        self.id.as_deref().unwrap_or(&self.seam)
+    }
 }
 
 impl SewPlan {
@@ -177,6 +203,9 @@ impl SewPlan {
         {
             return Err(bad("invalid sewing machine limits or seam tolerance"));
         }
+        if let Some(reverse) = &machine.reverse {
+            reverse.validate()?;
+        }
         if options.passes.is_empty() || options.passes.len() > MAX_OPERATIONS {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,
@@ -195,16 +224,19 @@ impl SewPlan {
         }
         let mut remaining = BTreeMap::new();
         for pass in &options.passes {
-            if pass.seam.trim().is_empty() || remaining.insert(pass.seam.clone(), pass).is_some() {
+            if pass.seam.trim().is_empty()
+                || pass.operation_id().trim().is_empty()
+                || remaining
+                    .insert(pass.operation_id().to_string(), pass)
+                    .is_some()
+            {
                 return Err(bad("sewing pass IDs must be nonempty and unique"));
             }
             if !within(pass.max_stitch_mm, [0.01, 1000.0])
-                || !within(pass.max_stitch_mm, machine.stitch_mm)
                 || pass.plies.iter().any(|&n| n == 0 || n > 64)
                 || !pass.minimum_allowance_mm.is_finite()
                 || pass.minimum_allowance_mm < 0.0
                 || !positive(pass.stitches_per_minute)
-                || pass.stitches_per_minute > machine.max_stitches_per_minute
                 || pass.needle.trim().is_empty()
                 || pass.thread.trim().is_empty()
             {
@@ -213,6 +245,7 @@ impl SewPlan {
                     pass.seam
                 )));
             }
+            program::validate_primary_feed(pass, machine)?;
         }
         let mut source_seams = BTreeMap::new();
         for seam in pattern.seams() {
@@ -223,13 +256,12 @@ impl SewPlan {
                 return Err(bad(format!("duplicate pattern seam {id}")));
             }
         }
-        if source_seams.len() != remaining.len()
-            || remaining
-                .keys()
-                .any(|id| !source_seams.contains_key(id.as_str()))
+        let covered: BTreeSet<_> = remaining.values().map(|p| p.seam.as_str()).collect();
+        if covered.len() != source_seams.len()
+            || covered.iter().any(|id| !source_seams.contains_key(id))
         {
             return Err(bad(
-                "provide exactly one sewing pass for every pattern seam",
+                "provide at least one sewing pass for every pattern seam, and no unknown seams",
             ));
         }
         for pass in remaining.values() {
@@ -242,8 +274,17 @@ impl SewPlan {
                 )));
             }
         }
+        let advanced = machine.reverse.is_some()
+            || options
+                .passes
+                .iter()
+                .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: "ftx-sewing-plan/1",
+            schema: if advanced {
+                "ftx-sewing-plan/2"
+            } else {
+                "ftx-sewing-plan/1"
+            },
             pattern_sha256: sha256_hex(
                 &serde_json::to_vec(pattern.raw()).map_err(|e| bad(e.to_string()))?,
             ),
@@ -264,7 +305,7 @@ impl SewPlan {
                 .map(|(id, _)| id.clone())
                 .ok_or_else(|| bad("cyclic sewing order"))?;
             let pass = remaining.remove(&id).expect("selected remaining pass");
-            let seam = source_seams[id.as_str()];
+            let seam = source_seams[pass.seam.as_str()];
             let ra = seam
                 .side_ref("a")
                 .ok_or_else(|| bad("missing seam side a"))?;
@@ -288,18 +329,19 @@ impl SewPlan {
             }
             // Bound allocation BEFORE seam_pairs computes ceil(span / pitch) samples per segment.
             let slots = ((la + lb) / pass.max_stitch_mm).ceil() + breaks as f64;
+            let extra = pass.backtack.extra_intervals()?;
             if !positive(la)
                 || !positive(lb)
                 || !slots.is_finite()
                 || slots > MAX_STATIONS as f64
-                || budget.saturating_add(slots as usize) > MAX_STATIONS
+                || budget.saturating_add(slots as usize).saturating_add(extra) > MAX_STATIONS
             {
                 return Err(Refusal::new(
                     RefusalCode::BudgetExceeded,
                     "sewing station budget exceeded",
                 ));
             }
-            budget += slots as usize;
+            budget += slots as usize + extra;
             let stations = pattern
                 .seam_pairs(seam, pass.max_stitch_mm)
                 .map_err(|e| bad(e.to_string()))?;
@@ -322,19 +364,15 @@ impl SewPlan {
             for (a, b) in stations.fa.windows(2).zip(stations.fb.windows(2)) {
                 let da = (a[1] - a[0]) * la;
                 let db = (b[1] - b[0]) * lb;
-                if !positive(da)
-                    || !positive(db)
-                    || !within(da, machine.stitch_mm)
-                    || !within(db, machine.stitch_mm)
-                    || !within(db / da, machine.feed_b_over_a)
-                {
+                if !positive(da) || !positive(db) {
                     return Err(bad(format!(
                         "{id}: local stitch advance or differential feed outside machine limits"
                     )));
                 }
                 feeds.push(db / da);
             }
-            let stitch_intervals = feeds.len();
+            let runs = program::compile(&stations, [la, lb], pass, machine)?;
+            let stitch_intervals = runs.iter().map(|r| r.stitch_intervals).sum();
             let feed_seconds = stitch_intervals as f64 * 60.0 / pass.stitches_per_minute;
             out.feed_seconds += feed_seconds;
             if !out.feed_seconds.is_finite() {
@@ -347,6 +385,7 @@ impl SewPlan {
                 stations,
                 feed_b_over_a: feeds,
                 stack_mm: stack,
+                runs: if advanced { runs } else { Vec::new() },
                 stitch_intervals,
                 feed_seconds,
             });
