@@ -8,15 +8,27 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, Vec2, Vec3, receipt::sha256_hex};
+use ftx_pattern::material_catalog::ResolvedMaterial;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::coverage::{Coverage, Layout, Portion, Region};
-use super::{Surface, invalid, positive};
+use super::{Patch, Surface, invalid, positive};
 use crate::bvh::{QueryBvh, overlaps};
 
 pub(super) mod clip;
 pub mod gap;
 use clip::{AREA_EPS, Work, area, barycentric, ccw, intersection, split};
+
+// Borrow only retained geometry and material observations. Projection and face-gap evaluation have
+// no storage dependency: a steady source must never be adapted by inventing density or heat capacity.
+// The original capability snapshot stays in the input hash, preserving transient replay identities.
+pub(crate) struct ProjectionSource<'a> {
+    pub vertex_count: usize,
+    pub patches: &'a [Patch],
+    pub layers: Vec<&'a [ResolvedMaterial]>,
+    pub snapshot: Value,
+}
 
 /// An explicit adjacent-layer resistance or an opt-in, geometry-derived stagnant-gas path.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -163,7 +175,7 @@ fn aabb(points: impl IntoIterator<Item = Vec3>) -> (Vec3, Vec3) {
 }
 
 fn validate_request<'a>(
-    source: &Surface,
+    source: &ProjectionSource<'_>,
     request: &'a Request,
 ) -> Result<BTreeMap<(&'a str, &'a str), &'a Interface>, Refusal> {
     let s = &request.settings;
@@ -287,6 +299,27 @@ pub fn project(
     faces: &[[usize; 3]],
     request: &Request,
 ) -> Result<Projection, Refusal> {
+    let input = ProjectionSource {
+        vertex_count: source.vertex_count,
+        patches: &source.patches,
+        layers: source.columns.iter().map(|c| c.layers.as_slice()).collect(),
+        snapshot: source.snapshot(),
+    };
+    let projection = project_source(&input, cloth, body, faces, request)?;
+    Coverage::new(source.clone(), projection.layout.clone())?;
+    Ok(projection)
+}
+
+pub(crate) fn project_source(
+    source: &ProjectionSource<'_>,
+    cloth: &[Vec3],
+    body: &[Vec3],
+    faces: &[[usize; 3]],
+    request: &Request,
+) -> Result<Projection, Refusal> {
+    if source.layers.iter().any(|layers| layers.len() != 1) {
+        return Err(invalid("projection requires single-layer source triangles"));
+    }
     let interfaces = validate_request(source, request)?;
     if cloth.len() != source.vertex_count
         || body.is_empty()
@@ -300,7 +333,7 @@ pub fn project(
         ));
     }
     let input_sha256 = sha256_hex(
-        &serde_json::to_vec(&(source.snapshot(), cloth, body, faces, request))
+        &serde_json::to_vec(&(&source.snapshot, cloth, body, faces, request))
             .map_err(|e| invalid(e.to_string()))?,
     );
     let mut layout = Layout {
@@ -321,8 +354,8 @@ pub fn project(
     {
         layout.mapping_basis.push_str("; opted-in interlayer stagnant-gas conduction uses frozen textile face thickness and parallel gap integration; see full projection request and gap diagnostics");
     }
-    // Reuse the consumer's topology, single-layer source and allocation-size contract.
-    Coverage::new(source.clone(), layout.clone())?;
+    // Reuse the common topology/allocation contract before indexing the supplied body faces.
+    layout.allocations(source.patches.len())?;
     let mut edges = BTreeMap::new();
     for face in faces {
         for i in 0..3 {
@@ -343,7 +376,7 @@ pub fn project(
         .map(|p| aabb(p.vertices.map(|i| cloth[i])))
         .collect();
     let mut normals = Vec::new();
-    for p in &source.patches {
+    for p in source.patches {
         let [a, b, c] = p.vertices.map(|i| cloth[i]);
         let n = (b - a).cross(c - a);
         normals.push(n / positive("cloth triangle normal", n.norm())?);
@@ -564,7 +597,6 @@ pub fn project(
             });
         }
     }
-    Coverage::new(source.clone(), layout.clone())?;
     Ok(Projection {
         layout,
         footprints,

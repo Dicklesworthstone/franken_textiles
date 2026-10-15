@@ -50,6 +50,33 @@ pub struct SurfaceSolution {
 }
 
 impl SteadySurface {
+    /// Derive disjoint body coverage from this source's current cloth geometry. The same clipping,
+    /// layer-order and finite-thickness gap kernels serve transient surfaces; missing heat capacity
+    /// does not disable geometric correspondence or create a fictitious transient-ready material.
+    /// Normals follow body winding. A non-self-intersecting outward boundary is a caller precondition.
+    ///
+    /// # Errors
+    /// Invalid geometry or controls, stacked source columns, ambiguous/crossing layers, missing
+    /// interfaces or gap thickness, spatially reused cloth, or exceeded numerical/allocation budgets.
+    pub fn project_coverage(
+        &self,
+        cloth: &[Vec3],
+        body: &[Vec3],
+        faces: &[[usize; 3]],
+        request: &crate::thermal::surface::projection::Request,
+    ) -> Result<crate::thermal::surface::projection::Projection, Refusal> {
+        use crate::thermal::surface::projection::{ProjectionSource, project_source};
+        let input = ProjectionSource {
+            vertex_count: self.vertex_count,
+            patches: &self.patches,
+            layers: self.columns.iter().map(|c| c.layers.as_slice()).collect(),
+            snapshot: self.snapshot()?,
+        };
+        let projection = project_source(&input, cloth, body, faces, request)?;
+        super::coverage::SteadyCoverage::new(self.clone(), projection.layout.clone())?;
+        Ok(projection)
+    }
+
     /// Bind source-locked columns to the same topology contract as storage-bearing surfaces.
     /// Reference areas remain in the receipt; steady exchange uses only current areas. Neither
     /// stretch-dependent thickness nor pressure/compression-dependent resistance is inferred.

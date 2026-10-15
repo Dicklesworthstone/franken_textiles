@@ -10,7 +10,7 @@ use ftx_pattern::materials::Source;
 use serde::{Deserialize, Serialize};
 
 use super::clip::{Work, area};
-use super::{Surface, invalid, positive};
+use super::{ProjectionSource, invalid, positive};
 
 /// A prescribed constant gas coefficient and explicit admission of a conduction-only approximation.
 /// Conditions must state the gas/state and why this closure is being used. A source citation is not
@@ -89,9 +89,14 @@ struct Plane {
 }
 
 impl Plane {
-    fn new(source: &Surface, cloth: &[Vec3], i: usize, n: Vec3) -> Result<Self, Refusal> {
+    fn new(
+        source: &ProjectionSource<'_>,
+        cloth: &[Vec3],
+        i: usize,
+        n: Vec3,
+    ) -> Result<Self, Refusal> {
         let patch = &source.patches[i];
-        let material = &source.columns[patch.column].layers[0];
+        let material = &source.layers[patch.column][0];
         let record = material.material();
         let t = positive(
             "gap sheet thickness",
@@ -128,7 +133,7 @@ impl Plane {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve(
-    source: &Surface,
+    source: &ProjectionSource<'_>,
     cloth: &[Vec3],
     body: [Vec3; 3],
     polygon: &[Vec2],
