@@ -90,6 +90,10 @@ path; homogeneous default versus identical explicit piece selections is tested w
 
 ## Important model limit
 
+For an explicit normal-projected alternative that removes tangential-curvature energy under
+nonuniform planar stretch, see `normal-panel-bending.md`. The model described below remains
+unchanged and is not silently replaced for existing material selections.
+
 This is **quasi-isometric vector-Hessian bending**, not a finite-stretch Koiter shell. For an isometric
 embedding the vector Hessian represents the second fundamental form times the normal. For general
 nonuniform in-plane deformation it also contains tangential derivatives and can store energy that a

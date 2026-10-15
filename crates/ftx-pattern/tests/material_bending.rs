@@ -136,3 +136,125 @@ fn normal_kinematics_are_explicit_source_locked_and_do_not_change_the_tensor() {
     s.allow_estimates = false;
     assert!(db.resolve(&s).unwrap().bending_response().is_err());
 }
+
+fn curved_selection() -> Selection {
+    let mut s = selection();
+    let m = s.record.as_mut().unwrap();
+    m.structure
+        .insert("bending_model".into(), NORMAL_MODEL.into());
+    // Published synthetic coefficients here only isolate consent on the estimated target curvature.
+    for q in m.properties.values_mut() {
+        q.evidence = ftx_pattern::materials::Evidence::Published;
+    }
+    for (key, value) in ftx_pattern::material_bending::PREFERRED_CURVATURE_PROPERTIES
+        .into_iter()
+        .zip([0.05, -0.02, 0.01])
+    {
+        let mut q = m.properties["bending_warp"].clone();
+        q.value = value;
+        q.unit = "1/cm".into();
+        q.method = "Synthetic preferred curvature, not physical shaping evidence".into();
+        q.evidence = ftx_pattern::materials::Evidence::Estimate;
+        m.properties.insert(key.into(), q);
+    }
+    s
+}
+
+#[test]
+fn preferred_curvature_keeps_signed_units_sources_and_identity() {
+    let db = Catalog::builtin().unwrap();
+    let s = curved_selection();
+    let m = db.resolve(&s).unwrap();
+    assert_eq!(
+        m.bending_response().unwrap().unwrap().preferred_curvature(),
+        [5., -2., 1.]
+    );
+    assert_eq!(
+        m.authored().properties["preferred_curvature_warp"].unit,
+        "1/cm"
+    );
+    assert_eq!(
+        m.material().properties["preferred_curvature_warp"].unit,
+        "1/m"
+    );
+    assert_eq!(
+        db.resolve(&m.frozen_selection()).unwrap().sha256(),
+        m.sha256()
+    );
+    let mut changed = m.frozen_selection();
+    changed
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("preferred_curvature_warp")
+        .unwrap()
+        .value = -0.05;
+    assert!(db.resolve(&changed).is_err());
+    changed.expected_sha256 = None;
+    let other = db.resolve(&changed).unwrap();
+    assert_eq!(
+        other
+            .bending_response()
+            .unwrap()
+            .unwrap()
+            .preferred_curvature()[0],
+        -5.
+    );
+    assert_ne!(m.sha256(), other.sha256());
+}
+
+#[test]
+fn preferred_curvature_requires_complete_evidence_and_oriented_kinematics() {
+    use ftx_pattern::material_bending::PREFERRED_CURVATURE_PROPERTIES as KEYS;
+    let db = Catalog::builtin().unwrap();
+    for key in KEYS {
+        let mut s = curved_selection();
+        s.record.as_mut().unwrap().properties.remove(key);
+        assert!(
+            db.resolve(&s)
+                .unwrap()
+                .bending_response()
+                .unwrap_err()
+                .message
+                .contains(key)
+        );
+    }
+    let mut s = curved_selection();
+    s.allow_estimates = false;
+    let e = db.resolve(&s).unwrap().bending_response().unwrap_err();
+    assert!(e.message.contains("preferred_curvature") && e.message.contains("estimate"));
+    s.allow_estimates = true;
+    s.record
+        .as_mut()
+        .unwrap()
+        .structure
+        .insert("bending_model".into(), MODEL.into());
+    assert!(db.resolve(&s).unwrap().bending_response().is_err());
+    let mut s = curved_selection();
+    s.record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut(KEYS[0])
+        .unwrap()
+        .unit = "m".into();
+    assert!(db.resolve(&s).is_err());
+    let d = BendingTensor::new(1., 1., 0., 1.).unwrap();
+    assert!(d.with_preferred_curvature([0.; 3]).is_err());
+    for value in [f64::NAN, f64::INFINITY, f64::MAX] {
+        assert!(
+            d.normal_projected()
+                .with_preferred_curvature([value, 0., 0.])
+                .is_err()
+        );
+    }
+    // No declaration preserves the existing serialized law; explicit zero remains physically equal.
+    assert_eq!(d.normal_projected().preferred_curvature(), [0.; 3]);
+    assert!(
+        serde_json::to_value(d.normal_projected())
+            .unwrap()
+            .get("preferred_curvature_m_inv")
+            .is_none()
+    );
+}

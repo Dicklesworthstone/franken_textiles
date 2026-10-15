@@ -13,6 +13,13 @@ pub const MODEL: &str = "orthotropic_quadratic_patch/1";
 /// Normal-projected second fundamental form, in reference material coordinates.
 pub const NORMAL_MODEL: &str = "orthotropic_normal_patch/1";
 
+/// Signed preferred covariant curvature [b_uu, b_vv, 2 b_uv], in inverse reference metres.
+pub const PREFERRED_CURVATURE_PROPERTIES: [&str; 3] = [
+    "preferred_curvature_warp",
+    "preferred_curvature_weft",
+    "preferred_curvature_twist",
+];
+
 /// Positive-definite bending resultant matrix in [k_uu, k_vv, 2 k_uv] order, in N m.
 /// u follows warp/wale/grain; v follows weft/course. This is not membrane Poisson coupling.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -20,6 +27,8 @@ pub struct BendingTensor {
     matrix_nm: [[f64; 3]; 3],
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     normal_projection: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preferred_curvature_m_inv: Option<[f64; 3]>,
 }
 
 impl BendingTensor {
@@ -52,6 +61,7 @@ impl BendingTensor {
                 [0.0, 0.0, twist],
             ],
             normal_projection: false,
+            preferred_curvature_m_inv: None,
         })
     }
 
@@ -73,6 +83,33 @@ impl BendingTensor {
     #[must_use]
     pub fn uses_normal(&self) -> bool {
         self.normal_projection
+    }
+
+    /// Specify preferred curvature without changing the reference membrane metric or the tensor.
+    /// Sign is relative to x_u cross x_v, with u along grain and v its positive in-plane normal.
+    /// An incompatible target (e.g. spherical curvature with a flat metric) may retain residual stress.
+    ///
+    /// # Errors
+    /// Vector-Hessian kinematics, non-finite curvature, or overflowing stored energy at flatness.
+    pub fn with_preferred_curvature(mut self, curvature: [f64; 3]) -> Result<Self, Refusal> {
+        let stored: f64 = (0..3)
+            .flat_map(|i| (0..3).map(move |j| self.matrix_nm[i][j] * curvature[i] * curvature[j]))
+            .sum();
+        if !self.uses_normal() || curvature.iter().any(|v| !v.is_finite()) || !stored.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "preferred curvature requires normal-projected bending, finite inverse metres and finite flat energy",
+            ));
+        }
+        self.preferred_curvature_m_inv = Some(curvature);
+        Ok(self)
+    }
+
+    /// Preferred covariant curvature in inverse reference metres. Absence retains flat-reference
+    /// bending exactly; this is not a radius, current principal curvature, or a stress-free metric.
+    #[must_use]
+    pub fn preferred_curvature(&self) -> [f64; 3] {
+        self.preferred_curvature_m_inv.unwrap_or([0.0; 3])
     }
 
     /// Exact selected kinematic model, independent of the material's display name.
@@ -106,18 +143,25 @@ impl ResolvedMaterial {
             ));
         }
         let value = |key| material.require(key, "N*m", self.allows_estimates());
-        BendingTensor::new(
+        let mut law = BendingTensor::new(
             value("bending_warp")?,
             value("bending_weft")?,
             value("bending_coupling")?,
             value("bending_twist")?,
-        )
-        .map(|law| {
-            Some(if model == NORMAL_MODEL {
-                law.normal_projected()
-            } else {
-                law
-            })
-        })
+        )?;
+        if model == NORMAL_MODEL {
+            law = law.normal_projected();
+        }
+        if PREFERRED_CURVATURE_PROPERTIES
+            .iter()
+            .any(|key| material.properties.contains_key(*key))
+        {
+            let mut curvature = [0.0; 3];
+            for (out, key) in curvature.iter_mut().zip(PREFERRED_CURVATURE_PROPERTIES) {
+                *out = material.require(key, "1/m", self.allows_estimates())?;
+            }
+            law = law.with_preferred_curvature(curvature)?;
+        }
+        Ok(Some(law))
     }
 }

@@ -95,7 +95,8 @@ impl BendingPatch {
     }
 
     /// Covariant [b_uu,b_vv,2b_uv] in inverse metres of the reference material coordinates,
-    /// not current principal curvatures. The reference sheet is flat, so its rest curvature is zero.
+    /// not current principal curvatures. This returns the geometric curvature, NOT the departure
+    /// from any preferred material curvature.
     ///
     /// # Errors
     /// This is a vector-Hessian patch, or its deformed reconstruction has no reliable normal.
@@ -110,8 +111,28 @@ impl BendingPatch {
         Ok(self.curvature(x).map(|c| n.dot(c)))
     }
 
+    /// Signed preferred covariant curvature [b_uu,b_vv,2b_uv], inverse reference metres.
+    #[must_use]
+    pub fn preferred_curvature(&self) -> [f64; 3] {
+        self.tensor.preferred_curvature()
+    }
+
+    /// Difference between the actual and preferred covariant curvature in material coordinates.
+    ///
+    /// # Errors
+    /// As [`Self::normal_curvature`], or a non-finite curvature difference.
+    pub fn bending_strain(&self, x: &[Vec3]) -> Result<[f64; 3], Refusal> {
+        let actual = self.normal_curvature(x)?;
+        let preferred = self.preferred_curvature();
+        let strain = std::array::from_fn(|i| actual[i] - preferred[i]);
+        if strain.iter().any(|v| !v.is_finite()) {
+            return Err(bad("preferred-curvature subtraction overflows"));
+        }
+        Ok(strain)
+    }
+
     pub(super) fn normal_energy(&self, x: &[Vec3]) -> f64 {
-        let Ok(c) = self.normal_curvature(x) else {
+        let Ok(c) = self.bending_strain(x) else {
             return f64::INFINITY;
         };
         let d = self.tensor.matrix();
@@ -160,7 +181,7 @@ impl BendingPatch {
             let derivative = std::array::from_fn(|k| {
                 (1..6).fold(z, |sum, i| sum + p[i][k] * self.weights[a][i])
             });
-            dot(normal, derivative)
+            dot(normal, derivative) - J::constant(self.preferred_curvature()[a])
         });
         let d = self.tensor.matrix();
         let mut e = z;

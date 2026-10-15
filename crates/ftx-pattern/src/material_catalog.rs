@@ -60,6 +60,9 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         "bending_rigidity" | "bending_warp" | "bending_weft" | "bending_coupling"
         | "bending_twist" => "N*m",
         "specimen_flexural_rigidity" => "N*m2",
+        "preferred_curvature_warp" | "preferred_curvature_weft" | "preferred_curvature_twist" => {
+            "1/m"
+        }
         "poisson_warp_weft"
         | "friction_skin"
         | "friction_self"
@@ -110,6 +113,7 @@ fn factor(unit: &str, expected: &str) -> Option<f64> {
         ("denier", "kg/m") => 1e-3 / 9000.0,
         ("1/in", "1/m") => 1.0 / 0.0254,
         ("1/cm", "1/m") => 100.0,
+        ("1/mm", "1/m") => 1000.0,
         _ => return None,
     })
 }

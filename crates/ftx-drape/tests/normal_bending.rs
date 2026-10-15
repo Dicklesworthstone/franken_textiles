@@ -329,6 +329,15 @@ fn source_selected_kinematics_survive_sewing_per_piece_ownership_and_motion() {
     .unwrap();
     let mut normal = selection.clone();
     normal["record"]["structure"]["bending_model"] = json!(NORMAL_MODEL);
+    for (key, value) in ftx_pattern::material_bending::PREFERRED_CURVATURE_PROPERTIES
+        .into_iter()
+        .zip([0.5, -0.2, 0.1])
+    {
+        let mut datum = normal["record"]["properties"]["bending_warp"].clone();
+        datum["value"] = json!(value);
+        datum["unit"] = json!("1/m");
+        normal["record"]["properties"][key] = datum;
+    }
     let w = 40. * std::f64::consts::PI;
     let pieces: Vec<_> = ["front", "back"]
         .iter()
@@ -390,6 +399,14 @@ fn source_selected_kinematics_survive_sewing_per_piece_ownership_and_motion() {
         .zip(field.panel_bending_triangles())
     {
         assert_eq!(
+            patch.preferred_curvature(),
+            if result.scene.triangle_owner[i] == 0 {
+                [0.5, -0.2, 0.1]
+            } else {
+                [0.0; 3]
+            }
+        );
+        assert_eq!(
             patch.model(),
             if result.scene.triangle_owner[i] == 0 {
                 NORMAL_MODEL
@@ -423,4 +440,122 @@ fn source_selected_kinematics_survive_sewing_per_piece_ownership_and_motion() {
         before.model.panel_bending_triangles(),
         result.scene.solver.model.panel_bending_triangles()
     );
+}
+
+#[test]
+fn preferred_curvature_has_independent_zero_and_flat_energy_answers() {
+    let x = points().map(surface);
+    let u = 0.2 / 3.;
+    let v = 0.15 / 3.;
+    let n = Vec3::new(1.3 + 0.8 * u + 0.2 * v, 0., 1.2 * u + 0.2 * v)
+        .cross(Vec3::new(0.2 * u, 0.8 + 0.6 * v, 0.2 * u - 0.8 * v))
+        .normalized();
+    let target = [
+        n.dot(Vec3::new(0.8, 0., 1.2)),
+        n.dot(Vec3::new(0., 0.6, -0.8)),
+        n.dot(Vec3::new(0.4, 0., 0.4)),
+    ];
+    let d = law().with_preferred_curvature(target).unwrap();
+    let p = BendingPatch::new([0, 1, 2, 3, 4, 5], points(), d).unwrap();
+    assert!(p.energy(&x) < 1e-28);
+    assert!(p.local(&x).grad.iter().all(|v| v.abs() < 1e-13));
+    let flat = points().map(|v| Vec3::new(v.x, v.y, 0.));
+    let matrix = d.matrix();
+    let mut expected = 0.;
+    for i in 0..3 {
+        for j in 0..3 {
+            expected += 0.5 * 0.015 * target[i] * matrix[i][j] * target[j];
+        }
+    }
+    near(p.energy(&flat), expected, 1e-15);
+    // A geometric plane is no longer bending-stress-free when the material prefers a curved form.
+    assert!(p.local(&flat).grad.iter().any(|v| v.abs() > 1e-6));
+    let reflected = x.map(|v| Vec3::new(v.x, v.y, -v.z));
+    let opposite = BendingPatch::new(
+        [0, 1, 2, 3, 4, 5],
+        points(),
+        law().with_preferred_curvature(target.map(|v| -v)).unwrap(),
+    )
+    .unwrap();
+    assert!(opposite.energy(&reflected) < 1e-28);
+    assert!(p.energy(&reflected) > 1e-6);
+}
+
+#[test]
+fn preferred_curvature_derivatives_include_the_changing_normal() {
+    let p = BendingPatch::new(
+        [0, 1, 2, 3, 4, 5],
+        points(),
+        law().with_preferred_curvature([2., -1., 0.6]).unwrap(),
+    )
+    .unwrap();
+    let x = points().map(surface);
+    let l = p.local(&x);
+    near(l.energy, p.energy(&x), 1e-17);
+    let eps = 2e-6;
+    for i in 0..18 {
+        let mut plus = x;
+        let mut minus = x;
+        let delta = [
+            Vec3::new(eps, 0., 0.),
+            Vec3::new(0., eps, 0.),
+            Vec3::new(0., 0., eps),
+        ][i % 3];
+        plus[i / 3] += delta;
+        minus[i / 3] -= delta;
+        near(
+            l.grad[i],
+            (p.energy(&plus) - p.energy(&minus)) / (2. * eps),
+            1e-8,
+        );
+        let gp = p.local(&plus).grad;
+        let gm = p.local(&minus).grad;
+        for j in 0..18 {
+            near(l.hess[j * 18 + i], (gp[j] - gm[j]) / (2. * eps), 4e-7);
+        }
+    }
+    let moved = x.map(|v| Vec3::new(v.z, v.x, v.y) + Vec3::new(7., -3., 2.));
+    near(p.energy(&moved), p.energy(&x), 1e-14);
+    let zero = BendingPatch::new(
+        [0, 1, 2, 3, 4, 5],
+        points(),
+        law().with_preferred_curvature([0.; 3]).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(zero.energy(&x), patch().energy(&x));
+    assert_eq!(zero.local(&x).grad, patch().local(&x).grad);
+    assert_eq!(zero.local(&x).hess, patch().local(&x).hess);
+}
+
+#[test]
+fn preferred_curvature_drives_opposite_curl_without_gravity_or_geometry_edits() {
+    let (rest, tris) = hex_grid(0.08, 0.06, 0.02, Vec2::ZERO);
+    let x: Vec<_> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.)).collect();
+    let fixed: Vec<_> = rest.iter().map(|p| [p.x < 0.021; 3]).collect();
+    let make = |curvature| {
+        let d = law().with_preferred_curvature([curvature, 0., 0.]).unwrap();
+        let mut s = Solver::new(model(&rest, &tris, Some(d)), x.clone(), &fixed, Vec3::ZERO);
+        s.tol = 1e-8;
+        s
+    };
+    let mut up = make(4.);
+    let mut down = make(-4.);
+    let mut flat = make(0.);
+    let initial = up.model.elastic_energy(&up.x);
+    for _ in 0..8 {
+        assert!(up.step(0.005).unwrap().converged);
+        assert!(down.step(0.005).unwrap().converged);
+        assert!(flat.step(0.005).unwrap().converged);
+    }
+    assert_eq!(up.model.mass, down.model.mass);
+    assert_eq!(up.model.membranes, down.model.membranes);
+    assert_eq!(up.model.rest, down.model.rest);
+    assert!(up.x.iter().map(|p| p.z).sum::<f64>() > 1e-5);
+    for ((u, d), f) in up.x.iter().zip(&down.x).zip(&flat.x) {
+        near(u.x, d.x, 1e-11);
+        near(u.y, d.y, 1e-11);
+        near(u.z, -d.z, 1e-11);
+        near(f.z, 0., 1e-13);
+    }
+    assert!(up.model.elastic_energy(&up.x) < initial);
 }
