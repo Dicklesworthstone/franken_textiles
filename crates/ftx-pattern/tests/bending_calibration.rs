@@ -67,6 +67,7 @@ fn input() -> Input {
         ],
         allow_estimated_observations: false,
         replace_existing: false,
+        fit_preferred_curvature: false,
         max_rms_scaled: 1e-7,
         max_peak_scaled: 1e-7,
     }
@@ -174,4 +175,35 @@ fn replacement_and_estimated_observation_require_explicit_consent() {
     assert!(calibrate(&raw).is_err());
     raw.allow_estimated_observations = true;
     assert!(calibrate(&raw).is_ok());
+}
+
+
+#[test]
+fn jointly_recovers_stiffness_and_unloaded_preferred_curvature() {
+    let mut raw = input();
+    let preferred = [1.25, -0.75, 0.4];
+    let d = [4.0e-4, 1.5e-4, 5.0e-5, 8.0e-5];
+    raw.fit_preferred_curvature = true;
+    for s in &mut raw.samples {
+        let strain: [f64; 3] =
+            std::array::from_fn(|i| s.curvature_m_inv[i] - preferred[i]);
+        s.moment_n = moment(strain, d).map(Some);
+    }
+    let out = calibrate(&raw).unwrap();
+    for (actual, expected) in out.preferred_curvature_m_inv.iter().zip(preferred) {
+        assert!((actual - expected).abs() < 1e-10, "{actual} != {expected}");
+    }
+    near(out.bending_nm[0][0], d[0]);
+    near(out.bending_nm[1][1], d[1]);
+    near(out.bending_nm[0][1], d[2]);
+    near(out.bending_nm[2][2], d[3]);
+    for (key, expected) in [
+        ("preferred_curvature_warp", preferred[0]),
+        ("preferred_curvature_weft", preferred[1]),
+        ("preferred_curvature_twist", preferred[2]),
+    ] {
+        let q = &out.material.properties[key];
+        assert_eq!(q.evidence, Evidence::Estimate);
+        assert!((q.value - expected).abs() < 1e-10);
+    }
 }

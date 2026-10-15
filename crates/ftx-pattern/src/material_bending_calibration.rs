@@ -67,6 +67,9 @@ pub struct Input {
     /// Explicit permission to replace existing directional bending coefficients/model.
     #[serde(default)]
     pub replace_existing: bool,
+    /// Jointly identify unloaded preferred curvature from the affine moment intercept.
+    #[serde(default)]
+    pub fit_preferred_curvature: bool,
     /// Maximum RMS scaled residual for fit and held-out partitions.
     pub max_rms_scaled: f64,
     /// Maximum absolute scaled residual for fit and held-out partitions.
@@ -141,16 +144,14 @@ fn quality(errors: &[f64], input: &Input, partition: &str) -> Result<Quality, Re
     })
 }
 
-struct Design {
-    rows: Vec<[f64; 4]>,
+struct Design<const N: usize> {
+    rows: Vec<[f64; N]>,
     target: Vec<f64>,
-    scales: [f64; 4],
+    scales: [f64; N],
     pivot: f64,
 }
 
-fn design(input: &Input, preferred: [f64; 3]) -> Result<Design, Refusal> {
-    let mut rows = Vec::new();
-    let mut target = Vec::new();
+fn validate_samples(input: &Input) -> Result<(), Refusal> {
     let mut ids = BTreeSet::new();
     for s in &input.samples {
         if s.id.trim().is_empty()
@@ -168,41 +169,30 @@ fn design(input: &Input, preferred: [f64; 3]) -> Result<Design, Refusal> {
                 s.id
             )));
         }
-        if s.partition != Partition::Fit {
-            continue;
-        }
-        let k: [f64; 3] = std::array::from_fn(|i| s.curvature_m_inv[i] - preferred[i]);
-        let basis = [
-            [k[0], 0.0, k[1], 0.0],
-            [0.0, k[1], k[0], 0.0],
-            [0.0, 0.0, 0.0, k[2]],
-        ];
-        for (i, observed) in s.moment_n.iter().enumerate() {
-            if let Some(value) = observed {
-                rows.push(basis[i].map(|v| v / s.scale_n));
-                target.push(value / s.scale_n);
-            }
-        }
     }
-    if rows.len() < 4 {
-        return Err(invalid(
-            "bending fit needs at least four observed moment components with independent curvature excitation",
-        ));
+    Ok(())
+}
+
+fn scaled_design<const N: usize>(
+    rows: Vec<[f64; N]>,
+    target: Vec<f64>,
+    insufficient: &str,
+) -> Result<Design<N>, Refusal> {
+    if rows.len() < N {
+        return Err(invalid(insufficient));
     }
-    let scales: [f64; 4] =
+    let scales: [f64; N] =
         std::array::from_fn(|j| rows.iter().map(|r| r[j] * r[j]).sum::<f64>().sqrt());
     if scales.iter().any(|s| !s.is_finite() || *s <= 0.0) {
-        return Err(invalid(
-            "bending coupons do not independently excite warp, weft, coupling and twist",
-        ));
+        return Err(invalid(insufficient));
     }
-    let normalized: Vec<[f64; 4]> = rows
+    let normalized: Vec<[f64; N]> = rows
         .iter()
         .map(|r| std::array::from_fn(|j| r[j] / scales[j]))
         .collect();
-    let mut l = [[0.0; 4]; 4];
+    let mut l = [[0.0; N]; N];
     let mut pivot = 1.0_f64;
-    for i in 0..4 {
+    for i in 0..N {
         for j in 0..=i {
             let mut value: f64 = normalized.iter().map(|r| r[i] * r[j]).sum();
             for k in 0..j {
@@ -210,9 +200,7 @@ fn design(input: &Input, preferred: [f64; 3]) -> Result<Design, Refusal> {
             }
             if i == j {
                 if !value.is_finite() || value <= 1e-8 {
-                    return Err(invalid(
-                        "rank-deficient or poorly excited bending fit; add independent warp/weft/twist coupon states",
-                    ));
+                    return Err(invalid(insufficient));
                 }
                 pivot = pivot.min(value);
                 l[i][j] = value.sqrt();
@@ -229,23 +217,115 @@ fn design(input: &Input, preferred: [f64; 3]) -> Result<Design, Refusal> {
     })
 }
 
-fn preferred_curvature(input: &Input) -> Result<[f64; 3], Refusal> {
+fn fixed_design(input: &Input, preferred: [f64; 3]) -> Result<Design<4>, Refusal> {
+    let mut rows = Vec::new();
+    let mut target = Vec::new();
+    for s in input
+        .samples
+        .iter()
+        .filter(|s| s.partition == Partition::Fit)
+    {
+        let k: [f64; 3] = std::array::from_fn(|i| s.curvature_m_inv[i] - preferred[i]);
+        let basis = [
+            [k[0], 0.0, k[1], 0.0],
+            [0.0, k[1], k[0], 0.0],
+            [0.0, 0.0, 0.0, k[2]],
+        ];
+        for (i, observed) in s.moment_n.iter().enumerate() {
+            if let Some(value) = observed {
+                rows.push(basis[i].map(|v| v / s.scale_n));
+                target.push(value / s.scale_n);
+            }
+        }
+    }
+    scaled_design(
+        rows,
+        target,
+        "bending coupons do not independently excite warp, weft, coupling and twist",
+    )
+}
+
+fn affine_design(input: &Input) -> Result<Design<7>, Refusal> {
+    let mut rows = Vec::new();
+    let mut target = Vec::new();
+    for s in input
+        .samples
+        .iter()
+        .filter(|s| s.partition == Partition::Fit)
+    {
+        let k = s.curvature_m_inv;
+        let basis = [
+            [k[0], 0.0, k[1], 0.0, 1.0, 0.0, 0.0],
+            [0.0, k[1], k[0], 0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, k[2], 0.0, 0.0, 1.0],
+        ];
+        for (i, observed) in s.moment_n.iter().enumerate() {
+            if let Some(value) = observed {
+                rows.push(basis[i].map(|v| v / s.scale_n));
+                target.push(value / s.scale_n);
+            }
+        }
+    }
+    scaled_design(
+        rows,
+        target,
+        "joint bending/preferred-curvature fit needs independent curvature variation and moment offsets",
+    )
+}
+
+fn preferred_curvature(input: &Input) -> Result<Option<[f64; 3]>, Refusal> {
     let normalized = normalize(&input.material)?;
-    let present = PREFERRED_CURVATURE_PROPERTIES
-        .map(|key| normalized.properties.contains_key(key));
+    let present =
+        PREFERRED_CURVATURE_PROPERTIES.map(|key| normalized.properties.contains_key(key));
     if present.iter().any(|x| *x) && !present.iter().all(|x| *x) {
         return Err(invalid(
             "preferred bending curvature must be absent or complete before stiffness calibration",
         ));
     }
     if !present[0] {
-        return Ok([0.0; 3]);
+        return Ok(None);
+    }
+    if input.fit_preferred_curvature {
+        if !input.replace_existing {
+            return Err(invalid(
+                "joint preferred-curvature fitting would replace existing curvature evidence; explicit replace_existing is required",
+            ));
+        }
+        return Ok(None);
     }
     let mut out = [0.0; 3];
     for (value, key) in out.iter_mut().zip(PREFERRED_CURVATURE_PROPERTIES) {
         *value = normalized.require(key, "1/m", input.allow_estimated_observations)?;
     }
-    Ok(out)
+    Ok(Some(out))
+}
+
+fn identify(input: &Input) -> Result<([f64; 4], [f64; 3], f64), Refusal> {
+    if input.fit_preferred_curvature {
+        let design = affine_design(input)?;
+        let fitted = lstsq(&design.rows, &design.target);
+        let p: [f64; 7] = std::array::from_fn(|j| fitted[j] / design.scales[j]);
+        let values = [p[0], p[1], p[2], p[3]];
+        BendingTensor::new(values[0], values[1], values[2], values[3])?;
+        let det = values[0] * values[1] - values[2] * values[2];
+        let preferred = [
+            (-values[1] * p[4] + values[2] * p[5]) / det,
+            (values[2] * p[4] - values[0] * p[5]) / det,
+            -p[6] / values[3],
+        ];
+        if preferred.iter().any(|v| !v.is_finite()) {
+            return Err(invalid(
+                "joint bending fit produced non-finite preferred curvature",
+            ));
+        }
+        Ok((values, preferred, design.pivot))
+    } else {
+        let preferred = preferred_curvature(input)?.unwrap_or([0.0; 3]);
+        let design = fixed_design(input, preferred)?;
+        let fitted = lstsq(&design.rows, &design.target);
+        let values: [f64; 4] = std::array::from_fn(|j| fitted[j] / design.scales[j]);
+        Ok((values, preferred, design.pivot))
+    }
 }
 
 /// Fit the exact four-coefficient tensor used by the normal-projected panel model.
@@ -266,6 +346,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             "invalid bending calibration schema, protocol, material form, sample count or residual budget",
         ));
     }
+    validate_samples(input)?;
     let has_prior = KEYS
         .iter()
         .any(|key| input.material.properties.contains_key(*key))
@@ -276,18 +357,14 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         ));
     }
 
-    let preferred = preferred_curvature(input)?;
-    let design = design(input, preferred)?;
-    let fitted = lstsq(&design.rows, &design.target);
-    if fitted.len() < 4 {
-        return Err(invalid(
-            "bending least-squares solver returned an incomplete tensor",
-        ));
-    }
-    let values: [f64; 4] = std::array::from_fn(|j| fitted[j] / design.scales[j]);
+    let prior_preferred = preferred_curvature(input)?;
+    let (values, preferred, excitation_pivot) = identify(input)?;
     let law = BendingTensor::new(values[0], values[1], values[2], values[3])?
         .normal_projected();
     let matrix = law.matrix();
+    if !input.fit_preferred_curvature && prior_preferred.unwrap_or([0.0; 3]) != preferred {
+        return Err(invalid("internal preferred-curvature calibration mismatch"));
+    }
 
     let mut fit_errors = Vec::new();
     let mut check_errors = Vec::new();
@@ -369,6 +446,22 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             },
         );
     }
+    if input.fit_preferred_curvature {
+        for (key, value) in PREFERRED_CURVATURE_PROPERTIES.into_iter().zip(preferred) {
+            material.properties.insert(
+                key.into(),
+                Quantity {
+                    value,
+                    unit: "1/m".into(),
+                    evidence: Evidence::Estimate,
+                    source: source_id.clone(),
+                    method: "Recovered jointly from the affine bending-moment intercept c=-D*k0; not a stress-free 3D reference surface.".into(),
+                    conditions: conditions.clone(),
+                    bounds: None,
+                },
+            );
+        }
+    }
     material.validate()?;
 
     Ok(Report {
@@ -378,7 +471,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         material,
         bending_nm: matrix,
         preferred_curvature_m_inv: preferred,
-        excitation_pivot: design.pivot,
+        excitation_pivot,
         fit,
         check,
         predictions,
