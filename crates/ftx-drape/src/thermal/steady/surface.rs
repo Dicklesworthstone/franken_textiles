@@ -20,9 +20,9 @@ use serde_json::{Value, json};
 /// Immutable independent columns with no invented mass, heat capacity, cells or transient state.
 #[derive(Clone, Debug)]
 pub struct SteadySurface {
-    columns: Vec<SteadyConductionModel>,
-    patches: Vec<Patch>,
-    vertex_count: usize,
+    pub(super) columns: Vec<SteadyConductionModel>,
+    pub(super) patches: Vec<Patch>,
+    pub(super) vertex_count: usize,
 }
 
 /// One triangle's signed heat flow; face temperatures are stored once in its assigned column.
@@ -136,7 +136,7 @@ impl SteadySurface {
         Ok(surface)
     }
 
-    fn areas(&self, positions: &[Vec3]) -> Result<Vec<f64>, Refusal> {
+    pub(super) fn areas(&self, positions: &[Vec3]) -> Result<Vec<f64>, Refusal> {
         if positions.len() != self.vertex_count || positions.iter().any(|p| !p.is_finite()) {
             return Err(invalid(
                 "steady surface needs every finite vertex in metres",

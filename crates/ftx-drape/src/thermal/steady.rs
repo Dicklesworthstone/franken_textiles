@@ -14,6 +14,7 @@ use ftx_pattern::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub mod coverage;
 pub mod request;
 pub mod surface;
 
@@ -39,6 +40,9 @@ pub struct SteadyConductionModel {
     layers: Vec<ResolvedMaterial>,
     laws: Vec<ConductionLaw>,
     interfaces: Vec<f64>,
+    // Temporary coverage solve factors A_body/A_cloth. These never alter source observations or
+    // public snapshots; only the coverage adapter creates the short-lived scaled solve object.
+    area_factors: Vec<f64>,
 }
 
 #[derive(Deserialize)]
@@ -77,10 +81,23 @@ impl SteadyConductionModel {
             .map(|m| ConductionLaw::from_material(m.material(), m.allows_estimates()))
             .collect::<Result<_, _>>()?;
         Ok(Self {
+            area_factors: vec![1.0; layers.len()],
             layers,
             laws,
             interfaces,
         })
+    }
+
+    pub(super) fn with_area_factors(&self, factors: Vec<f64>) -> Result<Self, Refusal> {
+        if factors.len() != self.layers.len() {
+            return Err(invalid("steady coverage needs one area factor per layer"));
+        }
+        for &factor in &factors {
+            positive("steady coverage area factor", factor)?;
+        }
+        let mut scaled = self.clone();
+        scaled.area_factors = factors;
+        Ok(scaled)
     }
 
     /// Portable source-complete model inputs; replay does not consult a live catalog.
@@ -172,7 +189,10 @@ impl SteadyConductionModel {
             };
             let law = &self.laws[i];
             let [a, b] = law.domain().unwrap_or([cold, hot]);
-            resistance += law.resistance_at(a / 2.0 + b / 2.0)?;
+            resistance += positive(
+                "area-scaled steady resistance",
+                law.resistance_at(a / 2.0 + b / 2.0)? * self.area_factors[i],
+            )?;
             if step + 1 < self.layers.len() {
                 resistance += self.interfaces[if reverse { i } else { i - 1 }];
             }
@@ -250,14 +270,14 @@ impl SteadyConductionModel {
             if !t.is_finite() || t > ceiling {
                 return Ok(Shot::High);
             }
-            let maximum = law.flux_between(ceiling, t)?;
+            let maximum = scaled_flux(law, ceiling, t, self.area_factors[i])?;
             if q > maximum {
                 return Ok(Shot::High);
             }
             let warm = if q == maximum {
                 ceiling
             } else {
-                inverse(law, t, ceiling, q)?
+                inverse(law, t, ceiling, q, self.area_factors[i])?
             };
             faces[i] = if reverse { [t, warm] } else { [warm, t] };
             t = warm;
@@ -284,7 +304,8 @@ impl SteadyConductionModel {
             }) {
                 return Err(invalid("steady maximum principle failed"));
             }
-            flux_residual = flux_residual.max((law.flux_between(inside, outside)? - q).abs());
+            flux_residual = flux_residual
+                .max((scaled_flux(law, inside, outside, self.area_factors[i])? - q).abs());
             if i < self.interfaces.len() {
                 temperature_residual = temperature_residual
                     .max((outside - faces[i + 1][0] - q * self.interfaces[i]).abs());
@@ -312,14 +333,29 @@ fn temperature_tolerance(b: Boundary) -> f64 {
         + 1e-11 * (b.inside_c - b.outside_c).abs()
 }
 
-fn inverse(law: &ConductionLaw, cold: f64, mut high: f64, q: f64) -> Result<f64, Refusal> {
+fn scaled_flux(law: &ConductionLaw, a: f64, b: f64, factor: f64) -> Result<f64, Refusal> {
+    let flux = law.flux_between(a, b)?;
+    let scaled = flux / factor;
+    if !scaled.is_finite() || (flux != 0.0 && scaled == 0.0) {
+        return Err(invalid("area-scaled steady flux is not representable"));
+    }
+    Ok(scaled)
+}
+
+fn inverse(
+    law: &ConductionLaw,
+    cold: f64,
+    mut high: f64,
+    q: f64,
+    factor: f64,
+) -> Result<f64, Refusal> {
     let mut low = cold;
     for _ in 0..ITERATIONS {
         let mid = low + (high - low) / 2.0;
         if mid == low || mid == high {
             break;
         }
-        let flux = law.flux_between(mid, cold)?;
+        let flux = scaled_flux(law, mid, cold, factor)?;
         if flux == q {
             return Ok(mid);
         }
@@ -329,7 +365,7 @@ fn inverse(law: &ConductionLaw, cold: f64, mut high: f64, q: f64) -> Result<f64,
             low = mid;
         }
     }
-    let lo_error = (law.flux_between(low, cold)? - q).abs();
-    let hi_error = (law.flux_between(high, cold)? - q).abs();
+    let lo_error = (scaled_flux(law, low, cold, factor)? - q).abs();
+    let hi_error = (scaled_flux(law, high, cold, factor)? - q).abs();
     Ok(if lo_error < hi_error { low } else { high })
 }

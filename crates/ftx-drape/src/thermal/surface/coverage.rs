@@ -170,16 +170,11 @@ fn positions(x: &[Vec3], count: usize) -> Result<(), Refusal> {
     Ok(())
 }
 
-impl Coverage {
-    /// Assemble explicit covered-body regions from an existing frozen independent-sheet surface.
-    /// One source triangle must represent one textile layer; already-stacked columns are refused.
-    /// Area allocations may split one sheet over many regions and combine many sheets over one body
-    /// triangle. Both allocation budgets and the global physical-layer ordering are checked.
-    ///
-    /// # Errors
-    /// Invalid topology, fractions, repeated identities, oversubscribed material/body area, cyclic
-    /// layer order, missing material coefficients, or more than 65,536 regions / one million cells.
-    pub fn new(source: Surface, layout: Layout) -> Result<Self, Refusal> {
+impl Layout {
+    // Shared geometric/allocation authority for both storage-bearing and conduction-only coverage.
+    // The legacy cells_per_layer budget remains a layout limit; steady transport allocates no cells.
+    pub(crate) fn allocations(&self, cloth_count: usize) -> Result<(Vec<f64>, Vec<f64>), Refusal> {
+        let layout = self;
         if layout.schema != "ftx-thermal-coverage-layout/1"
             || layout.mapping_basis.trim().is_empty()
             || layout.body_vertex_count == 0
@@ -193,11 +188,6 @@ impl Coverage {
                 "invalid coverage schema, mapping basis or topology budget",
             ));
         }
-        if source.columns.iter().any(|c| c.layers.len() != 1) {
-            return Err(invalid(
-                "coverage requires independent single-layer source triangles",
-            ));
-        }
         let mut faces = BTreeSet::new();
         for &face in &layout.body_triangles {
             let mut f = face;
@@ -208,11 +198,10 @@ impl Coverage {
             }
         }
         let mut covered = vec![0.0; layout.body_triangles.len()];
-        let mut allocated = vec![0.0; source.patches.len()];
+        let mut allocated = vec![0.0; cloth_count];
         let mut cloth_layer = BTreeMap::new();
         let mut order: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         let mut ids = BTreeSet::new();
-        let mut models = Vec::new();
         let mut cells = 0usize;
         for region in &layout.regions {
             if region.id.trim().is_empty()
@@ -238,7 +227,14 @@ impl Coverage {
                 .and_then(|n| cells.checked_add(n))
                 .filter(|&n| n <= 1_000_000)
                 .ok_or_else(|| invalid("coverage exceeds thermal cell budget"))?;
-            let mut layers = Vec::new();
+            if region.interface_resistance_m2_k_w.len() != region.layers.len() - 1 {
+                return Err(invalid(
+                    "coverage needs one resistance per adjacent layer pair",
+                ));
+            }
+            for &r in &region.interface_resistance_m2_k_w {
+                nonnegative("coverage interface resistance", r)?;
+            }
             let mut seen = BTreeSet::new();
             for portion in &region.layers {
                 fraction(portion.fraction)?;
@@ -247,10 +243,9 @@ impl Coverage {
                         "physical layer is missing or repeated within a coverage region",
                     ));
                 }
-                let patch = source
-                    .patches
-                    .get(portion.cloth_triangle)
-                    .ok_or_else(|| invalid("coverage refers to an absent cloth triangle"))?;
+                if portion.cloth_triangle >= cloth_count {
+                    return Err(invalid("coverage refers to an absent cloth triangle"));
+                }
                 if let Some(old) =
                     cloth_layer.insert(portion.cloth_triangle, portion.layer.as_str())
                     && old != portion.layer
@@ -264,7 +259,6 @@ impl Coverage {
                     return Err(invalid("coverage duplicates reference cloth area/mass"));
                 }
                 order.entry(portion.layer.as_str()).or_default();
-                layers.push(source.columns[patch.column].layers[0].clone());
             }
             for pair in region.layers.windows(2) {
                 order
@@ -272,11 +266,6 @@ impl Coverage {
                     .or_default()
                     .insert(pair[1].layer.as_str());
             }
-            models.push(DryThermalModel::new(
-                layers,
-                region.interface_resistance_m2_k_w.clone(),
-                layout.cells_per_layer,
-            )?);
         }
         // Kahn traversal detects conflicting ordering across regions without recursion or a dense graph.
         let mut indegree: BTreeMap<&str, usize> = order.keys().map(|&k| (k, 0)).collect();
@@ -304,6 +293,45 @@ impl Coverage {
         if visited != order.len() {
             return Err(invalid("coverage physical-layer order is cyclic"));
         }
+        Ok((covered, allocated))
+    }
+}
+
+impl Coverage {
+    /// Assemble explicit covered-body regions from an existing frozen independent-sheet surface.
+    /// One source triangle must represent one textile layer; already-stacked columns are refused.
+    /// Area allocations may split one sheet over many regions and combine many sheets over one body
+    /// triangle. Both allocation budgets and the global physical-layer ordering are checked.
+    ///
+    /// # Errors
+    /// Invalid topology, fractions, repeated identities, oversubscribed material/body area, cyclic
+    /// layer order, missing material coefficients, or more than 65,536 regions / one million cells.
+    pub fn new(source: Surface, layout: Layout) -> Result<Self, Refusal> {
+        let (covered, allocated) = layout.allocations(source.patches.len())?;
+        if source.columns.iter().any(|c| c.layers.len() != 1) {
+            return Err(invalid(
+                "coverage requires independent single-layer source triangles",
+            ));
+        }
+        let models = layout
+            .regions
+            .iter()
+            .map(|region| {
+                let layers = region
+                    .layers
+                    .iter()
+                    .map(|portion| {
+                        let patch = &source.patches[portion.cloth_triangle];
+                        source.columns[patch.column].layers[0].clone()
+                    })
+                    .collect();
+                DryThermalModel::new(
+                    layers,
+                    region.interface_resistance_m2_k_w.clone(),
+                    layout.cells_per_layer,
+                )
+            })
+            .collect::<Result<_, _>>()?;
         let mut assembly = Self {
             source,
             layout,
