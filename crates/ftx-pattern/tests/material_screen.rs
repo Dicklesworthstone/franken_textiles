@@ -226,3 +226,30 @@ fn discovery_filters_keep_explicit_exclusions_and_empty_objectives_do_not_rank()
     assert!(serde_json::from_value::<Request>(json!({"schema":"ftx-material-screen/1"})).is_err());
     let _: Value = serde_json::to_value(report).unwrap();
 }
+
+#[test]
+fn different_test_protocols_are_incomparable_without_explicit_permission() {
+    let mut db = database();
+    db.materials[2]
+        .properties
+        .get_mut("areal_density")
+        .unwrap()
+        .method = "a different protocol".into();
+    let mut r = request();
+    assert!(r.evaluate(&db).unwrap().frontier.contains(&"c".into()));
+    r.allow_mixed_protocols = true;
+    assert!(!r.evaluate(&db).unwrap().frontier.contains(&"c".into()));
+    db.materials[2]
+        .properties
+        .get_mut("areal_density")
+        .unwrap()
+        .method = "synthetic scalar".into();
+    db.materials[2]
+        .properties
+        .get_mut("thermal_resistance")
+        .unwrap()
+        .conditions
+        .insert("temperature".into(), "different test temperature".into());
+    r.allow_mixed_protocols = false;
+    assert!(r.evaluate(&db).unwrap().frontier.contains(&"c".into()));
+}

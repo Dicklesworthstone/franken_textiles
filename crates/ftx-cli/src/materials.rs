@@ -5,10 +5,25 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
+mod screen;
 mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if matches!(action, "screen" | "study") {
+        known_options(args, "materials", &[])?;
+        let result = match (action, &args.positional[2..]) {
+            ("screen", [path]) => screen::run(path)?,
+            ("study", [pattern, request]) => screen::study(pattern, request)?,
+            _ => {
+                return Err(bad_input(
+                    "usage: ftx materials screen REQUEST.json | study PATTERN.json REQUEST.json",
+                ));
+            }
+        };
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if matches!(
         action,
         "thermal-steady" | "thermal-steady-surface" | "thermal-steady-coverage"

@@ -98,6 +98,49 @@ pub fn inspect(selection: &str) -> Result<String, Refusal> {
     serde_json::to_string(&detail(&m)).map_err(invalid)
 }
 
+/// Screen source-locked alternatives under explicit constraints, evidence policy and objectives.
+///
+/// # Errors
+/// Input over 64 MiB or an invalid request. Per-candidate missing data remains visible in the report.
+pub fn screen(request: &str) -> Result<String, Refusal> {
+    budget(&[request])?;
+    let request: ftx_pattern::material_screen::Request =
+        serde_json::from_str(request).map_err(invalid)?;
+    serde_json::to_string(&request.evaluate(&textile_import::catalog()?)?).map_err(invalid)
+}
+
+/// Browser constraint screening over the same canonical material authority as native code.
+///
+/// # Errors
+/// Same refusals as [`screen`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_screen(request: &str) -> Result<String, wasm_bindgen::JsError> {
+    screen(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
+/// Compare unchanged-pattern material substitutions using the actual manufacturing consumers.
+///
+/// # Errors
+/// Combined input over 64 MiB, invalid source/request or aggregate work budget exceeded.
+pub fn study(pattern: &str, request: &str) -> Result<String, Refusal> {
+    budget(&[pattern, request])?;
+    let pattern = Pattern::from_json(pattern).map_err(invalid)?;
+    let request: ftx_export::material_study::Request =
+        serde_json::from_str(request).map_err(invalid)?;
+    serde_json::to_string(&request.evaluate(&pattern)?).map_err(invalid)
+}
+
+/// Browser material study; no network, file write or hardware execution.
+///
+/// # Errors
+/// Same refusals as [`study`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_study(pattern: &str, request: &str) -> Result<String, wasm_bindgen::JsError> {
+    study(pattern, request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Freeze exact default/per-piece edits and report the existing drape resolver's capability refusals.
 /// No body geometry, measured fit or successful solver run is implied by a resolved material set.
 ///

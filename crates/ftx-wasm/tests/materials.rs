@@ -229,3 +229,37 @@ fn portable_pattern_text_preserves_float_and_negative_zero_receipt_identity() {
     assert_eq!(replay["pattern_json"], result["pattern_json"]);
     assert_eq!(replay["pattern_sha256"], result["pattern_sha256"]);
 }
+
+#[test]
+fn screening_reuses_canonical_library_and_requires_an_explicit_comparison_basis() {
+    let input = include_str!("../../../tests/fixtures/materials/screen-insulation.json");
+    let request: ftx_pattern::material_screen::Request = serde_json::from_str(input).unwrap();
+    let expected = request
+        .evaluate(&ftx_pattern::textile_import::catalog().unwrap())
+        .unwrap();
+    let output: Value = serde_json::from_str(&materials::screen(input).unwrap()).unwrap();
+    assert_eq!(output, serde_json::to_value(expected).unwrap());
+    assert!(!output["frontier"].as_array().unwrap().is_empty());
+    assert!(materials::screen(r#"{"schema":"ftx-material-screen/1"}"#).is_err());
+}
+
+#[test]
+fn study_reuses_production_planners_and_preserves_material_source_locks() {
+    let input = include_str!("../../../tests/fixtures/materials/study-insulation.json");
+    let request: ftx_export::material_study::Request = serde_json::from_str(input).unwrap();
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let output: Value = serde_json::from_str(&materials::study(PATTERN, input).unwrap()).unwrap();
+    assert_eq!(
+        output,
+        serde_json::to_value(request.evaluate(&source).unwrap()).unwrap()
+    );
+    for row in output["alternatives"].as_array().unwrap() {
+        let bound = &row["binding"]["result"];
+        assert_eq!(bound["pattern"]["pieces"], source.raw()["pieces"]);
+        assert!(bound["pattern"]["fabric"]["material"]["expected_sha256"].is_string());
+        let text = bound["pattern_json"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed, bound["pattern"]);
+    }
+    assert!(materials::study("{}", input).is_err());
+}

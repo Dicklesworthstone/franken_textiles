@@ -17,6 +17,8 @@ use ftx_pattern::textile_import::{catalog, resolve_fabric};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+#[path = "../materials/screen.rs"]
+mod screening;
 #[path = "../materials/thermal.rs"]
 mod steady_workbench;
 #[path = "material_workbench/coverage.rs"]
@@ -38,6 +40,8 @@ mod cutting;
 mod relaxation_calibration;
 
 const USAGE: &str = "ftx-materials catalog [SEARCH]
+ftx-materials screen REQUEST.json
+ftx-materials study PATTERN.json REQUEST.json
 ftx-materials show ID [--allow-estimates]
 ftx-materials resolve PATTERN.json
 ftx-materials bind PATTERN.json SELECTION.json NEW-PATTERN.json
@@ -216,6 +220,8 @@ fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["screen", path] => screening::run(path),
+        ["study", pattern, request] => screening::study(pattern, request),
         ["thermal-at", id, t] => thermal_transient::point(id, t, false),
         ["thermal-at", id, t, "--allow-estimates"] => thermal_transient::point(id, t, true),
         ["calibrate-bending", path] => bending_calibration::run(path, false),

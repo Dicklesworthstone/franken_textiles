@@ -109,6 +109,10 @@ pub struct Request {
     /// Estimate policy for catalog-wide discovery only. Explicit candidates carry their own policy.
     #[serde(default)]
     pub allow_catalog_estimates: bool,
+    /// Explicitly allow dominance across different reported methods/conditions. False keeps such
+    /// observations incomparable, even if both pass the requested condition subset.
+    #[serde(default)]
+    pub allow_mixed_protocols: bool,
     /// Optional case-insensitive identity/construction/composition discovery filter.
     #[serde(default)]
     pub query: String,
@@ -154,6 +158,8 @@ pub struct Report {
     pub request_sha256: String,
     /// Explicit comparison policy copied from the request.
     pub basis: Basis,
+    /// Whether cross-protocol comparisons were explicitly admitted by the request.
+    pub allow_mixed_protocols: bool,
     /// All candidates, including unavailable/excluded ones, ordered by key.
     pub alternatives: Vec<Alternative>,
     /// Eligible candidates not dominated on the requested objectives, ordered by key.
@@ -289,12 +295,14 @@ impl Request {
             schema: "ftx-material-screen-report/1",
             request_sha256: sha256_hex(&serde_json::to_vec(self).map_err(|e| invalid(e.to_string()))?),
             basis: self.basis,
+            allow_mixed_protocols: self.allow_mixed_protocols,
             frontier: alternatives.iter().filter(|a| a.eligible && a.dominated_by.is_empty()).map(|a| a.key.clone()).collect(),
             alternatives,
             physical_validation_claim: false,
             notes: vec![
                 "Only requested scalar observations and compiler capabilities are compared. No fit, warmth rating, safety certification, robot authorization or market-population optimum is inferred.".into(),
                 "Method/condition filters are exact restrictions, not proof of cross-specimen comparability. Reported bounds are not confidence intervals; absent bounds never become zero-width intervals in reported_bounds mode.".into(),
+                "Dominance requires matching reported methods and complete observation conditions unless allow_mixed_protocols was explicitly requested. An unknown protocol shared by two records is still not empirical comparability evidence.".into(),
                 "Prices belong to dated, currency/region/quantity-qualified quote and marker evaluation, not a timeless fiber-property score. Temperature-dependent curves are not reduced to unstated scalar temperatures.".into(),
             ],
         })
@@ -374,8 +382,15 @@ impl Request {
         }
         let mut strict = false;
         for o in &self.objectives {
-            let [al, ah] = interval(&a.readings[&o.attribute.key], self.basis);
-            let [bl, bh] = interval(&b.readings[&o.attribute.key], self.basis);
+            let aq = &a.readings[&o.attribute.key];
+            let bq = &b.readings[&o.attribute.key];
+            if !self.allow_mixed_protocols
+                && (aq.method != bq.method || aq.conditions != bq.conditions)
+            {
+                return false;
+            }
+            let [al, ah] = interval(aq, self.basis);
+            let [bl, bh] = interval(bq, self.basis);
             let (better, worse) = match o.direction {
                 Direction::Minimize => (ah, bl),
                 Direction::Maximize => (-al, -bh),
