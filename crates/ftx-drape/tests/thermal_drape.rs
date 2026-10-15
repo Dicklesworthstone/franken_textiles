@@ -329,3 +329,57 @@ fn conduction_only_drape_follows_materials_without_fabricating_storage() {
     frame["sha256"] = json!(hash(frame));
     assert!(SteadySurface::from_drape_report(&changed).is_err());
 }
+
+#[test]
+fn steady_workbench_on_actual_drape_binds_conditions_and_omits_unrelated_metadata() {
+    use ftx_drape::thermal::steady::request::SurfaceConditions;
+    let mut raw = band().raw().clone();
+    let mut material = thermal_sheet(0.2, 1000.0);
+    material["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("specific_heat");
+    raw["fabric"]["material"] = material.clone();
+    material["record"]["properties"]["thermal_resistance"]["value"] = json!(0.6);
+    raw["pieces"][1]["fabric"] = json!({"material":material});
+    let solved = run(&Pattern::new(raw.clone()), options());
+    let c: SurfaceConditions = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/steady-surface-conditions.json"
+    ))
+    .unwrap();
+    let mut report = solved.report.clone();
+    report["unrelated_metadata"] = json!("synthetic field not needed for thermal replay");
+    let result = c.evaluate(&report).unwrap();
+    assert_eq!(result["positions_m"], json!(solved.scene.solver.x));
+    assert!(
+        result["request"]["report"]
+            .get("unrelated_metadata")
+            .is_none()
+    );
+    assert_eq!(result["request"]["report"].as_object().unwrap().len(), 2);
+    let frozen: SurfaceConditions =
+        serde_json::from_value(result["request"]["conditions"].clone()).unwrap();
+    assert_eq!(
+        result,
+        frozen.evaluate(&result["request"]["report"]).unwrap()
+    );
+    // A transport-only change alters identity and heat flow, not mechanical trajectories.
+    raw["pieces"][1]["fabric"]["material"]["record"]["properties"]["thermal_resistance"]["value"] =
+        json!(1.2);
+    let changed = run(&Pattern::new(raw), options());
+    assert_eq!(solved.scene.solver.x, changed.scene.solver.x);
+    assert!(frozen.evaluate(&changed.report).is_err());
+    let new_result = c.evaluate(&changed.report).unwrap();
+    assert!(
+        new_result["steady"]["power_w"].as_f64().unwrap()
+            < result["steady"]["power_w"].as_f64().unwrap()
+    );
+    let mut per_column = c.clone();
+    per_column.boundaries.push(per_column.boundaries[0]);
+    assert!(per_column.evaluate(&report).is_err());
+    per_column.model_sha256 = frozen.model_sha256;
+    assert_eq!(
+        per_column.evaluate(&report).unwrap()["steady"],
+        result["steady"]
+    );
+}

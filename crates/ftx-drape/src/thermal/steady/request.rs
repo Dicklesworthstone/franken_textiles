@@ -6,6 +6,103 @@ use ftx_pattern::{material_catalog::Selection, materials::Catalog};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+/// Explicit reservoirs and films, not inferred skin temperatures or weather conditions.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Film {
+    /// Inside reservoir temperature in degrees Celsius.
+    pub inside_c: f64,
+    /// Outside reservoir temperature in degrees Celsius.
+    pub outside_c: f64,
+    /// Inside film resistance in m² K/W; zero prescribes the material face temperature.
+    pub inside_resistance_m2_k_w: f64,
+    /// Outside film resistance in m² K/W; zero prescribes the material face temperature.
+    pub outside_resistance_m2_k_w: f64,
+}
+
+impl Film {
+    fn boundary(self) -> Boundary {
+        Boundary {
+            inside_c: self.inside_c,
+            outside_c: self.outside_c,
+            inside_resistance: self.inside_resistance_m2_k_w,
+            outside_resistance: self.outside_resistance_m2_k_w,
+        }
+    }
+}
+
+/// Steady conditions on retained drape triangles, independent of transient storage readiness.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceConditions {
+    /// Must be `ftx-steady-surface-conditions/1`.
+    pub schema: String,
+    /// One boundary broadcasts uniformly; otherwise exactly one per frozen material column.
+    pub boundaries: Vec<Film>,
+    /// Required for multiple boundaries so substitution cannot silently reorder their meaning.
+    /// Optional for a uniform boundary; frozen replay always binds the exact model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_sha256: Option<String>,
+}
+
+impl SurfaceConditions {
+    /// Calculate local face temperatures and signed patch powers on saved solver geometry.
+    /// Restores frozen observations, evidence policy and owners without a catalog lookup.
+    ///
+    /// # Errors
+    /// Unsupported schema/boundaries, unavailable or changed drape, stale column assignments,
+    /// invalid geometry, out-of-domain transport or any exact steady solver refusal.
+    pub fn evaluate(&self, report: &Value) -> Result<Value, Refusal> {
+        if self.schema != "ftx-steady-surface-conditions/1"
+            || self.boundaries.is_empty()
+            || self.boundaries.len() > 65_536
+        {
+            return Err(invalid("invalid steady surface schema or boundary count"));
+        }
+        let (surface, positions) = super::surface::SteadySurface::from_drape_report(report)?;
+        let frame = &report["steady_thermal_surface"];
+        let model_sha256 = frame["model"]["sha256"]
+            .as_str()
+            .ok_or_else(|| invalid("missing steady model identity"))?;
+        if self
+            .model_sha256
+            .as_deref()
+            .is_some_and(|s| s != model_sha256)
+            || (self.boundaries.len() != 1 && self.model_sha256.is_none())
+        {
+            return Err(invalid(
+                "per-column boundaries require the exact model_sha256; use one uniform boundary for substitution",
+            ));
+        }
+        let boundaries = if self.boundaries.len() == 1 {
+            vec![self.boundaries[0].boundary(); surface.column_count()]
+        } else if self.boundaries.len() == surface.column_count() {
+            self.boundaries.iter().map(|b| b.boundary()).collect()
+        } else {
+            return Err(invalid("one steady boundary per column is required"));
+        };
+        let solution = surface.solve(&positions, &boundaries)?;
+        let mut conditions = self.clone();
+        conditions.model_sha256 = Some(model_sha256.into());
+        // Keep only the source/geometry inputs needed for replay, not unrelated wearer metadata.
+        let request = json!({"report":{"material":report["material"],
+            "steady_thermal_surface":frame},"conditions":conditions});
+        let request_sha256 =
+            sha256_hex(&serde_json::to_vec(&request).map_err(|e| invalid(e.to_string()))?);
+        Ok(json!({"schema":"ftx-steady-surface-result/1",
+            "drape_steady_frame_sha256":frame["sha256"],"model_sha256":model_sha256,
+            "request":request,"request_sha256":request_sha256,
+            "positions_m":positions,"patch_topology":frame["model"]["patches"],
+            "triangle_instance":frame["triangle_instance"],"instances":frame["instances"],
+            "steady":solution,"storage_required":false,"uncertainty_propagated":false,
+            "comfort_claim":false,"empirical_validation_claim":false,
+            "scope":"independent fixed-characterization cloth columns; not whole-wearer heat loss",
+            "not_simulated":["transient heat storage","inferred body coverage","overlapping-sheet coupling",
+                "inferred air gaps","compression-dependent loft","moisture transport","evaporation",
+                "wind-dependent films","radiative exchange","thermal bridges","human thermoregulation"]}))
+    }
+}
+
 /// A fully declared equal-area steady experiment; unknown fields or implicit interfaces refuse.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

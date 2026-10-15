@@ -194,3 +194,12 @@ pub fn sew_svg(pattern: &str, options: &str, operation: &str) -> Result<String, 
 pub fn thermal_steady(request: &str) -> Result<String, JsError> {
     crate::thermal::steady(request).map_err(|e| JsError::new(&e.message))
 }
+
+/// Steady heat fields on retained drape geometry, without inventing absent heat storage.
+///
+/// # Errors
+/// Invalid, oversized, changed or unsupported inputs, or a bounded steady solver refusal.
+#[wasm_bindgen]
+pub fn thermal_steady_surface(report: &str, conditions: &str) -> Result<String, JsError> {
+    crate::thermal::steady_surface(report, conditions).map_err(|e| JsError::new(&e.message))
+}

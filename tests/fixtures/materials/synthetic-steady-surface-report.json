@@ -1,0 +1,282 @@
+{
+  "material": {
+    "basis": "per_piece_characterization",
+    "instances": [
+      {
+        "instance": "front",
+        "record_sha256": "29daad30ed08044a5af8eeb7dc7635b49fbcd64e6e48f834002b600e4bb4560d"
+      },
+      {
+        "instance": "back",
+        "record_sha256": "1ddcafdd07cc9c9d099a08877e6e8b26a15c432f5981a470de66b6118731621b"
+      }
+    ],
+    "records": {
+      "1ddcafdd07cc9c9d099a08877e6e8b26a15c432f5981a470de66b6118731621b": {
+        "record": {
+          "allow_estimates": true,
+          "authored": {
+            "composition": [],
+            "composition_complete": false,
+            "form": "woven",
+            "id": "back",
+            "name": "Synthetic sheet resistance; not measured material data",
+            "properties": {
+              "thermal_resistance": {
+                "bounds": null,
+                "conditions": {},
+                "evidence": "estimate",
+                "method": "Synthetic constant resistance for interface regression",
+                "source": "test",
+                "unit": "m2*K/W",
+                "value": 0.8
+              }
+            },
+            "sources": {
+              "test": {
+                "accessed_on": "2026-10-15",
+                "note": "Synthetic declared geometry; no physical or mechanical characterization",
+                "reference": "test:steady-surface-workbench"
+              }
+            },
+            "structure": {}
+          },
+          "normalized": {
+            "composition": [],
+            "composition_complete": false,
+            "form": "woven",
+            "id": "back",
+            "name": "Synthetic sheet resistance; not measured material data",
+            "properties": {
+              "thermal_resistance": {
+                "bounds": null,
+                "conditions": {},
+                "evidence": "estimate",
+                "method": "Synthetic constant resistance for interface regression",
+                "source": "test",
+                "unit": "m2*K/W",
+                "value": 0.8
+              }
+            },
+            "sources": {
+              "test": {
+                "accessed_on": "2026-10-15",
+                "note": "Synthetic declared geometry; no physical or mechanical characterization",
+                "reference": "test:steady-surface-workbench"
+              }
+            },
+            "structure": {}
+          },
+          "schema": "ftx-resolved-material/1",
+          "sha256": "1ddcafdd07cc9c9d099a08877e6e8b26a15c432f5981a470de66b6118731621b"
+        }
+      },
+      "29daad30ed08044a5af8eeb7dc7635b49fbcd64e6e48f834002b600e4bb4560d": {
+        "record": {
+          "allow_estimates": true,
+          "authored": {
+            "composition": [],
+            "composition_complete": false,
+            "form": "woven",
+            "id": "front",
+            "name": "Synthetic sheet resistance; not measured material data",
+            "properties": {
+              "thermal_resistance": {
+                "bounds": null,
+                "conditions": {},
+                "evidence": "estimate",
+                "method": "Synthetic constant resistance for interface regression",
+                "source": "test",
+                "unit": "m2*K/W",
+                "value": 0.4
+              }
+            },
+            "sources": {
+              "test": {
+                "accessed_on": "2026-10-15",
+                "note": "Synthetic declared geometry; no physical or mechanical characterization",
+                "reference": "test:steady-surface-workbench"
+              }
+            },
+            "structure": {}
+          },
+          "normalized": {
+            "composition": [],
+            "composition_complete": false,
+            "form": "woven",
+            "id": "front",
+            "name": "Synthetic sheet resistance; not measured material data",
+            "properties": {
+              "thermal_resistance": {
+                "bounds": null,
+                "conditions": {},
+                "evidence": "estimate",
+                "method": "Synthetic constant resistance for interface regression",
+                "source": "test",
+                "unit": "m2*K/W",
+                "value": 0.4
+              }
+            },
+            "sources": {
+              "test": {
+                "accessed_on": "2026-10-15",
+                "note": "Synthetic declared geometry; no physical or mechanical characterization",
+                "reference": "test:steady-surface-workbench"
+              }
+            },
+            "structure": {}
+          },
+          "schema": "ftx-resolved-material/1",
+          "sha256": "29daad30ed08044a5af8eeb7dc7635b49fbcd64e6e48f834002b600e4bb4560d"
+        }
+      }
+    }
+  },
+  "steady_thermal_surface": {
+    "available": true,
+    "instances": [
+      "front",
+      "back"
+    ],
+    "material_report_sha256": "2fb4506a214d646c228c451a7f31a955315d2a41d9c265a668eb2c6d9995b1e6",
+    "model": {
+      "columns": [
+        {
+          "interface_resistance_m2_k_w": [],
+          "layers": [
+            {
+              "allow_estimates": true,
+              "expected_sha256": "1ddcafdd07cc9c9d099a08877e6e8b26a15c432f5981a470de66b6118731621b",
+              "id": "back",
+              "overrides": {},
+              "record": {
+                "composition": [],
+                "composition_complete": false,
+                "form": "woven",
+                "id": "back",
+                "name": "Synthetic sheet resistance; not measured material data",
+                "properties": {
+                  "thermal_resistance": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic constant resistance for interface regression",
+                    "source": "test",
+                    "unit": "m2*K/W",
+                    "value": 0.8
+                  }
+                },
+                "sources": {
+                  "test": {
+                    "accessed_on": "2026-10-15",
+                    "note": "Synthetic declared geometry; no physical or mechanical characterization",
+                    "reference": "test:steady-surface-workbench"
+                  }
+                },
+                "structure": {}
+              },
+              "sources": {}
+            }
+          ],
+          "schema": "ftx-steady-conduction-model/1"
+        },
+        {
+          "interface_resistance_m2_k_w": [],
+          "layers": [
+            {
+              "allow_estimates": true,
+              "expected_sha256": "29daad30ed08044a5af8eeb7dc7635b49fbcd64e6e48f834002b600e4bb4560d",
+              "id": "front",
+              "overrides": {},
+              "record": {
+                "composition": [],
+                "composition_complete": false,
+                "form": "woven",
+                "id": "front",
+                "name": "Synthetic sheet resistance; not measured material data",
+                "properties": {
+                  "thermal_resistance": {
+                    "bounds": null,
+                    "conditions": {},
+                    "evidence": "estimate",
+                    "method": "Synthetic constant resistance for interface regression",
+                    "source": "test",
+                    "unit": "m2*K/W",
+                    "value": 0.4
+                  }
+                },
+                "sources": {
+                  "test": {
+                    "accessed_on": "2026-10-15",
+                    "note": "Synthetic declared geometry; no physical or mechanical characterization",
+                    "reference": "test:steady-surface-workbench"
+                  }
+                },
+                "structure": {}
+              },
+              "sources": {}
+            }
+          ],
+          "schema": "ftx-steady-conduction-model/1"
+        }
+      ],
+      "comfort_claim": false,
+      "coupling": "independent columns; no inferred overlaps or body coverage",
+      "empirical_validation_claim": false,
+      "geometry_policy": "characterized fixed thickness/conditioning; resistance per current cloth area",
+      "patches": [
+        {
+          "column": 1,
+          "reference_area_m2": 0.5,
+          "vertices": [
+            0,
+            1,
+            2
+          ]
+        },
+        {
+          "column": 0,
+          "reference_area_m2": 0.5,
+          "vertices": [
+            1,
+            3,
+            2
+          ]
+        }
+      ],
+      "schema": "ftx-steady-thermal-surface/1",
+      "sha256": "1a19f20671481ba816dcbfda35fa2dd7523f55d1fb31dc7873a5d9b2c0fa7d4e",
+      "storage_required": false,
+      "vertex_count": 4
+    },
+    "positions_m": [
+      [
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0,
+        0.0
+      ]
+    ],
+    "schema": "ftx-drape-steady-thermal-surface/1",
+    "scope": "Synthetic declared triangles for interface tests; not a completed mechanical drape",
+    "sha256": "2e14e41e5ab9ef618dec9a9175a44f8030db700338e7aa5c4af4672659c203fe",
+    "triangle_instance": [
+      0,
+      1
+    ]
+  }
+}
