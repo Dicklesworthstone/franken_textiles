@@ -14,6 +14,8 @@ use crate::{Ctx, ExportOptions, edge_sa};
 
 pub mod program;
 use program::{Backtack, FeedDirection, ReverseFeed, StitchRun};
+pub mod path;
+use path::{OffsetPath, PathReceipt};
 
 const MAX_OPERATIONS: usize = 4096;
 const MAX_STATIONS: usize = 250_000;
@@ -64,6 +66,9 @@ pub struct SewingPass {
     /// Explicit start/end lock lengths in existing station intervals; never inferred from material.
     #[serde(default, skip_serializing_if = "Backtack::is_empty")]
     pub backtack: Backtack,
+    /// Optional paired offset stitch lines. Omission preserves the original seam station table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stitch_path: Option<OffsetPath>,
     /// Operation IDs which must finish first. Omission adds no physical-accessibility claim.
     #[serde(default)]
     pub after: Vec<String>,
@@ -108,6 +113,9 @@ pub struct PlannedSeam {
     pub sides: [SewSide; 2],
     /// Corresponding needle stations in each original side's local mm frame, not a robot frame.
     pub stations: SeamPairs,
+    /// Offset polylines and source correspondence; absent on legacy centerline operations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathReceipt>,
     /// Side-b / side-a feed ratio for each interval between consecutive stations.
     pub feed_b_over_a: Vec<f64>,
     /// Declared ply counts times sourced, uncompressed thicknesses (mm).
@@ -124,7 +132,7 @@ pub struct PlannedSeam {
 /// Deterministic, source-locked manufacturing review plan. Never hardware execution permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
-    /// `ftx-sewing-plan/1` for legacy jobs, `/2` when operation IDs/reverse/locks are requested.
+    /// `/1` for legacy jobs, `/2` for directed jobs, `/3` for offset stitch-line jobs.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
     pub pattern_sha256: String,
@@ -246,6 +254,9 @@ impl SewPlan {
                 )));
             }
             program::validate_primary_feed(pass, machine)?;
+            if let Some(path) = &pass.stitch_path {
+                path.validate()?;
+            }
         }
         let mut source_seams = BTreeMap::new();
         for seam in pattern.seams() {
@@ -280,7 +291,9 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if advanced {
+            schema: if options.passes.iter().any(|p| p.stitch_path.is_some()) {
+                "ftx-sewing-plan/3"
+            } else if advanced {
                 "ftx-sewing-plan/2"
             } else {
                 "ftx-sewing-plan/1"
@@ -298,6 +311,7 @@ impl SewPlan {
         };
         let mut done = BTreeSet::new();
         let mut budget = 0usize;
+        let mut geometry_work = 0usize;
         while !remaining.is_empty() {
             let id = remaining
                 .iter()
@@ -342,9 +356,28 @@ impl SewPlan {
                 ));
             }
             budget += slots as usize + extra;
-            let stations = pattern
-                .seam_pairs(seam, pass.max_stitch_mm)
-                .map_err(|e| bad(e.to_string()))?;
+            let (stations, path) = if let Some(path) = &pass.stitch_path {
+                path.build(pattern, seam, pass.max_stitch_mm, &ctx, &mut geometry_work)?
+            } else {
+                (
+                    pattern
+                        .seam_pairs(seam, pass.max_stitch_mm)
+                        .map_err(|e| bad(e.to_string()))?,
+                    None,
+                )
+            };
+            // Offsets can lengthen a path. Charge the larger actual table, including lock travel.
+            let actual_slots = stations.fa.len();
+            if actual_slots > slots as usize {
+                budget = budget.saturating_add(actual_slots - slots as usize);
+                if budget > MAX_STATIONS {
+                    return Err(Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        "sewing station budget exceeded after path offset",
+                    ));
+                }
+            }
+            let (la, lb) = (stations.len_a, stations.len_b);
             if stations.notch_match.starts_with("count-mismatch") {
                 return Err(bad(format!("{id}: notches must pair before sewing")));
             }
@@ -383,9 +416,14 @@ impl SewPlan {
                 pass: pass.clone(),
                 sides,
                 stations,
+                path,
                 feed_b_over_a: feeds,
                 stack_mm: stack,
-                runs: if advanced { runs } else { Vec::new() },
+                runs: if out.schema != "ftx-sewing-plan/1" {
+                    runs
+                } else {
+                    Vec::new()
+                },
                 stitch_intervals,
                 feed_seconds,
             });

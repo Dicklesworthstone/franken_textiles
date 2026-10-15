@@ -308,7 +308,7 @@ fn direct_offset(loops: &[EdgeLoop], limit: f64) -> Option<Vec<Vec2>> {
 }
 
 /// Whether segments `p1p2` and `q1q2` share any point (touching counts).
-fn segments_touch(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> bool {
+pub(crate) fn segments_touch(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> bool {
     let orient = |a: Vec2, b: Vec2, c: Vec2| {
         let v = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
         if v > 0.0 {

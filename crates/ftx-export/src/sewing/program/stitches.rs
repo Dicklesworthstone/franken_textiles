@@ -36,7 +36,7 @@ pub struct StitchStep {
 /// Fully expanded geometric stitch travel for software/CAM review. No device commands or permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewProgram {
-    /// `ftx-sewing-program/1`.
+    /// `/1` for centerline jobs; `/2` retains offset geometry and source correspondence.
     pub schema: &'static str,
     /// Original inputs, frozen source materials, paired station tables and directed operation order.
     pub plan: SewPlan,
@@ -59,7 +59,10 @@ impl SewProgram {
             ));
         }
         // Legacy jobs get an explicit forward run here, but `SewPlan::build` keeps their v1 output.
-        plan.schema = "ftx-sewing-plan/2";
+        let offset = plan.schema == "ftx-sewing-plan/3";
+        if !offset {
+            plan.schema = "ftx-sewing-plan/2";
+        }
         let mut stitches = Vec::with_capacity(plan.stitch_intervals);
         for (operation, seam) in plan.seams.iter_mut().enumerate() {
             if seam.runs.is_empty() {
@@ -102,7 +105,11 @@ impl SewProgram {
             return Err(bad("inconsistent sewing program interval accounting"));
         }
         Ok(Self {
-            schema: "ftx-sewing-program/1",
+            schema: if offset {
+                "ftx-sewing-program/2"
+            } else {
+                "ftx-sewing-program/1"
+            },
             plan,
             stitches,
         })
