@@ -7,6 +7,7 @@
 
 pub mod fold;
 pub mod manufacturing;
+pub mod materials;
 pub mod page;
 pub mod thermal;
 pub mod tracing;
