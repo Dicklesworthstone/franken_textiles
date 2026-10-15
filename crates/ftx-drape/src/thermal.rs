@@ -10,6 +10,7 @@ use ftx_pattern::materials::Form;
 use serde_json::{Value, json};
 
 mod nonlinear;
+pub mod steady;
 pub mod surface;
 
 /// Prescribed temperatures and film resistances. A zero film means a prescribed surface temperature,
@@ -296,7 +297,8 @@ impl DryThermalModel {
     ///
     /// # Errors
     /// Invalid boundary conditions or overflow. This still requires heat-capacity characterization,
-    /// because the same model is prepared for transients; use `ThermalStack` for resistance-only data.
+    /// because this model is prepared for transients; use [`steady::SteadyConductionModel`] for
+    /// transport-only data, including temperature-dependent conductivity without heat capacity.
     pub fn steady(&self, boundary: Boundary) -> Result<State, Refusal> {
         if let Some(variable) = &self.variable {
             return variable.solve(None, 1.0, boundary);
