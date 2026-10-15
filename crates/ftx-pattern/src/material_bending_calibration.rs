@@ -275,8 +275,7 @@ fn affine_design(input: &Input) -> Result<Design<7>, Refusal> {
 
 fn preferred_curvature(input: &Input) -> Result<Option<[f64; 3]>, Refusal> {
     let normalized = normalize(&input.material)?;
-    let present =
-        PREFERRED_CURVATURE_PROPERTIES.map(|key| normalized.properties.contains_key(key));
+    let present = PREFERRED_CURVATURE_PROPERTIES.map(|key| normalized.properties.contains_key(key));
     if present.iter().any(|x| *x) && !present.iter().all(|x| *x) {
         return Err(invalid(
             "preferred bending curvature must be absent or complete before stiffness calibration",
@@ -359,8 +358,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
 
     let prior_preferred = preferred_curvature(input)?;
     let (values, preferred, excitation_pivot) = identify(input)?;
-    let law = BendingTensor::new(values[0], values[1], values[2], values[3])?
-        .normal_projected();
+    let law = BendingTensor::new(values[0], values[1], values[2], values[3])?.normal_projected();
     let matrix = law.matrix();
     if !input.fit_preferred_curvature && prior_preferred.unwrap_or([0.0; 3]) != preferred {
         return Err(invalid("internal preferred-curvature calibration mismatch"));
