@@ -57,12 +57,24 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         "thickness" | "width" | "fiber_diameter" | "staple_length" => "m",
         "bulk_density" => "kg/m3",
         "warp_stiffness" | "weft_stiffness" | "shear_stiffness" => "N/m",
-        "bending_rigidity" | "bending_warp" | "bending_weft" | "bending_coupling"
-        | "bending_twist" => "N*m",
+        "bending_rigidity"
+        | "bending_warp"
+        | "bending_weft"
+        | "bending_coupling"
+        | "bending_twist"
+        | "bending_hardening_warp"
+        | "bending_hardening_weft"
+        | "bending_hardening_twist" => "N*m",
         "specimen_flexural_rigidity" => "N*m2",
         "preferred_curvature_warp" | "preferred_curvature_weft" | "preferred_curvature_twist" => {
             "1/m"
         }
+        "bending_curvature_limit_warp"
+        | "bending_curvature_limit_weft"
+        | "bending_curvature_limit_twist"
+        | "bending_accumulation_limit_warp"
+        | "bending_accumulation_limit_weft"
+        | "bending_accumulation_limit_twist" => "1/m",
         "poisson_warp_weft"
         | "friction_skin"
         | "friction_self"
@@ -83,7 +95,10 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         | "breaking_force_weft"
         | "tear_force"
         | "cut_force"
-        | "needle_penetration_force" => "N",
+        | "needle_penetration_force"
+        | "bending_yield_warp"
+        | "bending_yield_weft"
+        | "bending_yield_twist" => "N",
         "abrasion_cycles" => "cycles",
         "yarn_linear_density" => "kg/m",
         "thread_density_warp" | "thread_density_weft" | "twist" => "1/m",
