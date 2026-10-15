@@ -400,6 +400,7 @@ fn different_materials_keep_their_own_enthalpy_laws_during_a_layered_remap() {
                 outer: "shell".into(),
                 resistance_m2_k_w: 0.05,
                 basis: "synthetic".into(),
+                stagnant_gap: None,
             }],
         },
     };

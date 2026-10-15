@@ -55,6 +55,7 @@ fn request(names: &[&str]) -> Request {
                     outer: outer.into(),
                     resistance_m2_k_w: 0.05,
                     basis: "Explicit synthetic interface assumption".into(),
+                    stagnant_gap: None,
                 });
             }
         }

@@ -15,9 +15,10 @@ use super::{Surface, invalid, positive};
 use crate::bvh::{QueryBvh, overlaps};
 
 pub(super) mod clip;
+pub mod gap;
 use clip::{AREA_EPS, Work, area, barycentric, ccw, intersection, split};
 
-/// An explicit adjacent-layer resistance, not inferred from a geometric separation.
+/// An explicit adjacent-layer resistance or an opt-in, geometry-derived stagnant-gas path.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Interface {
@@ -29,6 +30,10 @@ pub struct Interface {
     pub resistance_m2_k_w: f64,
     /// Measurement source or explicit assumption explaining this interface value.
     pub basis: String,
+    /// Optional conduction-only gap model. Its resistance is added to the explicitly declared
+    /// fixed resistance above. Absent keeps the original constant-interface behavior and receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stagnant_gap: Option<gap::Conduction>,
 }
 
 /// Controls the geometric closure; all distances use the solver's metre frame.
@@ -106,6 +111,10 @@ pub struct Projection {
     pub body_roundoff_adjustment_m2: f64,
     /// Reference cloth area removed by that same explicitly reported numerical correction, m².
     pub cloth_roundoff_adjustment_m2: f64,
+    /// Derived surface gaps and numerical resistance bounds, only for opted-in interfaces.
+    /// Source observations and modeling consent remain in the hashed projection request.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gap_interfaces: Vec<gap::Resolved>,
 }
 
 #[derive(Clone)]
@@ -156,7 +165,7 @@ fn aabb(points: impl IntoIterator<Item = Vec3>) -> (Vec3, Vec3) {
 fn validate_request<'a>(
     source: &Surface,
     request: &'a Request,
-) -> Result<BTreeMap<(&'a str, &'a str), f64>, Refusal> {
+) -> Result<BTreeMap<(&'a str, &'a str), &'a Interface>, Refusal> {
     let s = &request.settings;
     if request.schema != "ftx-thermal-projection/1"
         || request.cloth_layers.len() != source.patches.len()
@@ -185,12 +194,15 @@ fn validate_request<'a>(
             || !i.resistance_m2_k_w.is_finite()
             || i.resistance_m2_k_w < 0.0
             || interfaces
-                .insert((i.inner.as_str(), i.outer.as_str()), i.resistance_m2_k_w)
+                .insert((i.inner.as_str(), i.outer.as_str()), i)
                 .is_some()
         {
             return Err(invalid(
                 "invalid, duplicate or unsourced projection interface",
             ));
+        }
+        if let Some(gap) = &i.stagnant_gap {
+            gap.validate()?;
         }
     }
     Ok(interfaces)
@@ -301,6 +313,14 @@ pub fn project(
         regions: Vec::new(),
         cells_per_layer: request.settings.cells_per_layer,
     };
+    if request
+        .settings
+        .interfaces
+        .iter()
+        .any(|i| i.stagnant_gap.is_some())
+    {
+        layout.mapping_basis.push_str("; opted-in interlayer stagnant-gas conduction uses frozen textile face thickness and parallel gap integration; see full projection request and gap diagnostics");
+    }
     // Reuse the consumer's topology, single-layer source and allocation-size contract.
     Coverage::new(source.clone(), layout.clone())?;
     let mut edges = BTreeMap::new();
@@ -337,6 +357,7 @@ pub fn project(
     let mut body_correction = 0.0;
     let mut cloth_correction = 0.0;
     let mut footprints = Vec::new();
+    let mut gap_interfaces = Vec::new();
     let mut allocations: Vec<Vec<(usize, Vec<Vec2>)>> = vec![Vec::new(); source.patches.len()];
     let mut allocated = vec![0.0; source.patches.len()];
     let tri = [Vec2::ZERO, Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)];
@@ -474,14 +495,31 @@ pub fn project(
                         }
                     }
                     let key = (request.cloth_layers[prev.id].as_str(), name.as_str());
-                    region
-                        .interface_resistance_m2_k_w
-                        .push(*interfaces.get(&key).ok_or_else(|| {
-                            invalid(format!(
-                                "missing explicit projection interface {} -> {}",
-                                key.0, key.1
-                            ))
-                        })?);
+                    let interface = interfaces.get(&key).ok_or_else(|| {
+                        invalid(format!(
+                            "missing explicit projection interface {} -> {}",
+                            key.0, key.1
+                        ))
+                    })?;
+                    let mut resistance = interface.resistance_m2_k_w;
+                    if let Some(law) = &interface.stagnant_gap {
+                        let resolved = gap::resolve(
+                            source,
+                            cloth,
+                            face.map(|i| body[i]),
+                            &cell.polygon,
+                            [prev.id, c.id],
+                            law,
+                            &mut work,
+                            &id,
+                        )?;
+                        resistance += resolved.resistance_m2_k_w;
+                        gap_interfaces.push(resolved);
+                    }
+                    if !resistance.is_finite() {
+                        return Err(invalid("gap and fixed interface resistance overflow"));
+                    }
+                    region.interface_resistance_m2_k_w.push(resistance);
                 }
                 let polygon = ccw(cell
                     .polygon
@@ -537,5 +575,6 @@ pub fn project(
         unresolved_footprint_area_m2: unresolved_footprint_area,
         body_roundoff_adjustment_m2: body_correction,
         cloth_roundoff_adjustment_m2: cloth_correction,
+        gap_interfaces,
     })
 }
