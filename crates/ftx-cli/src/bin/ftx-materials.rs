@@ -139,6 +139,7 @@ fn simulation_readiness(material: &ResolvedMaterial) -> Result<(), Refusal> {
     material.mechanics()?;
     material.membrane_relaxation()?;
     material.bending_response()?;
+    material.bending_plasticity()?;
     Ok(())
 }
 
