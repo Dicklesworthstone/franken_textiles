@@ -116,3 +116,42 @@ human thermoregulation, uncertainty propagation, empirical garment fit, outdoor
 comfort temperature, PPE rating or hardware authorization is supplied by this
 extension. Qualified optical specimens and independent held-out boundary
 experiments remain required for physical acceptance.
+
+## Layered garment/body coverage
+
+`thermal-steady-coverage` now accepts `conditions.exterior_exchange` too, through
+both CLIs and the existing browser API. It is an array: one uniform environment,
+or one per body triangle with the exact `body_mesh_sha256`. The existing map still
+recomputes geometric overlap, layer ordering and cloth allocation from the saved
+drape. Each covered series path exposes **only its outermost material**, even
+where the surrounding body triangle has several differently layered regions.
+The public/reverse optical face remains explicitly selected by the environment;
+projection does not guess a textile face from a material name.
+
+Exterior convection and radiation are integrated over the allocated current
+**outer cloth area**, not the body area or the sum of all lining/fill/shell areas.
+For example, when an outer shell has twice the covered body area, its exterior
+conductance is twice the per-area value. The same area conversion applies to
+its existing integrated Fourier law. Each covered body patch is still counted
+once, and hidden inner-layer emissivity does not become an additional exterior
+radiative path. Partial material exposure follows the geometric partitions.
+
+Any uncovered body fraction requires `conditions.bare_boundaries`: one explicit
+film boundary or one per body triangle. These use the usual film object with
+`inside_c`, `outside_c`, `inside_resistance_m2_k_w` and
+`outside_resistance_m2_k_w`. The inside temperature must agree with the covered
+path on that same body triangle. No skin emissivity, tissue model or bare-skin
+heat-transfer coefficient is inferred from fabric properties. Omission refuses
+when bare area exists; supplying this option outside exterior mode also refuses.
+Nonuniform bare or exterior conditions are body-mesh-bound, independently of
+whether the covered inner conditions are uniform.
+
+The output retains `steady` body and layer fields and adds
+`exterior_exchange.regions` with solved outer face temperatures and signed fluxes,
+covered-cloth convective/radiative powers and a local power-balance residual.
+`steady.bare_power_w` remains a distinct prescribed-film contribution, already
+included in total `steady.power_w`. Summing the covered exterior contributions
+and bare power reconstructs the total; do not add the bare power twice. Frozen
+requests retain these boundary sources and policies for both CLI and browser
+replay, without a new material lookup. This remains a prescribed-boundary dry
+model, not validated whole-wearer thermoregulation or a comfort rating.

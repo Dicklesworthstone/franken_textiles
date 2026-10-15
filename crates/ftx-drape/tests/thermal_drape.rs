@@ -489,4 +489,63 @@ fn finish_only_changes_follow_an_actual_sewn_drape_into_exterior_exchange() {
         old.evaluate(&first.report).unwrap()["steady"]["power_w"],
         old.evaluate(&second.report).unwrap()["steady"]["power_w"]
     );
+    // Carry the same optical-only substitution through geometric BODY coverage as well. Use a
+    // declared local boundary inside an actual back-piece triangle, not an inferred wearer model.
+    let back = first
+        .scene
+        .mesh
+        .instances
+        .iter()
+        .position(|n| n == "back")
+        .unwrap();
+    let triangle = first
+        .scene
+        .triangle_owner
+        .iter()
+        .position(|&i| i == back)
+        .unwrap();
+    let [p, q, r] = first.scene.solver.model.membranes[triangle]
+        .v
+        .map(|i| first.scene.solver.x[i]);
+    let normal = (q - p).cross(r - p).normalized();
+    let center = (p + q + r) / 3.;
+    let local_body = [p, q, r].map(|v| center + (v - center) * 0.2 - normal * 0.00001);
+    let layers: std::collections::BTreeMap<_, _> = first
+        .scene
+        .mesh
+        .instances
+        .iter()
+        .map(|n| (n.clone(), "garment"))
+        .collect();
+    let mut coverage: ftx_drape::thermal::steady::coverage::request::Request = serde_json::from_value(json!({
+        "schema":"ftx-steady-coverage-request/1","report":first.report,
+        "map":{"body_positions_m":local_body,"body_triangles":[[0,1,2]],"instance_layers":layers,
+            "settings":{"max_distance_m":0.00002,"min_normal_cosine":0.99,
+                "separation_tolerance_m":0.000000001,"cells_per_layer":1,"interfaces":[]}},
+        "conditions":{"boundaries":conditions.boundaries,"exterior_exchange":conditions.exterior_exchange,
+            "bare_boundaries":[{"inside_c":35.,"outside_c":5.,
+                "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}]}
+    })).unwrap();
+    let covered_first = coverage.evaluate().unwrap();
+    coverage.report = second.report;
+    let covered_second = coverage.evaluate().unwrap();
+    assert_eq!(
+        covered_first["projection"]["footprints"],
+        covered_second["projection"]["footprints"]
+    );
+    assert!(
+        covered_first["steady"]["power_w"].as_f64().unwrap()
+            > covered_second["steady"]["power_w"].as_f64().unwrap()
+    );
+    let area = covered_second["steady"]["covered_area_m2"]
+        .as_f64()
+        .unwrap();
+    let flux = b["exterior_exchange"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["conduction"]["flux_w_m2"].as_f64().unwrap())
+        .min_by(f64::total_cmp)
+        .unwrap();
+    assert!((covered_second["steady"]["power_w"].as_f64().unwrap() - area * flux).abs() < 1e-12);
 }

@@ -104,3 +104,85 @@ fn command_projects_frozen_drape_inputs_and_replays_the_same_request() {
     assert!(String::from_utf8_lossy(&refused.stderr).contains("refusal"));
     // Keep the generated test file; this repository does not permit implicit file deletion.
 }
+
+#[test]
+fn both_commands_share_exterior_coverage_and_refuse_implicit_bare_skin() {
+    let read = |name| serde_json::from_slice::<Value>(&fs::read(fixture(name)).unwrap()).unwrap();
+    let mut environment = read("synthetic-exterior-exchange.json")["exterior_exchange"].clone();
+    environment["air_c"] = json!(0.);
+    environment["convection_w_m2_k"] = json!(5.);
+    environment.as_object_mut().unwrap().remove("radiation");
+    let mut input = json!({"schema":"ftx-steady-coverage-request/1",
+        "report":read("synthetic-steady-surface-report.json"),"map":read("steady-coverage-map.json"),
+        "conditions":read("steady-coverage-conditions.json")});
+    input["map"]["body_positions_m"][1][0] = json!(2.);
+    input["map"]["body_positions_m"][3][0] = json!(2.);
+    input["conditions"]["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.);
+    input["conditions"]["exterior_exchange"] = json!([environment]);
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-exterior-coverage-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    let execute = |main: bool, name: &str, value: &Value| {
+        let path = dir.join(format!("{main}-{name}.json"));
+        let bytes = serde_json::to_vec(value).unwrap();
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut file, &bytes).unwrap();
+        drop(file);
+        let mut cmd = Command::new(if main {
+            env!("CARGO_BIN_EXE_ftx")
+        } else {
+            env!("CARGO_BIN_EXE_ftx-materials")
+        });
+        if main {
+            cmd.args(["materials", "--json"]);
+        }
+        let out = cmd
+            .arg("thermal-steady-coverage")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(fs::read(path).unwrap(), bytes);
+        out
+    };
+    let result = |out: std::process::Output| {
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        if v["schema"] == "ftx-cli/1" {
+            v["result"].clone()
+        } else {
+            v
+        }
+    };
+    for main in [false, true] {
+        assert!(!execute(main, "missing-bare", &input).status.success());
+    }
+    input["conditions"]["bare_boundaries"] = json!([{
+        "inside_c":30.,"outside_c":0.,"inside_resistance_m2_k_w":0.2,"outside_resistance_m2_k_w":0.4
+    }]);
+    let r: ftx_drape::thermal::steady::coverage::request::Request =
+        serde_json::from_value(input.clone()).unwrap();
+    let expected = r.evaluate().unwrap();
+    assert!(
+        (expected["steady"]["power_w"].as_f64().unwrap() - 50. - 15. / 0.7 - 15. / 1.1).abs()
+            < 1e-7
+    );
+    for main in [false, true] {
+        let actual = result(execute(main, "qualified", &input));
+        assert_eq!(actual, expected);
+        assert_eq!(actual, result(execute(main, "replay", &actual["request"])));
+    }
+}

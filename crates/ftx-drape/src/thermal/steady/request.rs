@@ -230,7 +230,7 @@ impl Request {
     }
 }
 
-fn describe_exterior(result: &mut Value, details: Value, radiation_enabled: bool) {
+pub(super) fn describe_exterior(result: &mut Value, details: Value, radiation_enabled: bool) {
     result["exterior_exchange"] = details;
     let limits = result["not_simulated"]
         .as_array_mut()

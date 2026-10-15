@@ -4,6 +4,7 @@
 //! Material transport uses current cloth area; films/interfaces use covered body area. The body is
 //! a prescribed-temperature boundary, not a thermoregulating human. No overlap is inferred here.
 
+use super::exterior::{Exterior, ExteriorState};
 use super::{Boundary, SteadyConductionModel, SteadyState, surface::SteadySurface};
 use crate::thermal::{
     invalid, nonnegative, positive,
@@ -73,6 +74,22 @@ pub struct CoverageSolution {
     pub power_w: f64,
     /// Unallocated reference cloth area, explicitly excluded from this calculation, in m².
     pub unassigned_cloth_reference_area_m2: f64,
+}
+
+/// Covered textiles exchange with the environment only at each path's outermost physical layer.
+/// Bare body paths retain separately declared films; textile optical properties never become skin.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExteriorCoverageSolution {
+    /// Body/region conduction and explicit bare-path powers in the original layout order.
+    pub steady: CoverageSolution,
+    /// Per-region outer face temperatures and fluxes per current outer cloth area.
+    pub regions: Vec<ExteriorState>,
+    /// Covered-cloth convection, W; excludes the separately reported bare-body films.
+    pub convective_power_w: f64,
+    /// Covered-cloth radiation, W; excludes bare body and interlayer exchange.
+    pub radiative_power_w: f64,
+    /// Sum of local covered-path through-power minus exterior exchange, W.
+    pub balance_residual_w: f64,
 }
 
 fn product(a: f64, b: f64) -> Result<f64, Refusal> {
@@ -166,6 +183,76 @@ impl SteadyCoverage {
         body: &[Vec3],
         boundaries: &[Boundary],
     ) -> Result<CoverageSolution, Refusal> {
+        Ok(self.solve_paths(cloth, body, boundaries, None)?.0)
+    }
+
+    /// Apply qualified exterior exchange to each covered series path's outermost material, using
+    /// its allocated CURRENT cloth area. Environment entries are indexed by body triangle, not
+    /// source material column. Pass an empty bare array only when the body is entirely covered.
+    /// Otherwise every body triangle needs a separately declared bare-path film boundary whose
+    /// inside temperature agrees with that same prescribed body reservoir.
+    ///
+    /// # Errors
+    /// Invalid geometry/counts, missing bare conditions, incompatible reservoir temperatures,
+    /// unqualified optical data or failed conduction/exterior equations. No partial results.
+    pub fn solve_exterior(
+        &self,
+        cloth: &[Vec3],
+        body: &[Vec3],
+        boundaries: &[Boundary],
+        exterior: &[Exterior],
+        bare_boundaries: &[Boundary],
+    ) -> Result<ExteriorCoverageSolution, Refusal> {
+        let count = self.layout.body_triangles.len();
+        if exterior.len() != count
+            || (!bare_boundaries.is_empty() && bare_boundaries.len() != count)
+            || (bare_boundaries.is_empty() && self.covered.iter().any(|&f| f < 1.0))
+        {
+            return Err(invalid(
+                "coverage exterior needs one environment per body triangle and explicit bare films for uncovered area",
+            ));
+        }
+        let (steady, regions) =
+            self.solve_paths(cloth, body, boundaries, Some((exterior, bare_boundaries)))?;
+        let mut convective_power_w = 0.0;
+        let mut radiative_power_w = 0.0;
+        let mut balance_residual_w = 0.0;
+        for (r, e) in steady.regions.iter().zip(&regions) {
+            let outer_area = *r.layer_area_m2.last().expect("nonempty region");
+            let conv = product(outer_area, e.convective_flux_w_m2)?;
+            let rad = product(outer_area, e.radiative_flux_w_m2)?;
+            let error = (r.power_w - conv) - rad;
+            if !error.is_finite()
+                || error.abs() > 1e-9 * (r.power_w.abs().max(conv.abs()).max(rad.abs()))
+            {
+                return Err(invalid("coverage exterior power balance failed"));
+            }
+            convective_power_w += conv;
+            radiative_power_w += rad;
+            balance_residual_w += error;
+        }
+        if [convective_power_w, radiative_power_w, balance_residual_w]
+            .iter()
+            .any(|v| !v.is_finite())
+        {
+            return Err(invalid("coverage exterior power accumulation overflow"));
+        }
+        Ok(ExteriorCoverageSolution {
+            steady,
+            regions,
+            convective_power_w,
+            radiative_power_w,
+            balance_residual_w,
+        })
+    }
+
+    fn solve_paths(
+        &self,
+        cloth: &[Vec3],
+        body: &[Vec3],
+        boundaries: &[Boundary],
+        exterior: Option<(&[Exterior], &[Boundary])>,
+    ) -> Result<(CoverageSolution, Vec<ExteriorState>), Refusal> {
         if body.len() != self.layout.body_vertex_count
             || body.iter().any(|p| !p.is_finite())
             || boundaries.len() != self.layout.body_triangles.len()
@@ -188,6 +275,21 @@ impl SteadyCoverage {
             nonnegative("inside film resistance", b.inside_resistance)?;
             nonnegative("outside film resistance", b.outside_resistance)?;
             let bare = if self.covered[i] < 1.0 {
+                let b = if let Some((_, bare)) = exterior {
+                    let explicit = bare[i];
+                    temperature(explicit.inside_c)?;
+                    temperature(explicit.outside_c)?;
+                    nonnegative("bare inside film resistance", explicit.inside_resistance)?;
+                    nonnegative("bare outside film resistance", explicit.outside_resistance)?;
+                    if explicit.inside_c != b.inside_c {
+                        return Err(invalid(
+                            "covered and bare paths must share the prescribed body temperature",
+                        ));
+                    }
+                    explicit
+                } else {
+                    b
+                };
                 let r = positive(
                     "bare-body path needs a positive declared film resistance",
                     b.inside_resistance + b.outside_resistance,
@@ -209,6 +311,7 @@ impl SteadyCoverage {
             });
         }
         let mut regions = Vec::with_capacity(self.models.len());
+        let mut exterior_states = Vec::new();
         for (region, model) in self.layout.regions.iter().zip(&self.models) {
             let area = product(fields[region.body_triangle].area_m2, region.body_fraction)?;
             let layer_area: Vec<_> = region
@@ -217,9 +320,16 @@ impl SteadyCoverage {
                 .map(|p| product(cloth_areas[p.cloth_triangle], p.fraction))
                 .collect::<Result<_, _>>()?;
             let factors = layer_area.iter().map(|a| area / a).collect();
-            let conduction = model
-                .with_area_factors(factors)?
-                .solve(boundaries[region.body_triangle])?;
+            let model = model.with_area_factors(factors)?;
+            let b = boundaries[region.body_triangle];
+            let conduction = if let Some((environments, _)) = exterior {
+                let state = model.solve_exterior(b, &environments[region.body_triangle])?;
+                let conduction = state.conduction.clone();
+                exterior_states.push(state);
+                conduction
+            } else {
+                model.solve(b)?
+            };
             let power = product(area, conduction.flux_w_m2)?;
             fields[region.body_triangle].power_w += power;
             regions.push(RegionSolution {
@@ -257,6 +367,6 @@ impl SteadyCoverage {
         {
             return Err(invalid("steady coverage accumulation overflow"));
         }
-        Ok(result)
+        Ok((result, exterior_states))
     }
 }

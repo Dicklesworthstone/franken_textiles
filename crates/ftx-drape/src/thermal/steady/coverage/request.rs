@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Boundary, Refusal, SteadyCoverage, SteadySurface, Vec3, digest, invalid};
 use crate::thermal::{
-    steady::request::Film,
+    steady::{exterior::Exterior, request::Film},
     surface::projection::{self, Settings},
 };
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,14 @@ pub struct Conditions {
     /// Required for nonuniform boundaries; optional for uniform conditions and populated on replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_mesh_sha256: Option<String>,
+    /// Optional exterior environment per body triangle, or one uniform environment. Only each
+    /// coverage path's outermost selected material is exposed to its ambient radiation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exterior_exchange: Option<Vec<Exterior>>,
+    /// Separate bare-body film conditions in exterior mode. Required for any uncovered fraction;
+    /// one uniform entry or one per body triangle. Never inherit textile emissivity for bare skin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bare_boundaries: Option<Vec<Film>>,
 }
 
 /// Portable material-following coverage request. Every evaluation recomputes geometric overlap.
@@ -68,6 +76,12 @@ impl Request {
         {
             return Err(invalid(
                 "invalid steady coverage request schema or input budget",
+            ));
+        }
+        if self.conditions.bare_boundaries.is_some() && self.conditions.exterior_exchange.is_none()
+        {
+            return Err(invalid(
+                "separate bare boundaries require explicit exterior exchange mode",
             ));
         }
         let frame = &self.report["steady_thermal_surface"];
@@ -118,7 +132,18 @@ impl Request {
             .body_mesh_sha256
             .as_ref()
             .is_some_and(|s| *s != body_sha)
-            || (self.conditions.boundaries.len() != 1 && self.conditions.body_mesh_sha256.is_none())
+            || ((self.conditions.boundaries.len() != 1
+                || self
+                    .conditions
+                    .exterior_exchange
+                    .as_ref()
+                    .is_some_and(|v| v.len() != 1)
+                || self
+                    .conditions
+                    .bare_boundaries
+                    .as_ref()
+                    .is_some_and(|v| v.len() != 1))
+                && self.conditions.body_mesh_sha256.is_none())
         {
             return Err(invalid(
                 "nonuniform coverage boundaries need the exact body_mesh_sha256",
@@ -148,10 +173,38 @@ impl Request {
             },
         )?;
         let assembly = SteadyCoverage::new(source, projection.layout.clone())?;
-        let solution = assembly.solve(&cloth, &self.map.body_positions_m, &boundaries)?;
+        let (solution, exterior) = if let Some(e) = &self.conditions.exterior_exchange {
+            let e = broadcast(e, boundaries.len())?;
+            let bare = self
+                .conditions
+                .bare_boundaries
+                .as_ref()
+                .map(|b| broadcast(b, boundaries.len()))
+                .transpose()?
+                .unwrap_or_default();
+            let bare: Vec<_> = bare.iter().map(boundary).collect();
+            let result = assembly.solve_exterior(
+                &cloth,
+                &self.map.body_positions_m,
+                &boundaries,
+                &e,
+                &bare,
+            )?;
+            let details = json!({"regions":result.regions,
+                "convective_power_w":result.convective_power_w,
+                "radiative_power_w":result.radiative_power_w,
+                "balance_residual_w":result.balance_residual_w,
+                "bare_policy":"separate explicitly prescribed films; no inferred skin emissivity"});
+            (result.steady, Some(details))
+        } else {
+            (
+                assembly.solve(&cloth, &self.map.body_positions_m, &boundaries)?,
+                None,
+            )
+        };
         frozen.conditions.body_mesh_sha256 = Some(body_sha.clone());
         let request = serde_json::to_value(frozen).map_err(|e| invalid(e.to_string()))?;
-        let result = json!({"schema":"ftx-steady-coverage-result/1",
+        let mut result = json!({"schema":"ftx-steady-coverage-result/1",
             "request_sha256":digest(&request)?,"request":request,
             "drape_steady_frame_sha256":frame["sha256"],"body_mesh_sha256":body_sha,
             "assembly":assembly.snapshot()?,"projection":projection,"steady":solution,
@@ -160,8 +213,28 @@ impl Request {
             "scope":"local-normal projected coverage with prescribed reservoirs; not whole-wearer heat loss",
             "not_simulated":["transient heat storage","compression-dependent loft","moisture transport",
                 "evaporation","wind-dependent films","radiative exchange","thermal bridges","human thermoregulation"]});
+        if let Some(details) = exterior {
+            let enabled = self
+                .conditions
+                .exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.iter().any(|e| e.radiation.is_some()));
+            crate::thermal::steady::request::describe_exterior(&mut result, details, enabled);
+        }
         bounded(&result)?;
         Ok(result)
+    }
+}
+
+fn broadcast<T: Clone>(values: &[T], count: usize) -> Result<Vec<T>, Refusal> {
+    if values.len() == 1 {
+        Ok(vec![values[0].clone(); count])
+    } else if values.len() == count {
+        Ok(values.to_vec())
+    } else {
+        Err(invalid(
+            "coverage needs one uniform value or one per body triangle",
+        ))
     }
 }
 

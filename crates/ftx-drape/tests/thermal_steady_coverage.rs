@@ -357,3 +357,205 @@ fn source_qualified_hfm_layers_reach_coverage_without_storage_or_estimation_of_c
         0.5 * expected,
     );
 }
+
+fn exterior_selection(r: f64, eps: f64) -> Selection {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+    ))
+    .unwrap();
+    let mut s = selection(r);
+    let mut q = fixture["layers"][0]["record"]["properties"]["emissivity"].clone();
+    q["value"] = json!(eps);
+    q["source"] = json!("test");
+    s.record
+        .as_mut()
+        .unwrap()
+        .properties
+        .insert("emissivity".into(), serde_json::from_value(q).unwrap());
+    s
+}
+fn environment(radiation: bool) -> ftx_drape::thermal::steady::exterior::Exterior {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+    ))
+    .unwrap();
+    let mut e = fixture["exterior_exchange"].clone();
+    e["air_c"] = json!(0.);
+    e["convection_w_m2_k"] = json!(5.);
+    if !radiation {
+        e.as_object_mut().unwrap().remove("radiation");
+    }
+    serde_json::from_value(e).unwrap()
+}
+fn exterior_boundary() -> Boundary {
+    Boundary {
+        outside_resistance: 0.,
+        ..boundary()
+    }
+}
+
+#[test]
+fn coverage_exterior_scales_exchange_by_outer_cloth_area_not_body_or_all_layers() {
+    let a = SteadyCoverage::new(source(), layout()).unwrap();
+    let solved = a
+        .solve_exterior(
+            &cloth(),
+            &body(),
+            &[exterior_boundary()],
+            &[environment(false)],
+            &[],
+        )
+        .unwrap();
+    // Inner film .1, lining .2, contact .1, shell .4*.5, exterior (1/5)*.5 per BODY area.
+    near(solved.steady.power_w, 0.5 * 30. / 0.7);
+    near(solved.convective_power_w, solved.steady.power_w);
+    near(solved.regions[0].outer_area_per_model_area, 2.);
+    near(solved.regions[0].surface_c * 5. * 1., solved.steady.power_w);
+    near(solved.radiative_power_w, 0.);
+    near(solved.balance_residual_w, 0.);
+    let equivalent = Boundary {
+        outside_resistance: 0.1,
+        ..boundary()
+    };
+    near(
+        a.solve(&cloth(), &body(), &[equivalent]).unwrap().power_w,
+        solved.steady.power_w,
+    );
+    let moved = |v: Vec3| Vec3::new(v.z, v.x, v.y) + Vec3::new(0.3, -0.2, 0.7);
+    let m = a
+        .solve_exterior(
+            &cloth().into_iter().map(moved).collect::<Vec<_>>(),
+            &body().into_iter().map(moved).collect::<Vec<_>>(),
+            &[exterior_boundary()],
+            &[environment(false)],
+            &[],
+        )
+        .unwrap();
+    near(m.steady.power_w, solved.steady.power_w);
+}
+
+#[test]
+fn partial_exterior_coverage_requires_separate_bare_films_and_one_body_temperature() {
+    let mut l = layout();
+    l.regions[0].body_fraction = 0.5;
+    l.regions[0].layers[0].fraction = 0.25;
+    l.regions[0].layers[1].fraction = 0.5;
+    let a = SteadyCoverage::new(source(), l).unwrap();
+    let b = [exterior_boundary()];
+    let e = [environment(false)];
+    let bare = [Boundary {
+        inside_resistance: 0.2,
+        outside_resistance: 0.4,
+        ..boundary()
+    }];
+    assert!(a.solve_exterior(&cloth(), &body(), &b, &e, &[]).is_err());
+    let solved = a.solve_exterior(&cloth(), &body(), &b, &e, &bare).unwrap();
+    near(solved.steady.covered_area_m2, 0.25);
+    near(solved.steady.bare_power_w, 12.5);
+    near(solved.convective_power_w, 0.25 * 30. / 0.9);
+    near(solved.steady.power_w, 12.5 + 0.25 * 30. / 0.9);
+    near(solved.steady.unassigned_cloth_reference_area_m2, 0.625);
+    assert!(
+        a.solve_exterior(
+            &cloth(),
+            &body(),
+            &b,
+            &e,
+            &[Boundary {
+                inside_c: 31.,
+                ..bare[0]
+            }]
+        )
+        .is_err()
+    );
+    assert!(
+        a.solve_exterior(
+            &cloth(),
+            &body(),
+            &b,
+            &e,
+            &[Boundary {
+                inside_resistance: 0.,
+                outside_resistance: 0.,
+                ..bare[0]
+            }]
+        )
+        .is_err()
+    );
+    assert!(a.solve_exterior(&cloth(), &body(), &b, &[], &bare).is_err());
+    assert!(
+        a.solve_exterior(&cloth(), &body(), &b, &e, &[bare[0]; 2])
+            .is_err()
+    );
+    // Entirely bare geometry has no covered optical exchange and still requires explicit films.
+    let mut l = layout();
+    l.regions.clear();
+    let a = SteadyCoverage::new(source(), l).unwrap();
+    let solved = a.solve_exterior(&cloth(), &body(), &b, &e, &bare).unwrap();
+    assert!(solved.regions.is_empty());
+    near(solved.steady.power_w, 25.);
+    near(solved.convective_power_w, 0.);
+}
+
+#[test]
+fn only_exposed_finish_affects_layered_radiation_and_frozen_material_replay() {
+    use ftx_drape::thermal::steady::exterior::STEFAN_BOLTZMANN;
+    let e = environment(true);
+    // Independent fourth powers manufacture a known outer face temperature on unequal areas.
+    let t: f64 = 10.;
+    let fourth = |c: f64| (c + 273.15).powi(4);
+    let rad = 0.8 * STEFAN_BOLTZMANN * (fourth(t) - fourth(-10.));
+    let outer_flux = 5. * t + rad;
+    let body_flux = 2. * outer_flux;
+    let b = Boundary {
+        inside_c: t + body_flux * 0.6,
+        ..exterior_boundary()
+    };
+    let mut values = Vec::new();
+    for (inner_eps, outer_eps) in [(0.1, 0.8), (0.9, 0.8), (0.9, 0.05)] {
+        let a = SteadyCoverage::new(
+            source_with(
+                exterior_selection(0.2, inner_eps),
+                exterior_selection(0.4, outer_eps),
+            ),
+            layout(),
+        )
+        .unwrap();
+        let solved = a
+            .solve_exterior(&cloth(), &body(), &[b], std::slice::from_ref(&e), &[])
+            .unwrap();
+        let replay = SteadyCoverage::from_snapshot(&a.snapshot().unwrap())
+            .unwrap()
+            .solve_exterior(&cloth(), &body(), &[b], std::slice::from_ref(&e), &[])
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&solved).unwrap(),
+            serde_json::to_value(replay).unwrap()
+        );
+        values.push(solved);
+    }
+    near(values[0].regions[0].surface_c, t);
+    near(values[0].steady.power_w, 0.5 * body_flux);
+    near(values[0].radiative_power_w, rad);
+    near(values[0].convective_power_w, 50.);
+    assert_eq!(values[0].steady.power_w, values[1].steady.power_w);
+    assert!(values[2].steady.power_w < values[0].steady.power_w);
+    let mut split = layout();
+    split.regions[0].body_fraction = 0.5;
+    for p in &mut split.regions[0].layers {
+        p.fraction = 0.5;
+    }
+    let mut second = split.regions[0].clone();
+    second.id = "second".into();
+    split.regions.push(second);
+    let refined = SteadyCoverage::new(
+        source_with(exterior_selection(0.2, 0.1), exterior_selection(0.4, 0.8)),
+        split,
+    )
+    .unwrap()
+    .solve_exterior(&cloth(), &body(), &[b], &[e], &[])
+    .unwrap();
+    near(refined.steady.power_w, values[0].steady.power_w);
+    near(refined.convective_power_w, values[0].convective_power_w);
+    near(refined.radiative_power_w, values[0].radiative_power_w);
+}
