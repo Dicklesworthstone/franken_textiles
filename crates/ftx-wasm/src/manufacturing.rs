@@ -41,3 +41,13 @@ pub fn sew_stitches(pattern: &str, options: &str) -> Result<String, Refusal> {
     serde_json::to_string(&SewProgram::build(&pattern, &options)?)
         .map_err(|e| invalid(e.to_string()))
 }
+
+/// Millimetre SVG review of one operation in two independent pattern frames, not machine space.
+/// The complete job is validated first; the preview neither reads files nor uses external resources.
+///
+/// # Errors
+/// Input/planning refusals, unknown operation or preview geometry/label budgets.
+pub fn sew_svg(pattern: &str, options: &str, operation: &str) -> Result<String, Refusal> {
+    let (pattern, options) = inputs(pattern, options)?;
+    ftx_export::sewing::preview::svg(&pattern, &options, operation)
+}

@@ -209,3 +209,88 @@ fn expanded_program_admits_legacy_jobs_but_never_emits_partial_refused_travel() 
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty());
 }
+
+#[test]
+fn offset_cli_program_retains_paths_and_materials_without_mutating_inputs() {
+    let p = fixture("synthetic-sewing-pattern.json");
+    let o = fixture("synthetic-sewing-topstitch-options.json");
+    let before = fs::read(&o).unwrap();
+    let out = run(&["sew-stitches", &p, &o]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "ftx-sewing-program/2");
+    assert_eq!(v["plan"]["schema"], "ftx-sewing-plan/3");
+    assert_eq!(v["stitches"].as_array().unwrap().len(), 90);
+    let seam = &v["plan"]["seams"][1];
+    assert_eq!(
+        seam["path"]["polylines_mm"][0],
+        json!([[17.0, 0.0], [17.0, 100.0]])
+    );
+    assert_eq!(
+        seam["path"]["polylines_mm"][1],
+        json!([[4.0, 0.0], [4.0, 100.0]])
+    );
+    assert_eq!(v["stitches"][50]["a_mm"][0], 17.0);
+    assert!((v["stitches"][50]["a_mm"][1].as_f64().unwrap() - 97.5).abs() < 1e-10);
+    let core = ftx_export::sewing::program::SewProgram::build(
+        &Pattern::from_json(PATTERN).unwrap(),
+        &serde_json::from_slice(&before).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(v, serde_json::to_value(core).unwrap());
+    assert_eq!(fs::read(&o).unwrap(), before);
+    assert_eq!(fs::read_to_string(&p).unwrap(), PATTERN);
+    let mut o: Value = serde_json::from_slice(&before).unwrap();
+    o["passes"][1]["stitch_path"]["offset_mm"] = json!([-11.0, 0.0]);
+    let out = run(&["sew-plan", &p, &changed_pattern(&o)]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn sewing_svg_is_create_only_and_never_publishes_refused_geometry() {
+    let p = fixture("synthetic-sewing-pattern.json");
+    let o = fixture("synthetic-sewing-topstitch-options.json");
+    let target = changed_pattern(&json!({"sentinel":"unchanged"}));
+    let out = run(&["sew-svg", &p, &o, "topstitch", &target]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "{\"sentinel\":\"unchanged\"}"
+    );
+    let target = format!("{target}.svg");
+    let out = run(&["sew-svg", &p, &o, "unknown", &target]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!std::path::Path::new(&target).exists());
+    let out = run(&["sew-svg", &p, &o, "topstitch", &target]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = fs::read_to_string(&target).unwrap();
+    let expected = ftx_export::sewing::preview::svg(
+        &Pattern::from_json(PATTERN).unwrap(),
+        &serde_json::from_str(&fs::read_to_string(&o).unwrap()).unwrap(),
+        "topstitch",
+    )
+    .unwrap();
+    assert_eq!(got, expected);
+    let receipt: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        receipt["svg_sha256"],
+        ftx_core::receipt::sha256_hex(got.as_bytes())
+    );
+    assert_eq!(receipt["hardware_execution_authorized"], false);
+    assert_eq!(
+        run(&["sew-svg", &p, &o, "topstitch", &target])
+            .status
+            .code(),
+        Some(2)
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), got);
+}

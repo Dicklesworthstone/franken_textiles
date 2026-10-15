@@ -55,6 +55,7 @@ ftx-materials cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json
 ftx-materials cut-svg PATTERN.json OPTIONS.json ROLL-INDEX NEW.svg
 ftx-materials sew-plan PATTERN.json OPTIONS.json
 ftx-materials sew-stitches PATTERN.json OPTIONS.json
+ftx-materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg
 
 JSON output. `show` includes a portable selection and missing-property coverage.
 `resolve` invokes the actual drape resolver without meshing; missing mechanics refuse.
@@ -73,6 +74,7 @@ JSON output. `show` includes a portable selection and missing-property coverage.
 `cut-svg` writes a new source-locked planning preview, not device execution code.
 `sew-plan` checks material thickness, allowances, local feed and multi-pass/reverse/backtack order.
 `sew-stitches` expands all directed stitch travel in paired pattern frames; neither command authorizes hardware.
+`sew-svg` writes a new operation preview with source/offset paths and needle stations; never a machine file.
 Fitted coefficients are estimates: --allow-estimates explicitly admits them to simulation.";
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -226,6 +228,20 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
                 &pattern, &options,
             )?)
             .map_err(|e| invalid(e.to_string()))
+        }
+        ["sew-svg", pattern, options, operation, out] => {
+            let pattern = Pattern::new(read::<Value>(pattern)?);
+            let options = read::<ftx_export::sewing::SewOptions>(options)?;
+            let svg = ftx_export::sewing::preview::svg(&pattern, &options, operation)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(out)
+                .map_err(|e| io(out, e))?;
+            file.write_all(svg.as_bytes()).map_err(|e| io(out, e))?;
+            Ok(json!({"out":out,"operation":operation,
+                "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
+                "hardware_execution_authorized":false}))
         }
         ["cut-price", pattern, options, quotes, market] => {
             cutting::price(pattern, options, quotes, market)

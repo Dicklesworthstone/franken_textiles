@@ -56,3 +56,32 @@ fn browser_entry_point_refuses_missing_reverse_and_unqualified_materials() {
     assert!(manufacturing::sew_stitches("not JSON", OPTIONS).is_err());
     assert!(manufacturing::sew_plan(PATTERN, "{}").is_err());
 }
+
+#[test]
+fn offset_paths_and_svg_share_the_exact_native_planner() {
+    let options =
+        include_str!("../../../tests/fixtures/materials/synthetic-sewing-topstitch-options.json");
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let o: SewOptions = serde_json::from_str(options).unwrap();
+    let plan: Value =
+        serde_json::from_str(&manufacturing::sew_plan(PATTERN, options).unwrap()).unwrap();
+    assert_eq!(
+        plan,
+        serde_json::to_value(SewPlan::build(&p, &o).unwrap()).unwrap()
+    );
+    assert_eq!(plan["schema"], "ftx-sewing-plan/3");
+    let program: Value =
+        serde_json::from_str(&manufacturing::sew_stitches(PATTERN, options).unwrap()).unwrap();
+    assert_eq!(
+        program,
+        serde_json::to_value(SewProgram::build(&p, &o).unwrap()).unwrap()
+    );
+    assert_eq!(
+        manufacturing::sew_svg(PATTERN, options, "topstitch").unwrap(),
+        ftx_export::sewing::preview::svg(&p, &o, "topstitch").unwrap()
+    );
+    assert!(manufacturing::sew_svg(PATTERN, options, "unknown").is_err());
+    let mut bad: Value = serde_json::from_str(options).unwrap();
+    bad["passes"][1]["stitch_path"]["offset_mm"] = json!([-11.0, 0.0]);
+    assert!(manufacturing::sew_svg(PATTERN, &bad.to_string(), "join").is_err());
+}

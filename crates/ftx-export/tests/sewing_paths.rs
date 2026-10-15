@@ -270,3 +270,21 @@ fn material_swap_keeps_offset_paths_but_rechecks_every_ply_stack() {
             .contains("stack thickness")
     );
 }
+
+#[test]
+fn closed_offsets_use_cyclic_mitres_and_retain_the_closing_station() {
+    let mut p = pattern();
+    p["seams"][0]["a"] = json!("front/bottom+right+top+left");
+    p["seams"][0]["b"] = json!("back/bottom+right+top+left");
+    p["seams"][0]["reverse"] = json!(false);
+    let mut o = offset(3.0, 4.0);
+    o["machine"]["stitch_mm"] = json!([0.01, 5.0]);
+    let a = build(p, o).unwrap();
+    let s = &a.seams[0];
+    near(s.stations.len_a, 216.0);
+    near(s.stations.len_b, 208.0);
+    assert_eq!(s.stations.a.first(), s.stations.a.last());
+    assert_eq!(s.stations.b.first(), s.stations.b.last());
+    assert_eq!(s.stations.a[0], Vec2::new(3.0, 3.0));
+    assert_eq!(s.stations.b[0], Vec2::new(4.0, 4.0));
+}

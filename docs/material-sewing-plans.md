@@ -42,8 +42,9 @@ These are invented example settings, not recommendations for any machine or text
 Replace them with the actual configuration and process requirements. Needle/thread
 identifiers are retained but their compatibility, penetration and strength are not
 inferred. Multiple passes, reverse feed and explicit start/end backtacks are supported
-as described below. Offset topstitch paths, physical folding and automatic assembly-order
-inference remain separate work: repeating a seam does not invent another stitch line.
+as described below. Explicit offset stitch lines and their review preview are also supported.
+Physical folding and automatic assembly-order inference remain separate work: a declared
+ply count or offset does not establish how the folded layers meet under a needle.
 
 ## What follows a material change
 
@@ -142,14 +143,16 @@ The pattern, materials and machine in this fixture are synthetic, not calibrated
 
 Unchanged legacy jobs still serialize as `ftx-sewing-plan/1`, without added default
 fields or altered arithmetic. Jobs requesting operation IDs, reverse capability,
-direction or locks use `ftx-sewing-plan/2`. Each operation contains ordered `runs`
+direction or locks use `ftx-sewing-plan/2`; explicit offset paths use `ftx-sewing-plan/3`.
+Each operation contains ordered `runs`
 over its unchanged `stations.a` and `stations.b` arrays. A run visits every consecutive
 integer index from `from_station` to `to_station`. Adjacent runs share an endpoint;
 that shared station is not an extra interval.
 
 `sew-stitches` calls `ftx_export::sewing::program::SewProgram::build` and emits
-`ftx-sewing-program/1`. Its nested `plan` always uses explicit version-2 runs, including
-for legacy input. Its `stitches` enumerates every actual interval with operation/run
+`ftx-sewing-program/1` for centerline jobs or `/2` for offset jobs. Its nested `plan`
+uses explicit version-2 runs for centerline input and version 3 for offset input.
+Its `stitches` enumerates every actual interval with operation/run
 indices, source and destination station indices, both destination coordinates,
 signed arclength advances, the b/a ratio and continuous-feed duration. Reverse feed
 makes both advances negative. `begins_run` marks direction/operation boundaries.
@@ -171,6 +174,95 @@ inputs or control a device. The native-callable `ftx_wasm::manufacturing` module
 contains their shared implementation. These are browser integration APIs, not a new
 interactive sewing page. Output coordinates are still separate local pattern frames,
 not robot trajectories or needle-up/down commands.
+
+## Offset stitch lines and topstitch review
+
+Add `stitch_path` to an individual pass to compute a different stitch line, not merely
+translate its displayed stations. The executable topstitch fixture adds this policy
+to a reverse reinforcement pass after an ordinary joining operation:
+
+```json
+{"offset_mm": [3.0, 4.0], "mitre_limit": 4.0, "minimum_cut_clearance_mm": 1.0}
+```
+
+These values are synthetic, not sewing recommendations. Each signed offset is in the
+original CCW material-instance frame: positive goes inward, negative into the seam
+allowance. Mirroring and b-side reversal preserve that convention; reversing a pass
+does not swap sides or invert the b/a feed ratio. Source pattern geometry is unchanged.
+
+The implementation offsets the existing 200-sample Bézier/polyline seam geometry.
+Adjacent offset segments meet at a mitre; endpoints of an open side move along its
+one-sided normal. Closed sides use cyclic corner normals. An excessive mitre, singular
+turn, collapsed/reversed span or self-intersection refuses rather than beveling,
+trimming or silently repairing the path. It is a sampled polygonal offset, not an
+exact analytic parallel curve; refine and independently validate it for fabrication.
+
+Source-to-offset correspondence is affine between corresponding polyline vertices in
+arclength. Notches and edge junctions are transported by that explicit monotone map,
+then paired across the two resulting stitch lines. This is not nearest-point projection
+or a physical material-deformation model; at a sharp mitre the mapped notch may move
+tangentially. The receipt retains full polylines, original lengths and source fractions
+for every station so consumers can inspect that mapping instead of guessing it.
+
+The planner resamples the actual offset arclength, recalculates both advances and
+local feed, checks the forward/reverse machine envelopes, and charges all backtack
+travel against the shared station budget. Consequently, offsetting two equal-length
+120 mm corner paths by 5 mm and 3 mm gives 110 mm and 114 mm paths: the new b/a ratio
+is 114/110, not the original 1. An unchanged tight-feed machine must refuse that job.
+Distinct notch/junction breaks are not rounded together to avoid a minimum-stitch
+refusal. Explicit zero offsets retain original station arithmetic while adding checks.
+
+Clearance uses the existing exported exterior cut outline and edge/piece/default
+allowance precedence. Every full path segment **and** every between-stitch chord must
+stay inside and meet `minimum_cut_clearance_mm`; testing isolated stations alone could
+miss a chord crossing a concave boundary. The reported minimum is over both geometries.
+This exterior check does not model notch incisions, defects or the swept footprint of
+a presser foot. Internal cuts and drills refuse until explicit obstacle geometry is
+supported. It does not certify needle access, workholding or a folded assembly.
+
+Offset evaluation has an 8192-vertex contour limit and a shared 50-million conservative
+geometry-pair budget; excessive jobs refuse. The existing 4096-operation/250000-slot
+job limits still apply, including offset growth and lock travel.
+
+```sh
+cargo run -p ftx-cli --bin ftx-materials -- sew-stitches \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  tests/fixtures/materials/synthetic-sewing-topstitch-options.json
+
+cargo run -p ftx-cli --bin ftx-materials -- sew-svg \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  tests/fixtures/materials/synthetic-sewing-topstitch-options.json \
+  topstitch topstitch-review.svg
+```
+
+The straight synthetic fixture retains 90 total intervals and 13 continuous-feed
+seconds, but the second pass follows x=17 mm on side A and x=4 mm on side B rather
+than the original x=20 mm/x=0 mm seam lines. This is a geometric example, not evidence
+that those two lines are physically coincident after folding. Each operation still
+resolves sourced thickness; a replacement material can invalidate only the thicker
+reinforcement stack while leaving every offset coordinate unchanged.
+
+`sew-svg` calls `ftx_export::sewing::preview::svg` and validates the complete job before
+creating a new file. Existing paths are never overwritten. The returned JSON includes
+the SVG digest. The preview distinguishes exterior cut, original seam, actual stitch
+path, all needle stations and between-stitch chords; an arrow shows the primary pass
+direction and a run list records lock/reverse travel. The two source-side frames are
+laid out separately, with full pattern/material hashes in escaped XML metadata.
+Display translations are not machine registrations. There are no scripts, external
+resources or cutter/robot instructions. Preview budgets refuse oversized diagrams
+instead of omitting stations (20000 stations across both sides, at most ten piece
+edges with bounded curve controls); six-decimal rendering is not a manufacturing tolerance.
+
+The same file-free browser entry point returns SVG text after rebuilding bindings:
+
+```js
+import init, { sew_svg } from "./pkg/ftx_wasm.js";
+await init();
+const svg = sew_svg(patternJson, optionsJson, "topstitch");
+```
+
+This is an integration API, not an interactive sewing page. No hardware permission,
+process qualification, thread consumption or full production time is asserted.
 
 ## Acceptance and remaining work
 

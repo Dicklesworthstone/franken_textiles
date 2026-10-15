@@ -175,3 +175,12 @@ pub fn sew_plan(pattern: &str, options: &str) -> Result<String, JsError> {
 pub fn sew_stitches(pattern: &str, options: &str) -> Result<String, JsError> {
     crate::manufacturing::sew_stitches(pattern, options).map_err(|e| JsError::new(&e.message))
 }
+
+/// SVG review of one operation in independent pattern frames; no machine registration is implied.
+///
+/// # Errors
+/// Any sewing input/planning refusal, unknown operation or bounded preview failure.
+#[wasm_bindgen]
+pub fn sew_svg(pattern: &str, options: &str, operation: &str) -> Result<String, JsError> {
+    crate::manufacturing::sew_svg(pattern, options, operation).map_err(|e| JsError::new(&e.message))
+}

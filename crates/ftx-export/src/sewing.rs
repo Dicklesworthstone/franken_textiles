@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Ctx, ExportOptions, edge_sa};
 
+pub mod preview;
 pub mod program;
 use program::{Backtack, FeedDirection, ReverseFeed, StitchRun};
 pub mod path;
