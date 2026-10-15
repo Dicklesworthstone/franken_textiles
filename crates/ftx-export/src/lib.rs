@@ -16,6 +16,7 @@ pub mod gc;
 pub mod geom;
 pub mod hpgl;
 pub mod layout;
+pub mod material_study;
 pub mod outline;
 pub mod pdf;
 pub mod pole;

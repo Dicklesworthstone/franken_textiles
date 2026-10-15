@@ -1,0 +1,460 @@
+//! Unchanged-pattern material alternatives evaluated by the production manufacturing consumers.
+//!
+//! Every variant starts from the same source, never the preceding variant. Screening is optional
+//! and does not hide per-consumer failures: a missing modulus cannot block cutting, a missing offer
+//! cannot make stock free, and a sewing refusal cannot erase a valid marker. No hardware is driven.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
+use ftx_pattern::{
+    Pattern, material_binding::Changes, material_catalog::Selection, material_cost::QuoteBook,
+    material_screen, textile_import,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::{
+    cutting::{
+        CutOptions, CutPlan,
+        procurement::{self, Market},
+    },
+    sewing::{SewOptions, SewPlan},
+};
+
+/// Explicit substitution, including heterogeneous source-piece assignments.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Variant {
+    /// Unique alternative identity, independent of the material's display name.
+    pub key: String,
+    /// Existing atomic material-binding operations; geometry/process parameters cannot be edited.
+    pub changes: Changes,
+}
+
+/// Where every material shortlisted by screening is substituted.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Target {
+    /// Replace only the default; explicitly assigned lining/cuff materials remain unchanged.
+    Default,
+    /// Replace these exact source-piece IDs, not instance IDs or cutting labels.
+    Pieces {
+        /// Nonempty unique source IDs, validated even when screening returns no eligible materials.
+        ids: Vec<String>,
+    },
+}
+
+/// Bridge from scalar screening to actual garment manufacturing. No silent Pareto pruning.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Screened {
+    /// Existing source-qualified constraints/objectives and explicit evidence policy.
+    pub request: material_screen::Request,
+    /// Explicit placement of the selected alternatives on the original pattern.
+    pub target: Target,
+    /// Required choice: false evaluates every eligible record. True deliberately prunes by scalar
+    /// objectives before manufacturing, which can remove a better marker/order alternative.
+    pub frontier_only: bool,
+}
+
+/// Dated source-bearing offers and comparable market scope; no network or checkout operation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Purchasing {
+    /// Immutable offer observations; original history and source hashes are retained.
+    pub quotes: QuoteBook,
+    /// The same currency/region/quality/terms/date scope for every variant.
+    pub market: Market,
+}
+
+/// Bounded, file-free manufacturing study over a single source pattern.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Request {
+    /// Must be `ftx-material-study/1`.
+    pub schema: String,
+    /// Explicit alternatives; mutually exclusive with screening. At most 32 are evaluated.
+    #[serde(default)]
+    pub variants: Vec<Variant>,
+    /// Optional screening directly over the canonical catalog or embedded material selections.
+    #[serde(default)]
+    pub screened: Option<Screened>,
+    /// Shared cutting policy; omission means not requested, not failed or successful.
+    #[serde(default)]
+    pub cutting: Option<CutOptions>,
+    /// Shared machine/assembly/seam policy, checked separately for every substituted material.
+    #[serde(default)]
+    pub sewing: Option<SewOptions>,
+    /// Optional pricing requires cutting, because purchased area comes from the actual marker.
+    #[serde(default)]
+    pub purchasing: Option<Purchasing>,
+}
+
+/// Separate result for one consumer. A numerical plan is never hardware authorization.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Outcome<T> {
+    /// Consumer was omitted explicitly.
+    NotRequested,
+    /// The existing consumer returned its normal source-bearing result.
+    Available {
+        /// Unmodified consumer output.
+        result: T,
+    },
+    /// The consumer or one of its required dependencies refused this alternative.
+    Refused {
+        /// Structured reason; unrelated consumers are still evaluated.
+        refusal: Refusal,
+    },
+}
+
+impl<T> Outcome<T> {
+    fn from_result(result: Result<T, Refusal>) -> Self {
+        match result {
+            Ok(result) => Self::Available { result },
+            Err(refusal) => Self::Refused { refusal },
+        }
+    }
+    fn value(&self) -> Option<&T> {
+        match self {
+            Self::Available { result } => Some(result),
+            _ => None,
+        }
+    }
+}
+
+/// Comparable outputs of actual consumers, not inferred textile or wearer performance.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Metrics {
+    /// Gross roll area including waste/margins; absent if cutting is unavailable.
+    pub stock_area_m2: Option<f64>,
+    /// Sum of outer cut-piece areas; holes are not subtracted or counted as recovered stock.
+    pub external_cut_area_m2: Option<f64>,
+    /// Complete purchased-stock mass only; absent if any roll lacks admitted areal density.
+    pub stock_mass_kg: Option<f64>,
+    /// Least observed independent whole-order total in the request currency; absent for any
+    /// missing offer. Neither a live quote guarantee nor a market-population percentile.
+    pub least_observed_independent_order_total: Option<f64>,
+    /// Sew-plan stitch intervals, including its declared directed passes/backtacks.
+    pub stitch_intervals: Option<usize>,
+    /// Declared stitch-rate feed time; excludes handling, robot movement and machine setup.
+    pub feed_seconds: Option<f64>,
+}
+
+/// One source-locked alternative, with independent production-planner results.
+#[derive(Clone, Debug, Serialize)]
+pub struct Alternative {
+    /// Original candidate key, stable across screening, binding and manufacturing.
+    pub key: String,
+    /// Source-complete binding report, including lossless `pattern_json` for later draping/exports.
+    pub binding: Outcome<Value>,
+    /// Source-locked changes which reproduce this binding on the SAME original pattern. Present
+    /// only after successful binding; unchanged inherited/per-piece assignments are also frozen.
+    pub frozen_changes: Option<Changes>,
+    /// Real roll marker output or refusal; no mechanical constants are required just to cut.
+    pub cutting: Outcome<CutPlan>,
+    /// Real sewing plan output or refusal; preserves uncompressed-stack and recipe limitations.
+    pub sewing: Outcome<SewPlan>,
+    /// Real marker-derived purchasing output or refusal; missing offers remain explicit within it.
+    pub purchasing: Outcome<Value>,
+    /// Selected actual-plan numbers for side-by-side comparison, never fabricated for failed cells.
+    pub metrics: Metrics,
+}
+
+/// Recomputed study. No cached body pose, preceding material or old machine feasibility is reused.
+#[derive(Clone, Debug, Serialize)]
+pub struct Report {
+    /// Stable report format.
+    pub schema: &'static str,
+    /// Original pattern identity, shared by every binding.
+    pub source_pattern_sha256: String,
+    /// Full authored study request identity, including machine policy and offer history.
+    pub request_sha256: String,
+    /// Retained screening result, including excluded/unknown candidates, when screening was requested.
+    pub screening: Option<material_screen::Report>,
+    /// Key-ordered alternatives, never sorted by a fabricated weighted score.
+    pub alternatives: Vec<Alternative>,
+    /// False: substitutions use the existing geometry-preserving binding implementation.
+    pub geometry_changed: bool,
+    /// Always false, regardless of whether individual planners returned successfully.
+    pub hardware_execution_authorized: bool,
+    /// Always false: this is software evaluation, not measured seam/garment validation.
+    pub physical_validation_claim: bool,
+    /// Scope of the metrics and the intentionally missing empirical claims.
+    pub notes: Vec<&'static str>,
+}
+
+fn invalid(message: impl Into<String>) -> Refusal {
+    Refusal::new(RefusalCode::InvalidDocument, message)
+}
+fn budget(message: &str) -> Refusal {
+    Refusal::new(RefusalCode::BudgetExceeded, message)
+}
+fn hash<T: Serialize>(value: &T) -> Result<String, Refusal> {
+    Ok(sha256_hex(
+        &serde_json::to_vec(value).map_err(|e| invalid(e.to_string()))?,
+    ))
+}
+
+impl Request {
+    fn variants(
+        &self,
+        pattern: &Pattern,
+    ) -> Result<(Vec<Variant>, Option<material_screen::Report>), Refusal> {
+        if self.schema != "ftx-material-study/1"
+            || (self.screened.is_some() && !self.variants.is_empty())
+            || (self.screened.is_none() && self.variants.is_empty())
+            || (self.cutting.is_none() && self.sewing.is_none())
+            || (self.purchasing.is_some() && self.cutting.is_none())
+        {
+            return Err(invalid(
+                "study needs its schema, exactly one variant source, at least one manufacturing consumer, and cutting when pricing",
+            ));
+        }
+        if self.variants.len() > 32 {
+            return Err(budget("material study exceeds 32 alternatives"));
+        }
+        let Some(screened) = &self.screened else {
+            return Ok((self.variants.clone(), None));
+        };
+        if let Target::Pieces { ids } = &screened.target {
+            let mut unique = BTreeSet::new();
+            if ids.is_empty()
+                || ids.len() > 4096
+                || ids.iter().any(|id| {
+                    !unique.insert(id)
+                        || !pattern.raw()["pieces"]
+                            .as_array()
+                            .is_some_and(|pieces| pieces.iter().any(|p| p["id"] == *id))
+                })
+            {
+                return Err(invalid(
+                    "screening target needs unique, existing source-piece IDs",
+                ));
+            }
+        }
+        let report = screened.request.evaluate(&textile_import::catalog()?)?;
+        let variants = report
+            .alternatives
+            .iter()
+            .filter(|a| a.eligible && (!screened.frontier_only || a.dominated_by.is_empty()))
+            .map(|a| {
+                let selection = a
+                    .selection
+                    .as_ref()
+                    .expect("eligible screening selection")
+                    .clone();
+                let mut changes = Changes {
+                    schema: "ftx-material-bindings/1".into(),
+                    ..Changes::default()
+                };
+                match &screened.target {
+                    Target::Default => changes.default = Some(selection),
+                    Target::Pieces { ids } => {
+                        changes.pieces = ids
+                            .iter()
+                            .map(|id| (id.clone(), selection.clone()))
+                            .collect()
+                    }
+                }
+                Variant {
+                    key: a.key.clone(),
+                    changes,
+                }
+            })
+            .collect();
+        Ok((variants, Some(report)))
+    }
+
+    /// Run each explicit substitution against the same unchanged source and common process policies.
+    ///
+    /// # Errors
+    /// Invalid source/request, ambiguous identities or excessive aggregate work. Material/geometry
+    /// feasibility errors belong to the individual consumer outcomes, not an invented aggregate pass.
+    pub fn evaluate(&self, pattern: &Pattern) -> Result<Report, Refusal> {
+        let errors = pattern.structure_errors();
+        if !errors.is_empty() {
+            return Err(invalid(errors.join("; ")));
+        }
+        let (mut variants, screening) = self.variants(pattern)?;
+        if variants.len() > 32 {
+            return Err(budget(
+                "constrain screening or supply at most 32 material alternatives",
+            ));
+        }
+        let mut keys = BTreeSet::new();
+        if variants
+            .iter()
+            .any(|v| v.key.trim().is_empty() || !keys.insert(v.key.clone()))
+        {
+            return Err(invalid("material variant keys must be unique and nonempty"));
+        }
+        let copies = self.cutting.as_ref().map_or(1, |c| c.copies);
+        if pattern
+            .instances
+            .len()
+            .checked_mul(copies)
+            .and_then(|n| n.checked_mul(variants.len()))
+            .is_none_or(|n| n > 16_384)
+            || self
+                .sewing
+                .as_ref()
+                .is_some_and(|s| s.passes.len().saturating_mul(variants.len()) > 4096)
+        {
+            return Err(budget(
+                "material study exceeds aggregate instance/pass budget",
+            ));
+        }
+        variants.sort_by(|a, b| a.key.cmp(&b.key));
+        let mut alternatives = Vec::new();
+        let mut stations = 0usize;
+        for variant in variants {
+            let row = self.evaluate_variant(pattern, variant)?;
+            if let Some(sewing) = row.sewing.value() {
+                stations = stations.saturating_add(
+                    sewing
+                        .seams
+                        .iter()
+                        .map(|s| s.stations.a.len())
+                        .sum::<usize>(),
+                );
+                if stations > 250_000 {
+                    return Err(budget(
+                        "material study exceeds 250000 aggregate sewing stations",
+                    ));
+                }
+            }
+            alternatives.push(row);
+        }
+        Ok(Report {
+            schema: "ftx-material-study-report/1",
+            source_pattern_sha256: hash(pattern.raw())?,
+            request_sha256: hash(self)?,
+            screening,
+            alternatives,
+            geometry_changed: false,
+            hardware_execution_authorized: false,
+            physical_validation_claim: false,
+            notes: vec![
+                "All variants start from the same source geometry and process options. Default replacements preserve explicit piece assignments; named-piece replacements do not change unrelated pieces.",
+                "Scalar-screening dominance is not garment/marker dominance. Frontier-only pruning happens solely when explicitly requested; manufacturing outputs are not assigned a hidden aggregate score.",
+                "Missing mass or offer coverage stays unknown. Stock mass includes waste, feed time excludes handling, and purchased quantities come from actual roll markers, not net pattern area.",
+                "Binding and available plans are not a successful drape, empirical fit, thermal-comfort prediction, seam qualification or permission to operate machinery. Source-locked pattern_json can be passed to the existing drape/thermal/export consumers.",
+            ],
+        })
+    }
+
+    fn evaluate_variant(&self, source: &Pattern, variant: Variant) -> Result<Alternative, Refusal> {
+        let binding = variant.changes.apply(source);
+        let mut row = Alternative {
+            key: variant.key,
+            binding: Outcome::NotRequested,
+            frozen_changes: None,
+            cutting: Outcome::NotRequested,
+            sewing: Outcome::NotRequested,
+            purchasing: Outcome::NotRequested,
+            metrics: Metrics::default(),
+        };
+        let bound = match binding {
+            Ok(result) => result,
+            Err(refusal) => {
+                if self.cutting.is_some() {
+                    row.cutting = Outcome::Refused {
+                        refusal: refusal.clone(),
+                    };
+                }
+                if self.sewing.is_some() {
+                    row.sewing = Outcome::Refused {
+                        refusal: refusal.clone(),
+                    };
+                }
+                if self.purchasing.is_some() {
+                    row.purchasing = Outcome::Refused {
+                        refusal: refusal.clone(),
+                    };
+                }
+                row.binding = Outcome::Refused { refusal };
+                return Ok(row);
+            }
+        };
+        let pattern = Pattern::new(bound["pattern"].clone());
+        row.frozen_changes = Some(freeze_changes(pattern.raw())?);
+        if let Some(options) = &self.cutting {
+            row.cutting = Outcome::from_result(CutPlan::build(&pattern, options));
+        }
+        if let Some(options) = &self.sewing {
+            row.sewing = Outcome::from_result(SewPlan::build(&pattern, options));
+        }
+        if let Some(purchasing) = &self.purchasing {
+            row.purchasing = match &row.cutting {
+                Outcome::Available { result } => Outcome::from_result(procurement::evaluate(
+                    result,
+                    &purchasing.quotes,
+                    &purchasing.market,
+                )),
+                Outcome::Refused { refusal } => Outcome::Refused {
+                    refusal: refusal.clone(),
+                },
+                Outcome::NotRequested => return Err(invalid("pricing requires cutting")),
+            };
+        }
+        if let Some(plan) = row.cutting.value() {
+            row.metrics.stock_area_m2 =
+                Some(finite_sum(plan.rolls.iter().map(|r| r.stock_area_m2))?);
+            row.metrics.external_cut_area_m2 = Some(finite_sum(
+                plan.rolls.iter().map(|r| r.external_cut_area_m2),
+            )?);
+            if plan.rolls.iter().all(|r| r.stock_mass_kg.is_some()) {
+                row.metrics.stock_mass_kg = Some(finite_sum(
+                    plan.rolls.iter().filter_map(|r| r.stock_mass_kg),
+                )?);
+            }
+        }
+        if let Some(plan) = row.sewing.value() {
+            row.metrics.stitch_intervals = Some(plan.stitch_intervals);
+            row.metrics.feed_seconds = Some(plan.feed_seconds);
+        }
+        if let Some(priced) = row.purchasing.value() {
+            row.metrics.least_observed_independent_order_total =
+                priced["least_observed_independent_order_total"].as_f64();
+        }
+        row.binding = Outcome::Available { result: bound };
+        Ok(row)
+    }
+}
+
+fn finite_sum(values: impl Iterator<Item = f64>) -> Result<f64, Refusal> {
+    let sum: f64 = values.sum();
+    if sum.is_finite() {
+        Ok(sum)
+    } else {
+        Err(invalid("manufacturing metric sum overflows"))
+    }
+}
+
+fn freeze_changes(pattern: &Value) -> Result<Changes, Refusal> {
+    let selection = |value: &Value| -> Result<Selection, Refusal> {
+        serde_json::from_value(value.clone()).map_err(|e| invalid(e.to_string()))
+    };
+    let mut pieces = BTreeMap::new();
+    for piece in pattern["pieces"]
+        .as_array()
+        .ok_or_else(|| invalid("bound pattern needs pieces"))?
+    {
+        if let Some(fabric) = piece.get("fabric") {
+            pieces.insert(
+                piece["id"]
+                    .as_str()
+                    .ok_or_else(|| invalid("piece ID must be text"))?
+                    .into(),
+                selection(&fabric["material"])?,
+            );
+        }
+    }
+    Ok(Changes {
+        schema: "ftx-material-bindings/1".into(),
+        default: Some(selection(&pattern["fabric"]["material"])?),
+        pieces,
+    })
+}
