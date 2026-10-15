@@ -383,3 +383,60 @@ fn steady_workbench_on_actual_drape_binds_conditions_and_omits_unrelated_metadat
         result["steady"]
     );
 }
+
+#[test]
+fn actual_sewn_drape_material_swap_reprojects_local_body_coverage_without_storage() {
+    use ftx_drape::thermal::steady::coverage::request::Request;
+    let mut raw = band().raw().clone();
+    let mut material = thermal_sheet(0.2, 1000.0);
+    material["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("specific_heat");
+    raw["fabric"]["material"] = material;
+    let first = run(&Pattern::new(raw.clone()), options());
+    raw["fabric"]["material"]["record"]["properties"]["thermal_resistance"]["value"] = json!(0.8);
+    let second = run(&Pattern::new(raw), options());
+    assert_eq!(first.scene.solver.x, second.scene.solver.x);
+    assert_eq!(first.report["thermal_surface"]["available"], false);
+    // A declared local prescribed-temperature boundary just inside an actual retained cloth face.
+    // This tests sewn-cloth propagation, not an inferred whole-body thermal/fit validation.
+    let [a, b, c] = first.scene.solver.model.membranes[0]
+        .v
+        .map(|i| first.scene.solver.x[i]);
+    let normal = (b - a).cross(c - a).normalized();
+    let center = (a + b + c) / 3.0;
+    let local_body = [a, b, c].map(|p| center + (p - center) * 0.2 - normal * 0.00001);
+    let names: std::collections::BTreeMap<_, _> = first
+        .scene
+        .mesh
+        .instances
+        .iter()
+        .map(|id| (id.clone(), "garment"))
+        .collect();
+    let mut request: Request = serde_json::from_value(json!({
+        "schema":"ftx-steady-coverage-request/1","report":first.report,
+        "map":{"body_positions_m":local_body,"body_triangles":[[0,1,2]],
+            "instance_layers":names,"settings":{"max_distance_m":0.00002,
+                "min_normal_cosine":0.99,"separation_tolerance_m":0.000000001,
+                "cells_per_layer":1,"interfaces":[]}},
+        "conditions":{"boundaries":[{"inside_c":30.0,"outside_c":0.0,
+            "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}]}
+    }))
+    .unwrap();
+    let one = request.evaluate().unwrap();
+    request.report = second.report;
+    let two = request.evaluate().unwrap();
+    let area = one["steady"]["body_area_m2"].as_f64().unwrap();
+    assert!(area > 0.0);
+    assert!((one["steady"]["covered_area_m2"].as_f64().unwrap() - area).abs() < 1e-12);
+    assert!((one["steady"]["power_w"].as_f64().unwrap() - area * 30.0 / 0.5).abs() < 1e-9);
+    assert!((two["steady"]["power_w"].as_f64().unwrap() - area * 30.0 / 1.1).abs() < 1e-9);
+    assert_eq!(
+        one["projection"]["footprints"],
+        two["projection"]["footprints"]
+    );
+    assert_ne!(one["assembly"]["sha256"], two["assembly"]["sha256"]);
+    let frozen: Request = serde_json::from_value(two["request"].clone()).unwrap();
+    assert_eq!(frozen.evaluate().unwrap(), two);
+}

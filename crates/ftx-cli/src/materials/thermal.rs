@@ -39,3 +39,22 @@ pub(crate) fn surface(report: &str, conditions: &str) -> Result<Value, Refusal> 
         serde_json::from_str(&read(conditions, MAX_INPUT - report.len())?).map_err(invalid)?;
     conditions.evaluate(&serde_json::from_str(&report).map_err(invalid)?)
 }
+
+pub(crate) fn coverage_request(path: &str) -> Result<Value, Refusal> {
+    let request: ftx_drape::thermal::steady::coverage::request::Request =
+        serde_json::from_str(&read(path, MAX_INPUT)?).map_err(invalid)?;
+    request.evaluate()
+}
+
+pub(crate) fn coverage(report: &str, map: &str, conditions: &str) -> Result<Value, Refusal> {
+    let report = read(report, MAX_INPUT)?;
+    let map = read(map, MAX_INPUT - report.len())?;
+    let conditions = read(conditions, MAX_INPUT - report.len() - map.len())?;
+    ftx_drape::thermal::steady::coverage::request::Request {
+        schema: "ftx-steady-coverage-request/1".into(),
+        report: serde_json::from_str(&report).map_err(invalid)?,
+        map: serde_json::from_str(&map).map_err(invalid)?,
+        conditions: serde_json::from_str(&conditions).map_err(invalid)?,
+    }
+    .evaluate()
+}

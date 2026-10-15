@@ -14,6 +14,8 @@ use ftx_core::{Refusal, Vec3};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+pub mod request;
+
 /// Frozen single-layer source triangles and their explicit inside-to-outside coverage topology.
 #[derive(Clone, Debug)]
 pub struct SteadyCoverage {

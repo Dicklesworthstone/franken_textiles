@@ -1,0 +1,12 @@
+{
+  "body_positions_m": [[0.0, 0.0, -0.05], [1.0, 0.0, -0.05], [0.0, 1.0, -0.05], [1.0, 1.0, -0.05]],
+  "body_triangles": [[0, 1, 2], [1, 3, 2]],
+  "instance_layers": {"front": "shell", "back": "shell"},
+  "settings": {
+    "max_distance_m": 0.2,
+    "min_normal_cosine": 0.5,
+    "separation_tolerance_m": 0.000001,
+    "cells_per_layer": 1,
+    "interfaces": []
+  }
+}

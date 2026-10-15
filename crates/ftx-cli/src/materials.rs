@@ -9,16 +9,23 @@ mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
-    if matches!(action, "thermal-steady" | "thermal-steady-surface") {
+    if matches!(
+        action,
+        "thermal-steady" | "thermal-steady-surface" | "thermal-steady-coverage"
+    ) {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
             ("thermal-steady", [path]) => thermal::stack(path)?,
             ("thermal-steady-surface", [report, conditions]) => {
                 thermal::surface(report, conditions)?
             }
+            ("thermal-steady-coverage", [path]) => thermal::coverage_request(path)?,
+            ("thermal-steady-coverage", [report, map, conditions]) => {
+                thermal::coverage(report, map, conditions)?
+            }
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json",
+                    "usage: ftx materials thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
                 ));
             }
         };
@@ -146,7 +153,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             Ok((result, 0, text))
         }
         _ => Err(bad_input(
-            "usage: ftx materials [list|show ID|freeze ID|compare ID ID|thermal-steady STACK.json|thermal-steady-surface SIM_REPORT.json CONDITIONS.json]",
+            "usage: ftx materials [list|show ID|freeze ID|compare ID ID|thermal-steady STACK.json|thermal-steady-surface SIM_REPORT.json CONDITIONS.json|thermal-steady-coverage REQUEST.json]",
         )),
     }
 }

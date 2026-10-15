@@ -50,6 +50,8 @@ ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
 ftx-materials thermal-steady STACK.json
 ftx-materials thermal-steady-surface SIM_REPORT.json CONDITIONS.json
+ftx-materials thermal-steady-coverage REQUEST.json
+ftx-materials thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json
 ftx-materials thermal-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json
 ftx-materials thermal-map SIM_REPORT.json BODY.obj PROJECTION.json
@@ -69,6 +71,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `thermal-steady` solves source-qualified conduction without requiring mass or heat capacity; its frozen request replays offline.
 `thermal-steady-surface` evaluates source-locked drape triangles without requiring heat storage; no inferred body coverage.
+`thermal-steady-coverage` recomputes layered body coverage and heat directly from retained drape materials, without invented storage.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
 `calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
@@ -263,6 +266,10 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-steady", path] => steady_workbench::stack(path),
         ["thermal-steady-surface", report, conditions] => {
             steady_workbench::surface(report, conditions)
+        }
+        ["thermal-steady-coverage", path] => steady_workbench::coverage_request(path),
+        ["thermal-steady-coverage", report, map, conditions] => {
+            steady_workbench::coverage(report, map, conditions)
         }
         ["calibrate", path] => calibration(path, false),
         ["calibrate", path, "--allow-estimates"] => calibration(path, true),

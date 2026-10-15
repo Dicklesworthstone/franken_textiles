@@ -44,3 +44,31 @@ pub fn steady_surface(report: &str, conditions: &str) -> Result<String, Refusal>
     let report = serde_json::from_str(report).map_err(invalid)?;
     serde_json::to_string(&conditions.evaluate(&report)?).map_err(invalid)
 }
+
+/// Recompute material-following body coverage and exact steady heat from a portable request.
+/// This calls the same implementation as `ftx-materials thermal-steady-coverage` without files.
+///
+/// # Errors
+/// Input over 64 MiB, invalid JSON, source/geometry refusals, or unsupported transport conditions.
+pub fn steady_coverage(input: &str) -> Result<String, Refusal> {
+    if input.len() > 64 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "coverage input exceeds 64 MiB",
+        ));
+    }
+    let invalid = |e: serde_json::Error| Refusal::new(RefusalCode::InvalidDocument, e.to_string());
+    let request: ftx_drape::thermal::steady::coverage::request::Request =
+        serde_json::from_str(input).map_err(invalid)?;
+    serde_json::to_string(&request.evaluate()?).map_err(invalid)
+}
+
+/// Browser binding for source-locked, storage-independent garment/body coverage.
+///
+/// # Errors
+/// The same input, geometric and physical capability refusals as [`steady_coverage`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn thermal_steady_coverage(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    steady_coverage(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
