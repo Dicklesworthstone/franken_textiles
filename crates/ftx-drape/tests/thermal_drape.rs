@@ -265,3 +265,67 @@ fn temperature_series_follow_sewn_drape_without_alternative_material_lookup() {
             .is_err()
     );
 }
+
+#[test]
+fn conduction_only_drape_follows_materials_without_fabricating_storage() {
+    use ftx_core::receipt::sha256_hex;
+    use ftx_drape::thermal::{Boundary, steady::surface::SteadySurface};
+    let mut raw = band().raw().clone();
+    let mut material = thermal_sheet(0.2, 1000.0);
+    material["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("specific_heat");
+    raw["fabric"]["material"] = material.clone();
+    let uniform = run(&Pattern::new(raw.clone()), options());
+    material["record"]["properties"]["thermal_resistance"]["value"] = json!(0.6);
+    raw["pieces"][1]["fabric"] = json!({"material":material});
+    let mixed = run(&Pattern::new(raw), options());
+    assert_eq!(uniform.scene.solver.x, mixed.scene.solver.x);
+    assert_eq!(mixed.report["thermal_surface"]["available"], false);
+    assert!(mixed.thermal_surface(4).is_err());
+    assert_eq!(mixed.report["steady_thermal_surface"]["available"], true);
+    let (s, x) = SteadySurface::from_drape_report(&mixed.report).unwrap();
+    assert_eq!(x, mixed.scene.solver.x);
+    assert_eq!(
+        s.snapshot().unwrap(),
+        mixed.steady_thermal_surface().unwrap().snapshot().unwrap()
+    );
+    let boundary = Boundary {
+        inside_c: 30.0,
+        outside_c: 0.0,
+        inside_resistance: 0.1,
+        outside_resistance: 0.2,
+    };
+    let output = s.solve(&x, &[boundary; 2]).unwrap();
+    for (i, &owner) in mixed.scene.triangle_owner.iter().enumerate() {
+        let patch = &output.patches[i];
+        let expected = 30.0 / (0.3 + if owner == 0 { 0.2 } else { 0.6 });
+        assert!((output.columns[patch.column].flux_w_m2 - expected).abs() < 1e-7);
+        assert_eq!(
+            s.snapshot().unwrap()["patches"][i]["vertices"],
+            json!(mixed.scene.solver.model.membranes[i].v)
+        );
+    }
+    let saved = serde_json::to_string(&mixed.report).unwrap();
+    assert_eq!(
+        SteadySurface::from_drape_report(&serde_json::from_str(&saved).unwrap())
+            .unwrap()
+            .0
+            .snapshot()
+            .unwrap(),
+        s.snapshot().unwrap()
+    );
+    let mut changed = mixed.report.clone();
+    changed["steady_thermal_surface"]["positions_m"][0][0] = json!(10.0);
+    assert!(SteadySurface::from_drape_report(&changed).is_err());
+    // Even rehashing a mixed receipt cannot associate a different material report with old columns.
+    changed = mixed.report.clone();
+    changed["material"] = uniform.report["material"].clone();
+    let hash = |v: &Value| sha256_hex(&serde_json::to_vec(v).unwrap());
+    changed["steady_thermal_surface"]["material_report_sha256"] = json!(hash(&changed["material"]));
+    let frame = &mut changed["steady_thermal_surface"];
+    frame.as_object_mut().unwrap().remove("sha256");
+    frame["sha256"] = json!(hash(frame));
+    assert!(SteadySurface::from_drape_report(&changed).is_err());
+}

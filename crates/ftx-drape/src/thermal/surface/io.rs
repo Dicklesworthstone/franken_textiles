@@ -21,7 +21,7 @@ fn array<'a>(v: &'a Value, key: &str) -> Result<&'a [Value], Refusal> {
         .map(Vec::as_slice)
         .ok_or_else(|| invalid(format!("thermal receipt needs array {key}")))
 }
-fn digest(v: &Value) -> Result<String, Refusal> {
+pub(crate) fn digest(v: &Value) -> Result<String, Refusal> {
     Ok(sha256_hex(
         &serde_json::to_vec(v).map_err(|e| invalid(e.to_string()))?,
     ))
@@ -222,71 +222,101 @@ impl Surface {
                 "thermal topology differs from retained cloth elements or exceeds budget",
             ));
         }
-        let mut records = BTreeMap::new();
-        let instance_hashes: Vec<String> = match material["basis"].as_str() {
-            Some("characterized_record") => {
-                let hash = material["record_sha256"]
-                    .as_str()
-                    .ok_or_else(|| invalid("missing material identity"))?;
-                records.insert(hash.to_string(), &material["record"]);
-                vec![hash.into(); scene.mesh.instances.len()]
-            }
-            Some("per_piece_characterization") => {
-                let receipts = array(material, "instances")?;
-                if receipts.len() != scene.mesh.instances.len() {
-                    return Err(invalid("missing instance material receipts"));
-                }
-                let mut hashes = Vec::with_capacity(receipts.len());
-                for (r, id) in receipts.iter().zip(&scene.mesh.instances) {
-                    if r["instance"] != *id {
-                        return Err(invalid("instance material order differs from cloth"));
-                    }
-                    let hash = r["record_sha256"]
-                        .as_str()
-                        .ok_or_else(|| invalid("missing instance material identity"))?;
-                    records.insert(hash.to_string(), &material["records"][hash]["record"]);
-                    hashes.push(hash.into());
-                }
-                hashes
-            }
-            _ => {
-                return Err(invalid(
-                    "thermal coupling needs characterized material records, not legacy defaults",
-                ));
-            }
-        };
-        let mut used = BTreeSet::new();
-        for &owner in &scene.triangle_owner {
-            used.insert(
-                instance_hashes
-                    .get(owner)
-                    .ok_or_else(|| invalid("invalid retained triangle owner"))?
-                    .clone(),
-            );
-        }
-        let mut ids = BTreeMap::new();
-        let mut columns = Vec::new();
-        for hash in used {
-            let record = restore_material(records[&hash])?;
-            if record.sha256() != hash {
-                return Err(invalid("instance refers to a different material receipt"));
-            }
-            ids.insert(hash, columns.len());
-            columns.push(DryThermalModel::new(vec![record], vec![], cells_per_layer)?);
-        }
+        let (records, assignment) =
+            retained_materials(material, &scene.mesh.instances, &scene.triangle_owner)?;
+        let columns = records
+            .into_iter()
+            .map(|r| DryThermalModel::new(vec![r], vec![], cells_per_layer))
+            .collect::<Result<_, _>>()?;
         let patches = faces
             .iter()
-            .zip(&scene.triangle_owner)
-            .map(|(e, &owner)| Patch {
+            .zip(assignment)
+            .map(|(e, column)| Patch {
                 vertices: e.v,
                 reference_area_m2: e.area,
-                column: ids[&instance_hashes[owner]],
+                column,
             })
             .collect();
         let surface = Self::new(columns, scene.solver.x.len(), patches)?;
         surface.validate_positions(&scene.solver.x)?;
         Ok(surface)
     }
+}
+
+// Resolve retained instance identities once for both thermal capabilities. No live catalog lookup.
+pub(crate) fn retained_materials(
+    material: &Value,
+    instances: &[String],
+    triangle_owner: &[usize],
+) -> Result<(Vec<ResolvedMaterial>, Vec<usize>), Refusal> {
+    if instances.is_empty()
+        || instances.len() > 196_608
+        || triangle_owner.is_empty()
+        || triangle_owner.len() > 65_536
+        || instances.iter().any(|id| id.is_empty())
+        || instances.iter().collect::<BTreeSet<_>>().len() != instances.len()
+    {
+        return Err(invalid(
+            "invalid retained thermal instance or triangle budget",
+        ));
+    }
+    let mut records = BTreeMap::new();
+    let instance_hashes: Vec<String> = match material["basis"].as_str() {
+        Some("characterized_record") => {
+            let hash = material["record_sha256"]
+                .as_str()
+                .ok_or_else(|| invalid("missing material identity"))?;
+            records.insert(hash.to_string(), &material["record"]);
+            vec![hash.into(); instances.len()]
+        }
+        Some("per_piece_characterization") => {
+            let receipts = array(material, "instances")?;
+            if receipts.len() != instances.len() {
+                return Err(invalid("missing instance material receipts"));
+            }
+            let mut hashes = Vec::with_capacity(receipts.len());
+            for (r, id) in receipts.iter().zip(instances) {
+                if r["instance"] != *id {
+                    return Err(invalid("instance material order differs from cloth"));
+                }
+                let hash = r["record_sha256"]
+                    .as_str()
+                    .ok_or_else(|| invalid("missing instance material identity"))?;
+                records.insert(hash.to_string(), &material["records"][hash]["record"]);
+                hashes.push(hash.into());
+            }
+            hashes
+        }
+        _ => {
+            return Err(invalid(
+                "thermal coupling needs characterized material records, not legacy defaults",
+            ));
+        }
+    };
+    let mut used = BTreeSet::new();
+    for &owner in triangle_owner {
+        used.insert(
+            instance_hashes
+                .get(owner)
+                .ok_or_else(|| invalid("invalid retained triangle owner"))?
+                .clone(),
+        );
+    }
+    let mut ids = BTreeMap::new();
+    let mut columns = Vec::new();
+    for hash in used {
+        let record = restore_material(records[&hash])?;
+        if record.sha256() != hash {
+            return Err(invalid("instance refers to a different material receipt"));
+        }
+        ids.insert(hash, columns.len());
+        columns.push(record);
+    }
+    let assignment = triangle_owner
+        .iter()
+        .map(|&owner| ids[&instance_hashes[owner]])
+        .collect();
+    Ok((columns, assignment))
 }
 
 impl DrapeRun {

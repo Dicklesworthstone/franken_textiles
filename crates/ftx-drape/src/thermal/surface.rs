@@ -9,17 +9,19 @@
 use std::collections::BTreeSet;
 
 use ftx_core::{Refusal, Vec3, receipt::sha256_hex};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{Boundary, DryThermalModel, invalid, positive, temperature};
 
 pub mod coverage;
-mod io;
+pub(crate) mod io;
 pub mod projection;
 pub(crate) use io::for_drape;
 
 /// One retained material triangle. A seam weld does not merge either triangle's reference area.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Patch {
     /// Vertex indices in the deformed surface, in the same frame and metres as the drape solver.
     pub vertices: [usize; 3],
@@ -27,6 +29,43 @@ pub struct Patch {
     pub reference_area_m2: f64,
     /// Index of the explicitly assigned through-thickness layer column.
     pub column: usize,
+}
+
+// Both storage-bearing and conduction-only surfaces use the same retained topology contract.
+pub(crate) fn validate_topology(
+    columns: usize,
+    vertex_count: usize,
+    patches: &[Patch],
+) -> Result<(), Refusal> {
+    if patches.is_empty()
+        || patches.len() > 65_536
+        || columns == 0
+        || columns > patches.len()
+        || vertex_count == 0
+        || vertex_count > 196_608
+    {
+        return Err(invalid("invalid thermal surface size"));
+    }
+    let mut faces = BTreeSet::new();
+    let mut used = BTreeSet::new();
+    for p in patches {
+        positive("reference triangle area", p.reference_area_m2)?;
+        if p.column >= columns {
+            return Err(invalid("thermal patch indexes a missing column"));
+        }
+        let mut v = p.vertices;
+        v.sort_unstable();
+        if v[2] >= vertex_count || v[0] == v[1] || v[1] == v[2] || !faces.insert(v) {
+            return Err(invalid(
+                "thermal surface has an invalid or repeated triangle",
+            ));
+        }
+        used.insert(p.column);
+    }
+    if used.len() != columns {
+        return Err(invalid("thermal surface contains an unassigned column"));
+    }
+    Ok(())
 }
 
 /// Immutable topology, reference geometry and source-locked layer columns.
@@ -98,38 +137,13 @@ impl Surface {
         vertex_count: usize,
         patches: Vec<Patch>,
     ) -> Result<Self, Refusal> {
-        if patches.is_empty()
-            || patches.len() > 65_536
-            || columns.is_empty()
-            || columns.len() > patches.len()
-            || vertex_count == 0
-            || vertex_count > 196_608
-        {
-            return Err(invalid("invalid thermal surface size"));
-        }
-        let mut faces = BTreeSet::new();
-        let mut used = BTreeSet::new();
+        validate_topology(columns.len(), vertex_count, &patches)?;
         let mut cells = 0usize;
         for p in &patches {
-            positive("reference triangle area", p.reference_area_m2)?;
-            let Some(column) = columns.get(p.column) else {
-                return Err(invalid("thermal patch indexes a missing column"));
-            };
-            let mut v = p.vertices;
-            v.sort_unstable();
-            if v[2] >= vertex_count || v[0] == v[1] || v[1] == v[2] || !faces.insert(v) {
-                return Err(invalid(
-                    "thermal surface has an invalid or repeated triangle",
-                ));
-            }
-            used.insert(p.column);
             cells = cells
-                .checked_add(column.cells())
+                .checked_add(columns[p.column].cells())
                 .filter(|&n| n <= 1_000_000)
                 .ok_or_else(|| invalid("thermal surface exceeds one million cells"))?;
-        }
-        if used.len() != columns.len() {
-            return Err(invalid("thermal surface contains an unassigned column"));
         }
         let mut surface = Self {
             columns,

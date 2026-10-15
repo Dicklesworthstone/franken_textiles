@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub mod request;
+pub mod surface;
 
 const ITERATIONS: usize = 128;
 const MAX_LAYERS: usize = 256;

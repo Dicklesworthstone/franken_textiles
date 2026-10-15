@@ -414,6 +414,8 @@ pub fn drape(
     // stay byte-compatible; explicit materials carry a ready-to-evaluate exchange or a refusal.
     if report["material"]["basis"] != "legacy_uncertain" {
         report["thermal_surface"] = crate::thermal::surface::for_drape(&scene, &report["material"]);
+        report["steady_thermal_surface"] =
+            crate::thermal::steady::surface::for_drape(&scene, &report["material"]);
     }
     Ok(DrapeRun {
         scene,
