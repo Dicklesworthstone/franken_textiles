@@ -13,6 +13,9 @@ use crate::materials::{Evidence, Form, Material, Source};
 
 mod polynomial;
 pub use polynomial::PolynomialFit;
+mod conduction;
+pub use conduction::ConductionLaw;
+use conduction::qualified_scalar;
 
 /// One reported mean; standard deviation is not an uncertainty of the mean or a confidence interval.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -327,38 +330,14 @@ impl ThermalLaw {
         }
         let response = material.thermal_response.as_ref();
         let scalar = |key: &str, unit: &str| -> Result<f64, Refusal> {
-            let value = positive(material.require(key, unit, allow_estimates)?, key)?;
-            if let Some(response) = response {
-                let q = &material.properties[key];
-                for (k, expected) in [
-                    ("specimen", &response.specimen),
-                    ("conditioning", &response.conditioning),
-                ] {
-                    if q.conditions.get(k) != Some(expected) {
-                        return Err(invalid(format!(
-                            "{}: {key} must match thermal {k} {expected}",
-                            material.id
-                        )));
-                    }
-                }
-            }
-            Ok(value)
+            qualified_scalar(material, key, unit, allow_estimates)
         };
         let mass = scalar("areal_density", "kg/m2")?;
-        let (thickness, transport) =
-            if let Some(series) = response.and_then(|r| r.conductivity.as_ref()) {
-                (
-                    Some(scalar("thickness", "m")?),
-                    Law::Curve(series.compile("W/(m*K)", &material.sources, allow_estimates)?),
-                )
-            } else if material.properties.contains_key("thermal_resistance") {
-                (None, Law::Constant(scalar("thermal_resistance", "m2*K/W")?))
-            } else {
-                (
-                    Some(scalar("thickness", "m")?),
-                    Law::Constant(scalar("thermal_conductivity", "W/(m*K)")?),
-                )
-            };
+        let ConductionLaw {
+            thickness,
+            transport,
+            ..
+        } = ConductionLaw::from_material(material, allow_estimates)?;
         let specific_heat = if let Some(series) = response.and_then(|r| r.specific_heat.as_ref()) {
             Law::Curve(series.compile("J/(kg*K)", &material.sources, allow_estimates)?)
         } else {
