@@ -19,6 +19,7 @@ pub mod material_cost;
 pub mod material_plasticity;
 pub mod material_relaxation;
 pub mod material_response;
+pub mod material_screen;
 pub mod material_thermal;
 pub mod materials;
 pub mod pattern;
