@@ -8,6 +8,7 @@
 pub mod fold;
 pub mod manufacturing;
 pub mod page;
+pub mod thermal;
 pub mod tracing;
 #[cfg(target_arch = "wasm32")]
 pub mod web;

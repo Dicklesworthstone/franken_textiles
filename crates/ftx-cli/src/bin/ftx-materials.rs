@@ -36,7 +36,7 @@ mod cutting;
 mod relaxation_calibration;
 
 const USAGE: &str = "ftx-materials catalog [SEARCH]
-ftx-materials show ID
+ftx-materials show ID [--allow-estimates]
 ftx-materials resolve PATTERN.json
 ftx-materials bind PATTERN.json SELECTION.json NEW-PATTERN.json
 ftx-materials price PATTERN.json QUOTES.json SCOPE.json
@@ -46,6 +46,7 @@ ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
 ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
+ftx-materials thermal-steady STACK.json
 ftx-materials thermal-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json
 ftx-materials thermal-map SIM_REPORT.json BODY.obj PROJECTION.json
@@ -57,12 +58,13 @@ ftx-materials sew-plan PATTERN.json OPTIONS.json
 ftx-materials sew-stitches PATTERN.json OPTIONS.json
 ftx-materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg
 
-JSON output. `show` includes a portable selection and missing-property coverage.
+JSON output. `show` includes a portable selection, missing-property coverage and separate steady/transient readiness.
 `resolve` invokes the actual drape resolver without meshing; missing mechanics refuse.
 `bind` preserves geometry and embeds a locked selection; its output path must not exist.
 `price` is a dated offer sample, not a checkout or a worldwide market price.
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
+`thermal-steady` solves source-qualified conduction without requiring mass or heat capacity; its frozen request replays offline.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
 `calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
@@ -254,6 +256,9 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-map", report, body, settings] => thermal_projection::run(report, body, settings),
         ["thermal-motion", schedule] => thermal_motion::run(schedule),
         ["thermal-transient", path] => thermal_transient::run(path),
+        ["thermal-steady", path] => {
+            read::<ftx_drape::thermal::steady::request::Request>(path)?.evaluate(&catalog()?)
+        }
         ["calibrate", path] => calibration(path, false),
         ["calibrate", path, "--allow-estimates"] => calibration(path, true),
         ["catalog"] | ["catalog", _] => {
@@ -268,14 +273,30 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             });
             serde_json::to_value(db).map_err(|e| invalid(e.to_string()))
         }
-        ["show", id] => {
+        ["show", id] | ["show", id, "--allow-estimates"] => {
             let snapshot = catalog()?.resolve(&Selection {
                 id: (*id).into(),
+                allow_estimates: words.len() == 3,
                 ..Selection::default()
             })?;
+            let steady = ftx_pattern::material_thermal::ConductionLaw::from_material(
+                snapshot.material(),
+                snapshot.allows_estimates(),
+            )
+            .map(|law| law.domain());
+            let transient = ftx_pattern::material_thermal::ThermalLaw::from_material(
+                snapshot.material(),
+                snapshot.allows_estimates(),
+            )
+            .map(|law| law.domain());
+            let readiness = |result: Result<Option<[f64; 2]>, Refusal>| match result {
+                Ok(domain) => json!({"ready":true,"temperature_domain_c":domain}),
+                Err(refusal) => json!({"ready":false,"refusal":refusal}),
+            };
             Ok(
                 json!({"snapshot":snapshot,"selection":snapshot.frozen_selection(),
                 "missing_mechanics":snapshot.material().missing_mechanics(),
+                "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
                 "simulation_ready":simulation_readiness(&snapshot).is_ok()}),
             )
         }

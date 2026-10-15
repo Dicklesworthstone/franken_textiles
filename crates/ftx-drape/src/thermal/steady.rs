@@ -14,6 +14,8 @@ use ftx_pattern::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub mod request;
+
 const ITERATIONS: usize = 128;
 const MAX_LAYERS: usize = 256;
 

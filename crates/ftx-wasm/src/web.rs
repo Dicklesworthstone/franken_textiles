@@ -184,3 +184,13 @@ pub fn sew_stitches(pattern: &str, options: &str) -> Result<String, JsError> {
 pub fn sew_svg(pattern: &str, options: &str, operation: &str) -> Result<String, JsError> {
     crate::manufacturing::sew_svg(pattern, options, operation).map_err(|e| JsError::new(&e.message))
 }
+
+/// Source-qualified steady textile conduction, with the native workbench's exact request schema.
+/// No files, network access, missing heat storage or comfort rating are introduced.
+///
+/// # Errors
+/// Oversized/invalid JSON, incomplete transport, denied evidence or a failed bounded thermal solve.
+#[wasm_bindgen]
+pub fn thermal_steady(request: &str) -> Result<String, JsError> {
+    crate::thermal::steady(request).map_err(|e| JsError::new(&e.message))
+}
