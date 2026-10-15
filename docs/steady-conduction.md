@@ -98,3 +98,60 @@ multisegment tables, manufactured nonlinear stacks at validity endpoints, disjoi
 domains, reversal, scalar/table mixtures, real-source substitution, frozen replay and refusal
 paths. This is numerical and integration validation; independent physical validation and
 matched transient characterization remain separate open work.
+
+## Steady fields on a retained drape
+
+`SteadySurface` uses the actual solver triangle positions, owners and frozen material records
+retained in `sim_report.json`. It does not require heat capacity or fabricate a transient state.
+A characterized drape records `steady_thermal_surface.available` separately from the existing
+storage-bearing `thermal_surface.available`. Incomplete conductivity/resistance still refuses.
+
+```bash
+ftx-materials thermal-steady-surface sim_report.json conditions.json
+ftx materials thermal-steady-surface sim_report.json conditions.json --json
+```
+
+Both commands call the same `SurfaceConditions::evaluate` method. The main `ftx` command wraps
+its result in the standard `ftx-cli/1` envelope; the companion prints the result directly.
+`ftx materials thermal-steady STACK.json --json` also exposes the equal-area stack command above.
+All inputs are read-only, with a combined 64 MiB input limit. A global `--allow-estimates` switch
+is not accepted here: each frozen material's original evidence consent remains authoritative.
+
+Conditions use `ftx-steady-surface-conditions/1` and a `boundaries` array. Each boundary explicitly
+specifies `inside_c`, `outside_c`, `inside_resistance_m2_k_w`, and
+`outside_resistance_m2_k_w`. One boundary broadcasts uniformly. Multiple boundaries require one
+per model column and its exact `model_sha256`; this prevents a material swap from silently
+changing which conditions apply to which material. No wind coefficient or skin temperature is
+inferred. Unknown fields (including transient settings), invalid films and out-of-domain material
+face temperatures refuse rather than changing the calculation.
+
+The `ftx-steady-surface-result/1` output includes current triangle areas, signed powers in W,
+column fluxes in W/m², layer face temperatures in °C, numerical residuals, vertex positions,
+triangle owners and a source-complete frozen `request`. To replay, save `request.report` and
+`request.conditions` as the two command inputs. Frozen conditions bind the model hash even for a
+uniform boundary. For a deliberate material comparison, reuse the original unbound uniform
+conditions on each newly draped material; do not edit an old receipt or remove its material hashes.
+Unrelated top-level report metadata is not copied to the replay request; geometry remains local
+user data and should not be published without permission.
+
+Runnable synthetic example (two declared triangles, **not** a simulated or measured garment):
+
+```bash
+cargo run --locked -p ftx-cli --bin ftx-materials -- thermal-steady-surface \
+  tests/fixtures/materials/synthetic-steady-surface-report.json \
+  tests/fixtures/materials/steady-surface-conditions.json
+```
+
+The declared two half-square-metre patches have resistances 0.4 and 0.8 m² K/W; with a 30 K
+reservoir difference and films summing to 0.3 m² K/W, their independent total is
+`0.5*30/0.7 + 0.5*30/1.1 = 35.064935064935064 W`. This is an analytic interface check, not
+measured jacket heat loss. An additional actual synthetic sewn-drape test changes only transport,
+verifies identical mechanical positions, changed heat flow and refusal of old bound conditions.
+
+The browser export `thermal_steady_surface(report_json, conditions_json)` has the same data
+contract and input budget; `ftx_wasm::thermal::steady_surface` is its native-testable entry point.
+Native equality and wasm compilation are not browser-runtime parity. These remain independent
+fixed-characterization sheet columns: adjacent triangles from different garments do not imply a
+series layer stack or body coverage. The separate coverage/motion path is not silently upgraded
+from storage-bearing materials to conduction-only records. No whole-wearer warmth, empirical
+fit, uncertainty propagation or hardware authorization is claimed.

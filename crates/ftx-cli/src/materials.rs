@@ -5,10 +5,28 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
+mod thermal;
+
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if matches!(action, "thermal-steady" | "thermal-steady-surface") {
+        known_options(args, "materials", &[])?;
+        let result = match (action, &args.positional[2..]) {
+            ("thermal-steady", [path]) => thermal::stack(path)?,
+            ("thermal-steady-surface", [report, conditions]) => {
+                thermal::surface(report, conditions)?
+            }
+            _ => {
+                return Err(bad_input(
+                    "usage: ftx materials thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json",
+                ));
+            }
+        };
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     known_options(args, "materials", &["allow-estimates"])?;
     let catalog = textile_import::catalog()?;
-    let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
     match action {
         "list" => {
             if args.positional.len() > 2 {
@@ -103,9 +121,24 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 json!({"schema":"ftx-material-selection/1", "selection":selected.frozen_selection(),
                     "mechanics_missing":missing, "sha256":selected.sha256()})
             } else {
+                let steady = ftx_pattern::material_thermal::ConductionLaw::from_material(
+                    selected.material(),
+                    selected.allows_estimates(),
+                )
+                .map(|law| law.domain());
+                let transient = ftx_pattern::material_thermal::ThermalLaw::from_material(
+                    selected.material(),
+                    selected.allows_estimates(),
+                )
+                .map(|law| law.domain());
+                let readiness = |result: Result<Option<[f64; 2]>, Refusal>| match result {
+                    Ok(domain) => json!({"ready":true,"temperature_domain_c":domain}),
+                    Err(refusal) => json!({"ready":false,"refusal":refusal}),
+                };
                 json!({"schema":"ftx-material-detail/1", "material":selected.material(),
                     "mechanics_missing":missing, "sha256":selected.sha256(),
                     "mechanics_ready":selected.mechanics().is_ok(),
+                    "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
                     "thermal_ready":selected.thermal_resistance().is_ok()})
             };
             let text = serde_json::to_string_pretty(&result)
@@ -113,7 +146,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             Ok((result, 0, text))
         }
         _ => Err(bad_input(
-            "usage: ftx materials [list|show ID|freeze ID|compare ID ID]",
+            "usage: ftx materials [list|show ID|freeze ID|compare ID ID|thermal-steady STACK.json|thermal-steady-surface SIM_REPORT.json CONDITIONS.json]",
         )),
     }
 }

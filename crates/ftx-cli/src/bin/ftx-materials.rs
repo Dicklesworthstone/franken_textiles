@@ -17,6 +17,8 @@ use ftx_pattern::textile_import::{catalog, resolve_fabric};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+#[path = "../materials/thermal.rs"]
+mod steady_workbench;
 #[path = "material_workbench/coverage.rs"]
 mod thermal_coverage;
 #[path = "material_workbench/motion.rs"]
@@ -47,6 +49,7 @@ ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
 ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
 ftx-materials thermal-steady STACK.json
+ftx-materials thermal-steady-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json
 ftx-materials thermal-map SIM_REPORT.json BODY.obj PROJECTION.json
@@ -65,6 +68,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `thermal-steady` solves source-qualified conduction without requiring mass or heat capacity; its frozen request replays offline.
+`thermal-steady-surface` evaluates source-locked drape triangles without requiring heat storage; no inferred body coverage.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
 `calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
@@ -256,8 +260,9 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-map", report, body, settings] => thermal_projection::run(report, body, settings),
         ["thermal-motion", schedule] => thermal_motion::run(schedule),
         ["thermal-transient", path] => thermal_transient::run(path),
-        ["thermal-steady", path] => {
-            read::<ftx_drape::thermal::steady::request::Request>(path)?.evaluate(&catalog()?)
+        ["thermal-steady", path] => steady_workbench::stack(path),
+        ["thermal-steady-surface", report, conditions] => {
+            steady_workbench::surface(report, conditions)
         }
         ["calibrate", path] => calibration(path, false),
         ["calibrate", path, "--allow-estimates"] => calibration(path, true),
