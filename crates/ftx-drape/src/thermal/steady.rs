@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub mod coverage;
+pub mod exterior;
 pub mod request;
 pub mod surface;
 
