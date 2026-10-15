@@ -30,6 +30,8 @@ not infer `D` from membrane modulus, fiber identity, thickness, cantilever marke
 `E*t^3`. If a test reports specimen flexural rigidity in N m², the dimensional conversion to a
 sheet coefficient requires the actual coupon geometry and belongs in the source-bearing method.
 
+By default, a complete preferred-curvature triplet already present in the material is held fixed. Set `fit_preferred_curvature: true` only when the coupon program contains enough independent curvature states to identify moment offsets as well as stiffness. That mode fits `M = D*k + c` and recovers `k0 = -D^-1*c`; any existing preferred-curvature evidence requires explicit replacement consent. The recovered target is estimate-class evidence even when the coupon forces were measured.
+
 The fitted law is
 
 ```
@@ -58,6 +60,5 @@ It does not identify bending hysteresis, rate dependence, damage, plastic folds,
 curvature response, natural seam curvature or a stress-free 3D reference metric. The six-node
 normal-curvature discretization still requires mesh-refinement checks.
 
-The synthetic regressions prove software arithmetic and evidence propagation, not textile
-characterization. Closing `ftx-tm2`, `ftx-tm4`, `ftx-md1` or the fixed-jacket gate still requires
+The runnable synthetic fixture exercises the joint mode and recovers preferred curvature `[1,-0.5,0.25] 1/m` together with all four directional coefficients. The synthetic regressions prove software arithmetic and evidence propagation, not textile characterization. Closing `ftx-tm2`, `ftx-tm4`, `ftx-md1` or the fixed-jacket gate still requires
 matched real linen, leather and performance-knit coupons with independent held-out measurements.

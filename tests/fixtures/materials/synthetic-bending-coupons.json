@@ -5,15 +5,69 @@
     "name": "Synthetic bending coupon sheet; not measured textile data",
     "form": "woven",
     "properties": {
-      "areal_density": {"value": 0.2, "unit": "kg/m2", "evidence": "estimate", "source": "fixture", "method": "Synthetic software fixture"},
-      "warp_stiffness": {"value": 1000.0, "unit": "N/m", "evidence": "estimate", "source": "fixture", "method": "Synthetic software fixture"},
-      "weft_stiffness": {"value": 900.0, "unit": "N/m", "evidence": "estimate", "source": "fixture", "method": "Synthetic software fixture"},
-      "poisson_warp_weft": {"value": 0.1, "unit": "1", "evidence": "estimate", "source": "fixture", "method": "Synthetic software fixture"},
-      "shear_stiffness": {"value": 300.0, "unit": "N/m", "evidence": "estimate", "source": "fixture", "method": "Synthetic software fixture"},
-      "bending_rigidity": {"value": 0.00003, "unit": "N*m", "evidence": "estimate", "source": "fixture", "method": "Synthetic seam-hinge fallback only"},
-      "thickness": {"value": 0.0006, "unit": "m", "evidence": "estimate", "source": "fixture", "method": "Synthetic software fixture"},
-      "friction_skin": {"value": 0.2, "unit": "1", "evidence": "estimate", "source": "fixture", "method": "Synthetic software fixture"},
-      "friction_self": {"value": 0.3, "unit": "1", "evidence": "estimate", "source": "fixture", "method": "Synthetic software fixture"}
+      "areal_density": {
+        "value": 0.2,
+        "unit": "kg/m2",
+        "evidence": "estimate",
+        "source": "fixture",
+        "method": "Synthetic software fixture"
+      },
+      "warp_stiffness": {
+        "value": 1000,
+        "unit": "N/m",
+        "evidence": "estimate",
+        "source": "fixture",
+        "method": "Synthetic software fixture"
+      },
+      "weft_stiffness": {
+        "value": 900,
+        "unit": "N/m",
+        "evidence": "estimate",
+        "source": "fixture",
+        "method": "Synthetic software fixture"
+      },
+      "poisson_warp_weft": {
+        "value": 0.1,
+        "unit": "1",
+        "evidence": "estimate",
+        "source": "fixture",
+        "method": "Synthetic software fixture"
+      },
+      "shear_stiffness": {
+        "value": 300,
+        "unit": "N/m",
+        "evidence": "estimate",
+        "source": "fixture",
+        "method": "Synthetic software fixture"
+      },
+      "bending_rigidity": {
+        "value": 0.00003,
+        "unit": "N*m",
+        "evidence": "estimate",
+        "source": "fixture",
+        "method": "Synthetic seam-hinge fallback only"
+      },
+      "thickness": {
+        "value": 0.0006,
+        "unit": "m",
+        "evidence": "estimate",
+        "source": "fixture",
+        "method": "Synthetic software fixture"
+      },
+      "friction_skin": {
+        "value": 0.2,
+        "unit": "1",
+        "evidence": "estimate",
+        "source": "fixture",
+        "method": "Synthetic software fixture"
+      },
+      "friction_self": {
+        "value": 0.3,
+        "unit": "1",
+        "evidence": "estimate",
+        "source": "fixture",
+        "method": "Synthetic software fixture"
+      }
     },
     "sources": {
       "fixture": {
@@ -23,18 +77,101 @@
       }
     }
   },
-  "method": "Synthetic direct material-frame curvature and moment-resultant oracle; D11=0.0004, D22=0.00015, D12=0.00005, D66=0.00008 N*m",
-  "conditions": {"purpose": "software regression only"},
+  "method": "Synthetic affine material-frame oracle; D11=0.0004, D22=0.00015, D12=0.00005, D66=0.00008 N*m; preferred curvature=[1,-0.5,0.25] 1/m",
+  "conditions": {
+    "purpose": "software regression only"
+  },
   "fitted_on": "2026-10-15",
   "samples": [
-    {"id": "warp", "curvature_m_inv": [8.0, 0.0, 0.0], "moment_n": [0.0032, 0.0004, 0.0], "scale_n": 0.001, "source": "fixture", "evidence": "estimate", "partition": "fit"},
-    {"id": "weft", "curvature_m_inv": [0.0, -6.0, 0.0], "moment_n": [-0.0003, -0.0009, 0.0], "scale_n": 0.001, "source": "fixture", "evidence": "estimate", "partition": "fit"},
-    {"id": "biaxial", "curvature_m_inv": [3.0, 4.0, 0.0], "moment_n": [0.0014, 0.00075, 0.0], "scale_n": 0.001, "source": "fixture", "evidence": "estimate", "partition": "fit"},
-    {"id": "twist", "curvature_m_inv": [0.0, 0.0, 9.0], "moment_n": [0.0, 0.0, 0.00072], "scale_n": 0.001, "source": "fixture", "evidence": "estimate", "partition": "fit"},
-    {"id": "held-out", "curvature_m_inv": [-2.0, 5.0, 3.0], "moment_n": [-0.00055, 0.00065, 0.00024], "scale_n": 0.001, "source": "fixture", "evidence": "estimate", "partition": "check"}
+    {
+      "id": "warp",
+      "curvature_m_inv": [
+        8,
+        0,
+        0
+      ],
+      "moment_n": [
+        0.002825,
+        0.000425,
+        -0.00002
+      ],
+      "scale_n": 0.001,
+      "source": "fixture",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "weft",
+      "curvature_m_inv": [
+        0,
+        -6,
+        0
+      ],
+      "moment_n": [
+        -0.000675,
+        -0.000875,
+        -0.00002
+      ],
+      "scale_n": 0.001,
+      "source": "fixture",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "biaxial",
+      "curvature_m_inv": [
+        3,
+        4,
+        0
+      ],
+      "moment_n": [
+        0.001025,
+        0.000775,
+        -0.00002
+      ],
+      "scale_n": 0.001,
+      "source": "fixture",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "twist",
+      "curvature_m_inv": [
+        0,
+        0,
+        9
+      ],
+      "moment_n": [
+        -0.000375,
+        0.000025,
+        0.0007
+      ],
+      "scale_n": 0.001,
+      "source": "fixture",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "held-out",
+      "curvature_m_inv": [
+        -2,
+        5,
+        3
+      ],
+      "moment_n": [
+        -0.000925,
+        0.000675,
+        0.00022
+      ],
+      "scale_n": 0.001,
+      "source": "fixture",
+      "evidence": "estimate",
+      "partition": "check"
+    }
   ],
   "allow_estimated_observations": true,
   "replace_existing": false,
   "max_rms_scaled": 0.000001,
-  "max_peak_scaled": 0.000001
+  "max_peak_scaled": 0.000001,
+  "fit_preferred_curvature": true
 }

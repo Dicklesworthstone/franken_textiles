@@ -53,6 +53,10 @@ mod tests {
         assert!((d[1][1] - 1.5e-4).abs() < 1e-12);
         assert!((d[0][1] - 5.0e-5).abs() < 1e-12);
         assert!((d[2][2] - 8.0e-5).abs() < 1e-12);
+        let preferred = bending.preferred_curvature_m_inv();
+        assert!((preferred[0] - 1.0).abs() < 1e-10);
+        assert!((preferred[1] + 0.5).abs() < 1e-10);
+        assert!((preferred[2] - 0.25).abs() < 1e-10);
         assert_eq!(
             Some(resolved.sha256()),
             selection.expected_sha256.as_deref()
