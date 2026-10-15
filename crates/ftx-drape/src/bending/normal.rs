@@ -7,6 +7,7 @@ use super::{BendingPatch, bad, quadratic};
 use crate::ad::Jet;
 use crate::elements::Local;
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
+use ftx_pattern::material_plasticity::Response;
 
 pub(super) fn tangent_weights(
     base: [Vec2; 3],
@@ -155,6 +156,70 @@ impl BendingPatch {
                 psd: false,
             };
         }
+        let curv = self.normal_strain_jets(x);
+        let d = self.tensor.matrix();
+        let mut e = Jet::constant(0.0);
+        for i in 0..3 {
+            for j in 0..3 {
+                e = e + curv[i] * curv[j] * d[i][j];
+            }
+        }
+        let e = e * (0.5 * self.area);
+        Local {
+            energy: e.v,
+            grad: e.g,
+            hess: std::array::from_fn(|i| e.h[i / 18][i % 18]),
+            psd: false,
+        }
+    }
+
+    /// Compose a material potential/moment/tangent with the exact current-normal curvature jets.
+    /// This replaces the elastic panel law, never adds it twice. The callback sees departure from
+    /// the authored preferred shape; all geometric-stiffness terms and engineering twist remain.
+    ///
+    /// # Errors
+    /// Invalid normal kinematics/frame, a material refusal or non-finite composed derivatives.
+    pub fn normal_local_with_response(
+        &self,
+        x: &[Vec3],
+        response: impl FnOnce([f64; 3]) -> Result<Response, Refusal>,
+    ) -> Result<Local<18, 324>, Refusal> {
+        if !self.tensor.uses_normal() {
+            return Err(bad("curvature response requires normal-projected bending"));
+        }
+        self.check_domain(x)?;
+        let k = self.normal_strain_jets(x);
+        let r = response(k.map(|c| c.v))?;
+        let grad = std::array::from_fn(|i| {
+            self.area * (0..3).map(|a| r.moment_n[a] * k[a].g[i]).sum::<f64>()
+        });
+        let mut hess = [0.; 324];
+        for i in 0..18 {
+            for j in 0..=i {
+                let mut h = 0.;
+                for a in 0..3 {
+                    h += r.moment_n[a] * k[a].h[i][j];
+                    for b in 0..3 {
+                        h += r.tangent_nm[a][b] * k[a].g[i] * k[b].g[j];
+                    }
+                }
+                hess[i * 18 + j] = self.area * h;
+                hess[j * 18 + i] = hess[i * 18 + j];
+            }
+        }
+        let energy = self.area * r.energy;
+        if !energy.is_finite() || grad.iter().chain(&hess).any(|v| !v.is_finite()) {
+            return Err(bad("composed curvature response overflows"));
+        }
+        Ok(Local {
+            energy,
+            grad,
+            hess,
+            psd: false,
+        })
+    }
+
+    fn normal_strain_jets(&self, x: &[Vec3]) -> [Jet<18>; 3] {
         type J = Jet<18>;
         let z = J::constant(0.0);
         let p: [[J; 3]; 6] = std::array::from_fn(|i| {
@@ -177,25 +242,11 @@ impl BendingPatch {
         ];
         let length = dot(cross, cross).sqrt();
         let normal = cross.map(|v| v / length);
-        let curv: [J; 3] = std::array::from_fn(|a| {
+        std::array::from_fn(|a| {
             let derivative = std::array::from_fn(|k| {
                 (1..6).fold(z, |sum, i| sum + p[i][k] * self.weights[a][i])
             });
             dot(normal, derivative) - J::constant(self.preferred_curvature()[a])
-        });
-        let d = self.tensor.matrix();
-        let mut e = z;
-        for i in 0..3 {
-            for j in 0..3 {
-                e = e + curv[i] * curv[j] * d[i][j];
-            }
-        }
-        let e = e * (0.5 * self.area);
-        Local {
-            energy: e.v,
-            grad: e.g,
-            hess: std::array::from_fn(|i| e.h[i / 18][i % 18]),
-            psd: false,
-        }
+        })
     }
 }

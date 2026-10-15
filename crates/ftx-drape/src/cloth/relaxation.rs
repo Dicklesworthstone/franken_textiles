@@ -198,32 +198,35 @@ impl Solver {
             || self.v.iter().any(|v| !v.is_finite())
         {
             return Err(bad(
-                "Maxwell step needs a positive finite duration and finite velocities",
+                "material-history step needs a positive finite duration and finite velocities",
             ));
         }
-        self.relaxation
-            .as_ref()
-            .expect("history path")
-            .check(&self.model, &self.x)?;
+        if let Some(field) = &self.relaxation {
+            field.check(&self.model, &self.x)?;
+        }
+        if let Some(field) = &self.plasticity {
+            field.check(&self.model, &self.x)?;
+        }
         let mut trial = self.clone();
         let report = trial.step_inner(h, body_start)?;
         if !report.converged {
             return Err(Refusal::new(
                 RefusalCode::NotConverged,
                 format!(
-                    "Maxwell step did not converge after {} iterations (residual {} N, last step {} m); positions, velocities and material history are unchanged",
+                    "material-history step did not converge after {} iterations (residual {} N, last step {} m); positions, velocities and material history are unchanged",
                     report.iterations, report.residual, report.last_step
                 ),
             ));
         }
         if trial.v.iter().any(|v| !v.is_finite()) {
-            return Err(bad("Maxwell step produced non-finite velocity"));
+            return Err(bad("material-history step produced non-finite velocity"));
         }
-        trial
-            .relaxation
-            .as_mut()
-            .expect("history path")
-            .advance(&trial.x, h)?;
+        if let Some(field) = &mut trial.relaxation {
+            field.advance(&trial.x, h)?;
+        }
+        if let Some(field) = &mut trial.plasticity {
+            field.advance(&trial.x)?;
+        }
         *self = trial;
         Ok(report)
     }

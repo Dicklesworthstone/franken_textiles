@@ -1,0 +1,48 @@
+{
+  "id": "synthetic-permanent-crease-sheet",
+  "allow_estimates": true,
+  "record": {
+    "id": "synthetic-permanent-crease-sheet",
+    "name": "Synthetic permanent-crease sheet; NOT measured textile data",
+    "form": "woven",
+    "structure": {
+      "bending_model": "orthotropic_normal_patch/1",
+      "bending_plasticity_model": "orthotropic_curvature_return_map/1",
+      "scope": "Artificial software demonstration, not a calibrated textile, forming process or machine qualification"
+    },
+    "properties": {
+      "areal_density": {"value": 0.2, "unit": "kg/m2", "source": "test", "evidence": "estimate", "method": "Synthetic software test"},
+      "thickness": {"value": 0.0006, "unit": "m", "source": "test", "evidence": "estimate", "method": "Synthetic software test"},
+      "warp_stiffness": {"value": 1000, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic software test"},
+      "weft_stiffness": {"value": 1000, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic software test"},
+      "poisson_warp_weft": {"value": 0, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic software test"},
+      "shear_stiffness": {"value": 500, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic software test"},
+      "bending_rigidity": {"value": 0.00003, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic scalar seam approximation, not the panel tensor"},
+      "friction_skin": {"value": 0.2, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic software test"},
+      "friction_self": {"value": 0.3, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic software test"},
+      "specific_heat": {"value": 1200, "unit": "J/(kg*K)", "source": "test", "evidence": "estimate", "method": "Synthetic constant storage; no plastic-to-heat coupling"},
+      "thermal_conductivity": {"value": 0.04, "unit": "W/(m*K)", "source": "test", "evidence": "estimate", "method": "Synthetic constant through-thickness conductivity"},
+      "bending_warp": {"value": 0.0002, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic D11", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_weft": {"value": 0.00005, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic D22", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_coupling": {"value": 0.00001, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic D12", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_twist": {"value": 0.000025, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic D66, conjugate to 2*b_uv", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_yield_warp": {"value": 0.0001, "unit": "N", "source": "test", "evidence": "estimate", "method": "Synthetic initial yield moment per reference width", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_yield_weft": {"value": 0.00002, "unit": "N", "source": "test", "evidence": "estimate", "method": "Synthetic initial yield moment per reference width", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_yield_twist": {"value": 0.00001, "unit": "N", "source": "test", "evidence": "estimate", "method": "Synthetic initial yield moment per reference width", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_hardening_warp": {"value": 0.00002, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic directional isotropic hardening", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_hardening_weft": {"value": 0.000005, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic directional isotropic hardening", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_hardening_twist": {"value": 0.0000025, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic directional isotropic hardening", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_curvature_limit_warp": {"value": 1000, "unit": "1/m", "source": "test", "evidence": "estimate", "method": "Synthetic symmetric geometric-curvature bound, not a measured range", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_curvature_limit_weft": {"value": 1000, "unit": "1/m", "source": "test", "evidence": "estimate", "method": "Synthetic symmetric geometric-curvature bound, not a measured range", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_curvature_limit_twist": {"value": 1000, "unit": "1/m", "source": "test", "evidence": "estimate", "method": "Synthetic symmetric geometric-curvature bound, not a measured range", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_accumulation_limit_warp": {"value": 10000, "unit": "1/m", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated-history bound, not a fatigue limit", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_accumulation_limit_weft": {"value": 10000, "unit": "1/m", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated-history bound, not a fatigue limit", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}},
+      "bending_accumulation_limit_twist": {"value": 10000, "unit": "1/m", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated-history bound, not a fatigue limit", "conditions": {"specimen_id": "artificial-coupon-A", "conditioning": "synthetic constant state"}}
+    },
+    "sources": {"test": {
+      "reference": "test:ftx-permanent-curvature-sheet",
+      "accessed_on": "2026-10-15",
+      "note": "Every number is artificial. This fixture tests software coupling only; it is not a linen/leather/knit calibration, comfort claim, flame rating or robot execution authorization."
+    }}
+  }
+}

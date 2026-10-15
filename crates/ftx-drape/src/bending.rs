@@ -21,7 +21,7 @@ fn bad(message: impl Into<String>) -> Refusal {
 
 /// A fixed rest-space curvature stencil integrated over one source triangle's full area.
 /// The last three vertices extend the first triangle. Solver indices may repeat after seam welding.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BendingPatch {
     /// Six solver vertices, in the same order as the local gradient and Hessian.
     pub v: [usize; 6],
@@ -90,6 +90,18 @@ fn inverse(a: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
 }
 
 impl BendingPatch {
+    /// The immutable tensor, preferred shape and kinematics bound to this exact stencil.
+    #[must_use]
+    pub fn tensor(&self) -> BendingTensor {
+        self.tensor
+    }
+
+    /// Reference triangle area in square metres; plastic work/storage uses this, not deformed area.
+    #[must_use]
+    pub fn reference_area(&self) -> f64 {
+        self.area
+    }
+
     /// Construct in the source panel's material coordinates (metres), with +u along grain.
     /// The represented area is the first triangle's rest area, not the six-node convex hull.
     ///

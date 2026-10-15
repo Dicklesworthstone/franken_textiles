@@ -416,27 +416,56 @@ pub(crate) fn build_scene_resolved(
             .as_ref()
             .is_some_and(|v| v.iter().any(Option::is_some))
     {
-        // Retained triangles own history in their already rotated rest frame, never welded vertices.
-        let laws = scene
-            .triangle_owner
-            .iter()
-            .map(|owner| {
-                let id = &scene.mesh.instances[*owner];
-                let instance = pattern
-                    .instance(id)
-                    .ok_or_else(|| bad(format!("missing instance {id}")))?;
-                match &material.piece_relaxations {
-                    Some(field) => field
-                        .get(instance.piece_index)
-                        .cloned()
-                        .ok_or_else(|| bad("missing per-piece Maxwell selector".into())),
-                    None => Ok(material.relaxation.clone()),
-                }
-            })
-            .collect::<Result<Vec<_>, Refusal>>()?;
+        let laws = material_triangle_field(
+            pattern,
+            &scene,
+            &material.relaxation,
+            material.piece_relaxations.as_deref(),
+        )?;
         scene.solver = scene.solver.with_relaxation(&laws)?;
     }
+    if material.plasticity.is_some()
+        || material
+            .piece_plasticities
+            .as_ref()
+            .is_some_and(|v| v.iter().any(Option::is_some))
+    {
+        let laws = material_triangle_field(
+            pattern,
+            &scene,
+            &material.plasticity,
+            material.piece_plasticities.as_deref(),
+        )?;
+        scene.solver = scene.solver.with_bending_plasticity(&laws)?;
+    }
     Ok(scene)
+}
+
+// All material history binds to the SAME retained triangle ownership and rotated rest frame.
+// Welded vertices never merge materials; explicit None entries do not inherit a default law.
+fn material_triangle_field<T: Clone>(
+    pattern: &Pattern,
+    scene: &Scene,
+    uniform: &Option<T>,
+    pieces: Option<&[Option<T>]>,
+) -> Result<Vec<Option<T>>, Refusal> {
+    scene
+        .triangle_owner
+        .iter()
+        .map(|owner| {
+            let id = &scene.mesh.instances[*owner];
+            let instance = pattern
+                .instance(id)
+                .ok_or_else(|| bad(format!("missing instance {id}")))?;
+            match pieces {
+                Some(field) => field
+                    .get(instance.piece_index)
+                    .cloned()
+                    .ok_or_else(|| bad("missing per-piece material-history selector".into())),
+                None => Ok(uniform.clone()),
+            }
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]

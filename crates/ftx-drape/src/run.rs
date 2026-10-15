@@ -399,7 +399,7 @@ pub fn drape(
             "models":models,
             "patch_count":model.panel_bending_patches().len(),
             "material_triangles":model.panel_bending_triangles(),
-            "panel_energy_j":model.panel_bending_patches().iter().map(|p|p.energy(&scene.solver.x)).sum::<f64>(),
+            "panel_energy_j":scene.solver.panel_bending_energy()?,
             "active_scalar_hinges":model.hinges.iter().enumerate().filter(|(i,_)| model.hinge_rigidity(*i)>0.0).count(),
             "scope":"flat-reference source-panel curvature with declared per-record kinematics; scalar seam approximation retained; not conforming-shell or empirical seam validation"
         });
@@ -408,6 +408,14 @@ pub fn drape(
         report["membrane_history"] = history;
         report["material_settledness_note"] = json!(
             "Geometric settledness does not establish relaxed stress; history time includes sewing and draping steps."
+        );
+    }
+    if let Some(history) = scene.solver.bending_plasticity_report()? {
+        report["bending_history"] = history;
+        report["panel_bending"]["energy_basis"] =
+            json!("accepted elastic and hardening storage; excludes dissipated plastic work");
+        report["material_settledness_note"] = json!(
+            "Geometric settledness does not establish stress equilibrium or a stress-free shape; accepted history includes sewing and draping steps."
         );
     }
     // Missing thermal observations must not invalidate a supported mechanical drape. Legacy reports

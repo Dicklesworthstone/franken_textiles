@@ -23,6 +23,7 @@ type EdgeUses = std::collections::BTreeMap<(usize, usize), Vec<(usize, usize, us
 mod materials;
 pub use materials::SheetMaterial;
 mod bending;
+mod plasticity;
 mod relaxation;
 
 /// The cloth: flat rest geometry, elements, lumped masses and material.
@@ -336,6 +337,12 @@ impl ClothModel {
     /// Elastic energy Ψ (membrane + bending + elastics) at positions `x`.
     #[must_use]
     pub fn elastic_energy(&self, x: &[Vec3]) -> f64 {
+        self.elastic_energy_with_panels(x, None)
+    }
+
+    // A history field supplies the WHOLE panel contribution, without subtracting large elastic
+    // energies or double-counting yielding panels. Memoryless summation stays bit-identical.
+    fn elastic_energy_with_panels(&self, x: &[Vec3], panels: Option<f64>) -> f64 {
         let m: f64 = self
             .membranes
             .iter()
@@ -354,7 +361,7 @@ impl ClothModel {
             .map(|(i, h)| h.energy(x, self.hinge_rigidity(i)))
             .sum();
         if let Some(field) = &self.panel_bending {
-            b += field.patches.iter().map(|p| p.energy(x)).sum::<f64>();
+            b += panels.unwrap_or_else(|| field.patches.iter().map(|p| p.energy(x)).sum::<f64>());
         }
         let t: f64 = self.elastics.iter().map(|e| e.energy(x)).sum();
         m + b + t
@@ -443,6 +450,8 @@ pub struct Solver {
     precond: Option<LdltFactor>,
     // Per-triangle, accepted physical memory; trial evaluations never mutate it.
     relaxation: Option<relaxation::Field>,
+    // Per-source-panel permanent curvature. Accepted together with all other material memory.
+    plasticity: Option<plasticity::Field>,
 }
 
 /// The relative residual an inexact Newton direction is solved to.
@@ -513,6 +522,7 @@ impl Solver {
             cached_panel_count,
             precond: None,
             relaxation: None,
+            plasticity: None,
         }
     }
 
@@ -688,7 +698,12 @@ impl Solver {
     fn potential(&self, x: &[Vec3], inertia: Option<(&[Vec3], f64)>) -> Result<f64, Refusal> {
         self.model.check_membrane_domains(x)?;
         self.model.check_panel_bending_domains(x)?;
-        let mut e = self.model.elastic_energy(x);
+        let panels = self
+            .plasticity
+            .as_ref()
+            .map(|field| field.energy(&self.model, x, inertia.is_some()))
+            .transpose()?;
+        let mut e = self.model.elastic_energy_with_panels(x, panels);
         if let Some(field) = &self.relaxation {
             e += field.energy(x, inertia.map(|(_, h)| h))?;
         }
@@ -808,8 +823,12 @@ impl Solver {
             let mut l = h.local(x, self.model.hinge_rigidity(i));
             scatter(&h.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
-        for p in self.model.panel_bending_patches() {
-            let mut l = p.local(x);
+        for (i, p) in self.model.panel_bending_patches().iter().enumerate() {
+            let mut l = self
+                .plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, x, inertia.is_some()))
+                .unwrap_or_else(|| p.local(x));
             scatter(&p.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for e in &self.model.elastics {
@@ -1100,7 +1119,7 @@ impl Solver {
         h: f64,
         body_start: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
-        if self.relaxation.is_some() {
+        if self.relaxation.is_some() || self.plasticity.is_some() {
             return self.relaxing_step(h, body_start);
         }
         self.step_inner(h, body_start)
@@ -1207,10 +1226,10 @@ impl Solver {
         quiet: usize,
         max_steps: usize,
     ) -> Result<SettleReport, Refusal> {
-        if self.relaxation.is_some() {
+        if self.relaxation.is_some() || self.plasticity.is_some() {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                "speed-only settling cannot certify relaxed material history; use explicit time steps and inspect transient stress",
+                "speed-only settling cannot certify material history; use explicit time steps and inspect stress and irreversible curvature",
             ));
         }
         let mut rep = SettleReport {
@@ -1242,10 +1261,10 @@ impl Solver {
     /// # Errors
     /// As [`Solver::step`].
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
-        if self.relaxation.is_some() {
+        if self.relaxation.is_some() || self.plasticity.is_some() {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                "a static solve cannot choose a material-history duration; use explicit time steps",
+                "a static solve cannot choose a material-history duration or irreversible loading path; use explicit time steps",
             ));
         }
         self.audit_self_contact()?;
@@ -1300,8 +1319,12 @@ impl Solver {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
         }
-        for p in self.model.panel_bending_patches() {
-            let l = p.local(&self.x);
+        for (i, p) in self.model.panel_bending_patches().iter().enumerate() {
+            let l = self
+                .plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x, false))
+                .unwrap_or_else(|| p.local(&self.x));
             for (a, &vi) in p.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
