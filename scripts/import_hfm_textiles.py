@@ -125,6 +125,9 @@ def parse_conductivity(raw: bytes) -> ConductivityRun:
     if len(markers) != 1:
         fail("HFM needs exactly one complete SI results table")
     before, after = lines[:markers[0]], lines[markers[0] + 1:]
+    if any(re.search(r"^\s*\**\s*(?:warning|error|aborted)\b|setpoint was not reached", line, re.I)
+           for line in before):
+        fail("instrument reports a warning/error or unreached setpoint; qualify the run before use")
     sample = field(before, "Sample Name")
     instrument = field(before, "Instrument")
     serial = field(before, "Instrument Serial Number")
@@ -134,6 +137,8 @@ def parse_conductivity(raw: bytes) -> ConductivityRun:
     mm = float(decimal(thickness[1], "thickness"))
     finite(mm, "instrument thickness", positive=True)
     method = field(before, "Thickness obtained")
+    if method.casefold() != "from instrument":
+        fail("this importer requires instrument-reported thickness, not an unqualified manual input")
     count_text = field(before, "Number of Setpoints")
     if not re.fullmatch(r"[0-9]{1,4}", count_text):
         fail("invalid setpoint count")

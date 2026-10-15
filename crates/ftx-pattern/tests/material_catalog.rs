@@ -33,7 +33,23 @@ fn selection() -> Selection {
 #[test]
 fn factual_seed_does_not_invent_physics_or_midpoints() {
     let db = Catalog::builtin().unwrap();
-    assert_eq!(db.materials.len(), 81);
+    assert_eq!(db.materials.len(), 83);
+    for id in [
+        "fsri/hfm/cotton-sheet/dry/220330-r1",
+        "fsri/hfm/cotton-sheet/wet/220318-r1",
+    ] {
+        let run = db.get(id).unwrap();
+        assert_eq!(run.properties.len(), 1);
+        assert!(run.properties.contains_key("thickness"));
+        assert!(
+            run.thermal_response
+                .as_ref()
+                .unwrap()
+                .specific_heat
+                .is_none()
+        );
+        assert!(run.mechanics(true).is_err());
+    }
     let linen = db.get("fs/il019-dusty-lotus-softened").unwrap();
     assert!(
         (linen.require("areal_density", "kg/m2", false).unwrap()

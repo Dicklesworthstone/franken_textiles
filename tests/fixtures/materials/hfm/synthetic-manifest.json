@@ -1,0 +1,24 @@
+{
+  "schema": "ftx-hfm-import/1",
+  "runs": [
+    {
+      "id": "synthetic/hfm/cotton-r1",
+      "name": "Synthetic instrument-format fixture",
+      "form": "sheet",
+      "path": "run.tst",
+      "sha256": "25015a510b16793c0d47350bde2d3cdd439a8f8659e8bb944edccf36202893c0",
+      "source": {
+        "reference": "local:synthetic-hfm",
+        "accessed_on": "2026-10-15",
+        "note": "Entirely synthetic; independent arithmetic expectations in tests"
+      },
+      "sample_name": "synthetic_Cotton_HFM_Dry_conductivity_R1",
+      "conditioning": "synthetic dry protocol",
+      "temperature_grouping": {
+        "method": "within_run_nearest_integer_c",
+        "maximum_deviation_c": 0.1
+      },
+      "retention_note": "Original synthetic test data; retain locally"
+    }
+  ]
+}

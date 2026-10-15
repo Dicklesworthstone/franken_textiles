@@ -1,0 +1,43 @@
+{
+  "schema": "ftx-hfm-import/1",
+  "runs": [
+    {
+      "id": "fsri/hfm/cotton-sheet/dry/220330-r1",
+      "name": "FSRI cotton fitted sheet Dry conductivity run 220330 R1",
+      "form": "sheet",
+      "path": "cotton-sheet-dry-r1-excerpt.tst",
+      "sha256": "f501f8bd36c14fd062087f0b54176408b8e408c2344b61e4e2cb9d35c69048e7",
+      "source": {
+        "reference": "https://github.com/ulfsri/fsri_materials_database/blob/a432697e4b7d40f642b5cc8f384506439ebb32df/01_Data/Cotton_Sheet/HFM/Cotton_Sheet_HFM_Dry_conductivity_220330_R1.tst",
+        "accessed_on": "2026-10-15",
+        "note": "McKinnon, Weinschenk, Dow, DiDomizio and Madrzykowski, FSRI Materials and Products Database (2023). Upstream git blob 899253ffc79b62493734bc137cf8956a85febffd. UTF-8 factual transcription of identity, instrument thickness, corner measurements and all six results rows; NOT the complete original UTF-16 export or its byte hash. Block telemetry and calibration history are not reproduced. Nominal-degree grouping retains this run separately from pooled website means."
+      },
+      "sample_name": "Cotton_Fitted_Sheet_HFM_Dry_Conductivity_220330_R1",
+      "conditioning": "FSRI Dry source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+      "temperature_grouping": {
+        "method": "within_run_nearest_integer_c",
+        "maximum_deviation_c": 0.1
+      },
+      "retention_note": "Attributed factual instrument metadata and numeric readings only; no photographs or source narrative. Retained bytes are a labelled excerpt, not the original export; retain full raw exports separately where permitted."
+    },
+    {
+      "id": "fsri/hfm/cotton-sheet/wet/220318-r1",
+      "name": "FSRI cotton fitted sheet Wet conductivity run 220318 R1",
+      "form": "sheet",
+      "path": "cotton-sheet-wet-r1-excerpt.tst",
+      "sha256": "f4bf5698854ea8995796b6d469aaffb212385acefccf6cb5387172a85bf810a1",
+      "source": {
+        "reference": "https://github.com/ulfsri/fsri_materials_database/blob/a432697e4b7d40f642b5cc8f384506439ebb32df/01_Data/Cotton_Sheet/HFM/Cotton_Sheet_HFM_Wet_conductivity_220318_R1.tst",
+        "accessed_on": "2026-10-15",
+        "note": "McKinnon, Weinschenk, Dow, DiDomizio and Madrzykowski, FSRI Materials and Products Database (2023). Upstream git blob 8ca5af619fd9584be859db87c0b2cd0b76f7855a. UTF-8 factual transcription of identity, instrument thickness, corner measurements and all six results rows; NOT the complete original UTF-16 export or its byte hash. Block telemetry and calibration history are not reproduced. Nominal-degree grouping retains this run separately from pooled website means."
+      },
+      "sample_name": "Cotton_Fitted_Sheet_HFM_Wet_Conductivity_220318_R1",
+      "conditioning": "FSRI Wet source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+      "temperature_grouping": {
+        "method": "within_run_nearest_integer_c",
+        "maximum_deviation_c": 0.1
+      },
+      "retention_note": "Attributed factual instrument metadata and numeric readings only; no photographs or source narrative. Retained bytes are a labelled excerpt, not the original export; retain full raw exports separately where permitted."
+    }
+  ]
+}

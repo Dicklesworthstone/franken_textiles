@@ -164,6 +164,8 @@ impl Catalog {
         catalog.materials.extend(insulation.materials);
         let measured = Self::from_json(include_str!("material_catalog/thermal-measurements.json"))?;
         catalog.materials.extend(measured.materials);
+        let hfm = Self::from_json(include_str!("material_catalog/hfm-runs.json"))?;
+        catalog.materials.extend(hfm.materials);
         catalog.materials.extend(nist::records());
         catalog.materials.extend(mit::records());
         catalog.validate()?;
