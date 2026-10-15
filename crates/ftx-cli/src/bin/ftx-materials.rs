@@ -32,6 +32,8 @@ mod thermal_transient;
 mod cutting;
 #[path = "material_workbench/relaxation.rs"]
 mod relaxation_calibration;
+#[path = "material_workbench/bending.rs"]
+mod bending_calibration;
 
 const USAGE: &str = "ftx-materials catalog [SEARCH]
 ftx-materials show ID
@@ -42,6 +44,7 @@ ftx-materials thermal STACK.json
 ftx-materials thermal-at ID TEMPERATURE-C [--allow-estimates]
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
+ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
 ftx-materials thermal-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json
@@ -60,6 +63,7 @@ JSON output. `show` includes a portable selection and missing-property coverage.
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
+`calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
 `thermal-coverage` couples mapped layers and bare body areas; generated geometry receipts are replayed.
 `thermal-map` derives coverage polygons from actual cloth and body geometry under a local-normal closure.
@@ -202,6 +206,8 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
     match words.as_slice() {
         ["thermal-at", id, t] => thermal_transient::point(id, t, false),
         ["thermal-at", id, t, "--allow-estimates"] => thermal_transient::point(id, t, true),
+        ["calibrate-bending", path] => bending_calibration::run(path, false),
+        ["calibrate-bending", path, "--allow-estimates"] => bending_calibration::run(path, true),
         ["calibrate-relaxation", path] => relaxation_calibration::run(path, false),
         ["calibrate-relaxation", path, "--allow-estimates"] => {
             relaxation_calibration::run(path, true)
