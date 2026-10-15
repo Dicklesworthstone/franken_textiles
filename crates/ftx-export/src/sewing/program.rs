@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{SewingMachine, SewingPass, bad, positive, range, within};
 
+mod stitches;
+pub use stitches::{SewProgram, StitchStep};
+
 /// Feed direction relative to increasing canonical paired-station index.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

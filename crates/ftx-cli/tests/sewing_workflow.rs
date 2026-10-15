@@ -118,3 +118,94 @@ fn measured_specimens_are_discoverable_without_a_false_drape_readiness_claim() {
     assert_eq!(props["specimen_flexural_rigidity"]["unit"], "lbf*in2");
     assert!(props.get("bending_rigidity").is_none());
 }
+
+#[test]
+fn multipass_cli_expands_every_directed_stitch_and_matches_library() {
+    let p = fixture("synthetic-sewing-pattern.json");
+    let o = fixture("synthetic-sewing-multipass-options.json");
+    let before = fs::read_to_string(&o).unwrap();
+    let plan = run(&["sew-plan", &p, &o]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let out = run(&["sew-stitches", &p, &o]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let program = ftx_export::sewing::program::SewProgram::build(
+        &Pattern::from_json(PATTERN).unwrap(),
+        &serde_json::from_str(&before).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(parsed, serde_json::to_value(&program).unwrap());
+    assert_eq!(parsed["plan"], plan);
+    assert_eq!(program.plan.stitch_intervals, 90);
+    assert_eq!(program.plan.feed_seconds, 13.0);
+    assert_eq!(program.stitches.len(), 90);
+    assert_eq!(program.stitches.iter().filter(|s| s.begins_run).count(), 6);
+    let mut feed_seconds = 0.0;
+    for step in &program.stitches {
+        let operation = &program.plan.seams[step.operation];
+        assert_eq!(step.a_mm, operation.stations.a[step.to_station]);
+        assert_eq!(step.b_mm, operation.stations.b[step.to_station]);
+        assert_eq!(step.to_station.abs_diff(step.from_station), 1);
+        assert_eq!(
+            step.advance_mm[0].is_sign_positive(),
+            step.to_station > step.from_station
+        );
+        assert_eq!(
+            step.advance_mm[1].is_sign_positive(),
+            step.to_station > step.from_station
+        );
+        assert!((step.feed_b_over_a - 1.0).abs() < 1e-12);
+        feed_seconds += step.feed_seconds;
+    }
+    assert!((feed_seconds - 13.0).abs() < 1e-12);
+    assert_eq!(program.stitches[49].to_station, 40);
+    assert_eq!(program.stitches[50].operation, 1);
+    assert_eq!(program.stitches[50].from_station, 40);
+    assert_eq!(program.stitches[89].to_station, 0);
+    assert_eq!(fs::read_to_string(o).unwrap(), before);
+    assert_eq!(fs::read_to_string(p).unwrap(), PATTERN);
+}
+
+#[test]
+fn expanded_program_admits_legacy_jobs_but_never_emits_partial_refused_travel() {
+    let p = fixture("synthetic-sewing-pattern.json");
+    let out = run(&[
+        "sew-stitches",
+        &p,
+        &fixture("synthetic-sewing-options.json"),
+    ]);
+    assert!(out.status.success());
+    let legacy: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(legacy["schema"], "ftx-sewing-program/1");
+    assert_eq!(legacy["plan"]["schema"], "ftx-sewing-plan/2");
+    assert_eq!(legacy["stitches"].as_array().unwrap().len(), 40);
+    let mut o: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-multipass-options.json"
+    ))
+    .unwrap();
+    o["machine"]["reverse"]["max_stitches_per_minute"] = json!(500.0);
+    let out = run(&["sew-stitches", &p, &changed_pattern(&o)]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let refusal: Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert!(
+        refusal["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Reverse stitch rate")
+    );
+    o["machine"]["reverse"]["max_stitches_per_minute"] = json!(800.0);
+    o["passes"][0]["after"] = json!(["reinforce"]);
+    let out = run(&["sew-stitches", &p, &changed_pattern(&o)]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+}

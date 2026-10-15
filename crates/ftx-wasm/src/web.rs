@@ -157,3 +157,21 @@ pub fn fold_up(
     .map(|inner| WebFold { inner })
     .map_err(|e| JsError::new(&e))
 }
+
+/// Local source-locked sewing plan, including explicit multi-pass, reverse-feed and backtack recipes.
+///
+/// # Errors
+/// Invalid inputs, missing material data or a refused machine/geometry/operation constraint.
+#[wasm_bindgen]
+pub fn sew_plan(pattern: &str, options: &str) -> Result<String, JsError> {
+    crate::manufacturing::sew_plan(pattern, options).map_err(|e| JsError::new(&e.message))
+}
+
+/// Expand every directed stitch interval in paired source-pattern mm frames, not robot coordinates.
+///
+/// # Errors
+/// Any sewing input/planning refusal; no partial output or hardware execution permission is returned.
+#[wasm_bindgen]
+pub fn sew_stitches(pattern: &str, options: &str) -> Result<String, JsError> {
+    crate::manufacturing::sew_stitches(pattern, options).map_err(|e| JsError::new(&e.message))
+}

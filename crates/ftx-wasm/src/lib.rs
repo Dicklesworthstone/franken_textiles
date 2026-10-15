@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod fold;
+pub mod manufacturing;
 pub mod page;
 pub mod tracing;
 #[cfg(target_arch = "wasm32")]
