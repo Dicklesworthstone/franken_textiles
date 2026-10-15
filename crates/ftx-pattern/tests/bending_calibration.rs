@@ -114,8 +114,7 @@ fn existing_preferred_curvature_is_subtracted_before_fitting() {
     }
     let d = [4.0e-4, 1.5e-4, 5.0e-5, 8.0e-5];
     for s in &mut raw.samples {
-        let strain: [f64; 3] =
-            std::array::from_fn(|i| s.curvature_m_inv[i] - preferred[i]);
+        let strain: [f64; 3] = std::array::from_fn(|i| s.curvature_m_inv[i] - preferred[i]);
         s.moment_n = moment(strain, d).map(Some);
     }
     let out = calibrate(&raw).unwrap();

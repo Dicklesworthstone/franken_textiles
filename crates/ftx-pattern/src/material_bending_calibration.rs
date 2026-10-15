@@ -76,25 +76,40 @@ pub struct Input {
 /// Prediction and residual for one coupon state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Prediction {
+    /// Input sample identity.
     pub id: String,
+    /// Whether this coupon state participated in identification or was held out.
     pub partition: Partition,
+    /// Curvature minus the admitted preferred curvature, in inverse reference metres.
     pub bending_strain_m_inv: [f64; 3],
+    /// Model-predicted moment resultants in N.
     pub predicted_moment_n: [f64; 3],
+    /// Predicted minus observed; unobserved components remain absent.
     pub residual_n: [Option<f64>; 3],
 }
 
 /// Reproducible fit and ordinary material record consumable by the existing resolver/drape path.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
+    /// ftx-bending-calibration-report/1.
     pub schema: String,
+    /// Complete calibration input, including prior material evidence.
     pub input: Input,
+    /// SHA-256 identity of the serialized input; not evidence authenticity.
     pub input_sha256: String,
+    /// Ordinary material record carrying the fitted tensor and receipt source.
     pub material: Material,
+    /// Fitted D matrix in [k_uu, k_vv, 2 k_uv] order, in N m.
     pub bending_nm: [[f64; 3]; 3],
+    /// Preferred curvature subtracted during identification, in inverse metres.
     pub preferred_curvature_m_inv: [f64; 3],
+    /// Minimum Cholesky pivot of the normalized fit design.
     pub excitation_pivot: f64,
+    /// Residual quality for observations used in the fit.
     pub fit: Quality,
+    /// Held-out residual quality, absent when no held-out moments were supplied.
     pub check: Option<Quality>,
+    /// Stable predictions and residuals for every input sample.
     pub predictions: Vec<Prediction>,
 }
 
@@ -156,8 +171,7 @@ fn design(input: &Input, preferred: [f64; 3]) -> Result<Design, Refusal> {
         if s.partition != Partition::Fit {
             continue;
         }
-        let k: [f64; 3] =
-            std::array::from_fn(|i| s.curvature_m_inv[i] - preferred[i]);
+        let k: [f64; 3] = std::array::from_fn(|i| s.curvature_m_inv[i] - preferred[i]);
         let basis = [
             [k[0], 0.0, k[1], 0.0],
             [0.0, k[1], k[0], 0.0],
@@ -271,8 +285,8 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         ));
     }
     let values: [f64; 4] = std::array::from_fn(|j| fitted[j] / design.scales[j]);
-    let law =
-        BendingTensor::new(values[0], values[1], values[2], values[3])?.normal_projected();
+    let law = BendingTensor::new(values[0], values[1], values[2], values[3])?
+        .normal_projected();
     let matrix = law.matrix();
 
     let mut fit_errors = Vec::new();
@@ -287,10 +301,10 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             matrix[2][2] * k[2],
         ];
         let mut residual = [None; 3];
-        for i in 0..3 {
+        for (i, slot) in residual.iter_mut().enumerate() {
             if let Some(observed) = s.moment_n[i] {
                 let delta = predicted[i] - observed;
-                residual[i] = Some(delta);
+                *slot = Some(delta);
                 let errors = if s.partition == Partition::Fit {
                     &mut fit_errors
                 } else {
