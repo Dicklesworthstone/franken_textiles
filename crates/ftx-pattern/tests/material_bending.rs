@@ -1,6 +1,6 @@
 //! Source and dimensional checks, not empirical textile observations.
 use ftx_pattern::{
-    material_bending::{BendingTensor, MODEL},
+    material_bending::{BendingTensor, MODEL, NORMAL_MODEL},
     material_catalog::Selection,
     materials::Catalog,
 };
@@ -100,4 +100,39 @@ fn dimensional_and_physical_mistakes_refuse() {
         .unwrap()
         .unit = "Pa".into();
     assert!(Catalog::builtin().unwrap().resolve(&s).is_err());
+}
+
+#[test]
+fn normal_kinematics_are_explicit_source_locked_and_do_not_change_the_tensor() {
+    let db = Catalog::builtin().unwrap();
+    let a = db.resolve(&selection()).unwrap();
+    let mut s = selection();
+    s.record
+        .as_mut()
+        .unwrap()
+        .structure
+        .insert("bending_model".into(), NORMAL_MODEL.into());
+    let b = db.resolve(&s).unwrap();
+    assert_eq!(
+        a.bending_response().unwrap().unwrap().matrix(),
+        b.bending_response().unwrap().unwrap().matrix()
+    );
+    assert!(!a.bending_response().unwrap().unwrap().uses_normal());
+    assert!(b.bending_response().unwrap().unwrap().uses_normal());
+    assert_eq!(b.bending_response().unwrap().unwrap().model(), NORMAL_MODEL);
+    assert_ne!(a.sha256(), b.sha256());
+    assert_eq!(
+        db.resolve(&b.frozen_selection()).unwrap().sha256(),
+        b.sha256()
+    );
+    let mut frozen = b.frozen_selection();
+    frozen
+        .record
+        .as_mut()
+        .unwrap()
+        .structure
+        .insert("bending_model".into(), MODEL.into());
+    assert!(db.resolve(&frozen).is_err());
+    s.allow_estimates = false;
+    assert!(db.resolve(&s).unwrap().bending_response().is_err());
 }

@@ -3,7 +3,7 @@
 //! tolerances and whether self-contact is enabled. Grain rotation remains in the existing scene builder.
 
 use ftx_core::{Refusal, RefusalCode, Vec2};
-use ftx_pattern::material_bending::{BendingTensor, MODEL as BENDING_MODEL};
+use ftx_pattern::material_bending::BendingTensor;
 use ftx_pattern::material_relaxation::CompiledRelaxation;
 use ftx_pattern::material_response::CompiledMembrane;
 use ftx_pattern::materials::Mechanics;
@@ -282,10 +282,13 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         not_simulated.push("directional bending");
     } else {
         not_simulated.extend([
-            "finite-stretch shell curvature",
+            "conforming shell discretization",
             "nonlinear curvature response",
             "measured seam bending",
         ]);
+        if !fabric.panel_bending.is_some_and(|d| d.uses_normal()) {
+            not_simulated.push("finite-stretch shell curvature");
+        }
     }
     Ok(MaterialInputs {
         fabric,
@@ -299,7 +302,7 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
                 (false,true)=>"orthotropic_green_strain_tensor_panel_bending",
                 (true,true)=>"tabulated_green_strain_tensor_panel_bending"
             },
-            "bending_model":if fabric.panel_bending.is_some() {BENDING_MODEL} else {"scalar_hinges"},
+            "bending_model":fabric.panel_bending.map_or("scalar_hinges", |law| law.model()),
             "panel_bending_matrix_nm":fabric.panel_bending.map(|p| p.matrix()),
             "bending_scope":"explicit tensor replaces interior source-panel hinges; scalar bending_rigidity remains the separate seam approximation",
             "nonlinear_strain_range": response.as_ref().map(CompiledMembrane::strain_range),

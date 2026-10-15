@@ -687,6 +687,7 @@ impl Solver {
     /// The potential: incremental (`Some((x̃, h))`) or static (`None`, gravity as potential).
     fn potential(&self, x: &[Vec3], inertia: Option<(&[Vec3], f64)>) -> Result<f64, Refusal> {
         self.model.check_membrane_domains(x)?;
+        self.model.check_panel_bending_domains(x)?;
         let mut e = self.model.elastic_energy(x);
         if let Some(field) = &self.relaxation {
             e += field.energy(x, inertia.map(|(_, h)| h))?;
@@ -809,7 +810,7 @@ impl Solver {
         }
         for p in self.model.panel_bending_patches() {
             let mut l = p.local(x);
-            scatter(&p.v, &l.grad, &mut l.hess, true, &mut sink, &mut g);
+            scatter(&p.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for e in &self.model.elastics {
             let mut l = e.local(x);
@@ -1106,6 +1107,7 @@ impl Solver {
     }
 
     fn step_inner(&mut self, h: f64, body_start: Option<&[Vec3]>) -> Result<SolveReport, Refusal> {
+        self.model.check_panel_bending_domains(&self.x)?;
         if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,

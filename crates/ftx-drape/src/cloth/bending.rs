@@ -1,6 +1,6 @@
 //! Source-panel topology is retained across physical welds; curvature support never jumps a seam.
 
-use ftx_core::{Refusal, RefusalCode, Vec2};
+use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_bending::BendingTensor;
 
 use super::ClothModel;
@@ -100,5 +100,17 @@ impl ClothModel {
         self.panel_bending
             .as_ref()
             .map_or(&[], |p| p.triangles.as_slice())
+    }
+
+    /// Refuse singular reconstructed tangent frames before evaluating curvature or derivatives.
+    /// A line-search trial may fail this gate without changing the accepted state.
+    ///
+    /// # Errors
+    /// Missing/non-finite positions or a degenerate normal-projected patch frame.
+    pub fn check_panel_bending_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
+        for patch in self.panel_bending_patches() {
+            patch.check_domain(x)?;
+        }
+        Ok(())
     }
 }

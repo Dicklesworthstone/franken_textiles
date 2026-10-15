@@ -1,7 +1,8 @@
 //! Grain-frame orthotropic quadratic panel bending. Each six-node patch reproduces quadratic
 //! polynomials exactly and annihilates affine maps. Under quasi-isometry its vector Hessian is the
-//! second fundamental form times the surface normal. This is NOT a finite-stretch Koiter shell:
-//! nonuniform in-plane deformation can also store energy. No dihedral-angle direction multiplier.
+//! second fundamental form times the surface normal. The explicit normal-projected alternative
+//! excludes tangential second derivatives, with exact current-normal derivatives. Neither model
+//! supplies empirical textile parameters or a conforming shell discretization.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,6 +10,8 @@ use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_bending::BendingTensor;
 
 use crate::elements::Local;
+
+mod normal;
 
 fn bad(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::DegenerateGeometry, message).repair(
@@ -26,6 +29,7 @@ pub struct BendingPatch {
     gram: [[f64; 6]; 6],
     area: f64,
     tensor: BendingTensor,
+    tangents: [[f64; 6]; 2],
 }
 
 fn quadratic(p: Vec2) -> [f64; 3] {
@@ -143,12 +147,18 @@ impl BendingPatch {
         {
             return Err(bad("bending coefficient overflow"));
         }
+        let tangents = if tensor.uses_normal() {
+            normal::tangent_weights(base, scale, &weights)?
+        } else {
+            [[0.0; 6]; 2]
+        };
         Ok(Self {
             v,
             weights,
             gram,
             area,
             tensor,
+            tangents,
         })
     }
 
@@ -165,6 +175,9 @@ impl BendingPatch {
     /// Panel energy in joules, objective under rigid rotations and zero for affine flat maps.
     #[must_use]
     pub fn energy(&self, x: &[Vec3]) -> f64 {
+        if self.tensor.uses_normal() {
+            return self.normal_energy(x);
+        }
         let c = self.curvature(x);
         let d = self.tensor.matrix();
         let mut e = 0.0;
@@ -176,9 +189,13 @@ impl BendingPatch {
         0.5 * self.area * e
     }
 
-    /// Exact energy/gradient/constant PSD Hessian of this quasi-isometric quadratic model.
+    /// Exact energy/gradient/Hessian. Only the vector-Hessian model is PSD by construction;
+    /// the normal-projected model includes geometric stiffness and may require Newton projection.
     #[must_use]
     pub fn local(&self, x: &[Vec3]) -> Local<18, 324> {
+        if self.tensor.uses_normal() {
+            return self.normal_local(x);
+        }
         let c = self.curvature(x);
         let d = self.tensor.matrix();
         let moment: [Vec3; 3] =
@@ -203,6 +220,12 @@ impl BendingPatch {
             hess,
             psd: true,
         }
+    }
+
+    /// The actual curvature kinematics selected for this source triangle.
+    #[must_use]
+    pub fn model(&self) -> &'static str {
+        self.tensor.model()
     }
 }
 

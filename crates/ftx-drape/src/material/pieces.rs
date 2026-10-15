@@ -164,7 +164,7 @@ pub(super) fn resolve(
         "hinge_policy":"shared curvature with each adjacent triangle's bending-area share; not an empirical seam law",
         "panel_bending_piece_count":fabrics.iter().filter(|f| f.bending_response().is_some()).count(),
         "panel_bending_policy":"selected panels use source-topology quadratic tensor patches; scalar seam approximation is retained independently",
-        "not_simulated":["layer generation", "finite-stretch shell curvature", "resolved seam cross-section", "plastic set/damage"],
+        "not_simulated":["layer generation", "conforming shell discretization", "resolved seam cross-section", "plastic set/damage"],
         "fit_claim":false
     });
     report["assignment_sha256"] = json!(sha256_hex(

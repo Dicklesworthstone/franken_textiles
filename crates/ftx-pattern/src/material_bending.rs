@@ -10,11 +10,16 @@ use crate::materials::Form;
 /// Explicit opt-in in `material.structure.bending_model`.
 pub const MODEL: &str = "orthotropic_quadratic_patch/1";
 
+/// Normal-projected second fundamental form, in reference material coordinates.
+pub const NORMAL_MODEL: &str = "orthotropic_normal_patch/1";
+
 /// Positive-definite bending resultant matrix in [k_uu, k_vv, 2 k_uv] order, in N m.
 /// u follows warp/wale/grain; v follows weft/course. This is not membrane Poisson coupling.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct BendingTensor {
     matrix_nm: [[f64; 3]; 3],
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    normal_projection: bool,
 }
 
 impl BendingTensor {
@@ -46,6 +51,7 @@ impl BendingTensor {
                 [coupling, weft, 0.0],
                 [0.0, 0.0, twist],
             ],
+            normal_projection: false,
         })
     }
 
@@ -53,6 +59,30 @@ impl BendingTensor {
     #[must_use]
     pub fn matrix(&self) -> [[f64; 3]; 3] {
         self.matrix_nm
+    }
+
+    /// Use normal-projected curvature instead of the quasi-isometric vector Hessian.
+    /// The independent constitutive matrix is unchanged; this does not infer stretch-dependent D.
+    #[must_use]
+    pub fn normal_projected(mut self) -> Self {
+        self.normal_projection = true;
+        self
+    }
+
+    /// Whether to project the reconstructed second derivatives onto the current surface normal.
+    #[must_use]
+    pub fn uses_normal(&self) -> bool {
+        self.normal_projection
+    }
+
+    /// Exact selected kinematic model, independent of the material's display name.
+    #[must_use]
+    pub fn model(&self) -> &'static str {
+        if self.normal_projection {
+            NORMAL_MODEL
+        } else {
+            MODEL
+        }
     }
 }
 
@@ -67,7 +97,9 @@ impl ResolvedMaterial {
         let Some(model) = material.structure.get("bending_model") else {
             return Ok(None);
         };
-        if model != MODEL || matches!(material.form, Form::Fiber | Form::Yarn | Form::Fill) {
+        if (model != MODEL && model != NORMAL_MODEL)
+            || matches!(material.form, Form::Fiber | Form::Yarn | Form::Fill)
+        {
             return Err(Refusal::new(
                 RefusalCode::InvalidDocument,
                 "unsupported panel bending model or material form",
@@ -80,6 +112,12 @@ impl ResolvedMaterial {
             value("bending_coupling")?,
             value("bending_twist")?,
         )
-        .map(Some)
+        .map(|law| {
+            Some(if model == NORMAL_MODEL {
+                law.normal_projected()
+            } else {
+                law
+            })
+        })
     }
 }
