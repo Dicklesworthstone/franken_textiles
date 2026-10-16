@@ -35,6 +35,13 @@ pub struct Stock {
     /// Simple, nonoverlapping interior exclusions, strictly inside the external boundary.
     #[serde(default)]
     pub defects_mm: Vec<Vec<Vec2>>,
+    /// Already-consumed exterior cut regions from earlier accepted plans. These are not defects:
+    /// future cutters use the piece-to-piece gap rather than the stock/defect boundary margin.
+    #[serde(default)]
+    pub occupied_mm: Vec<Vec<Vec2>>,
+    /// Stable receipt chain explaining the occupied regions. Required when `occupied_mm` is nonempty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupied_basis: Option<String>,
     /// Directed preferred cutting axis; for a hide this is authored, never inferred as a weave.
     pub grain_mm: [Vec2; 2],
     /// Evidence/rationale for actual stock geometry, exclusions, units and cutting axis.
@@ -85,10 +92,14 @@ pub struct Marker {
     pub outline_mm: Vec<Vec2>,
     /// Transformed exclusions. Internal cut holes are not reused to hide defects.
     pub defects_mm: Vec<Vec<Vec2>>,
+    /// Prior accepted cuts transformed into the same planning frame.
+    pub occupied_mm: Vec<Vec<Vec2>>,
     /// Whole polygon area including defects, in m²; not roll width times guessed length.
     pub gross_area_m2: f64,
     /// Polygon area less disjoint defects; margins and kerf are NOT subtracted.
     pub defect_free_area_m2: f64,
+    /// Defect-free area less prior accepted external cut areas; clearances are not subtracted.
+    pub available_area_m2: f64,
     /// Sum of allocated external cutter areas; interior holes remain occupied.
     pub external_cut_area_m2: f64,
     /// Allocated external area / whole stock area. Zero for unused stock.
@@ -190,6 +201,39 @@ fn marker(stock: &Stock, material: ResolvedMaterial, work: &mut Work) -> Result<
         defects.push(path);
     }
     let usable = positive("defect-free stock area", gross - excluded)?;
+    if !stock.occupied_mm.is_empty()
+        && stock
+            .occupied_basis
+            .as_deref()
+            .is_none_or(|basis| basis.trim().is_empty())
+    {
+        return Err(bad(
+            "occupied finite-stock regions need a nonempty receipt basis",
+        ));
+    }
+    let mut occupied: Vec<Vec<Vec2>> = Vec::new();
+    let mut consumed = 0.0;
+    for path in &stock.occupied_mm {
+        let path: Vec<_> = path.iter().map(|p| r.apply(*p)).collect();
+        consumed += ring(&path, work)?;
+        if !checked(enclosed(&path, &outline, 0.0, work))? {
+            return Err(bad(
+                "occupied stock regions must lie inside the stock outline",
+            ));
+        }
+        for defect in &defects {
+            if !checked(clear(&path, bbox(&path)?, defect, bbox(defect)?, 0.0, work))? {
+                return Err(bad("occupied stock regions overlap a declared defect"));
+            }
+        }
+        for other in &occupied {
+            if !checked(clear(&path, bbox(&path)?, other, bbox(other)?, 0.0, work))? {
+                return Err(bad("occupied stock regions overlap one another"));
+            }
+        }
+        occupied.push(path);
+    }
+    let available = positive("available finite-stock area", usable - consumed)?;
     let mass = material
         .material()
         .require("areal_density", "kg/m2", material.allows_estimates())
@@ -201,8 +245,10 @@ fn marker(stock: &Stock, material: ResolvedMaterial, work: &mut Work) -> Result<
         source_to_marker: [[r.a[0][0], r.a[0][1], 0.0], [r.a[1][0], r.a[1][1], 0.0]],
         outline_mm: outline,
         defects_mm: defects,
+        occupied_mm: occupied,
         gross_area_m2: gross,
         defect_free_area_m2: usable,
+        available_area_m2: available,
         external_cut_area_m2: 0.0,
         utilization: 0.0,
         stock_mass_kg: mass.as_ref().ok().copied(),
@@ -245,12 +291,16 @@ impl Request {
         let vertices = self.stocks.iter().try_fold(0usize, |n, s| {
             s.defects_mm
                 .iter()
+                .chain(&s.occupied_mm)
                 .try_fold(n.checked_add(s.outline_mm.len())?, |n, p| {
                     n.checked_add(p.len())
                 })
         });
         if vertices.is_none_or(|n| n > 32768)
-            || self.stocks.iter().any(|s| s.defects_mm.len() > 256)
+            || self
+                .stocks
+                .iter()
+                .any(|s| s.defects_mm.len() > 256 || s.occupied_mm.len() > 4096)
         {
             return Err(budget());
         }
@@ -385,7 +435,7 @@ impl Request {
             marker.utilization = marker.external_cut_area_m2 / marker.gross_area_m2;
             if !marker.utilization.is_finite()
                 || marker.utilization > 1.0 + 1e-10
-                || marker.external_cut_area_m2 > marker.defect_free_area_m2 * (1.0 + 1e-10)
+                || marker.external_cut_area_m2 > marker.available_area_m2 * (1.0 + 1e-10)
             {
                 return Err(bad("finite-stock area balance failed"));
             }
@@ -414,7 +464,7 @@ impl Request {
                 "Finite single-ply stock; authored defects/axis and frozen material identity, not a hide scan or measured property acquisition.",
                 "Largest-exterior-area-first pieces, stock input order, bottom-left lattice; one-way grain only, no reflection or crossgrain rotation. Not globally optimal.",
                 "Full polygon checks on emitted geometry; no reuse of internal holes, no shrinkage, pattern-repeat matching, variable-quality zones or physical process qualification.",
-                "Gross/defect-free areas are not recoverable offcuts; no inventory mutation, hide pricing, machine coordinates or hardware authorization.",
+                "Residual requests preserve prior exterior cuts as occupied geometry; they do not reconstruct arbitrary free-space polygons, price offcuts, or authorize hardware.",
             ],
         })
     }
@@ -490,6 +540,15 @@ fn locate(
             if !free {
                 continue;
             }
+            for occupied in &stock.occupied_mm {
+                if !checked(clear(&ring, rb, occupied, bbox(occupied)?, o.gap_mm, work))? {
+                    free = false;
+                    break;
+                }
+            }
+            if !free {
+                continue;
+            }
             for p in &stock.placements {
                 if !checked(clear(&ring, rb, &p.cut_mm, p.bounds_mm, o.gap_mm, work))? {
                     free = false;
@@ -532,5 +591,53 @@ impl Plan {
     #[must_use]
     pub fn request(&self) -> &Request {
         &self.request
+    }
+
+    /// Produce a frozen request for the same physical inventory after consuming this complete plan.
+    /// Existing stock boundaries/defects/material locks are preserved. Accepted exterior cutter
+    /// paths become occupied regions in each stock's original authored frame, so a later plan cannot
+    /// reuse the same physical area. This is a conservative inventory receipt, not a polygonized
+    /// description of every disconnected offcut and not a reservation side effect.
+    ///
+    /// # Errors
+    /// Non-rigid or non-finite stored stock transforms, malformed placement geometry, or serialization
+    /// failure. The original plan and request are unchanged.
+    pub fn residual_request(&self) -> Result<Request, Refusal> {
+        let mut next = self.request.clone();
+        if next.stocks.len() != self.markers.len() {
+            return Err(bad("finite-stock receipt lost inventory correspondence"));
+        }
+        for (stock, marker) in next.stocks.iter_mut().zip(&self.markers) {
+            let a = marker.source_to_marker;
+            let det = a[0][0] * a[1][1] - a[0][1] * a[1][0];
+            if !det.is_finite() || (det - 1.0).abs() > 1e-10 {
+                return Err(bad(
+                    "finite-stock receipt transform is not a proper rigid rotation",
+                ));
+            }
+            let inverse = |p: Vec2| {
+                let x = p.x - a[0][2];
+                let y = p.y - a[1][2];
+                Vec2::new(a[0][0] * x + a[1][0] * y, a[0][1] * x + a[1][1] * y)
+            };
+            for placement in &marker.placements {
+                if placement.cut_mm.len() < 3 || placement.cut_mm.iter().any(|p| !p.is_finite()) {
+                    return Err(bad(
+                        "finite-stock receipt contains malformed placement geometry",
+                    ));
+                }
+                stock
+                    .occupied_mm
+                    .push(placement.cut_mm.iter().copied().map(inverse).collect());
+            }
+            if !marker.placements.is_empty() {
+                let receipt = format!("ftx-finite-stock-plan/1:{}", self.request_sha256);
+                stock.occupied_basis = Some(match stock.occupied_basis.take() {
+                    Some(previous) => format!("{previous} -> {receipt}"),
+                    None => receipt,
+                });
+            }
+        }
+        Ok(next)
     }
 }

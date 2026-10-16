@@ -133,6 +133,62 @@ fn actual_inventory_is_consumed_once_and_copies_never_round_down_to_partial_succ
 }
 
 #[test]
+fn residual_request_prevents_reusing_prior_cuts_and_chains_receipts() {
+    let p = pattern(vec![piece("panel", 20., 20.)]);
+    let r = request(vec![stock(
+        "reusable-hide",
+        material("hide", "hide"),
+        rect(50., 25.),
+    )]);
+    let first = r.build(&p).unwrap();
+    let residual = first.residual_request().unwrap();
+    assert_eq!(residual.stocks[0].occupied_mm.len(), 1);
+    assert!(
+        residual.stocks[0]
+            .occupied_basis
+            .as_deref()
+            .unwrap()
+            .starts_with("ftx-finite-stock-plan/1:")
+    );
+    let first_cut = first.markers()[0].placements[0].cut_mm.clone();
+    let second = residual.build(&p).unwrap();
+    assert_eq!(second.markers()[0].placements.len(), 1);
+    let second_cut = &second.markers()[0].placements[0].cut_mm;
+    assert_ne!(second_cut, &first_cut);
+    near(first.markers()[0].defect_free_area_m2, 0.00125);
+    near(second.markers()[0].available_area_m2, 0.00085);
+
+    let residual2 = second.residual_request().unwrap();
+    assert_eq!(residual2.stocks[0].occupied_mm.len(), 2);
+    assert!(
+        residual2.stocks[0]
+            .occupied_basis
+            .as_deref()
+            .unwrap()
+            .contains(" -> ftx-finite-stock-plan/1:")
+    );
+    assert!(residual2.build(&p).is_err());
+    assert_eq!(r.stocks[0].occupied_mm.len(), 0);
+}
+
+#[test]
+fn authored_occupied_regions_require_receipts_and_survive_rotated_stock_frames() {
+    let p = pattern(vec![piece("panel", 20., 20.)]);
+    let mut s = stock("rotated", material("hide", "hide"), rect(25., 50.));
+    s["grain_mm"] = json!([[0, 0], [10, 0]]);
+    let first = request(vec![s]).build(&p).unwrap();
+    let residual = first.residual_request().unwrap();
+    let second = residual.build(&p).unwrap();
+    assert_eq!(second.markers()[0].placements.len(), 1);
+    near(second.markers()[0].available_area_m2, 0.00085);
+
+    let mut raw = serde_json::to_value(&residual).unwrap();
+    raw["stocks"][0]["occupied_basis"] = Value::Null;
+    let unproven: Request = serde_json::from_value(raw).unwrap();
+    assert!(unproven.build(&p).is_err());
+}
+
+#[test]
 fn material_only_substitution_changes_stock_assignment_and_missing_mass_stays_unknown() {
     let p = pattern(vec![piece("shell", 30., 40.)]);
     let m = material("knit", "knit");
