@@ -183,6 +183,8 @@ impl Catalog {
         catalog.materials.extend(hfm.materials);
         catalog.materials.extend(nist::records());
         catalog.materials.extend(mit::records());
+        let woven = Self::from_json(include_str!("material_catalog/woven-measurements.json"))?;
+        catalog.materials.extend(woven.materials);
         catalog.validate()?;
         Ok(catalog)
     }
