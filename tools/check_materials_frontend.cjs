@@ -403,6 +403,36 @@ test('study replacement/cancellation cannot publish late file reads or stale sce
   assert.equal(p.e.error.hidden, false);
 });
 
+test('computed objectives display Rust admission, signed units and incomparability without a browser scorer', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const comparison = {
+    policy: { basis: 'nominal', allow_mixed_protocols: false,
+      objectives: [{ metric: 'independent_surface_power_w', direction: 'minimize' }], constraints: [] },
+    frontier: ['A'], uncertainty_propagated: false,
+    alternatives: [
+      { key: 'A', eligible: true, dominated_by: [], exclusions: [], readings: { independent_surface_power_w: { value: -8, unit: 'W' } } },
+      { key: 'B', eligible: false, dominated_by: [], exclusions: [{ message: 'not settled' }], readings: {} }],
+    incomparable: [{ alternatives: ['A', '<C>'], reason: 'Different conditioning' }]
+  };
+  await p.e.scenario.onclick();
+  const report = scenarioReport(); report.comparison = comparison;
+  p.emit(report);
+  const s = section(p, 'Fresh drape and heat alternatives');
+  assert.match(visibleText(s), /Computed nominal frontier: A/);
+  assert.match(visibleText(s), /Reported input protocols must match/);
+  assert.match(visibleText(s), /A \/ <C>: Different conditioning/);
+  const t = descendants(s).find(n => n.tag === 'table');
+  assert.deepEqual(plain(t.children[2].children.map(n => n.textContent)), ['A', 'Eligible', 'None reported', '-8 W']);
+  assert.deepEqual(plain(t.children[3].children.map(n => n.textContent)), ['B', 'Excluded: not settled', 'None reported', 'Unknown']);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true);
+  await p.e.study.onclick();
+  const study = studyReport(); study.comparison = { ...comparison, frontier: [], policy: { ...comparison.policy, allow_mixed_protocols: true } };
+  p.emit(study);
+  const m = section(p, 'Fixed-pattern manufacturing alternatives');
+  assert.match(visibleText(m), /No eligible non-dominated alternatives/);
+  assert.match(visibleText(m), /Mixed source protocols explicitly admitted/);
+});
+
 // Opt in after tools/build_web.sh. This executes the real production WASM through the actual
 // worker module, with only the Node transport/module loader adapted. It is not HTTP/browser or
 // native parity, successful anatomical body fitting, or empirical textile validation.
@@ -448,6 +478,21 @@ test('compiled WASM study preserves causal manufacturing changes and source-lock
       assert.equal(replay.pattern_json, row.binding.result.pattern_json);
     }
     assert.equal((await w.send({ type: 'study', pattern, studyRequest })).files[0].text, study.files[0].text);
+    const compared = JSON.parse(studyRequest);
+    compared.comparison = { basis: 'nominal', objectives: [{ metric: 'stock_mass_kg', direction: 'minimize' }], required_consumers: ['sewing'] };
+    const comparisonRequest = JSON.stringify(compared);
+    const comparison = await w.send({ type: 'study', pattern, studyRequest: comparisonRequest });
+    assert.equal(comparison.type, 'result', comparison.message);
+    assert.deepEqual(comparison.result.alternatives, study.result.alternatives);
+    assert.deepEqual(comparison.result, JSON.parse(ftx.material_study(pattern, comparisonRequest)));
+    assert.deepEqual(comparison.result.comparison.frontier, ['a-wide']);
+    assert.equal(comparison.result.comparison.uncertainty_propagated, false);
+    assert.equal(comparison.result.comparison.alternatives[0].readings.stock_mass_kg.value, rows[0].metrics.stock_mass_kg);
+    assert.equal(comparison.files[2].text, comparisonRequest);
+    compared.comparison.objectives = [{ metric: 'observed_order_cost', direction: 'minimize' }];
+    const noOffers = await w.send({ type: 'study', pattern, studyRequest: JSON.stringify(compared) });
+    assert.equal(noOffers.type, 'result', noOffers.message);
+    assert.deepEqual(noOffers.result.comparison.frontier, []);
     const invalid = await w.send({ type: 'scenario', pattern, studyRequest, scenarioRequest: '{}', measurements: '{}', bytes: new ArrayBuffer(8) });
     assert.equal(invalid.type, 'error'); assert.match(invalid.message, /ftxbody/);
   });

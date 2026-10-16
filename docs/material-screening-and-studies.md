@@ -21,7 +21,7 @@ The browser bindings are `material_screen(request_json)` and
 `material_study(pattern_json, request_json)`. The file-free Rust entry points are
 `ftx_pattern::material_screen::Request::evaluate`,
 `ftx_export::material_study::Request::evaluate`, and `ftx_wasm::materials::{screen,study}`.
-This delivery exposes browser-callable bindings, not new controls on `materials.html`.
+Section 4 of `materials.html` runs these same requests and displays source-qualified results.
 
 The examples use the existing source-bearing 3M insulation records and a clearly synthetic pattern.
 They compare reported mass/thickness/resistance, not whole-jacket warmth. Some candidate records
@@ -118,6 +118,59 @@ also includes `frozen_changes`; applying them to the SAME original pattern repro
 including unchanged explicit assignments. Modified frozen observations fail their source locks.
 Inputs are never overwritten. Hardware and physical-validation flags are always false.
 
+## Computed manufacturing objectives
+
+An optional `comparison` in `ftx-material-study/1` computes a Pareto frontier from the **actual
+planner outputs**, independently of scalar catalog screening:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [
+    {"metric": "stock_mass_kg", "direction": "minimize"},
+    {"metric": "observed_order_cost", "direction": "minimize"}
+  ],
+  "constraints": [{"metric": "feed_seconds", "maximum": 120}],
+  "required_consumers": ["sewing"],
+  "allow_mixed_protocols": false
+}
+```
+
+These objectives require cutting and purchasing in the same study request; the constraint requires
+sewing. Other metrics are `stock_area_m2`, `external_cut_area_m2`, `stitch_intervals` and
+`feed_seconds`. Dimensions are fixed by their names; order cost uses the exact request currency.
+One to sixteen unique objectives, up to 64 constraints and unique required consumers are accepted.
+Every requested value must be available and finite, every inclusive constraint must pass, and
+required purchasing must have complete offer coverage. An unrequested consumer is an invalid
+comparison policy; a requested consumer's refusal excludes only its candidate. Unrelated
+consumer failures do not disqualify a candidate unless explicitly required.
+
+The report's `comparison` retains readings, eligibility exclusions, protocol identities,
+`dominated_by`, `frontier`, and explicit incomparable pairs. Ties and tradeoffs remain alternatives.
+Default pairwise comparison requires equal reported methods, conditions, canonical units and
+evidence for relevant width/density/thickness inputs by source piece. Unrelated properties do not
+block it. `allow_mixed_protocols` deliberately relaxes this check, never the selection's estimate
+policy. Equal protocols are not empirical comparability. Full source observations remain in the
+binding and ordinary planner reports; those outputs do not change when comparison is requested.
+
+`nominal` is an explicit required choice. Source ranges are **not** numerical output intervals;
+`reported_bounds` comparison is refused rather than pretending uncertainty has been propagated.
+This finite-candidate frontier is conditional on upstream screening, process options, quantities,
+market date and input data. It is not optimal nesting, a global material optimum or physical validation.
+
+`tests/fixtures/materials/study-compared-insulation.json` is an executable example using the same
+synthetic sewing pattern and source-bearing insulation records. It compares gross marker mass and
+area, retaining missing-width exclusions; it is not an insulation warmth or safety comparison:
+
+```sh
+ftx materials study tests/fixtures/materials/synthetic-sewing-pattern.json \
+  tests/fixtures/materials/study-compared-insulation.json --json
+```
+
+Scenario studies use the same optional `comparison` at the top of their result, additionally
+supporting signed heat, reported edge strain and simulated-cloth mass. See
+`docs/material-scenario-studies.md` for mandatory settledness, identity checks and scope limits.
+
 ## Budgets, tests and remaining gates
 
 Native and browser boundaries limit combined input to 64 MiB. Screening permits 1024 candidates,
@@ -132,6 +185,6 @@ and both real native binaries. Native-callable wasm tests use the same library o
 compilation alone is not a browser-runtime or native/wasm execution-parity claim.
 
 Still separate: fully characterized linen/cowhide/performance-knit lots, held-out garment validation,
-measured manufacturing recipes, calibrated robotic execution, live supplier coverage, and a qualified
-multi-physics optimization objective over actual drape/body/environment scenarios. Screening/study
+measured manufacturing recipes, calibrated robotic execution, live supplier coverage, propagated
+scenario uncertainty and empirical qualification of computed objectives. Screening/study
 software does not close those empirical gates or grant a fire, cut-resistance or cold-weather rating.

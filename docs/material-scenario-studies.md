@@ -66,6 +66,50 @@ textile. In particular body triangle 0 in that fixture is chosen for the synthet
 must not be reused as an assumed chest patch on Anny. The small step count tests propagation; it
 does not establish a settled garment or a usable real-person fit.
 
+## Declared computed scenario objectives
+
+The study request's optional `comparison` also applies to actual scenario outputs. It uses the same
+nominal Pareto engine as manufacturing, not a browser score or a surrogate drape. For example:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [
+    {"metric": "body_coverage_power_w", "direction": "minimize"},
+    {"metric": "stock_mass_kg", "direction": "minimize"}
+  ],
+  "constraints": [{"metric": "max_absolute_edge_strain_pct", "maximum": 8}],
+  "required_consumers": ["sewing"],
+  "allow_mixed_protocols": false
+}
+```
+
+This example requires actual cutting and sewing requests plus coverage geometry/conditions. The
+8% constraint is an illustrative authored requirement, **not** a measured material limit or safe-fit
+threshold. Other scenario metrics are `independent_surface_power_w` and `simulated_cloth_mass_kg`.
+Heat retains its sign; minimizing negative power does not mean minimizing its magnitude or improving
+warmth. Independent sheet power and declared body-domain power are different quantities. Simulated
+cloth mass excludes omitted pieces, trims and hardware; it is not a complete garment mass estimate.
+Maximum absolute edge strain uses the extrema and precision in the production report, not principal
+strain or a physical fit score. Manufacturing-only objectives remain usable after simulation refusal.
+
+Every scenario objective requires this bound pattern's identity, the retained body/scenario identities,
+`drape.settled == true`, empty drape gating and `simulation_gating_clear == true`. Successful thermal
+output on an unfinished frame is still excluded. Thermal consumers enforce their existing source,
+temperature and geometry domains. Comparisons cannot substitute an older drape, mix environments,
+or treat missing heat/mass as zero. Required consumers and failed constraints exclude a candidate
+without erasing independent results. The top-level `comparison` is qualified by the entire scenario
+request identity; there is no misleading manufacturing-only frontier nested beneath it.
+
+Relevant reported methods, full conditions and evidence must match by source piece unless explicitly
+relaxed. Different nonlinear/relaxation/temperature records and constitutive-model selectors use
+conservative exact-record comparison. Protocol override never bypasses freshness, settledness or
+missing-value checks. Nominal comparison requires explicit consent: input ranges are not propagated
+objective intervals. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
+comfort or proof that the requested run duration was physically sufficient. Positive admission tests
+use explicitly synthetic callback outcomes; the actual cylinder integration test demonstrates that
+clear-gating but drifting cloth is excluded. No settled anatomical garment experiment is claimed.
+
 ## Reports and replay
 
 `ftx-material-scenario-study/1` contains:
@@ -112,7 +156,8 @@ values remain unknown, and incomplete offer coverage is not a free order. Source
 are inspectable per alternative. Downloaded reports, input JSON and bound alternative patterns
 retain the original text; display-only JSON is not used as a replay artifact. Changing actual
 dependencies removes their outputs and download URLs, while unrelated preview edits preserve
-study results. No weighted score or garment-level Pareto frontier is fabricated in JavaScript.
+study results. Declared computed objectives display the Rust frontier, units, exclusions and
+incomparable pairs; no weighted score or Pareto frontier is fabricated in JavaScript.
 
 The existing frontend tests include optional **real compiled WASM** execution without a model
 asset or native executable:
@@ -137,7 +182,7 @@ Real-binary tests verify both commands retain manufacturing when model decoding 
 implementation session did not have converted Anny assets, so it does not claim a positive
 model-backed end-to-end run or native/WASM execution parity merely from target compilation.
 
-`ftx-ms2` stays open for qualified garment-level objectives/Pareto comparisons, uncertainty admission,
-expanded body/pose policies and physical acceptance. Synthetic coupons and numerical conservation
+`ftx-ms2` stays open for propagated uncertainty, complete garment-mass accounting, expanded body/pose
+policies and physical acceptance of the nominal comparison path. Synthetic coupons and numerical conservation
 are not measured linen/leather/knit garment validation. No warmth rating, empirical fit,
 whole-wearer accuracy, global optimum or hardware execution authorization is claimed.

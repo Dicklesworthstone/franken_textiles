@@ -119,3 +119,57 @@ fn both_material_study_commands_reach_real_markers_and_explicit_missing_widths()
         );
     }
 }
+
+#[test]
+fn both_material_study_commands_compute_declared_objectives_using_the_same_library() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/materials");
+    let pattern = root.join("synthetic-sewing-pattern.json");
+    let source =
+        ftx_pattern::Pattern::from_json(&std::fs::read_to_string(&pattern).unwrap()).unwrap();
+    let mut request: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/study-insulation.json"
+    ))
+    .unwrap();
+    request["comparison"] = serde_json::json!({"basis":"nominal", "objectives":[
+        {"metric":"stock_mass_kg","direction":"minimize"}], "allow_mixed_protocols":true});
+    let typed: ftx_export::material_study::Request =
+        serde_json::from_value(request.clone()).unwrap();
+    let expected = serde_json::to_value(typed.evaluate(&source).unwrap()).unwrap();
+    assert!(
+        !expected["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        expected["comparison"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["eligible"] == false)
+    );
+    let path =
+        std::env::temp_dir().join(format!("ftx-objective-study-{}.json", std::process::id()));
+    std::fs::write(&path, request.to_string()).unwrap();
+    for (binary, prefix) in [
+        (env!("CARGO_BIN_EXE_ftx-materials"), vec!["study"]),
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            vec!["--json", "materials", "study"],
+        ),
+    ] {
+        let out = Command::new(binary)
+            .args(prefix)
+            .arg(&pattern)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let result: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(result.get("result").unwrap_or(&result), &expected);
+    }
+}

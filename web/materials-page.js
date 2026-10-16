@@ -127,6 +127,27 @@ function screening(parent, r) {
       material_id: row.material_id, readings: row.readings, exclusions: row.exclusions, selection: row.selection });
   }
 }
+function objectiveComparison(parent, r) {
+  const note = document.createElement("p");
+  note.textContent = `Computed ${r.policy.basis} frontier: ${r.frontier.length ? r.frontier.join(", ") : "No eligible non-dominated alternatives"}. ` +
+    (r.policy.allow_mixed_protocols ? "Mixed source protocols explicitly admitted. " : "Reported input protocols must match. ") +
+    "Conditional on these inputs and evaluated alternatives; no propagated uncertainty, empirical fit or global optimum claim.";
+  parent.append(note);
+  const objectives = r.policy.objectives;
+  const constraints = r.policy.constraints.filter(c => !objectives.some(o => o.metric === c.metric));
+  const metrics = [...objectives, ...constraints];
+  const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",
+    ...metrics.map(o => `${o.metric} (${o.direction || "constraint"})`)]);
+  for (const row of r.alternatives) {
+    cells(t, [row.key, row.eligible ? "Eligible" : `Excluded: ${row.exclusions.map(e => e.message).join("; ")}`,
+      row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
+      ...metrics.map(o => { const q = row.readings[o.metric]; return q ? `${metric(q.value)} ${q.unit}` : "Unknown"; })]);
+  }
+  for (const pair of r.incomparable) {
+    const p = document.createElement("p"); p.textContent = `${pair.alternatives.join(" / ")}: ${pair.reason}`; parent.append(p);
+  }
+  detail(parent, "Computed comparison policy, context and exclusions (display only)", r);
+}
 function comparison(op, r) {
   const parent = sections.get(op).comparison;
   if (op === "screen") {
@@ -134,6 +155,7 @@ function comparison(op, r) {
     return { schema: r.schema, basis: r.basis, allow_mixed_protocols: r.allow_mixed_protocols,
       scalar_frontier: r.frontier, request_sha256: r.request_sha256, notes: r.notes };
   }
+  if (r.comparison) objectiveComparison(parent, r.comparison);
   const study = op === "scenario" ? r.manufacturing : r;
   const t = table(parent, "Independent manufacturing outcomes", ["Alternative", "Binding", "Cutting", "Sewing", "Purchasing",
     "Stock area (m²)", "Cut area (m²)", "Complete stock mass (kg)", "Observed order cost", "Stitch intervals", "Feed-only seconds"]);
@@ -175,7 +197,9 @@ function comparison(op, r) {
   return { schema: r.schema, source_pattern_sha256: study.source_pattern_sha256, request_sha256: r.request_sha256,
     geometry_changed: study.geometry_changed, physical_validation_claim: study.physical_validation_claim,
     hardware_execution_authorized: study.hardware_execution_authorized, notes: study.notes,
-    comparison_basis: "Actual consumer results; unknowns are not zero, costs are dated observations, and no garment ranking or fit/warmth claim is made." };
+    computed_frontier: r.comparison?.frontier ?? null,
+    comparison_basis: r.comparison ? "Declared nominal objectives evaluated by Rust; conditional Pareto set, not an empirical fit/warmth claim or global optimum." :
+      "Actual consumer results; no computed objectives requested. Unknowns are not zero, and no ranking is inferred by this page." };
 }
 function show(op, msg) {
   const r = msg.result;

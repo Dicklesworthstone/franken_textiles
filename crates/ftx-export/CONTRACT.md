@@ -8,6 +8,23 @@ orchestration of both (`export_all`, `check_files`). The `ftx export` / `ftx che
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
+**Material-study comparison** (`material_study::comparison`, plan §25.10). Optional explicit
+nominal objectives/constraints consume actual cutting/sewing/dated procurement results on the same
+unchanged pattern and shared process inputs. Canonical metric names fix m², kg, seconds, counts or
+the exact market currency. Required unknown/refused/incomplete outputs exclude the candidate,
+never score zero. Default dominance requires matching relevant reported protocols by source piece;
+mixed protocols require deliberate consent. No source bounds are promoted to propagated result
+uncertainty. Ties, tradeoffs, exclusions and incompatible pairs remain visible. Existing reports and
+request identities are unchanged when the optional comparison is absent. See
+`docs/material-screening-and-studies.md`; direct real-planner, native-binary and file-free WASM
+regressions use synthetic geometry/data. No physical validation or global optimum is asserted.
+Scenario comparisons also consume fresh production drape/heat outcomes by stable key, without
+introducing a numerical crate dependency here. Signed heat, simulated-cloth mass and reported edge
+strain require matching pattern/body/scenario identities, geometric settledness and clear gating;
+required heat consumers retain their own validity domains. Callback serialization occurs only when
+needed, one alternative at a time. Full scenario context qualifies the top-level comparison.
+See `docs/material-scenario-studies.md`; geometric settledness is not stress equilibrium or fit.
+
 **Text and numbers** (`text.rs`, §2). `fnum` (fixed-point, ties to even on the exact binary value, trailing
 zeros stripped, `-0` → `0`), `ascii_text` (NFKD, `×` → `x`, `— – ·` → `-`, code points 32..126 kept),
 `safe_name`, Helvetica `text_width`, greedy `wrap`, the single-stroke font (`stroke_text`), tile column

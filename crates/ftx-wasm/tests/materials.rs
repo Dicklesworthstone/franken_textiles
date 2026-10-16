@@ -263,3 +263,34 @@ fn study_reuses_production_planners_and_preserves_material_source_locks() {
     }
     assert!(materials::study("{}", input).is_err());
 }
+
+#[test]
+fn study_comparison_is_shared_with_native_and_retains_unknown_values() {
+    let mut input: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/study-insulation.json"
+    ))
+    .unwrap();
+    input["comparison"] = json!({"basis":"nominal", "objectives":[
+        {"metric":"stock_mass_kg","direction":"minimize"}], "allow_mixed_protocols":true});
+    let request: ftx_export::material_study::Request =
+        serde_json::from_value(input.clone()).unwrap();
+    let expected = request
+        .evaluate(&Pattern::from_json(PATTERN).unwrap())
+        .unwrap();
+    let output: Value =
+        serde_json::from_str(&materials::study(PATTERN, &input.to_string()).unwrap()).unwrap();
+    assert_eq!(output, serde_json::to_value(expected).unwrap());
+    assert!(
+        !output["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        output["comparison"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["eligible"] == false)
+    );
+}

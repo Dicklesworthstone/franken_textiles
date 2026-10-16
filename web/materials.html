@@ -93,6 +93,10 @@ Its scalar frontier is not a garment ranking. Original observations and protocol
 <p class="note">The study request contains explicit <code>variants</code> or a <code>screened</code> request, and its own shared cutting,
 sewing and dated purchasing inputs. It does not use the single-preview process files above. Up to 32 alternatives;
 scalar-frontier pruning requires explicit consent. Download source-locked alternative patterns from the results.</p>
+<p class="note">Add an optional <code>comparison</code> to the study request with explicit <code>basis: "nominal"</code>,
+<code>objectives</code>, inclusive <code>constraints</code> and <code>required_consumers</code>. The shared Rust engine reports
+the computed Pareto alternatives, exclusions and protocol-incomparable pairs separately from scalar screening.
+No missing output is scored as zero, and source ranges are not presented as propagated result uncertainty.</p>
 </div><div>
 <h3>Fresh body, drape and heat study</h3>
 <label>Scenario request JSON (<code>ftx-drape-scenario/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
@@ -102,7 +106,8 @@ The scenario itself owns the fit specification, numerical options, surface condi
 the single-preview fit, self-contact checkbox and thermal files above do not override it. Body fitting runs once in the standard
 35° straight-arm drape pose; each alternative gets a fresh production drape and current-geometry heat evaluation.</p>
 <p class="note">Heat on a flagged or unsettled final frame is not an accepted fit prediction. Signed surface power and body-coverage power
-have different bases and are not interchangeable. There is no hidden weighted score, whole-wearer warmth rating or automatic garment winner.</p>
+have different bases and are not interchangeable. Declared heat, strain and simulated-cloth-mass objectives require both settledness and clear gating;
+an available heat number on an unfinished frame is excluded. There is no hidden weighted score, whole-wearer warmth rating or global garment winner.</p>
 <p>Changing either request, measurements, body or original pattern withdraws affected results. Cancel terminates the worker,
 including synchronous simulation. Raw reports and exact input JSON are downloadable; keep the source-identified body model locally for replay.</p>
 </div></div>
