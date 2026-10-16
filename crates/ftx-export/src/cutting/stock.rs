@@ -1,0 +1,536 @@
+//! Finite irregular hides and sheet remnants, with authored defects and one-way cutting axes.
+//!
+//! Physical stock is identified individually, not multiplied or replaced by a bounding rectangle.
+//! Placement is a bounded lattice heuristic, not an optimality or infeasibility proof. Accepted
+//! paths use full polygon containment/clearance shared with roll nesting. No partial plan escapes.
+
+use std::collections::BTreeSet;
+
+use ftx_core::{Refusal, RefusalCode, Vec2, det, polyline::signed_area, receipt::sha256_hex};
+use ftx_pattern::{
+    Pattern,
+    material_catalog::{ResolvedMaterial, Selection},
+    materials::{Form, Source},
+    textile_import::{catalog, piece_fabric, resolve_fabric},
+};
+use serde::{Deserialize, Serialize};
+
+use super::{
+    CutPlacement, Shape, bad, bbox, cut_shape,
+    geometry::{Work, clear, enclosed, simple},
+    place, positive,
+};
+use crate::{Ctx, ExportOptions, layout::rotation};
+
+/// One individually inventoried hide, remnant or finite sheet, in its own measured mm frame.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Stock {
+    /// Unique physical stock identity. Each item is available exactly once.
+    pub id: String,
+    /// Must match the pattern's exact material snapshot AND evidence policy, not just a fiber name.
+    pub material: Selection,
+    /// Simple external polygon; either winding, no repeated closing vertex. Edge damage belongs here.
+    pub outline_mm: Vec<Vec2>,
+    /// Simple, nonoverlapping interior exclusions, strictly inside the external boundary.
+    #[serde(default)]
+    pub defects_mm: Vec<Vec<Vec2>>,
+    /// Directed preferred cutting axis; for a hide this is authored, never inferred as a weave.
+    pub grain_mm: [Vec2; 2],
+    /// Evidence/rationale for actual stock geometry, exclusions, units and cutting axis.
+    pub geometry_source: Source,
+}
+
+/// Explicit planning controls, not machine calibration or material measurements.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Options {
+    /// Complete garment copies; pattern cut quantities are expanded exactly once.
+    pub copies: usize,
+    /// Minimum Euclidean distance between external cut paths, in mm.
+    pub gap_mm: f64,
+    /// Minimum distance to the stock boundary AND defects, in mm.
+    pub boundary_margin_mm: f64,
+    /// Lattice spacing in the stock's axis-aligned frame. Failure may require refinement.
+    pub step_mm: f64,
+    /// Total stock-validation/search operations across ALL stocks, in 1..20,000,000.
+    pub work_limit: usize,
+    /// Existing export allowance hierarchy is used when absent.
+    #[serde(default)]
+    pub seam_allowance_mm: Option<f64>,
+}
+
+/// Finite stock allocation. Stock order is an explicit first-fit preference.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Request {
+    /// Must be `ftx-finite-stock-request/1`.
+    pub schema: String,
+    /// Individually identified stock, in preferred consumption order.
+    pub stocks: Vec<Stock>,
+    /// Explicit search, allowance and spacing policy.
+    pub options: Options,
+}
+
+/// Validated stock and complete allocations in a local +y cutting-axis frame.
+#[derive(Clone, Debug, Serialize)]
+pub struct Marker {
+    /// Unique physical stock identity.
+    pub id: String,
+    /// Same material authority used by draping, sewing and purchasing.
+    pub material: ResolvedMaterial,
+    /// Rigid affine map from the authored stock frame to the emitted planning frame.
+    pub source_to_marker: [[f64; 3]; 2],
+    /// Full transformed stock boundary, not its bounding rectangle.
+    pub outline_mm: Vec<Vec2>,
+    /// Transformed exclusions. Internal cut holes are not reused to hide defects.
+    pub defects_mm: Vec<Vec<Vec2>>,
+    /// Whole polygon area including defects, in m²; not roll width times guessed length.
+    pub gross_area_m2: f64,
+    /// Polygon area less disjoint defects; margins and kerf are NOT subtracted.
+    pub defect_free_area_m2: f64,
+    /// Sum of allocated external cutter areas; interior holes remain occupied.
+    pub external_cut_area_m2: f64,
+    /// Allocated external area / whole stock area. Zero for unused stock.
+    pub utilization: f64,
+    /// Whole stock mass from admitted areal density; never inferred from hide thickness.
+    pub stock_mass_kg: Option<f64>,
+    /// Why optional mass is unknown; missing mass never becomes zero.
+    pub mass_unavailable: Option<Refusal>,
+    /// Deterministic instance/copy order, not machine traversal or sewing order.
+    pub placements: Vec<CutPlacement>,
+}
+
+/// Atomic complete allocation; private fields prevent mutation of geometry underlying previews.
+#[derive(Clone, Debug, Serialize)]
+pub struct Plan {
+    schema: &'static str,
+    pattern_sha256: String,
+    request_sha256: String,
+    request: Request,
+    markers: Vec<Marker>,
+    used_stock_count: usize,
+    used_gross_area_m2: f64,
+    external_cut_area_m2: f64,
+    work_used: usize,
+    candidates: usize,
+    optimality_claim: bool,
+    hardware_execution_authorized: bool,
+    limitations: Vec<&'static str>,
+}
+
+fn budget() -> Refusal {
+    Refusal::new(
+        RefusalCode::BudgetExceeded,
+        "finite-stock work budget exhausted; no complete plan published",
+    )
+}
+fn checked<T>(value: Option<T>) -> Result<T, Refusal> {
+    value.ok_or_else(budget)
+}
+fn sheet(m: &ResolvedMaterial) -> Result<(), Refusal> {
+    if matches!(m.material().form, Form::Fiber | Form::Yarn | Form::Fill) {
+        return Err(bad(
+            "finite stock requires a sheet or hide identity, not loose fiber/yarn/fill",
+        ));
+    }
+    Ok(())
+}
+fn ring(p: &[Vec2], work: &mut Work) -> Result<f64, Refusal> {
+    if !(3..=4096).contains(&p.len()) || p.iter().any(|v| !v.is_finite()) {
+        return Err(bad("stock polygons need 3..4096 finite vertices"));
+    }
+    bbox(p)?;
+    if !checked(simple(p, work))? {
+        return Err(bad("stock polygon is not simple or retraces an edge"));
+    }
+    positive("stock polygon area", area_m2(p))
+}
+fn area_m2(p: &[Vec2]) -> f64 {
+    // A scanner's arbitrary origin must not destroy small area differences in the shoelace sum.
+    signed_area(&p.iter().map(|v| *v - p[0]).collect::<Vec<_>>()).abs() * 1e-6
+}
+fn marker(stock: &Stock, material: ResolvedMaterial, work: &mut Work) -> Result<Marker, Refusal> {
+    sheet(&material)?;
+    let d = stock.grain_mm[1] - stock.grain_mm[0];
+    if stock.grain_mm.iter().any(|v| !v.is_finite())
+        || !d.is_finite()
+        || !d.norm2().is_finite()
+        || d.norm2() == 0.0
+    {
+        return Err(bad("stock needs an explicit finite, nonzero cutting axis"));
+    }
+    let source = &stock.geometry_source;
+    if source.reference.trim().is_empty()
+        || source.accessed_on.trim().is_empty()
+        || source.note.trim().is_empty()
+    {
+        return Err(bad(
+            "stock geometry needs source, date and characterization note",
+        ));
+    }
+    let r = rotation((90.0 - det::atan2(d.y, d.x).to_degrees() + 180.0).rem_euclid(360.0) - 180.0);
+    let outline: Vec<_> = stock.outline_mm.iter().map(|p| r.apply(*p)).collect();
+    let gross = ring(&outline, work)?;
+    let mut defects: Vec<Vec<Vec2>> = Vec::new();
+    let mut excluded = 0.0;
+    for path in &stock.defects_mm {
+        let path: Vec<_> = path.iter().map(|p| r.apply(*p)).collect();
+        excluded += ring(&path, work)?;
+        if !checked(enclosed(&path, &outline, 0.0, work))? {
+            return Err(bad(
+                "defects must be strictly inside stock; edge damage belongs in the stock outline",
+            ));
+        }
+        for other in &defects {
+            if !checked(clear(&path, bbox(&path)?, other, bbox(other)?, 0.0, work))? {
+                return Err(bad("stock defects overlap or contain one another"));
+            }
+        }
+        defects.push(path);
+    }
+    let usable = positive("defect-free stock area", gross - excluded)?;
+    let mass = material
+        .material()
+        .require("areal_density", "kg/m2", material.allows_estimates())
+        .and_then(|rho| positive("areal density", rho))
+        .and_then(|rho| positive("whole stock mass", rho * gross));
+    Ok(Marker {
+        id: stock.id.clone(),
+        material,
+        source_to_marker: [[r.a[0][0], r.a[0][1], 0.0], [r.a[1][0], r.a[1][1], 0.0]],
+        outline_mm: outline,
+        defects_mm: defects,
+        gross_area_m2: gross,
+        defect_free_area_m2: usable,
+        external_cut_area_m2: 0.0,
+        utilization: 0.0,
+        stock_mass_kg: mass.as_ref().ok().copied(),
+        mass_unavailable: mass.err(),
+        placements: Vec::new(),
+    })
+}
+
+impl Request {
+    /// Allocate every physical pattern instance to individually identified finite stock, atomically.
+    /// Width, constitutive moduli and thermal storage are not needed to cut an identified hide.
+    /// Frozen replay uses the same original pattern and emitted request; no files are modified.
+    ///
+    /// # Errors
+    /// Invalid/ambiguous geometry, source/evidence mismatch, incomplete assignments, no candidate
+    /// placement, or exceeded bounds: 128 stocks, 4096 instances, 32768 stock vertices, 20M work units.
+    pub fn build(&self, pattern: &Pattern) -> Result<Plan, Refusal> {
+        let o = &self.options;
+        if self.schema != "ftx-finite-stock-request/1"
+            || self.stocks.is_empty()
+            || self.stocks.len() > 128
+            || !(1..=4096).contains(&o.copies)
+            || !(1..=20_000_000).contains(&o.work_limit)
+        {
+            return Err(bad(
+                "invalid finite-stock schema, stock count, copies or work limit",
+            ));
+        }
+        positive("finite-stock search step", o.step_mm)?;
+        for v in [o.gap_mm, o.boundary_margin_mm]
+            .into_iter()
+            .chain(o.seam_allowance_mm)
+        {
+            if !v.is_finite() || v < 0.0 {
+                return Err(bad(
+                    "finite-stock allowances must be finite and nonnegative",
+                ));
+            }
+        }
+        let vertices = self.stocks.iter().try_fold(0usize, |n, s| {
+            s.defects_mm
+                .iter()
+                .try_fold(n.checked_add(s.outline_mm.len())?, |n, p| {
+                    n.checked_add(p.len())
+                })
+        });
+        if vertices.is_none_or(|n| n > 32768)
+            || self.stocks.iter().any(|s| s.defects_mm.len() > 256)
+        {
+            return Err(budget());
+        }
+        let errors = pattern.structure_errors();
+        if !errors.is_empty() {
+            return Err(bad(errors.join("; ")));
+        }
+        let raw = pattern.raw();
+        let pieces = raw["pieces"]
+            .as_array()
+            .ok_or_else(|| bad("pattern needs pieces"))?;
+        if pattern
+            .instances
+            .len()
+            .checked_mul(o.copies)
+            .is_none_or(|n| n == 0 || n > 4096)
+            || pieces.len() > 4096
+        {
+            return Err(budget());
+        }
+        if raw["fabric"].get("layers").is_some() {
+            return Err(bad(
+                "implicit layers need explicit cut pieces; finite stock cannot invent them",
+            ));
+        }
+        let ctx = Ctx::new(
+            pattern,
+            ExportOptions {
+                sa: o.seam_allowance_mm,
+                ..ExportOptions::default()
+            },
+        )?;
+        if !ctx.sa.is_finite() || ctx.sa < 0.0 {
+            return Err(bad("invalid export seam allowance"));
+        }
+        let mut work = Work::new(o.work_limit);
+        let db = catalog()?;
+        let mut ids = BTreeSet::new();
+        let mut frozen = self.clone();
+        let mut markers = Vec::new();
+        for stock in &mut frozen.stocks {
+            if stock.id.trim().is_empty() || !ids.insert(stock.id.clone()) {
+                return Err(bad("physical stock IDs must be nonempty and unique"));
+            }
+            let material = db.resolve(&stock.material)?;
+            stock.material = material.frozen_selection();
+            markers.push(marker(stock, material, &mut work)?);
+        }
+        let mut materials = Vec::new();
+        for i in 0..pieces.len() {
+            let m = resolve_fabric(piece_fabric(pattern, i)?)?
+                .ok_or_else(|| bad(format!("piece {i} needs an explicit material selection")))?;
+            sheet(&m)?;
+            if !markers.iter().any(|s| same_material(&s.material, &m)) {
+                return Err(bad(format!(
+                    "no stock matches piece {i} material {} and evidence policy",
+                    m.material().id
+                )));
+            }
+            materials.push(m);
+        }
+        let shapes = pattern
+            .instances
+            .iter()
+            .map(|i| cut_shape(&ctx, i))
+            .collect::<Result<Vec<_>, _>>()?;
+        for shape in &shapes {
+            for (path, closed) in &shape.geom.internal_cut {
+                if !checked(super::geometry::path_inside(
+                    path,
+                    *closed,
+                    &shape.ring,
+                    &mut work,
+                ))? {
+                    return Err(bad(
+                        "finite-stock internal cuts must lie strictly inside their external cut path",
+                    ));
+                }
+            }
+            for (point, diameter) in &shape.geom.drills {
+                if !checked(super::geometry::disk_inside(
+                    *point,
+                    *diameter / 2.0,
+                    &shape.ring,
+                    &mut work,
+                ))? {
+                    return Err(bad(
+                        "finite-stock drill discs must lie strictly inside their external cut path",
+                    ));
+                }
+            }
+        }
+        let mut order: Vec<_> = (0..shapes.len())
+            .flat_map(|i| (0..o.copies).map(move |c| (i, c)))
+            .collect();
+        order.sort_by(|&(a, ac), &(b, bc)| {
+            shapes[b]
+                .area
+                .total_cmp(&shapes[a].area)
+                .then_with(|| shapes[a].geom.iid.cmp(&shapes[b].geom.iid))
+                .then(ac.cmp(&bc))
+        });
+        for (index, copy) in order {
+            let s = &shapes[index];
+            let m = &materials[pattern.instances[index].piece_index];
+            let mut placed = false;
+            for marker in &mut markers {
+                if !same_material(&marker.material, m) {
+                    continue;
+                }
+                if let Some(p) = locate(s, copy, marker, o, &mut work)? {
+                    marker.external_cut_area_m2 += s.area;
+                    marker.placements.push(p);
+                    placed = true;
+                    break;
+                }
+            }
+            if !placed {
+                return Err(bad(format!(
+                    "no checked finite-stock placement for {} copy {copy}; refine step_mm, reorder stock or supply more matching stock (not a proof of infeasibility)",
+                    s.geom.iid
+                )));
+            }
+        }
+        let mut used = 0;
+        let mut gross = 0.0;
+        let mut cut = 0.0;
+        for marker in &mut markers {
+            marker
+                .placements
+                .sort_by(|a, b| a.instance.cmp(&b.instance).then(a.copy.cmp(&b.copy)));
+            marker.utilization = marker.external_cut_area_m2 / marker.gross_area_m2;
+            if !marker.utilization.is_finite()
+                || marker.utilization > 1.0 + 1e-10
+                || marker.external_cut_area_m2 > marker.defect_free_area_m2 * (1.0 + 1e-10)
+            {
+                return Err(bad("finite-stock area balance failed"));
+            }
+            if !marker.placements.is_empty() {
+                used += 1;
+                gross += marker.gross_area_m2;
+                cut += marker.external_cut_area_m2;
+            }
+        }
+        positive("used stock area", gross)?;
+        positive("allocated cut area", cut)?;
+        Ok(Plan {
+            schema: "ftx-finite-stock-plan/1",
+            pattern_sha256: hash(raw)?,
+            request_sha256: hash(&frozen)?,
+            request: frozen,
+            markers,
+            used_stock_count: used,
+            used_gross_area_m2: gross,
+            external_cut_area_m2: cut,
+            work_used: work.used,
+            candidates: work.candidates,
+            optimality_claim: false,
+            hardware_execution_authorized: false,
+            limitations: vec![
+                "Finite single-ply stock; authored defects/axis and frozen material identity, not a hide scan or measured property acquisition.",
+                "Largest-exterior-area-first pieces, stock input order, bottom-left lattice; one-way grain only, no reflection or crossgrain rotation. Not globally optimal.",
+                "Full polygon checks on emitted geometry; no reuse of internal holes, no shrinkage, pattern-repeat matching, variable-quality zones or physical process qualification.",
+                "Gross/defect-free areas are not recoverable offcuts; no inventory mutation, hide pricing, machine coordinates or hardware authorization.",
+            ],
+        })
+    }
+}
+fn hash(value: &impl Serialize) -> Result<String, Refusal> {
+    Ok(sha256_hex(
+        &serde_json::to_vec(value).map_err(|e| bad(e.to_string()))?,
+    ))
+}
+fn same_material(a: &ResolvedMaterial, b: &ResolvedMaterial) -> bool {
+    a.sha256() == b.sha256() && a.allows_estimates() == b.allows_estimates()
+}
+fn locate(
+    shape: &Shape,
+    copy: usize,
+    stock: &Marker,
+    o: &Options,
+    work: &mut Work,
+) -> Result<Option<CutPlacement>, Refusal> {
+    let b = bbox(&stock.outline_mm)?;
+    let w = shape.bounds[2] - shape.bounds[0];
+    let h = shape.bounds[3] - shape.bounds[1];
+    // Padding affects candidate construction only; no geometry or requested clearance is clamped.
+    let guard = 128.0 * f64::EPSILON * (1.0 + b.iter().map(|v| v.abs()).fold(0.0, f64::max));
+    let margin = o.boundary_margin_mm + guard;
+    let lo = Vec2::new(b[0] + margin, b[1] + margin);
+    let hi = Vec2::new(b[2] - margin - w, b[3] - margin - h);
+    if hi.x < lo.x || hi.y < lo.y {
+        return Ok(None);
+    }
+    let nx = axis_steps(lo.x, hi.x, o.step_mm, work.limit)?;
+    let ny = axis_steps(lo.y, hi.y, o.step_mm, work.limit)?;
+    for iy in 0..=ny {
+        let y = if iy == ny {
+            hi.y
+        } else {
+            lo.y + iy as f64 * o.step_mm
+        };
+        for ix in 0..=nx {
+            checked(work.tick())?;
+            work.candidates += 1;
+            checked(work.spend(shape.ring.len()))?;
+            let x = if ix == nx {
+                hi.x
+            } else {
+                lo.x + ix as f64 * o.step_mm
+            };
+            let offset = Vec2::new(x - shape.bounds[0], y - shape.bounds[1]);
+            let ring: Vec<_> = shape.ring.iter().map(|p| *p + offset).collect();
+            let rb = bbox(&ring)?;
+            if !checked(enclosed(
+                &ring,
+                &stock.outline_mm,
+                o.boundary_margin_mm,
+                work,
+            ))? {
+                continue;
+            }
+            let mut free = true;
+            for defect in &stock.defects_mm {
+                if !checked(clear(
+                    &ring,
+                    rb,
+                    defect,
+                    bbox(defect)?,
+                    o.boundary_margin_mm,
+                    work,
+                ))? {
+                    free = false;
+                    break;
+                }
+            }
+            if !free {
+                continue;
+            }
+            for p in &stock.placements {
+                if !checked(clear(&ring, rb, &p.cut_mm, p.bounds_mm, o.gap_mm, work))? {
+                    free = false;
+                    break;
+                }
+            }
+            if free {
+                let placed = place(shape, copy, offset)?;
+                let d = placed.grain_mm[1] - placed.grain_mm[0];
+                if !d.is_finite()
+                    || d.norm2() == 0.0
+                    || !d.norm2().is_finite()
+                    || (area_m2(&placed.cut_mm) - shape.area).abs() > shape.area * 1e-8
+                    || !checked(simple(&placed.cut_mm, work))?
+                {
+                    return Err(bad(
+                        "finite-stock translation lost representable cutter geometry",
+                    ));
+                }
+                return Ok(Some(placed));
+            }
+        }
+    }
+    Ok(None)
+}
+fn axis_steps(lo: f64, hi: f64, step: f64, limit: usize) -> Result<usize, Refusal> {
+    let count = ((hi - lo) / step).ceil();
+    if !count.is_finite() || count > limit as f64 {
+        return Err(budget());
+    }
+    Ok(count as usize)
+}
+impl Plan {
+    /// Complete allocations; callers cannot mutate the geometry underlying a preview.
+    #[must_use]
+    pub fn markers(&self) -> &[Marker] {
+        &self.markers
+    }
+    /// Portable, frozen stock request; apply to the SAME original pattern for replay.
+    #[must_use]
+    pub fn request(&self) -> &Request {
+        &self.request
+    }
+}

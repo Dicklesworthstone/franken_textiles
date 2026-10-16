@@ -4,11 +4,9 @@
 //! never raise a piece's bottom edge. Every move is checked against full exterior paths; holes remain
 //! occupied. Work exhaustion retains the last COMPLETE feasible marker, not a partial purchase list.
 
+use super::geometry::{Work, clear};
 use super::{CutOptions, CutPlacement, bad, bbox, positive};
-use ftx_core::{
-    Refusal, Vec2,
-    exact::{Sign, orient2d},
-};
+use ftx_core::{Refusal, Vec2};
 use serde::{Deserialize, Serialize};
 
 /// Optional translation-only optimization. Defaults apply only when a nesting object is supplied.
@@ -62,124 +60,6 @@ pub struct NestingReport {
     /// Always false: this bounded heuristic provides no optimality certificate.
     pub optimality_claim: bool,
 }
-struct Work {
-    used: usize,
-    limit: usize,
-    exhausted: bool,
-    candidates: usize,
-}
-impl Work {
-    fn tick(&mut self) -> Option<()> {
-        self.spend(1)
-    }
-    fn spend(&mut self, count: usize) -> Option<()> {
-        if count > self.limit - self.used {
-            self.used = self.limit;
-            self.exhausted = true;
-            return None;
-        }
-        self.used += count;
-        Some(())
-    }
-}
-fn orient(a: Vec2, b: Vec2, c: Vec2) -> Sign {
-    orient2d([a.x, a.y], [b.x, b.y], [c.x, c.y])
-}
-fn between(p: Vec2, a: Vec2, b: Vec2) -> bool {
-    p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y)
-}
-fn intersects(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> bool {
-    let (u, v, w, z) = (
-        orient(a, b, c),
-        orient(a, b, d),
-        orient(c, d, a),
-        orient(c, d, b),
-    );
-    if (u == Sign::Zero && between(c, a, b))
-        || (v == Sign::Zero && between(d, a, b))
-        || (w == Sign::Zero && between(a, c, d))
-        || (z == Sign::Zero && between(b, c, d))
-    {
-        return true;
-    }
-    u != Sign::Zero && v != Sign::Zero && w != Sign::Zero && z != Sign::Zero && u != v && w != z
-}
-fn point_distance(p: Vec2, a: Vec2, b: Vec2) -> f64 {
-    let edge = b - a;
-    let length2 = edge.norm2();
-    if length2 == 0.0 {
-        return (p - a).norm();
-    }
-    // Nonrepresentable distance is never accepted as a proof of clearance.
-    if !length2.is_finite() {
-        return f64::NAN;
-    }
-    let t = ((p - a).dot(edge) / length2).clamp(0.0, 1.0);
-    (p - (a + edge * t)).norm()
-}
-fn edges(p: &[Vec2]) -> impl Iterator<Item = (Vec2, Vec2)> + '_ {
-    p.iter()
-        .copied()
-        .zip(p.iter().copied().cycle().skip(1))
-        .take(p.len())
-}
-fn inside(p: Vec2, ring: &[Vec2], work: &mut Work) -> Option<bool> {
-    let mut winding = 0_i32;
-    for (a, b) in edges(ring) {
-        work.tick()?;
-        let side = orient(a, b, p);
-        if side == Sign::Zero && between(p, a, b) {
-            return Some(true);
-        }
-        if a.y <= p.y && b.y > p.y && side == Sign::Positive {
-            winding += 1;
-        }
-        if a.y > p.y && b.y <= p.y && side == Sign::Negative {
-            winding -= 1;
-        }
-    }
-    Some(winding != 0)
-}
-fn separated_boxes(a: [f64; 4], b: [f64; 4], gap: f64) -> bool {
-    a[2] + gap <= b[0] || b[2] + gap <= a[0] || a[3] + gap <= b[1] || b[3] + gap <= a[1]
-}
-/// Boundary contact in overlapping boxes is conservatively rejected, even for gap=0. This also
-/// handles identical/collinear rings without mistaking absent proper crossings for disjointness.
-fn clear(
-    a: &[Vec2],
-    ab: [f64; 4],
-    b: &[Vec2],
-    bb: [f64; 4],
-    gap: f64,
-    work: &mut Work,
-) -> Option<bool> {
-    work.tick()?;
-    if separated_boxes(ab, bb, gap) {
-        return Some(true);
-    }
-    for (a0, a1) in edges(a) {
-        for (b0, b1) in edges(b) {
-            work.tick()?;
-            if intersects(a0, a1, b0, b1) {
-                return Some(false);
-            }
-            if gap > 0.0 {
-                for d in [
-                    point_distance(a0, b0, b1),
-                    point_distance(a1, b0, b1),
-                    point_distance(b0, a0, a1),
-                    point_distance(b1, a0, a1),
-                ] {
-                    if !d.is_finite() || d < gap {
-                        return Some(false);
-                    }
-                }
-            }
-        }
-    }
-    Some(!inside(a[0], b, work)? && !inside(b[0], a, work)?)
-}
-
 // At most 16 uniformly indexed outline vertices generate anchors; ALL vertices determine clearance.
 fn probes(p: &[Vec2]) -> impl Iterator<Item = Vec2> + '_ {
     let n = p.len().min(16);

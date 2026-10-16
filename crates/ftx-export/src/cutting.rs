@@ -11,9 +11,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Affine, Ctx, ExportOptions, Geom, Source, cutter::cutter_ring, layout::rotation};
 
+mod geometry;
 pub mod nesting;
 pub mod preview;
 pub mod procurement;
+pub mod stock;
 
 /// Declared roll-planning policy. Values are allowances, not calibrated machine parameters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -156,6 +158,65 @@ struct Shape {
     angle: f64,
     area: f64,
 }
+
+// Shared unfolded/mirrored cutter geometry, not a second approximation for finite stock.
+fn cut_shape(ctx: &Ctx<'_>, instance: &ftx_pattern::Instance) -> Result<Shape, Refusal> {
+    let geom = ctx.geom(Source::Instance(instance), 6.0)?;
+    let (a, b) = geom
+        .grain
+        .ok_or_else(|| bad(format!("{} needs explicit grain", instance.id)))?;
+    let d = b - a;
+    if geom.grain_default || !d.is_finite() || !d.norm2().is_finite() || d.norm2() == 0.0 {
+        return Err(bad(format!(
+            "{} needs explicit nonzero grain; generated export grain is not a cutting direction",
+            instance.id
+        )));
+    }
+    let angle = (90.0 - det::atan2(d.y, d.x).to_degrees() + 180.0).rem_euclid(360.0) - 180.0;
+    let oriented = geom.transform(&rotation(angle));
+    let ring = cutter_ring(&oriented)?;
+    let bounds = bbox(&ring)?;
+    positive("cut polygon area", signed_area(&ring).abs())?;
+    if !crate::outline::ring_is_simple(&ring) {
+        return Err(bad("self-intersecting cutter outline"));
+    }
+    let area = positive("cut area in square metres", signed_area(&ring).abs() * 1e-6)?;
+    Ok(Shape {
+        geom: oriented,
+        ring,
+        bounds,
+        angle,
+        area,
+    })
+}
+
+fn place(shape: &Shape, copy: usize, offset: Vec2) -> Result<CutPlacement, Refusal> {
+    if !offset.is_finite() {
+        return Err(bad("cut placement arithmetic overflows"));
+    }
+    let translated = shape.geom.transform(&Affine {
+        a: [[1., 0.], [0., 1.]],
+        b: offset,
+    });
+    let ring: Vec<_> = shape.ring.iter().map(|&p| p + offset).collect();
+    let bounds = bbox(&ring)?;
+    let r = rotation(shape.angle);
+    let (a, b) = translated.grain.ok_or_else(|| bad("cut grain was lost"))?;
+    Ok(CutPlacement {
+        piece: shape.geom.pid.clone(),
+        instance: shape.geom.iid.clone(),
+        copy,
+        cut_mm: ring,
+        grain_mm: [a, b],
+        internal_cut_mm: translated.internal_cut,
+        drills_mm: translated.drills,
+        bounds_mm: bounds,
+        transform: [
+            [r.a[0][0], r.a[0][1], offset.x],
+            [r.a[1][0], r.a[1][1], offset.y],
+        ],
+    })
+}
 struct Shelf {
     y: f64,
     height: f64,
@@ -228,40 +289,13 @@ impl CutPlan {
             materials.push(record);
         }
         for instance in &pattern.instances {
-            let geom = ctx.geom(Source::Instance(instance), 6.0)?;
-            let (a, b) = geom
-                .grain
-                .ok_or_else(|| bad(format!("{} needs explicit grain", instance.id)))?;
-            let d = b - a;
-            if geom.grain_default || !d.is_finite() || !d.norm2().is_finite() || d.norm2() == 0.0 {
-                return Err(bad(format!(
-                    "{} needs explicit nonzero grain; generated export grain is not a cutting direction",
-                    instance.id
-                )));
-            }
-            let angle =
-                (90.0 - det::atan2(d.y, d.x).to_degrees() + 180.0).rem_euclid(360.0) - 180.0;
-            let oriented = geom.transform(&rotation(angle));
-            let ring = cutter_ring(&oriented)?;
-            let bounds = bbox(&ring)?;
-            positive("cut polygon area", signed_area(&ring).abs())?;
-            if !crate::outline::ring_is_simple(&ring) {
-                return Err(bad("self-intersecting cutter outline"));
-            }
-            let area = signed_area(&ring).abs() * 1e-6;
-            positive("cut area in square metres", area)?;
+            let shape = cut_shape(&ctx, instance)?;
             let record = &materials[instance.piece_index];
             groups
                 .entry(record.sha256().to_owned())
                 .or_insert_with(|| (record.clone(), Vec::new()))
                 .1
-                .push(Shape {
-                    geom: oriented,
-                    ring,
-                    bounds,
-                    angle,
-                    area,
-                });
+                .push(shape);
         }
         let mut rolls = Vec::with_capacity(groups.len());
         for (_, (material, shapes)) in groups {
@@ -354,31 +388,7 @@ fn pack(
             options.edge_margin_mm + x - shape.bounds[0],
             options.end_margin_mm + y - shape.bounds[1],
         );
-        if !offset.is_finite() {
-            return Err(bad("cut placement arithmetic overflows"));
-        }
-        let translated = shape.geom.transform(&Affine {
-            a: [[1., 0.], [0., 1.]],
-            b: offset,
-        });
-        let ring: Vec<_> = shape.ring.iter().map(|&p| p + offset).collect();
-        let bounds = bbox(&ring)?;
-        let r = rotation(shape.angle);
-        let (a, b) = translated.grain.ok_or_else(|| bad("cut grain was lost"))?;
-        placements.push(CutPlacement {
-            piece: shape.geom.pid.clone(),
-            instance: shape.geom.iid.clone(),
-            copy,
-            cut_mm: ring,
-            grain_mm: [a, b],
-            internal_cut_mm: translated.internal_cut,
-            drills_mm: translated.drills,
-            bounds_mm: bounds,
-            transform: [
-                [r.a[0][0], r.a[0][1], offset.x],
-                [r.a[1][0], r.a[1][1], offset.y],
-            ],
-        });
+        placements.push(place(shape, copy, offset)?);
         total_area += shape.area;
     }
     placements.sort_by(|a, b| a.instance.cmp(&b.instance).then(a.copy.cmp(&b.copy)));
