@@ -26,6 +26,9 @@ pub fn on_body(
     budget(&[pattern, request, scenario])?;
     let pattern = Pattern::from_json(pattern).map_err(invalid)?;
     let request: Request = serde_json::from_str(request).map_err(invalid)?;
+    if let Some(policy) = &request.comparison {
+        policy.validate(&request, true)?;
+    }
     let scenario: Scenario = serde_json::from_str(scenario).map_err(invalid)?;
     let mut session = Session::new(&scenario, body)?;
     let descriptor = session.descriptor();
@@ -52,6 +55,9 @@ pub fn on_model(
     budget(&[pattern, request, scenario, measurements, model_sha256])?;
     let pattern = Pattern::from_json(pattern).map_err(invalid)?;
     let request: Request = serde_json::from_str(request).map_err(invalid)?;
+    if let Some(policy) = &request.comparison {
+        policy.validate(&request, true)?;
+    }
     let scenario: Scenario = serde_json::from_str(scenario).map_err(invalid)?;
     let measurements: Value = serde_json::from_str(measurements).map_err(invalid)?;
     scenario.validate()?;

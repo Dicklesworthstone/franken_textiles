@@ -208,6 +208,9 @@ pub struct ScenarioStudy<T> {
     pub manufacturing: Report,
     /// Key-ordered additional results, with binding failures retained rather than skipped.
     pub simulations: Vec<ScenarioAlternative<T>>,
+    /// Declared comparison across the actual independent manufacturing and scenario consumers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<comparison::Report>,
 }
 
 /// One additional evaluation on exactly the pattern retained in its manufacturing binding.
@@ -238,7 +241,7 @@ impl Request {
         additional_consumer: bool,
     ) -> Result<(Vec<Variant>, Option<material_screen::Report>), Refusal> {
         if let Some(policy) = &self.comparison {
-            policy.validate(self)?;
+            policy.validate(self, additional_consumer)?;
         }
         if self.schema != "ftx-material-study/1"
             || (self.screened.is_some() && !self.variants.is_empty())
@@ -322,7 +325,7 @@ impl Request {
     /// # Errors
     /// The same structural/aggregate-budget refusals as [`Self::evaluate`], or a scenario that
     /// cannot serialize. Binding and callback failures remain independent per-alternative outcomes.
-    pub fn evaluate_with<T, S: Serialize>(
+    pub fn evaluate_with<T: Serialize, S: Serialize>(
         &self,
         pattern: &Pattern,
         scenario: &S,
@@ -352,12 +355,27 @@ impl Request {
                 evaluation,
             });
         }
+        let comparison = self
+            .comparison
+            .as_ref()
+            .map(|policy| {
+                policy.evaluate_scenarios(
+                    &manufacturing.alternatives,
+                    &simulations,
+                    &scenario,
+                    &manufacturing.source_pattern_sha256,
+                    &request_sha256,
+                    self.purchasing.as_ref().map(|p| p.market.currency.as_str()),
+                )
+            })
+            .transpose()?;
         Ok(ScenarioStudy {
             schema: "ftx-material-scenario-study/1",
             request_sha256,
             scenario,
             manufacturing,
             simulations,
+            comparison,
         })
     }
 
@@ -422,14 +440,18 @@ impl Request {
         }
         let request_sha256 = hash(self)?;
         let source_pattern_sha256 = hash(pattern.raw())?;
-        let comparison = self.comparison.as_ref().map(|policy| {
-            policy.evaluate(
-                &alternatives,
-                &source_pattern_sha256,
-                &request_sha256,
-                self.purchasing.as_ref().map(|p| p.market.currency.as_str()),
-            )
-        });
+        let comparison = self
+            .comparison
+            .as_ref()
+            .filter(|_| !additional_consumer)
+            .map(|policy| {
+                policy.evaluate(
+                    &alternatives,
+                    &source_pattern_sha256,
+                    &request_sha256,
+                    self.purchasing.as_ref().map(|p| p.market.currency.as_str()),
+                )
+            });
         Ok(Report {
             schema: "ftx-material-study-report/1",
             source_pattern_sha256,

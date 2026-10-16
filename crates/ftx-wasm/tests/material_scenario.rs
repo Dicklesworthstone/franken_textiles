@@ -178,3 +178,96 @@ fn aggregate_budget_refusals_do_not_create_free_successful_cells() {
         .is_err()
     );
 }
+
+#[test]
+fn computed_scenario_objectives_use_actual_heat_and_strain_without_weakening_admission() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let mut r = request();
+    r.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal", "objectives":[
+        {"metric":"independent_surface_power_w","direction":"minimize"},
+        {"metric":"simulated_cloth_mass_kg","direction":"minimize"}],
+        "constraints":[{"metric":"max_absolute_edge_strain_pct","maximum":100.}],
+        "required_consumers":["coverage"]}))
+        .unwrap(),
+    );
+    let output: Value = serde_json::from_str(
+        &on_body(
+            &body,
+            PATTERN,
+            &serde_json::to_string(&r).unwrap(),
+            SCENARIO,
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(output["manufacturing"].get("comparison").is_none());
+    assert_eq!(
+        output["comparison"]["context_sha256"],
+        output["request_sha256"]
+    );
+    assert_eq!(output["comparison"]["uncertainty_propagated"], false);
+    for (candidate, simulation) in output["comparison"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(output["simulations"].as_array().unwrap())
+    {
+        let actual = &simulation["evaluation"]["result"];
+        let admitted = simulation["evaluation"]["status"] == "available"
+            && actual["drape"]["settled"] == true
+            && actual["metrics"]["simulation_gating_clear"] == true
+            && actual["coverage"]["status"] == "available";
+        assert_eq!(candidate["eligible"], admitted);
+        if admitted {
+            assert_eq!(
+                candidate["readings"]["independent_surface_power_w"]["value"],
+                actual["surface"]["result"]["steady"]["power_w"]
+            );
+            assert_eq!(
+                candidate["readings"]["simulated_cloth_mass_kg"]["value"],
+                actual["drape"]["mass_kg"]
+            );
+            let strain = &actual["drape"]["global_strain_pct"];
+            assert_eq!(
+                candidate["readings"]["max_absolute_edge_strain_pct"]["value"],
+                strain["min"]
+                    .as_f64()
+                    .unwrap()
+                    .abs()
+                    .max(strain["max"].as_f64().unwrap().abs())
+            );
+        }
+    }
+    let original = &output["manufacturing"]["alternatives"];
+    r.comparison = None;
+    let baseline: Value = serde_json::from_str(
+        &on_body(
+            &body,
+            PATTERN,
+            &serde_json::to_string(&r).unwrap(),
+            SCENARIO,
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(original, &baseline["manufacturing"]["alternatives"]);
+    assert_eq!(output["simulations"], baseline["simulations"]);
+    assert_eq!(output["comparison"]["frontier"], json!([]));
+    assert_eq!(
+        output["simulations"][0]["evaluation"]["result"]["drape"]["settled"],
+        false
+    );
+    assert_eq!(
+        output["simulations"][0]["evaluation"]["result"]["drape"]["gating"],
+        json!([])
+    );
+}

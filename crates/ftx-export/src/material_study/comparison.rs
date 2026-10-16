@@ -6,7 +6,7 @@ use ftx_pattern::{material_catalog::property_unit, material_screen::Direction};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Alternative, Request, hash, invalid};
+use super::{Alternative, Request, ScenarioAlternative, hash, invalid};
 
 /// Uncertainty admission. Source intervals cannot be propagated through planners by relabeling them.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -26,6 +26,12 @@ pub enum Consumer {
     Sewing,
     /// Complete marker-derived whole-order offer coverage in the request's dated market scope.
     Purchasing,
+    /// Fresh, geometrically settled, gating-clear production drape in the retained scenario.
+    Drape,
+    /// Successful independent sheet-column heat on an admitted drape, not whole-body heat.
+    Surface,
+    /// Successful declared body-patch/layer coverage heat on an admitted drape.
+    Coverage,
 }
 
 /// Fixed-dimension output names; values are read only from the actual corresponding consumer.
@@ -44,6 +50,14 @@ pub enum Metric {
     StitchIntervals,
     /// Feed-only time in seconds; not a robot cycle-time estimate.
     FeedSeconds,
+    /// Mass of simulated cloth only (kg); omitted pieces, trims and hardware are not included.
+    SimulatedClothMassKg,
+    /// Maximum absolute reported edge strain (%) across compression and extension, at report precision.
+    MaxAbsoluteEdgeStrainPct,
+    /// Signed independent sheet-column power (W), not an absolute value or warmth rating.
+    IndependentSurfacePowerW,
+    /// Signed heat through the declared body coverage domain (W), not assumed whole-wearer heat.
+    BodyCoveragePowerW,
 }
 
 impl Metric {
@@ -52,6 +66,9 @@ impl Metric {
             Self::StockAreaM2 | Self::ExternalCutAreaM2 | Self::StockMassKg => Consumer::Cutting,
             Self::ObservedOrderCost => Consumer::Purchasing,
             Self::StitchIntervals | Self::FeedSeconds => Consumer::Sewing,
+            Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
+            Self::IndependentSurfacePowerW => Consumer::Surface,
+            Self::BodyCoveragePowerW => Consumer::Coverage,
         }
     }
     fn unit(self, currency: Option<&str>) -> &str {
@@ -61,9 +78,12 @@ impl Metric {
             Self::ObservedOrderCost => currency.unwrap_or("unavailable currency"),
             Self::StitchIntervals => "count",
             Self::FeedSeconds => "s",
+            Self::SimulatedClothMassKg => "kg",
+            Self::MaxAbsoluteEdgeStrainPct => "%",
+            Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW => "W",
         }
     }
-    fn value(self, row: &Alternative) -> Option<f64> {
+    fn value(self, row: &Alternative, simulation: &Value) -> Option<f64> {
         match self {
             Self::StockAreaM2 => row.metrics.stock_area_m2,
             Self::ExternalCutAreaM2 => row.metrics.external_cut_area_m2,
@@ -71,7 +91,26 @@ impl Metric {
             Self::ObservedOrderCost => row.metrics.least_observed_independent_order_total,
             Self::StitchIntervals => row.metrics.stitch_intervals.map(|n| n as f64),
             Self::FeedSeconds => row.metrics.feed_seconds,
+            Self::SimulatedClothMassKg => simulation["drape"]["mass_kg"].as_f64(),
+            Self::MaxAbsoluteEdgeStrainPct => {
+                let strain = &simulation["drape"]["global_strain_pct"];
+                let lo = strain["min"].as_f64()?;
+                let hi = strain["max"].as_f64()?;
+                (lo.is_finite() && hi.is_finite() && lo <= hi).then(|| lo.abs().max(hi.abs()))
+            }
+            Self::IndependentSurfacePowerW => {
+                simulation["surface"]["result"]["steady"]["power_w"].as_f64()
+            }
+            Self::BodyCoveragePowerW => {
+                simulation["coverage"]["result"]["steady"]["power_w"].as_f64()
+            }
         }
+    }
+    fn signed(self) -> bool {
+        matches!(
+            self,
+            Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW
+        )
     }
 }
 
@@ -180,14 +219,19 @@ pub struct Report {
 }
 
 impl Policy {
-    pub(super) fn validate(&self, request: &Request) -> Result<(), Refusal> {
+    /// Validate the declared comparison before expensive fitting/planning. Scenario outputs are
+    /// admitted only through an explicitly requested additional production consumer.
+    ///
+    /// # Errors
+    /// Invalid bounds, duplicate or missing objectives, or a required unrequested consumer.
+    pub fn validate(&self, request: &Request, additional_consumer: bool) -> Result<(), Refusal> {
         if self.objectives.is_empty()
             || self.objectives.len() > 16
             || self.constraints.len() > 64
-            || self.required_consumers.len() > 3
+            || self.required_consumers.len() > 6
         {
             return Err(invalid(
-                "comparison needs 1..16 objectives, at most 64 constraints and 3 consumers",
+                "comparison needs 1..16 objectives, at most 64 constraints and 6 consumers",
             ));
         }
         let mut metrics = BTreeSet::new();
@@ -216,6 +260,7 @@ impl Policy {
                 Consumer::Cutting => request.cutting.is_some(),
                 Consumer::Sewing => request.sewing.is_some(),
                 Consumer::Purchasing => request.purchasing.is_some(),
+                Consumer::Drape | Consumer::Surface | Consumer::Coverage => additional_consumer,
             };
             if !requested {
                 return Err(invalid(format!(
@@ -240,6 +285,11 @@ impl Policy {
             .chain(self.required_consumers.iter().copied())
             .collect()
     }
+    fn needs_simulation(&self) -> bool {
+        self.consumers()
+            .iter()
+            .any(|c| matches!(c, Consumer::Drape | Consumer::Surface | Consumer::Coverage))
+    }
 
     pub(super) fn evaluate(
         &self,
@@ -248,10 +298,46 @@ impl Policy {
         context: &str,
         currency: Option<&str>,
     ) -> Report {
-        let mut candidates: Vec<_> = rows
+        let candidates: Vec<_> = rows
             .iter()
-            .map(|row| self.candidate(row, currency))
+            .map(|row| self.candidate(row, currency, &Value::Null, &Value::Null))
             .collect();
+        self.finish(candidates, source, context)
+    }
+
+    pub(super) fn evaluate_scenarios<T: Serialize>(
+        &self,
+        rows: &[Alternative],
+        simulations: &[ScenarioAlternative<T>],
+        descriptor: &Value,
+        source: &str,
+        context: &str,
+        currency: Option<&str>,
+    ) -> Result<Report, Refusal> {
+        let by_key: BTreeMap<_, _> = simulations
+            .iter()
+            .map(|s| (s.key.as_str(), &s.evaluation))
+            .collect();
+        let mut candidates = Vec::with_capacity(rows.len());
+        for row in rows {
+            // At most one transient JSON representation; do not duplicate the entire mesh batch.
+            let simulation = if self.needs_simulation() {
+                by_key
+                    .get(row.key.as_str())
+                    .and_then(|outcome| outcome.value())
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|e| invalid(e.to_string()))?
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            candidates.push(self.candidate(row, currency, descriptor, &simulation));
+        }
+        Ok(self.finish(candidates, source, context))
+    }
+
+    fn finish(&self, mut candidates: Vec<Candidate>, source: &str, context: &str) -> Report {
         let mut incomparable = Vec::new();
         for i in 0..candidates.len() {
             for j in i + 1..candidates.len() {
@@ -294,11 +380,19 @@ impl Policy {
                 "The frontier is conditional on the evaluated alternatives, constraints, process policy and reported-protocol admission. Scalar pre-screening may have removed better garment alternatives.",
                 "Matching reported protocols is a software comparison rule, not proof that specimens or experiments are comparable. Missing or refused required outputs exclude a row without erasing other consumers.",
                 "Stock mass includes waste, costs are dated complete independent order observations, and feed time excludes handling. No empirical fit, warmth, hardware authorization or global optimum is claimed.",
+                "Scenario objectives require matching pattern/body/scenario identities, geometric settledness and clear gating. Geometric settledness is not viscoelastic stress equilibrium or empirical fit; simulated cloth mass excludes omitted components.",
+                "Heat powers keep their signed directions and distinct sheet/domain bases. Strain uses the production report's edge extrema and precision, not an invented fit score. Different nonlinear constitutive records are conservatively protocol-incomparable unless explicitly admitted.",
             ],
         }
     }
 
-    fn candidate(&self, row: &Alternative, currency: Option<&str>) -> Candidate {
+    fn candidate(
+        &self,
+        row: &Alternative,
+        currency: Option<&str>,
+        descriptor: &Value,
+        simulation: &Value,
+    ) -> Candidate {
         let mut result = Candidate {
             key: row.key.clone(),
             readings: BTreeMap::new(),
@@ -312,16 +406,30 @@ impl Policy {
                 "comparison requires successful source-locked binding",
             ));
         }
+        let simulation = if self.needs_simulation() {
+            match admit_simulation(row, descriptor, simulation) {
+                Ok(()) => simulation,
+                Err(e) => {
+                    result.exclusions.push(e);
+                    &Value::Null
+                }
+            }
+        } else {
+            &Value::Null
+        };
         for consumer in self.consumers() {
-            if !consumer_available(row, consumer) {
+            if !consumer_available(row, consumer, simulation) {
                 result.exclusions.push(invalid(format!(
                     "comparison requires available {consumer:?} with complete required coverage"
                 )));
             }
         }
         for metric in self.metrics() {
-            match metric.value(row).filter(|v| v.is_finite() && *v >= 0.) {
-                Some(value) if consumer_available(row, metric.consumer()) => {
+            match metric
+                .value(row, simulation)
+                .filter(|v| v.is_finite() && (metric.signed() || *v >= 0.))
+            {
+                Some(value) if consumer_available(row, metric.consumer(), simulation) => {
                     result.readings.insert(
                         metric,
                         Reading {
@@ -385,6 +493,19 @@ impl Policy {
         if self.metrics().contains(&Metric::StockMassKg) {
             keys.insert("areal_density");
         }
+        let mechanics = self.needs_simulation();
+        let thermal =
+            consumers.contains(&Consumer::Surface) || consumers.contains(&Consumer::Coverage);
+        if mechanics {
+            keys.extend(
+                ftx_pattern::materials::MECHANICAL_PROPERTIES
+                    .iter()
+                    .map(|(key, _)| *key),
+            );
+        }
+        if thermal {
+            keys.extend(["thermal_conductivity", "thermal_resistance", "emissivity"]);
+        }
         let pieces = bound["pattern"]["pieces"]
             .as_array()
             .ok_or_else(|| invalid("bound source pieces unavailable"))?;
@@ -402,7 +523,17 @@ impl Policy {
                 .record
                 .as_ref()
                 .ok_or_else(|| invalid("frozen source record unavailable"))?;
-            let profile: BTreeMap<_, _> = keys
+            let mut relevant = keys.clone();
+            if mechanics {
+                relevant.extend(
+                    material
+                        .properties
+                        .keys()
+                        .filter(|k| k.starts_with("bending_"))
+                        .map(String::as_str),
+                );
+            }
+            let profile: BTreeMap<_, _> = relevant
                 .iter()
                 .map(|&key| {
                     let p = material.properties.get(key).map_or(Value::Null, |q| {
@@ -413,13 +544,32 @@ impl Policy {
                     (key, p)
                 })
                 .collect();
-            protocols.insert(id, profile);
+            // Scalar protocols compare qualifiers, not their values. Complex response records use
+            // conservative whole-record equality rather than guessing which curve fields are metadata.
+            let models: BTreeMap<_, _> = material
+                .structure
+                .iter()
+                .filter(|(key, _)| {
+                    mechanics && (key.starts_with("bending_") || key.starts_with("membrane_"))
+                })
+                .collect();
+            protocols.insert(id, json!({"properties":profile, "constitutive_models":models,
+                "membrane_response":if mechanics { serde_json::to_value(&material.membrane_response).map_err(|e| invalid(e.to_string()))? } else { Value::Null },
+                "membrane_relaxation":if mechanics { serde_json::to_value(&material.membrane_relaxation).map_err(|e| invalid(e.to_string()))? } else { Value::Null },
+                "thermal_response":if thermal { serde_json::to_value(&material.thermal_response).map_err(|e| invalid(e.to_string()))? } else { Value::Null }}));
         }
-        hash(&protocols)
+        hash(&(
+            protocols,
+            if mechanics {
+                bound["pattern"]["fabric"]["interfaces"].clone()
+            } else {
+                Value::Null
+            },
+        ))
     }
 }
 
-fn consumer_available(row: &Alternative, consumer: Consumer) -> bool {
+fn consumer_available(row: &Alternative, consumer: Consumer, simulation: &Value) -> bool {
     match consumer {
         Consumer::Cutting => row.cutting.value().is_some(),
         Consumer::Sewing => row.sewing.value().is_some(),
@@ -427,5 +577,44 @@ fn consumer_available(row: &Alternative, consumer: Consumer) -> bool {
             .purchasing
             .value()
             .is_some_and(|p| p["complete_offer_coverage"] == true),
+        Consumer::Drape => !simulation.is_null(),
+        Consumer::Surface => simulation["surface"]["status"] == "available",
+        Consumer::Coverage => simulation["coverage"]["status"] == "available",
     }
+}
+
+fn admit_simulation(
+    row: &Alternative,
+    descriptor: &Value,
+    simulation: &Value,
+) -> Result<(), Refusal> {
+    let bound = row
+        .binding
+        .value()
+        .ok_or_else(|| invalid("scenario comparison requires successful binding"))?;
+    let same = |key: &str, expected: &Value| {
+        expected
+            .as_str()
+            .is_some_and(|s| !s.is_empty() && simulation[key].as_str() == Some(s))
+    };
+    if simulation["schema"] != "ftx-drape-scenario-result/1"
+        || !same("pattern_sha256", &bound["pattern_sha256"])
+        || !same("scenario_sha256", &descriptor["scenario_sha256"])
+        || !same("body_geometry_sha256", &descriptor["body_geometry_sha256"])
+    {
+        return Err(invalid(
+            "scenario comparison needs fresh production results matching this bound pattern, body and scenario; missing/stale identities refuse",
+        ));
+    }
+    if simulation["drape"]["settled"] != true
+        || simulation["metrics"]["simulation_gating_clear"] != true
+        || !simulation["drape"]["gating"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    {
+        return Err(invalid(
+            "scenario comparison requires a geometrically settled, gating-clear drape; review retained flags rather than ranking an unfinished frame",
+        ));
+    }
+    Ok(())
 }

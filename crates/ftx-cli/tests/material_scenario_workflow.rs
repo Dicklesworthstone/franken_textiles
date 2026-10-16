@@ -67,6 +67,69 @@ fn both_native_commands_preserve_manufacturing_when_the_model_is_unavailable() {
         outputs.push(result.clone());
     }
     assert_eq!(outputs[0], outputs[1]);
+    // A body refusal is not a zero-mass, zero-heat winning alternative. Both native adapters
+    // retain independent manufacturing while placing the declared comparison at scenario scope.
+    let mut compared = serde_json::to_value(&r).unwrap();
+    compared["comparison"] = json!({"basis":"nominal", "objectives":[
+        {"metric":"simulated_cloth_mass_kg","direction":"minimize"},
+        {"metric":"independent_surface_power_w","direction":"minimize"}]});
+    let compared_path = dir.join("compared-study.json");
+    std::fs::write(&compared_path, compared.to_string()).unwrap();
+    let mut compared_outputs = Vec::new();
+    for (binary, prefix) in [
+        (env!("CARGO_BIN_EXE_ftx-materials"), vec!["scenario-study"]),
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            vec!["--json", "materials", "scenario-study"],
+        ),
+    ] {
+        let out = Command::new(binary)
+            .args(prefix)
+            .args([&pattern, &compared_path, &scenario, &measurements, &model])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let raw: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let result = raw.get("result").unwrap_or(&raw);
+        assert_eq!(result["comparison"]["frontier"], json!([]));
+        assert!(result["manufacturing"].get("comparison").is_none());
+        assert_eq!(
+            result["manufacturing"]["alternatives"],
+            expected["alternatives"]
+        );
+        assert!(
+            result["comparison"]["alternatives"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|a| a["eligible"] == false && !a["exclusions"].as_array().unwrap().is_empty())
+        );
+        compared_outputs.push(result.clone());
+    }
+    assert_eq!(compared_outputs[0], compared_outputs[1]);
+    compared["comparison"]["objectives"] = json!([]);
+    std::fs::write(&compared_path, compared.to_string()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .args(["--json", "materials", "scenario-study"])
+        .args([
+            &pattern,
+            &compared_path,
+            &scenario,
+            &measurements,
+            &dir.join("absent-model"),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let error = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        error.contains("objectives") && !error.contains("absent-model"),
+        "{error}"
+    );
     let mut invalid: Value = serde_json::from_slice(&std::fs::read(&scenario).unwrap()).unwrap();
     invalid["options"]["sew_steps"] = json!(1000000);
     std::fs::write(&scenario, invalid.to_string()).unwrap();

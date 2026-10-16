@@ -40,6 +40,9 @@ pub(super) fn run(
     let mut remaining = 64 * 1024 * 1024;
     let pattern = Pattern::new(read(pattern, &mut remaining)?);
     let request: Request = read(request, &mut remaining)?;
+    if let Some(policy) = &request.comparison {
+        policy.validate(&request, true)?;
+    }
     let scenario: Scenario = read(scenario, &mut remaining)?;
     let measurements: Value = read(measurements, &mut remaining)?;
     scenario.validate()?;
