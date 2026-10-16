@@ -60,6 +60,16 @@ self.onmessage = async ({ data: msg }) => {
           files.push(file("roll-0.svg", picture, "image/svg+xml"));
         }
         break;
+      case "stock": {
+        raw = ftx.stock_plan(msg.pattern, msg.stockRequest); result = json(raw);
+        files = [file("finite-stock-plan.json", raw)];
+        const i = result.markers.findIndex(m => m.placements.length);
+        if (i >= 0) {
+          picture = ftx.stock_svg(msg.pattern, msg.stockRequest, i);
+          files.push(file(`stock-${i}.svg`, picture, "image/svg+xml"));
+        }
+        break;
+      }
       case "price":
         raw = ftx.cut_price(msg.pattern, msg.options, msg.quotes, msg.market); result = json(raw);
         files = [file("cut-price.json", raw)]; break;

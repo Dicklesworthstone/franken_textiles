@@ -60,6 +60,9 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <h3>Cutting, purchasing and sewing</h3>
 <label>Roll-planning options JSON <input id="cutOptions" type="file" accept=".json,application/json"></label>
 <button id="cut" data-command="cut" disabled>Plan rolls &amp; preview</button>
+<label>Finite hides / remnants with defect maps JSON <input id="stockRequest" type="file" accept=".json,application/json"></label>
+<button id="stock" data-command="stock" disabled>Allocate finite stock &amp; preview</button>
+<p class="note">Use <code>ftx-finite-stock-request/1</code> for individually identified hides or remnants. Supply the actual boundary, exclusions and preferred cutting axis; each item must match the bound material. No roll width is invented.</p>
 <label>Dated quote book JSON <input id="quotes" type="file" accept=".json,application/json"></label>
 <label>Comparable market scope JSON <input id="market" type="file" accept=".json,application/json"></label>
 <button id="price" data-command="price" disabled>Compare whole-order costs</button>
@@ -76,5 +79,6 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 </section>
 <section><h2>Current results</h2><pre id="progress" aria-live="polite"></pre>
 <div id="outputs"></div><iframe id="viewer" title="Current material drape" sandbox="allow-scripts" hidden></iframe>
-<img id="marker" alt="First material roll preview" hidden></section>
+<img id="marker" alt="First material roll preview" hidden>
+<img id="stockMarker" alt="First allocated finite-stock item with defect exclusions" hidden></section>
 </main><script type="module" src="materials-page.js"></script></body></html>

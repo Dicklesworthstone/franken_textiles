@@ -1,0 +1,18 @@
+{
+  "schema": "ftx-finite-stock-request/1",
+  "stocks": [{
+    "id": "hide-001",
+    "material": {
+      "id": "example-hide", "allow_estimates": true,
+      "record": {"id": "example-hide", "name": "Synthetic hide, not measured", "form": "hide",
+        "properties": {"areal_density": {"value": 0.5, "unit": "kg/m2", "evidence": "estimate", "source": "test", "method": "Synthetic areal mass"}},
+        "sources": {"test": {"reference": "test:finite-stock-example", "accessed_on": "2026-10-15", "note": "Synthetic material for geometry checks only"}}
+      }
+    },
+    "outline_mm": [[0,0],[100,0],[100,45],[45,45],[45,100],[0,100]],
+    "defects_mm": [[[5,5],[20,5],[20,20],[5,20]]],
+    "grain_mm": [[0,0],[0,10]],
+    "geometry_source": {"reference": "test:finite-stock-outline", "accessed_on": "2026-10-15", "note": "Synthetic boundary, defect and preferred cutting axis; not a hide scan"}
+  }],
+  "options": {"copies": 1, "gap_mm": 2, "boundary_margin_mm": 2, "step_mm": 2, "work_limit": 2000000}
+}

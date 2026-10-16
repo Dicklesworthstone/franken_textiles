@@ -27,6 +27,8 @@ async function workerModule({ failFold = false, failExport = false, trap = false
     thermal_steady_coverage: r => { called.push(['coverage', JSON.parse(r), r]); return '{}'; },
     cut_plan: (p, o) => { called.push(['cut', p, o]); return '{"rolls":[{},{}]}'; },
     cut_svg: (p, o, i) => { called.push(['svg', p, o, i]); return '<svg/>'; },
+    stock_plan: (p, r) => { called.push(['stock', p, r]); return '{"markers":[{"placements":[]},{"placements":[{}]}],"stock_value":1.0}'; },
+    stock_svg: (p, r, i) => { called.push(['stock-svg', p, r, i]); return '<svg/>'; },
     cut_price: (...args) => { called.push(['price', ...args]); return '{"complete_offer_coverage":false}'; },
     sew_stitches: (p, o) => { called.push(['sew', p, o]); return '{"stitches":[]}'; },
     run: (r, d, t) => {
@@ -91,6 +93,15 @@ test('worker retains numerical JSON identities across binding, drape files and n
   assert.equal(fold.reportText,fold.files[0].text);assert.match(fold.reportText,/-0\.0/);
   await w.send({type:'coverage',report:fold.reportText,map:'{}',conditions:'{}'});
   assert.ok(w.called.find(c=>c[0]==='coverage')[2].includes(fold.reportText));
+});
+
+test('finite stock uses unmodified source text and previews the first allocated physical item', async () => {
+  const w = await workerModule(), pattern = '{"coordinate":-0.0}', stockRequest = '{"mass":1.0}';
+  const r = await w.send({ type: 'stock', pattern, stockRequest, request: 11 });
+  assert.equal(r.type, 'result'); assert.equal(r.files[1].name, 'stock-1.svg');
+  assert.deepEqual(w.called.find(c => c[0] === 'stock'), ['stock', pattern, stockRequest]);
+  assert.deepEqual(w.called.find(c => c[0] === 'stock-svg'), ['stock-svg', pattern, stockRequest, 1]);
+  assert.match(r.files[0].text, /1\.0/);
 });
 
 class Element {
@@ -196,4 +207,25 @@ test('original drafting worker also retains replayable drape JSON and frees its 
   for(const msg of [{type:'init',pkg:'./pkg/'},{type:'run',req:{}},{type:'body',bytes:new ArrayBuffer(8)},{type:'fold',selfContactMm:2}]) await context.onmessage({data:msg});
   assert.equal(sent.at(-1).type,'folded');assert.equal(sent.at(-1).reportText,raw);assert.deepEqual(freed,['fold']);
   assert.ok(read('index.html').includes('new Blob([msg.reportText]'));
+});
+
+test('finite-stock input and material edits invalidate only their current dependencies', async () => {
+  const p = await pageModule(); await p.load(); await p.bind();
+  p.select('stockRequest', '{"value":1.0}'); p.e.stockRequest.handlers.change();
+  assert.equal(p.e.stock.disabled, false);
+  await p.e.stock.onclick();
+  assert.equal(p.current().messages.at(-1).stockRequest, '{"value":1.0}');
+  p.emit({ markers: [], limitations: [] }, [
+    { name: 'plan.json', text: '{}', mime: 'application/json' },
+    { name: 'stock-0.svg', text: '<svg/>', mime: 'image/svg+xml' }
+  ]);
+  assert.equal(p.live.size, 3); assert.equal(p.e.stockMarker.hidden, false);
+  p.select('quotes'); p.e.quotes.handlers.change(); assert.equal(p.live.size, 3);
+  p.e.stockRequest.handlers.change(); assert.equal(p.live.size, 1); assert.equal(p.e.stockMarker.hidden, true);
+  await p.e.stock.onclick(); const old = p.current(), id = old.messages.at(-1).request;
+  p.e.stockRequest.handlers.change(); p.ready();
+  old.emit({ type: 'result', request: id, files: [{ name: 'stale.json', text: '{}' }] });
+  assert.equal(p.live.size, 1);
+  await p.inspect('replacement'); p.e.assign.onclick(); assert.equal(p.live.size, 0);
+  assert.equal(p.e.stock.disabled, true);
 });

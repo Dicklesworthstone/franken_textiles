@@ -1,5 +1,4 @@
-//! Clock-free, file-free sewing entry points for the browser. Both use the same source-bearing
-//! material resolver, pattern seam geometry and manufacturing planner as the native CLI.
+//! Clock-free, file-free manufacturing entry points for the browser, sharing the native planners.
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_export::sewing::{SewOptions, SewPlan, program::SewProgram};
@@ -24,6 +23,54 @@ fn cut_inputs(pattern: &str, options: &str) -> Result<ftx_export::cutting::CutPl
     let pattern = Pattern::new(serde_json::from_str(pattern).map_err(|e| invalid(e.to_string()))?);
     let options = serde_json::from_str(options).map_err(|e| invalid(e.to_string()))?;
     ftx_export::cutting::CutPlan::build(&pattern, &options)
+}
+
+fn stock_inputs(pattern: &str, request: &str) -> Result<ftx_export::cutting::stock::Plan, Refusal> {
+    budget(&[pattern, request])?;
+    let pattern = Pattern::new(serde_json::from_str(pattern).map_err(|e| invalid(e.to_string()))?);
+    let request: ftx_export::cutting::stock::Request =
+        serde_json::from_str(request).map_err(|e| invalid(e.to_string()))?;
+    request.build(&pattern)
+}
+
+/// Complete finite hide/remnant allocation from the same source-bearing pattern as draping/sewing.
+///
+/// # Errors
+/// Invalid/oversized inputs, stock/material mismatch, geometry or bounded search refusal.
+pub fn stock_plan(pattern: &str, request: &str) -> Result<String, Refusal> {
+    serde_json::to_string(&stock_inputs(pattern, request)?).map_err(|e| invalid(e.to_string()))
+}
+
+/// Finite-stock SVG in its measured cutting-axis frame; never a machine-coordinate instruction.
+///
+/// # Errors
+/// Same complete-plan refusals as [`stock_plan`], invalid stock index or preview output budget.
+pub fn stock_svg(pattern: &str, request: &str, index: usize) -> Result<String, Refusal> {
+    ftx_export::cutting::preview::stock_svg(&stock_inputs(pattern, request)?, index)
+}
+
+/// Browser export of [`stock_plan`].
+///
+/// # Errors
+/// Same errors as [`stock_plan`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = stock_plan)]
+pub fn web_stock_plan(pattern: &str, request: &str) -> Result<String, wasm_bindgen::JsError> {
+    stock_plan(pattern, request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
+/// Browser export of [`stock_svg`].
+///
+/// # Errors
+/// Same errors as [`stock_svg`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = stock_svg)]
+pub fn web_stock_svg(
+    pattern: &str,
+    request: &str,
+    index: usize,
+) -> Result<String, wasm_bindgen::JsError> {
+    stock_svg(pattern, request, index).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
 /// Material-specific roll requirements from original cut instances; not a device command.

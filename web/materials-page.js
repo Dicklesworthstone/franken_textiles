@@ -1,7 +1,7 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
-const operations = ["exports", "fold", "heat", "coverage", "cut", "price", "sew"];
+const operations = ["exports", "fold", "heat", "coverage", "cut", "stock", "price", "sew"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
 let sourceText = null;
@@ -27,6 +27,7 @@ function controls() {
   $("exports").disabled ||= !has("measurements") || !has("fit");
   $("fold").disabled ||= !has("measurements") || !has("fit") || !has("body");
   $("cut").disabled ||= !has("cutOptions");
+  $("stock").disabled ||= !has("stockRequest");
   $("price").disabled ||= !has("cutOptions") || !has("quotes") || !has("market");
   $("sew").disabled ||= !has("sewOptions");
   $("heat").disabled ||= !drape || !has("heatConditions");
@@ -40,6 +41,7 @@ function clear(keys) {
     if (sections.has(key)) { const s = sections.get(key); s.section.hidden = true; s.links.replaceChildren(); s.summary.textContent = ""; }
     if (key === "fold") { drape = null; $("viewer").hidden = true; $("viewer").removeAttribute("src"); }
     if (key === "cut") { $("marker").hidden = true; $("marker").removeAttribute("src"); }
+    if (key === "stock") { $("stockMarker").hidden = true; $("stockMarker").removeAttribute("src"); }
     if (key === "bind") { bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren(); }
   }
 }
@@ -115,6 +117,10 @@ function show(op, msg) {
       op === "cut" ? { pattern_sha256: r.pattern_sha256, rolls: r.rolls.map(x => ({ material: x.material?.authored?.id,
         width_m: x.width_m, length_m: x.length_m, stock_mass_kg: x.stock_mass_kg, utilization: x.utilization })), limitations: r.limitations } :
       op === "price" ? { complete_offer_coverage: r.complete_offer_coverage, currency: r.currency, least_observed_independent_order_total: r.least_observed_independent_order_total, limits: r.limits } :
+      op === "stock" ? { used_stock_count: r.used_stock_count, used_gross_area_m2: r.used_gross_area_m2,
+        external_cut_area_m2: r.external_cut_area_m2, markers: r.markers.map(m => ({ id: m.id, pieces: m.placements.length,
+          gross_area_m2: m.gross_area_m2, defect_free_area_m2: m.defect_free_area_m2, utilization: m.utilization,
+          stock_mass_kg: m.stock_mass_kg, mass_unavailable: m.mass_unavailable })), limitations: r.limitations } :
       op === "sew" ? { schema: r.schema, stitches: r.stitches?.length, hardware_execution_authorized: r.plan?.hardware_execution_authorized } :
       op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } : r;
     s.summary.textContent = text(summary);
@@ -122,6 +128,7 @@ function show(op, msg) {
       const url = link(op, s.links, f);
       if (op === "fold" && f.mime === "text/html") { $("viewer").src = url; $("viewer").hidden = false; }
       if (op === "cut" && f.mime === "image/svg+xml") { $("marker").src = url; $("marker").hidden = false; }
+      if (op === "stock" && f.mime === "image/svg+xml") { $("stockMarker").src = url; $("stockMarker").hidden = false; }
     }
     // The parsed result is for display only: JSON.stringify changes 1.0/-0.0 and breaks locks.
     if (op === "fold") drape = msg.reportText;
@@ -163,6 +170,7 @@ async function execute(op) {
         if (op === "coverage") msg.map = await read("map");
       }
       if (op === "cut" || op === "price") msg.options = await read("cutOptions");
+      if (op === "stock") msg.stockRequest = await read("stockRequest");
       if (op === "price") { msg.quotes = await read("quotes"); msg.market = await read("market"); }
       if (op === "sew") msg.options = await read("sewOptions");
     }
@@ -214,7 +222,7 @@ $("assign").onclick = () => {
 $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); edits(); invalidate(["bind", ...operations]); };
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","coverage"], fit:["exports","fold","heat","coverage"],
   body:["fold","heat","coverage"], selfContact:["fold","heat","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
-  sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"] })) {
+  stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"] })) {
   $(id).addEventListener("change", () => invalidate(keys));
 }
 window.addEventListener("pagehide", () => { ++epoch; worker?.terminate(); clear(["bind", ...operations]); });

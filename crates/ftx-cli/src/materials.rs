@@ -6,10 +6,27 @@ use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
 mod screen;
+mod stock;
 mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if matches!(action, "stock-plan" | "stock-svg") {
+        known_options(args, "materials", &[])?;
+        let result = match (action, &args.positional[2..]) {
+            ("stock-plan", [pattern, request]) => stock::plan(pattern, request)?,
+            ("stock-svg", [pattern, request, index, out]) => {
+                stock::preview(pattern, request, index, out)?
+            }
+            _ => {
+                return Err(bad_input(
+                    "usage: ftx materials stock-plan PATTERN.json STOCK.json | stock-svg PATTERN.json STOCK.json INDEX NEW.svg",
+                ));
+            }
+        };
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if matches!(action, "screen" | "study") {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
