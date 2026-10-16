@@ -23,6 +23,7 @@ use crate::{
     },
 };
 
+pub mod fitted;
 mod options;
 
 /// Coverage is anchored to triangle IDs on this session's collision body, never a saved old pose.

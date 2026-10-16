@@ -10,6 +10,8 @@ use ftx_pattern::{
 };
 use serde_json::{Value, json};
 
+pub mod scenario;
+
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
 fn invalid(e: impl std::fmt::Display) -> Refusal {

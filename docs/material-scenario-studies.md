@@ -1,0 +1,112 @@
+# Fixed-body material scenario studies
+
+`ftx-ms2` now has an executable drape/heat/manufacturing composition, built on the existing
+source-locked `ftx-material-study/1` request. Each alternative starts from the original pattern,
+is bound through the existing material selection authority, and gets a **new production drape**.
+No earlier alternative's cloth state, relaxation/plastic history, final pose or heat map is reused.
+This is a software delivery, not closure of the empirical or optimization gates in plan §25.10.
+
+## Native commands
+
+```sh
+ftx materials scenario-study pattern.json study.json scenario.json measurements.json model.ftxbody --json
+ftx-materials scenario-study pattern.json study.json scenario.json measurements.json model.ftxbody
+```
+
+The four JSON inputs share a 64 MiB limit; the converted Anny model has a 512 MiB native read limit.
+The commands read inputs without modifying them and print a report. The main CLI uses its usual
+`result` envelope; the companion prints that result directly. Use the existing model converter to
+obtain `model.ftxbody`. This command does not download model assets or upload body evidence.
+Measurements need `wearer.age_months` and the existing tape-fit fields. Body fitting runs **once**
+with the existing Anny fitter, trimming and landmark pipeline in the standard straight-arm,
+35-degree drape pose. It does not re-fit the wearer for each material. Alternate poses, accepted
+multi-frame body reports and pose sweeps are not yet exposed by this native adapter.
+
+`study.json` is the existing manufacturing study format, including explicit variants or screening,
+optional cutting/sewing and marker-derived purchasing. Here manufacturing may be omitted because
+draping is explicitly requested. Ordinary `study` retains its manufacturing-consumer requirement.
+Screening's scalar frontier is not reinterpreted as a garment-level Pareto frontier.
+
+Minimal `scenario.json` (numerical policy, not measured fabric parameters):
+
+```json
+{
+  "schema": "ftx-drape-scenario/1",
+  "options": {"spacing": 12.0, "sew_steps": 12, "drape_steps": 36},
+  "fit_spec": {},
+  "max_mesh_points": 32768,
+  "max_vertex_frames": 64000000
+}
+```
+
+Supply the pattern's actual fit contract rather than `{}` for its normal points-of-measure reporting.
+Omitted individual `options` use the production `DrapeOptions` defaults. Unknown fields refuse.
+The per-run mesh budget counts conservative dense-outline, seam and lattice candidates before
+meshing; it can exceed the eventual retained vertices. The aggregate vertex-frame budget is charged
+in key order, including failed attempted drapes. Total sew/drape steps are capped at 256, lag rounds
+at four and PCG iterations at 128. These are allocation/work limits, not a runtime guarantee.
+
+## Independent thermal consumers
+
+Optional `surface` accepts the existing `ftx-steady-surface-conditions/1`: prescribed films or the
+existing qualified exterior-exchange policy. It evaluates independent material-following sheet
+columns. It does not require heat capacity merely to compute steady conduction.
+
+Optional `coverage` has `body_triangle_ids`, `instance_layers`, `settings` and `conditions`.
+Triangle IDs are unique indices into this session's **trimmed collision body**, not triangles from
+an unrelated OBJ or an older pose. The adapter assembles the existing steady-coverage request from
+that exact geometry and the new drape report. Explicit layer identities and existing projection,
+interface, gas-gap and environmental validity rules remain authoritative. Uniform boundary
+conditions broadcast; spatial boundary conditions use the selected triangle order. Invalid or stale
+coverage conditions refuse independently of surface heat, draping and manufacturing.
+
+`tests/fixtures/materials/synthetic-scenario.json` and `synthetic-scenario-pattern.json` are
+executable **synthetic cylinder/band test inputs**, not an Anny wearer example or a characterized
+textile. In particular body triangle 0 in that fixture is chosen for the synthetic cylinder and
+must not be reused as an assumed chest patch on Anny. The small step count tests propagation; it
+does not establish a settled garment or a usable real-person fit.
+
+## Reports and replay
+
+`ftx-material-scenario-study/1` contains:
+
+- `manufacturing`: the unchanged production study report with frozen changes, bound `pattern_json`,
+  actual cutting/sewing/dated purchasing outcomes and their independent failures.
+- `simulations`: key-matched outcomes. An available result retains actual `drape`, final positions,
+  membrane triangles, resolved placements, gating flags, mass, and separate `surface` / `coverage`
+  outcomes. Missing heat is null/refused, never zero heat. A body or mechanics refusal cannot erase
+  a valid cutting or purchasing result.
+- `scenario`: numerical/environmental inputs, model hash, retained measurement evidence, model-fit
+  residuals and actual body identity. The overall request identity binds the source pattern, study
+  policy and scenario. Per-result placement hashes distinguish placement frames as well as skins.
+
+A successful process exit means the study report was computed, not that every alternative passed.
+Inspect each consumer's `status` and the drape's gating flags. Heat is evaluated on the computed final
+frame even when those flags require review; an available number is not automatically admissible as a
+settled-garment objective. Replay each alternative's `frozen_changes` against the original pattern,
+using the same scenario, measurements and model. Keep raw Rust-produced JSON text through browser
+boundaries: parsing/stringifying source receipts in JavaScript can change numeric identities.
+
+## Library and browser-callable API
+
+`ftx_export::material_study::Request::evaluate_with` composes an additional production consumer with
+existing manufacturing without adding a numerical dependency to the export crate. The numerical
+implementation is `ftx_drape::study::Session`; `study::fitted::FittedBody` fits the common body once.
+`ftx_wasm::materials::scenario::on_body` provides a file-free fixed-body entry point and
+`on_model` the one-fit adapter. The browser export is
+`material_scenario_study(webBody, patternText, studyText, scenarioText, measurementsText)`.
+It uses the model bytes identified by `WebBody`, never a catalog material name as a physics shortcut.
+
+## Evidence and remaining gates
+
+Synthetic tests compare against direct production drape, surface, coverage and manufacturing calls.
+They exercise frozen replay, deterministic repeats, thermal-only substitutions preserving motion,
+mechanical substitutions changing motion, independent refusals and admission before solver work.
+Real-binary tests verify both commands retain manufacturing when model decoding refuses. This
+implementation session did not have converted Anny assets, so it does not claim a positive
+model-backed end-to-end run or native/WASM execution parity merely from target compilation.
+
+`ftx-ms2` stays open for qualified garment-level objectives/Pareto comparisons, uncertainty admission,
+expanded body/pose policies and physical acceptance. Synthetic coupons and numerical conservation
+are not measured linen/leather/knit garment validation. No warmth rating, empirical fit,
+whole-wearer accuracy, global optimum or hardware execution authorization is claimed.

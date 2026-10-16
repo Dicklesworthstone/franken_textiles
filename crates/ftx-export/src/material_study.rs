@@ -185,6 +185,32 @@ pub struct Report {
     pub notes: Vec<&'static str>,
 }
 
+/// Additional production-consumer results, evaluated on the same source-locked alternatives.
+/// The export crate knows nothing about cloth/body/browser types; application layers supply the
+/// existing consumer, not another binding or manufacturing implementation.
+#[derive(Debug, Serialize)]
+pub struct ScenarioStudy<T> {
+    /// `ftx-material-scenario-study/1`.
+    pub schema: &'static str,
+    /// Identity of the original pattern, study policy and exact supplied scenario descriptor.
+    pub request_sha256: String,
+    /// Body, pose, environment and numerical policy retained by the caller's production consumer.
+    pub scenario: Value,
+    /// Unmodified manufacturing outcomes; unavailable simulation never erases them.
+    pub manufacturing: Report,
+    /// Key-ordered additional results, with binding failures retained rather than skipped.
+    pub simulations: Vec<ScenarioAlternative<T>>,
+}
+
+/// One additional evaluation on exactly the pattern retained in its manufacturing binding.
+#[derive(Debug, Serialize)]
+pub struct ScenarioAlternative<T> {
+    /// The matching manufacturing alternative's key.
+    pub key: String,
+    /// Independent production-consumer output or structured refusal.
+    pub evaluation: Outcome<T>,
+}
+
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }
@@ -201,11 +227,12 @@ impl Request {
     fn variants(
         &self,
         pattern: &Pattern,
+        additional_consumer: bool,
     ) -> Result<(Vec<Variant>, Option<material_screen::Report>), Refusal> {
         if self.schema != "ftx-material-study/1"
             || (self.screened.is_some() && !self.variants.is_empty())
             || (self.screened.is_none() && self.variants.is_empty())
-            || (self.cutting.is_none() && self.sewing.is_none())
+            || (!additional_consumer && self.cutting.is_none() && self.sewing.is_none())
             || (self.purchasing.is_some() && self.cutting.is_none())
         {
             return Err(invalid(
@@ -273,11 +300,66 @@ impl Request {
     /// Invalid source/request, ambiguous identities or excessive aggregate work. Material/geometry
     /// feasibility errors belong to the individual consumer outcomes, not an invented aggregate pass.
     pub fn evaluate(&self, pattern: &Pattern) -> Result<Report, Refusal> {
+        self.evaluate_manufacturing(pattern, false)
+    }
+
+    /// Compose an additional production consumer with the existing immutable material study.
+    /// Each successful binding is evaluated once, in key order, on its retained source-complete
+    /// pattern. The callback must start fresh, not warm-start from the preceding alternative.
+    /// Manufacturing can be omitted because an additional consumer is explicitly requested here.
+    ///
+    /// # Errors
+    /// The same structural/aggregate-budget refusals as [`Self::evaluate`], or a scenario that
+    /// cannot serialize. Binding and callback failures remain independent per-alternative outcomes.
+    pub fn evaluate_with<T, S: Serialize>(
+        &self,
+        pattern: &Pattern,
+        scenario: &S,
+        mut evaluate: impl FnMut(&str, &Pattern) -> Result<T, Refusal>,
+    ) -> Result<ScenarioStudy<T>, Refusal> {
+        let manufacturing = self.evaluate_manufacturing(pattern, true)?;
+        let scenario = serde_json::to_value(scenario).map_err(|e| invalid(e.to_string()))?;
+        let request_sha256 = hash(&(pattern.raw(), self, &scenario))?;
+        let mut simulations = Vec::with_capacity(manufacturing.alternatives.len());
+        for row in &manufacturing.alternatives {
+            let evaluation = match &row.binding {
+                Outcome::Available { result } => {
+                    // Keep Rust's parsed number representation. A JavaScript round-trip through
+                    // stringify would alter source identities such as 1.0 or negative zero.
+                    let bound = Pattern::new(result["pattern"].clone());
+                    Outcome::from_result(evaluate(&row.key, &bound))
+                }
+                Outcome::Refused { refusal } => Outcome::Refused {
+                    refusal: refusal.clone(),
+                },
+                Outcome::NotRequested => Outcome::Refused {
+                    refusal: invalid("additional evaluation requires a successful binding"),
+                },
+            };
+            simulations.push(ScenarioAlternative {
+                key: row.key.clone(),
+                evaluation,
+            });
+        }
+        Ok(ScenarioStudy {
+            schema: "ftx-material-scenario-study/1",
+            request_sha256,
+            scenario,
+            manufacturing,
+            simulations,
+        })
+    }
+
+    fn evaluate_manufacturing(
+        &self,
+        pattern: &Pattern,
+        additional_consumer: bool,
+    ) -> Result<Report, Refusal> {
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
         }
-        let (mut variants, screening) = self.variants(pattern)?;
+        let (mut variants, screening) = self.variants(pattern, additional_consumer)?;
         if variants.len() > 32 {
             return Err(budget(
                 "constrain screening or supply at most 32 material alternatives",

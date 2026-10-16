@@ -266,3 +266,70 @@ fn malformed_targets_duplicate_keys_and_aggregate_work_are_refused() {
         "not_requested"
     );
 }
+
+#[test]
+fn additional_production_consumer_uses_frozen_bindings_and_preserves_independent_failures() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let request = request();
+    let mut called = Vec::new();
+    let scenario = json!({"body_sha256":"synthetic-fixed-body", "environment":{"outside_c":10.0}});
+    let result = request
+        .evaluate_with(&source, &scenario, |key, bound| {
+            called.push(key.to_string());
+            if key == "wide" {
+                return Err(ftx_core::Refusal::new(
+                    ftx_core::RefusalCode::NotConverged,
+                    "synthetic independent refusal",
+                ));
+            }
+            Ok(bound.raw().clone())
+        })
+        .unwrap();
+    let result = serde_json::to_value(result).unwrap();
+    assert_eq!(called, vec!["missing-width", "narrow", "thick", "wide"]);
+    assert_eq!(result["manufacturing"], evaluate(&request, &source));
+    for row in result["simulations"].as_array().unwrap() {
+        let key = row["key"].as_str().unwrap();
+        if key == "unknown" || key == "wide" {
+            assert_eq!(row["evaluation"]["status"], "refused");
+        } else {
+            assert_eq!(
+                row["evaluation"]["result"],
+                self::row(&result["manufacturing"], key)["binding"]["result"]["pattern"]
+            );
+        }
+    }
+    let changed = request
+        .evaluate_with(
+            &source,
+            &json!({"environment":{"outside_c":11.0}}),
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert_ne!(result["request_sha256"], changed.request_sha256);
+}
+
+#[test]
+fn explicit_additional_consumer_allows_mechanics_only_without_weakening_ordinary_studies() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let mut request = request();
+    request.cutting = None;
+    request.sewing = None;
+    request.purchasing = None;
+    assert!(request.evaluate(&source).is_err());
+    let result = request
+        .evaluate_with(&source, &json!({"test":"additional consumer"}), |_, p| {
+            Ok(p.raw().clone())
+        })
+        .unwrap();
+    assert_eq!(result.simulations.len(), 5);
+    let raw = serde_json::to_value(result).unwrap();
+    assert!(
+        raw["manufacturing"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["cutting"]["status"] == "not_requested"
+                && r["sewing"]["status"] == "not_requested")
+    );
+}

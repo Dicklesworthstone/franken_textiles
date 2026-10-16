@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 
 #[path = "../materials/stock.rs"]
 mod finite_stock;
+#[path = "../materials/scenario.rs"]
+mod scenarios;
 #[path = "../materials/screen.rs"]
 mod screening;
 #[path = "../materials/thermal.rs"]
@@ -44,6 +46,7 @@ mod relaxation_calibration;
 const USAGE: &str = "ftx-materials catalog [SEARCH]
 ftx-materials screen REQUEST.json
 ftx-materials study PATTERN.json REQUEST.json
+ftx-materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody
 ftx-materials stock-plan PATTERN.json STOCK.json
 ftx-materials stock-residual PATTERN.json STOCK.json
 ftx-materials stock-svg PATTERN.json STOCK.json STOCK-INDEX NEW.svg
@@ -230,6 +233,14 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
     match words.as_slice() {
         ["screen", path] => screening::run(path),
         ["study", pattern, request] => screening::study(pattern, request),
+        [
+            "scenario-study",
+            pattern,
+            request,
+            scenario,
+            measurements,
+            model,
+        ] => scenarios::run(pattern, request, scenario, measurements, model),
         ["stock-plan", pattern, request] => finite_stock::plan(pattern, request),
         ["stock-residual", pattern, request] => finite_stock::residual(pattern, request),
         ["stock-svg", pattern, request, index, out] => {

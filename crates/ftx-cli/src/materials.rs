@@ -5,12 +5,24 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
+mod scenario;
 mod screen;
 mod stock;
 mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if action == "scenario-study" {
+        known_options(args, "materials", &[])?;
+        let [pattern, request, scenario, measurements, model] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody",
+            ));
+        };
+        let result = scenario::run(pattern, request, scenario, measurements, model)?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if matches!(action, "stock-plan" | "stock-residual" | "stock-svg") {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {

@@ -93,6 +93,7 @@ extern "C" {
 #[wasm_bindgen]
 pub struct WebBody {
     inner: ftx_body::AnnyModel,
+    source_sha256: String,
 }
 
 #[wasm_bindgen]
@@ -104,9 +105,37 @@ impl WebBody {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: &[u8]) -> Result<WebBody, JsError> {
         fold::load_body(bytes)
-            .map(|inner| WebBody { inner })
+            .map(|inner| WebBody {
+                inner,
+                source_sha256: ftx_core::receipt::sha256_hex(bytes),
+            })
             .map_err(|e| JsError::new(&e))
     }
+}
+
+/// Recompute manufacturing, fresh drapes and requested heat consumers for each material alternative.
+/// Fits this source-identified body only once; no earlier material's state is reused.
+///
+/// # Errors
+/// Malformed/excessive input; per-consumer refusals are retained in a successful study envelope.
+#[wasm_bindgen]
+pub fn material_scenario_study(
+    body: &WebBody,
+    pattern: &str,
+    request: &str,
+    scenario: &str,
+    measurements: &str,
+) -> Result<String, JsError> {
+    crate::materials::scenario::on_model(
+        &body.inner,
+        &body.source_sha256,
+        pattern,
+        request,
+        scenario,
+        measurements,
+        ftx_progress,
+    )
+    .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// A finished fold-up: the fit report and the viewer page.
