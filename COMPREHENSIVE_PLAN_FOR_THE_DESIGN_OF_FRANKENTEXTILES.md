@@ -1175,6 +1175,98 @@ acceptance gates, not merely additional property names or a more convincing visu
 
 ---
 
+### 25.10 Source-qualified optimization and fixed-pattern material studies
+
+The material platform must make the same authored jacket, costume or other textile assembly usable
+as a controlled design experiment: change source-locked shell/lining/fill selections and recompute
+the relevant consequences, rather than creating a separate physics implementation or pretending a
+fiber label determines fabric behavior. Sections 25.1–25.9 remain the governing requirements for
+all fiber/yarn, woven/knit, nonwoven, hide, laminate and fill families, physical attributes, comparable
+live offers, specimen identity, conditioning, uncertainty and empirical qualification. The hierarchy
+must retain yarn construction, thread density, weave/knit, finish, thickness, layer role and effective
+measured response. Marketing names, blend percentages and cheap missing-value defaults are not
+substitutes for these data.
+
+**Delivered software path (`ftx-ms1`).** `ftx_pattern::material_screen` applies canonical-unit scalar
+constraints, exact method/condition restrictions and explicit estimate consent to the existing
+catalog or embedded selections. Nominal comparison and conservative reported-interval comparison
+are explicit alternatives. Missing bounds never become zero-width intervals. Pareto dominance
+requires all objectives to be no worse, at least one strictly better, and matching full reported
+protocols unless cross-protocol comparison is explicitly admitted. Ties, overlapping intervals and
+incomparable protocols remain visible; there is no invented aggregate textile score. Compiler
+readiness invokes the real mechanical, steady-conduction or transient-thermal implementations,
+without requiring unrelated measurements. Every admitted selection is frozen for existing bindings.
+
+`ftx_export::material_study` evaluates up to 32 explicit or screened alternatives against ONE
+original pattern and shared process options. Default edits preserve explicit lining/cuff assignments;
+named-piece edits target source IDs. Geometry, seams, grainlines and unrelated process fields are
+unchanged. Every variant starts from the original, never the preceding variant. Actual `CutPlan`,
+`SewPlan` and marker-derived procurement rerun independently: a thickness-based sewing refusal
+does not erase valid cutting, missing width does not prevent sewing, and absent prices or incomplete
+mass coverage remain unknown. Gross marker stock includes waste and sale increments; feed-only
+time is not robot cycle time. Scalar-frontier pruning before manufacturing requires explicit consent,
+since a scalar-dominated textile can still have a better marker or whole-order cost. The report retains
+all screening exclusions, individual consumer outcomes, source-complete bound `pattern_json` and
+`frozen_changes` that replay against the original pattern.
+
+Both `ftx materials screen/study` and `ftx-materials screen/study`, plus the browser-callable
+`material_screen` / `material_study` exports, use these same file-free engines. See
+`docs/material-screening-and-studies.md` and its executable insulation examples. This slice adds
+browser APIs, not selection-study controls to the existing browser workbench. It performs real
+manufacturing evaluations but does not yet execute a batch drape/body/environment study. Its
+source-locked patterns can enter the existing drape and thermal paths without solver changes.
+The first three implementation commits are `38f7f75`, `7e333a5` and `d3c221a`; their complete
+workspace run passed 1,127 Rust tests with no failures and 28 pre-existing ignores, plus strict
+Clippy, wasm32 compilation, 49 Python and 18 Node tests. These are software checks, not measured
+material, garment, price-market or machine-performance validation.
+
+**Source expansion with explicit limits.** The built-in catalog now also includes the M1
+cotton/polyester/elastane twill specimen from Mahnić Naglić, Petrak and Tomljenović (2025),
+DOI `10.3390/polym17152013`, retaining construction, measured mass/thickness/thread density,
+conditioning and original KES observations. See `docs/measured-woven-m1.md`. The thickness is
+pressure-qualified. Original KES extensions are not silently converted to sheet laws, tensile
+elongation at a reported load is not breaking strain, and AI-derived CAD coefficients are not
+relabeled measured. Missing stock width, friction, thermal properties and comparable offers remain
+missing. One specimen measured by three characterization methods remains one specimen, not three
+independent fabrics. This adds usable source-qualified discovery/screening data, not a fully
+characterized linen/leather/performance-knit substitution benchmark.
+
+**Next highest-impact implementation and evidence gates:**
+
+1. **Scenario-qualified multiphysics optimization (`ftx-ms2`, P0; supports `ftx-tm0`/`ftx-tm8`).**
+   Extend the existing study composition, not the solver models: retain exact body/pose, geometry,
+   environment and process policies; rerun actual drape, source-thickness-aware coverage, qualified
+   boundary transport and manufacturing for each alternative. Refuse stale cached poses/heat fields
+   after material edits. Carry independent consumer failures and capability gaps into the results.
+   Optimize declared fit/strain, signed heat exchange, mass, manufacturing and dated cost objectives
+   only where each result has admitted source data and a valid operating domain. Keep garment-level
+   comparisons separate from scalar screening. Preserve Pareto alternatives and explicit uncertainty;
+   no warmth index, safety rating or global optimum claim from incomplete input. Integrate a browser
+   study workflow with source/condition inspection and output invalidation, reusing these wasm APIs.
+2. **Resolve raw woven characterization and conversions (`ftx-ms3`, P1; supports `ftx-tm2`).**
+   Obtain primary raw M1 observations or author clarification for KES load normalization, effective
+   bending dimensions and the CAD conversion discrepancy, and units for the adapted Fabric Kit
+   force table. Retain coupon geometry, direction, conditioning, replicates and uncertainty. Reproduce
+   the published observations before deriving material-law parameters, never copying a CAD tuning
+   coefficient into a physical tensor by name alone. Use existing calibration APIs, source locks and
+   explicit estimate admission for fitted laws, then test held-out coupons. Extend the same matched-
+   specimen acquisition route to linen, treated cowhide and performance knit under `ftx-tm2`; do not
+   close that larger gate with one partially characterized blend or synthetic numerical tests.
+3. **Measured garment and process acceptance remains blocking.** Preserve `ftx-tm8`, `ftx-tme`,
+   `ftx-tmf`, `ftx-md1`, `ftx-sp2` and the relevant `ftx-tm6` supplier gates. Refresh live offers through
+   retained, rights-aware adapters, match exact SKU/lot/width and currency/region/quality/order terms,
+   and compare dated observed p10/median/p90 and marker-derived whole-order costs without claiming
+   population percentiles. Calibrate sewing recipes against measured stacks, workholding, needle,
+   thread, feed and compression; hardware needs its own kinematics, sensing, collisions, interlocks
+   and approval. Material changes must rerun these checks rather than inheriting an earlier pass.
+
+`geometry_changed`, `physical_validation_claim` and `hardware_execution_authorized` remain false
+for these studies. Software propagation and deterministic source replay are necessary foundations;
+only matched measurements and held-out experiments can establish the empirical jacket/costume
+fit, thermal and manufacturing accuracy sought by the overall platform.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
