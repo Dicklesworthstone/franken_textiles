@@ -41,6 +41,16 @@ pub fn stock_plan(pattern: &str, request: &str) -> Result<String, Refusal> {
     serde_json::to_string(&stock_inputs(pattern, request)?).map_err(|e| invalid(e.to_string()))
 }
 
+/// Frozen finite-stock request after consuming every accepted cutter in this complete plan.
+/// The original request is unchanged; this is an explicit receipt for a later planning job.
+///
+/// # Errors
+/// Same complete-plan refusals as [`stock_plan`], or invalid retained stock transform/geometry.
+pub fn stock_residual(pattern: &str, request: &str) -> Result<String, Refusal> {
+    serde_json::to_string(&stock_inputs(pattern, request)?.residual_request()?)
+        .map_err(|e| invalid(e.to_string()))
+}
+
 /// Finite-stock SVG in its measured cutting-axis frame; never a machine-coordinate instruction.
 ///
 /// # Errors
@@ -57,6 +67,16 @@ pub fn stock_svg(pattern: &str, request: &str, index: usize) -> Result<String, R
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = stock_plan)]
 pub fn web_stock_plan(pattern: &str, request: &str) -> Result<String, wasm_bindgen::JsError> {
     stock_plan(pattern, request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
+/// Browser export of [`stock_residual`].
+///
+/// # Errors
+/// Same errors as [`stock_residual`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = stock_residual)]
+pub fn web_stock_residual(pattern: &str, request: &str) -> Result<String, wasm_bindgen::JsError> {
+    stock_residual(pattern, request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
 /// Browser export of [`stock_svg`].

@@ -28,6 +28,7 @@ async function workerModule({ failFold = false, failExport = false, trap = false
     cut_plan: (p, o) => { called.push(['cut', p, o]); return '{"rolls":[{},{}]}'; },
     cut_svg: (p, o, i) => { called.push(['svg', p, o, i]); return '<svg/>'; },
     stock_plan: (p, r) => { called.push(['stock', p, r]); return '{"markers":[{"placements":[]},{"placements":[{}]}],"stock_value":1.0}'; },
+    stock_residual: (p, r) => { called.push(['stock-residual', p, r]); return '{"schema":"ftx-finite-stock-request/1","mass":1.0}'; },
     stock_svg: (p, r, i) => { called.push(['stock-svg', p, r, i]); return '<svg/>'; },
     cut_price: (...args) => { called.push(['price', ...args]); return '{"complete_offer_coverage":false}'; },
     sew_stitches: (p, o) => { called.push(['sew', p, o]); return '{"stitches":[]}'; },
@@ -98,10 +99,11 @@ test('worker retains numerical JSON identities across binding, drape files and n
 test('finite stock uses unmodified source text and previews the first allocated physical item', async () => {
   const w = await workerModule(), pattern = '{"coordinate":-0.0}', stockRequest = '{"mass":1.0}';
   const r = await w.send({ type: 'stock', pattern, stockRequest, request: 11 });
-  assert.equal(r.type, 'result'); assert.equal(r.files[1].name, 'stock-1.svg');
+  assert.equal(r.type, 'result'); assert.equal(r.files[1].name, 'residual-stock-request.json'); assert.equal(r.files[2].name, 'stock-1.svg');
   assert.deepEqual(w.called.find(c => c[0] === 'stock'), ['stock', pattern, stockRequest]);
+  assert.deepEqual(w.called.find(c => c[0] === 'stock-residual'), ['stock-residual', pattern, stockRequest]);
   assert.deepEqual(w.called.find(c => c[0] === 'stock-svg'), ['stock-svg', pattern, stockRequest, 1]);
-  assert.match(r.files[0].text, /1\.0/);
+  assert.match(r.files[0].text, /1\.0/); assert.match(r.files[1].text, /1\.0/);
 });
 
 class Element {

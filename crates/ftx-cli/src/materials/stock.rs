@@ -37,6 +37,10 @@ pub(super) fn plan(pattern: &str, request: &str) -> Result<Value, Refusal> {
     serde_json::to_value(build(pattern, request)?)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
 }
+pub(super) fn residual(pattern: &str, request: &str) -> Result<Value, Refusal> {
+    serde_json::to_value(build(pattern, request)?.residual_request()?)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
+}
 pub(super) fn preview(
     pattern: &str,
     request: &str,

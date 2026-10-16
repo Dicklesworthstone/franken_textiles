@@ -65,6 +65,10 @@ fn both_binaries_share_finite_stock_and_preview_with_frozen_replay() {
         assert_eq!(result, serde_json::to_value(&native).unwrap());
         assert_eq!(a.stdout, invoke(main, &dir, "stock-plan", &[]).stdout);
         assert_eq!(
+            success(&invoke(main, &dir, "stock-residual", &[])),
+            serde_json::to_value(native.residual_request().unwrap()).unwrap()
+        );
+        assert_eq!(
             fs::read_to_string(dir.join("pattern.json")).unwrap(),
             PATTERN
         );

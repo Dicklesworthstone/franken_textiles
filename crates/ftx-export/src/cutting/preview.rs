@@ -113,6 +113,7 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
     for n in marker
         .defects_mm
         .iter()
+        .chain(&marker.occupied_mm)
         .map(Vec::len)
         .chain(marker.placements.iter().flat_map(|p| {
             [p.cut_mm.len(), 2, p.drills_mm.len()]
@@ -141,6 +142,12 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
     );
     for defect in &marker.defects_mm {
         out.push_str(&format!("<path d=\"{}\"/>\n", path(defect, true)));
+    }
+    out.push_str(
+        "</g>\n<g id=\"stock-occupied\" fill=\"#eee\" stroke=\"#999\" stroke-dasharray=\"1 1\">\n",
+    );
+    for occupied in &marker.occupied_mm {
+        out.push_str(&format!("<path d=\"{}\"/>\n", path(occupied, true)));
     }
     out.push_str("</g>\n<g id=\"placements\" fill=\"none\" stroke=\"black\">\n");
     for (i, p) in marker.placements.iter().enumerate() {

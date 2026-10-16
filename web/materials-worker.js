@@ -62,7 +62,9 @@ self.onmessage = async ({ data: msg }) => {
         break;
       case "stock": {
         raw = ftx.stock_plan(msg.pattern, msg.stockRequest); result = json(raw);
-        files = [file("finite-stock-plan.json", raw)];
+        const residual = ftx.stock_residual(msg.pattern, msg.stockRequest);
+        json(residual);
+        files = [file("finite-stock-plan.json", raw), file("residual-stock-request.json", residual)];
         const i = result.markers.findIndex(m => m.placements.length);
         if (i >= 0) {
           picture = ftx.stock_svg(msg.pattern, msg.stockRequest, i);

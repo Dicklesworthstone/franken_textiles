@@ -21,6 +21,11 @@ fn file_free_stock_and_preview_match_native_and_replay_frozen_inputs() {
         manufacturing::stock_svg(PATTERN, STOCK, 0).unwrap(),
         stock_svg(&native, 0).unwrap()
     );
+    assert_eq!(
+        serde_json::from_str::<Value>(&manufacturing::stock_residual(PATTERN, STOCK).unwrap())
+            .unwrap(),
+        serde_json::to_value(native.residual_request().unwrap()).unwrap()
+    );
     let frozen = serde_json::to_string(native.request()).unwrap();
     assert_eq!(output, manufacturing::stock_plan(PATTERN, &frozen).unwrap());
     let mut tampered: Value = serde_json::from_str(&frozen).unwrap();
@@ -42,6 +47,7 @@ fn preview_has_true_mm_frame_escaped_labels_and_distinct_noncutting_stock_defect
     assert!(svg.contains("panel&lt;&quot;&amp;"));
     assert!(svg.contains("id=\"stock-boundary\""));
     assert!(svg.contains("id=\"stock-defects\""));
+    assert!(svg.contains("id=\"stock-occupied\""));
     assert!(svg.contains("NOT cut paths"));
     assert!(svg.contains("class=\"cut-exterior\""));
     assert!(!svg.contains("href="));

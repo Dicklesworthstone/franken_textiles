@@ -45,6 +45,7 @@ const USAGE: &str = "ftx-materials catalog [SEARCH]
 ftx-materials screen REQUEST.json
 ftx-materials study PATTERN.json REQUEST.json
 ftx-materials stock-plan PATTERN.json STOCK.json
+ftx-materials stock-residual PATTERN.json STOCK.json
 ftx-materials stock-svg PATTERN.json STOCK.json STOCK-INDEX NEW.svg
 ftx-materials show ID [--allow-estimates]
 ftx-materials resolve PATTERN.json
@@ -88,6 +89,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-motion` evolves a timed sequence of verified maps, conservatively remaps heat, and can resume saved states.
 `cut-plan` derives material-specific roll requirements from real cut instances and sourced width.
 `stock-plan` allocates every cutter to finite hide/remnant polygons, with defect exclusions and exact material matching.
+`stock-residual` emits the next frozen request with accepted cuts retained as occupied physical stock.
 `stock-svg` writes a new finite-stock review; stock boundaries/defects are not machine cut paths.
 `cut-price` prices gross marker stock, including layout waste; missing offers remain unknown.
 `cut-svg` writes a new source-locked planning preview, not device execution code.
@@ -229,6 +231,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["screen", path] => screening::run(path),
         ["study", pattern, request] => screening::study(pattern, request),
         ["stock-plan", pattern, request] => finite_stock::plan(pattern, request),
+        ["stock-residual", pattern, request] => finite_stock::residual(pattern, request),
         ["stock-svg", pattern, request, index, out] => {
             finite_stock::preview(pattern, request, index, out)
         }
