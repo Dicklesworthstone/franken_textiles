@@ -333,3 +333,236 @@ fn explicit_additional_consumer_allows_mechanics_only_without_weakening_ordinary
                 && r["sewing"]["status"] == "not_requested")
     );
 }
+
+fn comparison(r: &mut Request, objectives: Value, constraints: Value, consumers: Value) {
+    r.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal", "objectives":objectives,
+        "constraints":constraints, "required_consumers":consumers}))
+        .unwrap(),
+    );
+}
+
+#[test]
+fn computed_pareto_set_keeps_real_cost_mass_tradeoffs_ties_and_frozen_outputs() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut raw = serde_json::to_value(request()).unwrap();
+    let mut variants = Vec::new();
+    let mut quotes = Vec::new();
+    for (key, density, price) in [
+        ("a-light", 0.1, 30.),
+        ("b-cheap", 0.3, 10.),
+        ("c-dominated", 0.4, 40.),
+        ("d-tie", 0.1, 30.),
+    ] {
+        let mut material = selection(key, 0.1, 0.4);
+        material["record"]["properties"]["areal_density"]["value"] = json!(density);
+        variants.push(variant(key, material));
+        let mut q = quote(key);
+        q["price"] = json!(price);
+        quotes.push(q);
+    }
+    raw["variants"] = json!(variants);
+    raw["purchasing"]["quotes"]["quotes"] = json!(quotes);
+    let mut r: Request = serde_json::from_value(raw).unwrap();
+    let baseline = evaluate(&r, &p);
+    assert!(baseline.get("comparison").is_none());
+    comparison(
+        &mut r,
+        json!([
+        {"metric":"stock_mass_kg","direction":"minimize"},
+        {"metric":"observed_order_cost","direction":"minimize"}]),
+        json!([]),
+        json!(["sewing"]),
+    );
+    let report = evaluate(&r, &p);
+    assert_eq!(report["alternatives"], baseline["alternatives"]);
+    assert_eq!(
+        report["comparison"]["frontier"],
+        json!(["a-light", "b-cheap", "d-tie"])
+    );
+    assert_eq!(
+        row(&report["comparison"], "c-dominated")["dominated_by"],
+        json!(["a-light", "b-cheap", "d-tie"])
+    );
+    assert_eq!(report["comparison"]["uncertainty_propagated"], false);
+    for candidate in report["comparison"]["alternatives"].as_array().unwrap() {
+        let original = row(&report, candidate["key"].as_str().unwrap());
+        assert_eq!(
+            candidate["readings"]["stock_mass_kg"]["value"],
+            original["metrics"]["stock_mass_kg"]
+        );
+        assert_eq!(
+            candidate["readings"]["observed_order_cost"]["value"],
+            original["metrics"]["least_observed_independent_order_total"]
+        );
+        assert_eq!(candidate["readings"]["observed_order_cost"]["unit"], "USD");
+    }
+    assert_eq!(report, evaluate(&r, &p));
+    r.comparison.as_mut().unwrap().objectives[1].direction =
+        ftx_pattern::material_screen::Direction::Maximize;
+    let different = evaluate(&r, &p);
+    assert_ne!(
+        report["comparison"]["context_sha256"],
+        different["comparison"]["context_sha256"]
+    );
+    assert_ne!(
+        report["comparison"]["frontier"],
+        different["comparison"]["frontier"]
+    );
+    assert_eq!(report["alternatives"], different["alternatives"]);
+}
+
+#[test]
+fn comparison_excludes_missing_required_values_not_unrelated_consumer_refusals() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = request();
+    comparison(
+        &mut r,
+        json!([{ "metric":"stock_mass_kg", "direction":"minimize" }]),
+        json!([]),
+        json!([]),
+    );
+    let report = evaluate(&r, &p);
+    assert_eq!(row(&report["comparison"], "thick")["eligible"], true);
+    assert_eq!(row(&report, "thick")["sewing"]["status"], "refused");
+    assert_eq!(
+        row(&report["comparison"], "missing-width")["eligible"],
+        false
+    );
+    assert!(
+        row(&report["comparison"], "missing-width")["readings"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    r.comparison
+        .as_mut()
+        .unwrap()
+        .required_consumers
+        .push(ftx_export::material_study::comparison::Consumer::Sewing);
+    let required = evaluate(&r, &p);
+    assert_eq!(row(&required["comparison"], "thick")["eligible"], false);
+    assert_eq!(required["alternatives"], report["alternatives"]);
+    comparison(
+        &mut r,
+        json!([{ "metric":"observed_order_cost", "direction":"minimize" }]),
+        json!([]),
+        json!([]),
+    );
+    let priced = evaluate(&r, &p);
+    assert_eq!(row(&priced["comparison"], "thick")["eligible"], false);
+    assert!(
+        row(&priced["comparison"], "thick")["readings"]
+            .get("observed_order_cost")
+            .is_none()
+    );
+}
+
+#[test]
+fn comparison_protocol_mismatches_remain_explicit_and_unrelated_properties_do_not_block() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = request();
+    r.variants
+        .retain(|v| ["wide", "narrow"].contains(&v.key.as_str()));
+    let narrow = r.variants.iter_mut().find(|v| v.key == "narrow").unwrap();
+    narrow
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("width")
+        .unwrap()
+        .method = "different width protocol".into();
+    comparison(
+        &mut r,
+        json!([{ "metric":"observed_order_cost", "direction":"minimize" }]),
+        json!([]),
+        json!([]),
+    );
+    let report = evaluate(&r, &p);
+    assert_eq!(report["comparison"]["frontier"], json!(["narrow", "wide"]));
+    assert_eq!(
+        report["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    let admitted = evaluate(&r, &p);
+    assert_eq!(
+        admitted["comparison"]["frontier"].as_array().unwrap().len(),
+        1
+    );
+    assert!(
+        admitted["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // With sewing-only objectives, width protocols (and width-dependent failed cuts) are irrelevant.
+    comparison(
+        &mut r,
+        json!([{ "metric":"feed_seconds", "direction":"minimize" }]),
+        json!([]),
+        json!([]),
+    );
+    let sewing = evaluate(&r, &p);
+    assert!(
+        sewing["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn comparison_constraints_use_inclusive_computed_values_and_refuse_invalid_policy() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = request();
+    let value = row(&evaluate(&r, &p), "wide")["metrics"]["stock_mass_kg"]
+        .as_f64()
+        .unwrap();
+    comparison(
+        &mut r,
+        json!([{ "metric":"stock_mass_kg", "direction":"minimize" }]),
+        json!([{ "metric":"stock_mass_kg", "minimum":value, "maximum":value }]),
+        json!([]),
+    );
+    assert_eq!(
+        row(&evaluate(&r, &p)["comparison"], "wide")["eligible"],
+        true
+    );
+    r.comparison.as_mut().unwrap().constraints[0].minimum = None;
+    r.comparison.as_mut().unwrap().constraints[0].maximum = Some(value * 0.5);
+    assert_eq!(
+        row(&evaluate(&r, &p)["comparison"], "wide")["eligible"],
+        false
+    );
+    r.comparison.as_mut().unwrap().constraints[0].maximum = Some(f64::NAN);
+    assert!(r.evaluate(&p).is_err());
+    r.comparison.as_mut().unwrap().constraints.clear();
+    let objective = r.comparison.as_ref().unwrap().objectives[0].clone();
+    r.comparison.as_mut().unwrap().objectives.push(objective);
+    assert!(r.evaluate(&p).is_err());
+    r.comparison.as_mut().unwrap().objectives.clear();
+    assert!(r.evaluate(&p).is_err());
+    comparison(
+        &mut r,
+        json!([{ "metric":"stock_mass_kg", "direction":"minimize" }]),
+        json!([]),
+        json!([]),
+    );
+    r.cutting = None;
+    assert!(r.evaluate(&p).is_err());
+    assert!(
+        serde_json::from_value::<ftx_export::material_study::comparison::Policy>(
+            json!({"basis":"reported_bounds","objectives":[]})
+        )
+        .is_err()
+    );
+}

@@ -22,6 +22,8 @@ use crate::{
     sewing::{SewOptions, SewPlan},
 };
 
+pub mod comparison;
+
 /// Explicit substitution, including heterogeneous source-piece assignments.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,6 +91,9 @@ pub struct Request {
     /// Optional pricing requires cutting, because purchased area comes from the actual marker.
     #[serde(default)]
     pub purchasing: Option<Purchasing>,
+    /// Optional explicit objectives over actual consumer outputs, not scalar catalog screening.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<comparison::Policy>,
 }
 
 /// Separate result for one consumer. A numerical plan is never hardware authorization.
@@ -175,6 +180,9 @@ pub struct Report {
     pub screening: Option<material_screen::Report>,
     /// Key-ordered alternatives, never sorted by a fabricated weighted score.
     pub alternatives: Vec<Alternative>,
+    /// Present only when a comparison was requested; failed/unknown cells are never zero scores.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<comparison::Report>,
     /// False: substitutions use the existing geometry-preserving binding implementation.
     pub geometry_changed: bool,
     /// Always false, regardless of whether individual planners returned successfully.
@@ -229,6 +237,9 @@ impl Request {
         pattern: &Pattern,
         additional_consumer: bool,
     ) -> Result<(Vec<Variant>, Option<material_screen::Report>), Refusal> {
+        if let Some(policy) = &self.comparison {
+            policy.validate(self)?;
+        }
         if self.schema != "ftx-material-study/1"
             || (self.screened.is_some() && !self.variants.is_empty())
             || (self.screened.is_none() && self.variants.is_empty())
@@ -409,12 +420,23 @@ impl Request {
             }
             alternatives.push(row);
         }
+        let request_sha256 = hash(self)?;
+        let source_pattern_sha256 = hash(pattern.raw())?;
+        let comparison = self.comparison.as_ref().map(|policy| {
+            policy.evaluate(
+                &alternatives,
+                &source_pattern_sha256,
+                &request_sha256,
+                self.purchasing.as_ref().map(|p| p.market.currency.as_str()),
+            )
+        });
         Ok(Report {
             schema: "ftx-material-study-report/1",
-            source_pattern_sha256: hash(pattern.raw())?,
-            request_sha256: hash(self)?,
+            source_pattern_sha256,
+            request_sha256,
             screening,
             alternatives,
+            comparison,
             geometry_changed: false,
             hardware_execution_authorized: false,
             physical_validation_claim: false,
