@@ -9,12 +9,21 @@ const read = name => fs.readFileSync(path.join(__dirname, '../web', name), 'utf8
 const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 
-async function workerModule({ failFold = false, failExport = false, trap = false, rejectLoad = false } = {}) {
+async function workerModule({ failFold = false, failExport = false, trap = false, rejectLoad = false,
+  failScenario = false, trapScenario = false } = {}) {
   const sent = [], called = [], freed = [];
   const imports = {
     default: () => rejectLoad ? Promise.reject(Error('bundle unavailable')) : Promise.resolve(),
     material_catalog: q => JSON.stringify({ materials: [], query: q }),
     material_inspect: s => JSON.stringify({ selection: JSON.parse(s) }),
+    material_screen: r => { called.push(['screen', r]); return '{"alternatives":[],"coefficient":1.0}'; },
+    material_study: (p, r) => { called.push(['study', p, r]); return '{"alternatives":[],"coordinate":-0.0}'; },
+    material_scenario_study: (b, p, r, s, m) => {
+      called.push(['scenario', b, p, r, s, m]);
+      if (trapScenario) throw new WebAssembly.RuntimeError('scenario trap');
+      if (failScenario) throw Error('scenario refused');
+      return '{"manufacturing":{"alternatives":[]},"simulations":[{"key":"A","evaluation":{"status":"refused","refusal":{"message":"missing mechanics"}}}],"coordinate":-0.0}';
+    },
     material_bind: (p, c) => { called.push(['bind', p, c]); return JSON.stringify({ pattern: JSON.parse(p), pattern_json:p }); },
     WebBody: class { constructor() { called.push(['body']); } free() { freed.push('body'); } },
     fold_up: (_b, p, m, f, contact) => {
@@ -106,6 +115,49 @@ test('finite stock uses unmodified source text and previews the first allocated 
   assert.match(r.files[0].text, /1\.0/); assert.match(r.files[1].text, /1\.0/);
 });
 
+test('screening and studies call production entry points and download unmodified source/request text', async () => {
+  const w = await workerModule(), pattern = '{"x":-0.0}', request = '{"coefficient":1.0}';
+  const screen = await w.send({ type: 'screen', request: 12, screenRequest: request });
+  assert.equal(screen.type, 'result'); assert.equal(screen.request, 12);
+  assert.deepEqual(w.called.at(-1), ['screen', request]);
+  assert.equal(screen.files[1].text, request); assert.match(screen.files[0].text, /1\.0/);
+  const study = await w.send({ type: 'study', pattern, studyRequest: request });
+  assert.equal(study.type, 'result'); assert.deepEqual(w.called.at(-1), ['study', pattern, request]);
+  assert.equal(study.files[1].text, pattern); assert.equal(study.files[2].text, request);
+  assert.match(study.files[0].text, /-0\.0/);
+});
+
+test('scenario studies retain partial failures and free the fresh model on success, refusal and trap', async () => {
+  for (const mode of [{}, { failScenario: true }, { trapScenario: true }]) {
+    const w = await workerModule(mode);
+    const msg = { type: 'scenario', request: 13, bytes: new ArrayBuffer(8), pattern: '{"x":-0.0}',
+      studyRequest: '{"value":1.0}', scenarioRequest: '{"temperature":293.0}', measurements: '{"length":10.0}' };
+    const r = await w.send(msg);
+    assert.deepEqual(w.freed, ['body']);
+    assert.deepEqual(w.called.find(c => c[0] === 'scenario').slice(2),
+      [msg.pattern, msg.studyRequest, msg.scenarioRequest, msg.measurements]);
+    assert.equal(r.type, mode.failScenario || mode.trapScenario ? 'error' : 'result');
+    if (r.type === 'result') {
+      assert.equal(r.result.simulations[0].evaluation.status, 'refused');
+      assert.equal(r.files.length, 5); assert.match(r.files[0].text, /-0\.0/);
+      assert.deepEqual(plain(r.files.slice(1).map(f => f.text)),
+        [msg.pattern, msg.studyRequest, msg.scenarioRequest, msg.measurements]);
+      await w.send(msg); assert.equal(w.called.filter(c => c[0] === 'body').length, 2);
+      assert.deepEqual(w.freed, ['body', 'body']);
+    } else {
+      assert.equal(w.sent.some(m => m.type === 'result'), false);
+      assert.equal(r.fatal, !!mode.trapScenario);
+    }
+  }
+});
+
+test('aggregate study JSON budget refuses before calling any consumer or allocating a body', async () => {
+  const w = await workerModule();
+  const chunk = ' '.repeat(33 * 1024 * 1024);
+  const r = await w.send({ type: 'scenario', pattern: chunk, studyRequest: chunk });
+  assert.equal(r.type, 'error'); assert.match(r.message, /64 MiB/); assert.deepEqual(w.called, []);
+});
+
 class Element {
   constructor() { this.value = ''; this.files = []; this.children = []; this.handlers = {}; this.checked = false; this.disabled = false; }
   addEventListener(name, fn) { this.handlers[name] = fn; }
@@ -119,7 +171,7 @@ async function pageModule() {
   const commands = [...html.matchAll(/<button([^>]*)>/g)].filter(m => m[1].includes('data-command')).map(m => {
     const el = e[/id="([^"]+)"/.exec(m[1])[1]]; el.dataset = { command: /data-command="([^"]+)"/.exec(m[1])[1] }; return el;
   });
-  const workers = [], live = new Set(), windowEvents = {}; let next = 0;
+  const workers = [], live = new Set(), blobs = new Map(), windowEvents = {}; let next = 0;
   class Worker {
     constructor() { this.messages = []; this.dead = false; workers.push(this); }
     postMessage(message) { assert.equal(this.dead, false); this.messages.push(message); }
@@ -127,11 +179,11 @@ async function pageModule() {
     emit(message) { this.onmessage({ data: message }); }
   }
   class LocalURL extends URL {}
-  LocalURL.createObjectURL = () => { const id = `blob:${++next}`; live.add(id); return id; };
-  LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true); };
+  LocalURL.createObjectURL = blob => { const id = `blob:${++next}`; live.add(id); blobs.set(id, blob); return id; };
+  LocalURL.revokeObjectURL = id => { assert.equal(live.delete(id), true); blobs.delete(id); };
   const context = vm.createContext({ Worker, URL: LocalURL, Blob, JSON, Date, document: {
     getElementById: id => { assert.ok(e[id], `HTML missing ${id}`); return e[id]; },
-    querySelectorAll: () => commands, createElement: () => new Element(),
+    querySelectorAll: () => commands, createElement: tag => Object.assign(new Element(), { tag }),
   }, window: { addEventListener: (name, fn) => { windowEvents[name] = fn; } } });
   const module = new vm.SourceTextModule(read('materials-page.js'), { context, initializeImportMeta: m => { m.url = 'https://unit.invalid/materials-page.js'; } });
   await module.link(() => { throw Error('unexpected import'); }); await module.evaluate();
@@ -142,7 +194,7 @@ async function pageModule() {
   const load = async () => { select('patternFile', JSON.stringify(pattern)); await e.patternFile.onchange(); };
   const inspect = async id => { e.selection.value = JSON.stringify({ id }); e.selection.handlers.input(); await e.inspect.onclick(); emit({ selection: { id, expected_sha256: 'locked' }, capabilities: {}, snapshot: { id } }); };
   const bind = async () => { await e.bind.onclick(); emit({ pattern, pattern_json:JSON.stringify(pattern), pieces: [], pattern_sha256: 'test' }, [{ name: 'pattern.json', text: '{}', mime: 'application/json' }]); };
-  return { e, current, workers, ready, select, emit, load, inspect, bind, live, windowEvents };
+  return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents };
 }
 test('material page freezes named assignments, withdraws dependent outputs and ignores stale worker replies', async () => {
   const p = await pageModule(); await p.load(); await p.inspect('linen');
@@ -230,4 +282,123 @@ test('finite-stock input and material edits invalidate only their current depend
   assert.equal(p.live.size, 1);
   await p.inspect('replacement'); p.e.assign.onclick(); assert.equal(p.live.size, 0);
   assert.equal(p.e.stock.disabled, true);
+});
+
+const descendants = el => [el, ...el.children.flatMap(descendants)];
+const visibleText = el => descendants(el).map(n => n.textContent || '').join('\n');
+const section = (p, title) => p.e.outputs.children.find(s => s.children[0].textContent === title);
+const outcome = (result = {}) => ({ status: 'available', result });
+const refused = message => ({ status: 'refused', refusal: { code: 'MISSING_DATA', message } });
+const omitted = () => ({ status: 'not_requested' });
+const studyRow = (key = 'A', pattern = '{"pieces":[],"x":-0.0,"value":1.0}') => ({
+  key, binding: outcome({ pattern_json: pattern, pattern_sha256: 'pattern-lock', pieces: [{ material: 'retained source' }] }),
+  frozen_changes: { default: { id: 'source-A', expected_sha256: 'source-lock' } },
+  cutting: refused('missing stock width'), sewing: outcome(), purchasing: omitted(),
+  metrics: { stock_area_m2: null, stock_mass_kg: null, stitch_intervals: 0, feed_seconds: 0 }
+});
+const studyReport = (rows = [studyRow()]) => ({ schema: 'ftx-material-study/1', alternatives: rows,
+  source_pattern_sha256: 'original-lock', geometry_changed: false, physical_validation_claim: false, hardware_execution_authorized: false });
+const screenReport = () => ({ schema: 'ftx-material-screen-report/1', basis: 'reported_bounds', allow_mixed_protocols: false, frontier: ['A'],
+  alternatives: [{ key: 'A', eligible: true, dominated_by: [], exclusions: [],
+    readings: { areal_density: { value: 0.2, unit: 'kg/m2', bounds: [0.19, 0.21] } }, selection: { id: 'source-A' } },
+    { key: '<excluded>', eligible: false, dominated_by: [], exclusions: [{ message: 'missing upper bound' }],
+      readings: {}, selection: { id: 'source-B', source: '<literal evidence>' } }] });
+const scenarioReport = () => ({ schema: 'ftx-material-scenario-study/1', scenario: { model_sha256: 'model-lock' },
+  manufacturing: studyReport([studyRow('A'), studyRow('B')]),
+  // Deliberately not manufacturing order: the UI must join on stable keys, not array positions.
+  simulations: [{ key: 'B', evaluation: refused('missing mechanics') }, { key: 'A', evaluation: outcome({
+    metrics: { simulation_gating_clear: false, cloth_mass_kg: 0, independent_surface_power_w: -4.5, body_coverage_power_w: null },
+    surface: outcome(), coverage: refused('missing conductivity'), drape: { settled: false, flags: ['unsettled'] },
+    body_geometry_sha256: 'body-lock', positions_sha256: 'positions-lock' }) }] });
+function scenarioInputs(p) {
+  p.select('studyRequest', '{"value":1.0}'); p.select('scenarioRequest', '{"temperature":293.0}');
+  p.select('measurements', '{"length":10.0}'); p.select('body');
+  p.e.body.files[0].arrayBuffer = async () => new ArrayBuffer(8); p.e.body.handlers.change();
+}
+
+test('screening is available without a pattern and retains excluded source evidence for inspection', async () => {
+  const p = await pageModule(); assert.equal(p.e.screen.disabled, true);
+  p.select('screenRequest', '{"threshold":1.0}'); p.e.screenRequest.handlers.change();
+  assert.equal(p.e.screen.disabled, false); assert.equal(p.e.study.disabled, true);
+  await p.e.screen.onclick(); assert.equal(p.current().messages.at(-1).screenRequest, '{"threshold":1.0}');
+  p.emit(screenReport());
+  const s = section(p, 'Source-qualified screening');
+  assert.match(visibleText(s), /reported_bounds/); assert.match(visibleText(s), /missing upper bound/);
+  assert.match(visibleText(s), /0.2 kg\/m2; \[0.19, 0.21\] reported bounds/); assert.match(visibleText(s), /Unknown/);
+  assert.match(visibleText(s), /not garment-level ranking/);
+  const details = descendants(s).filter(n => n.tag === 'details');
+  details[1].open = true; details[1].handlers.toggle();
+  assert.match(visibleText(s), /<literal evidence>/);
+  assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+});
+
+test('manufacturing studies use original lossless source, not bound previews, and download exact alternative patterns', async () => {
+  const p = await pageModule(), original = '{"pieces":[{"id":"front"}],"x":-0.0,"coefficient":1.0}';
+  p.select('patternFile', original); await p.e.patternFile.onchange();
+  p.select('studyRequest', '{"coefficient":1.0}'); p.e.studyRequest.handlers.change();
+  assert.equal(p.e.study.disabled, false); assert.equal(p.e.cut.disabled, true);
+  await p.e.bind.onclick(); p.emit({ pattern_json: '{"different":"preview"}', pieces: [] });
+  await p.e.study.onclick(); const request = p.current().messages.at(-1);
+  assert.equal(request.pattern, original); assert.equal(request.studyRequest, '{"coefficient":1.0}');
+  const row = studyRow('../<unsafe-name>'); p.emit(studyReport([row]));
+  const s = section(p, 'Fixed-pattern manufacturing alternatives');
+  assert.match(visibleText(s), /missing stock width/); assert.match(visibleText(s), /Available/);
+  const t = descendants(s).find(n => n.tag === 'table'); const values = t.children[2].children.map(n => n.textContent);
+  assert.equal(values[7], 'Unknown'); assert.equal(values[8], 'Unknown');
+  assert.equal(values[9], '0'); assert.equal(values[10], '0');
+  const a = descendants(s).find(n => n.download);
+  assert.equal(a.download, 'alternative-1-pattern.json');
+  assert.equal(await p.blobs.get(a.href).text(), row.binding.result.pattern_json);
+  p.windowEvents.pagehide(); assert.equal(p.live.size, 0);
+});
+
+test('scenario comparisons join keys, preserve signed values, and distinguish gating and independent refusals', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  assert.equal(p.e.scenario.disabled, false); assert.equal(p.e.fold.disabled, true); // no bind or single-preview fit
+  await p.e.scenario.onclick(); const request = p.current().messages.at(-1);
+  assert.equal(request.scenarioRequest, '{"temperature":293.0}'); assert.equal(request.measurements, '{"length":10.0}');
+  assert.equal(request.bytes.byteLength, 8); assert.equal('fit' in request, false);
+  p.emit(scenarioReport()); const s = section(p, 'Fresh drape and heat alternatives');
+  const t = descendants(s).filter(n => n.tag === 'table')[1];
+  assert.deepEqual(plain(t.children[2].children.map(n => n.textContent)),
+    ['A', 'Available', 'NO — review flags', '0', 'Available', '-4.5', 'Refused: missing conductivity', 'Unknown']);
+  assert.match(t.children[3].children[1].textContent, /missing mechanics/);
+  assert.equal(t.children[3].children[3].textContent, 'Unknown');
+  const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('A: simulation'));
+  d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /unsettled/); assert.match(visibleText(d), /body-lock/);
+});
+
+test('study output invalidation follows the actual request/body dependencies, not unrelated preview controls', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  await p.e.study.onclick(); p.emit(studyReport());
+  await p.e.scenario.onclick(); p.emit(scenarioReport());
+  assert.equal(p.live.size, 3);
+  for (const id of ['cutOptions', 'heatConditions', 'fit', 'selfContact', 'quotes']) p.e[id].handlers.change();
+  assert.equal(p.live.size, 3);
+  p.e.measurements.handlers.change(); assert.equal(p.live.size, 1);
+  assert.equal(section(p, 'Fresh drape and heat alternatives').hidden, true);
+  assert.equal(section(p, 'Fixed-pattern manufacturing alternatives').hidden, false);
+  await p.e.scenario.onclick(); p.emit(scenarioReport());
+  p.e.scenarioRequest.handlers.change(); assert.equal(p.live.size, 1);
+  await p.e.scenario.onclick(); p.emit(scenarioReport());
+  p.e.studyRequest.handlers.change(); assert.equal(p.live.size, 0);
+  await p.e.study.onclick(); p.emit(studyReport()); await p.e.scenario.onclick(); p.emit(scenarioReport());
+  await p.load(); assert.equal(p.live.size, 0); // no earlier-pattern results remain
+});
+
+test('study replacement/cancellation cannot publish late file reads or stale scenario success', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  await p.e.scenario.onclick(); p.emit(scenarioReport()); assert.equal(p.live.size, 2);
+  const d = deferred(); p.e.scenarioRequest.files[0].text = () => d.promise;
+  const old = p.current(), running = p.e.scenario.onclick(); assert.equal(p.live.size, 0);
+  p.e.cancel.onclick(); p.ready(); d.resolve('{}'); await running;
+  assert.equal(old.messages.filter(m => m.type === 'scenario').length, 1);
+  scenarioInputs(p); await p.e.scenario.onclick(); const stale = p.current(), id = stale.messages.at(-1).request;
+  p.e.scenarioRequest.handlers.change(); p.ready();
+  stale.emit({ type: 'result', request: id, result: scenarioReport(), files: [] });
+  assert.equal(p.live.size, 0);
+  await p.e.scenario.onclick(); p.emit(scenarioReport());
+  p.select('scenarioRequest', '{malformed'); await p.e.scenario.onclick();
+  assert.equal(p.live.size, 0); assert.equal(section(p, 'Fresh drape and heat alternatives').hidden, true);
+  assert.equal(p.e.error.hidden, false);
 });

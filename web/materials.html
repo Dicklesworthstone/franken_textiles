@@ -15,6 +15,7 @@ button{background:var(--accent);color:white;border:0;border-radius:5px;padding:9
 pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;background:var(--paper);padding:12px;font-size:13px}
 small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:7px;text-align:left;border-bottom:1px solid var(--line)}
 .links a{display:inline-block;margin:8px 16px 8px 0}iframe{width:100%;height:520px;border:1px solid var(--line)}img{max-width:100%;max-height:440px}
+.comparison{overflow-x:auto}.comparison table{margin:16px 0}.comparison caption{text-align:left;font-weight:600;margin:8px 0}.comparison td{vertical-align:top;min-width:110px;overflow-wrap:anywhere}.comparison details{margin:8px 0}
 @media(max-width:760px){.grid{grid-template-columns:1fr}main{padding:14px}}
 </style>
 </head>
@@ -76,6 +77,35 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <div><label>Body geometry / instance layer map JSON <input id="map" type="file" accept=".json,application/json"></label>
 <label>Coverage conditions JSON <input id="coverageConditions" type="file" accept=".json,application/json"></label>
 <button id="coverage" data-command="coverage" disabled>Recompute layered body coverage</button></div></div>
+</section>
+<section><h2>4. Compare material alternatives on the original pattern</h2>
+<p>Run a source-qualified shortlist, then compare real manufacturing and simulation outcomes side by side.
+Every alternative starts from the <strong>original pattern loaded in section 2</strong>, not its current bound preview.
+No binding step is required. Refused consumers remain visible; missing prices, mass or heat never become zero.</p>
+<div class="grid"><div>
+<h3>Screen and compare manufacturing</h3>
+<label>Screening request JSON (<code>ftx-material-screen/1</code>) <input id="screenRequest" type="file" accept=".json,application/json"></label>
+<button id="screen" data-command="screen" disabled>Screen source-qualified materials</button>
+<p class="note">The request declares units, constraints, objectives, nominal or reported-bound comparison and estimate consent.
+Its scalar frontier is not a garment ranking. Original observations and protocols remain inspectable for excluded candidates too.</p>
+<label>Study request JSON (<code>ftx-material-study/1</code>) <input id="studyRequest" type="file" accept=".json,application/json"></label>
+<button id="study" data-command="study" disabled>Compare manufacturing alternatives</button>
+<p class="note">The study request contains explicit <code>variants</code> or a <code>screened</code> request, and its own shared cutting,
+sewing and dated purchasing inputs. It does not use the single-preview process files above. Up to 32 alternatives;
+scalar-frontier pruning requires explicit consent. Download source-locked alternative patterns from the results.</p>
+</div><div>
+<h3>Fresh body, drape and heat study</h3>
+<label>Scenario request JSON (<code>ftx-drape-scenario/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
+<button id="scenario" data-command="scenario" disabled>Recompute drape &amp; heat for every alternative</button>
+<p class="note">Uses the same study request plus the <strong>measurements and local body model</strong> selected in section 3.
+The scenario itself owns the fit specification, numerical options, surface conditions and body-coverage policy;
+the single-preview fit, self-contact checkbox and thermal files above do not override it. Body fitting runs once in the standard
+35° straight-arm drape pose; each alternative gets a fresh production drape and current-geometry heat evaluation.</p>
+<p class="note">Heat on a flagged or unsettled final frame is not an accepted fit prediction. Signed surface power and body-coverage power
+have different bases and are not interchangeable. There is no hidden weighted score, whole-wearer warmth rating or automatic garment winner.</p>
+<p>Changing either request, measurements, body or original pattern withdraws affected results. Cancel terminates the worker,
+including synchronous simulation. Raw reports and exact input JSON are downloadable; keep the source-identified body model locally for replay.</p>
+</div></div>
 </section>
 <section><h2>Current results</h2><pre id="progress" aria-live="polite"></pre>
 <div id="outputs"></div><iframe id="viewer" title="Current material drape" sandbox="allow-scripts" hidden></iframe>
