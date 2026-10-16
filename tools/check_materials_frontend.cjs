@@ -10,9 +10,9 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 
 async function workerModule({ failFold = false, failExport = false, trap = false, rejectLoad = false,
-  failScenario = false, trapScenario = false } = {}) {
+  failScenario = false, trapScenario = false, bindings = null } = {}) {
   const sent = [], called = [], freed = [];
-  const imports = {
+  const imports = bindings || {
     default: () => rejectLoad ? Promise.reject(Error('bundle unavailable')) : Promise.resolve(),
     material_catalog: q => JSON.stringify({ materials: [], query: q }),
     material_inspect: s => JSON.stringify({ selection: JSON.parse(s) }),
@@ -402,3 +402,52 @@ test('study replacement/cancellation cannot publish late file reads or stale sce
   assert.equal(p.live.size, 0); assert.equal(section(p, 'Fresh drape and heat alternatives').hidden, true);
   assert.equal(p.e.error.hidden, false);
 });
+
+// Opt in after tools/build_web.sh. This executes the real production WASM through the actual
+// worker module, with only the Node transport/module loader adapted. It is not HTTP/browser or
+// native parity, successful anatomical body fitting, or empirical textile validation.
+test('compiled WASM study preserves causal manufacturing changes and source-locked worker replay',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg = path.join(__dirname, '../web/pkg');
+    assert.ok(fs.existsSync(path.join(pkg, 'ftx_wasm_bg.wasm')), 'Build web/pkg before FTX_REAL_WASM=1');
+    const ftx = await import(require('node:url').pathToFileURL(path.join(pkg, 'ftx_wasm.js')).href);
+    ftx.initSync({ module: fs.readFileSync(path.join(pkg, 'ftx_wasm_bg.wasm')) });
+    const w = await workerModule({ bindings: ftx });
+    const fixture = n => fs.readFileSync(path.join(__dirname, '../tests/fixtures/materials', n), 'utf8');
+    const screenRequest = fixture('screen-insulation.json');
+    const screened = await w.send({ type: 'screen', screenRequest });
+    assert.equal(screened.type, 'result', screened.message);
+    assert.deepEqual(screened.result, JSON.parse(ftx.material_screen(screenRequest)));
+    assert.equal(screened.files[1].text, screenRequest);
+    const pattern = fixture('synthetic-sewing-pattern.json');
+    const variants = [['a-wide', 0.1, 0.4], ['b-narrow', 0.06, 2], ['c-unknown-width', null, 0.4]].map(([key, width, thickness]) => {
+      const selection = JSON.parse(pattern).fabric.material;
+      for (const [name, value, unit] of [['width', width, 'm'], ['thickness', thickness, 'mm'], ['areal_density', 0.2, 'kg/m2']]) {
+        if (value !== null) selection.record.properties[name] = { value, unit, evidence: 'estimate', source: 'test',
+          method: 'Synthetic software test; not measured textile data' };
+      }
+      return { key, changes: { schema: 'ftx-material-bindings/1', default: selection } };
+    });
+    const studyRequest = JSON.stringify({ schema: 'ftx-material-study/1', variants,
+      cutting: { copies: 1, gap_mm: 2, edge_margin_mm: 0, end_margin_mm: 0 },
+      sewing: JSON.parse(fixture('synthetic-sewing-options.json')), purchasing: { quotes: { schema: 'ftx-textile-quotes/1', quotes: [] },
+        market: { currency: 'USD', region: 'US', quality: 'test', terms: 'test', as_of: '2026-10-15', max_age_days: 30 } } });
+    const study = await w.send({ type: 'study', pattern, studyRequest });
+    assert.equal(study.type, 'result', study.message);
+    assert.deepEqual(study.result, JSON.parse(ftx.material_study(pattern, studyRequest)));
+    assert.equal(study.files[1].text, pattern); assert.equal(study.files[2].text, studyRequest);
+    const rows = study.result.alternatives;
+    assert.equal(rows.length, 3); assert.ok(rows.every(r => r.binding.status === 'available'));
+    assert.equal(rows[0].cutting.status, 'available'); assert.equal(rows[1].cutting.status, 'available');
+    assert.ok(rows[1].cutting.result.rolls[0].length_m > rows[0].cutting.result.rolls[0].length_m);
+    assert.equal(rows[0].sewing.status, 'available'); assert.equal(rows[1].sewing.status, 'refused');
+    assert.equal(rows[2].cutting.status, 'refused'); assert.equal(rows[2].sewing.status, 'available');
+    assert.ok(rows.every(r => r.metrics.least_observed_independent_order_total === null));
+    for (const row of rows) {
+      const replay = JSON.parse(ftx.material_bind(pattern, JSON.stringify(row.frozen_changes)));
+      assert.equal(replay.pattern_json, row.binding.result.pattern_json);
+    }
+    assert.equal((await w.send({ type: 'study', pattern, studyRequest })).files[0].text, study.files[0].text);
+    const invalid = await w.send({ type: 'scenario', pattern, studyRequest, scenarioRequest: '{}', measurements: '{}', bytes: new ArrayBuffer(8) });
+    assert.equal(invalid.type, 'error'); assert.match(invalid.message, /ftxbody/);
+  });

@@ -97,6 +97,37 @@ implementation is `ftx_drape::study::Session`; `study::fitted::FittedBody` fits 
 `material_scenario_study(webBody, patternText, studyText, scenarioText, measurementsText)`.
 It uses the model bytes identified by `WebBody`, never a catalog material name as a physics shortcut.
 
+## Material workbench
+
+After `sh tools/build_web.sh`, open `web/materials.html` from the existing local web server.
+Section 4 exposes screening, manufacturing studies and fresh model-backed scenarios through the
+worker, with cancellation. Load the **original** pattern in section 2 and the study request in
+section 4; a prior single-preview binding is neither required nor used. For scenarios, also select
+the measurements and converted body in section 3 and the scenario request in section 4. The scenario
+owns its fit/numerical/thermal policy; the separate single-preview controls do not override it.
+
+The comparison shows source-qualified scalar readings with units/bounds, excluded candidates,
+independent cutting/sewing/purchasing outcomes, signed heat and explicit drape gating. Missing
+values remain unknown, and incomplete offer coverage is not a free order. Source/protocol details
+are inspectable per alternative. Downloaded reports, input JSON and bound alternative patterns
+retain the original text; display-only JSON is not used as a replay artifact. Changing actual
+dependencies removes their outputs and download URLs, while unrelated preview edits preserve
+study results. No weighted score or garment-level Pareto frontier is fabricated in JavaScript.
+
+The existing frontend tests include optional **real compiled WASM** execution without a model
+asset or native executable:
+
+```sh
+sh tools/build_web.sh
+FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs
+```
+
+That mode checks the actual worker-to-WASM bridge, causal marker/sewing changes, independent
+missing-data outcomes, exact source/request downloads, frozen replay, deterministic repeats and
+malformed-model rejection. Its Node loader is not an HTTP/browser transport or a successful
+anatomical fitting/drape test; the existing `tools/check_materials_web.cjs` remains the separate
+Chromium/native comparison lane.
+
 ## Evidence and remaining gates
 
 Synthetic tests compare against direct production drape, surface, coverage and manufacturing calls.
