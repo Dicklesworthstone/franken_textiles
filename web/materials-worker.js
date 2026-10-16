@@ -27,6 +27,29 @@ self.onmessage = async ({ data: msg }) => {
     switch (msg.type) {
       case "catalog": result = json(ftx.material_catalog(msg.query)); break;
       case "inspect": result = json(ftx.material_inspect(msg.selection)); break;
+      case "screen":
+        raw = ftx.material_screen(msg.screenRequest); result = json(raw);
+        files = [file("material-screen.json", raw), file("screen-request.json", msg.screenRequest)];
+        break;
+      case "study":
+        raw = ftx.material_study(msg.pattern, msg.studyRequest); result = json(raw);
+        files = [file("material-study.json", raw), file("original-pattern.json", msg.pattern),
+          file("study-request.json", msg.studyRequest)];
+        break;
+      case "scenario": {
+        // A new handle for every invocation: no previous alternative's body or cloth state.
+        const model = new ftx.WebBody(new Uint8Array(msg.bytes));
+        try {
+          raw = ftx.material_scenario_study(model, msg.pattern, msg.studyRequest, msg.scenarioRequest, msg.measurements);
+          result = json(raw);
+        } finally { model.free(); }
+        // Save original JSON text, not the display objects: number spellings participate in locks.
+        // The large local model stays with its owner; the report identifies its exact source hash.
+        files = [file("material-scenario-study.json", raw), file("original-pattern.json", msg.pattern),
+          file("study-request.json", msg.studyRequest), file("scenario-request.json", msg.scenarioRequest),
+          file("measurements.json", msg.measurements)];
+        break;
+      }
       case "bind":
         raw = ftx.material_bind(msg.pattern, msg.changes); result = json(raw);
         if (typeof result.pattern_json !== "string") throw Error("Rebuild web/pkg: missing lossless material pattern bridge.");
