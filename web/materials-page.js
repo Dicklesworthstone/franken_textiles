@@ -29,7 +29,7 @@ function controls() {
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
   $("study").disabled ||= !source || !has("studyRequest");
-  $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || !has("measurements");
+  $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || (!has("scenarioBody") && !has("measurements"));
   $("exports").disabled ||= !has("measurements") || !has("fit");
   $("fold").disabled ||= !has("measurements") || !has("fit") || !has("body");
   $("cut").disabled ||= !has("cutOptions");
@@ -283,7 +283,8 @@ async function execute(op) {
       // Alternatives always start at the original, never the currently bound single-material preview.
       msg.pattern = sourceText; msg.studyRequest = await read("studyRequest");
       if (op === "scenario") {
-        msg.scenarioRequest = await read("scenarioRequest"); msg.measurements = await read("measurements");
+        msg.scenarioRequest = await read("scenarioRequest");
+        msg.measurements = await read(has("scenarioBody") ? "scenarioBody" : "measurements");
         msg.bytes = await read("body", true);
       }
     }
@@ -354,8 +355,8 @@ $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); edits()
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","coverage","scenario"], fit:["exports","fold","heat","coverage"],
   body:["fold","heat","coverage","scenario"], selfContact:["fold","heat","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"],
-  screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"] })) {
-  $(id).addEventListener("change", () => invalidate(keys));
+  screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
+  $(id).addEventListener("change", () => invalidate(id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : keys));
 }
 window.addEventListener("pagehide", () => { ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
 start();

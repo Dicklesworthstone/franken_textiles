@@ -9,18 +9,64 @@ This is a software delivery, not closure of the empirical or optimization gates 
 ## Native commands
 
 ```sh
-ftx materials scenario-study pattern.json study.json scenario.json measurements.json model.ftxbody --json
-ftx-materials scenario-study pattern.json study.json scenario.json measurements.json model.ftxbody
+ftx materials scenario-study pattern.json study.json scenario.json body-input.json model.ftxbody --json
+ftx-materials scenario-study pattern.json study.json scenario.json body-input.json model.ftxbody
 ```
 
 The four JSON inputs share a 64 MiB limit; the converted Anny model has a 512 MiB native read limit.
 The commands read inputs without modifying them and print a report. The main CLI uses its usual
 `result` envelope; the companion prints that result directly. Use the existing model converter to
 obtain `model.ftxbody`. This command does not download model assets or upload body evidence.
-Measurements need `wearer.age_months` and the existing tape-fit fields. Body fitting runs **once**
-with the existing Anny fitter, trimming and landmark pipeline in the standard straight-arm,
-35-degree drape pose. It does not re-fit the wearer for each material. Alternate poses, accepted
-multi-frame body reports and pose sweeps are not yet exposed by this native adapter.
+The body input may be a legacy measurement document or an explicit `ftx-scenario-body/1` request.
+Legacy measurements keep the existing tape-fit behavior: require `wearer.age_months`, fit once in
+the standard 35-degree straight-arm reference pose, and reuse that shape for every material.
+An explicit request can instead reuse an accepted multi-frame shape **without fitting again**,
+and independently choose the standing straight-arm abduction angle. No material enters body fitting.
+
+## Body evidence and independent standing poses
+
+`ftx-scenario-body/1` accepts `measurements` (default `{}`), optional `accepted_body_fit`, and
+`arm_abduction_deg` (default 35, finite, inclusive range 0..180). Unknown fields refuse. Omit
+`accepted_body_fit` to perform a tape fit; an explicitly null, rejected or inconsistent report
+refuses instead of falling back. Changing the requested pose never changes the tape-fitting
+reference pose or the accepted shape parameters.
+
+To reuse a fit, put the **complete intact `ftx-body-fit/1` report** in `accepted_body_fit`, not its
+filename or the CLI envelope. For example, this creates a new request while retaining the report's
+original JSON text; it neither edits the accepted source nor invents new body measurements:
+
+```sh
+python3 - <<'PY'
+import json
+from pathlib import Path
+report = Path("body-fit.json").read_text()
+json.loads(report)
+with Path("body-input.json").open("x") as out:
+    out.write('{"schema":"ftx-scenario-body/1","arm_abduction_deg":50.0,'
+              '"accepted_body_fit":' + report + '}\n')
+PY
+```
+
+The existing accepted-shape validator checks the exact model digest, pinned Anny identity, acceptance
+status, starts/checks/spread, parameter bounds and reconstructed parameter consistency. The original
+image-frame poses are never reused as drape poses. Receipt consistency is not cryptographic proof
+of an experiment, and accepted model parameters remain `MODEL_FIT`, never measured body truth.
+Optional supplied tapes are compared at the existing accepted-body measurement pose (35-degree
+A-pose) without refitting; contradictory age or sex refuses. Missing predicted tape sections are
+explicitly unavailable, not zero or guessed values. Source-fit residuals remain in `source_fit`.
+
+Each request rebuilds the posed skin, collision mesh and placement frames. The report preserves
+`shape_parameters`, `shape_sha256`, `measurements_sha256`, the original accepted source and its
+canonical parsed-JSON digest, and the requested `pose`. A pose change retains the shape identity
+but changes the body/scenario identity and reruns cloth and heat. Additional tapes change evidence
+identity without changing an accepted shape. The original `body_input` is retained for replay.
+
+These are independent **static standing poses**, not a motion or ride-up experiment. Seated/squat
+placement and a garment-following pose ramp use separate production paths; they are not silently
+approximated here. Invalid source/setup results remain per-simulation refusals while independent
+manufacturing results survive. No previous body's drape or temperature field is substituted.
+
+## Numerical and material study policy
 
 `study.json` is the existing manufacturing study format, including explicit variants or screening,
 optional cutting/sewing and marker-derived purchasing. Here manufacturing may be omitted because
@@ -128,17 +174,18 @@ A successful process exit means the study report was computed, not that every al
 Inspect each consumer's `status` and the drape's gating flags. Heat is evaluated on the computed final
 frame even when those flags require review; an available number is not automatically admissible as a
 settled-garment objective. Replay each alternative's `frozen_changes` against the original pattern,
-using the same scenario, measurements and model. Keep raw Rust-produced JSON text through browser
+using the same scenario, body input and model. Keep raw Rust-produced JSON text through browser
 boundaries: parsing/stringifying source receipts in JavaScript can change numeric identities.
 
 ## Library and browser-callable API
 
 `ftx_export::material_study::Request::evaluate_with` composes an additional production consumer with
 existing manufacturing without adding a numerical dependency to the export crate. The numerical
-implementation is `ftx_drape::study::Session`; `study::fitted::FittedBody` fits the common body once.
+implementation is `ftx_drape::study::Session`; `study::fitted::FittedBody::prepare` selects and poses
+the common shape using `BodyRequest`. `FittedBody::fit` retains the legacy tape-only convenience API.
 `ftx_wasm::materials::scenario::on_body` provides a file-free fixed-body entry point and
-`on_model` the one-fit adapter. The browser export is
-`material_scenario_study(webBody, patternText, studyText, scenarioText, measurementsText)`.
+`on_model` the body-source adapter. The browser export is
+`material_scenario_study(webBody, patternText, studyText, scenarioText, bodyInputText)`.
 It uses the model bytes identified by `WebBody`, never a catalog material name as a physics shortcut.
 
 ## Material workbench
@@ -149,6 +196,12 @@ worker, with cancellation. Load the **original** pattern in section 2 and the st
 section 4; a prior single-preview binding is neither required nor used. For scenarios, also select
 the measurements and converted body in section 3 and the scenario request in section 4. The scenario
 owns its fit/numerical/thermal policy; the separate single-preview controls do not override it.
+For an accepted fit or another standing arm angle, load the optional **body-source request** in
+section 4. It replaces only the scenario's measurement input, not other preview controls; shared
+measurement files are no longer needed for that scenario. Clearing the optional file restores
+legacy tape input. Changing the file withdraws previous results and cancels stale reads/work.
+Malformed overrides never fall back to a valid shared measurement file. Downloads retain the exact
+request as `body-input.json`, along with source-locked patterns and the complete study report.
 
 The comparison shows source-qualified scalar readings with units/bounds, excluded candidates,
 independent cutting/sewing/purchasing outcomes, signed heat and explicit drape gating. Missing
@@ -178,9 +231,13 @@ Chromium/native comparison lane.
 Synthetic tests compare against direct production drape, surface, coverage and manufacturing calls.
 They exercise frozen replay, deterministic repeats, thermal-only substitutions preserving motion,
 mechanical substitutions changing motion, independent refusals and admission before solver work.
-Real-binary tests verify both commands retain manufacturing when model decoding refuses. This
-implementation session did not have converted Anny assets, so it does not claim a positive
-model-backed end-to-end run or native/WASM execution parity merely from target compilation.
+Real-binary tests verify both commands retain manufacturing when model decoding refuses. Accepted
+reuse additionally runs through both binaries on an explicitly synthetic articulated Anny-format
+prism, with actual drape/steady heat, unchanged parameters across poses, visible tape disagreement,
+identical native reports and transport-only material swaps. Library tests compare against direct
+production consumers and verify pose-dependent geometry. This is a positive synthetic model-backed
+software run, not a successful anatomical garment fit, and target compilation alone is not WASM
+execution parity. Converted anatomical Anny assets were unavailable during this delivery.
 
 `ftx-ms2` stays open for propagated uncertainty, complete garment-mass accounting, expanded body/pose
 policies and physical acceptance of the nominal comparison path. Synthetic coupons and numerical conservation

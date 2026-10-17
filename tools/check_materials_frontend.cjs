@@ -496,3 +496,42 @@ test('compiled WASM study preserves causal manufacturing changes and source-lock
     const invalid = await w.send({ type: 'scenario', pattern, studyRequest, scenarioRequest: '{}', measurements: '{}', bytes: new ArrayBuffer(8) });
     assert.equal(invalid.type, 'error'); assert.match(invalid.message, /ftxbody/);
   });
+
+test('explicit body sources replace only scenario evidence and retain exact replay text', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const raw = '{"schema":"ftx-scenario-body/1","arm_abduction_deg":50.0,"accepted_body_fit":{"test":-0.0}}';
+  p.select('scenarioBody', raw); p.e.measurements.files = [];
+  p.e.scenarioBody.handlers.change(); assert.equal(p.e.scenario.disabled, false);
+  await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).measurements, raw);
+  p.emit(scenarioReport()); assert.equal(p.live.size, 2);
+  p.select('measurements', '{"wearer":{"stature_mm":1000.0}}'); p.e.measurements.handlers.change();
+  assert.equal(p.live.size, 2); // overridden tapes are not a dependency of this result
+  p.e.scenarioBody.handlers.change(); assert.equal(p.live.size, 0);
+  p.e.scenarioBody.files = []; p.e.scenarioBody.handlers.change();
+  await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).measurements, '{"wearer":{"stature_mm":1000.0}}');
+  const w = await workerModule();
+  const r = await w.send({type:'scenario',request:55,bytes:new ArrayBuffer(8),
+    pattern:'{}',studyRequest:'{}',scenarioRequest:'{}',measurements:raw});
+  const artifact = r.files.find(f => f.name === 'body-input.json');
+  assert.equal(artifact.text, raw); assert.equal(w.called.find(c => c[0] === 'scenario').at(-1), raw);
+});
+
+test('invalid or superseded body-source files cannot fall back to tapes or publish stale outcomes', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  p.select('scenarioBody', '{malformed'); p.e.scenarioBody.handlers.change();
+  const oldCount = p.current().messages.length;
+  await p.e.scenario.onclick();
+  assert.equal(p.current().messages.length, oldCount); assert.equal(p.e.error.hidden, false);
+  assert.equal(p.live.size, 0);
+  const d = deferred(); p.select('scenarioBody', '{}'); p.e.scenarioBody.files[0].text = () => d.promise;
+  const old = p.current(), running = p.e.scenario.onclick();
+  p.select('scenarioBody', '{"schema":"ftx-scenario-body/1"}'); p.e.scenarioBody.handlers.change();
+  p.ready(); d.resolve('{"schema":"ftx-scenario-body/1","arm_abduction_deg":35.0}'); await running;
+  assert.equal(old.messages.length, oldCount);
+  await p.e.scenario.onclick(); const stale = p.current(), id = stale.messages.at(-1).request;
+  p.e.body.handlers.change(); p.ready();
+  stale.emit({type:'result',request:id,result:scenarioReport(),files:[]});
+  assert.equal(p.live.size, 0); assert.equal(section(p, 'Fresh drape and heat alternatives').hidden, true);
+});

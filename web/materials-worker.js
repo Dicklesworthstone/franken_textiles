@@ -47,7 +47,7 @@ self.onmessage = async ({ data: msg }) => {
         // The large local model stays with its owner; the report identifies its exact source hash.
         files = [file("material-scenario-study.json", raw), file("original-pattern.json", msg.pattern),
           file("study-request.json", msg.studyRequest), file("scenario-request.json", msg.scenarioRequest),
-          file("measurements.json", msg.measurements)];
+          file("body-input.json", msg.measurements)];
         break;
       }
       case "bind":

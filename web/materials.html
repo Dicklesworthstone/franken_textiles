@@ -100,11 +100,17 @@ No missing output is scored as zero, and source ranges are not presented as prop
 </div><div>
 <h3>Fresh body, drape and heat study</h3>
 <label>Scenario request JSON (<code>ftx-drape-scenario/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
+<label>Optional body-source request JSON (<code>ftx-scenario-body/1</code>) <input id="scenarioBody" type="file" accept=".json,application/json"></label>
 <button id="scenario" data-command="scenario" disabled>Recompute drape &amp; heat for every alternative</button>
-<p class="note">Uses the same study request plus the <strong>measurements and local body model</strong> selected in section 3.
+<p class="note">Uses the same study request and the <strong>local body model</strong> selected in section 3.
+Without a body-source request it fits the section-3 measurements at 35°. A body-source request instead owns the
+measurements, optional <code>accepted_body_fit</code> report and <code>arm_abduction_deg</code> (0–180°, default 35°).
+Accepted shapes must match the exact model and are never refitted; optional tapes report residuals only.
+Clear this file to return to section-3 measurements. A malformed request refuses rather than falling back.
 The scenario itself owns the fit specification, numerical options, surface conditions and body-coverage policy;
-the single-preview fit, self-contact checkbox and thermal files above do not override it. Body fitting runs once in the standard
-35° straight-arm drape pose; each alternative gets a fresh production drape and current-geometry heat evaluation.</p>
+the single-preview fit, self-contact checkbox and thermal files above do not override it. Shape selection runs once;
+the chosen standing straight-arm pose does not change that shape. Each alternative gets a fresh production drape and
+current-geometry heat evaluation. This is a static pose, not a ride-up motion, seated or squat simulation.</p>
 <p class="note">Heat on a flagged or unsettled final frame is not an accepted fit prediction. Signed surface power and body-coverage power
 have different bases and are not interchangeable. Declared heat, strain and simulated-cloth-mass objectives require both settledness and clear gating;
 an available heat number on an unfinished frame is excluded. There is no hidden weighted score, whole-wearer warmth rating or global garment winner.</p>
