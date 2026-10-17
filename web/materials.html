@@ -90,14 +90,17 @@ No binding step is required. Refused consumers remain visible; missing prices, m
 Its scalar frontier is not a garment ranking. Original observations and protocols remain inspectable for excluded candidates too.</p>
 <label>Study request JSON (<code>ftx-material-study/1</code>) <input id="studyRequest" type="file" accept=".json,application/json"></label>
 <button id="study" data-command="study" disabled>Compare manufacturing alternatives</button>
-<p class="note">The study request contains explicit <code>variants</code> or a <code>screened</code> request, and its own shared cutting,
-sewing and dated purchasing inputs. It does not use the single-preview process files above. Up to 32 alternatives;
+<p class="note">The study request contains explicit <code>variants</code> or a <code>screened</code> request, and its own shared roll cutting,
+finite-stock, sewing, declared assembly mass and dated purchasing inputs. Add <code>finite_stock</code> with an <code>ftx-finite-stock-request/1</code>
+inventory to compare actual hides or remnants, including defects and prior cuts. Every alternative uses the same original inventory;
+one alternative does not consume another's stock. Roll and finite-stock results remain independent, and purchasing uses roll markers.
+The study does not use the single-preview process files above. Up to 32 alternatives;
 scalar-frontier pruning requires explicit consent. Download source-locked alternative patterns from the results.</p>
 <p class="note">For retained assembly mass, add <code>assembly_mass</code> with schema <code>ftx-assembly-mass/1</code>,
 an explicit <code>inventory_complete</code> declaration and sourced <code>extras</code> masses. It counts every physical cut piece,
 including unsimulated lining, plus retained thread, closures and other declared extras. A mass-only study needs no roll width or body.
 Use <code>assembly_mass_kg</code> as the objective; missing components leave the total unknown. This is one pre-finishing assembly,
-not stock waste, a simulated subset or a weighed finished garment. Cutting and mass must use the same seam allowance.</p>
+not stock waste, a simulated subset or a weighed finished garment. Mass and every requested roll or finite-stock cutter must use the same seam allowance.</p>
 <p class="note">Add an optional <code>comparison</code> to the study request with explicit <code>basis: "nominal"</code>,
 <code>objectives</code>, inclusive <code>constraints</code> and <code>required_consumers</code>. The shared Rust engine reports
 the computed Pareto alternatives, exclusions and protocol-incomparable pairs separately from scalar screening.

@@ -72,9 +72,9 @@ quantity- and market-qualified offers, not a timeless material score.
 
 ## Study contract: `ftx-material-study/1`
 
-The study takes ONE original pattern and shared `cutting`, `sewing`, `assembly_mass`, and optional
-`purchasing` inputs. At least one manufacturing consumer is required; mass-only studies are allowed.
-Purchasing contains the existing `quotes` book and
+The study takes ONE original pattern and shared `cutting`, `finite_stock`, `sewing`, `assembly_mass`,
+and optional `purchasing` inputs. At least one manufacturing consumer is required; finite-stock-only
+and mass-only studies are allowed. Purchasing contains the existing `quotes` book and
 `market` scope and requires cutting: required stock comes from actual markers, including waste,
 width, margins, minimum orders and sale increments, never just net pattern-piece area.
 
@@ -100,8 +100,9 @@ lining/cuff materials. Named-piece substitution changes only those source IDs. I
 layer stacks, remaps instance IDs, changes grainlines, rewrites pair friction or changes geometry.
 Every candidate begins from the SAME original pattern; substitutions never accumulate across rows.
 
-Each row independently reports binding, cutting, sewing, requested assembly mass and purchasing as `available`, `refused` or
-`not_requested`. `available` purchasing can still have `complete_offer_coverage: false`: its total
+Each row independently reports binding, roll cutting, finite stock, sewing, requested assembly mass
+and purchasing as `available`, `refused` or `not_requested`. `available` purchasing can still have
+`complete_offer_coverage: false`: its total
 then remains null. Missing mechanical parameters do not prevent source-qualified cutting or sewing.
 Excessive thickness can refuse sewing while cutting remains available. Missing width refuses cutting
 and its dependent pricing but does not prevent sewing. Every result is the existing planner's normal
@@ -163,10 +164,11 @@ requires all extras and an explicitly complete inventory. A partial subtotal is 
 complete total. Successful consumer execution can therefore produce an available report with
 `assembly_mass.kg: null`; it is not successful complete-mass admission in the comparator.
 
-Optional `seam_allowance_mm` uses the same edge/piece/export hierarchy as cutting. When both consumers
-are requested, their effective export allowances must match; disagreement refuses mass but preserves
-the independent cutting result. Cutting's `copies` counts the purchased order, not this **one-assembly**
-mass. Stock includes waste; this inventory does not. Simulation omission/scaling never changes it.
+Optional `seam_allowance_mm` uses the same edge/piece/export hierarchy as cutting. Mass must match
+the effective export allowances of every requested roll-cutting and finite-stock consumer;
+disagreement refuses mass but preserves each independent cutting result. Each cutting consumer's
+`copies` counts the allocated order, not this **one-assembly** mass. Stock includes waste; this
+inventory does not. Simulation omission/scaling never changes it.
 Finishing losses, seam grading, washing, coatings and other unmodeled changes remain outside this
 pre-finishing cut inventory. The result is not a weighed final-garment prediction.
 
@@ -193,6 +195,58 @@ textile observation. Maximum work is 20 million polygon operations for a standal
 40 million shared across all successful/refused study alternatives. The existing 16,384 aggregate
 instance limit and an additional 4,096 aggregate extra-group limit apply before evaluation; exhausted
 aggregate geometry work refuses the study rather than returning a truncated frontier.
+
+## Finite hides and remnants in the same study
+
+`finite_stock` accepts the existing complete `ftx-finite-stock-request/1` object: physical stock
+IDs, exact material selections, real outside polygons, defects, prior occupied cuts, directed axes,
+geometry evidence and shared search controls. See `docs/finite-stock-cutting.md` for its schema and
+the executable synthetic stock fixture. It can be the only manufacturing consumer, or accompany
+roll cutting, sewing and scenario drapes. No roll width is required for a hide/remnant allocation.
+
+Every material alternative starts with the **same original inventory and options**. A row does not
+consume inventory for the next alternative. The existing planner still requires an exact material
+snapshot and evidence-policy match; selecting a differently characterized lot with the same name
+does not rebind the stock to that lot. Unknown stock coverage or an unsuccessful bounded placement
+is a `finite_stock` refusal for that row, while its other consumers continue independently. Source
+pattern geometry, quantities, mirrors, folds, grainlines, seam allowances and occupied regions keep
+their existing manufacturing semantics.
+
+The `finite_stock` outcome contains the unmodified `ftx-finite-stock-plan/1` production result,
+including frozen inventory, complete geometry and replay identities. Its summary fields are:
+
+| Metric / comparison name | Meaning |
+|---|---|
+| `used_stock_count` | Number of individually identified physical items used, each counted once |
+| `used_stock_gross_area_m2` | Whole polygon area of those items, including defects and prior occupied cuts |
+| `used_stock_mass_kg` | Complete source-qualified mass of those items; unknown when any **used** item lacks density |
+| `finite_stock_external_cut_area_m2` | Newly allocated exterior cut area, with internal holes still occupied |
+
+Used-item area and mass describe inventory engaged by a plan, not the newly consumed area, recovered
+offcuts or a purchasing requirement. Unused inventory cannot inflate these metrics or erase known
+used-stock mass. Roll metrics retain their original meanings and are reported separately when both
+consumers are requested. Purchasing still requires the roll `cutting` consumer: no price per hide,
+offcut valuation or area-to-hide conversion is inferred.
+
+For example, with `finite_stock` supplied in the study request, this comparison minimizes the number
+of hides/remnants needed, retaining inventory area as a separate objective:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [
+    {"metric": "used_stock_count", "direction": "minimize"},
+    {"metric": "used_stock_gross_area_m2", "direction": "minimize"}
+  ],
+  "required_consumers": ["finite_stock"]
+}
+```
+
+Each alternative must have a complete accepted allocation. A missing required value does not score
+zero. Density methods/conditioning/evidence remain part of protocol comparison when mass is an
+objective; unrelated roll-width measurements do not block a finite-stock-only comparison. Omitting
+`finite_stock` preserves existing request identities and result fields. As with every study, choose
+and review one alternative before using its separate stock plan in a later inventory workflow.
 
 ## Computed manufacturing objectives
 
@@ -251,13 +305,18 @@ supporting signed heat, reported edge strain and simulated-cloth mass. See
 
 Native and browser boundaries limit combined input to 64 MiB. Screening permits 1024 candidates,
 64 constraints and 16 objectives. Studies permit 32 evaluated variants, 16,384 aggregate expanded
-cut instances, 4096 aggregate sewing passes and 250,000 retained sewing stations; individual planners
-retain their own limits. Over-budget studies refuse, not return a truncated winner list.
+cut instances across both roll and finite-stock consumers, 4096 aggregate sewing passes and 250,000
+retained sewing stations. The sum of declared finite-stock `work_limit` budgets over all alternatives
+must not exceed 20 million; reduce that per-plan limit or evaluate fewer alternatives when necessary.
+Individual planners retain their own limits. Over-budget studies refuse, not return a truncated
+winner list.
 
 Regression tests cover units, interval overlap, ties, evidence/condition/method policies, missing
 values, malformed requests, immutable replay, real marker/whole-order/seam equality, material-only
 sewing refusal, heterogeneous assignments, complete-or-unknown mass, explicit screening pruning,
-and both real native binaries. Native-callable wasm tests use the same library outputs; wasm32
+real hide/remnant planner equality, unchanged inventory across alternatives, stock source mismatch,
+finite-stock-only and scenario composition, and both real native binaries. Native-callable wasm
+tests use the same library outputs; wasm32
 compilation alone is not a browser-runtime or native/wasm execution-parity claim.
 
 Still separate: fully characterized linen/cowhide/performance-knit lots, held-out garment validation,

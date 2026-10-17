@@ -368,6 +368,28 @@ test('scenario comparisons join keys, preserve signed values, and distinguish ga
   d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /unsettled/); assert.match(visibleText(d), /body-lock/);
 });
 
+test('finite-stock studies expose used inventory and independent refusal without inventing mass', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  await p.e.study.onclick();
+  const a = studyRow('hide-A'), b = studyRow('hide-B');
+  a.finite_stock = outcome({ markers: [{ id: 'physical-hide', defects_mm: [], placements: [{ instance: 'front' }] }] });
+  a.metrics.used_stock_count = 1; a.metrics.used_stock_gross_area_m2 = 0.18;
+  a.metrics.finite_stock_external_cut_area_m2 = 0.12; a.metrics.used_stock_mass_kg = null;
+  b.finite_stock = refused('inventory material does not match the selected snapshot');
+  p.emit(studyReport([a, b]));
+  const s = section(p, 'Fixed-pattern manufacturing alternatives');
+  const stock = descendants(s).find(n => n.tag === 'table' && visibleText(n).includes('Finite hides and remnants'));
+  assert.deepEqual(plain(stock.children[2].children.map(n => n.textContent)),
+    ['hide-A', 'Available', '1', '0.18', '0.12', 'Unknown']);
+  assert.match(stock.children[3].children[1].textContent, /inventory material does not match/);
+  assert.equal(stock.children[3].children.slice(2).every(n => n.textContent === 'Unknown'), true);
+  assert.match(visibleText(s), /missing stock width/); // roll failure did not erase the valid hide plan
+  const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.includes('physical stock'));
+  d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /physical-hide/);
+  p.e.stockRequest.handlers.change(); assert.equal(s.hidden, false); // shared study inventory is authoritative
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
+});
+
 test('study output invalidation follows the actual request/body dependencies, not unrelated preview controls', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   await p.e.study.onclick(); p.emit(studyReport());
@@ -433,7 +455,7 @@ test('computed objectives display Rust admission, signed units and incomparabili
   assert.match(visibleText(m), /Mixed source protocols explicitly admitted/);
 });
 
-test('assembly mass displays complete inventory and unknown contributions independently of stock and simulation', async () => {
+test('assembly mass and finite stock retain independent totals and refusals in manufacturing and scenario studies', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const a = studyRow('complete'), b = studyRow('unknown'), c = studyRow('refused');
   a.metrics.stock_mass_kg = 9;
@@ -442,6 +464,13 @@ test('assembly mass displays complete inventory and unknown contributions indepe
   b.assembly_mass = outcome({ request: { inventory_complete: false }, sheet_mass: { kg: 1 },
     assembly_mass: { kg: null, reported_bounds_kg: null, unavailable: { message: 'extra inventory incomplete' } } });
   c.assembly_mass = refused('cutout geometry refused');
+  a.finite_stock = outcome({ markers: [{ id: 'complete-hide' }] });
+  Object.assign(a.metrics, { used_stock_count: 1, used_stock_gross_area_m2: 2,
+    finite_stock_external_cut_area_m2: 0.5, used_stock_mass_kg: 7 });
+  b.finite_stock = refused('physical inventory mismatch');
+  c.finite_stock = outcome({ markers: [{ id: 'untrimmed-remnant' }] });
+  Object.assign(c.metrics, { used_stock_count: 1, used_stock_gross_area_m2: 1,
+    finite_stock_external_cut_area_m2: 0.25, used_stock_mass_kg: 4 });
   const report = studyReport([a, b, c]);
   for (const op of ['study', 'scenario']) {
     await p.e[op].onclick();
@@ -455,6 +484,12 @@ test('assembly mass displays complete inventory and unknown contributions indepe
     assert.equal(t.children[4].children[1].textContent, 'Refused: cutout geometry refused');
     const manufacturing = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'Independent manufacturing outcomes');
     assert.equal(manufacturing.children[2].children[7].textContent, '9');
+    const stock = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'Finite hides and remnants — used physical inventory');
+    assert.deepEqual(plain(stock.children[2].children.map(n => n.textContent)),
+      ['complete', 'Available', '1', '2', '0.5', '7']);
+    assert.equal(stock.children[3].children[1].textContent, 'Refused: physical inventory mismatch');
+    assert.deepEqual(plain(stock.children[4].children.map(n => n.textContent)),
+      ['refused', 'Available', '1', '1', '0.25', '4']);
     assert.match(visibleText(s), /not confidence intervals/);
     const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('complete: cut-piece mass'));
     d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /<retained source>/);

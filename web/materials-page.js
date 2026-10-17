@@ -194,7 +194,19 @@ function comparison(op, r) {
     }
     detail(parent, `${row.key}: frozen assignments and source observations (display only)`, {
       pattern_sha256: binding?.pattern_sha256, frozen_changes: row.frozen_changes, pieces: binding?.pieces,
-      refusals: { binding: row.binding.refusal, cutting: row.cutting.refusal, sewing: row.sewing.refusal, purchasing: row.purchasing.refusal } });
+      refusals: { binding: row.binding.refusal, cutting: row.cutting.refusal, finite_stock: row.finite_stock?.refusal,
+        sewing: row.sewing.refusal, purchasing: row.purchasing.refusal } });
+  }
+  if (study.alternatives.some(row => row.finite_stock && row.finite_stock.status !== "not_requested")) {
+    const stock = table(parent, "Finite hides and remnants — used physical inventory", ["Alternative", "Finite stock",
+      "Used items", "Used gross area (m²)", "Allocated cut area (m²)", "Complete used-stock mass (kg)"]);
+    for (const row of study.alternatives) {
+      const m = row.metrics || {};
+      cells(stock, [row.key, state(row.finite_stock), metric(m.used_stock_count), metric(m.used_stock_gross_area_m2),
+        metric(m.finite_stock_external_cut_area_m2), metric(m.used_stock_mass_kg)]);
+      const plan = available(row.finite_stock);
+      if (plan) detail(parent, `${row.key}: physical stock, defects and allocated pieces (display only)`, plan);
+    }
   }
   assemblyMassComparison(parent, study.alternatives);
   if (study.screening) screening(parent, study.screening);

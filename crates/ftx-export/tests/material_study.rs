@@ -839,3 +839,356 @@ fn comparison_constraints_use_inclusive_computed_values_and_refuse_invalid_polic
         .is_err()
     );
 }
+
+fn finite_inventory_item(id: &str, material: Value, width: f64, height: f64) -> Value {
+    json!({"id":id,"material":material,"outline_mm":[[0,0],[width,0],[width,height],[0,height]],
+        "grain_mm":[[0,0],[0,10]],"geometry_source":{"reference":"test:study-inventory",
+        "accessed_on":"2026-10-16","note":"Synthetic inventory geometry, not measured stock"}})
+}
+
+fn finite_inventory_study() -> Request {
+    let mut hide = selection("hide", 0.1, 0.4);
+    hide["record"]["form"] = json!("hide");
+    hide["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("width");
+    hide["record"]["properties"]["areal_density"]["value"] = json!(0.5);
+    let remnant = selection("remnant", 0.1, 0.4);
+    let mut unused = selection("unused-unknown-mass", 0.1, 0.4);
+    unused["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("areal_density");
+    let mut raw = serde_json::to_value(request()).unwrap();
+    raw["variants"] = json!([
+        variant("hide", hide.clone()),
+        variant("remnant", remnant.clone()),
+        variant("unstocked", selection("unstocked", 0.1, 0.4)),
+        variant("unknown", json!({"id":"no-such-material"}))
+    ]);
+    raw["finite_stock"] = json!({"schema":"ftx-finite-stock-request/1","stocks":[
+        finite_inventory_item("hide-001",hide,80.,260.),
+        finite_inventory_item("remnant-001",remnant,100.,150.),
+        finite_inventory_item("unused-001",unused,100.,150.)],
+        "options":{"copies":1,"gap_mm":2.,"boundary_margin_mm":2.,"step_mm":2.,"work_limit":2000000}});
+    raw["purchasing"]["quotes"]["quotes"] = json!([quote("remnant"), quote("unstocked")]);
+    serde_json::from_value(raw).unwrap()
+}
+
+#[test]
+fn finite_stock_studies_recompute_real_hide_and_remnant_allocations_with_independent_consumers() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let original = source.raw().clone();
+    let mut request = finite_inventory_study();
+    let mut identical = request.variants[1].clone();
+    identical.key = "same-remnant-again".into();
+    request.variants.push(identical);
+    let inventory = serde_json::to_value(&request.finite_stock).unwrap();
+    let report = evaluate(&request, &source);
+    for key in ["hide", "remnant", "same-remnant-again"] {
+        let row = row(&report, key);
+        let binding = &row["binding"]["result"];
+        let bound = Pattern::new(binding["pattern"].clone());
+        let actual = request
+            .finite_stock
+            .as_ref()
+            .unwrap()
+            .build(&bound)
+            .unwrap();
+        let direct = serde_json::to_value(&actual).unwrap();
+        assert_eq!(row["finite_stock"]["status"], "available");
+        assert_eq!(row["finite_stock"]["result"], direct);
+        assert_eq!(direct["pattern_sha256"], binding["pattern_sha256"]);
+        assert_eq!(binding["pattern"]["pieces"], original["pieces"]);
+        assert_eq!(binding["pattern"]["seams"], original["seams"]);
+        assert_eq!(
+            row["metrics"]["used_stock_count"],
+            direct["used_stock_count"]
+        );
+        assert_eq!(
+            row["metrics"]["used_stock_gross_area_m2"],
+            direct["used_gross_area_m2"]
+        );
+        assert_eq!(
+            row["metrics"]["finite_stock_external_cut_area_m2"],
+            direct["external_cut_area_m2"]
+        );
+        assert_eq!(
+            serde_json::to_value(actual.request().build(&bound).unwrap()).unwrap(),
+            direct
+        );
+        // The unrelated unused stock has unknown density; it cannot erase known used-stock mass.
+        assert!(row["metrics"]["used_stock_mass_kg"].as_f64().unwrap() > 0.);
+        assert_eq!(row["sewing"]["status"], "available");
+    }
+    assert_eq!(row(&report, "hide")["cutting"]["status"], "refused");
+    assert_eq!(row(&report, "hide")["purchasing"]["status"], "refused");
+    assert_eq!(row(&report, "remnant")["cutting"]["status"], "available");
+    assert_eq!(
+        row(&report, "unstocked")["finite_stock"]["status"],
+        "refused"
+    );
+    assert_eq!(row(&report, "unstocked")["cutting"]["status"], "available");
+    assert_eq!(
+        row(&report, "unstocked")["purchasing"]["result"]["complete_offer_coverage"],
+        true
+    );
+    assert_eq!(row(&report, "unknown")["finite_stock"]["status"], "refused");
+    assert_eq!(
+        row(&report, "remnant")["finite_stock"],
+        row(&report, "same-remnant-again")["finite_stock"]
+    );
+    assert_eq!(source.raw(), &original);
+    assert_eq!(
+        serde_json::to_value(&request.finite_stock).unwrap(),
+        inventory
+    );
+    assert_eq!(report, evaluate(&request, &source));
+}
+
+#[test]
+fn finite_stock_comparison_uses_exact_used_items_and_rejects_missing_or_stale_materials() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let mut request = finite_inventory_study();
+    comparison(
+        &mut request,
+        json!([{"metric":"used_stock_gross_area_m2","direction":"minimize"},
+            {"metric":"used_stock_mass_kg","direction":"minimize"}]),
+        json!([{"metric":"used_stock_count","minimum":1,"maximum":1},
+            {"metric":"finite_stock_external_cut_area_m2","minimum":0.0096}]),
+        json!(["finite_stock", "sewing"]),
+    );
+    let result = evaluate(&request, &source);
+    assert_eq!(result["comparison"]["frontier"], json!(["remnant"]));
+    assert_eq!(row(&result["comparison"], "hide")["eligible"], true);
+    assert_eq!(
+        row(&result["comparison"], "hide")["dominated_by"],
+        json!(["remnant"])
+    );
+    assert_eq!(row(&result["comparison"], "unstocked")["eligible"], false);
+    assert!(
+        row(&result["comparison"], "unstocked")["readings"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    let readings = &row(&result["comparison"], "remnant")["readings"];
+    for (metric, unit) in [
+        ("used_stock_count", "count"),
+        ("used_stock_gross_area_m2", "m2"),
+        ("used_stock_mass_kg", "kg"),
+        ("finite_stock_external_cut_area_m2", "m2"),
+    ] {
+        assert_eq!(
+            readings[metric]["value"].as_f64(),
+            row(&result, "remnant")["metrics"][metric].as_f64()
+        );
+        assert_eq!(readings[metric]["unit"], unit);
+        assert_eq!(readings[metric]["consumer"], "finite_stock");
+    }
+    // A same-name source edit is a different material. Shared inventory is never rebound for it.
+    request.variants[1]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("thickness")
+        .unwrap()
+        .value = 0.5;
+    let changed = evaluate(&request, &source);
+    assert_eq!(
+        row(&changed, "remnant")["finite_stock"]["status"],
+        "refused"
+    );
+    assert_eq!(row(&changed, "remnant")["sewing"]["status"], "available");
+    assert_eq!(changed["comparison"]["frontier"], json!(["hide"]));
+    assert_ne!(
+        result["comparison"]["context_sha256"],
+        changed["comparison"]["context_sha256"]
+    );
+}
+
+#[test]
+fn heterogeneous_finite_stock_mass_is_unknown_when_any_used_item_lacks_density() {
+    let mut source: Value = serde_json::from_str(PATTERN).unwrap();
+    let mut missing = selection("lining-without-density", 0.1, 0.1);
+    missing["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("areal_density");
+    source["pieces"][1]["fabric"] = json!({"material":missing,"role":"lining"});
+    let mut request = finite_inventory_study();
+    request.finite_stock.as_mut().unwrap().stocks.push(
+        serde_json::from_value(finite_inventory_item("lining-001", missing, 100., 150.)).unwrap(),
+    );
+    comparison(
+        &mut request,
+        json!([{"metric":"used_stock_mass_kg","direction":"minimize"}]),
+        json!([]),
+        json!([]),
+    );
+    let result = evaluate(&request, &Pattern::new(source));
+    for key in ["hide", "remnant"] {
+        let row = row(&result, key);
+        assert_eq!(row["finite_stock"]["status"], "available");
+        assert_eq!(row["metrics"]["used_stock_count"], 2);
+        assert!(row["metrics"]["used_stock_mass_kg"].is_null());
+        assert!(row["metrics"]["used_stock_gross_area_m2"].as_f64().unwrap() > 0.);
+        assert_eq!(self::row(&result["comparison"], key)["eligible"], false);
+    }
+    assert!(
+        result["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn finite_stock_and_assembly_mass_share_cut_geometry_and_preserve_both_consumers() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let mut request = finite_inventory_study();
+    request.assembly_mass = Some(mass_request());
+    comparison(
+        &mut request,
+        json!([{"metric":"used_stock_mass_kg","direction":"minimize"},
+            {"metric":"assembly_mass_kg","direction":"minimize"}]),
+        json!([]),
+        json!(["finite_stock", "assembly_mass"]),
+    );
+    let result = evaluate(&request, &source);
+    for key in ["hide", "remnant"] {
+        let candidate = row(&result, key);
+        assert_eq!(candidate["finite_stock"]["status"], "available");
+        assert_eq!(candidate["assembly_mass"]["status"], "available");
+        assert_eq!(row(&result["comparison"], key)["eligible"], true);
+        let bound = Pattern::new(candidate["binding"]["result"]["pattern"].clone());
+        assert_eq!(
+            candidate["assembly_mass"]["result"],
+            serde_json::to_value(
+                request
+                    .assembly_mass
+                    .as_ref()
+                    .unwrap()
+                    .evaluate(&bound)
+                    .unwrap()
+            )
+            .unwrap()
+        );
+    }
+    // A finite-stock-only cut must use the same outline as the assembly whose mass is compared.
+    request.cutting = None;
+    request.purchasing = None;
+    request
+        .finite_stock
+        .as_mut()
+        .unwrap()
+        .options
+        .seam_allowance_mm = Some(11.);
+    let mismatch = evaluate(&request, &source);
+    assert_eq!(
+        row(&mismatch, "remnant")["finite_stock"]["status"],
+        "available"
+    );
+    assert_eq!(
+        row(&mismatch, "remnant")["assembly_mass"]["status"],
+        "refused"
+    );
+    assert_eq!(mismatch["comparison"]["frontier"], json!([]));
+    request.assembly_mass.as_mut().unwrap().seam_allowance_mm = Some(11.);
+    assert_eq!(
+        row(&evaluate(&request, &source), "remnant")["assembly_mass"]["status"],
+        "available"
+    );
+
+    // The combined production surface now has eight independently requestable consumers.
+    request.cutting = self::request().cutting;
+    request.purchasing = self::request().purchasing;
+    request.comparison.as_mut().unwrap().required_consumers = serde_json::from_value(json!([
+        "cutting",
+        "finite_stock",
+        "sewing",
+        "purchasing",
+        "assembly_mass",
+        "drape",
+        "surface",
+        "coverage"
+    ]))
+    .unwrap();
+    request
+        .comparison
+        .as_ref()
+        .unwrap()
+        .validate(&request, true)
+        .unwrap();
+}
+
+#[test]
+fn finite_stock_only_studies_preserve_scenario_composition_and_bound_aggregate_work() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let mut request = finite_inventory_study();
+    request.cutting = None;
+    request.sewing = None;
+    request.purchasing = None;
+    comparison(
+        &mut request,
+        json!([{"metric":"used_stock_count","direction":"minimize"}]),
+        json!([]),
+        json!([]),
+    );
+    let standalone = evaluate(&request, &source);
+    let scenario = request
+        .evaluate_with(&source, &json!({"fixed":"test scenario"}), |_, _| {
+            Err::<Value, _>(ftx_core::Refusal::new(
+                ftx_core::RefusalCode::NotConverged,
+                "synthetic independent simulation refusal",
+            ))
+        })
+        .unwrap();
+    let scenario = serde_json::to_value(scenario).unwrap();
+    assert_eq!(
+        scenario["manufacturing"]["alternatives"],
+        standalone["alternatives"]
+    );
+    assert_eq!(
+        scenario["comparison"]["frontier"],
+        standalone["comparison"]["frontier"]
+    );
+    assert_eq!(
+        scenario["simulations"][0]["evaluation"]["status"],
+        "refused"
+    );
+    request.finite_stock.as_mut().unwrap().options.work_limit = 20_000_000;
+    assert_eq!(
+        request.evaluate(&source).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    request.finite_stock.as_mut().unwrap().options.work_limit = 2_000_000;
+    request.finite_stock.as_mut().unwrap().options.copies = 4096;
+    assert_eq!(
+        request.evaluate(&source).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    request.finite_stock = None;
+    assert!(request.evaluate(&source).is_err());
+    // Old requests keep their serialization and report shape when this consumer is omitted.
+    let legacy = self::request();
+    assert!(
+        serde_json::to_value(&legacy)
+            .unwrap()
+            .get("finite_stock")
+            .is_none()
+    );
+    let legacy_report = evaluate(&legacy, &source);
+    assert!(row(&legacy_report, "wide").get("finite_stock").is_none());
+    assert!(
+        row(&legacy_report, "wide")["metrics"]
+            .get("used_stock_count")
+            .is_none()
+    );
+}

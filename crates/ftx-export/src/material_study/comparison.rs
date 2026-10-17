@@ -22,6 +22,8 @@ pub enum Basis {
 pub enum Consumer {
     /// Production roll cutting, not hypothetical net pattern area.
     Cutting,
+    /// Complete allocation on the shared, individually identified hide/remnant inventory.
+    FiniteStock,
     /// Production seam/stack/recipe admission, not physical seam qualification.
     Sewing,
     /// Complete marker-derived whole-order offer coverage in the request's dated market scope.
@@ -40,7 +42,7 @@ pub enum Consumer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Metric {
-    /// Gross stock including marker waste/margins, in square metres.
+    /// Gross roll stock including marker waste/margins, in square metres.
     StockAreaM2,
     /// Outer cut area, in square metres; holes are not assumed recovered.
     ExternalCutAreaM2,
@@ -48,6 +50,14 @@ pub enum Metric {
     StockMassKg,
     /// All retained physical cut pieces plus sourced extras for ONE declared assembly (kg).
     AssemblyMassKg,
+    /// Individually identified finite-stock items engaged by the complete allocation.
+    UsedStockCount,
+    /// Whole polygon area of used finite stock, including defects and prior occupied regions.
+    UsedStockGrossAreaM2,
+    /// Complete mass of used finite stock, including unusable/prior-cut regions, in kilograms.
+    UsedStockMassKg,
+    /// Newly allocated external cutter area on finite stock, in square metres.
+    FiniteStockExternalCutAreaM2,
     /// Least observed independent whole-order total in the explicit market currency.
     ObservedOrderCost,
     /// Traversed stitch intervals, including declared locks and repeated passes.
@@ -69,6 +79,10 @@ impl Metric {
         match self {
             Self::StockAreaM2 | Self::ExternalCutAreaM2 | Self::StockMassKg => Consumer::Cutting,
             Self::AssemblyMassKg => Consumer::AssemblyMass,
+            Self::UsedStockCount
+            | Self::UsedStockGrossAreaM2
+            | Self::UsedStockMassKg
+            | Self::FiniteStockExternalCutAreaM2 => Consumer::FiniteStock,
             Self::ObservedOrderCost => Consumer::Purchasing,
             Self::StitchIntervals | Self::FeedSeconds => Consumer::Sewing,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
@@ -78,10 +92,13 @@ impl Metric {
     }
     fn unit(self, currency: Option<&str>) -> &str {
         match self {
-            Self::StockAreaM2 | Self::ExternalCutAreaM2 => "m2",
-            Self::StockMassKg | Self::AssemblyMassKg => "kg",
+            Self::StockAreaM2
+            | Self::ExternalCutAreaM2
+            | Self::UsedStockGrossAreaM2
+            | Self::FiniteStockExternalCutAreaM2 => "m2",
+            Self::StockMassKg | Self::AssemblyMassKg | Self::UsedStockMassKg => "kg",
             Self::ObservedOrderCost => currency.unwrap_or("unavailable currency"),
-            Self::StitchIntervals => "count",
+            Self::StitchIntervals | Self::UsedStockCount => "count",
             Self::FeedSeconds => "s",
             Self::SimulatedClothMassKg => "kg",
             Self::MaxAbsoluteEdgeStrainPct => "%",
@@ -94,6 +111,10 @@ impl Metric {
             Self::ExternalCutAreaM2 => row.metrics.external_cut_area_m2,
             Self::StockMassKg => row.metrics.stock_mass_kg,
             Self::AssemblyMassKg => row.assembly_mass.value().and_then(|r| r.assembly_mass.kg),
+            Self::UsedStockCount => row.metrics.used_stock_count.map(|n| n as f64),
+            Self::UsedStockGrossAreaM2 => row.metrics.used_stock_gross_area_m2,
+            Self::UsedStockMassKg => row.metrics.used_stock_mass_kg,
+            Self::FiniteStockExternalCutAreaM2 => row.metrics.finite_stock_external_cut_area_m2,
             Self::ObservedOrderCost => row.metrics.least_observed_independent_order_total,
             Self::StitchIntervals => row.metrics.stitch_intervals.map(|n| n as f64),
             Self::FeedSeconds => row.metrics.feed_seconds,
@@ -234,10 +255,10 @@ impl Policy {
         if self.objectives.is_empty()
             || self.objectives.len() > 16
             || self.constraints.len() > 64
-            || self.required_consumers.len() > 7
+            || self.required_consumers.len() > 8
         {
             return Err(invalid(
-                "comparison needs 1..16 objectives, at most 64 constraints and 7 consumers",
+                "comparison needs 1..16 objectives, at most 64 constraints and 8 consumers",
             ));
         }
         let mut metrics = BTreeSet::new();
@@ -264,6 +285,7 @@ impl Policy {
         for consumer in self.consumers() {
             let requested = match consumer {
                 Consumer::Cutting => request.cutting.is_some(),
+                Consumer::FiniteStock => request.finite_stock.is_some(),
                 Consumer::Sewing => request.sewing.is_some(),
                 Consumer::Purchasing => request.purchasing.is_some(),
                 Consumer::AssemblyMass => request.assembly_mass.is_some(),
@@ -497,7 +519,10 @@ impl Policy {
         if consumers.contains(&Consumer::Sewing) {
             keys.insert("thickness");
         }
-        if self.metrics().contains(&Metric::StockMassKg)
+        if self
+            .metrics()
+            .iter()
+            .any(|m| matches!(m, Metric::StockMassKg | Metric::UsedStockMassKg))
             || consumers.contains(&Consumer::AssemblyMass)
         {
             keys.insert("areal_density");
@@ -581,6 +606,7 @@ impl Policy {
 fn consumer_available(row: &Alternative, consumer: Consumer, simulation: &Value) -> bool {
     match consumer {
         Consumer::Cutting => row.cutting.value().is_some(),
+        Consumer::FiniteStock => row.finite_stock.value().is_some(),
         Consumer::Sewing => row.sewing.value().is_some(),
         Consumer::Purchasing => row
             .purchasing
