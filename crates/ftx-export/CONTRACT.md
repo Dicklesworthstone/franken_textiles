@@ -8,6 +8,22 @@ orchestration of both (`export_all`, `check_files`). The `ftx export` / `ftx che
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
+**Declared assembly mass** (`assembly_mass`, plan §25.10 / `ftx-ms2`). Every expanded physical
+cut instance uses the same exporter outline, fold/mirror semantics, allowances and outward tabs.
+Strictly contained disjoint closed cutouts are subtracted with the existing budgeted cutting
+geometry kernel. Source-locked areal density supplies retained sheet mass; width, grain, body and
+mechanics are unrelated requirements. `sim:false` and simulation scaling never alter this inventory.
+Extra retained thread, trim, closures and loose fill need explicit source-bearing group masses in
+kg using the existing `Quantity`/`Source` vocabulary and independent estimate consent. Missing
+contributions and undeclared inventory completeness keep the assembly total unknown. Reported
+endpoints are scaled/summed only with complete bounds and fixed authored geometry. This is one
+pre-finishing cut assembly, not purchased stock, a simulated subset, propagated geometry uncertainty,
+a weighed final garment or automatic discovery of unrepresented components. Studies optionally rerun
+this consumer and compare `assembly_mass_kg` under the existing nominal/protocol policy. Effective
+cutting/mass allowances must match; missing complete mass never becomes a winning zero. Aggregate
+instance, extra-group and polygon work limits apply before returning a study frontier. Tests:
+`assembly_mass`, `material_study`; native/WASM adapters use the same evaluator.
+
 **Material-study comparison** (`material_study::comparison`, plan §25.10). Optional explicit
 nominal objectives/constraints consume actual cutting/sewing/dated procurement results on the same
 unchanged pattern and shared process inputs. Canonical metric names fix m², kg, seconds, counts or

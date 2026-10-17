@@ -72,8 +72,9 @@ quantity- and market-qualified offers, not a timeless material score.
 
 ## Study contract: `ftx-material-study/1`
 
-The study takes ONE original pattern and shared `cutting`, `sewing`, and optional `purchasing` inputs.
-At least one manufacturing consumer is required. Purchasing contains the existing `quotes` book and
+The study takes ONE original pattern and shared `cutting`, `sewing`, `assembly_mass`, and optional
+`purchasing` inputs. At least one manufacturing consumer is required; mass-only studies are allowed.
+Purchasing contains the existing `quotes` book and
 `market` scope and requires cutting: required stock comes from actual markers, including waste,
 width, margins, minimum orders and sale increments, never just net pattern-piece area.
 
@@ -99,7 +100,7 @@ lining/cuff materials. Named-piece substitution changes only those source IDs. I
 layer stacks, remaps instance IDs, changes grainlines, rewrites pair friction or changes geometry.
 Every candidate begins from the SAME original pattern; substitutions never accumulate across rows.
 
-Each row independently reports binding, cutting, sewing and purchasing as `available`, `refused` or
+Each row independently reports binding, cutting, sewing, requested assembly mass and purchasing as `available`, `refused` or
 `not_requested`. `available` purchasing can still have `complete_offer_coverage: false`: its total
 then remains null. Missing mechanical parameters do not prevent source-qualified cutting or sewing.
 Excessive thickness can refuse sewing while cutting remains available. Missing width refuses cutting
@@ -117,6 +118,81 @@ representations such as `1.0` and `-0.0` participate in existing receipts. Each 
 also includes `frozen_changes`; applying them to the SAME original pattern reproduces that binding,
 including unchanged explicit assignments. Modified frozen observations fail their source locks.
 Inputs are never overwritten. Hardware and physical-validation flags are always false.
+
+## Complete declared cut-assembly mass
+
+`assembly_mass` invokes `ftx_export::assembly_mass::Request::evaluate` on every bound alternative.
+It needs neither roll width, explicit cutting grain, mechanical coefficients nor a body. All physical
+cut instances are counted, including unsimulated lining, unplaced pieces, mirror pairs and on-fold
+unfolding. The actual exporter cutter path retains seam/hem allowances and outward notch tabs.
+Strictly contained, disjoint closed internal cut polygons are subtracted once; crossing, nested,
+touching or malformed cutouts refuse rather than inventing the removed area. Open slits and drill
+marks have no authored removal area, so no kerf or punched-out disk is assumed. Implicit layers
+refuse: represent each physical layer as actual cut pieces or select the measured complete laminate,
+never both for the same retained material.
+
+For example, add this inventory to an existing study request:
+
+```json
+{
+  "assembly_mass": {
+    "schema": "ftx-assembly-mass/1",
+    "inventory_complete": false,
+    "extras": [
+      {"id": "all-retained-thread", "mass": null},
+      {"id": "complete-closure-set", "mass": null}
+    ]
+  }
+}
+```
+
+`inventory_complete` and `extras` are required explicit choices. The declaration is the author's
+accounting claim, not automatic discovery of buttons, thread, bindings, embroidery, loose fill or
+other hidden components. Replace each unknown group with its **total retained mass for ONE
+assembly**, using the existing `Quantity` vocabulary: positive `value`, `unit: "kg"`, `evidence`,
+`source`, `method`, optional full `conditions` and reported `bounds`. The group also carries a
+`sources` map with the referenced `reference`, `accessed_on` and `note`. Estimated group mass requires
+that group's `allow_estimates: true`; it cannot authorize estimates in sheet selections. Do not
+insert an arbitrary thread allowance or identify purchased packaging as retained garment mass.
+Omit a truly absent group rather than supplying a fake zero observation.
+
+Each report retains the request, exact pattern/request identities, per-instance source records,
+external/removed/retained areas, individual mass contributions and unavailable reasons. `sheet_mass`
+is complete only when every cut piece has admitted source areal density. `assembly_mass` additionally
+requires all extras and an explicitly complete inventory. A partial subtotal is never relabeled a
+complete total. Successful consumer execution can therefore produce an available report with
+`assembly_mass.kg: null`; it is not successful complete-mass admission in the comparator.
+
+Optional `seam_allowance_mm` uses the same edge/piece/export hierarchy as cutting. When both consumers
+are requested, their effective export allowances must match; disagreement refuses mass but preserves
+the independent cutting result. Cutting's `copies` counts the purchased order, not this **one-assembly**
+mass. Stock includes waste; this inventory does not. Simulation omission/scaling never changes it.
+Finishing losses, seam grading, washing, coatings and other unmodeled changes remain outside this
+pre-finishing cut inventory. The result is not a weighed final-garment prediction.
+
+`reported_bounds_kg` scales and adds input endpoints only when every contribution reports bounds.
+Missing bounds stay absent, never zero-width. These ranges hold authored geometry and inventory
+fixed; they are not confidence intervals or propagated geometric/measurement uncertainty. Study
+comparison remains explicitly nominal: `assembly_mass_kg` can be an objective or inclusive constraint,
+and `assembly_mass` a required consumer. Unknown/incomplete totals exclude a candidate without
+erasing its other results. Density methods, conditions and evidence remain part of the existing
+protocol comparison; unrelated width observations do not block a mass-only comparison.
+
+The executable example supplies sourced insulation densities and **synthetic geometry and extras**:
+
+```sh
+ftx materials study tests/fixtures/materials/synthetic-sewing-pattern.json \
+  tests/fixtures/materials/study-assembly-mass.json --json
+```
+
+Both native binaries and section 4 of the material workbench use the same request/engine. The browser
+shows cut-sheet mass, declared assembly mass, ranges, inventory and per-piece sources separately
+from purchased stock and simulated cloth. It displays the Rust total, never sums display numbers.
+The synthetic extra mass in this fixture is not a recommended garment allowance or new empirical
+textile observation. Maximum work is 20 million polygon operations for a standalone mass call and
+40 million shared across all successful/refused study alternatives. The existing 16,384 aggregate
+instance limit and an additional 4,096 aggregate extra-group limit apply before evaluation; exhausted
+aggregate geometry work refuses the study rather than returning a truncated frontier.
 
 ## Computed manufacturing objectives
 

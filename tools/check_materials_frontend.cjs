@@ -433,6 +433,39 @@ test('computed objectives display Rust admission, signed units and incomparabili
   assert.match(visibleText(m), /Mixed source protocols explicitly admitted/);
 });
 
+test('assembly mass displays complete inventory and unknown contributions independently of stock and simulation', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const a = studyRow('complete'), b = studyRow('unknown'), c = studyRow('refused');
+  a.metrics.stock_mass_kg = 9;
+  a.assembly_mass = outcome({ request: { inventory_complete: true, extras: [{ id: '<retained source>' }] },
+    sheet_mass: { kg: 1 }, assembly_mass: { kg: 1.2, reported_bounds_kg: [1.1, 1.3] } });
+  b.assembly_mass = outcome({ request: { inventory_complete: false }, sheet_mass: { kg: 1 },
+    assembly_mass: { kg: null, reported_bounds_kg: null, unavailable: { message: 'extra inventory incomplete' } } });
+  c.assembly_mass = refused('cutout geometry refused');
+  const report = studyReport([a, b, c]);
+  for (const op of ['study', 'scenario']) {
+    await p.e[op].onclick();
+    p.emit(op === 'study' ? report : { ...scenarioReport(), manufacturing: report });
+    const s = section(p, op === 'study' ? 'Fixed-pattern manufacturing alternatives' : 'Fresh drape and heat alternatives');
+    const t = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'Declared assembly mass — complete or unknown');
+    assert.deepEqual(plain(t.children[2].children.map(n => n.textContent)),
+      ['complete', 'Complete declared inventory', '1', '1.2', '[1.1, 1.3]', 'Declared complete']);
+    assert.deepEqual(plain(t.children[3].children.map(n => n.textContent)),
+      ['unknown', 'Report available; total unknown', '1', 'Unknown', 'Not reported', 'Incomplete']);
+    assert.equal(t.children[4].children[1].textContent, 'Refused: cutout geometry refused');
+    const manufacturing = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'Independent manufacturing outcomes');
+    assert.equal(manufacturing.children[2].children[7].textContent, '9');
+    assert.match(visibleText(s), /not confidence intervals/);
+    const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('complete: cut-piece mass'));
+    d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /<retained source>/);
+    assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+  }
+  assert.equal(p.live.size, 6);
+  p.e.studyRequest.handlers.change(); assert.equal(p.live.size, 0);
+  assert.equal(section(p, 'Fixed-pattern manufacturing alternatives').hidden, true);
+  assert.equal(section(p, 'Fresh drape and heat alternatives').hidden, true);
+});
+
 // Opt in after tools/build_web.sh. This executes the real production WASM through the actual
 // worker module, with only the Node transport/module loader adapted. It is not HTTP/browser or
 // native parity, successful anatomical body fitting, or empirical textile validation.
@@ -493,6 +526,31 @@ test('compiled WASM study preserves causal manufacturing changes and source-lock
     const noOffers = await w.send({ type: 'study', pattern, studyRequest: JSON.stringify(compared) });
     assert.equal(noOffers.type, 'result', noOffers.message);
     assert.deepEqual(noOffers.result.comparison.frontier, []);
+    // Authored, unlocked synthetic alternatives; source-locked results never go through stringify.
+    const massOnly = { schema: 'ftx-material-study/1', variants: JSON.parse(studyRequest).variants,
+      assembly_mass: JSON.parse(fixture('study-assembly-mass.json')).assembly_mass,
+      comparison: { basis: 'nominal', objectives: [{ metric: 'assembly_mass_kg', direction: 'minimize' }] } };
+    const densities = [0.2, 0.4, 0.1];
+    massOnly.variants.forEach((v, i) => { v.changes.default.record.properties.areal_density.value = densities[i]; });
+    const massRequest = JSON.stringify(massOnly);
+    const mass = await w.send({ type: 'study', pattern, studyRequest: massRequest });
+    assert.equal(mass.type, 'result', mass.message);
+    assert.deepEqual(mass.result, JSON.parse(ftx.material_study(pattern, massRequest)));
+    assert.deepEqual(mass.result.comparison.frontier, ['c-unknown-width']);
+    for (const [i, row] of mass.result.alternatives.entries()) {
+      assert.equal(row.cutting.status, 'not_requested');
+      assert.equal(row.assembly_mass.status, 'available');
+      assert.ok(Math.abs(row.metrics.assembly_mass_kg - (0.0096 * densities[i] + 0.015)) < 1e-12);
+      assert.equal(row.assembly_mass.result.pattern_sha256, row.binding.result.pattern_sha256);
+    }
+    assert.equal(mass.files[2].text, massRequest);
+    assert.equal((await w.send({ type: 'study', pattern, studyRequest: massRequest })).files[0].text, mass.files[0].text);
+    massOnly.assembly_mass.extras[0].mass = null;
+    const unknown = await w.send({ type: 'study', pattern, studyRequest: JSON.stringify(massOnly) });
+    assert.equal(unknown.type, 'result', unknown.message);
+    assert.deepEqual(unknown.result.comparison.frontier, []);
+    assert.ok(unknown.result.alternatives.every(r => r.assembly_mass.result.sheet_mass.kg > 0 &&
+      r.assembly_mass.result.assembly_mass.kg === null && r.metrics.assembly_mass_kg === undefined));
     const invalid = await w.send({ type: 'scenario', pattern, studyRequest, scenarioRequest: '{}', measurements: '{}', bytes: new ArrayBuffer(8) });
     assert.equal(invalid.type, 'error'); assert.match(invalid.message, /ftxbody/);
   });

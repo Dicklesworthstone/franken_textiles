@@ -1,0 +1,49 @@
+{
+  "schema": "ftx-material-study/1",
+  "screened": {
+    "request": {
+      "schema": "ftx-material-screen/1",
+      "basis": "nominal",
+      "query": "thinsulate",
+      "forms": ["nonwoven"],
+      "constraints": [
+        {"attribute": {"key": "areal_density", "unit": "kg/m2"}, "maximum": 0.3}
+      ],
+      "objectives": [
+        {"attribute": {"key": "areal_density", "unit": "kg/m2"}, "direction": "minimize"}
+      ]
+    },
+    "target": {"scope": "default"},
+    "frontier_only": false
+  },
+  "assembly_mass": {
+    "schema": "ftx-assembly-mass/1",
+    "inventory_complete": true,
+    "extras": [
+      {
+        "id": "synthetic-retained-thread-and-closures",
+        "mass": {
+          "value": 0.015,
+          "unit": "kg",
+          "bounds": [0.014, 0.016],
+          "evidence": "estimate",
+          "source": "synthetic-example",
+          "method": "Illustrative total for one synthetic assembly, not a measured garment"
+        },
+        "sources": {
+          "synthetic-example": {
+            "reference": "test:declared-assembly-inventory",
+            "accessed_on": "2026-10-16",
+            "note": "Software demonstration only; not a recommended thread or closure allowance"
+          }
+        },
+        "allow_estimates": true
+      }
+    ]
+  },
+  "comparison": {
+    "basis": "nominal",
+    "objectives": [{"metric": "assembly_mass_kg", "direction": "minimize"}],
+    "allow_mixed_protocols": false
+  }
+}

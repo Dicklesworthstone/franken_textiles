@@ -138,6 +138,12 @@ warmth. Independent sheet power and declared body-domain power are different qua
 cloth mass excludes omitted pieces, trims and hardware; it is not a complete garment mass estimate.
 Maximum absolute edge strain uses the extrema and precision in the production report, not principal
 strain or a physical fit score. Manufacturing-only objectives remain usable after simulation refusal.
+For a complete declared cut inventory, request `assembly_mass` in the study and compare
+`assembly_mass_kg` instead. It counts all physical cut pieces (including unsimulated lining) and
+explicit sourced retained extras, independently of the body. Unknown components or an incomplete
+inventory block that mass objective, not valid drape/heat or other manufacturing results. It is one
+pre-finishing assembly, not purchased waste or a weighed finished garment. Its conditional reported
+ranges do not relax the nominal-only comparison policy. See `docs/material-screening-and-studies.md`.
 
 Every scenario objective requires this bound pattern's identity, the retained body/scenario identities,
 `drape.settled == true`, empty drape gating and `simulation_gating_clear == true`. Successful thermal
@@ -239,7 +245,9 @@ production consumers and verify pose-dependent geometry. This is a positive synt
 software run, not a successful anatomical garment fit, and target compilation alone is not WASM
 execution parity. Converted anatomical Anny assets were unavailable during this delivery.
 
-`ftx-ms2` stays open for propagated uncertainty, complete garment-mass accounting, expanded body/pose
-policies and physical acceptance of the nominal comparison path. Synthetic coupons and numerical conservation
+`ftx-ms2` stays open for propagated uncertainty, finishing effects and empirical inventory/garment-mass
+acceptance, expanded body/pose policies and physical acceptance of the nominal comparison path.
+Complete declared pre-finishing assembly accounting is available; it cannot discover an omitted component.
+Synthetic coupons and numerical conservation
 are not measured linen/leather/knit garment validation. No warmth rating, empirical fit,
 whole-wearer accuracy, global optimum or hardware execution authorization is claimed.

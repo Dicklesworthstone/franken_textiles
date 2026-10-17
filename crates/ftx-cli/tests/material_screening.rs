@@ -173,3 +173,56 @@ fn both_material_study_commands_compute_declared_objectives_using_the_same_libra
         assert_eq!(result.get("result").unwrap_or(&result), &expected);
     }
 }
+
+#[test]
+fn both_native_commands_evaluate_complete_or_unknown_assembly_mass_without_a_marker() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/materials");
+    let pattern = root.join("synthetic-sewing-pattern.json");
+    let source =
+        ftx_pattern::Pattern::from_json(&std::fs::read_to_string(&pattern).unwrap()).unwrap();
+    let mut request: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/study-assembly-mass.json"
+    ))
+    .unwrap();
+    for complete in [true, false] {
+        request["assembly_mass"]["inventory_complete"] = complete.into();
+        let typed: ftx_export::material_study::Request =
+            serde_json::from_value(request.clone()).unwrap();
+        let expected = serde_json::to_value(typed.evaluate(&source).unwrap()).unwrap();
+        let frontier = expected["comparison"]["frontier"].as_array().unwrap();
+        assert_eq!(!frontier.is_empty(), complete);
+        assert!(!expected["alternatives"].as_array().unwrap().is_empty());
+        for a in expected["alternatives"].as_array().unwrap() {
+            assert_eq!(a["cutting"]["status"], "not_requested");
+            assert_eq!(a["assembly_mass"]["status"], "available");
+            assert_eq!(a["metrics"]["assembly_mass_kg"].is_number(), complete);
+            assert!(a["assembly_mass"]["result"]["sheet_mass"]["kg"].is_number());
+        }
+        let path = std::env::temp_dir().join(format!(
+            "ftx-assembly-study-{}-{complete}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, request.to_string()).unwrap();
+        for (binary, prefix) in [
+            (env!("CARGO_BIN_EXE_ftx-materials"), vec!["study"]),
+            (
+                env!("CARGO_BIN_EXE_ftx"),
+                vec!["--json", "materials", "study"],
+            ),
+        ] {
+            let out = Command::new(binary)
+                .args(prefix)
+                .arg(&pattern)
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let result: Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(result.get("result").unwrap_or(&result), &expected);
+        }
+    }
+}

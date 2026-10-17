@@ -148,6 +148,26 @@ function objectiveComparison(parent, r) {
   }
   detail(parent, "Computed comparison policy, context and exclusions (display only)", r);
 }
+function assemblyMassComparison(parent, rows) {
+  if (!rows.some(row => row.assembly_mass)) return;
+  const note = document.createElement("p");
+  note.textContent = "One declared pre-finishing assembly, not purchased stock or simulated cloth. All physical cut pieces and declared extras are counted. " +
+    "Reported mass bounds use fixed authored geometry and inventory; they are not confidence intervals or an allowance for missing components.";
+  parent.append(note);
+  const t = table(parent, "Declared assembly mass — complete or unknown", ["Alternative", "Mass consumer", "All cut sheets (kg)",
+    "Declared assembly (kg)", "Reported assembly bounds (kg)", "Extra inventory"]);
+  for (const row of rows) {
+    const report = available(row.assembly_mass), mass = report?.assembly_mass;
+    cells(t, [row.key, report ? (mass?.kg == null ? "Report available; total unknown" : "Complete declared inventory") :
+      row.assembly_mass ? state(row.assembly_mass) : "Not requested",
+      metric(report?.sheet_mass?.kg), metric(mass?.kg),
+      mass?.reported_bounds_kg ? `[${mass.reported_bounds_kg.map(metric).join(", ")}]` : "Not reported",
+      report?.request?.inventory_complete === true ? "Declared complete" :
+        report?.request?.inventory_complete === false ? "Incomplete" : "Unknown"]);
+    detail(parent, `${row.key}: cut-piece mass, retained extras and source inventory (display only)`,
+      report || { refusal: row.assembly_mass?.refusal });
+  }
+}
 function comparison(op, r) {
   const parent = sections.get(op).comparison;
   if (op === "screen") {
@@ -176,6 +196,7 @@ function comparison(op, r) {
       pattern_sha256: binding?.pattern_sha256, frozen_changes: row.frozen_changes, pieces: binding?.pieces,
       refusals: { binding: row.binding.refusal, cutting: row.cutting.refusal, sewing: row.sewing.refusal, purchasing: row.purchasing.refusal } });
   }
+  assemblyMassComparison(parent, study.alternatives);
   if (study.screening) screening(parent, study.screening);
   if (op === "scenario") {
     const simulations = new Map(r.simulations.map(row => [row.key, row.evaluation]));

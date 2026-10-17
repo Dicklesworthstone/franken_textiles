@@ -265,6 +265,51 @@ fn study_reuses_production_planners_and_preserves_material_source_locks() {
 }
 
 #[test]
+fn mass_only_studies_share_the_actual_inventory_consumer_and_require_completeness() {
+    let input = include_str!("../../../tests/fixtures/materials/study-assembly-mass.json");
+    let request: ftx_export::material_study::Request = serde_json::from_str(input).unwrap();
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let output: Value = serde_json::from_str(&materials::study(PATTERN, input).unwrap()).unwrap();
+    assert_eq!(
+        output,
+        serde_json::to_value(request.evaluate(&source).unwrap()).unwrap()
+    );
+    assert!(
+        !output["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    for row in output["alternatives"].as_array().unwrap() {
+        let pattern = Pattern::new(row["binding"]["result"]["pattern"].clone());
+        let direct = request
+            .assembly_mass
+            .as_ref()
+            .unwrap()
+            .evaluate(&pattern)
+            .unwrap();
+        assert_eq!(
+            row["assembly_mass"]["result"],
+            serde_json::to_value(direct).unwrap()
+        );
+        assert_eq!(row["cutting"]["status"], "not_requested");
+    }
+    let mut incomplete: Value = serde_json::from_str(input).unwrap();
+    incomplete["assembly_mass"]["inventory_complete"] = json!(false);
+    let refused: Value =
+        serde_json::from_str(&materials::study(PATTERN, &incomplete.to_string()).unwrap()).unwrap();
+    assert_eq!(refused["comparison"]["frontier"], json!([]));
+    assert_ne!(refused["request_sha256"], output["request_sha256"]);
+    assert!(
+        refused["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["metrics"]["assembly_mass_kg"].is_null())
+    );
+}
+
+#[test]
 fn study_comparison_is_shared_with_native_and_retains_unknown_values() {
     let mut input: Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/materials/study-insulation.json"
