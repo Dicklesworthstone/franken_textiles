@@ -686,6 +686,102 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         a["scenario"]["body_geometry_sha256"]
     );
     assert_eq!(posed["manufacturing"], a["manufacturing"]);
+
+    // Actual model-backed continuation, not independent re-draping of these endpoint poses.
+    body_request["arm_abduction_deg"] = json!(35.0);
+    save(&dir.join("body-input.json"), &body_request);
+    scenario["motion"] = json!({"schema":"ftx-drape-motion/1",
+        "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.1},
+            {"time_s":0.004,"arm_abduction_deg":35.2}],
+        "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000});
+    save(&dir.join("scenario.json"), &scenario);
+    let moving = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    assert_eq!(
+        moving,
+        run(
+            env!("CARGO_BIN_EXE_ftx"),
+            &["--json", "materials", "scenario-study"]
+        )
+    );
+    assert_eq!(
+        moving,
+        run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"])
+    );
+    assert_eq!(moving["manufacturing"], a["manufacturing"]);
+    assert_eq!(moving["scenario"]["body_fit"], a["scenario"]["body_fit"]);
+    assert_ne!(moving["request_sha256"], a["request_sha256"]);
+    let motion = &moving["simulations"][0]["evaluation"]["result"]["motion"];
+    let other = &moving["simulations"][1]["evaluation"]["result"]["motion"];
+    assert_eq!(motion["status"], "available", "{motion}");
+    assert_eq!(other["status"], "available", "{other}");
+    let motion = &motion["result"];
+    let other = &other["result"];
+    assert_eq!(
+        motion["path_sha256"],
+        moving["scenario"]["motion_path"]["sha256"]
+    );
+    assert_eq!(
+        motion["initial_positions_sha256"],
+        first["result"]["positions_sha256"]
+    );
+    assert_eq!(motion["samples"], other["samples"]);
+    assert_ne!(
+        motion["keyframes"][1]["surface"]["result"]["steady"]["power_w"],
+        other["keyframes"][1]["surface"]["result"]["steady"]["power_w"]
+    );
+    let samples = motion["samples"].as_array().unwrap();
+    assert_eq!(samples.len(), 4);
+    assert_eq!(samples.last().unwrap()["time_s"], 0.004);
+    assert_ne!(
+        samples[0]["body_positions_m"],
+        samples[3]["body_positions_m"]
+    );
+    assert_ne!(samples[3]["positions_m"], first["result"]["positions_m"]);
+    assert_eq!(motion["physical_validation_claim"], false);
+    // Verify final endpoint vertices against the direct source-model pose, not a guessed rig.
+    let model =
+        ftx_body::AnnyModel::from_data(ftx_body::AnnyData::from_bytes(&bytes, false).unwrap())
+            .unwrap();
+    let mut final_request = ftx_drape::study::fitted::BodyRequest::read(&body_request).unwrap();
+    final_request.arm_abduction_deg = 35.2;
+    let final_body =
+        ftx_drape::study::fitted::FittedBody::prepare(&model, &sha256_hex(&bytes), &final_request)
+            .unwrap();
+    assert_eq!(
+        samples[3]["body_positions_m"],
+        json!(final_body.body().collision.0)
+    );
+    // Changed timing is a different scenario, despite having the same endpoint poses and shape.
+    scenario["motion"]["keyframes"][0]["time_s"] = json!(0.004);
+    scenario["motion"]["keyframes"][1]["time_s"] = json!(0.008);
+    save(&dir.join("scenario.json"), &scenario);
+    let slower = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    assert_ne!(slower["request_sha256"], moving["request_sha256"]);
+    assert_eq!(
+        slower["scenario"]["body_fit"],
+        moving["scenario"]["body_fit"]
+    );
+    let slow_motion = &slower["simulations"][0]["evaluation"]["result"]["motion"];
+    assert_eq!(slow_motion["status"], "available", "{slow_motion}");
+    assert_ne!(
+        slow_motion["result"]["final_velocities_m_s"],
+        motion["final_velocities_m_s"]
+    );
+    // Failed continuation keeps the complete, unmodified initial static result and manufacturing.
+    scenario["motion"]["max_sample_vertices"] = json!(1);
+    save(&dir.join("scenario.json"), &scenario);
+    let exhausted = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    let failed_motion = &exhausted["simulations"][0]["evaluation"]["result"];
+    assert_eq!(failed_motion["motion"]["status"], "refused");
+    assert!(failed_motion["motion"]["result"].is_null());
+    for key in ["drape", "surface", "positions_m"] {
+        assert_eq!(failed_motion[key], first["result"][key]);
+    }
+    assert_eq!(exhausted["manufacturing"], a["manufacturing"]);
+    // Keep the successful motion fixture available for independent native/WASM replay checks.
+    scenario["motion"]["max_sample_vertices"] = json!(10000);
+    save(&dir.join("scenario.json"), &scenario);
+    save(&dir.join("motion-report.json"), &slower);
     for bad in [json!("REJECTED"), Value::Null] {
         body_request["accepted_body_fit"]["status"] = bad;
         save(&dir.join("body-input.json"), &body_request);

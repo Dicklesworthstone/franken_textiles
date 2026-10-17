@@ -8,7 +8,7 @@ use ftx_core::Refusal;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{hash, invalid};
+use super::{budget, hash, invalid, motion};
 use crate::run::DrapeBody;
 
 /// Body evidence and an independently authored standing pose. No material can alter this request.
@@ -153,6 +153,8 @@ pub struct FittedBody {
     collision: SkinMesh,
     display: SkinMesh,
     arm_deg: f64,
+    params: BodyParams,
+    model_sha256: String,
     /// Actual body-fitting residuals and source identity; the fit is model-derived, not measured.
     pub report: Value,
 }
@@ -212,8 +214,58 @@ impl FittedBody {
             collision,
             display,
             arm_deg: request.arm_abduction_deg,
+            params,
+            model_sha256: model_sha256.into(),
             report,
         })
+    }
+
+    /// Generate motion endpoints from the SAME selected shape, without fitting again. The caller
+    /// supplies the model digest from its decoded bytes just as for `prepare`. Endpoint generation
+    /// uses Anny poses; the motion solver interpolates checked linear vertex chords between them.
+    ///
+    /// # Errors
+    /// Invalid/excessive trajectory, changed model identity or nonmatching collision topology.
+    pub fn motion_path(
+        &self,
+        model: &AnnyModel,
+        model_sha256: &str,
+        request: &motion::Request,
+    ) -> Result<motion::Path, Refusal> {
+        request.validate()?;
+        if self.model_sha256.is_empty() || self.model_sha256 != model_sha256 {
+            return Err(invalid(
+                "motion must use the source-identified selected body model",
+            ));
+        }
+        if self
+            .collision
+            .vertices
+            .len()
+            .saturating_mul(request.keyframes.len() + 1)
+            > 2_000_000
+        {
+            return Err(budget("motion endpoint body-vertex budget exceeded"));
+        }
+        let rest = model.rest(&self.params)?;
+        let mut endpoints = Vec::with_capacity(request.keyframes.len());
+        for keyframe in &request.keyframes {
+            let mut pose = Pose::drape();
+            pose.arm_abduction_deg = Some(keyframe.arm_abduction_deg);
+            let posed = model.pose(&rest, &pose_deltas(model, &rest, &pose, 1.0)?)?;
+            let skin = trimmed_skin(
+                model,
+                &posed.vertices,
+                &["wrist.R", "wrist.L", "foot.R", "foot.L"],
+            )?;
+            if skin.triangles != self.collision.triangles {
+                return Err(invalid(
+                    "motion endpoints must preserve the selected collision topology",
+                ));
+            }
+            endpoints.push(skin.vertices);
+        }
+        motion::Path::new(request, self.body().collision, endpoints)
     }
 
     /// Borrow the same immutable body for each fresh cloth simulation.
@@ -480,6 +532,52 @@ mod tests {
         let again = FittedBody::prepare(&model, &hash, &req).unwrap();
         assert_eq!(b.collision.vertices, again.collision.vertices);
         assert_eq!(b.report, again.report);
+    }
+
+    #[test]
+    fn motion_endpoints_reuse_exact_selected_shape_and_match_direct_source_poses() {
+        let model = model();
+        let digest = "a".repeat(64);
+        let mut req = request();
+        let fitted = FittedBody::prepare(&model, &digest, &req).unwrap();
+        let original_report = fitted.report.clone();
+        let motion: motion::Request = serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.01,"arm_abduction_deg":36.0},
+                {"time_s":0.02,"arm_abduction_deg":37.0}],
+            "max_step_s":0.01,"max_trials":16,"max_pairs":10000,"max_sample_vertices":10000}))
+        .unwrap();
+        let actual = fitted.motion_path(&model, &digest, &motion).unwrap();
+        let mut endpoints = Vec::new();
+        for keyframe in &motion.keyframes {
+            req.arm_abduction_deg = keyframe.arm_abduction_deg;
+            let posed = FittedBody::prepare(&model, &digest, &req).unwrap();
+            assert_eq!(posed.report["shape_sha256"], fitted.report["shape_sha256"]);
+            endpoints.push(posed.collision.vertices);
+        }
+        let expected = motion::Path::new(&motion, fitted.body().collision, endpoints).unwrap();
+        assert_eq!(actual.sha256(), expected.sha256());
+        assert_eq!(
+            actual.sha256(),
+            fitted
+                .motion_path(&model, &digest, &motion)
+                .unwrap()
+                .sha256()
+        );
+        assert_eq!(fitted.report, original_report);
+        assert!(
+            fitted
+                .motion_path(&model, &"b".repeat(64), &motion)
+                .is_err()
+        );
+        let mut changed = motion.clone();
+        changed.keyframes[0].arm_abduction_deg = 35.5;
+        assert_ne!(
+            actual.sha256(),
+            fitted
+                .motion_path(&model, &digest, &changed)
+                .unwrap()
+                .sha256()
+        );
     }
 
     #[test]

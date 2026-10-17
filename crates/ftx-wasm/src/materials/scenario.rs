@@ -75,6 +75,9 @@ pub fn on_model(
         .as_ref()
         .map_err(Clone::clone)
         .and_then(|body| Session::new(&scenario, body));
+    if let (Ok(session), Ok(fitted), Some(motion)) = (&mut session, &fitted, &scenario.motion) {
+        session.set_motion_path(fitted.motion_path(model, model_sha256, motion))?;
+    }
     let mut descriptor = match &session {
         Ok(session) => session.descriptor(),
         Err(refusal) => json!({"scenario":scenario,"body_setup_refusal":refusal}),
