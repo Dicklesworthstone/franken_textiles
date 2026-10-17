@@ -11,6 +11,54 @@ use std::{
 };
 
 fn model_bytes() -> Vec<u8> {
+    model_bytes_with_rig(false)
+}
+
+fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
+    // The placement case is an articulated closed prism; the original image-fit case is a box.
+    // Both are synthetic analytic geometry, never a stand-in for anatomical acceptance.
+    let mut bones = vec!["root"];
+    let mut parents = vec![-1];
+    let mut heads = vec![0.0; 3];
+    let mut tails = vec![0.0, 0.0, 0.1];
+    if articulated {
+        bones.extend([
+            "upperarm01.R",
+            "upperarm02.R",
+            "lowerarm01.R",
+            "wrist.R",
+            "upperarm01.L",
+            "upperarm02.L",
+            "lowerarm01.L",
+            "wrist.L",
+            "upperleg01.R",
+            "lowerleg01.R",
+            "foot.R",
+            "upperleg01.L",
+            "lowerleg01.L",
+            "foot.L",
+            "neck01",
+            "head",
+        ]);
+        parents.extend([0, 1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 0, 12, 13, 0, 15]);
+        for sign in [1.0, -1.0] {
+            for j in 0..4 {
+                let x = sign * (0.12 + 0.05 * f64::from(j));
+                let z = 0.9 - 0.06 * f64::from(j);
+                heads.extend([x, 0.0, z]);
+                tails.extend([x + sign * 0.05, 0.0, z - 0.06]);
+            }
+        }
+        for sign in [1.0, -1.0] {
+            for z in [0.6, 0.3, 0.05] {
+                heads.extend([sign * 0.06, 0.0, z]);
+                tails.extend([sign * 0.06, 0.0, z - 0.05]);
+            }
+        }
+        heads.extend([0.0, 0.0, 0.9, 0.0, 0.0, 1.0]);
+        tails.extend([0.0, 0.0, 1.0, 0.0, 0.0, 1.1]);
+    }
+    let bone_count = bones.len();
     let mut arrays = BTreeMap::new();
     let mut data = Vec::new();
     let mut add = |name: &str, dtype: &str, shape: Vec<usize>, bytes: Vec<u8>| {
@@ -20,70 +68,126 @@ fn model_bytes() -> Vec<u8> {
     let f64s = |a: Vec<f64>| a.into_iter().flat_map(f64::to_le_bytes).collect::<Vec<_>>();
     let u32s = |a: Vec<u32>| a.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
     let mut vertices = Vec::new();
-    let mut delta = Vec::new();
-    for z in [0.0, 1.0] {
-        for y in [-0.1, 0.1] {
-            for x in [-0.1, 0.1] {
-                vertices.extend([x, y, z]);
-                delta.extend([0.0, 0.0, 0.5 * z]);
+    let mut influences = Vec::new();
+    let mut faces = Vec::new();
+    if articulated {
+        for (r, z) in [0.0, 0.4, 0.8, 1.0].into_iter().enumerate() {
+            for i in 0..16 {
+                let (s, c) = ftx_core::det::sin_cos(f64::from(i) * std::f64::consts::TAU / 16.0);
+                vertices.extend([0.1 * c, 0.1 * s, z]);
+                influences.push(if r == 3 && [15, 0, 1].contains(&i) {
+                    1
+                } else if r == 3 && [7, 8, 9].contains(&i) {
+                    5
+                } else if r == 0 && c > 0.5 {
+                    9
+                } else if r == 0 && c < -0.5 {
+                    12
+                } else {
+                    0
+                });
             }
         }
-    }
-    add("template_vertices", "f64", vec![8, 3], f64s(vertices));
-    add(
-        "faces",
-        "u32",
-        vec![12, 3],
-        u32s(vec![
+        vertices.extend([0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+        influences.extend([0, 0]);
+        for i in 0..16 {
+            let j = (i + 1) % 16;
+            faces.extend([64, j, i, 65, 48 + i, 48 + j]);
+            for r in 0..3 {
+                let a = 16 * r + i;
+                let b = 16 * r + j;
+                faces.extend([a, b, b + 16, a, b + 16, a + 16]);
+            }
+        }
+    } else {
+        for z in [0.0, 1.0] {
+            for y in [-0.1, 0.1] {
+                for x in [-0.1, 0.1] {
+                    vertices.extend([x, y, z]);
+                }
+            }
+        }
+        influences = vec![0; 8];
+        faces = vec![
             0, 2, 3, 0, 3, 1, 4, 5, 7, 4, 7, 6, 0, 1, 5, 0, 5, 4, 2, 6, 7, 2, 7, 3, 0, 4, 6, 0, 6,
             2, 1, 3, 7, 1, 7, 5,
-        ]),
+        ];
+    }
+    let n = vertices.len() / 3;
+    let nfaces = faces.len() / 3;
+    let delta = vertices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|v| [0.0, 0.0, 0.5 * v[2]])
+        .collect();
+    add("template_vertices", "f64", vec![n, 3], f64s(vertices));
+    add("faces", "u32", vec![nfaces, 3], u32s(faces));
+    add(
+        "blendshape_row_ptr",
+        "u32",
+        vec![2],
+        u32s(vec![0, n as u32]),
     );
-    add("blendshape_row_ptr", "u32", vec![2], u32s(vec![0, 8]));
-    add("blendshape_vertex", "u32", vec![8], u32s((0..8).collect()));
-    add("blendshape_delta", "f64", vec![8, 3], f64s(delta));
+    add(
+        "blendshape_vertex",
+        "u32",
+        vec![n],
+        u32s((0..n as u32).collect()),
+    );
+    add("blendshape_delta", "f64", vec![n, 3], f64s(delta));
     let mut mask = vec![0; 26];
     mask[1] = 1;
     add("phenotype_mask", "u8", vec![1, 26], mask);
-    add("template_bone_heads", "f64", vec![1, 3], f64s(vec![0.0; 3]));
+    add(
+        "template_bone_heads",
+        "f64",
+        vec![bone_count, 3],
+        f64s(heads),
+    );
     add(
         "template_bone_tails",
         "f64",
-        vec![1, 3],
-        f64s(vec![0.0, 0.0, 0.1]),
+        vec![bone_count, 3],
+        f64s(tails),
     );
     add(
         "bone_heads_blendshapes",
         "f64",
-        vec![1, 1, 3],
-        f64s(vec![0.0; 3]),
+        vec![1, bone_count, 3],
+        f64s(vec![0.0; 3 * bone_count]),
     );
     add(
         "bone_tails_blendshapes",
         "f64",
-        vec![1, 1, 3],
-        f64s(vec![0.0; 3]),
+        vec![1, bone_count, 3],
+        f64s(vec![0.0; 3 * bone_count]),
     );
     add(
         "bone_rolls",
         "f64",
-        vec![1, 3, 3],
-        f64s(vec![1., 0., 0., 0., 1., 0., 0., 0., 1.]),
+        vec![bone_count, 3, 3],
+        f64s([1., 0., 0., 0., 1., 0., 0., 0., 1.].repeat(bone_count)),
     );
-    add("vertex_bone_indices", "u32", vec![8, 1], u32s(vec![0; 8]));
-    add("vertex_bone_weights", "f64", vec![8, 1], f64s(vec![1.0; 8]));
+    add("vertex_bone_indices", "u32", vec![n, 1], u32s(influences));
+    add("vertex_bone_weights", "f64", vec![n, 1], f64s(vec![1.0; n]));
     add(
         "base_mesh_vertex_indices",
         "u32",
-        vec![8],
-        u32s((0..8).collect()),
+        vec![n],
+        u32s((0..n as u32).collect()),
     );
     let mut components = vec![json!(["height", "low"]), json!(["height", "high"])];
     components.extend((0..24).map(|i| json!(["race", format!("r{i}")])));
+    let waist_loop: Vec<usize> = if articulated {
+        (16..32).collect()
+    } else {
+        vec![]
+    };
     let header = json!({"schema":"ftxbody/1","model":"anny","anny_version":"0.6.1","configuration":"synthetic interchange test",
-        "licence":"synthetic","package_sha256":{},"counts":{"vertices":8,"faces":12,"bones":1,"blendshapes":1,"phenotype_blendshapes":1,"local_changes":0,"influences":1},
+        "licence":"synthetic","package_sha256":{},"counts":{"vertices":n,"faces":nfaces,"bones":bone_count,"blendshapes":1,"phenotype_blendshapes":1,"local_changes":0,"influences":1},
         "phenotype":{"features":["height","race"],"components":components,"anchors":{"height":[0,1]},"exposed":["height"],"fixed_value":0.5},
-        "y_axis":[0,1,0],"degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],"labels":{"blendshapes":["height-high"],"bones":["root"],"bone_parents":[-1],"local_changes":[]},"waist_loop_final":[],"arrays":arrays});
+        "y_axis":[0,1,0],"degenerate_rotation":[[1,0,0],[0,1,0],[0,0,1]],"labels":{"blendshapes":["height-high"],"bones":bones,"bone_parents":parents,"local_changes":[]},"waist_loop_final":waist_loop,"arrays":arrays});
     let mut h = serde_json::to_vec(&header).unwrap();
     while !h.len().is_multiple_of(8) {
         h.push(b' ');
@@ -480,4 +584,129 @@ fn simulated_round_preserves_the_import_refusal_in_its_own_verdict() {
     assert!(result["viewer"].is_null());
     assert!(!dir.join("ws/rounds/000/sim/sim_report.json").exists());
     assert_eq!(std::fs::read(dir.join("fit.json")).unwrap(), original);
+}
+
+#[test]
+fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
+    let dir = setup();
+    let bytes = model_bytes_with_rig(true);
+    let accepted = receipt(&sha256_hex(&bytes));
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    save(&dir.join("accepted.json"), &accepted);
+    let mut body_request = json!({"schema":"ftx-scenario-body/1","accepted_body_fit":accepted,
+        "arm_abduction_deg":35.0,"measurements":{"wearer":{"stature_mm":1111.0}}});
+    save(&dir.join("body-input.json"), &body_request);
+    let mut pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let width = std::f64::consts::TAU * 180.0;
+    pattern["pieces"][0]["vertices"]["b"][0] = json!(width);
+    pattern["pieces"][0]["vertices"]["c"][0] = json!(width);
+    pattern["pieces"][0]["placement"]["radius_mm"] = json!(180.0);
+    pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+    save(&dir.join("pattern.json"), &pattern);
+    let material = pattern["fabric"]["material"].clone();
+    let mut transport = material.clone();
+    transport["record"]["properties"]["thermal_conductivity"]["value"] = json!(0.1);
+    let study = json!({"schema":"ftx-material-study/1","variants":[
+        {"key":"baseline","changes":{"schema":"ftx-material-bindings/1","default":material}},
+        {"key":"transport","changes":{"schema":"ftx-material-bindings/1","default":transport}}],
+        "cutting":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0.0,"end_margin_mm":0.0}});
+    save(&dir.join("study.json"), &study);
+    let mut scenario: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario.json"
+    ))
+    .unwrap();
+    scenario["options"]["spacing"] = json!(100.0);
+    // No unsupported anatomical interpretation of the cylinder fixture's body patch index.
+    scenario.as_object_mut().unwrap().remove("coverage");
+    save(&dir.join("scenario.json"), &scenario);
+    let run = |binary: &str, prefix: &[&str]| {
+        let out = Command::new(binary)
+            .current_dir(&dir)
+            .args(prefix)
+            .args([
+                "pattern.json",
+                "study.json",
+                "scenario.json",
+                "body-input.json",
+                "model.ftxbody",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{} / {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let raw: Value = serde_json::from_slice(&out.stdout).unwrap();
+        raw.get("result").unwrap_or(&raw).clone()
+    };
+    let a = run(
+        env!("CARGO_BIN_EXE_ftx"),
+        &["--json", "materials", "scenario-study"],
+    );
+    let b = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    assert_eq!(a, b);
+    let fit = &a["scenario"]["body_fit"];
+    assert_eq!(fit["shape_source"]["refitted"], false, "{}", a["scenario"]);
+    assert_eq!(fit["shape_source"]["image_poses_reused"], false);
+    assert_eq!(fit["source_fit"], accepted);
+    assert_eq!(fit["residuals"][0]["residual_mm"], 189.0);
+    assert_eq!(a["scenario"]["body_input"], body_request);
+    let first = &a["simulations"][0]["evaluation"];
+    let second = &a["simulations"][1]["evaluation"];
+    assert_eq!(first["status"], "available", "{first}");
+    assert_eq!(second["status"], "available", "{second}");
+    assert_eq!(first["result"]["surface"]["status"], "available");
+    assert_eq!(
+        first["result"]["positions_sha256"],
+        second["result"]["positions_sha256"]
+    );
+    assert_ne!(
+        first["result"]["metrics"]["independent_surface_power_w"],
+        second["result"]["metrics"]["independent_surface_power_w"]
+    );
+    assert_eq!(
+        fit["shape_parameters"],
+        accepted["solution"]["anny_parameters"]
+    );
+    body_request["arm_abduction_deg"] = json!(50.0);
+    save(&dir.join("body-input.json"), &body_request);
+    let posed = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    assert_eq!(
+        posed["scenario"]["body_fit"]["shape_sha256"],
+        fit["shape_sha256"]
+    );
+    assert_ne!(posed["request_sha256"], a["request_sha256"]);
+    assert_ne!(
+        posed["scenario"]["body_geometry_sha256"],
+        a["scenario"]["body_geometry_sha256"]
+    );
+    assert_eq!(posed["manufacturing"], a["manufacturing"]);
+    for bad in [json!("REJECTED"), Value::Null] {
+        body_request["accepted_body_fit"]["status"] = bad;
+        save(&dir.join("body-input.json"), &body_request);
+        let failed = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+        assert_eq!(failed["manufacturing"], a["manufacturing"]);
+        let message = failed["scenario"]["body_setup_refusal"]["message"]
+            .as_str()
+            .unwrap();
+        assert!(message.contains("not an accepted Anny shape"), "{message}");
+        assert!(!message.contains("age_months") && !message.contains("local change"));
+        assert!(
+            failed["simulations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["evaluation"]["status"] == "refused")
+        );
+    }
+    // Leave a valid replay request alongside the synthetic files for independent decoder tests.
+    body_request["accepted_body_fit"] = accepted.clone();
+    save(&dir.join("body-input.json"), &body_request);
+    assert_eq!(read(&dir.join("accepted.json")), accepted);
+    assert_eq!(std::fs::read(dir.join("model.ftxbody")).unwrap(), bytes);
 }

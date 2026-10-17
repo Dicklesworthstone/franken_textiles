@@ -22,7 +22,7 @@ pub struct BodyRequest {
     #[serde(default = "empty_measurements")]
     pub measurements: Value,
     /// Intact `ftx-body-fit/1` report for the same model. Invalid receipts never fall back to tape.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_body_fit: Option<Value>,
     /// Standing straight-arm abduction from vertical, degrees in 0..=180. Not a motion trajectory.
     #[serde(default = "default_arm_angle")]
@@ -547,6 +547,9 @@ mod tests {
         assert_eq!(req.measurements, legacy);
         assert!(req.accepted_body_fit.is_none());
         assert_eq!(req.arm_abduction_deg, 35.0);
+        let replay = serde_json::to_value(&req).unwrap();
+        assert!(replay.get("accepted_body_fit").is_none());
+        assert_eq!(BodyRequest::read(&replay).unwrap().measurements, legacy);
     }
 
     #[test]

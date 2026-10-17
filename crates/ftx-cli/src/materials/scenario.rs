@@ -3,7 +3,10 @@ use std::{fs::File, io::Read};
 
 use ftx_body::{AnnyData, AnnyModel};
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
-use ftx_drape::study::{Scenario, Session, fitted::FittedBody};
+use ftx_drape::study::{
+    Scenario, Session,
+    fitted::{BodyRequest, FittedBody},
+};
 use ftx_export::material_study::Request;
 use ftx_pattern::Pattern;
 use serde::de::DeserializeOwned;
@@ -44,15 +47,21 @@ pub(super) fn run(
         policy.validate(&request, true)?;
     }
     let scenario: Scenario = read(scenario, &mut remaining)?;
-    let measurements: Value = read(measurements, &mut remaining)?;
+    let body_input: Value = read(measurements, &mut remaining)?;
     scenario.validate()?;
     let bytes = bytes(model, &mut (512 * 1024 * 1024))?;
     let model_sha256 = sha256_hex(&bytes);
     let model = AnnyData::from_bytes(&bytes, false).and_then(AnnyModel::from_data);
-    let fitted = model
+    let body_request = BodyRequest::read(&body_input);
+    let fitted = body_request
         .as_ref()
         .map_err(Clone::clone)
-        .and_then(|model| FittedBody::fit(model, &measurements));
+        .and_then(|request| {
+            model
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|model| FittedBody::prepare(model, &model_sha256, request))
+        });
     let body = fitted.as_ref().map(FittedBody::body).map_err(Clone::clone);
     let mut session = body
         .as_ref()
@@ -63,7 +72,10 @@ pub(super) fn run(
         Err(refusal) => json!({"scenario":scenario,"body_setup_refusal":refusal}),
     };
     descriptor["model_sha256"] = json!(model_sha256);
-    descriptor["measurements"] = measurements;
+    descriptor["measurements"] = body_request
+        .as_ref()
+        .map_or(Value::Null, |request| request.measurements.clone());
+    descriptor["body_input"] = body_input;
     descriptor["body_fit"] = fitted
         .as_ref()
         .map_or(Value::Null, |body| body.report.clone());

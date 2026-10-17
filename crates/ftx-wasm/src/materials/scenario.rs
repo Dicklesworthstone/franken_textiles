@@ -3,7 +3,10 @@ use ftx_body::AnnyModel;
 use ftx_core::Refusal;
 use ftx_drape::{
     run::DrapeBody,
-    study::{Scenario, Session, fitted::FittedBody},
+    study::{
+        Scenario, Session,
+        fitted::{BodyRequest, FittedBody},
+    },
 };
 use ftx_export::material_study::Request;
 use ftx_pattern::Pattern;
@@ -38,7 +41,8 @@ pub fn on_body(
     serde_json::to_string(&report).map_err(invalid)
 }
 
-/// Fit one model once, preserving manufacturing outcomes even when body setup refuses.
+/// Select one shape once (tape or accepted report) and pose it independently. The last JSON input
+/// accepts legacy measurements or ftx-scenario-body/1. Preserve manufacturing when setup refuses.
 /// Model bytes are already parsed by the browser's WebBody; its exact source hash is retained.
 ///
 /// # Errors
@@ -59,9 +63,13 @@ pub fn on_model(
         policy.validate(&request, true)?;
     }
     let scenario: Scenario = serde_json::from_str(scenario).map_err(invalid)?;
-    let measurements: Value = serde_json::from_str(measurements).map_err(invalid)?;
+    let body_input: Value = serde_json::from_str(measurements).map_err(invalid)?;
     scenario.validate()?;
-    let fitted = FittedBody::fit(model, &measurements);
+    let body_request = BodyRequest::read(&body_input);
+    let fitted = body_request
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|request| FittedBody::prepare(model, model_sha256, request));
     let body = fitted.as_ref().map(FittedBody::body).map_err(Clone::clone);
     let mut session = body
         .as_ref()
@@ -72,7 +80,10 @@ pub fn on_model(
         Err(refusal) => json!({"scenario":scenario,"body_setup_refusal":refusal}),
     };
     descriptor["model_sha256"] = json!(model_sha256);
-    descriptor["measurements"] = measurements;
+    descriptor["measurements"] = body_request
+        .as_ref()
+        .map_or(Value::Null, |request| request.measurements.clone());
+    descriptor["body_input"] = body_input;
     descriptor["body_fit"] = fitted
         .as_ref()
         .map_or(Value::Null, |body| body.report.clone());
