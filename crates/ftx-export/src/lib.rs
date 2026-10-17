@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod all;
+pub mod assembly_mass;
 pub mod checks;
 pub mod ctx;
 pub mod cutter;

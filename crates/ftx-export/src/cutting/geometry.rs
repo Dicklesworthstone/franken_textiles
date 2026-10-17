@@ -6,14 +6,14 @@ use ftx_core::{
     exact::{Sign, orient2d},
 };
 
-pub(super) struct Work {
+pub(crate) struct Work {
     pub used: usize,
     pub limit: usize,
     pub exhausted: bool,
     pub candidates: usize,
 }
 impl Work {
-    pub(super) fn new(limit: usize) -> Self {
+    pub(crate) fn new(limit: usize) -> Self {
         Self {
             used: 0,
             limit,
@@ -118,7 +118,7 @@ fn boundaries_clear(a: &[Vec2], b: &[Vec2], gap: f64, work: &mut Work) -> Option
     Some(true)
 }
 // Preserve the roll kernel's conservative overlapping-box boundary-contact semantics, including gap=0.
-pub(super) fn clear(
+pub(crate) fn clear(
     a: &[Vec2],
     ab: [f64; 4],
     b: &[Vec2],
@@ -130,6 +130,10 @@ pub(super) fn clear(
     if separated_boxes(ab, bb, gap) {
         return Some(true);
     }
+    clear_paths(a, b, gap, work)
+}
+// The same exact boundary/containment acceptance without a caller-supplied broad-phase box.
+pub(crate) fn clear_paths(a: &[Vec2], b: &[Vec2], gap: f64, work: &mut Work) -> Option<bool> {
     if !boundaries_clear(a, b, gap, work)? {
         return Some(false);
     }
@@ -137,7 +141,7 @@ pub(super) fn clear(
 }
 // No edge may cross a concavity or touch the stock boundary. Vertices-inside alone is insufficient.
 // Zero requested margin still forbids contact; search anchors include a numerical guard, not a clamp.
-pub(super) fn enclosed(
+pub(crate) fn enclosed(
     inner: &[Vec2],
     outer: &[Vec2],
     margin: f64,
@@ -149,7 +153,7 @@ pub(super) fn enclosed(
     boundaries_clear(inner, outer, margin, work)
 }
 // Budgeted simplicity check for authored stock. Consecutive collinear edges may continue, not retrace.
-pub(super) fn simple(ring: &[Vec2], work: &mut Work) -> Option<bool> {
+pub(crate) fn simple(ring: &[Vec2], work: &mut Work) -> Option<bool> {
     for (i, (a, b)) in edges(ring).enumerate() {
         work.tick()?;
         if a == b {

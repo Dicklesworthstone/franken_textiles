@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Affine, Ctx, ExportOptions, Geom, Source, cutter::cutter_ring, layout::rotation};
 
-mod geometry;
+pub(crate) mod geometry;
 pub mod nesting;
 pub mod preview;
 pub mod procurement;
