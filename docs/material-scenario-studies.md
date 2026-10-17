@@ -1,8 +1,9 @@
-# Fixed-body material scenario studies
+# Fixed-shape material scenarios with optional cloth motion
 
 `ftx-ms2` now has an executable drape/heat/manufacturing composition, built on the existing
 source-locked `ftx-material-study/1` request. Each alternative starts from the original pattern,
 is bound through the existing material selection authority, and gets a **new production drape**.
+An optional prescribed body trajectory then continues that same sewn cloth through movement.
 No earlier alternative's cloth state, relaxation/plastic history, final pose or heat map is reused.
 This is a software delivery, not closure of the empirical or optimization gates in plan §25.10.
 
@@ -61,10 +62,11 @@ canonical parsed-JSON digest, and the requested `pose`. A pose change retains th
 but changes the body/scenario identity and reruns cloth and heat. Additional tapes change evidence
 identity without changing an accepted shape. The original `body_input` is retained for replay.
 
-These are independent **static standing poses**, not a motion or ride-up experiment. Seated/squat
-placement and a garment-following pose ramp use separate production paths; they are not silently
-approximated here. Invalid source/setup results remain per-simulation refusals while independent
-manufacturing results survive. No previous body's drape or temperature field is substituted.
+Without `scenario.motion`, these are independent **static standing poses**, not a motion experiment.
+The optional continuation below starts at that selected pose and keeps its shape fixed. Seated/squat
+placement is not silently approximated by an arm-angle change. Invalid source/setup results remain
+per-simulation refusals while independent manufacturing results survive. No previous body's drape
+or temperature field is substituted.
 
 ## Numerical and material study policy
 
@@ -91,6 +93,74 @@ The per-run mesh budget counts conservative dense-outline, seam and lattice cand
 meshing; it can exceed the eventual retained vertices. The aggregate vertex-frame budget is charged
 in key order, including failed attempted drapes. Total sew/drape steps are capped at 256, lag rounds
 at four and PCG iterations at 128. These are allocation/work limits, not a runtime guarantee.
+
+## Prescribed motion of the sewn cloth
+
+Add optional `motion` to the scenario request. Both native binaries and the model-backed WASM
+entry point use the same implementation; no new command or browser-only solver is involved.
+The following tiny motion is the **synthetic articulated-model regression policy**, not a measured
+movement, recommended garment test duration or an anatomical acceptance case:
+
+```json
+{
+  "motion": {
+    "schema": "ftx-drape-motion/1",
+    "keyframes": [
+      {"time_s": 0.004, "arm_abduction_deg": 35.1},
+      {"time_s": 0.008, "arm_abduction_deg": 35.2}
+    ],
+    "max_step_s": 0.001,
+    "max_trials": 16,
+    "max_pairs": 100000,
+    "max_sample_vertices": 10000
+  }
+}
+```
+
+Times are cumulative physical seconds **after the initial drape**, strictly increasing; angles
+are the same standing straight-arm convention as the body input. An unchanged angle at a later
+time is an explicit hold. Endpoint skins are generated once from the exact selected shape and
+source-model digest. No tape fit or accepted-shape adjustment occurs between endpoints or materials.
+Collision topology and vertex order must remain unchanged.
+
+Between endpoints, the existing transactional motion kernel follows **linear body-vertex chords**,
+using adaptive implicit cloth substeps, relative body/cloth friction and continuous collision checks.
+These chords are not interpolated anatomical joint rotations. Large increments can distort a body
+or refuse; author suitably short source-model pose increments. Body self-intersections are not
+certified. The solver continues the initial cloth's positions, velocities and constitutive history;
+it does not place, weld, settle or zero velocities again at each keyframe. Each material alternative
+still begins with a separate fresh initial drape. An unfinished physical-thickness ramp refuses motion.
+
+The optional per-simulation `motion` outcome is **all-or-refused**. Even a late failure publishes
+no partial trajectory; the complete initial static drape/heat and independent manufacturing remain
+unchanged. A successful `ftx-drape-motion-result/1` retains every accepted adaptive sample, physical
+time, cloth/body positions, topology, solve diagnostics, endpoint identities, final velocities and
+material-history reports. Its initial-position identity links back to the retained static result.
+Peak absolute panel-edge strain includes the initial state and all accepted samples, using each
+original flat panel chart across welded seams. It is not principal strain, a rupture criterion or fit.
+Use the accepted sample sequence rather than inventing a long interpolation over omitted substeps.
+
+Each endpoint independently recompiles source-locked steady sheet transport and body coverage from
+the **new cloth and body geometry**. These are equilibrium snapshots, not a transient-temperature
+history, energy accumulated during motion or a comfort prediction. A thermal refusal does not erase
+the completed mechanical trajectory. The scenario's original `drape`, `surface`, `coverage`, positions
+and comparison objectives continue to describe the **initial static drape**, not the moved state.
+The current comparator does not rank motion histories or require motion success. Inspect its separate
+status; a static frontier is not a motion-qualified frontier. Neither initial geometric settledness
+nor successful implicit substeps establish viscoelastic equilibrium or empirical garment accuracy.
+
+Admission permits 1..16 endpoints through 60 seconds, 0..180-degree angles, maximum substeps in
+1e-9..1 seconds, 1..512 attempted substeps for the **entire** trajectory, up to one million pairs
+per continuous-collision query and up to two million retained body/cloth vertex samples. Initial
+positions count against that sample budget. Endpoint body meshes have an additional two-million-
+vertex allocation cap. Each attempted material run reserves eight times `max_sample_vertices`
+against the shared scenario vertex-frame budget for motion samples and endpoint thermal receipts,
+on top of static work. Limits refuse instead of truncating an alternative's trajectory.
+
+Library callers with explicit meshes can construct `study::motion::Path` and attach it once with
+`Session::set_motion_path` before evaluation. `FittedBody::motion_path` generates source-model
+endpoints for the native and model-backed browser adapters. A fixed-body `on_body` call without an
+attached source path refuses requested motion rather than pretending its body moved.
 
 ## Independent thermal consumers
 
@@ -172,6 +242,8 @@ clear-gating but drifting cloth is excluded. No settled anatomical garment exper
   membrane triangles, resolved placements, gating flags, mass, and separate `surface` / `coverage`
   outcomes. Missing heat is null/refused, never zero heat. A body or mechanics refusal cannot erase
   a valid cutting or purchasing result.
+- Optional `motion` inside each available simulation: complete continuation samples and endpoint
+  steady heat, or its independent refusal. Initial static data is never replaced by endpoint data.
 - `scenario`: numerical/environmental inputs, model hash, retained measurement evidence, model-fit
   residuals and actual body identity. The overall request identity binds the source pattern, study
   policy and scenario. Per-result placement hashes distinguish placement frames as well as skins.
@@ -217,6 +289,11 @@ retain the original text; display-only JSON is not used as a replay artifact. Ch
 dependencies removes their outputs and download URLs, while unrelated preview edits preserve
 study results. Declared computed objectives display the Rust frontier, units, exclusions and
 incomparable pairs; no weighted score or Pareto frontier is fabricated in JavaScript.
+Requested motion adds a separate completion/substep/strain table and per-endpoint steady-heat table,
+including independent refusals and the initial settledness warning. Raw reports contain the full
+sample arrays and material history. The existing single-fold viewer remains a static-workflow
+viewer; these controls do not silently replace it with an untested endpoint animation. Editing the
+scenario's time/pose policy invalidates these results through the existing request lifecycle.
 
 The existing frontend tests include optional **real compiled WASM** execution without a model
 asset or native executable:
@@ -232,6 +309,19 @@ malformed-model rejection. Its Node loader is not an HTTP/browser transport or a
 anatomical fitting/drape test; the existing `tools/check_materials_web.cjs` remains the separate
 Chromium/native comparison lane.
 
+For positive model-backed motion equality, the existing synthetic native test leaves its files in
+`${TMPDIR:-/tmp}/ftx-shape-*`. Choose the directory containing `motion-report.json`, then run:
+
+```sh
+cargo test -p ftx-cli --test accepted_body_workflow scenario_binaries --locked
+FTX_REAL_WASM=1 FTX_MOTION_REPLAY=/path/to/generated/ftx-shape-directory \
+  node --experimental-vm-modules --test tools/check_trace_frontend.cjs
+```
+
+This optional lane sends the intact pattern, study, scenario, accepted-body input and synthetic model
+through the actual worker and compiled WASM. It compares the **entire** report against the native
+binary, checks exact replay downloads and repeats the trajectory without retained prior state.
+
 ## Evidence and remaining gates
 
 Synthetic tests compare against direct production drape, surface, coverage and manufacturing calls.
@@ -240,13 +330,17 @@ mechanical substitutions changing motion, independent refusals and admission bef
 Real-binary tests verify both commands retain manufacturing when model decoding refuses. Accepted
 reuse additionally runs through both binaries on an explicitly synthetic articulated Anny-format
 prism, with actual drape/steady heat, unchanged parameters across poses, visible tape disagreement,
-identical native reports and transport-only material swaps. Library tests compare against direct
-production consumers and verify pose-dependent geometry. This is a positive synthetic model-backed
+identical native reports and transport-only material swaps. Prescribed motion additionally checks
+every accepted sample against direct solver continuation, source-model endpoint equality, preserved
+shape, timing-dependent response, fresh endpoint heat and late-failure isolation. Library tests
+compare against direct production consumers and verify pose-dependent geometry. This is a positive synthetic model-backed
 software run, not a successful anatomical garment fit, and target compilation alone is not WASM
 execution parity. Converted anatomical Anny assets were unavailable during this delivery.
 
 `ftx-ms2` stays open for propagated uncertainty, finishing effects and empirical inventory/garment-mass
-acceptance, expanded body/pose policies and physical acceptance of the nominal comparison path.
+acceptance, expanded body/pose policies, transient thermal coupling, qualified motion objectives and
+physical acceptance of the nominal comparison path. Standing-arm motion continuation is available;
+it does not establish an anatomical or empirical ride-up experiment.
 Complete declared pre-finishing assembly accounting is available; it cannot discover an omitted component.
 Synthetic coupons and numerical conservation
 are not measured linen/leather/knit garment validation. No warmth rating, empirical fit,

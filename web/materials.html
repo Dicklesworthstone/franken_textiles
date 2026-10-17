@@ -118,7 +118,13 @@ Clear this file to return to section-3 measurements. A malformed request refuses
 The scenario itself owns the fit specification, numerical options, surface conditions and body-coverage policy;
 the single-preview fit, self-contact checkbox and thermal files above do not override it. Shape selection runs once;
 the chosen standing straight-arm pose does not change that shape. Each alternative gets a fresh production drape and
-current-geometry heat evaluation. This is a static pose, not a ride-up motion, seated or squat simulation.</p>
+current-geometry heat evaluation. Without a <code>motion</code> request this remains a static pose.</p>
+<p class="note">Optional <code>motion</code> in the scenario (<code>ftx-drape-motion/1</code>) continues that same sewn cloth through
+declared time/arm-angle keyframes, preserving velocities and material history. It uses the selected shape without refitting.
+Each interval follows checked linear body-vertex chords, not a certified anatomical joint path. The report retains every accepted
+adaptive substep, maximum panel-edge strain and independent steady endpoint heat. Failed motion publishes no partial trajectory;
+initial static results stay separate. Existing comparison objectives still describe the initial static drape, not a motion frontier.
+No transient thermal, body self-intersection, seated/squat or empirical ride-up claim is made.</p>
 <p class="note">Heat on a flagged or unsettled final frame is not an accepted fit prediction. Signed surface power and body-coverage power
 have different bases and are not interchangeable. Declared heat, strain and simulated-cloth-mass objectives require both settledness and clear gating;
 an available heat number on an unfinished frame is excluded. There is no hidden weighted score, whole-wearer warmth rating or global garment winner.</p>

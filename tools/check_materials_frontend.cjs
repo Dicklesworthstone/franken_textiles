@@ -53,7 +53,19 @@ async function workerModule({ failFold = false, failExport = false, trap = false
   }, { context });
   const module = new vm.SourceTextModule(read('materials-worker.js'), { context });
   await module.link(() => stub); await module.evaluate();
-  const send = async data => { await context.self.onmessage({ data }); return sent.at(-1); };
+  const send = async data => {
+    // Real wasm-bindgen imports execute in Node's module realm, while this worker is a VM realm.
+    // Forward its worker-global progress import to the actual worker callback for this invocation.
+    const previous = globalThis.ftxProgress;
+    if (bindings) globalThis.ftxProgress = line => context.self.ftxProgress(line);
+    try { await context.self.onmessage({ data }); return sent.at(-1); }
+    finally {
+      if (bindings) {
+        if (previous === undefined) delete globalThis.ftxProgress;
+        else globalThis.ftxProgress = previous;
+      }
+    }
+  };
   return { send, sent, called, freed };
 }
 
@@ -390,6 +402,38 @@ test('finite-stock studies expose used inventory and independent refusal without
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
 });
 
+test('motion displays complete continuation separately from initial static heat and preserves endpoint refusals', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const raw = '{"motion":{"time_s":1.0,"coordinate":-0.0}}';
+  p.select('scenarioRequest', raw); await p.e.scenario.onclick();
+  assert.equal(p.current().messages.at(-1).scenarioRequest, raw);
+  const report = scenarioReport(); report.scenario.scenario = { motion: {} };
+  const initial = report.simulations.find(r => r.key === 'A').evaluation.result;
+  initial.motion = outcome({ duration_s: 1, samples: [{}, {}], trials: 3, initial_drape_gating: [],
+    path_sha256: 'exact-motion-source', metrics: { max_absolute_edge_strain_pct: 7.25 },
+    keyframes: [{ time_s: 1, arm_abduction_deg: 40, surface: outcome({ steady: { power_w: -2.5 } }),
+      coverage: refused('<missing endpoint coverage>') }], thermal_basis: 'steady snapshots only' });
+  p.emit(report);
+  const s = section(p, 'Fresh drape and heat alternatives');
+  const table = label => descendants(s).find(n => n.tag === 'table' && n.children[0].textContent.startsWith(label));
+  assert.equal(table('Initial static-drape').children[2].children[5].textContent, '-4.5');
+  assert.deepEqual(plain(table('Prescribed motion').children[2].children.map(n => n.textContent)),
+    ['A', 'Available', 'NO — review initial state', '1', '2', '3', '7.25']);
+  assert.match(table('Prescribed motion').children[3].children[1].textContent, /missing mechanics/);
+  assert.equal(table('Prescribed motion').children[3].children[3].textContent, 'Unknown');
+  assert.deepEqual(plain(table('A: endpoint').children[2].children.map(n => n.textContent)),
+    ['1', '40', 'Available', '-2.5', 'Refused: <missing endpoint coverage>', 'Unknown']);
+  const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('A: motion identities'));
+  d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /exact-motion-source/);
+  assert.match(visibleText(s), /not transient heat/); assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
+  // A later refusal cannot retain a successful earlier trajectory or its endpoint heat table.
+  await p.e.scenario.onclick(); initial.motion = refused('trajectory budget exhausted'); p.emit(report);
+  assert.match(visibleText(table('Prescribed motion')), /trajectory budget exhausted/);
+  assert.equal(table('A: endpoint'), undefined);
+  assert.equal(table('Initial static-drape').children[2].children[5].textContent, '-4.5');
+});
+
 test('study output invalidation follows the actual request/body dependencies, not unrelated preview controls', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   await p.e.study.onclick(); p.emit(studyReport());
@@ -504,7 +548,7 @@ test('assembly mass and finite stock retain independent totals and refusals in m
 // Opt in after tools/build_web.sh. This executes the real production WASM through the actual
 // worker module, with only the Node transport/module loader adapted. It is not HTTP/browser or
 // native parity, successful anatomical body fitting, or empirical textile validation.
-test('compiled WASM study preserves causal manufacturing changes and source-locked worker replay',
+test('compiled WASM studies preserve source replay and optional model-backed motion equality',
   { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
     const pkg = path.join(__dirname, '../web/pkg');
     assert.ok(fs.existsSync(path.join(pkg, 'ftx_wasm_bg.wasm')), 'Build web/pkg before FTX_REAL_WASM=1');
@@ -588,6 +632,28 @@ test('compiled WASM study preserves causal manufacturing changes and source-lock
       r.assembly_mass.result.assembly_mass.kg === null && r.metrics.assembly_mass_kg === undefined));
     const invalid = await w.send({ type: 'scenario', pattern, studyRequest, scenarioRequest: '{}', measurements: '{}', bytes: new ArrayBuffer(8) });
     assert.equal(invalid.type, 'error'); assert.match(invalid.message, /ftxbody/);
+    // Optional positive source-model motion replay from the existing real-binary fixture producer.
+    // It is synthetic geometry, not private wearer data or an anatomical acceptance experiment.
+    if (process.env.FTX_MOTION_REPLAY) {
+      const dir = process.env.FTX_MOTION_REPLAY;
+      const input = name => fs.readFileSync(path.join(dir, name), 'utf8');
+      const bytes = fs.readFileSync(path.join(dir, 'model.ftxbody'));
+      const msg = { type: 'scenario', request: 93, pattern: input('pattern.json'), studyRequest: input('study.json'),
+        scenarioRequest: input('scenario.json'), measurements: input('body-input.json'),
+        bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+      const result = await w.send(msg);
+      assert.equal(result.type, 'result', result.message);
+      assert.deepEqual(result.result, JSON.parse(input('motion-report.json')));
+      assert.equal(result.files.find(f => f.name === 'scenario-request.json').text, msg.scenarioRequest);
+      assert.equal(result.files.find(f => f.name === 'body-input.json').text, msg.measurements);
+      const a = result.result.simulations[0].evaluation.result.motion;
+      const b = result.result.simulations[1].evaluation.result.motion;
+      assert.equal(a.status, 'available'); assert.equal(b.status, 'available');
+      assert.deepEqual(a.result.samples, b.result.samples);
+      assert.notEqual(a.result.keyframes[1].surface.result.steady.power_w, b.result.keyframes[1].surface.result.steady.power_w);
+      assert.equal((await w.send(msg)).files[0].text, result.files[0].text);
+      assert.ok(w.sent.some(m => m.type === 'progress' && m.request === 93 && m.text.includes('motion endpoint')));
+    }
   });
 
 test('explicit body sources replace only scenario evidence and retain exact replay text', async () => {

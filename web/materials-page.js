@@ -168,6 +168,36 @@ function assemblyMassComparison(parent, rows) {
       report || { refusal: row.assembly_mass?.refusal });
   }
 }
+function motionComparison(parent, rows, simulations, requested) {
+  if (!requested && ![...simulations.values()].some(o => available(o)?.motion)) return;
+  const note = document.createElement("p");
+  note.textContent = "Motion continues the initial sewn cloth; it does not re-drape each pose. Initial static metrics and the computed frontier remain separate. " +
+    "Endpoint heat is a steady snapshot, not transient heat during movement. Successful motion is not a settled-garment or empirical fit claim.";
+  parent.append(note);
+  const t = table(parent, "Prescribed motion — complete trajectory or refusal", ["Alternative", "Motion", "Initial drape settled",
+    "Duration (s)", "Accepted substeps", "Attempted substeps", "Peak absolute panel-edge strain (%)"]);
+  for (const row of rows) {
+    const evaluation = simulations.get(row.key), initial = available(evaluation), result = available(initial?.motion);
+    cells(t, [row.key, initial ? state(initial.motion) : state(evaluation),
+      initial?.drape?.settled === true ? "Yes — also review initial flags" : initial?.drape?.settled === false ? "NO — review initial state" : "Unknown",
+      metric(result?.duration_s), metric(result?.samples?.length), metric(result?.trials), metric(result?.metrics?.max_absolute_edge_strain_pct)]);
+    if (!result) continue;
+    const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)", "Arm angle (degrees)",
+      "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
+    for (const endpoint of result.keyframes) {
+      cells(endpoints, [metric(endpoint.time_s), metric(endpoint.arm_abduction_deg), state(endpoint.surface),
+        metric(available(endpoint.surface)?.steady?.power_w), state(endpoint.coverage), metric(available(endpoint.coverage)?.steady?.power_w)]);
+    }
+    detail(parent, `${row.key}: motion identities, material history and endpoint refusals (display only)`, {
+      path_sha256: result.path_sha256, initial_positions_sha256: result.initial_positions_sha256,
+      initial_body_collision_sha256: result.initial_body_collision_sha256, initial_drape_gating: result.initial_drape_gating,
+      retained_vertex_samples: result.retained_vertex_samples, pairs_tested: result.pairs_tested,
+      membrane_history: result.membrane_history, bending_history: result.bending_history,
+      endpoints: result.keyframes.map(e => ({ time_s: e.time_s, positions_sha256: e.positions_sha256,
+        body_collision_sha256: e.body_collision_sha256, surface_refusal: e.surface?.refusal, coverage_refusal: e.coverage?.refusal })),
+      scope: result.scope, thermal_basis: result.thermal_basis });
+  }
+}
 function comparison(op, r) {
   const parent = sections.get(op).comparison;
   if (op === "screen") {
@@ -212,7 +242,7 @@ function comparison(op, r) {
   if (study.screening) screening(parent, study.screening);
   if (op === "scenario") {
     const simulations = new Map(r.simulations.map(row => [row.key, row.evaluation]));
-    const sim = table(parent, "Computed final-frame results — review drape flags before interpreting heat", ["Alternative", "Drape",
+    const sim = table(parent, "Initial static-drape results — review drape flags before interpreting heat", ["Alternative", "Drape",
       "Gating clear", "Cloth mass (kg)", "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
     for (const row of study.alternatives) {
       const outcome = simulations.get(row.key), result = available(outcome), m = result?.metrics || {};
@@ -225,6 +255,7 @@ function comparison(op, r) {
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
     }
+    motionComparison(parent, study.alternatives, simulations, !!r.scenario?.scenario?.motion);
     detail(parent, "Retained body fit, scenario options and environment (display only)", r.scenario);
   }
   return { schema: r.schema, source_pattern_sha256: study.source_pattern_sha256, request_sha256: r.request_sha256,
