@@ -273,3 +273,244 @@ fn budgets_and_identity_are_checked_before_a_solver_starts() {
         serde_json::from_value::<DrapeOptions>(json!({"contact":{"dhat":0.1,"typo":1}})).is_err()
     );
 }
+
+fn motion_scenario() -> Scenario {
+    let mut s = scenario();
+    s.max_vertex_frames = 2_000_000;
+    s.motion = Some(
+        serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+        "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.0},
+            {"time_s":0.004,"arm_abduction_deg":36.0}],
+        "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000}))
+        .unwrap(),
+    );
+    s
+}
+fn path(s: &Scenario, body: &DrapeBody<'_>) -> ftx_drape::study::motion::Path {
+    // Explicit caller-owned cylinder translations, not an anatomical arm-angle fixture.
+    let endpoints = [0.0001, 0.0002]
+        .into_iter()
+        .map(|z| {
+            body.collision
+                .0
+                .iter()
+                .map(|p| *p + Vec3::new(0.0, 0.0, z))
+                .collect()
+        })
+        .collect();
+    ftx_drape::study::motion::Path::new(s.motion.as_ref().unwrap(), body.collision, endpoints)
+        .unwrap()
+}
+
+#[test]
+fn motion_continues_the_same_sewn_solver_and_recomputes_endpoint_heat() {
+    use ftx_drape::motion::{MotionOptions, advance_body};
+    use ftx_drape::start::{edge_strain, face_edges};
+    let form = form();
+    let body = body(&form);
+    let p = pattern();
+    let s = motion_scenario();
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let result = session.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(
+        result["motion"]["status"], "available",
+        "{}",
+        result["motion"]
+    );
+    let motion = &result["motion"]["result"];
+    let mut direct = drape(&p, &s.fit_spec, &body, &s.options, |_| {}).unwrap();
+    assert_eq!(result["drape"], direct.report); // static report is still the INITIAL drape
+    assert_eq!(result["positions_m"], json!(direct.scene.solver.x));
+    let original = direct.scene.solver.x.clone();
+    let mut samples = Vec::new();
+    let edges = face_edges(&direct.scene.mesh.faces);
+    let mut peak = edge_strain(
+        &direct.scene.positions(),
+        &direct.scene.mesh.verts2d,
+        &edges,
+    )
+    .into_iter()
+    .fold(0.0_f64, |a, b| a.max(100.0 * b.abs()));
+    let mut trials = 16;
+    let mut vertices = 10000 - form.vertices.len() - direct.scene.solver.x.len();
+    for (i, z) in [0.0001, 0.0002].into_iter().enumerate() {
+        let target: Vec<_> = form
+            .vertices
+            .iter()
+            .map(|p| *p + Vec3::new(0.0, 0.0, z))
+            .collect();
+        let r = advance_body(
+            &mut direct.scene.solver,
+            &target,
+            0.002,
+            MotionOptions {
+                max_step_s: 0.001,
+                max_trials: trials,
+                max_pairs: 100000,
+                max_sample_vertices: vertices,
+            },
+        )
+        .unwrap();
+        trials -= r.trials;
+        vertices -= r.samples.len() * (form.vertices.len() + direct.scene.solver.x.len());
+        for sample in r.samples {
+            let expanded: Vec<_> = direct.scene.weld.iter().map(|&w| sample.cloth[w]).collect();
+            peak = edge_strain(&expanded, &direct.scene.mesh.verts2d, &edges)
+                .into_iter()
+                .fold(peak, |a, b| a.max(100.0 * b.abs()));
+            samples.push(json!({"time_s":i as f64*0.002+sample.time_s,
+                "positions_m":sample.cloth,"body_positions_m":sample.body}));
+        }
+        let endpoint = &motion["keyframes"][i];
+        assert_eq!(endpoint["surface"]["status"], "available");
+        let actual = &endpoint["surface"]["result"];
+        let boundary = ftx_drape::thermal::Boundary {
+            inside_c: 30.0,
+            outside_c: 10.0,
+            inside_resistance: 0.1,
+            outside_resistance: 0.2,
+        };
+        let solved = direct
+            .steady_thermal_surface()
+            .unwrap()
+            .solve(&direct.scene.solver.x, &[boundary])
+            .unwrap();
+        assert_eq!(actual["steady"], serde_json::to_value(solved).unwrap());
+        assert_eq!(actual["positions_m"], json!(direct.scene.solver.x));
+        let c = &endpoint["coverage"];
+        assert_eq!(c["status"], "available", "{c}");
+        assert_eq!(
+            c["result"]["request"]["map"]["body_positions_m"],
+            json!(target)
+        );
+    }
+    assert_eq!(samples.len(), motion["samples"].as_array().unwrap().len());
+    for (expected, actual) in samples.iter().zip(motion["samples"].as_array().unwrap()) {
+        for field in ["time_s", "positions_m", "body_positions_m"] {
+            assert_eq!(expected[field], actual[field]);
+        }
+        assert_eq!(actual["solve"]["converged"], true);
+    }
+    assert_eq!(motion["final_velocities_m_s"], json!(direct.scene.solver.v));
+    assert_eq!(
+        motion["metrics"]["max_absolute_edge_strain_pct"],
+        json!(peak)
+    );
+    assert_ne!(
+        json!(original),
+        motion["samples"].as_array().unwrap().last().unwrap()["positions_m"]
+    );
+    assert_eq!(
+        motion["path_sha256"],
+        session.descriptor()["motion_path"]["sha256"]
+    );
+    assert_eq!(result, session.evaluate(&p, |_| {}).unwrap());
+}
+
+#[test]
+fn motion_substitutions_keep_history_within_a_variant_not_between_variants() {
+    let form = form();
+    let body = body(&form);
+    let s = motion_scenario();
+    let p = pattern();
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let a = session.evaluate(&p, |_| {}).unwrap();
+    let thermal = session
+        .evaluate(&changed(&p, "thermal_conductivity", 0.1), |_| {})
+        .unwrap();
+    assert_eq!(a["motion"]["status"], "available");
+    assert_eq!(
+        a["motion"]["result"]["samples"],
+        thermal["motion"]["result"]["samples"]
+    );
+    assert_ne!(
+        a["motion"]["result"]["keyframes"][0]["surface"]["result"]["steady"]["power_w"],
+        thermal["motion"]["result"]["keyframes"][0]["surface"]["result"]["steady"]["power_w"]
+    );
+    let heavy = session
+        .evaluate(&changed(&p, "areal_density", 0.4), |_| {})
+        .unwrap();
+    assert_eq!(
+        heavy["motion"]["status"], "available",
+        "{}",
+        heavy["motion"]
+    );
+    assert_ne!(
+        a["motion"]["result"]["samples"],
+        heavy["motion"]["result"]["samples"]
+    );
+    assert_eq!(a, session.evaluate(&p, |_| {}).unwrap());
+}
+
+#[test]
+fn failed_or_unprepared_motion_retains_static_results_and_never_publishes_a_partial_path() {
+    let form = form();
+    let body = body(&form);
+    let p = pattern();
+    let mut s = motion_scenario();
+    let initial = Session::new(&s, &body)
+        .unwrap()
+        .evaluate(&p, |_| {})
+        .unwrap();
+    assert_eq!(initial["motion"]["status"], "refused");
+    assert_eq!(initial["surface"]["status"], "available");
+    let count = form.vertices.len() + initial["positions_m"].as_array().unwrap().len();
+    s.motion.as_mut().unwrap().max_sample_vertices = 3 * count;
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let r = session.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(r["motion"]["status"], "refused");
+    assert!(r["motion"]["result"].is_null());
+    assert_eq!(r["drape"], initial["drape"]);
+    assert_eq!(r["positions_m"], initial["positions_m"]);
+    assert_eq!(r["surface"], initial["surface"]);
+    assert_eq!(r["coverage"], initial["coverage"]);
+    assert!(session.set_motion_path(Ok(path(&s, &body))).is_err());
+    s.max_vertex_frames = 10;
+    let mut progress_called = false;
+    assert_eq!(
+        Session::new(&s, &body)
+            .unwrap()
+            .evaluate(&p, |_| progress_called = true)
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+    assert!(!progress_called);
+}
+
+#[test]
+fn motion_rejects_stale_body_policy_and_invalid_time_before_numerical_work() {
+    let form = form();
+    let body = body(&form);
+    let s = motion_scenario();
+    let mut other = motion_scenario();
+    other.motion.as_mut().unwrap().keyframes[0].arm_abduction_deg = 40.0;
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path(&other, &body))).unwrap();
+    assert!(session.descriptor()["motion_path"]["refusal"].is_object());
+    for mode in 0..5 {
+        let mut m = s.motion.clone().unwrap();
+        match mode {
+            0 => m.keyframes.clear(),
+            1 => m.keyframes[1].time_s = 0.001,
+            2 => m.keyframes[0].arm_abduction_deg = f64::NAN,
+            3 => m.max_trials = 1,
+            _ => m.max_sample_vertices = usize::MAX,
+        }
+        assert!(m.validate().is_err());
+    }
+    let mut other_body = form.vertices.clone();
+    other_body[0].z += 0.001;
+    let path = ftx_drape::study::motion::Path::new(
+        s.motion.as_ref().unwrap(),
+        (&other_body, &form.triangles),
+        vec![other_body.clone(), other_body.clone()],
+    )
+    .unwrap();
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path)).unwrap();
+    assert!(session.descriptor()["motion_path"]["refusal"].is_object());
+}

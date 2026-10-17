@@ -24,6 +24,7 @@ use crate::{
 };
 
 pub mod fitted;
+pub mod motion;
 mod options;
 
 /// Coverage is anchored to triangle IDs on this session's collision body, never a saved old pose.
@@ -61,6 +62,9 @@ pub struct Scenario {
     /// Optional actual body/layer overlap and series transport on the newly draped geometry.
     #[serde(default)]
     pub coverage: Option<Coverage>,
+    /// Optional source-model motion, continuing the same sewn cloth and material history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<motion::Request>,
 }
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -92,6 +96,9 @@ impl Scenario {
     /// Unknown schema, invalid production options or an excessive per-run/aggregate budget.
     pub fn validate(&self) -> Result<(), Refusal> {
         self.options.validate()?;
+        if let Some(motion) = &self.motion {
+            motion.validate()?;
+        }
         if self.schema != "ftx-drape-scenario/1" {
             return Err(invalid("expected ftx-drape-scenario/1"));
         }
@@ -118,6 +125,7 @@ pub struct Session<'a, 'body> {
     body_sha256: String,
     scenario_sha256: String,
     charged_vertex_frames: usize,
+    motion_path: Option<Result<motion::Path, Refusal>>,
 }
 
 impl<'a, 'body> Session<'a, 'body> {
@@ -146,15 +154,51 @@ impl<'a, 'body> Session<'a, 'body> {
             body_sha256,
             scenario_sha256,
             charged_vertex_frames: 0,
+            motion_path: None,
         })
     }
 
     /// Retained scenario and body identities for the application-level study request.
     #[must_use]
     pub fn descriptor(&self) -> Value {
-        json!({"scenario":self.scenario,"body_geometry_sha256":self.body_sha256,
+        let mut descriptor = json!({"scenario":self.scenario,"body_geometry_sha256":self.body_sha256,
             "scenario_sha256":self.scenario_sha256,
-            "body_policy":"one fixed caller-supplied posed body; no material-dependent refitting"})
+            "body_policy":"one fixed caller-supplied posed body; no material-dependent refitting"});
+        if let Some(path) = &self.motion_path {
+            descriptor["motion_path"] = match path {
+                Ok(path) => json!({"sha256":path.sha256()}),
+                Err(refusal) => json!({"refusal":refusal}),
+            };
+        }
+        descriptor
+    }
+
+    /// Attach endpoint geometry once, before any alternative runs. A setup refusal belongs only
+    /// to motion, preserving independent static drape, heat and manufacturing results.
+    ///
+    /// # Errors
+    /// No requested motion, a second attachment or an already-started session.
+    pub fn set_motion_path(&mut self, path: Result<motion::Path, Refusal>) -> Result<(), Refusal> {
+        let request = self
+            .scenario
+            .motion
+            .as_ref()
+            .ok_or_else(|| invalid("no motion requested"))?;
+        if self.charged_vertex_frames != 0 || self.motion_path.is_some() {
+            return Err(invalid(
+                "motion path is immutable once attached or evaluation starts",
+            ));
+        }
+        self.motion_path = Some(path.and_then(|p| {
+            p.validate_for(request, self.body)?;
+            Ok(p)
+        }));
+        self.scenario_sha256 = hash(&(
+            self.scenario,
+            &self.body_sha256,
+            self.descriptor()["motion_path"].clone(),
+        ))?;
+        Ok(())
     }
 
     /// Run actual draping, then evaluate each requested heat consumer independently on its new result.
@@ -166,7 +210,7 @@ impl<'a, 'body> Session<'a, 'body> {
     pub fn evaluate(
         &mut self,
         pattern: &Pattern,
-        progress: impl FnMut(&str),
+        mut progress: impl FnMut(&str),
     ) -> Result<Value, Refusal> {
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
@@ -186,6 +230,16 @@ impl<'a, 'body> Session<'a, 'body> {
             + 4;
         let charge = points
             .checked_mul(frames)
+            // Reserve endpoint heat receipts as well as all accepted body/cloth samples. This
+            // conservative allowance is charged even if a later attempted motion refuses.
+            .and_then(|n| {
+                n.checked_add(
+                    self.scenario
+                        .motion
+                        .as_ref()
+                        .map_or(0, |m| 8 * m.max_sample_vertices),
+                )
+            })
             .ok_or_else(|| budget("scenario work overflow"))?;
         self.charged_vertex_frames = self.charged_vertex_frames.saturating_add(charge);
         if self.charged_vertex_frames > self.scenario.max_vertex_frames {
@@ -193,12 +247,12 @@ impl<'a, 'body> Session<'a, 'body> {
                 "aggregate scenario vertex-frame budget exhausted; no drape started",
             ));
         }
-        let run = drape(
+        let mut run = drape(
             pattern,
             &self.scenario.fit_spec,
             self.body,
             &self.scenario.options,
-            progress,
+            &mut progress,
         )?;
         let surface = self
             .scenario
@@ -212,7 +266,7 @@ impl<'a, 'body> Session<'a, 'body> {
             .coverage
             .as_ref()
             .map_or_else(omitted, |policy| {
-                outcome(self.coverage(policy, &run.report))
+                outcome(coverage_at(policy, &run.report, self.body.collision))
             });
         let positions_sha256 = hash(&run.scene.solver.x)?;
         // Exact resolved placement data disambiguates callers with equal skins but different frames.
@@ -220,8 +274,7 @@ impl<'a, 'body> Session<'a, 'body> {
             "frame":{"origin":p.frame.origin,"up":p.frame.up,"front":p.frame.front,"lat":p.frame.lat},
             "h0":p.h0,"radius":p.radius,"theta_deg":p.theta_deg,"x0":p.x0,
             "mirrored":p.mirrored,"own_side":p.own_side})).collect();
-        Ok(
-            json!({"schema":"ftx-drape-scenario-result/1", "pattern_sha256":hash(pattern.raw())?,
+        let mut result = json!({"schema":"ftx-drape-scenario-result/1", "pattern_sha256":hash(pattern.raw())?,
             "scenario_sha256":self.scenario_sha256,"body_geometry_sha256":self.body_sha256,
             "placements_sha256":hash(&placements)?,"placements":placements,
             "positions_sha256":positions_sha256,"positions_m":run.scene.solver.x,
@@ -233,40 +286,55 @@ impl<'a, 'body> Session<'a, 'body> {
             "drape":run.report,"surface":surface,"coverage":coverage,
             "charged_vertex_frames":charge,"physical_validation_claim":false,
             "comfort_claim":false,"hardware_execution_authorized":false,
-            "note":"Heat is evaluated on this final computed frame even when drape flags require review. No scalar ranking or empirical fit/whole-wearer claim is made."}),
-        )
+            "note":"Heat is evaluated on this final computed frame even when drape flags require review. No scalar ranking or empirical fit/whole-wearer claim is made."});
+        if let Some(request) = &self.scenario.motion {
+            result["motion"] = outcome(match &self.motion_path {
+                Some(Ok(path)) => {
+                    motion::evaluate(request, path, self.scenario, self.body, &mut run, progress)
+                }
+                Some(Err(refusal)) => Err(refusal.clone()),
+                None => Err(invalid(
+                    "motion needs prepared endpoint meshes from the same body shape",
+                )),
+            });
+        }
+        Ok(result)
     }
+}
 
-    fn coverage(&self, policy: &Coverage, report: &Value) -> Result<Value, Refusal> {
-        let mut seen = BTreeSet::new();
-        if policy.body_triangle_ids.is_empty()
-            || policy.body_triangle_ids.len() > 4096
-            || policy
+fn coverage_at(
+    policy: &Coverage,
+    report: &Value,
+    body: (&[ftx_core::Vec3], &[[usize; 3]]),
+) -> Result<Value, Refusal> {
+    let mut seen = BTreeSet::new();
+    if policy.body_triangle_ids.is_empty()
+        || policy.body_triangle_ids.len() > 4096
+        || policy
+            .body_triangle_ids
+            .iter()
+            .any(|&i| i >= body.1.len() || !seen.insert(i))
+    {
+        return Err(invalid(
+            "coverage needs 1..4096 unique current collision-body triangle IDs",
+        ));
+    }
+    coverage::Request {
+        schema: "ftx-steady-coverage-request/1".into(),
+        report: report.clone(),
+        map: coverage::Map {
+            body_positions_m: body.0.to_vec(),
+            body_triangles: policy
                 .body_triangle_ids
                 .iter()
-                .any(|&i| i >= self.body.collision.1.len() || !seen.insert(i))
-        {
-            return Err(invalid(
-                "coverage needs 1..4096 unique current collision-body triangle IDs",
-            ));
-        }
-        coverage::Request {
-            schema: "ftx-steady-coverage-request/1".into(),
-            report: report.clone(),
-            map: coverage::Map {
-                body_positions_m: self.body.collision.0.to_vec(),
-                body_triangles: policy
-                    .body_triangle_ids
-                    .iter()
-                    .map(|&i| self.body.collision.1[i])
-                    .collect(),
-                instance_layers: policy.instance_layers.clone(),
-                settings: policy.settings.clone(),
-            },
-            conditions: policy.conditions.clone(),
-        }
-        .evaluate()
+                .map(|&i| body.1[i])
+                .collect(),
+            instance_layers: policy.instance_layers.clone(),
+            settings: policy.settings.clone(),
+        },
+        conditions: policy.conditions.clone(),
     }
+    .evaluate()
 }
 
 // Conservative admission bound BEFORE the reference mesher allocates its spacing-dependent arrays.
