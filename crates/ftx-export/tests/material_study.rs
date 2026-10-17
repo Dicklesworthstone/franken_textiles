@@ -342,6 +342,279 @@ fn comparison(r: &mut Request, objectives: Value, constraints: Value, consumers:
     );
 }
 
+fn mass_request() -> ftx_export::assembly_mass::Request {
+    serde_json::from_value(json!({"schema":"ftx-assembly-mass/1", "inventory_complete":true,
+        "extras":[{"id":"all-thread-and-closures", "allow_estimates":true,
+        "mass":{"value":0.02,"unit":"kg","evidence":"estimate","source":"test","method":"Synthetic retained extras"},
+        "sources":{"test":{"reference":"test:study-extras","accessed_on":"2026-10-16","note":"Synthetic only"}}}]})).unwrap()
+}
+
+#[test]
+fn full_assembly_mass_matches_direct_consumer_without_changing_other_plans() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = request();
+    let without = evaluate(&r, &p);
+    assert!(row(&without, "wide").get("assembly_mass").is_none());
+    r.assembly_mass = Some(mass_request());
+    let report = evaluate(&r, &p);
+    for key in ["wide", "narrow", "thick", "missing-width"] {
+        let a = row(&report, key);
+        for consumer in ["binding", "cutting", "sewing", "purchasing"] {
+            assert_eq!(a[consumer], row(&without, key)[consumer]);
+        }
+        let bound = Pattern::new(a["binding"]["result"]["pattern"].clone());
+        assert_eq!(
+            a["assembly_mass"]["result"],
+            serde_json::to_value(r.assembly_mass.as_ref().unwrap().evaluate(&bound).unwrap())
+                .unwrap()
+        );
+        let total = a["metrics"]["assembly_mass_kg"].as_f64().unwrap();
+        assert!((total - (0.0096 * 0.2 + 0.02)).abs() < 1e-12);
+    }
+    assert_eq!(
+        row(&report, "unknown")["assembly_mass"]["status"],
+        "refused"
+    );
+    assert_eq!(
+        row(&report, "missing-width")["cutting"]["status"],
+        "refused"
+    );
+    assert_eq!(row(&report, "thick")["sewing"]["status"], "refused");
+    assert_eq!(report, evaluate(&r, &p));
+    r.cutting.as_mut().unwrap().copies = 3;
+    let many = evaluate(&r, &p);
+    assert_eq!(
+        row(&many, "wide")["assembly_mass"],
+        row(&report, "wide")["assembly_mass"]
+    );
+    assert!(
+        row(&many, "wide")["metrics"]["stock_mass_kg"]
+            .as_f64()
+            .unwrap()
+            > row(&report, "wide")["metrics"]["stock_mass_kg"]
+                .as_f64()
+                .unwrap()
+    );
+}
+
+#[test]
+fn mass_only_frontier_counts_unsimulated_lining_and_does_not_require_width_or_body() {
+    let mut p: Value = serde_json::from_str(PATTERN).unwrap();
+    p["pieces"][1]["sim"] = json!(false);
+    p["pieces"][1]["fabric"] = json!({"material":selection("fixed-lining", 0.1, 0.4)});
+    let p = Pattern::new(p);
+    let mut r = request();
+    r.cutting = None;
+    r.sewing = None;
+    r.purchasing = None;
+    r.assembly_mass = Some(mass_request());
+    r.variants.clear();
+    for (key, density) in [
+        ("light", Some(0.1)),
+        ("heavy", Some(0.3)),
+        ("unknown", None),
+    ] {
+        let mut material = selection(key, 0.1, 0.4);
+        material["record"]["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("width");
+        if let Some(density) = density {
+            material["record"]["properties"]["areal_density"]["value"] = json!(density);
+        } else {
+            material["record"]["properties"]
+                .as_object_mut()
+                .unwrap()
+                .remove("areal_density");
+        }
+        r.variants
+            .push(serde_json::from_value(variant(key, material)).unwrap());
+    }
+    comparison(
+        &mut r,
+        json!([{"metric":"assembly_mass_kg", "direction":"minimize"}]),
+        json!([]),
+        json!([]),
+    );
+    let report = evaluate(&r, &p);
+    assert_eq!(report["comparison"]["frontier"], json!(["light"]));
+    assert_eq!(
+        row(&report["comparison"], "heavy")["dominated_by"],
+        json!(["light"])
+    );
+    assert_eq!(row(&report["comparison"], "unknown")["eligible"], false);
+    assert_eq!(row(&report, "light")["cutting"]["status"], "not_requested");
+    let mass = &row(&report, "light")["assembly_mass"]["result"];
+    assert_eq!(mass["pieces"].as_array().unwrap().len(), 2);
+    assert!(
+        (mass["assembly_mass"]["kg"].as_f64().unwrap() - (0.0048 * (0.1 + 0.2) + 0.02)).abs()
+            < 1e-12
+    );
+    let failed_sim = r
+        .evaluate_with(&p, &json!({"body":"unavailable"}), |_, _| {
+            Err::<Value, _>(ftx_core::Refusal::new(
+                ftx_core::RefusalCode::NotConverged,
+                "synthetic body failure",
+            ))
+        })
+        .unwrap();
+    let failed_sim = serde_json::to_value(failed_sim).unwrap();
+    assert_eq!(
+        failed_sim["comparison"]["frontier"],
+        report["comparison"]["frontier"]
+    );
+    assert!(
+        failed_sim["simulations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["evaluation"]["status"] == "refused")
+    );
+}
+
+#[test]
+fn incomplete_mass_is_not_a_winning_zero_or_a_successful_required_consumer() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = request();
+    r.assembly_mass = Some(mass_request());
+    comparison(
+        &mut r,
+        json!([{"metric":"assembly_mass_kg", "direction":"minimize"}]),
+        json!([]),
+        json!([]),
+    );
+    assert!(
+        !evaluate(&r, &p)["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    r.assembly_mass.as_mut().unwrap().inventory_complete = false;
+    let incomplete = evaluate(&r, &p);
+    assert_eq!(incomplete["comparison"]["frontier"], json!([]));
+    assert!(row(&incomplete, "wide")["assembly_mass"]["result"]["sheet_mass"]["kg"].is_number());
+    assert!(row(&incomplete, "wide")["metrics"]["assembly_mass_kg"].is_null());
+    comparison(
+        &mut r,
+        json!([{"metric":"stock_area_m2", "direction":"minimize"}]),
+        json!([]),
+        json!(["assembly_mass"]),
+    );
+    assert_eq!(evaluate(&r, &p)["comparison"]["frontier"], json!([]));
+    r.assembly_mass.as_mut().unwrap().inventory_complete = true;
+    r.assembly_mass.as_mut().unwrap().extras[0].mass = None;
+    let unknown = evaluate(&r, &p);
+    assert_eq!(unknown["comparison"]["frontier"], json!([]));
+    assert_ne!(unknown["request_sha256"], incomplete["request_sha256"]);
+    r.comparison.as_mut().unwrap().required_consumers.clear();
+    assert!(
+        !evaluate(&r, &p)["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn mass_comparison_respects_density_protocols_constraints_and_same_cut_geometry() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = request();
+    r.variants
+        .retain(|v| ["wide", "narrow"].contains(&v.key.as_str()));
+    r.assembly_mass = Some(mass_request());
+    comparison(
+        &mut r,
+        json!([{"metric":"assembly_mass_kg", "direction":"minimize"}]),
+        json!([]),
+        json!([]),
+    );
+    // Width qualifiers are unrelated to retained mass and must not block this comparison.
+    let material = r.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap();
+    material.properties.get_mut("width").unwrap().method =
+        "Different irrelevant width method".into();
+    assert_eq!(evaluate(&r, &p)["comparison"]["incomparable"], json!([]));
+    let material = r.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap();
+    material
+        .properties
+        .get_mut("areal_density")
+        .unwrap()
+        .conditions
+        .insert("conditioning".into(), "different".into());
+    assert_eq!(
+        evaluate(&r, &p)["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    r.assembly_mass.as_mut().unwrap().seam_allowance_mm = Some(10.);
+    assert!(
+        !evaluate(&r, &p)["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    r.assembly_mass.as_mut().unwrap().seam_allowance_mm = Some(11.);
+    let mismatch = evaluate(&r, &p);
+    assert_eq!(mismatch["comparison"]["frontier"], json!([]));
+    assert_eq!(row(&mismatch, "wide")["cutting"]["status"], "available");
+    assert_eq!(row(&mismatch, "wide")["assembly_mass"]["status"], "refused");
+    r.cutting.as_mut().unwrap().seam_allowance_mm = Some(11.);
+    let matched = evaluate(&r, &p);
+    let mass = row(&matched, "wide")["metrics"]["assembly_mass_kg"]
+        .as_f64()
+        .unwrap();
+    r.comparison.as_mut().unwrap().constraints = vec![
+        serde_json::from_value(json!({"metric":"assembly_mass_kg","minimum":mass,"maximum":mass}))
+            .unwrap(),
+    ];
+    assert!(
+        !evaluate(&r, &p)["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    r.comparison.as_mut().unwrap().constraints[0].minimum = None;
+    r.comparison.as_mut().unwrap().constraints[0].maximum = Some(mass * 0.99);
+    assert_eq!(evaluate(&r, &p)["comparison"]["frontier"], json!([]));
+    r.assembly_mass = None;
+    assert!(r.evaluate(&p).is_err());
+}
+
+#[test]
+fn aggregate_extra_inventory_is_admitted_before_any_study_evaluation() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = request();
+    r.assembly_mass = Some(mass_request());
+    let extra = r.assembly_mass.as_ref().unwrap().extras[0].clone();
+    r.assembly_mass.as_mut().unwrap().extras = (0..1024)
+        .map(|i| {
+            let mut e = extra.clone();
+            e.id = format!("group-{i}");
+            e
+        })
+        .collect();
+    assert_eq!(
+        r.evaluate(&p).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
 #[test]
 fn computed_pareto_set_keeps_real_cost_mass_tradeoffs_ties_and_frozen_outputs() {
     let p = Pattern::from_json(PATTERN).unwrap();

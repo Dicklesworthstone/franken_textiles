@@ -260,6 +260,16 @@ impl Request {
     /// Malformed/unscaled geometry, implicit layers, ambiguous/overlapping cutouts or work overflow.
     /// Missing source mass is reported per contribution and never yields a complete total.
     pub fn evaluate(&self, pattern: &Pattern) -> Result<Report, Refusal> {
+        self.evaluate_with_work(pattern, &mut Work::new(20_000_000))
+    }
+
+    // Studies share an aggregate geometry budget across successful AND refused alternatives.
+    pub(crate) fn evaluate_with_work(
+        &self,
+        pattern: &Pattern,
+        work: &mut Work,
+    ) -> Result<Report, Refusal> {
+        let initial_work = work.used;
         self.validate()?;
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
@@ -333,11 +343,10 @@ impl Request {
                 }
             }
         }
-        let mut work = Work::new(20_000_000);
         let mut pieces = Vec::with_capacity(pattern.instances.len());
         for instance in &pattern.instances {
             let geom = ctx.geom(crate::Source::Instance(instance), 6.0)?;
-            let (external, cutouts) = areas(&geom, &mut work)?;
+            let (external, cutouts) = areas(&geom, work)?;
             let retained = positive(external - cutouts)?;
             let material = &materials[instance.piece_index];
             let mass = Mass::from_result(material.as_ref().map_err(Clone::clone).and_then(|m| {
@@ -380,7 +389,7 @@ impl Request {
             sheet_mass,
             extras,
             assembly_mass,
-            geometry_work: work.used,
+            geometry_work: work.used - initial_work,
             physical_validation_claim: false,
             limitations: vec![
                 "One authored assembly: all expanded cut pieces, including sim:false and unplaced pieces, plus explicitly inventoried retained extras. Purchased waste and simulation scaling are excluded.",

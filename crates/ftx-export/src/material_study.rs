@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    Ctx, ExportOptions, assembly_mass,
     cutting::{
         CutOptions, CutPlan,
+        geometry::Work,
         procurement::{self, Market},
     },
     sewing::{SewOptions, SewPlan},
@@ -91,6 +93,9 @@ pub struct Request {
     /// Optional pricing requires cutting, because purchased area comes from the actual marker.
     #[serde(default)]
     pub purchasing: Option<Purchasing>,
+    /// Optional complete cut-piece inventory plus declared extras for ONE assembly, not stock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly_mass: Option<assembly_mass::Request>,
     /// Optional explicit objectives over actual consumer outputs, not scalar catalog screening.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comparison: Option<comparison::Policy>,
@@ -115,6 +120,9 @@ pub enum Outcome<T> {
 }
 
 impl<T> Outcome<T> {
+    fn is_not_requested(&self) -> bool {
+        matches!(self, Self::NotRequested)
+    }
     fn from_result(result: Result<T, Refusal>) -> Self {
         match result {
             Ok(result) => Self::Available { result },
@@ -138,6 +146,10 @@ pub struct Metrics {
     pub external_cut_area_m2: Option<f64>,
     /// Complete purchased-stock mass only; absent if any roll lacks admitted areal density.
     pub stock_mass_kg: Option<f64>,
+    /// Complete declared pre-finishing cut assembly, including unsimulated pieces and extras.
+    /// Missing contributions or an incomplete inventory yield no value, not a subtotal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assembly_mass_kg: Option<f64>,
     /// Least observed independent whole-order total in the request currency; absent for any
     /// missing offer. Neither a live quote guarantee nor a market-population percentile.
     pub least_observed_independent_order_total: Option<f64>,
@@ -163,6 +175,9 @@ pub struct Alternative {
     pub sewing: Outcome<SewPlan>,
     /// Real marker-derived purchasing output or refusal; missing offers remain explicit within it.
     pub purchasing: Outcome<Value>,
+    /// Every physical cut piece plus sourced extras; an available report can still have unknown mass.
+    #[serde(skip_serializing_if = "Outcome::is_not_requested")]
+    pub assembly_mass: Outcome<assembly_mass::Report>,
     /// Selected actual-plan numbers for side-by-side comparison, never fabricated for failed cells.
     pub metrics: Metrics,
 }
@@ -243,10 +258,16 @@ impl Request {
         if let Some(policy) = &self.comparison {
             policy.validate(self, additional_consumer)?;
         }
+        if let Some(mass) = &self.assembly_mass {
+            mass.validate()?;
+        }
         if self.schema != "ftx-material-study/1"
             || (self.screened.is_some() && !self.variants.is_empty())
             || (self.screened.is_none() && self.variants.is_empty())
-            || (!additional_consumer && self.cutting.is_none() && self.sewing.is_none())
+            || (!additional_consumer
+                && self.cutting.is_none()
+                && self.sewing.is_none()
+                && self.assembly_mass.is_none())
             || (self.purchasing.is_some() && self.cutting.is_none())
         {
             return Err(invalid(
@@ -401,7 +422,8 @@ impl Request {
         {
             return Err(invalid("material variant keys must be unique and nonempty"));
         }
-        let copies = self.cutting.as_ref().map_or(1, |c| c.copies);
+        // A malformed zero-copy cutting request must not bypass admission of other consumers.
+        let copies = self.cutting.as_ref().map_or(1, |c| c.copies.max(1));
         if pattern
             .instances
             .len()
@@ -412,16 +434,26 @@ impl Request {
                 .sewing
                 .as_ref()
                 .is_some_and(|s| s.passes.len().saturating_mul(variants.len()) > 4096)
+            || self
+                .assembly_mass
+                .as_ref()
+                .is_some_and(|m| m.extras.len().saturating_mul(variants.len()) > 4096)
         {
             return Err(budget(
-                "material study exceeds aggregate instance/pass budget",
+                "material study exceeds aggregate instance/pass/extra inventory budget",
             ));
         }
         variants.sort_by(|a, b| a.key.cmp(&b.key));
         let mut alternatives = Vec::new();
         let mut stations = 0usize;
+        let mut mass_work = Work::new(40_000_000);
         for variant in variants {
-            let row = self.evaluate_variant(pattern, variant)?;
+            let row = self.evaluate_variant(pattern, variant, &mut mass_work)?;
+            if mass_work.exhausted {
+                return Err(budget(
+                    "material study exceeds aggregate mass geometry budget",
+                ));
+            }
             if let Some(sewing) = row.sewing.value() {
                 stations = stations.saturating_add(
                     sewing
@@ -452,6 +484,15 @@ impl Request {
                     self.purchasing.as_ref().map(|p| p.market.currency.as_str()),
                 )
             });
+        let mut notes = vec![
+            "All variants start from the same source geometry and process options. Default replacements preserve explicit piece assignments; named-piece replacements do not change unrelated pieces.",
+            "Scalar-screening dominance is not garment/marker dominance. Frontier-only pruning happens solely when explicitly requested; manufacturing outputs are not assigned a hidden aggregate score.",
+            "Missing mass or offer coverage stays unknown. Stock mass includes waste, feed time excludes handling, and purchased quantities come from actual roll markers, not net pattern area.",
+            "Binding and available plans are not a successful drape, empirical fit, thermal-comfort prediction, seam qualification or permission to operate machinery. Source-locked pattern_json can be passed to the existing drape/thermal/export consumers.",
+        ];
+        if self.assembly_mass.is_some() {
+            notes.push("Declared assembly mass counts one pre-finishing cut inventory plus explicitly sourced retained extras. Cutting copies multiply purchased stock, not this one-assembly mass; finishing changes and unrepresented components are not inferred.");
+        }
         Ok(Report {
             schema: "ftx-material-study-report/1",
             source_pattern_sha256,
@@ -462,16 +503,16 @@ impl Request {
             geometry_changed: false,
             hardware_execution_authorized: false,
             physical_validation_claim: false,
-            notes: vec![
-                "All variants start from the same source geometry and process options. Default replacements preserve explicit piece assignments; named-piece replacements do not change unrelated pieces.",
-                "Scalar-screening dominance is not garment/marker dominance. Frontier-only pruning happens solely when explicitly requested; manufacturing outputs are not assigned a hidden aggregate score.",
-                "Missing mass or offer coverage stays unknown. Stock mass includes waste, feed time excludes handling, and purchased quantities come from actual roll markers, not net pattern area.",
-                "Binding and available plans are not a successful drape, empirical fit, thermal-comfort prediction, seam qualification or permission to operate machinery. Source-locked pattern_json can be passed to the existing drape/thermal/export consumers.",
-            ],
+            notes,
         })
     }
 
-    fn evaluate_variant(&self, source: &Pattern, variant: Variant) -> Result<Alternative, Refusal> {
+    fn evaluate_variant(
+        &self,
+        source: &Pattern,
+        variant: Variant,
+        mass_work: &mut Work,
+    ) -> Result<Alternative, Refusal> {
         let binding = variant.changes.apply(source);
         let mut row = Alternative {
             key: variant.key,
@@ -480,6 +521,7 @@ impl Request {
             cutting: Outcome::NotRequested,
             sewing: Outcome::NotRequested,
             purchasing: Outcome::NotRequested,
+            assembly_mass: Outcome::NotRequested,
             metrics: Metrics::default(),
         };
         let bound = match binding {
@@ -500,6 +542,11 @@ impl Request {
                         refusal: refusal.clone(),
                     };
                 }
+                if self.assembly_mass.is_some() {
+                    row.assembly_mass = Outcome::Refused {
+                        refusal: refusal.clone(),
+                    };
+                }
                 row.binding = Outcome::Refused { refusal };
                 return Ok(row);
             }
@@ -511,6 +558,35 @@ impl Request {
         }
         if let Some(options) = &self.sewing {
             row.sewing = Outcome::from_result(SewPlan::build(&pattern, options));
+        }
+        if let Some(request) = &self.assembly_mass {
+            let mass = (|| {
+                // Both consumers must describe the same cut outline. Compare the effective
+                // exporter defaults, allowing None versus an explicitly equal value.
+                if let Some(cutting) = &self.cutting {
+                    let allowance = |sa| {
+                        Ctx::new(
+                            &pattern,
+                            ExportOptions {
+                                sa,
+                                ..ExportOptions::default()
+                            },
+                        )
+                        .map(|ctx| ctx.sa)
+                    };
+                    if allowance(request.seam_allowance_mm)?
+                        != allowance(cutting.seam_allowance_mm)?
+                    {
+                        return Err(invalid(
+                            "assembly mass and cutting need the same effective seam allowance",
+                        ));
+                    }
+                }
+                request.evaluate_with_work(&pattern, mass_work)
+            })();
+            row.assembly_mass = Outcome::from_result(mass);
+            row.metrics.assembly_mass_kg =
+                row.assembly_mass.value().and_then(|r| r.assembly_mass.kg);
         }
         if let Some(purchasing) = &self.purchasing {
             row.purchasing = match &row.cutting {

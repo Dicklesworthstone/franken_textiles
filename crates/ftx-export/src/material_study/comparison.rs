@@ -26,6 +26,8 @@ pub enum Consumer {
     Sewing,
     /// Complete marker-derived whole-order offer coverage in the request's dated market scope.
     Purchasing,
+    /// Complete declared pre-finishing assembly inventory, not a purchased or simulated subset.
+    AssemblyMass,
     /// Fresh, geometrically settled, gating-clear production drape in the retained scenario.
     Drape,
     /// Successful independent sheet-column heat on an admitted drape, not whole-body heat.
@@ -44,6 +46,8 @@ pub enum Metric {
     ExternalCutAreaM2,
     /// Complete gross stock mass, in kilograms, never a partial sum.
     StockMassKg,
+    /// All retained physical cut pieces plus sourced extras for ONE declared assembly (kg).
+    AssemblyMassKg,
     /// Least observed independent whole-order total in the explicit market currency.
     ObservedOrderCost,
     /// Traversed stitch intervals, including declared locks and repeated passes.
@@ -64,6 +68,7 @@ impl Metric {
     fn consumer(self) -> Consumer {
         match self {
             Self::StockAreaM2 | Self::ExternalCutAreaM2 | Self::StockMassKg => Consumer::Cutting,
+            Self::AssemblyMassKg => Consumer::AssemblyMass,
             Self::ObservedOrderCost => Consumer::Purchasing,
             Self::StitchIntervals | Self::FeedSeconds => Consumer::Sewing,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
@@ -74,7 +79,7 @@ impl Metric {
     fn unit(self, currency: Option<&str>) -> &str {
         match self {
             Self::StockAreaM2 | Self::ExternalCutAreaM2 => "m2",
-            Self::StockMassKg => "kg",
+            Self::StockMassKg | Self::AssemblyMassKg => "kg",
             Self::ObservedOrderCost => currency.unwrap_or("unavailable currency"),
             Self::StitchIntervals => "count",
             Self::FeedSeconds => "s",
@@ -88,6 +93,7 @@ impl Metric {
             Self::StockAreaM2 => row.metrics.stock_area_m2,
             Self::ExternalCutAreaM2 => row.metrics.external_cut_area_m2,
             Self::StockMassKg => row.metrics.stock_mass_kg,
+            Self::AssemblyMassKg => row.assembly_mass.value().and_then(|r| r.assembly_mass.kg),
             Self::ObservedOrderCost => row.metrics.least_observed_independent_order_total,
             Self::StitchIntervals => row.metrics.stitch_intervals.map(|n| n as f64),
             Self::FeedSeconds => row.metrics.feed_seconds,
@@ -228,10 +234,10 @@ impl Policy {
         if self.objectives.is_empty()
             || self.objectives.len() > 16
             || self.constraints.len() > 64
-            || self.required_consumers.len() > 6
+            || self.required_consumers.len() > 7
         {
             return Err(invalid(
-                "comparison needs 1..16 objectives, at most 64 constraints and 6 consumers",
+                "comparison needs 1..16 objectives, at most 64 constraints and 7 consumers",
             ));
         }
         let mut metrics = BTreeSet::new();
@@ -260,6 +266,7 @@ impl Policy {
                 Consumer::Cutting => request.cutting.is_some(),
                 Consumer::Sewing => request.sewing.is_some(),
                 Consumer::Purchasing => request.purchasing.is_some(),
+                Consumer::AssemblyMass => request.assembly_mass.is_some(),
                 Consumer::Drape | Consumer::Surface | Consumer::Coverage => additional_consumer,
             };
             if !requested {
@@ -490,7 +497,9 @@ impl Policy {
         if consumers.contains(&Consumer::Sewing) {
             keys.insert("thickness");
         }
-        if self.metrics().contains(&Metric::StockMassKg) {
+        if self.metrics().contains(&Metric::StockMassKg)
+            || consumers.contains(&Consumer::AssemblyMass)
+        {
             keys.insert("areal_density");
         }
         let mechanics = self.needs_simulation();
@@ -577,6 +586,12 @@ fn consumer_available(row: &Alternative, consumer: Consumer, simulation: &Value)
             .purchasing
             .value()
             .is_some_and(|p| p["complete_offer_coverage"] == true),
+        Consumer::AssemblyMass => row.assembly_mass.value().is_some_and(|r| {
+            r.assembly_mass.kg.is_some()
+                && row.binding.value().is_some_and(|b| {
+                    b["pattern_sha256"].as_str() == Some(r.pattern_sha256.as_str())
+                })
+        }),
         Consumer::Drape => !simulation.is_null(),
         Consumer::Surface => simulation["surface"]["status"] == "available",
         Consumer::Coverage => simulation["coverage"]["status"] == "available",
