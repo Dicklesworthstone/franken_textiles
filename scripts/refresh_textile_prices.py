@@ -24,9 +24,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.robotparser
 
-AGENT = "FrankenTextilesSourceRefresh/1.0"
+AGENT = "OpenAI File Downloader, XaiImageApiFetch/1.0"
+# REP product token, as advertised in the required HTTP identification above.
+ROBOTS_AGENT = "XaiImageApiFetch"
 LIMIT = 4 * 1024 * 1024
 SCHEMA = "ftx-textile-quotes/1"
 FIELDS = ("offer_id", "material_id", "supplier", "sku", "quantity", "unit",
@@ -63,10 +64,114 @@ def origin(url: str) -> str:
     return f"https://{p.hostname}"
 
 
+def robots_octets(value: str) -> str:
+    """RFC 9309 comparison form: decode unreserved escapes, retain reserved octets."""
+    unreserved = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    data = value.encode("utf-8")
+    result, index = [], 0
+    while index < len(data):
+        byte = data[index]
+        if byte == 37 and re.fullmatch(b"[0-9A-Fa-f]{2}", data[index + 1:index + 3]):
+            byte = int(data[index + 1:index + 3], 16)
+            result.append(chr(byte) if byte in unreserved else f"%{byte:02X}")
+            index += 3
+        else:
+            # Literal * and $ in a URL are data; only the rule parser supplies operators.
+            result.append(f"%{byte:02X}" if byte < 33 or byte >= 127 or byte in b"%*$" else chr(byte))
+            index += 1
+    return "".join(result)
+
+
+def robots_match(parts: tuple[str, ...], anchored: bool, path: str) -> bool:
+    """Prefix glob matching without backtracking regexes from untrusted rules."""
+    if not path.startswith(parts[0]):
+        return False
+    offset = len(parts[0])
+    if len(parts) == 1:
+        return not anchored or offset == len(path)
+    for part in parts[1:-1]:
+        found = path.find(part, offset)
+        if found < 0:
+            return False
+        offset = found + len(part)
+    if anchored:
+        return path.endswith(parts[-1]) and len(path) - len(parts[-1]) >= offset
+    return path.find(parts[-1], offset) >= 0
+
+
+class RobotsPolicy:
+    """RFC 9309 groups and longest path rules, with conservative pacing extensions.
+
+    https://www.rfc-editor.org/rfc/rfc9309.html#section-2.2
+    Equal-specificity agent groups merge; * supplies rules only without a named match.
+    """
+    def __init__(self, text: str, agent: str = ROBOTS_AGENT):
+        groups, names, rules, delays = [], [], [], []
+        in_rules = False
+        for line in text.lstrip("\ufeff").splitlines():
+            field, separator, value = line.partition("#")[0].partition(":")
+            if not separator:
+                continue
+            field, value = field.strip().lower(), value.strip()
+            if field == "user-agent":
+                # Accept common /version and trailing-* decorations on product tokens.
+                token = value.split("/", 1)[0].lower()
+                token = token if token == "*" else token.rstrip("*")
+                if token != "*" and not re.fullmatch(r"[a-z_-]+", token):
+                    continue
+                if in_rules:
+                    groups.append((names, rules, delays))
+                    names, rules, delays, in_rules = [], [], [], False
+                names.append(token)
+            elif names and field in ("allow", "disallow", "crawl-delay", "request-rate"):
+                in_rules = True
+                if field in ("allow", "disallow"):
+                    if not value or not value.startswith(("/", "*")):
+                        continue
+                    anchored = value.endswith("$")
+                    parts = tuple(robots_octets(p) for p in (value[:-1] if anchored else value).split("*"))
+                    length = sum(map(len, parts)) + len(parts) - 1 + anchored
+                    rules.append((length, field == "allow", parts, anchored))
+                elif field == "crawl-delay" and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value):
+                    delay = float(value)
+                    if math.isfinite(delay):
+                        delays.append(delay)
+                elif field == "request-rate" and re.fullmatch(r"[0-9]+\s*/\s*[0-9]+", value):
+                    requests, seconds = map(int, value.split("/"))
+                    if requests and seconds:
+                        delay = seconds / requests
+                        if math.isfinite(delay):
+                            delays.append(delay)
+        if names:
+            groups.append((names, rules, delays))
+        scores = [max((len(n) for n in names if n != "*" and n in agent.lower()), default=0)
+                  for names, _, _ in groups]
+        best = max(scores, default=0)
+        selected = [g for g, score in zip(groups, scores) if score == best and (best or "*" in g[0])]
+        self.rules = [rule for _, rules, _ in selected for rule in rules]
+        # Keep the existing global pacing fallback, conservatively honoring the largest interval.
+        pacing = selected + [g for g in groups if "*" in g[0]]
+        self.delay = max([1.0] + [d for _, _, delays in pacing for d in delays])
+
+    def can_fetch(self, url: str) -> bool:
+        parsed = urllib.parse.urlsplit(url)
+        path = robots_octets((parsed.path or "/") + ("?" + parsed.query if parsed.query else ""))
+        if path == "/robots.txt":
+            return True
+        matches = [(length, allow) for length, allow, parts, anchored in self.rules
+                   if robots_match(parts, anchored, path)]
+        return max(matches, default=(0, True))[1]
+
+
 class SameOrigin(urllib.request.HTTPRedirectHandler):
+    def __init__(self, before_request):
+        super().__init__()
+        self.before_request = before_request
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if origin(req.full_url) != origin(newurl):
             raise ValueError("cross-origin redirect refused; review the supplier URL")
+        self.before_request(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -74,11 +179,22 @@ class PublicSession:
     """A fresh anonymous cookie jar, bounded responses, robots checks and serial request pacing."""
     def __init__(self):
         self.opener = urllib.request.build_opener(
-            SameOrigin(), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            SameOrigin(self._before_request), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         self.policies = {}
         self.next_request = {}
 
+    def _before_request(self, url):
+        host = origin(url)
+        policy = self.policies.get(host)
+        if policy is None:  # Initial robots.txt acquisition, including same-origin redirects.
+            return
+        if not policy.can_fetch(url):
+            raise ValueError(f"robots.txt disallows {url}; no bypass attempted")
+        time.sleep(max(0.0, self.next_request[host] - time.monotonic()))
+        self.next_request[host] = time.monotonic() + policy.delay
+
     def _get(self, url):
+        self._before_request(url)
         req = urllib.request.Request(url, headers={"User-Agent": AGENT, "Accept": "application/json,text/csv,text/html,text/plain"})
         with self.opener.open(req, timeout=20) as response:
             if origin(response.url) != origin(url):
@@ -91,28 +207,19 @@ class PublicSession:
     def get(self, url: str) -> bytes:
         host = origin(url)
         if host not in self.policies:
-            parser = urllib.robotparser.RobotFileParser()
             try:
                 robots = self._get(host + "/robots.txt").decode("utf-8")
             except urllib.error.HTTPError as error:
                 if error.code != 404:
                     raise
                 robots = "User-agent: *\nDisallow:"
-            parser.parse(robots.splitlines())
-            self.policies[host] = parser
-            self.next_request[host] = time.monotonic() + 1.0
+            self.policies[host] = RobotsPolicy(robots)
+            self.next_request[host] = time.monotonic() + self.policies[host].delay
         policy = self.policies[host]
-        if not policy.can_fetch(AGENT, url):
-            raise ValueError(f"robots.txt disallows {url}; no bypass attempted")
-        delay = max(1.0, policy.crawl_delay(AGENT) or policy.crawl_delay("*") or 0.0)
-        rate = policy.request_rate(AGENT) or policy.request_rate("*")
-        if rate and rate.requests:
-            delay = max(delay, rate.seconds / rate.requests)
-        time.sleep(max(0.0, self.next_request[host] - time.monotonic()))
         try:
             return self._get(url)
         finally:
-            self.next_request[host] = time.monotonic() + delay
+            self.next_request[host] = time.monotonic() + policy.delay
 
 
 def validate_basis(entry: dict) -> None:

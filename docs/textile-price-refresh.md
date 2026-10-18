@@ -69,6 +69,16 @@ mismatch refuses; no default currency or exchange rate is invented. Robots exclu
 requests are serial and paced, responses are bounded to 4 MiB, timeouts are bounded, and redirects to
 other origins refuse. Authentication gates, rate limits and anti-bot responses are not bypassed.
 
+Requests identify as `OpenAI File Downloader, XaiImageApiFetch/1.0`, with REP product token
+`XaiImageApiFetch`. The collector combines equally specific matching agent groups, uses the most
+specific matching path rule, and prefers Allow on equal-length ties. It handles `*`, terminal `$`,
+UTF-8 and percent-encoded paths; a leading `Allow: /` cannot override a longer cart exclusion.
+Same-origin source redirects are checked before the destination request. Declared Crawl-delay and
+Request-rate intervals apply from the first source request and between redirect hops. Only a robots
+404 is treated as an absent policy; other retrieval failures stop collection. Policy-file redirects
+remain restricted to the supplier origin and the resulting rules govern that origin.
+Protocol reference: [RFC 9309, section 2.2](https://www.rfc-editor.org/rfc/rfc9309.html#section-2.2).
+
 The manifest owns the reviewed quantity basis. The resolved material owns sourced width, so the existing
 Rust price consumer performs yard-to-area conversion and order-quantity rounding. Neither adapter nor
 consumer infers hide area, fabric density, thermal resistance, elasticity or safe machine settings from

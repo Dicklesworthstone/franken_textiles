@@ -2,6 +2,7 @@
 import copy
 import csv
 import datetime as dt
+from email.message import Message
 import hashlib
 import io
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.response import addinfourl
 
 import refresh_textile_prices as r
 
@@ -245,6 +247,175 @@ class CsvRefreshTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             r.refresh(dict(schema="ftx-textile-refresh/1", offers=[dict(csv_entry(), adapter="guess")]),
                       lambda _: self.fail("network"))
+
+
+class RobotsTests(unittest.TestCase):
+    def test_supplier_cart_exclusions_win_over_broad_allow_in_either_order(self):
+        rules = ["Allow: /", "Disallow: /cart/", "Disallow: /cart.js", "Disallow: /*/cart.js"]
+        for ordered in (rules, list(reversed(rules))):
+            policy = r.RobotsPolicy("User-agent: *\n" + "\n".join(ordered))
+            for path in ("/cart.js", "/cart/add", "/en/cart.js", "/fr-ca/cart.js"):
+                with self.subTest(path=path, ordered=ordered):
+                    self.assertFalse(policy.can_fetch("https://example.invalid" + path))
+            self.assertTrue(policy.can_fetch(entry()["product_url"]))
+
+    def test_longest_rule_allow_ties_and_glob_specificity(self):
+        for rules, path, allowed in [
+            (["Disallow: /", "Allow: /products/"], "/products/silk", True),
+            (["Allow: /products/", "Disallow: /products/private"], "/products/private", False),
+            (["Disallow: /same", "Allow: /same"], "/same", True),
+            (["Allow: /page", "Disallow: /*.htm"], "/page.htm", False),
+            (["Allow: /page", "Disallow: /*.ph"], "/page.php", True),
+            (["Disallow: /$", "Allow: /"], "/", False),
+        ]:
+            for ordered in (rules, list(reversed(rules))):
+                with self.subTest(rules=ordered, path=path):
+                    policy = r.RobotsPolicy("User-agent: *\n" + "\n".join(ordered))
+                    self.assertEqual(policy.can_fetch("https://example.invalid" + path), allowed)
+
+    def test_specific_groups_merge_and_do_not_borrow_wildcard_rules(self):
+        text = """Disallow: /outside-group
+User-agent: *
+Disallow: /fallback
+User-agent: Xai
+Disallow: /
+User-agent: OtherBot
+User-agent: XAIIMAGEAPIFETCH
+Disallow: /first
+Sitemap: https://example.invalid/sitemap.xml
+Disallow: /after-sitemap
+
+User-agent: XaiImageApiFetch/1.0
+Disallow: /second
+"""
+        policy = r.RobotsPolicy(text)
+        for path in ("/first", "/second", "/after-sitemap"):
+            self.assertFalse(policy.can_fetch("https://example.invalid" + path))
+        for path in ("/fallback", "/outside-group", "/products/silk"):
+            self.assertTrue(policy.can_fetch("https://example.invalid" + path))
+        self.assertFalse(r.RobotsPolicy(text, "UnlistedBot").can_fetch("https://example.invalid/fallback"))
+
+    def test_empty_rules_groups_bom_comments_and_unknown_records(self):
+        for text in ("", "User-agent: DifferentBot\nDisallow: /",
+                     "User-agent: *\nDisallow: /\nUser-agent: XaiImageApiFetch",
+                     "User-agent: *\nDisallow:\nAllow:"):
+            self.assertTrue(r.RobotsPolicy(text).can_fetch(entry()["product_url"]))
+        policy = r.RobotsPolicy("\ufeffUser-Agent: XaiImageApiFetch\n\nSitemap: ignored\n"
+                                "User-agent: OtherBot\nDisallow: /private # inline comment\n")
+        self.assertFalse(policy.can_fetch("https://example.invalid/private"))
+        malformed = r.RobotsPolicy("User-agent: *\nAllow: /\nUser-agent:\nDisallow: /cart.js")
+        self.assertFalse(malformed.can_fetch(entry()["cart_url"]))
+        self.assertTrue(r.RobotsPolicy("User-agent: *\nDisallow: /").can_fetch("https://example.invalid/robots.txt"))
+
+    def test_wildcards_end_anchor_query_and_case(self):
+        policy = r.RobotsPolicy("User-agent: *\nDisallow: /*/cart.js$\nDisallow: /*.csv$\n"
+                                "Disallow: /offer?preview=\nDisallow: /a*b*c$\n")
+        for path in ("/en/cart.js", "/prices.csv", "/nested/prices.csv", "/offer?preview=yes", "/abbcc"):
+            self.assertFalse(policy.can_fetch("https://example.invalid" + path), path)
+        for path in ("/en/cart.js/more", "/prices.csv?version=1", "/prices.CSV", "/abdc/more"):
+            self.assertTrue(policy.can_fetch("https://example.invalid" + path), path)
+
+    def test_percent_encoding_preserves_reserved_separators_and_literal_operators(self):
+        for rule, path, allowed in [
+            ("/cart", "/%63art.js", False), ("/%63art", "/cart.js", False),
+            ("/café", "/caf%C3%A9", False), ("/caf%c3%a9", "/café", False),
+            ("/a%2Fb", "/a/b", True), ("/a/b", "/a%2fb", True),
+            ("/a%2Fb", "/a%2fb", False), ("/a%252Fb", "/a%2Fb", True),
+            ("/file%2A", "/file*", False), ("/file%2A", "/file-other", True),
+            ("/cost%24", "/cost$", False), ("/x%23secret", "/x%23secret", False),
+        ]:
+            with self.subTest(rule=rule, path=path):
+                policy = r.RobotsPolicy("User-agent: *\nDisallow: " + rule)
+                self.assertEqual(policy.can_fetch("https://example.invalid" + path), allowed)
+        policy = r.RobotsPolicy("User-agent: *\nDisallow: /%63art\nAllow: /cart")
+        self.assertTrue(policy.can_fetch("https://example.invalid/cart"))
+
+
+class PublicSessionTests(unittest.TestCase):
+    def session(self, replies):
+        """Keep urllib's redirects/errors/cookie handling; replace only HTTP transport."""
+        calls = []
+        class FixtureHttp(r.urllib.request.BaseHandler):
+            handler_order = 0
+            def https_open(self, request):
+                calls.append(request)
+                reply = replies[request.full_url]
+                code, body, location = reply if isinstance(reply, tuple) else (200, reply, None)
+                headers = Message()
+                if location:
+                    headers["Location"] = location
+                response = addinfourl(io.BytesIO(body), headers, request.full_url, code)
+                response.msg = "synthetic HTTP fixture"
+                return response
+        session = r.PublicSession()
+        session.opener.add_handler(FixtureHttp())
+        return session, calls
+
+    def test_blocked_cart_never_reaches_http(self):
+        host = "https://example.invalid"
+        session, calls = self.session({host + "/robots.txt": b"User-agent: *\nAllow: /\nDisallow: /cart.js"})
+        with patch.object(r.time, "sleep") as sleep:
+            with self.assertRaisesRegex(ValueError, "robots.txt disallows"):
+                session.get(host + "/cart.js")
+        self.assertEqual([c.full_url for c in calls], [host + "/robots.txt"])
+        sleep.assert_not_called()
+
+    def test_headers_policy_cache_and_delays_include_first_source_request(self):
+        host = "https://example.invalid"
+        robots = b"User-agent: *\nCrawl-delay: 2\nUser-agent: XaiImageApiFetch\nCrawl-delay: 3.5\nRequest-rate: 2/10"
+        session, calls = self.session({host + "/robots.txt": robots, host + "/prices.csv": b"prices"})
+        with patch.object(r.time, "monotonic", return_value=100.0), patch.object(r.time, "sleep") as sleep:
+            self.assertEqual(session.get(host + "/prices.csv"), b"prices")
+            self.assertEqual(session.get(host + "/prices.csv"), b"prices")
+        self.assertEqual([c.full_url for c in calls], [host + "/robots.txt", host + "/prices.csv", host + "/prices.csv"])
+        self.assertEqual([c.args for c in sleep.call_args_list], [(5.0,), (5.0,)])
+        for request in calls:
+            self.assertEqual(request.get_header("User-agent"), "OpenAI File Downloader, XaiImageApiFetch/1.0")
+            self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(r.RobotsPolicy("User-agent: *\nCrawl-delay: 4\nUser-agent: XaiImageApiFetch\nAllow: /").delay, 4)
+
+    def test_only_robots_404_is_treated_as_no_policy(self):
+        host = "https://example.invalid"
+        for status in (404, 403, 429, 503):
+            session, calls = self.session({host + "/robots.txt": (status, b"", None), host + "/price": b"price"})
+            with self.subTest(status=status), patch.object(r.time, "sleep"):
+                if status == 404:
+                    self.assertEqual(session.get(host + "/price"), b"price")
+                    self.assertEqual(len(calls), 2)
+                else:
+                    with self.assertRaises(r.urllib.error.HTTPError):
+                        session.get(host + "/price")
+                    self.assertEqual(len(calls), 1)
+
+    def test_redirects_recheck_exclusions_and_pace_allowed_hops(self):
+        host = "https://example.invalid"
+        for destination in ("/cart.js", "https://other.invalid/price", "/public"):
+            replies = {host + "/robots.txt": b"User-agent: *\nAllow: /\nDisallow: /cart.js\nCrawl-delay: 2",
+                       host + "/price": (302, b"", destination), host + "/public": b"public"}
+            session, calls = self.session(replies)
+            with self.subTest(destination=destination), patch.object(r.time, "monotonic", return_value=100.0), \
+                    patch.object(r.time, "sleep") as sleep:
+                if destination == "/public":
+                    self.assertEqual(session.get(host + "/price"), b"public")
+                    self.assertEqual([c.args for c in sleep.call_args_list], [(2.0,), (2.0,)])
+                    self.assertEqual(len(calls), 3)
+                else:
+                    with self.assertRaisesRegex(ValueError, "robots.txt disallows|cross-origin redirect"):
+                        session.get(host + "/price")
+                    self.assertEqual([c.full_url for c in calls], [host + "/robots.txt", host + "/price"])
+
+    def test_robots_redirect_bootstrap_keeps_the_original_supplier_policy(self):
+        host = "https://example.invalid"
+        session, calls = self.session({host + "/robots.txt": (302, b"", "/private/rules"),
+                                      host + "/private/rules": b"User-agent: *\nDisallow: /private\nCrawl-delay: 2",
+                                      host + "/public": b"public"})
+        with patch.object(r.time, "monotonic", return_value=100.0), patch.object(r.time, "sleep") as sleep:
+            self.assertEqual(session.get(host + "/public"), b"public")
+            with self.assertRaisesRegex(ValueError, "robots.txt disallows"):
+                session.get(host + "/private/rules")
+        self.assertEqual([c.full_url for c in calls], [host + "/robots.txt", host + "/private/rules", host + "/public"])
+        self.assertEqual([c.args for c in sleep.call_args_list], [(2.0,)])
+        self.assertTrue(all(c.get_header("User-agent") == r.AGENT for c in calls))
 
 
 if __name__ == "__main__":
