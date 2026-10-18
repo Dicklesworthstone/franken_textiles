@@ -74,10 +74,10 @@ pub struct ExteriorState {
     pub balance_residual_w_m2: f64,
 }
 
-struct Exchange<'a> {
+pub(in crate::thermal) struct Exchange<'a> {
     input: &'a Exterior,
-    emissivity: f64,
-    domain: [f64; 2],
+    pub(in crate::thermal) emissivity: f64,
+    pub(in crate::thermal) domain: [f64; 2],
 }
 
 fn range([lo, hi]: [f64; 2]) -> Result<[f64; 2], Refusal> {
@@ -90,7 +90,10 @@ fn range([lo, hi]: [f64; 2]) -> Result<[f64; 2], Refusal> {
 }
 
 impl<'a> Exchange<'a> {
-    fn new(input: &'a Exterior, outer: &ResolvedMaterial) -> Result<Self, Refusal> {
+    pub(in crate::thermal) fn new(
+        input: &'a Exterior,
+        outer: &ResolvedMaterial,
+    ) -> Result<Self, Refusal> {
         temperature(input.air_c)?;
         nonnegative("prescribed convection coefficient", input.convection_w_m2_k)?;
         let mut domain = range(input.surface_temperature_range_c)?;
@@ -175,7 +178,8 @@ impl<'a> Exchange<'a> {
         })
     }
 
-    fn flux(&self, surface_c: f64) -> Result<[f64; 2], Refusal> {
+    pub(in crate::thermal) fn flux(&self, surface_c: f64) -> Result<[f64; 2], Refusal> {
+        temperature(surface_c)?;
         if surface_c < self.domain[0] || surface_c > self.domain[1] {
             return Err(invalid(
                 "surface temperature outside exterior coefficient qualification",
