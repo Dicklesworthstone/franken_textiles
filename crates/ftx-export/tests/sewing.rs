@@ -1,7 +1,7 @@
 //! Synthetic software answers, not measurements or qualified sewing-machine recipes.
 use ftx_export::sewing::{SewOptions, SewPlan, SewingQualification};
-use ftx_pattern::materials::{Evidence, Source};
 use ftx_pattern::Pattern;
+use ftx_pattern::materials::{Evidence, Source};
 use serde_json::{Value, json};
 
 fn fabric(id: &str, thickness_mm: f64) -> Value {
@@ -238,7 +238,6 @@ fn duplicate_notches_bad_flat_ratios_and_allocation_bombs_refuse() {
     assert!(plan(p, o).unwrap_err().message.contains("budget"));
 }
 
-
 fn qualification_for(plan: &SewPlan) -> SewingQualification {
     let seam = &plan.seams[0];
     SewingQualification {
@@ -324,6 +323,11 @@ fn estimated_qualification_and_reverse_travel_need_separate_explicit_admission()
     o.qualifications[0].allow_estimates = true;
     SewPlan::build(&Pattern::new(p.clone()), &o).unwrap();
 
+    o.machine.reverse = Some(ftx_export::sewing::program::ReverseFeed {
+        stitch_mm: [0.1, 5.0],
+        feed_b_over_a: [0.5, 2.0],
+        max_stitches_per_minute: 1000.0,
+    });
     o.passes[0].backtack.start_stitches = 1;
     assert!(
         SewPlan::build(&Pattern::new(p.clone()), &o)
@@ -333,5 +337,8 @@ fn estimated_qualification_and_reverse_travel_need_separate_explicit_admission()
     );
     o.qualifications[0].allow_reverse = true;
     let admitted = SewPlan::build(&Pattern::new(p), &o).unwrap();
-    assert_eq!(admitted.seams[0].qualification_id.as_deref(), Some("measured-coupon-v1"));
+    assert_eq!(
+        admitted.seams[0].qualification_id.as_deref(),
+        Some("measured-coupon-v1")
+    );
 }

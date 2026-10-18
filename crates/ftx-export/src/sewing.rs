@@ -301,9 +301,7 @@ impl SewingQualification {
                 .iter()
                 .flatten()
                 .all(|&advance| within(advance, self.stitch_mm))
-            && feeds
-                .iter()
-                .all(|&feed| within(feed, self.feed_b_over_a))
+            && feeds.iter().all(|&feed| within(feed, self.feed_b_over_a))
     }
 }
 
