@@ -445,6 +445,7 @@ impl Material {
             friction_self: v[8],
         };
         if let Some(relaxation) = &self.membrane_relaxation {
+            relaxation.validate_equilibrium(self)?;
             relaxation.compile(&self.sources, allow_estimates, mechanics.origin_tangent())?;
         }
         Ok(mechanics)

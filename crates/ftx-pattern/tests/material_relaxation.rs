@@ -1,6 +1,6 @@
 //! Synthetic standard-linear-solid and generalized-Maxwell answers; no empirical textile claims.
 
-use ftx_pattern::material_relaxation::{Initialization, Relaxation};
+use ftx_pattern::material_relaxation::{Initialization, OrthotropicBranch, Relaxation};
 use ftx_pattern::materials::Source;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -179,4 +179,207 @@ fn identity_and_extreme_time_ratios_are_deterministic_and_finite() {
         let u = m.advance([0.1, 0., 0.], h).unwrap();
         assert!(u.stored_j_m2.is_finite() && u.dissipated_j_m2.is_finite());
     }
+}
+
+fn orthotropic_law() -> Relaxation {
+    let mut l = law();
+    l.branches.clear();
+    l.conditions = BTreeMap::from([
+        ("specimen_id".into(), "synthetic-directional-coupon".into()),
+        ("conditioning".into(), "synthetic-dry-reference".into()),
+    ]);
+    l.orthotropic_branches = [
+        ("warp", [2000., 0., 0., 0.], 0.05),
+        ("weft", [0., 1000., 0., 0.], 0.2),
+        ("bias", [0., 0., 0., 400.], 0.7),
+    ]
+    .into_iter()
+    .map(|(id, [a, b, c, g], tau)| {
+        let q = |v, unit| {
+            json!({"value":v,"unit":unit,"source":"test",
+            "evidence":"estimate","method":"Synthetic directional known answer",
+            "conditions":l.conditions})
+        };
+        serde_json::from_value::<OrthotropicBranch>(json!({"id":id,
+            "stiffness":{"warp":q(a,"N/m"),"weft":q(b,"N/m"),
+                "coupling":q(c,"N/m"),"shear":q(g,"N/m")},
+            "relaxation_time":q(tau,"s")}))
+        .unwrap()
+    })
+    .collect();
+    l
+}
+
+#[test]
+fn independent_directional_spectra_follow_three_closed_form_hold_and_unload_answers() {
+    let compiled = orthotropic_law().compile(&source(), true, Q).unwrap();
+    assert!(compiled.has_orthotropic_branches());
+    let mut memory = compiled.initialize([0.; 3]).unwrap();
+    let e = [0.1, -0.05, 0.2];
+    let stiffness = [2000., 1000., 400.];
+    let tau = [0.05, 0.2, 0.7];
+    let mut factors = [1.; 3];
+    for _ in 0..20 {
+        let potential = memory.response(e, Some(0.01)).unwrap().energy;
+        let update = memory.advance(e, 0.01).unwrap();
+        near(
+            potential,
+            update.stored_j_m2 + 0.5 * update.dissipated_j_m2,
+            1e-12,
+        );
+        memory = update.memory;
+        let r = memory.response(e, None).unwrap();
+        for j in 0..3 {
+            factors[j] *= tau[j] / (tau[j] + 0.01);
+            near(r.stress[j], stiffness[j] * e[j] * factors[j], 2e-12);
+        }
+    }
+    let initial_unload = memory.response([0.; 3], None).unwrap().stress;
+    for j in 0..3 {
+        near(
+            initial_unload[j],
+            -stiffness[j] * e[j] * (1. - factors[j]),
+            2e-12,
+        );
+    }
+    let mut unload_factors = [1.; 3];
+    let mut previous_energy = memory.response([0.; 3], None).unwrap().energy;
+    for _ in 0..20 {
+        let update = memory.advance([0.; 3], 0.01).unwrap();
+        assert!(update.dissipated_j_m2 >= 0. && update.stored_j_m2 < previous_energy);
+        previous_energy = update.stored_j_m2;
+        memory = update.memory;
+        for j in 0..3 {
+            unload_factors[j] *= tau[j] / (tau[j] + 0.01);
+            near(
+                memory.response([0.; 3], None).unwrap().stress[j],
+                initial_unload[j] * unload_factors[j],
+                2e-12,
+            );
+        }
+    }
+}
+
+#[test]
+fn coupled_directional_tensors_have_consistent_derivatives_and_nonnegative_null_mode_storage() {
+    let mut l = orthotropic_law();
+    l.orthotropic_branches.truncate(1);
+    let stiffness = &mut l.orthotropic_branches[0].stiffness;
+    stiffness.warp.value = 1000.;
+    stiffness.weft.value = 500.;
+    stiffness.coupling.value = -200.;
+    let m = l
+        .compile(&source(), true, Q)
+        .unwrap()
+        .initialize([0.; 3])
+        .unwrap()
+        .advance([0.02, 0.01, 0.03], 0.04)
+        .unwrap()
+        .memory;
+    let e = [0.08, -0.03, 0.1];
+    let r = m.response(e, Some(0.07)).unwrap();
+    for j in 0..3 {
+        let (mut plus, mut minus) = (e, e);
+        plus[j] += 1e-6;
+        minus[j] -= 1e-6;
+        let p = m.response(plus, Some(0.07)).unwrap();
+        let n = m.response(minus, Some(0.07)).unwrap();
+        near((p.energy - n.energy) / 2e-6, r.stress[j], 1e-7);
+        for i in 0..3 {
+            near((p.stress[i] - n.stress[i]) / 2e-6, r.tangent[i][j], 1e-7);
+        }
+    }
+    // Rank-one coupled normal response and an explicitly inactive shear direction.
+    let stiffness = &mut l.orthotropic_branches[0].stiffness;
+    stiffness.warp.value = 100.;
+    stiffness.weft.value = 100.;
+    stiffness.coupling.value = 100.;
+    let m = l
+        .compile(&source(), true, Q)
+        .unwrap()
+        .initialize([0.; 3])
+        .unwrap();
+    let r = m.response([0.2, -0.2, 0.7], Some(0.1)).unwrap();
+    assert_eq!(r.energy, 0.);
+    assert_eq!(r.stress, [0.; 3]);
+    assert_eq!(
+        m.advance([0.2, -0.2, 0.7], 0.1).unwrap().dissipated_j_m2,
+        0.
+    );
+}
+
+#[test]
+fn directional_laws_refuse_missing_evidence_mixed_conditions_and_unstable_tensors() {
+    assert!(orthotropic_law().compile(&source(), false, Q).is_err());
+    let changes: Vec<fn(&mut Relaxation)> = vec![
+        |l| {
+            l.conditions.remove("specimen_id");
+        },
+        |l| {
+            l.orthotropic_branches[0].stiffness.warp.conditions.clear();
+        },
+        |l| {
+            l.orthotropic_branches[0]
+                .relaxation_time
+                .conditions
+                .insert("conditioning".into(), "wet".into());
+        },
+        |l| l.orthotropic_branches[0].stiffness.warp.unit = "Pa".into(),
+        |l| l.orthotropic_branches[0].stiffness.warp.source = "missing".into(),
+        |l| l.orthotropic_branches[0].stiffness.warp.value = -1.,
+        |l| l.orthotropic_branches[0].stiffness.warp.value = 0.,
+        |l| l.orthotropic_branches[0].stiffness.coupling.value = 1.,
+        |l| l.orthotropic_branches[0].stiffness.coupling.bounds = Some([1., 2.]),
+        |l| l.orthotropic_branches[0].relaxation_time.value = 0.,
+        |l| l.orthotropic_branches[1].id = "warp".into(),
+    ];
+    for edit in changes {
+        let mut l = orthotropic_law();
+        edit(&mut l);
+        assert!(l.compile(&source(), true, Q).is_err());
+    }
+    let mut l = orthotropic_law();
+    l.orthotropic_branches[0].stiffness.weft.value = 1.;
+    l.orthotropic_branches[0].stiffness.coupling.value = 50.;
+    assert!(l.compile(&source(), true, Q).is_err());
+    let mut l = orthotropic_law();
+    for i in 0..14 {
+        let mut b = l.orthotropic_branches[0].clone();
+        b.id = format!("extra-{i}");
+        l.orthotropic_branches.push(b);
+    }
+    assert!(l.compile(&source(), true, Q).is_err());
+}
+
+#[test]
+fn directional_and_legacy_source_identities_replay_without_implicit_coefficients() {
+    let legacy = law();
+    assert!(
+        !serde_json::to_value(&legacy)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("orthotropic_branches")
+    );
+    assert!(
+        !legacy
+            .compile(&source(), true, Q)
+            .unwrap()
+            .has_orthotropic_branches()
+    );
+    let mut l = orthotropic_law();
+    let mut proportional = legacy.branches[0].clone();
+    proportional.stiffness_ratio.conditions = l.conditions.clone();
+    proportional.relaxation_time.conditions = l.conditions.clone();
+    l.branches.push(proportional);
+    let c = l.compile(&source(), true, Q).unwrap();
+    let replay: Relaxation = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+    assert_eq!(c, replay.compile(&source(), true, Q).unwrap());
+    l.orthotropic_branches[1].relaxation_time.value *= 2.;
+    assert_ne!(
+        c.fingerprint(),
+        l.compile(&source(), true, Q).unwrap().fingerprint()
+    );
+    l.orthotropic_branches[1].id.clone_from(&l.branches[0].id);
+    assert!(l.compile(&source(), true, Q).is_err());
 }

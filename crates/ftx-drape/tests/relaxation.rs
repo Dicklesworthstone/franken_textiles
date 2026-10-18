@@ -8,8 +8,10 @@ use ftx_drape::scene::PartFrames;
 use ftx_drape::{Body, ClothModel, ContactParams, PartFrame, Solver};
 use ftx_pattern::Pattern;
 use ftx_pattern::material_catalog::Selection;
+use ftx_pattern::material_relaxation::{OrthotropicBranch, OrthotropicStiffness};
 use ftx_pattern::materials::Catalog;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 fn selection() -> Selection {
     serde_json::from_str(include_str!(
@@ -22,6 +24,9 @@ fn solver(fixed: bool, relaxation: bool) -> Solver {
     if !relaxation {
         select.record.as_mut().unwrap().membrane_relaxation = None;
     }
+    selected_solver(select, fixed)
+}
+fn selected_solver(select: Selection, fixed: bool) -> Solver {
     let db = Catalog::builtin().unwrap();
     let m = db.resolve(&select).unwrap();
     let p = Pattern::new(json!({"fabric":{"material":select}}));
@@ -44,6 +49,43 @@ fn solver(fixed: bool, relaxation: bool) -> Solver {
     s.tol = 1e-8;
     s.max_newton = 100;
     s
+}
+
+fn directional_selection() -> Selection {
+    let mut selected = selection();
+    let record = selected.record.as_mut().unwrap();
+    let conditions = BTreeMap::from([
+        ("specimen_id".into(), "synthetic-directional-sheet".into()),
+        ("conditioning".into(), "synthetic-reference".into()),
+    ]);
+    for quantity in record.properties.values_mut() {
+        quantity.conditions = conditions.clone();
+    }
+    let datum = record.properties["warp_stiffness"].clone();
+    let quantity = |value, unit: &str| {
+        let mut q = datum.clone();
+        q.value = value;
+        q.unit = unit.into();
+        q.method = "Synthetic directional model, not measured textile data".into();
+        q
+    };
+    let law = record.membrane_relaxation.as_mut().unwrap();
+    law.branches.clear();
+    law.conditions = conditions;
+    law.orthotropic_branches = [("warp", 2000., 0., 0.05), ("weft", 0., 1000., 0.2)]
+        .into_iter()
+        .map(|(id, warp, weft, tau)| OrthotropicBranch {
+            id: id.into(),
+            stiffness: OrthotropicStiffness {
+                warp: quantity(warp, "N/m"),
+                weft: quantity(weft, "N/m"),
+                coupling: quantity(0., "N/m"),
+                shear: quantity(0., "N/m"),
+            },
+            relaxation_time: quantity(tau, "s"),
+        })
+        .collect();
+    selected
 }
 fn near(a: f64, b: f64, tol: f64) {
     assert!((a - b).abs() < tol, "{a} != {b}");
@@ -233,8 +275,15 @@ fn pattern() -> Pattern {
 
 #[test]
 fn source_selection_reaches_only_assigned_retained_triangles_in_real_sewn_scene() {
+    for selected in [selection(), directional_selection()] {
+        check_sewn_selection(selected);
+    }
+}
+
+fn check_sewn_selection(selected: Selection) {
     let mut p = pattern().raw().clone();
-    let mut equilibrium = selection();
+    p["fabric"]["material"] = json!(selected);
+    let mut equilibrium = selected;
     equilibrium.record.as_mut().unwrap().membrane_relaxation = None;
     p["pieces"][1]["fabric"] = json!({"material":equilibrium});
     let opts = DrapeOptions {
@@ -278,6 +327,142 @@ fn source_selection_reaches_only_assigned_retained_triangles_in_real_sewn_scene(
     assert_eq!(eq.scene.weld, run.scene.weld);
     assert_eq!(eq.scene.solver.model.mass, run.scene.solver.model.mass);
     assert_ne!(eq.scene.solver.x, run.scene.solver.x);
+}
+
+#[test]
+fn material_directional_recovery_changes_actual_reactions_and_dynamics_without_changing_geometry() {
+    let selected = directional_selection();
+    let mut equilibrium = selected.clone();
+    equilibrium.record.as_mut().unwrap().membrane_relaxation = None;
+    let mut s = selected_solver(selected.clone(), true);
+    let mut eq = selected_solver(equilibrium, true);
+    s.x[2].y = 0.11;
+    eq.x[2].y = 0.11;
+    let original = s.x.clone();
+    let initial = s.elastic_forces();
+    let eq_force = eq.elastic_forces();
+    let mut factor = [1.; 2];
+    for _ in 0..20 {
+        assert!(s.step(0.01).unwrap().converged);
+        factor[0] /= 1.2;
+        factor[1] /= 1.05;
+        let force = s.elastic_forces();
+        near(
+            force[1].x - eq_force[1].x,
+            (initial[1].x - eq_force[1].x) * factor[0],
+            2e-11,
+        );
+        near(
+            force[2].y - eq_force[2].y,
+            (initial[2].y - eq_force[2].y) * factor[1],
+            2e-11,
+        );
+        assert_eq!(s.x, original);
+    }
+    let mut changed = selected.clone();
+    changed
+        .record
+        .as_mut()
+        .unwrap()
+        .membrane_relaxation
+        .as_mut()
+        .unwrap()
+        .orthotropic_branches[0]
+        .relaxation_time
+        .value = 0.5;
+    let db = Catalog::builtin().unwrap();
+    let a = db.resolve(&selected).unwrap();
+    let b = db.resolve(&changed).unwrap();
+    assert_ne!(a.sha256(), b.sha256());
+    assert_eq!(
+        a.sha256(),
+        db.resolve(&a.frozen_selection()).unwrap().sha256()
+    );
+    let mut fast = selected_solver(selected, false);
+    let mut slow = selected_solver(changed, false);
+    for _ in 0..4 {
+        fast.step(0.005).unwrap();
+        slow.step(0.005).unwrap();
+    }
+    assert_eq!(fast.model.rest, slow.model.rest);
+    assert_eq!(fast.model.mass, slow.model.mass);
+    assert_eq!(fast.model.membrane, slow.model.membrane);
+    assert_ne!(fast.x, slow.x);
+    let mut continued = fast.clone();
+    fast.step(0.005).unwrap();
+    continued.step(0.005).unwrap();
+    assert_eq!(fast.x, continued.x);
+    assert_eq!(
+        fast.relaxation_report().unwrap(),
+        continued.relaxation_report().unwrap()
+    );
+    let accepted = fast.relaxation_report().unwrap();
+    let positions = fast.x.clone();
+    fast.max_newton = 0;
+    assert_eq!(
+        fast.step(0.005).unwrap_err().code,
+        RefusalCode::NotConverged
+    );
+    assert_eq!(fast.x, positions);
+    assert_eq!(fast.relaxation_report().unwrap(), accepted);
+}
+
+#[test]
+fn directional_recovery_cannot_mix_equilibrium_specimens_or_nonlinear_conditions() {
+    let db = Catalog::builtin().unwrap();
+    let mut selected = directional_selection();
+    selected
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("warp_stiffness")
+        .unwrap()
+        .conditions
+        .insert("specimen_id".into(), "different-lot".into());
+    let material = db.resolve(&selected).unwrap();
+    assert!(material.mechanics().is_err());
+    assert!(material.membrane_relaxation().is_err());
+
+    let mut nonlinear: ftx_pattern::materials::Material = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-nonlinear.json"
+    ))
+    .unwrap();
+    let directional = directional_selection().record.unwrap();
+    let conditions = directional
+        .membrane_relaxation
+        .as_ref()
+        .unwrap()
+        .conditions
+        .clone();
+    nonlinear.membrane_relaxation = directional.membrane_relaxation;
+    let response = nonlinear.membrane_response.as_mut().unwrap();
+    response.warp.conditions = conditions.clone();
+    response.weft.conditions = conditions.clone();
+    response.shear.conditions = conditions.clone();
+    response.coupling.conditions = conditions;
+    selected.id.clone_from(&nonlinear.id);
+    selected.record = Some(nonlinear);
+    db.resolve(&selected)
+        .unwrap()
+        .membrane_relaxation()
+        .unwrap();
+    selected
+        .record
+        .as_mut()
+        .unwrap()
+        .membrane_response
+        .as_mut()
+        .unwrap()
+        .weft
+        .conditions
+        .insert("conditioning".into(), "wet".into());
+    assert!(
+        db.resolve(&selected)
+            .unwrap()
+            .membrane_relaxation()
+            .is_err()
+    );
 }
 
 #[test]

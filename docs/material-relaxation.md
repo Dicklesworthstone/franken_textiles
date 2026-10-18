@@ -25,15 +25,35 @@ selection syntax. An explicit equilibrium-only piece does not inherit the defaul
 Mixed-material self-contact still requires its independently sourced interface pairs; adding a
 relaxation law does not authorize guessing unlike-cloth friction.
 
-The optional record has model `green_maxwell/1`, one to sixteen branches, initialization,
-`strain_range`, source, method and conditions. Each branch has a distinct ID, a source-bearing
-positive `stiffness_ratio` in `1` and `relaxation_time` in `s`. Ratios multiply the **equilibrium origin
-tangent**, not the instantaneous stiffness. The original scalar or tabulated nonlinear membrane is
-the equilibrium branch. Supplying a modulus measured immediately after loading as equilibrium and
-then adding transient branches would double-count stiffness. The existing static swatch calibration
-command does not identify relaxation times or separate instantaneous and equilibrium measurements.
-The timed `ftx-materials calibrate-relaxation` workflow now identifies ratios and times from complete
-force/deformation histories with independently supplied equilibrium; see `relaxation-calibration.md`.
+The optional record has model `green_maxwell/1`, initialization, `strain_range`, source, method and
+conditions, with one to sixteen branches in total. The original `branches` array contains distinct IDs,
+source-bearing positive `stiffness_ratio` in `1` and `relaxation_time` in `s`. Ratios multiply the
+**equilibrium origin tangent**, not the instantaneous stiffness. The original scalar or tabulated
+nonlinear membrane remains the equilibrium response. Supplying an instantaneous modulus as equilibrium
+and then adding transient branches would double-count stiffness.
+
+Optional `orthotropic_branches` allow independently characterized warp/wale, weft/course and bias
+recovery. Each entry has an `id`, a sourced positive `relaxation_time` in `s`, and a `stiffness` object
+with four ordinary source-bearing quantities: `warp`, `weft`, `coupling` and `shear`, all in `N/m`.
+These are tensor entries in the work-conjugate `[E11,E22,2E12]` frame, not Young moduli or bulk fiber
+properties. The normal block is `[[warp,coupling],[coupling,weft]]`; the engineering-shear entry is
+`shear`, with no normal/shear coupling. Explicit zero components permit a warp-only, weft-only or
+bias-only branch. Different branches can then have different recovery times. The complete branch
+tensor must be nonzero and positive semidefinite; unstable normal coupling refuses. No absent entry
+becomes zero and no stiffness is inferred from a fiber, weave, knit or brand name.
+
+For an orthotropic spectrum, the law's `conditions` must include nonempty `specimen_id` and
+`conditioning`. Every branch coefficient and time, including any accompanying proportional branches,
+must match all declared shared conditions. The consumed equilibrium stiffness observations or nonlinear
+curves must match too. Test-specific extra conditions, such as direction, can remain on observations.
+Purely directional spectra use `branches: []`. IDs are unique across both arrays; internal-strain
+reports retain proportional branches first, then orthotropic branches, each in authored order.
+Omitting `orthotropic_branches` preserves the original source serialization and proportional arithmetic.
+
+The timed `ftx-materials calibrate-relaxation` workflow identifies **proportional** ratios and times from
+complete histories with independently supplied equilibrium; see `relaxation-calibration.md`. It does
+not yet fit independent directional tensors. Such tensor/time observations must be supplied explicitly
+with their characterization source and conditions. Static swatch calibration does not determine times.
 
 Estimates require the material selection's existing explicit `allow_estimates` policy. Every source,
 parameter, condition and initialization choice participates in the frozen material identity. Omitting
@@ -42,7 +62,8 @@ parameter, condition and initialization choice participates in the frozen materi
 ## Constitutive and numerical contract
 
 Let e be the material-frame Green strain vector [E11,E22,2E12], after the existing reversible
-compression/gather mapping. For branch b, Qb = ratio_b * Q_equilibrium_origin and eta_b = tau_b Qb.
+compression/gather mapping. For branch b, Qb is either `ratio_b * Q_equilibrium_origin` or the explicit
+orthotropic branch tensor, and eta_b = tau_b Qb.
 It stores 1/2 (e-zb)^T Qb (e-zb) per reference area, where zb evolves as (e-zb)/tau_b. The raw physical
 strain must remain inside the declared characterization box as well; compression softening does not
 permit extrapolation. The domain must contain zero in its interior. Normal lower bounds exceed -1/2.
@@ -77,15 +98,16 @@ state per physical step; no performance improvement is claimed.
 
 ## Evidence and limits
 
-The regression suite checks closed-form standard-linear-solid relaxation, creep and unloading recovery;
-multiple time scales; temporal refinement; constitutive and assembled nodal gradients/Hessians;
-nonlinear equilibrium and gather compression; actual clamped reactions, free dynamics, sewn
-per-piece ownership, cloning, failed-step rollback, and prescribed-body motion. All specimen data
-are synthetic. These are model/software checks, not measured garment fit or textile characterization.
+The regression suite includes independent directional hold/unload answers, coupled tensor derivatives
+and zero-energy null modes; source/condition refusals; standard-linear-solid creep/recovery; temporal
+refinement; assembled nodal derivatives; nonlinear equilibrium and gather compression; actual clamped
+directional reactions, changed free dynamics, sewn per-piece ownership, cloning, rollback and body
+motion. All specimen data are synthetic; these checks do not establish measured garment accuracy.
 
-This is a proportional, constant-condition generalized Maxwell model in Green strain. It is not yarn
-homogenization, anisotropic relaxation-spectrum identification, plastic set, failure/damage, aging,
-thermal activation, wet relaxation or a physically qualified model for arbitrary large textile strains.
+This is a constant-condition generalized Maxwell model in Green strain. Independent directional
+tensors are supported, but their automatic identification is still absent. It is not yarn homogenization,
+plastic set, failure/damage, aging, thermal activation, wet relaxation or a physically qualified model
+for arbitrary large textile strains.
 Independent hold/cycle/recovery measurements and fitted time spectra are still required for actual
 linen, leather and performance-knit variants. Bead `ftx-tm4` remains open for those broader physical
 and constitutive acceptance conditions, along with the empirical-data gate `ftx-tm2`.

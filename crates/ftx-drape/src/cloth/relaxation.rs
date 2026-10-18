@@ -251,12 +251,22 @@ impl Solver {
                     "effective_transient_stress_n_m":response.stress}));
             }
         }
+        let scope = if field
+            .entries
+            .iter()
+            .flatten()
+            .any(|b| b.law.has_orthotropic_branches())
+        {
+            "Constant source-qualified proportional and orthotropic branch tensors in effective Green strain; excludes numerical dissipation, plastic damage and thermal feedback"
+        } else {
+            "Constant proportional branch tensors in effective Green strain; excludes numerical dissipation, plastic damage and thermal feedback"
+        };
         Ok(Some(
             json!({"schema":"ftx-membrane-history/1", "model":"green_maxwell/1",
             "time_seconds":field.time_seconds,"accepted_steps":field.steps,
             "stored_branch_energy_j":field.energy(&self.x,None)?,
             "viscous_step_work_j":field.dissipated_j,"elements":elements,
-            "scope":"Constant proportional branch tensors in effective Green strain; excludes numerical dissipation, plastic damage and thermal feedback",
+            "scope":scope,
             "stress_equilibrium_claim":false,"empirical_validation_claim":false}),
         ))
     }

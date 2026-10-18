@@ -198,6 +198,7 @@ fn law(input: &Input, ratios: &[f64], times: &[f64], source: &str) -> Relaxation
             input.method
         ),
         conditions: input.conditions.clone(),
+        orthotropic_branches: Vec::new(),
         branches: ratios
             .iter()
             .zip(times)
