@@ -16,6 +16,7 @@ pub mod material_binding;
 pub mod material_calibration;
 pub mod material_catalog;
 pub mod material_cost;
+pub mod material_friction;
 pub mod material_plasticity;
 pub mod material_relaxation;
 pub mod material_response;
