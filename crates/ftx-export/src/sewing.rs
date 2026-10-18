@@ -597,7 +597,7 @@ impl SewPlan {
                 advances.push([da, db]);
             }
             let runs = program::compile(&stations, [la, lb], pass, machine)?;
-            let has_reverse = runs.iter().any(|run| run.direction.is_reverse());
+            let has_reverse = runs.iter().any(|run| !run.direction.is_forward());
             let stack_materials: Vec<String> = if let Some(receipt) = &assembly {
                 receipt
                     .layers
@@ -606,11 +606,14 @@ impl SewPlan {
                     .collect()
             } else {
                 let plies = pass.plies.expect("validated exclusive ply policy");
-                std::iter::repeat_n(sides[0].material_sha256.clone(), plies[0] as usize)
-                    .chain(std::iter::repeat_n(
-                        sides[1].material_sha256.clone(),
-                        plies[1] as usize,
-                    ))
+                std::iter::repeat_n(
+                    sides[0].material_sha256.clone(),
+                    usize::try_from(plies[0]).expect("validated ply count"),
+                )
+                .chain(std::iter::repeat_n(
+                    sides[1].material_sha256.clone(),
+                    usize::try_from(plies[1]).expect("validated ply count"),
+                ))
                     .collect()
             };
             let identity: Vec<_> = options
