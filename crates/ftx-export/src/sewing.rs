@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
-use ftx_pattern::materials::Form;
+use ftx_pattern::materials::{Evidence, Form, Source};
 use ftx_pattern::textile_import::{piece_fabric, resolve_fabric};
 use ftx_pattern::{Pattern, SeamPairs};
 use serde::{Deserialize, Serialize};
@@ -89,11 +89,56 @@ pub struct SewOptions {
     pub machine: SewingMachine,
     /// Explicit passes covering every seam, including seams omitted from a simulation.
     pub passes: Vec<SewingPass>,
+    /// Source-bearing process envelopes tied to exact resolved material stacks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub qualifications: Vec<SewingQualification>,
+    /// Require every pass to match exactly one qualification; false preserves legacy planning.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub require_qualification: bool,
     /// Default flat seam-walk tolerance in mm; existing per-seam tolerances take precedence.
     pub seam_tolerance_mm: f64,
     /// Default export allowance override; edge and piece allowances still take precedence.
     #[serde(default)]
     pub seam_allowance_mm: Option<f64>,
+}
+
+/// Source-locked process envelope from an external seam/coupon qualification.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SewingQualification {
+    /// Stable qualification identity retained in each admitted planned operation.
+    pub id: String,
+    /// Exact bottom-to-top material snapshot sequence; legacy ply jobs use A plies then B plies.
+    pub materials: Vec<String>,
+    /// Exact machine/configuration identifier.
+    pub machine: String,
+    /// Exact needle identifier qualified by the source.
+    pub needle: String,
+    /// Exact thread identifier qualified by the source.
+    pub thread: String,
+    /// Qualified actual stitch-advance interval, millimetres, applied independently to both sides.
+    pub stitch_mm: [f64; 2],
+    /// Qualified local differential-feed interval, side-b / side-a.
+    pub feed_b_over_a: [f64; 2],
+    /// Qualified uncompressed material-stack interval, millimetres.
+    pub stack_mm: [f64; 2],
+    /// Qualified continuous stitch-rate interval.
+    pub stitches_per_minute: [f64; 2],
+    /// Whether reverse travel, including backtacks, was included in this qualification.
+    #[serde(default)]
+    pub allow_reverse: bool,
+    /// Evidence class of this qualification record.
+    pub evidence: Evidence,
+    /// Exact external source or retained local measurement identity.
+    pub source: Source,
+    /// Coupon/test protocol; an ID alone is not process evidence.
+    pub method: String,
+    /// Conditioning and applicability metadata.
+    #[serde(default)]
+    pub conditions: BTreeMap<String, String>,
+    /// Explicit permission to use an estimated qualification.
+    #[serde(default)]
+    pub allow_estimates: bool,
 }
 
 /// Source material and minimum edge allowance for one side of a seam.
@@ -137,12 +182,15 @@ pub struct PlannedSeam {
     pub stitch_intervals: usize,
     /// Continuous feed time at the requested rate (seconds), excluding handling/acceleration.
     pub feed_seconds: f64,
+    /// Exact source qualification admitted for this operation, absent on unqualified legacy plans.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualification_id: Option<String>,
 }
 
 /// Deterministic, source-locked manufacturing review plan. Never hardware execution permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
-    /// `/1` legacy, `/2` directed, `/3` offset paths, `/4` explicit flat-fold assemblies.
+    /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` source qualifications.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
     pub pattern_sha256: String,
@@ -170,6 +218,18 @@ fn positive(x: f64) -> bool {
     x.is_finite() && x > 0.0
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn qualified_text(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 4096
+}
+
+fn sha256_text(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 fn range(x: [f64; 2]) -> bool {
     positive(x[0]) && positive(x[1]) && x[0] <= x[1]
 }
@@ -178,6 +238,73 @@ fn within(x: f64, limits: [f64; 2]) -> bool {
     // Arithmetic tolerance only: not a concealed machine/process allowance.
     let eps = |limit: f64| 1e-10 * x.abs().max(limit.abs());
     positive(x) && x >= limits[0] - eps(limits[0]) && x <= limits[1] + eps(limits[1])
+}
+
+impl SewingQualification {
+    fn validate(&self) -> Result<(), Refusal> {
+        if !qualified_text(&self.id)
+            || self.materials.is_empty()
+            || self.materials.len() > 128
+            || self.materials.iter().any(|h| !sha256_text(h))
+            || !qualified_text(&self.machine)
+            || !qualified_text(&self.needle)
+            || !qualified_text(&self.thread)
+            || !range(self.stitch_mm)
+            || !range(self.feed_b_over_a)
+            || !range(self.stack_mm)
+            || !range(self.stitches_per_minute)
+            || !qualified_text(&self.source.reference)
+            || !qualified_text(&self.source.accessed_on)
+            || !qualified_text(&self.source.note)
+            || !qualified_text(&self.method)
+            || self.conditions.len() > 64
+            || self
+                .conditions
+                .iter()
+                .any(|(k, v)| !qualified_text(k) || !qualified_text(v))
+        {
+            return Err(bad(format!("{}: invalid sewing qualification", self.id)));
+        }
+        if self.evidence == Evidence::Estimate && !self.allow_estimates {
+            return Err(bad(format!(
+                "{}: estimated sewing qualification requires explicit consent",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn identity_matches(
+        &self,
+        materials: &[String],
+        machine: &SewingMachine,
+        pass: &SewingPass,
+    ) -> bool {
+        self.materials == materials
+            && self.machine == machine.id
+            && self.needle == pass.needle
+            && self.thread == pass.thread
+    }
+
+    fn envelope_matches(
+        &self,
+        pass: &SewingPass,
+        stack_mm: f64,
+        advances: &[[f64; 2]],
+        feeds: &[f64],
+        has_reverse: bool,
+    ) -> bool {
+        within(stack_mm, self.stack_mm)
+            && within(pass.stitches_per_minute, self.stitches_per_minute)
+            && (!has_reverse || self.allow_reverse)
+            && advances
+                .iter()
+                .flatten()
+                .all(|&advance| within(advance, self.stitch_mm))
+            && feeds
+                .iter()
+                .all(|&feed| within(feed, self.feed_b_over_a))
+    }
 }
 
 impl SewingPass {
@@ -223,6 +350,24 @@ impl SewPlan {
         }
         if let Some(reverse) = &machine.reverse {
             reverse.validate()?;
+        }
+        if options.qualifications.len() > MAX_OPERATIONS {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "at most 4096 sewing qualifications are supported",
+            ));
+        }
+        let mut qualification_ids = BTreeSet::new();
+        for q in &options.qualifications {
+            q.validate()?;
+            if !qualification_ids.insert(&q.id) {
+                return Err(bad("sewing qualification IDs must be unique"));
+            }
+        }
+        if options.require_qualification && options.qualifications.is_empty() {
+            return Err(bad(
+                "qualification is required but no sewing qualifications were supplied",
+            ));
         }
         if options.passes.is_empty() || options.passes.len() > MAX_OPERATIONS {
             return Err(Refusal::new(
@@ -304,7 +449,9 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if options.passes.iter().any(|p| p.assembly.is_some()) {
+            schema: if !options.qualifications.is_empty() || options.require_qualification {
+                "ftx-sewing-plan/5"
+            } else if options.passes.iter().any(|p| p.assembly.is_some()) {
                 "ftx-sewing-plan/4"
             } else if options.passes.iter().any(|p| p.stitch_path.is_some()) {
                 "ftx-sewing-plan/3"
@@ -437,6 +584,7 @@ impl SewPlan {
                 )));
             }
             let mut feeds = Vec::with_capacity(stations.fa.len() - 1);
+            let mut advances = Vec::with_capacity(stations.fa.len() - 1);
             for (a, b) in stations.fa.windows(2).zip(stations.fb.windows(2)) {
                 let da = (a[1] - a[0]) * la;
                 let db = (b[1] - b[0]) * lb;
@@ -446,8 +594,52 @@ impl SewPlan {
                     )));
                 }
                 feeds.push(db / da);
+                advances.push([da, db]);
             }
             let runs = program::compile(&stations, [la, lb], pass, machine)?;
+            let has_reverse = runs.iter().any(|run| run.direction.is_reverse());
+            let stack_materials: Vec<String> = if let Some(receipt) = &assembly {
+                receipt
+                    .layers
+                    .iter()
+                    .map(|layer| layer.material_sha256.clone())
+                    .collect()
+            } else {
+                let plies = pass.plies.expect("validated exclusive ply policy");
+                std::iter::repeat_n(sides[0].material_sha256.clone(), plies[0] as usize)
+                    .chain(std::iter::repeat_n(
+                        sides[1].material_sha256.clone(),
+                        plies[1] as usize,
+                    ))
+                    .collect()
+            };
+            let identity: Vec<_> = options
+                .qualifications
+                .iter()
+                .filter(|q| q.identity_matches(&stack_materials, machine, pass))
+                .collect();
+            let qualified: Vec<_> = identity
+                .iter()
+                .copied()
+                .filter(|q| q.envelope_matches(pass, stack, &advances, &feeds, has_reverse))
+                .collect();
+            let qualification_id = match qualified.as_slice() {
+                [q] => Some(q.id.clone()),
+                [] if options.require_qualification => {
+                    let reason = if identity.is_empty() {
+                        "no qualification matches the exact stack, machine, needle and thread"
+                    } else {
+                        "operation falls outside its qualified stitch/feed/stack/rate/reverse envelope"
+                    };
+                    return Err(bad(format!("{id}: {reason}")));
+                }
+                [] => None,
+                _ => {
+                    return Err(bad(format!(
+                        "{id}: multiple sewing qualifications admit the same operation"
+                    )));
+                }
+            };
             let stitch_intervals = runs.iter().map(|r| r.stitch_intervals).sum();
             let feed_seconds = stitch_intervals as f64 * 60.0 / pass.stitches_per_minute;
             out.feed_seconds += feed_seconds;
@@ -470,6 +662,7 @@ impl SewPlan {
                 },
                 stitch_intervals,
                 feed_seconds,
+                qualification_id,
             });
             done.insert(id);
         }

@@ -41,7 +41,7 @@ For a basic job, declare one forward pass per pattern seam and the machine envel
 These are invented example settings, not recommendations for any machine or textile.
 Replace them with the actual configuration and process requirements. Needle/thread
 identifiers are retained but their compatibility, penetration and strength are not
-inferred. Multiple passes, reverse feed and explicit start/end backtacks are supported
+inferred unless an explicit source qualification is supplied as described below. Multiple passes, reverse feed and explicit start/end backtacks are supported
 as described below. Explicit offset stitch lines and their review preview are also supported.
 Physical folding and automatic assembly-order inference remain separate work: a declared
 ply count or offset does not establish how the folded layers meet under a needle.
@@ -63,6 +63,33 @@ a digest of the complete input pattern. A prior JSON plan is an immutable result
 not a live view: rerun the command after changing a pattern, material or machine.
 The planner needs thickness, not invented membrane moduli; incomplete mechanical
 characterization can therefore leave this manufacturing check usable.
+
+## Source-locked sewing qualifications
+
+Version 5 can require external process evidence without inventing a recipe from fiber or brand names.
+Set `require_qualification: true` and supply `qualifications`. Each qualification names the exact
+resolved material stack by SHA-256, machine configuration, needle, thread, actual stitch-advance
+range, local b/a feed range, uncompressed stack range, continuous stitch-rate range and whether reverse
+travel was qualified. It also carries evidence, source, method, conditions and separate consent for
+estimates.
+
+The planner matches the **generated** operation, not merely the requested maximum stitch pitch. Every
+actual station interval on both sides, every local feed ratio, the derived stack thickness and requested
+rate must be inside one qualification. Backtacks and reverse passes require `allow_reverse: true`.
+An explicit folded assembly uses its complete bottom-to-top material preimage. Legacy ply-count jobs
+use their deterministic A-plies-then-B-plies sequence because no richer physical stack order was declared.
+Changing an otherwise identical material record changes its snapshot hash and invalidates the qualification.
+
+Exactly one qualification may admit a required operation. Missing, stale, out-of-envelope or ambiguous
+evidence refuses the entire plan. When qualifications are supplied but not required, a uniquely matching
+one is attached to the operation; absence remains an unqualified review rather than a hidden failure.
+Estimated process evidence requires its own `allow_estimates`; this is independent of the material
+selection's evidence policy.
+
+A version-5 match is **source qualification admission**, not independent seam validation. The planner does
+not reinterpret the source's test, infer pucker/strength/needle damage, or verify machine calibration,
+workholding, accessibility or operator setup. Consequently `hardware_execution_authorized` and
+`physical_seam_quality_validated` remain false even when every operation has a qualification.
 
 ## Geometry, feed and sequencing
 
@@ -143,7 +170,7 @@ The pattern, materials and machine in this fixture are synthetic, not calibrated
 
 Unchanged legacy jobs still serialize as `ftx-sewing-plan/1`, without added default
 fields or altered arithmetic. Jobs requesting operation IDs, reverse capability,
-direction or locks use `ftx-sewing-plan/2`; explicit offset paths use `ftx-sewing-plan/3`.
+direction or locks use `ftx-sewing-plan/2`; explicit offset paths use `ftx-sewing-plan/3`, explicit folded assemblies use `/4`, and source-qualified jobs use `/5`.
 Each operation contains ordered `runs`
 over its unchanged `stations.a` and `stations.b` arrays. A run visits every consecutive
 integer index from `from_station` to `to_station`. Adjacent runs share an endpoint;

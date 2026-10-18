@@ -1,5 +1,6 @@
 //! Synthetic software answers, not measurements or qualified sewing-machine recipes.
-use ftx_export::sewing::{SewOptions, SewPlan};
+use ftx_export::sewing::{SewOptions, SewPlan, SewingQualification};
+use ftx_pattern::materials::{Evidence, Source};
 use ftx_pattern::Pattern;
 use serde_json::{Value, json};
 
@@ -235,4 +236,102 @@ fn duplicate_notches_bad_flat_ratios_and_allocation_bombs_refuse() {
     o["passes"][0]["max_stitch_mm"] = json!(0.01);
     o["machine"]["stitch_mm"] = json!([0.001, 5.]);
     assert!(plan(p, o).unwrap_err().message.contains("budget"));
+}
+
+
+fn qualification_for(plan: &SewPlan) -> SewingQualification {
+    let seam = &plan.seams[0];
+    SewingQualification {
+        id: "measured-coupon-v1".into(),
+        materials: vec![
+            seam.sides[0].material_sha256.clone(),
+            seam.sides[1].material_sha256.clone(),
+        ],
+        machine: "synthetic-machine".into(),
+        needle: "test-needle".into(),
+        thread: "test-thread".into(),
+        stitch_mm: [2.0, 3.0],
+        feed_b_over_a: [0.9, 1.1],
+        stack_mm: [0.7, 0.9],
+        stitches_per_minute: [500.0, 700.0],
+        allow_reverse: false,
+        evidence: Evidence::Measured,
+        source: Source {
+            reference: "test:sewing-coupon".into(),
+            accessed_on: "2026-10-18".into(),
+            note: "Synthetic known-answer qualification; not a physical coupon".into(),
+        },
+        method: "Synthetic seam qualification fixture".into(),
+        conditions: std::collections::BTreeMap::from([(
+            "purpose".into(),
+            "software regression only".into(),
+        )]),
+        allow_estimates: false,
+    }
+}
+
+#[test]
+fn exact_source_qualification_follows_material_and_actual_operation_envelopes() {
+    let p = pattern();
+    let baseline = plan(p.clone(), options()).unwrap();
+    let mut o: SewOptions = serde_json::from_value(options()).unwrap();
+    o.require_qualification = true;
+    o.qualifications.push(qualification_for(&baseline));
+    let admitted = SewPlan::build(&Pattern::new(p.clone()), &o).unwrap();
+    assert_eq!(admitted.schema, "ftx-sewing-plan/5");
+    assert_eq!(
+        admitted.seams[0].qualification_id.as_deref(),
+        Some("measured-coupon-v1")
+    );
+    assert!(!admitted.hardware_execution_authorized);
+    assert!(!admitted.physical_seam_quality_validated);
+
+    let mut changed = p.clone();
+    changed["fabric"] = fabric("same-thickness-different-lot", 0.4);
+    let err = SewPlan::build(&Pattern::new(changed), &o).unwrap_err();
+    assert!(err.message.contains("exact stack"), "{err}");
+
+    let mut wrong_needle = o.clone();
+    wrong_needle.passes[0].needle = "other-needle".into();
+    assert!(
+        SewPlan::build(&Pattern::new(p.clone()), &wrong_needle)
+            .unwrap_err()
+            .message
+            .contains("needle")
+    );
+
+    let mut too_fast = o.clone();
+    too_fast.passes[0].stitches_per_minute = 800.0;
+    assert!(
+        SewPlan::build(&Pattern::new(p), &too_fast)
+            .unwrap_err()
+            .message
+            .contains("qualified")
+    );
+}
+
+#[test]
+fn estimated_qualification_and_reverse_travel_need_separate_explicit_admission() {
+    let p = pattern();
+    let baseline = plan(p.clone(), options()).unwrap();
+    let mut o: SewOptions = serde_json::from_value(options()).unwrap();
+    o.require_qualification = true;
+    let mut q = qualification_for(&baseline);
+    q.evidence = Evidence::Estimate;
+    o.qualifications.push(q);
+    assert!(SewPlan::build(&Pattern::new(p.clone()), &o).is_err());
+
+    o.qualifications[0].allow_estimates = true;
+    SewPlan::build(&Pattern::new(p.clone()), &o).unwrap();
+
+    o.passes[0].backtack.start_stitches = 1;
+    assert!(
+        SewPlan::build(&Pattern::new(p.clone()), &o)
+            .unwrap_err()
+            .message
+            .contains("qualified")
+    );
+    o.qualifications[0].allow_reverse = true;
+    let admitted = SewPlan::build(&Pattern::new(p), &o).unwrap();
+    assert_eq!(admitted.seams[0].qualification_id.as_deref(), Some("measured-coupon-v1"));
 }
