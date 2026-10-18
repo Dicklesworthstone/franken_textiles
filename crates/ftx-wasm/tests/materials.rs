@@ -36,6 +36,41 @@ fn selection(width: f64, thickness: f64) -> Value {
 fn changes(default: Value) -> Value {
     json!({"schema":"ftx-material-bindings/1","default":default,"pieces":{}})
 }
+
+#[test]
+fn nonlinear_swatch_api_reuses_native_identification_and_binding() {
+    let input = include_str!("../../../tests/fixtures/materials/synthetic-nonlinear-swatch.json");
+    let denied: Value =
+        serde_json::from_str(&materials::calibrate_nonlinear(input, false).unwrap()).unwrap();
+    let fitted: Value =
+        serde_json::from_str(&materials::calibrate_nonlinear(input, true).unwrap()).unwrap();
+    let native = ftx_pattern::material_calibration::nonlinear::calibrate(
+        &serde_json::from_str(input).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(fitted["calibration"], serde_json::to_value(native).unwrap());
+    assert_eq!(denied["calibration"], fitted["calibration"]);
+    assert_eq!(
+        denied["material"]["capabilities"]["mechanical_coefficients"]["ready"],
+        false
+    );
+    assert_eq!(
+        fitted["material"]["capabilities"]["mechanical_coefficients"]["ready"],
+        true
+    );
+    let result =
+        materials::bind(PATTERN, &changes(fitted["selection"].clone()).to_string()).unwrap();
+    let result: Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(
+        result["drape_materials_without_self_contact"]["ready"],
+        true
+    );
+    assert_eq!(result["geometry_changed"], false);
+    let mut tampered: Value = serde_json::from_str(input).unwrap();
+    tampered["samples"][12]["nominal_n_m"][0][0] = json!(45.);
+    assert!(materials::calibrate_nonlinear(&tampered.to_string(), true).is_err());
+    assert!(materials::calibrate_nonlinear("{}", true).is_err());
+}
 fn bind(p: &Value, c: &Value) -> Value {
     serde_json::from_str(&materials::bind(&p.to_string(), &c.to_string()).unwrap()).unwrap()
 }

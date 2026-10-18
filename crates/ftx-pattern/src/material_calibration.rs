@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
 
+/// Identify the existing nonlinear membrane directly from finite-strain swatch observations.
+pub mod nonlinear;
+
 /// Input schema for reproducible swatch identification.
 pub const SCHEMA: &str = "ftx-swatch-calibration/1";
 const MAX_SAMPLES: usize = 4096;

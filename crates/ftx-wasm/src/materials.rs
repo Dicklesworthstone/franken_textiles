@@ -100,6 +100,43 @@ pub fn inspect(selection: &str) -> Result<String, Refusal> {
     serde_json::to_string(&detail(&m)).map_err(invalid)
 }
 
+/// Identify the production nonlinear material law from source-bearing nominal swatch forces.
+/// Observation consent in the input and admission of the fitted estimates are independent.
+///
+/// # Errors
+/// Oversized/invalid input, unidentifiable or unstable response, inadmissible evidence, or failed
+/// fit/held-out residual budgets. Missing unrelated mechanics remain reported, never invented.
+pub fn calibrate_nonlinear(input: &str, allow_estimates: bool) -> Result<String, Refusal> {
+    budget(&[input])?;
+    let input = serde_json::from_str(input).map_err(invalid)?;
+    let report = ftx_pattern::material_calibration::nonlinear::calibrate(&input)?;
+    let snapshot = textile_import::catalog()?.resolve(&Selection {
+        id: report.material.id.clone(),
+        record: Some(report.material.clone()),
+        allow_estimates,
+        ..Selection::default()
+    })?;
+    serde_json::to_string(
+        &json!({"calibration":report,"selection":snapshot.frozen_selection(),
+        "material":detail(&snapshot),"fit_claim":false}),
+    )
+    .map_err(invalid)
+}
+
+/// Browser nonlinear swatch calibration using the native identification and material authority.
+///
+/// # Errors
+/// Same refusals as [`calibrate_nonlinear`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_calibrate_nonlinear(
+    input: &str,
+    allow_estimates: bool,
+) -> Result<String, wasm_bindgen::JsError> {
+    calibrate_nonlinear(input, allow_estimates)
+        .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Screen source-locked alternatives under explicit constraints, evidence policy and objectives.
 ///
 /// # Errors

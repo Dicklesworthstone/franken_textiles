@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 
 #[path = "../materials/stock.rs"]
 mod finite_stock;
+#[path = "../materials/nonlinear.rs"]
+mod nonlinear_calibration;
 #[path = "../materials/scenario.rs"]
 mod scenarios;
 #[path = "../materials/screen.rs"]
@@ -59,6 +61,7 @@ ftx-materials price PATTERN.json QUOTES.json SCOPE.json
 ftx-materials thermal STACK.json
 ftx-materials thermal-at ID TEMPERATURE-C [--allow-estimates]
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
+ftx-materials calibrate-nonlinear SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
 ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials calibrate-friction SLIDING.json [--allow-estimates]
@@ -88,6 +91,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-steady-surface` evaluates source-locked drape triangles without requiring heat storage; no inferred body coverage.
 `thermal-steady-coverage` recomputes layered body coverage and heat directly from retained drape materials, without invented storage.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
+`calibrate-nonlinear` identifies signed nonlinear membrane curves from nominal forces without extrapolating.
 `calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
 `calibrate-friction` identifies explicit pair/self/body kinetic coefficients from corrected steady sliding forces.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
@@ -235,6 +239,10 @@ fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["calibrate-nonlinear", path] => nonlinear_calibration::run(path, false),
+        ["calibrate-nonlinear", path, "--allow-estimates"] => {
+            nonlinear_calibration::run(path, true)
+        }
         ["calibrate-friction", path] => friction_calibration::run(path, false),
         ["calibrate-friction", path, "--allow-estimates"] => friction_calibration::run(path, true),
         ["screen", path] => screening::run(path),

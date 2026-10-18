@@ -1392,6 +1392,73 @@ missing coupon width, direction and conditioning still prevent a justified sheet
 
 ---
 
+### 25.13 Raw swatches, directional recovery and finite purchasing
+
+The priority remains the unchanged jacket/body experiment in §25.1: material construction, lot,
+finish and conditioning must determine the existing simulation and manufacturing inputs. The
+complete attribute scope in §25.2–25.5 remains in force. A family name, blend percentage or supplier
+description is insufficient to supply missing mechanical or thermal measurements.
+
+**Nonlinear swatch identification (`ftx-tm4`, supports `ftx-tm2`).** Both native material
+commands now expose `calibrate-nonlinear`, and the file-free browser API exposes the same Rust
+engine. Full deformation gradients and observed nominal force components identify the existing
+separable tabulated Green-strain membrane, including tension/compression asymmetry, toe regions,
+stiffening, nonlinear shear and constant normal coupling. Missing force channels remain absent.
+Only FIT observations determine the knot endpoints, parameters and strain domain; independently
+held-out observations retain separate residual budgets and cannot extend or tune the fit.
+Unexcited knots, unstable coupled tangents and extrapolation refuse. Estimates require explicit
+admission, old equilibrium evidence requires explicit replacement, and a previous relaxation law
+cannot silently attach to a newly fitted equilibrium. The output is the ordinary source-complete
+frozen selection, preserving unrelated mass, bending, friction, thickness and thermal observations.
+Native, portable and actual sewn-band tests exercise propagation without changing geometry or mass.
+See `docs/nonlinear-material-calibration.md`.
+
+**Directional recovery (`ftx-tm4`).** Commit `25a13d3` extends the current Maxwell history model
+with independently sourced orthotropic branch tensors. Warp/wale, weft/course and bias may recover
+at different rates. Explicit inactive directions, stable signed normal coupling and matched
+specimen/conditioning are required; no material-name branch or separate solver is introduced.
+The existing proportional history and serialization remain compatible. Actual per-piece sewn
+triangles, clamped reactions, free dynamics and motion continuation use the same history path.
+The automatic timed fitter still identifies proportional spectra; independent directional
+identification and measured cyclic acceptance remain work to complete.
+
+**Quantity-aware procurement (`ftx-tm6`).** Commit `00a773b` binds optional quotes to exact
+resolved material hashes and checks the complete minimum/increment-rounded order against observed
+supplier capacity in the quote's sale unit. An explicit policy can require observed capacity.
+Unavailable, stale, mismatched, unknown-capacity and insufficient-capacity offers retain exclusion
+reasons; a later unusable observation cannot revive an earlier quote. Marker cost remains unknown
+when any material lacks an eligible whole-order offer. Source adapters must obtain stock quantities
+from retained observations of the exact variant, never a static guessed manifest value. A dated
+observation does not reserve inventory. Offer percentiles remain sample summaries, not worldwide
+quality/location distributions.
+
+**Next product and evidence gaps:**
+
+1. **Matched practical materials (`ftx-tm2`, `ftx-tm8`).** Acquire complete compatible
+   conditioned linen, treated cowhide and performance-knit swatches, with independently measured
+   mass/thickness, directional membrane/shear/bending, counterface friction and transport. Fit the
+   declared law only inside its characterized range, then validate held-out coupons and the same
+   sewn jacket/body. Extend fill loft/compression and moisture separately. Numerical fixtures
+   cannot close these highest-priority empirical gates.
+2. **Independent recovery identification (`ftx-rc1`).** Identify orthotropic tensors and times
+   from complete matched warp/weft/shear hold, unload and cyclic histories, including lateral
+   reactions and independently characterized equilibrium. Report deficient excitation, relaxation
+   outside measured durations and held-out disagreement rather than borrowing another axis's time.
+3. **Permanent in-plane set and damage (`ftx-ps1`).** Add a measured, dissipative membrane state
+   model for residual stretch and stiffness loss, preserving material-frame objectivity, grain,
+   exact welded seams, failed-step rollback and motion continuation. Bending plasticity and
+   recoverable Maxwell memory do not establish these mechanisms.
+4. **Primary-source closure (`ftx-fj1`) and live stock qualification (`ftx-pq1`).** Resolve
+   missing units and ambiguous bending normalization in the Fujii et al. (2026) cotton study before
+   those observations become canonical mass or bending. Obtain permitted raw directional data.
+   Qualify real supplier quantity observations and material/lot identity, unit/width/order tiers,
+   zero/depleted stock and source changes. Preserve old frozen designs and unavailable results.
+
+These increments establish common material propagation and numerical identification. They do not
+establish measured garment fit/warmth, complete textile failure behavior or robot execution.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

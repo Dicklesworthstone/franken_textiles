@@ -5,6 +5,7 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
+mod nonlinear;
 mod scenario;
 mod screen;
 mod stock;
@@ -12,6 +13,17 @@ mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if action == "calibrate-nonlinear" {
+        known_options(args, "materials", &["allow-estimates"])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials calibrate-nonlinear SWATCHES.json [--allow-estimates]",
+            ));
+        };
+        let result = nonlinear::run(path, args.options.contains_key("allow-estimates"))?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if action == "scenario-study" {
         known_options(args, "materials", &[])?;
         let [pattern, request, scenario, measurements, model] = &args.positional[2..] else {
