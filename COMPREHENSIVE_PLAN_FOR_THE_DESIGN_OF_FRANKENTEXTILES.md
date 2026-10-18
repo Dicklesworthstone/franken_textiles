@@ -1267,6 +1267,72 @@ fit, thermal and manufacturing accuracy sought by the overall platform.
 
 ---
 
+### 25.11 Purchasable textile records and complete-history design objectives
+
+The source-qualified catalog and the fixed-pattern workbench are the same material platform.
+Supplier records must enter the existing `Material` authority, retain original units and evidence,
+and reach each consumer through its normal frozen selection. A new product must not require a
+brand-specific branch in mechanics, heat, cutting, sewing or purchasing. Construction and specimen
+data remain essential: fiber percentages, marketing stretch and a product name do not determine an
+effective sheet law.
+
+**Purchasable source expansion (`ftx-sr1`).** The built-in catalog contains 96 records, including
+twelve additional exact supplier products with 21 numeric source observations. This tranche covers
+linen, cotton poplin/interlock, bamboo-derived rayon/cotton/elastane jersey, silk charmeuse, merino
+knit/felt, cotton sewing thread and batting, two separately identified Polartec mesh constructions,
+and treated goose down. It preserves supplier identity, SKU or explicit variant, composition,
+construction, original quantities, source URL, access date and source-page digest. Yarn linear density
+remains yarn data; fill-power and marketing stretch labels do not become shell mechanics or thermal
+ratings. Nominal fabric width does not assert measured defect-free cutting width. These are published
+supplier observations with capability-specific gaps, not twelve fully measured simulation materials.
+See `docs/supplier-apparel-catalog.md`.
+
+The reviewed four-offer manifest in `docs/examples/textile-supplier-refresh.json` uses the existing
+Product/Offer adapter and quote schema. Exact SKU, currency, stock, sale quantity and reviewed
+description checks remain mandatory. An optional exact HTML-text check also protects selling-unit
+evidence that the supplier places outside its structured product description. Source changes refuse
+publication; they never silently reinterpret a half-metre price as a full-metre price. Requests obey
+the applicable supplier robots rules, including redirect destinations and longest-path precedence.
+New runs retain immutable dated quotes and raw evidence separately; no previous observation is
+overwritten or made current by changing its date. CAD and USD, different textile variants and different
+market/order terms remain separate samples. One offer's p10/median/p90 is a one-observation summary,
+not a world-market distribution. An out-of-stock observation remains unavailable.
+
+**Final-state objectives on complete histories (`ftx-mo1`, supports `ftx-ms2`).** The existing
+scenario comparison admits complete motion and transient sheet/body-domain histories. It now also
+exposes each thermal domain's signed net boundary energy and final minimum/maximum cloth temperature,
+alongside inward energy, retained-history temperature extrema and peak panel-edge strain. A final
+temperature constraint is distinct from an extreme reached earlier in the motion. All readings come
+from the admitted production history; the browser displays the Rust frontier and `motion_required`
+scope rather than computing another score. Initial static objectives retain their initial-frame basis.
+
+Admission requires a settled, gating-clear initial drape and the complete, converged requested path.
+Transient objectives additionally require matching policy, duration, source geometry and every
+accepted mechanical sample. A requested failed heat history cannot qualify through successful static
+heat, and the final moving state need not be at rest. Sheet and body-coverage energies remain separate
+domains; stored heat, bare-body exchange, remap residuals and numerical balance error remain explicit.
+Negative temperatures and reversed energy are valid within their declared domains. The same native
+and wasm engines recompute material substitutions without editing solver code. Synthetic model-backed
+replay verifies software propagation; it does not establish measured jacket fit or warmth.
+
+**Remaining highest-impact delivery gates:**
+
+1. Complete matched linen, treated cowhide and performance-knit characterization under `ftx-tm2`,
+   `ftx-md1`, `ftx-tme` and `ftx-ms3`: exact lot/finish, conditioned thickness/areal mass, directional
+   load-extension/shear/bending, pair friction and compatible thermal observations. Use primary raw
+   data and held-out coupons; unrelated lots or proprietary brand descriptions cannot fill gaps.
+2. Add reviewable supplier specification revisions (`ftx-sr2`). Compare newly observed composition,
+   construction, sale basis and nominal dimensions against the exact retained product revision before
+   accepting updates. Preserve frozen studies and old prices, distinguish product/SKU from measured
+   specimen/lot, and require explicit review for changed identities or specifications. Extend actual
+   supplier coverage only with unambiguous variants, order tiers, currencies and permitted sources.
+3. Use those matched records for the unchanged jacket/body experiment in `ftx-tm8` and independent
+   garment/layer thermal acceptance in `ftx-tmf`/`ftx-cv2`. Keep the highest-priority evidence gaps open.
+   Qualify sewing recipes on measured material stacks under `ftx-sp2`; machine execution still needs
+   calibrated workholding, kinematics, sensing, collisions, interlocks and its own authorization.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

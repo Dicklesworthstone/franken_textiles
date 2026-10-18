@@ -185,6 +185,8 @@ impl Catalog {
         catalog.materials.extend(mit::records());
         let woven = Self::from_json(include_str!("material_catalog/woven-measurements.json"))?;
         catalog.materials.extend(woven.materials);
+        let supplier = Self::from_json(include_str!("material_catalog/supplier-apparel.json"))?;
+        catalog.materials.extend(supplier.materials);
         catalog.validate()?;
         Ok(catalog)
     }

@@ -134,6 +134,39 @@ class JsonLdTests(unittest.TestCase):
         p["description"] = "Sold per whole roll now"
         with self.assertRaises(ValueError): self.extract(p)
 
+    def test_reviewed_page_basis_outside_description_is_retained_and_checked(self):
+        e = manifest_entry(); e["unit"] = "linear_meter"
+        e["required_description_text"] = ["Content: 100% Linen"]
+        e["required_page_text"] = ["All fabric is sold by the half meter.", "Quantité en mètres"]
+        p = product(); p["description"] = "Content: 100% Linen. Synthetic fixture only."
+        faq = "<section>All fabric is sold by the half meter. Quantité en mètres</section>".encode()
+        data = html(p).replace(b"</html>", faq + b"</html>")
+        quote, receipt = r.extract_jsonld(e, data, NOW)
+        self.assertEqual((quote["quantity"], quote["unit"]), (0.5, "linear_meter"))
+        self.assertEqual(quote["source_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(receipt["manifest_entry"]["required_page_text"], e["required_page_text"])
+        for changed in (html(p), data.replace(b"half meter", b"full meter"),
+                        data.replace("Quantité en mètres".encode(), b"Other text")):
+            with self.subTest(changed=changed[-100:]), self.assertRaisesRegex(ValueError, "page selling-basis text"):
+                r.extract_jsonld(e, changed, NOW)
+        p["description"] = "Content: 100% Polyester"
+        with self.assertRaisesRegex(ValueError, "product-description|selling-basis description"):
+            r.extract_jsonld(e, html(p).replace(b"</html>", faq + b"</html>"), NOW)
+
+    def test_page_guards_are_optional_but_nonempty_html_only_and_exact(self):
+        for fragments in (None, "Sold per half yard", [], [""], ["   "], [1], ["valid", False]):
+            e = manifest_entry(); e["required_page_text"] = fragments
+            with self.subTest(fragments=fragments), self.assertRaisesRegex(ValueError, "required_page_text"):
+                r.validate_jsonld(e)
+        e = manifest_entry(); e.update(source_format="json", required_page_text=["Sold per half yard"])
+        with self.assertRaisesRegex(ValueError, "required_page_text"):
+            r.extract_jsonld(e, json.dumps(product()).encode(), NOW)
+        e["source_format"] = "html"; e["required_page_text"] = ["Sold  per half yard"]
+        with self.assertRaisesRegex(ValueError, "page selling-basis text"):
+            r.extract_jsonld(e, html(product()), NOW)
+        del e["required_page_text"]
+        self.assertEqual(r.extract_jsonld(e, html(product()), NOW)[0]["price"], 12.99)
+
     def test_no_remote_fetch_execution_or_context_remapping(self):
         e = manifest_entry()
         for data in [b'<script type="application/ld+json" src="https://other.invalid/x"></script>',

@@ -1,0 +1,241 @@
+{
+  "schema": "ftx-textile-catalog/1",
+  "materials": [
+    {
+      "id": "blackbird/FL9910",
+      "name": "Blackbird Everyday Linen — Black FL9910",
+      "form": "woven",
+      "composition": [{"fiber":"flax","fraction":1,"source":"blackbird-fl9910"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_sku": "FL9910",
+        "supplier_variant": "39784406482990; Black",
+        "construction": "Woven linen; thread count and weave geometry not reported. [source: blackbird-fl9910]",
+        "origin": "Jiangsu, China. [source: blackbird-fl9910]",
+        "width_scope": "Supplier nominal fabric width; usable selvage allowance and lot tolerance are not reported.",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "areal_density": {"value":210,"unit":"g/m2","evidence":"published","source":"blackbird-fl9910","method":"Direct supplier GSM specification; retains metric value rather than reconciling rounded 6 oz label","conditions":{"specimen":"As-sold Black FL9910; lot and conditioning not reported"}},
+        "width": {"value":130,"unit":"cm","evidence":"published","source":"blackbird-fl9910","method":"Direct supplier metric width; separately rounded 51 in is not an independent measurement","conditions":{"specimen":"As-sold Black FL9910; usable selvage allowance not reported"}}
+      },
+      "sources": {"blackbird-fl9910":{"reference":"https://www.blackbirdfabrics.com/products/everyday-linen-black","accessed_on":"2026-10-18","note":"Primary supplier product specification and exact variant reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 fb8c6dbfbf98ff6385bcb94f10304ec5f48e1e43891a4d8268292c36233acd79. No measured drape, thermal or machine-process qualification."}}
+    },
+    {
+      "id": "blackbird/FNOVAWHT",
+      "name": "Blackbird Washed Cotton Poplin — White FNOVAWHT",
+      "form": "woven",
+      "composition": [{"fiber":"cotton","fraction":1,"source":"blackbird-fnovawht"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_sku": "FNOVAWHT",
+        "supplier_variant": "32619575869486; White",
+        "construction": "Cotton poplin with washed finish. Thread counts and shrinkage measurements not reported. [source: blackbird-fnovawht]",
+        "origin": "China. [source: blackbird-fnovawht]",
+        "width_scope": "Supplier nominal fabric width; usable selvage allowance and lot tolerance are not reported.",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "areal_density": {"value":110,"unit":"g/m2","evidence":"published","source":"blackbird-fnovawht","method":"Direct supplier GSM specification; rounded 3.2 oz label retained by source","conditions":{"specimen":"As-sold White FNOVAWHT; lot and conditioning not reported"}},
+        "width": {"value":145,"unit":"cm","evidence":"published","source":"blackbird-fnovawht","method":"Direct supplier metric width; separately rounded 57 in is not an independent measurement","conditions":{"specimen":"As-sold White FNOVAWHT; usable selvage allowance not reported"}}
+      },
+      "sources": {"blackbird-fnovawht":{"reference":"https://www.blackbirdfabrics.com/products/washed-cotton-poplin-white","accessed_on":"2026-10-18","note":"Primary supplier product specification and exact variant reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 9851ff37ae88e3d92d1af5314075351da1594ad6b54103090306204079f25cc9. Descriptive crispness is not a measured bending coefficient."}}
+    },
+    {
+      "id": "blackbird/FT4148999",
+      "name": "Blackbird Bamboo Cotton Jersey — Black FT4148999",
+      "form": "knit",
+      "composition": [{"fiber":"bamboo-viscose","fraction":0.66,"source":"blackbird-ft4148999"},{"fiber":"cotton","fraction":0.28,"source":"blackbird-ft4148999"},{"fiber":"elastane","fraction":0.06,"source":"blackbird-ft4148999"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_sku": "FT4148999",
+        "supplier_variant": "41092819419182; Black",
+        "construction": "Jersey knit; bamboo component is rayon from bamboo, not bamboo bast. [source: blackbird-ft4148999]",
+        "supplier_stretch": "75% cross-grain and 65% along grain-line, described as four-way stretch. Applied load, gauge length, conditioning and recovery protocol absent; not a stress-strain law or breaking strain. [source: blackbird-ft4148999]",
+        "origin": "China. [source: blackbird-ft4148999]",
+        "width_scope": "Supplier nominal fabric width; usable selvage allowance and lot tolerance are not reported.",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "areal_density": {"value":200,"unit":"g/m2","evidence":"published","source":"blackbird-ft4148999","method":"Direct supplier GSM specification","conditions":{"specimen":"As-sold Black FT4148999; lot and conditioning not reported"}},
+        "width": {"value":152,"unit":"cm","evidence":"published","source":"blackbird-ft4148999","method":"Direct supplier metric width; separately rounded 60 in is not an independent measurement","conditions":{"specimen":"As-sold Black FT4148999; usable selvage allowance not reported"}}
+      },
+      "sources": {"blackbird-ft4148999":{"reference":"https://www.blackbirdfabrics.com/products/bamboo-cotton-jersey-black","accessed_on":"2026-10-18","note":"Primary supplier product specification and exact variant reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 53dec13c94a4bfdac9463ecb221a00f43d8066f9691b60849e3c35a235bdf081. Variant was unavailable at review; stock belongs to dated quotes, not frozen physics."}}
+    },
+    {
+      "id": "nydesigner/CM-065",
+      "name": "NY Designer Fabrics Black Silk Charmeuse — CM-065",
+      "form": "woven",
+      "composition": [{"fiber":"silk","fraction":1,"source":"nydesigner-cm065"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_sku": "CM-065",
+        "supplier_variant": "32932287643693; Black",
+        "construction": "Silk charmeuse; satin face and matte back. [source: nydesigner-cm065]",
+        "supplier_weight_label": "19 MM is the supplier's silk-weight designation; it is not 19 millimetres of thickness. No areal-density conversion is assigned without a reviewed momme definition. [source: nydesigner-cm065]",
+        "care": "Supplier recommends dry cleaning and testing a swatch before home laundering. [source: nydesigner-cm065]",
+        "width_scope": "Supplier nominal fabric width; usable selvage allowance and lot tolerance are not reported.",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "width": {"value":44,"unit":"in","evidence":"published","source":"nydesigner-cm065","method":"Supplier product-code CM-065 width specification","conditions":{"specimen":"As-sold Black CM-065; usable selvage allowance not reported"}}
+      },
+      "sources": {"nydesigner-cm065":{"reference":"https://nydesignerfabrics.com/products/black-charmeuse-silk-fabric","accessed_on":"2026-10-18","note":"Primary supplier product details explicitly identify 100% silk, code CM-065 and 44-inch width. Reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 b09cd0651fd4ea59a382c28519d0f878ecf27a4970db6009433a26e6b4d3d842. No source-backed mechanics or thermal parameters."}}
+    },
+    {
+      "id": "greenpepper/merino-46280585609436",
+      "name": "The Green Pepper Merino Wool Knit — Moroccan Teal",
+      "form": "knit",
+      "composition": [{"fiber":"merino-wool","fraction":1,"source":"greenpepper-merino"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_variant": "46280585609436; Moroccan Teal; supplier SKU absent",
+        "construction": "Merino wool knit; stitch structure, gauge and yarn count not reported. [source: greenpepper-merino]",
+        "supplier_stretch": "50% stretch claim has no stated direction, load or test protocol; no stiffness, recovery law or breaking strain inferred. [source: greenpepper-merino]",
+        "care": "Hand wash cold; dry flat or hanging; low iron. [source: greenpepper-merino]",
+        "width_scope": "Supplier nominal 59 in, also rounded as 150 cm; usable selvage allowance not reported.",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "areal_density": {"value":200,"unit":"g/m2","evidence":"published","source":"greenpepper-merino","method":"Direct supplier 200 GSM specification; also labels 5.9 oz/sq yd","conditions":{"specimen":"As-sold merino knit, Moroccan Teal; lot and conditioning not reported"}},
+        "width": {"value":59,"unit":"in","evidence":"published","source":"greenpepper-merino","method":"Direct supplier inch width; separately rounded 150 cm is not an independent measurement","conditions":{"specimen":"As-sold merino knit; usable selvage allowance not reported"}}
+      },
+      "sources": {"greenpepper-merino":{"reference":"https://thegreenpepper.com/products/merino-wool","accessed_on":"2026-10-18","note":"Primary supplier product specification and variant reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 cc23ff699fbbf35ab781504a91908d43bf5e4b4bbb7cf02a529e92a773726eb5. Product JSON-LD lacks an exact SKU and cannot be accepted by the current quote importer."}}
+    },
+    {
+      "id": "organiccottonplus/INT-SOLIDS-BLACK",
+      "name": "Organic Cotton Plus Solid Interlock — Black",
+      "form": "knit",
+      "composition": [{"fiber":"cotton","fraction":1,"source":"ocp-interlock"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_sku": "INT-SOLIDS-BLACK",
+        "construction": "Cotton interlock knit; supplier identifies organic cotton. Independent certification or specimen tests not established here. [source: ocp-interlock]",
+        "width_scope": "Supplier describes width as varying but at least 60 inches; 60-inch nominal width retained, not a measured roll or usable-selvage guarantee. [source: ocp-interlock]",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "areal_density": {"value":260,"unit":"g/m2","evidence":"published","source":"ocp-interlock","method":"Direct supplier 260 GSM specification; separately rounded 7.67 oz/sq yd not treated as a second test","conditions":{"specimen":"As-sold Black INT-SOLIDS-BLACK; lot and conditioning not reported"}},
+        "width": {"value":60,"unit":"in","evidence":"published","source":"ocp-interlock","method":"Supplier nominal width; description states at least 60 inches","conditions":{"specimen":"As-sold interlock; width varies; usable selvage allowance not reported"}}
+      },
+      "sources": {"ocp-interlock":{"reference":"https://organiccottonplus.com/products/solid-interlock-60","accessed_on":"2026-10-18","note":"Primary supplier specification reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 1fac7aad981785d11baca079a5f2efd0a24a2e26795c91b0a646d1ec166cc65f. Published AggregateOffer and quantity tiers are not converted to an unconditional exact quote."}}
+    },
+    {
+      "id": "organiccottonplus/FELT400",
+      "name": "Organic Cotton Plus Merino Wool Felt — Black FELT400",
+      "form": "nonwoven",
+      "composition": [{"fiber":"merino-wool","fraction":1,"source":"ocp-felt"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_sku": "FELT400; Black",
+        "construction": "Felted merino wool; milled in Europe. [source: ocp-felt]",
+        "areal_density_unresolved": "Supplier reports 13–14 oz per yard without an explicit area basis or nominal; no mass midpoint or areal-density conversion is assigned. [source: ocp-felt]",
+        "care": "Supplier specifies dry cleaning; washing changes the felt appearance and may shrink it. [source: ocp-felt]",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "thickness": {"value":1,"unit":"mm","evidence":"published","source":"ocp-felt","method":"Supplier nominal thickness; no pressure-qualified measurement method reported","conditions":{"specimen":"As-sold Black FELT400; pressure and conditioning not reported"}},
+        "width": {"value":72,"unit":"in","evidence":"published","source":"ocp-felt","method":"Supplier nominal fabric width","conditions":{"specimen":"As-sold Black FELT400; usable edge allowance not reported"}}
+      },
+      "sources": {"ocp-felt":{"reference":"https://organiccottonplus.com/products/felt-72","accessed_on":"2026-10-18","note":"Primary supplier specification reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 94466d692961285d24809e77ff8a4c16a03673a226962f61d33d1ad0bc81dac2. Nominal 1 mm is not a calibrated compression law; supplier marketing does not establish safety or process certification."}}
+    },
+    {
+      "id": "organiccottonplus/THR4800-5000WHT",
+      "name": "Organic Cotton Plus Tex 35 Sewing Thread — White 5000 m Cone",
+      "form": "yarn",
+      "composition": [{"fiber":"cotton","fraction":1,"source":"ocp-thread"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_sku": "THR4800-5000WHT",
+        "construction": "Two-ply organic-cotton sewing thread; supplier tex 35 and parenthetical 30wt retained separately. [source: ocp-thread]",
+        "finish": "Supplier reports a soy-based coating mixture; fiber composition excludes unreported coating mass. [source: ocp-thread]",
+        "package": "5000 metres per cone. No cone-price-to-mass conversion is inferred from nominal tex. [source: ocp-thread]",
+        "origin": "Holland, as labelled by supplier. [source: ocp-thread]",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "yarn_linear_density": {"value":35,"unit":"tex","evidence":"published","source":"ocp-thread","method":"Supplier nominal tex designation; no breaking strength or needle suitability inferred","conditions":{"specimen":"As-sold White THR4800-5000WHT; conditioning and coating mass contribution not reported"}}
+      },
+      "sources": {"ocp-thread":{"reference":"https://organiccottonplus.com/products/thread-5000-meter-cone-1","accessed_on":"2026-10-18","note":"Primary supplier specification reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 9d90c2deb8ef795b883b611807817802a781b80a7a221af89d793d8e31b6851d. Thread is a yarn record, not a membrane. Quantity-tiered cone offers are not unconditional linear fabric quotes."}}
+    },
+    {
+      "id": "organiccottonplus/ORBY-96",
+      "name": "Organic Cotton Plus Heirloom Cotton Batting — Natural ORBY-96",
+      "form": "fill",
+      "composition": [],
+      "composition_complete": false,
+      "structure": {
+        "supplier_sku": "ORBY-96; Natural",
+        "construction": "Needle-punched organic-cotton batting; supplier states no added scrim or binders. An explicit numerical composition assay is not reported. [source: ocp-batting]",
+        "thickness_reported_range": "[0.125, 0.25] in; no nominal, pressure or conditioning reported. No midpoint assigned. [source: ocp-batting]",
+        "shrinkage_reported_range": "[3, 5] percent; wash protocol and direction absent. Not a calibrated dimensional-change law. [source: ocp-batting]",
+        "quilting": "Supplier maximum quilting separation 4 in; recipe and finished seam strength not qualified. [source: ocp-batting]",
+        "origin": "India. [source: ocp-batting]",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "areal_density": {"value":3.7,"unit":"oz/yd2","evidence":"published","source":"ocp-batting","method":"Direct supplier area-weight specification; separately rounded 10 oz per linear yard is not a second independent observation","conditions":{"specimen":"As-sold Natural ORBY-96; lot and conditioning not reported"}},
+        "width": {"value":96,"unit":"in","evidence":"published","source":"ocp-batting","method":"Supplier nominal batting width","conditions":{"specimen":"As-sold Natural ORBY-96; usable edge allowance not reported"}}
+      },
+      "sources": {"ocp-batting":{"reference":"https://organiccottonplus.com/products/heirloom-cotton-batting-by-the-yard","accessed_on":"2026-10-18","note":"Primary supplier specification reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 be911be21c9f3bb92c1c24c4695f7f0bea1032bcdeb646235c67d0a33e6bbef3. Fill properties do not define a shell or thermal resistance. Published quantity tiers/AggregateOffer not ingested as unconditional quotes."}}
+    },
+    {
+      "id": "discovery/power-stretch-94010-olive-mesh",
+      "name": "Discovery Polartec Power Stretch Jersey 94010 — Olive Mesh",
+      "form": "knit",
+      "composition": [{"fiber":"nylon","fraction":0.92,"source":"discovery-94010"},{"fiber":"elastane","fraction":0.08,"source":"discovery-94010"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_sku": "Polartec Power Stretch Jersey94010 Olive MeshYard",
+        "supplier_variant": "49386236084546; Yard; 94010 Olive Mesh",
+        "construction": "Power Stretch jersey mesh; style-specific content and specification rows retained, not product-family averages. [source: discovery-94010]",
+        "supplier_stretch": "Four-way stretch label; direction-specific load-extension curves are not reported. [source: discovery-94010]",
+        "width_scope": "Supplier nominal width; usable selvage allowance and lot tolerance are not reported.",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "areal_density": {"value":203,"unit":"g/m2","evidence":"published","source":"discovery-94010","method":"Supplier Specs and Features row explicitly for STYLE 94010 Olive Mesh; also labels 6.0 oz/sq yd","conditions":{"specimen":"As-sold 94010 Olive Mesh; lot and conditioning not reported"}},
+        "width": {"value":66,"unit":"in","evidence":"published","source":"discovery-94010","method":"Supplier STYLE 94010 Olive Mesh nominal width; not another Power Stretch style","conditions":{"specimen":"As-sold 94010 Olive Mesh; usable selvage allowance not reported"}}
+      },
+      "sources": {"discovery-94010":{"reference":"https://discoveryfabrics.com/products/polartec-power-stretch-jersey","accessed_on":"2026-10-18","note":"Primary supplier variant, Specs and Features and Content rows reviewed by public HTTP GET. Factual attributes only; trademarks and page rights remain with source. HTML SHA-256 4a9d57a2f74b190b2036f2d1317a14ed11aabfcec8cf9bf29c7d0972e828f7d4. Multi-variant Offer array lacks exact @id selection for current importer; no family minimum price used."}}
+    },
+    {
+      "id": "discovery/power-stretch-94065-black-mesh",
+      "name": "Discovery Polartec Power Stretch Jersey 94065 — Black Mesh",
+      "form": "knit",
+      "composition": [{"fiber":"polyester","fraction":0.92,"source":"discovery-94065"},{"fiber":"elastane","fraction":0.08,"source":"discovery-94065"}],
+      "composition_complete": true,
+      "structure": {
+        "supplier_sku": "Polartec Power Stretch Jersey94065 Black MeshYard",
+        "supplier_variant": "39947834687573; Yard; 94065 Black Mesh",
+        "construction": "Power Stretch jersey mesh; style-specific content and specification rows retained. [source: discovery-94065]",
+        "supplier_stretch": "55% side-to-side and lengthwise; four-way stretch label. Load, gauge length, recovery and conditioning not reported; no constitutive curve or breaking strain inferred. [source: discovery-94065]",
+        "width_scope": "Supplier nominal width; usable selvage allowance and lot tolerance are not reported.",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "areal_density": {"value":203,"unit":"g/m2","evidence":"published","source":"discovery-94065","method":"Supplier Specs and Features row explicitly for STYLE 94065 Black Mesh; also labels 6.0 oz/sq yd","conditions":{"specimen":"As-sold 94065 Black Mesh; lot and conditioning not reported"}},
+        "width": {"value":60,"unit":"in","evidence":"published","source":"discovery-94065","method":"Supplier STYLE 94065 Black Mesh nominal width; not 66-inch style 94010","conditions":{"specimen":"As-sold 94065 Black Mesh; usable selvage allowance not reported"}}
+      },
+      "sources": {"discovery-94065":{"reference":"https://discoveryfabrics.com/products/polartec-power-stretch-jersey","accessed_on":"2026-10-18","note":"Primary supplier variant, Specs and Features and Content rows reviewed by public HTTP GET. Factual attributes only; trademarks and page rights remain with source. HTML SHA-256 4a9d57a2f74b190b2036f2d1317a14ed11aabfcec8cf9bf29c7d0972e828f7d4. This polyester construction is distinct from the nylon 94010 specimen; neither has complete mechanical or thermal characterization."}}
+    },
+    {
+      "id": "rbtr/hyperdry-850-goose-down",
+      "name": "Ripstop by the Roll HyperDRY 850 FP Goose Down",
+      "form": "fill",
+      "composition": [{"fiber":"goose-down","fraction":1,"source":"rbtr-hyperdry850"}],
+      "composition_complete": true,
+      "structure": {
+        "manufacturer": "Allied Feather and Down. [source: rbtr-hyperdry850]",
+        "construction": "Loose goose down with proprietary water-resistant treatment; no sheet geometry. Supplier 100% goose-down label excludes unspecified treatment mass. [source: rbtr-hyperdry850]",
+        "package": "Sold in 3 avoirdupois-ounce increments; quantity 3 buys three packs, not three ounces. [source: rbtr-hyperdry850]",
+        "qualification": "FP label has no stated test protocol or volume/mass unit definition. Do not derive density, loft at arbitrary pressure, clo, temperature rating or an areal shell mass.",
+        "record_revision": "2026-10-18"
+      },
+      "properties": {
+        "supplier_fill_power": {"value":850,"unit":"FP","evidence":"published","source":"rbtr-hyperdry850","method":"Supplier fill-power label; test protocol and dimensional definition not reported, so retained as an unconsumed extension","conditions":{"specimen":"As-sold treated goose down; lot, humidity, conditioning and test pressure not reported"}}
+      },
+      "sources": {"rbtr-hyperdry850":{"reference":"https://ripstopbytheroll.com/products/hyperdry-850-fp-dwr-goose-down","accessed_on":"2026-10-18","note":"Primary supplier product table and package basis reviewed by public HTTP GET. Factual attributes only; page rights remain with source. HTML SHA-256 48690438a1ae322d2b84ec64d8b7149af34d955dcb0c3ef050e8d3b0c13c4089. Supplier describes table values as averages or estimates. No Product/Offer JSON-LD present; cart.js is excluded by robots policy, so no live quote manifest is supplied."}}
+    }
+  ]
+}

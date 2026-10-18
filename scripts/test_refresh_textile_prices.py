@@ -137,7 +137,8 @@ class RefreshTests(unittest.TestCase):
 
     def test_refresh_orders_cart_product_cart_and_retains_product_evidence(self):
         calls = []
-        def get(url):
+        def get(url, *, accept):
+            self.assertEqual(accept, "application/json")
             calls.append(url)
             return CART if url.endswith("cart.js") else raw(product())
         book, evidence = r.refresh(dict(schema="ftx-shopify-refresh/1", offers=[entry()]), get, lambda: NOW)
@@ -231,7 +232,8 @@ class CsvRefreshTests(unittest.TestCase):
         calls = []
         a = csv_entry(); b = copy.deepcopy(a); b["offer_id"] = "synthetic/42/other-scope"
         c = entry(); c["offer_id"] = "synthetic/shopify42"
-        def get(url):
+        def get(url, *, accept):
+            self.assertEqual(accept, "text/csv" if url.endswith(".csv") else "application/json")
             calls.append(url)
             return csv_raw() if url.endswith(".csv") else CART if url.endswith("cart.js") else raw(product())
         book, evidence = r.refresh(dict(schema="ftx-textile-refresh/1", offers=[c, b, a]), get, lambda: NOW)
@@ -340,6 +342,8 @@ class PublicSessionTests(unittest.TestCase):
             def https_open(self, request):
                 calls.append(request)
                 reply = replies[request.full_url]
+                if callable(reply):
+                    reply = reply(request)
                 code, body, location = reply if isinstance(reply, tuple) else (200, reply, None)
                 headers = Message()
                 if location:
@@ -359,6 +363,33 @@ class PublicSessionTests(unittest.TestCase):
                 session.get(host + "/cart.js")
         self.assertEqual([c.full_url for c in calls], [host + "/robots.txt"])
         sleep.assert_not_called()
+
+    def test_manifest_requests_the_reviewed_representation_and_caches_it_separately(self):
+        e = entry()
+        for key in ("product_url", "cart_url", "variant_id"):
+            del e[key]
+        e.update(adapter="jsonld_v1", source_url="https://example.invalid/products/sheet",
+                 source_format="html", offer_ref=None, tax_included=None)
+        ld = {"@context": "https://schema.org", "@type": "Product", "sku": "TEST-42",
+              "description": "Sold per half yard", "offers": {"@type": "Offer", "price": "12.99",
+              "priceCurrency": "USD", "availability": "https://schema.org/InStock"}}
+        page = b'<script type="application/ld+json">' + raw(ld) + b'</script>'
+        def negotiated(request):
+            # Ordinary Shopify product JSON is not the page's embedded JSON-LD.
+            return {"text/html": page, "application/ld+json,application/json": raw(ld)}.get(
+                request.get_header("Accept"), raw({"product": {"sku": "TEST-42"}}))
+        session, calls = self.session({"https://example.invalid/robots.txt": b"User-agent: *\nDisallow:",
+                                      e["source_url"]: negotiated})
+        feed = dict(e, offer_id="synthetic/feed", source_format="json")
+        same_page = dict(e, offer_id="synthetic/other-scope")
+        with patch.object(r.time, "sleep"):
+            book, evidence = r.refresh(dict(schema="ftx-textile-refresh/1", offers=[e, feed, same_page]),
+                                      session.get, lambda: NOW)
+        self.assertEqual([c.get_header("Accept") for c in calls],
+                         ["text/plain", "text/html", "application/ld+json,application/json"])
+        self.assertEqual(len(book["quotes"]), 3)
+        self.assertEqual(evidence[hashlib.sha256(page).hexdigest() + ".html"], page)
+        self.assertEqual(evidence[hashlib.sha256(raw(ld)).hexdigest() + ".json"], raw(ld))
 
     def test_headers_policy_cache_and_delays_include_first_source_request(self):
         host = "https://example.invalid"

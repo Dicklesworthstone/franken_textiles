@@ -460,7 +460,21 @@ mod tests {
     #[test]
     fn discovery_and_real_drape_refusals_are_exposed() {
         let rows = run(&["catalog".into(), "bamboo".into()]).unwrap();
-        assert_eq!(rows["materials"].as_array().unwrap().len(), 2);
+        let ids: Vec<_> = rows["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect();
+        for id in [
+            "fiber/bamboo-viscose",
+            "nf_bamboo_viscose_jersey_240",
+            "blackbird/FT4148999",
+        ] {
+            assert!(ids.contains(&id), "missing bamboo search result: {id}");
+        }
+        assert!(!ids.contains(&"fs_il019_natural"));
+        assert_eq!(run(&["catalog".into(), "BAMBOO".into()]).unwrap(), rows);
         let shown = run(&["show".into(), "fs_il019_natural".into()]).unwrap();
         assert_eq!(shown["simulation_ready"], false);
         assert!(

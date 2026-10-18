@@ -69,6 +69,10 @@ mismatch refuses; no default currency or exchange rate is invented. Robots exclu
 requests are serial and paced, responses are bounded to 4 MiB, timeouts are bounded, and redirects to
 other origins refuse. Authentication gates, rate limits and anti-bot responses are not bypassed.
 
+The request's Accept header follows the reviewed source format: HTML pages request `text/html`, JSON-LD
+feeds request JSON-LD/JSON, CSV feeds request CSV, and Shopify Ajax requests JSON. This prevents an HTML
+product URL from negotiating a different JSON product representation that lacks the reviewed page data.
+
 Requests identify as `OpenAI File Downloader, XaiImageApiFetch/1.0`, with REP product token
 `XaiImageApiFetch`. The collector combines equally specific matching agent groups, uses the most
 specific matching path rule, and prefers Allow on equal-length ties. It handles `*`, terminal `$`,
@@ -88,9 +92,13 @@ are reviewed declarations, not properties established by the Ajax response.
 The current Rust quote schema records calendar dates. Keep intraday refreshes as separate snapshots:
 merging conflicting same-day rows into a single historical book is deliberately rejected by that schema.
 A successful fetch is not a purchase guarantee or a statistically representative world-market survey.
-No automatic recurring refresh is configured. Reviewed live supplier manifests and policy-aware scheduling
-remain follow-up work. Live supplier endpoints were inaccessible from the implementation environment;
-the adapter was verified with offline response fixtures, not presented as a successful live scrape.
+No automatic recurring refresh is configured. A reviewed four-offer live manifest is now available in
+`docs/examples/textile-supplier-refresh.json`; its full public-source refresh succeeded on 2026-10-18.
+The dated factual snapshot is `docs/examples/textile-quotes-2026-10-18.json`. The existing Rust price
+consumer resolved the corresponding built-in material widths, converted metre/yard prices to area
+rates, rounded actual sale increments and excluded the out-of-stock variant. See
+`docs/supplier-apparel-catalog.md` for exact source scope and remaining supplier coverage. Policy-aware
+scheduling, broader supplier qualification and intraday history semantics remain follow-up work.
 
 Primary interface references (checked 2026-10-13):
 - Shopify Ajax Product API: https://shopify.dev/docs/api/ajax/reference/product
@@ -170,7 +178,8 @@ Only standard schema.org contexts (or a sole schema.org `@vocab`) are supported,
 term remapping. JavaScript is never executed and referenced scripts, contexts and external nodes are
 never fetched. There is no browser fallback or authentication bypass. HTML must be UTF-8, with at most
 64 data scripts; graph traversal is bounded. Original HTML/JSON and source-selection receipts are
-retained by hash. All SKUs drawn from one URL use the same fetched bytes and observation timestamp.
+retained by hash. All SKUs drawn from one URL and representation use the same fetched bytes and
+observation timestamp; distinct negotiated representations are cached separately.
 
 A direct Offer price or one plain PriceSpecification can supply the price, with explicit currency.
 When both exist, their amounts/currencies must agree. UnitPriceSpecification, list/sale-price arrays,
@@ -179,6 +188,14 @@ boolean when the source explicitly publishes `valueAddedTaxIncluded`, otherwise 
 or disappearing tax observation refuses. This checks published metadata, not checkout charges.
 Exact Product-description fragments still guard the reviewed quantity basis; JSON-LD prices do not
 establish roll length, yardage, dye lot, delivery eligibility or calibrated textile physics.
+
+When a reviewed selling-basis statement appears elsewhere on the product page, HTML entries may also
+declare `"required_page_text": ["All fabric is sold by the half meter."]`. Every fragment must be a
+nonempty exact substring of the fetched UTF-8 HTML. Changed or missing fragments refuse the offer;
+whitespace, markup and entities are not normalized. This optional check supplements the mandatory
+`required_description_text` checks and is retained in the existing source receipt. It is unavailable
+for `source_format: "json"`. Matching raw page text does not establish visibility or interpret the
+statement: the reviewed manifest still declares the sale unit and quantity, and no scripts run.
 
 ### Source expiry is a purchasing constraint, not just a receipt note
 

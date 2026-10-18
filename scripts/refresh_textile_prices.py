@@ -193,9 +193,9 @@ class PublicSession:
         time.sleep(max(0.0, self.next_request[host] - time.monotonic()))
         self.next_request[host] = time.monotonic() + policy.delay
 
-    def _get(self, url):
+    def _get(self, url, *, accept="*/*"):
         self._before_request(url)
-        req = urllib.request.Request(url, headers={"User-Agent": AGENT, "Accept": "application/json,text/csv,text/html,text/plain"})
+        req = urllib.request.Request(url, headers={"User-Agent": AGENT, "Accept": accept})
         with self.opener.open(req, timeout=20) as response:
             if origin(response.url) != origin(url):
                 raise ValueError("source origin changed")
@@ -204,11 +204,11 @@ class PublicSession:
             raise ValueError("source exceeds 4 MiB")
         return raw
 
-    def get(self, url: str) -> bytes:
+    def get(self, url: str, *, accept="*/*") -> bytes:
         host = origin(url)
         if host not in self.policies:
             try:
-                robots = self._get(host + "/robots.txt").decode("utf-8")
+                robots = self._get(host + "/robots.txt", accept="text/plain").decode("utf-8")
             except urllib.error.HTTPError as error:
                 if error.code != 404:
                     raise
@@ -217,7 +217,7 @@ class PublicSession:
             self.next_request[host] = time.monotonic() + self.policies[host].delay
         policy = self.policies[host]
         try:
-            return self._get(url)
+            return self._get(url, accept=accept)
         finally:
             self.next_request[host] = time.monotonic() + policy.delay
 
@@ -500,7 +500,7 @@ def jsonld_nodes(source_raw: bytes, source_format: str) -> tuple[list[dict], dic
 def validate_jsonld(entry: dict) -> None:
     required = set(FIELDS) | {"adapter", "source_url", "basis_source", "basis_note", "basis_reviewed_on",
                               "source_format", "offer_ref", "tax_included", "required_description_text"}
-    if set(entry) != required or entry["adapter"] != "jsonld_v1":
+    if set(entry) - {"required_page_text"} != required or entry["adapter"] != "jsonld_v1":
         raise ValueError("JSON-LD manifest fields differ from jsonld_v1")
     validate_basis(entry)
     if origin(entry["source_url"]) != origin(entry["basis_source"]):
@@ -514,6 +514,11 @@ def validate_jsonld(entry: dict) -> None:
     fragments = entry["required_description_text"]
     if not isinstance(fragments, list) or not fragments or any(not isinstance(s, str) or not s.strip() for s in fragments):
         raise ValueError("JSON-LD needs reviewed product-description fragments for its selling basis")
+    if "required_page_text" in entry:
+        fragments = entry["required_page_text"]
+        if (entry["source_format"] != "html" or not isinstance(fragments, list) or not fragments
+                or any(not isinstance(s, str) or not s.strip() for s in fragments)):
+            raise ValueError("required_page_text needs nonempty exact text fragments and an HTML source")
 
 
 def valid_period(node: dict, observed: dt.datetime) -> str | None:
@@ -546,6 +551,10 @@ def extract_jsonld(entry: dict, source_raw: bytes, observed: dt.datetime) -> tup
     validate_jsonld(entry)
     observed = observation_time(entry, observed)
     nodes, identifiers = jsonld_nodes(source_raw, entry["source_format"])
+    if "required_page_text" in entry:
+        page = source_raw.decode("utf-8-sig")
+        if not all(fragment in page for fragment in entry["required_page_text"]):
+            raise ValueError("JSON-LD reviewed page selling-basis text changed or is missing")
     def resolve(node):
         if isinstance(node, dict) and set(node) == {"@id"}:
             node = identifiers.get(node["@id"])
@@ -655,9 +664,12 @@ def refresh(manifest: dict, get, now=None) -> tuple[dict, dict[str, bytes]]:
     for entry in entries:
         if entry.get("adapter") in ("csv_v1", "jsonld_v1"):
             url = entry["source_url"]
-            if url not in sources:
-                sources[url] = (get(url), clock())
-            product, observed = sources[url]
+            accept = ("text/csv" if entry["adapter"] == "csv_v1" else "text/html"
+                      if entry["source_format"] == "html" else "application/ld+json,application/json")
+            source_key = (url, accept)
+            if source_key not in sources:
+                sources[source_key] = (get(url, accept=accept), clock())
+            product, observed = sources[source_key]
             if entry["adapter"] == "csv_v1":
                 quote, receipt = extract_csv(entry, product, observed)
                 extension = ".csv"
@@ -665,9 +677,9 @@ def refresh(manifest: dict, get, now=None) -> tuple[dict, dict[str, bytes]]:
                 quote, receipt = extract_jsonld(entry, product, observed)
                 extension = ".html" if entry["source_format"] == "html" else ".json"
         else:
-            before = get(entry["cart_url"])
-            product = get(entry["product_url"])
-            after = get(entry["cart_url"])
+            before = get(entry["cart_url"], accept="application/json")
+            product = get(entry["product_url"], accept="application/json")
+            after = get(entry["cart_url"], accept="application/json")
             quote, receipt = extract(entry, product, before, after, clock())
             extension = ".json"
         quotes.append(quote)
