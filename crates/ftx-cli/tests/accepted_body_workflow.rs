@@ -605,6 +605,9 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     pattern["pieces"][0]["vertices"]["c"][0] = json!(width);
     pattern["pieces"][0]["placement"]["radius_mm"] = json!(180.0);
     pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+    pattern["fabric"]["material"]["record"]["properties"]["specific_heat"] = json!({
+        "value":1000.0,"unit":"J/(kg*K)","source":"test","evidence":"estimate",
+        "method":"Synthetic transient-heat integration test; not measured textile data"});
     save(&dir.join("pattern.json"), &pattern);
     let material = pattern["fabric"]["material"].clone();
     let mut transport = material.clone();
@@ -694,6 +697,19 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.1},
             {"time_s":0.004,"arm_abduction_deg":35.2}],
         "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000});
+    let films = json!([
+        {"inside_c":40.,"outside_c":5.,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2},
+        {"inside_c":5.,"outside_c":40.,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}]);
+    scenario["motion"]["transient_surface"] = json!({"schema":"ftx-motion-surface-heat/1",
+        "initial_temperature_c":15.,"cells_per_layer":2,"boundaries":films,
+        "max_step_s":0.0005,"max_cell_steps":100000});
+    // An explicit domain on this synthetic prism only; not an anatomical chest-patch convention.
+    scenario["motion"]["transient_coverage"] = json!({"schema":"ftx-motion-coverage-heat/1",
+        "body_triangle_ids":[4],"instance_layers":{"band":"shell"},
+        "settings":{"max_distance_m":0.12,"min_normal_cosine":0.1,
+            "separation_tolerance_m":0.00001,"cells_per_layer":2,"interfaces":[]},
+        "initial_temperature_c":15.,"boundaries":films,"exposed_boundaries":films,
+        "max_step_s":0.0005,"max_cell_steps":100000,"max_geometry_operations":2000000});
     save(&dir.join("scenario.json"), &scenario);
     let moving = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
     assert_eq!(
@@ -738,6 +754,28 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     );
     assert_ne!(samples[3]["positions_m"], first["result"]["positions_m"]);
     assert_eq!(motion["physical_validation_claim"], false);
+    for name in ["transient_surface", "transient_coverage"] {
+        assert_eq!(motion[name]["status"], "available", "{}", motion[name]);
+        assert_eq!(other[name]["status"], "available", "{}", other[name]);
+        let h = &motion[name]["result"];
+        assert_eq!(h["duration_s"], motion["duration_s"]);
+        assert_eq!(h["path_sha256"], motion["path_sha256"]);
+        assert_eq!(
+            h["initial_positions_sha256"],
+            motion["initial_positions_sha256"]
+        );
+        assert_eq!(h["trace"].as_array().unwrap().len(), samples.len());
+        assert!(h["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+        assert_eq!(h["physical_validation_claim"], false);
+    }
+    assert_ne!(
+        motion["transient_surface"]["result"]["final"]["temperature_c"],
+        other["transient_surface"]["result"]["final"]["temperature_c"]
+    );
+    assert_ne!(
+        motion["transient_coverage"]["result"]["checkpoint"]["exposed_temperature_c"],
+        other["transient_coverage"]["result"]["checkpoint"]["exposed_temperature_c"]
+    );
     // Verify final endpoint vertices against the direct source-model pose, not a guessed rig.
     let model =
         ftx_body::AnnyModel::from_data(ftx_body::AnnyData::from_bytes(&bytes, false).unwrap())
@@ -766,6 +804,10 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     assert_ne!(
         slow_motion["result"]["final_velocities_m_s"],
         motion["final_velocities_m_s"]
+    );
+    assert_ne!(
+        slow_motion["result"]["transient_surface"]["result"]["final"]["temperature_c"],
+        motion["transient_surface"]["result"]["final"]["temperature_c"]
     );
     // Failed continuation keeps the complete, unmodified initial static result and manufacturing.
     scenario["motion"]["max_sample_vertices"] = json!(1);

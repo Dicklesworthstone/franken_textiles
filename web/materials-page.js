@@ -168,11 +168,32 @@ function assemblyMassComparison(parent, rows) {
       report || { refusal: row.assembly_mass?.refusal });
   }
 }
+function transientHeatComparison(parent, key, result, dependency, policy) {
+  const consumers = [["transient_surface", "Independent sheets"], ["transient_coverage", "Body coverage + exposed cloth"]]
+    .filter(([name]) => policy?.[name] || result?.[name]);
+  if (!consumers.length) return;
+  const t = table(parent, `${key}: transient heat — complete time history or refusal`, ["Thermal domain", "Status", "Duration (s)",
+    "Thermal substeps", "Final temperature range (°C)", "Net boundary energy (J)", "Physical stored change (J)",
+    "Energy residual (J)", "Signed remap residual (J)"]);
+  for (const [name, label] of consumers) {
+    const output = result?.[name], h = available(output), range = h?.trace?.at(-1)?.temperature_range_c;
+    cells(t, [label, output ? state(output) : `Unavailable: ${state(dependency)}`, metric(h?.duration_s), metric(h?.thermal_steps),
+      range ? `[${range.map(metric).join(", ")}]` : "Unknown", metric(h?.net_boundary_energy_j),
+      metric(h?.physical_stored_change_j ?? h?.stored_change_j), metric(h?.balance_error_j),
+      name === "transient_surface" ? "Not applicable" : metric(h?.signed_remap_residual_j)]);
+    detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
+  }
+  const note = document.createElement("p");
+  note.textContent = "These are separate one-way thermal models with declared initial temperatures and interval films. Do not add their energy totals. " +
+    "Remapping transfers stored heat without elapsed time; its numerical residual is not environmental heat. Bare body paths store no cloth energy. " +
+    "Geometry uses accepted motion samples; smaller thermal substeps do not refine the body motion. Small energy residuals are not empirical accuracy.";
+  parent.append(note);
+}
 function motionComparison(parent, rows, simulations, requested) {
   if (!requested && ![...simulations.values()].some(o => available(o)?.motion)) return;
   const note = document.createElement("p");
   note.textContent = "Motion continues the initial sewn cloth; it does not re-drape each pose. Initial static metrics and the computed frontier remain separate. " +
-    "Endpoint heat is a steady snapshot, not transient heat during movement. Successful motion is not a settled-garment or empirical fit claim.";
+    "Endpoint steady snapshots are separate from explicitly requested transient histories. Successful motion is not a settled-garment or empirical fit claim.";
   parent.append(note);
   const t = table(parent, "Prescribed motion — complete trajectory or refusal", ["Alternative", "Motion", "Initial drape settled",
     "Duration (s)", "Accepted substeps", "Attempted substeps", "Peak absolute panel-edge strain (%)"]);
@@ -181,6 +202,7 @@ function motionComparison(parent, rows, simulations, requested) {
     cells(t, [row.key, initial ? state(initial.motion) : state(evaluation),
       initial?.drape?.settled === true ? "Yes — also review initial flags" : initial?.drape?.settled === false ? "NO — review initial state" : "Unknown",
       metric(result?.duration_s), metric(result?.samples?.length), metric(result?.trials), metric(result?.metrics?.max_absolute_edge_strain_pct)]);
+    transientHeatComparison(parent, row.key, result, initial?.motion || evaluation, requested);
     if (!result) continue;
     const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)", "Arm angle (degrees)",
       "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
@@ -255,7 +277,7 @@ function comparison(op, r) {
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
     }
-    motionComparison(parent, study.alternatives, simulations, !!r.scenario?.scenario?.motion);
+    motionComparison(parent, study.alternatives, simulations, r.scenario?.scenario?.motion);
     detail(parent, "Retained body fit, scenario options and environment (display only)", r.scenario);
   }
   return { schema: r.schema, source_pattern_sha256: study.source_pattern_sha256, request_sha256: r.request_sha256,

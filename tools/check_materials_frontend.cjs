@@ -651,6 +651,19 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
       assert.equal(a.status, 'available'); assert.equal(b.status, 'available');
       assert.deepEqual(a.result.samples, b.result.samples);
       assert.notEqual(a.result.keyframes[1].surface.result.steady.power_w, b.result.keyframes[1].surface.result.steady.power_w);
+      for (const name of ['transient_surface', 'transient_coverage']) {
+        if (!JSON.parse(msg.scenarioRequest).motion[name]) continue;
+        const h = a.result[name]; assert.equal(h.status, 'available');
+        assert.equal(b.result[name].status, 'available');
+        assert.equal(h.result.duration_s,a.result.duration_s);
+        assert.equal(h.result.path_sha256,a.result.path_sha256);
+        assert.equal(h.result.trace.length,a.result.samples.length);
+        assert.ok(Math.abs(h.result.balance_error_j)<1e-8);
+      }
+      if (a.result.transient_surface) assert.notDeepEqual(a.result.transient_surface.result.final.temperature_c,
+        b.result.transient_surface.result.final.temperature_c);
+      if (a.result.transient_coverage) assert.notDeepEqual(a.result.transient_coverage.result.checkpoint.exposed_temperature_c,
+        b.result.transient_coverage.result.checkpoint.exposed_temperature_c);
       assert.equal((await w.send(msg)).files[0].text, result.files[0].text);
       assert.ok(w.sent.some(m => m.type === 'progress' && m.request === 93 && m.text.includes('motion endpoint')));
     }
@@ -693,4 +706,36 @@ test('invalid or superseded body-source files cannot fall back to tapes or publi
   p.e.body.handlers.change(); p.ready();
   stale.emit({type:'result',request:id,result:scenarioReport(),files:[]});
   assert.equal(p.live.size, 0); assert.equal(section(p, 'Fresh drape and heat alternatives').hidden, true);
+});
+
+test('transient heat displays signed energy and remap separately, preserving refusal and invalidation', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const r = scenarioReport();
+  r.scenario = { scenario: { motion: { transient_surface: {}, transient_coverage: {} } } };
+  const motion = { duration_s: 1, samples: [{}], trials: 1, keyframes: [], metrics: {},
+    transient_surface: outcome({ duration_s: 1, thermal_steps: 2, trace: [{temperature_range_c:[-5,0]}],
+      net_boundary_energy_j: -3, stored_change_j: -3, balance_error_j: 0 }),
+    transient_coverage: outcome({ duration_s: 1, thermal_steps: 4, trace: [{temperature_range_c:[0,5]}],
+      net_boundary_energy_j: 4, physical_stored_change_j: 4, balance_error_j: 0, signed_remap_residual_j: -1e-12,
+      checkpoint: { source: '<synthetic locked source>' } }) };
+  r.simulations = [{key:'A',evaluation:outcome({drape:{settled:false},motion:outcome(motion)})},
+    {key:'B',evaluation:outcome({drape:{settled:true},motion:refused('motion exhausted')})}];
+  await p.e.scenario.onclick(); p.emit(r);
+  const s = section(p, 'Fresh drape and heat alternatives');
+  const t = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'A: transient heat — complete time history or refusal');
+  assert.deepEqual(plain(t.children[2].children.map(n => n.textContent)),
+    ['Independent sheets','Available','1','2','[-5, 0]','-3','-3','0','Not applicable']);
+  assert.deepEqual(plain(t.children[3].children.map(n => n.textContent)),
+    ['Body coverage + exposed cloth','Available','1','4','[0, 5]','4','4','0','-1e-12']);
+  const failed = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent.startsWith('B: transient heat'));
+  assert.match(visibleText(failed), /Unavailable: Refused: motion exhausted/);
+  assert.equal(failed.children[2].children[5].textContent, 'Unknown');
+  assert.match(visibleText(s), /Do not add their energy totals/);
+  const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('A: Body coverage + exposed cloth temperature'));
+  d.open=true; d.handlers.toggle(); assert.match(visibleText(d), /<synthetic locked source>/);
+  motion.transient_coverage = refused('missing heat capacity');
+  await p.e.scenario.onclick(); p.emit(r);
+  assert.match(visibleText(s), /Refused: missing heat capacity/);
+  assert.match(visibleText(s), /Independent sheets/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });

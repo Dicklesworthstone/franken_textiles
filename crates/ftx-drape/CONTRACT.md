@@ -7,6 +7,18 @@ thickness-offset gap, additive CCD, lagged smoothed Coulomb friction); and the g
 (`garment.rs`). Placement, pre-sew, the drape schedule and the reference's metrics are described below.
 Optional cloth self-contact adds moving cloth–cloth barriers and independent friction.
 
+**Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
+body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
+and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform interval films are
+explicit. Heat storage follows reference mass; changing coverage preserves covered/exposed material
+enthalpy, with remap residual separated from physical heat. Thermal failures never erase complete
+mechanics or another consumer. Complete histories retain time/geometry/source identities and final
+fields; coverage includes a restorable checkpoint. Per-history/session work is bounded. One-way
+prescribed-film coupling only: no inferred ambient state, moisture, mechanical heating, human
+thermoregulation, empirical warmth or motion-qualified optimization claim. Schemas, accounting and
+limits are in `docs/material-scenario-studies.md`; production regressions in `material_scenario.rs`
+compare every sample against direct solvers and independent reference-mass heat accounting.
+
 **Garment mesh** (`build_garment`, spec 04 §2). Simulated instances (`sim` not false, a placement),
 matched seam samples at `spacing` (12 mm), boundary samples, the hex interior, constrained Delaunay inside
 the outline, sewing pairs, seam records, corner and edge-index maps, then `sim_scale`. Triangulation is

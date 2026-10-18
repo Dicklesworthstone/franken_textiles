@@ -162,6 +162,90 @@ Library callers with explicit meshes can construct `study::motion::Path` and att
 endpoints for the native and model-backed browser adapters. A fixed-body `on_body` call without an
 attached source path refuses requested motion rather than pretending its body moved.
 
+### Transient temperatures during the actual motion
+
+Optional `motion.transient_surface` and `motion.transient_coverage` now execute the existing
+transient solvers on **every accepted mechanical sample**, instead of restarting at each endpoint
+or treating steady power as a temperature history. Both start at an explicitly authored uniform
+cloth temperature at motion time zero, after the initial drape. They do not infer that temperature
+from the static result or integrate heat during initial sewing/settling. Source heat capacity and
+areal mass are required; conductivity-only data remain usable by the independent steady consumers.
+
+For the two-keyframe example above, a synthetic sheet policy is:
+
+```json
+{
+  "transient_surface": {
+    "schema": "ftx-motion-surface-heat/1",
+    "initial_temperature_c": 15.0,
+    "cells_per_layer": 2,
+    "max_step_s": 0.0005,
+    "max_cell_steps": 100000,
+    "boundaries": [
+      {"inside_c": 40.0, "outside_c": 5.0,
+       "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.2},
+      {"inside_c": 5.0, "outside_c": 40.0,
+       "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.2}
+    ]
+  }
+}
+```
+
+Put these fields **inside** `motion`, alongside its keyframes. The values illustrate the synthetic
+regression, not sourced environmental films, an initial wearer temperature or a recommended test.
+Each boundary applies throughout its keyframe interval, spatially uniformly, with no interpolation.
+The temperature solver uses backward Euler at the accepted sample's right-endpoint geometry;
+`max_step_s` subdivides the thermal step but does not invent finer cloth/body motion. Storage follows
+undeformed reference mass even when exchange area changes. Independent-sheet heat counts every
+retained sheet separately; it is not body heat loss through a layered garment.
+
+`transient_coverage` instead uses schema `ftx-motion-coverage-heat/1` and adds the exact
+`body_triangle_ids`, `instance_layers` and projection `settings` described above. Set thermal
+resolution in `settings.cells_per_layer`; do not add the sheet policy's top-level `cells_per_layer`.
+Supply `initial_temperature_c`, `boundaries`, `max_step_s`, `max_cell_steps`, and
+`max_geometry_operations` (at most 20000000). The layer map must name every retained instance
+exactly. All body IDs refer to this selected shape's collision mesh, not another pose or an assumed
+anatomical part. There is no automatic reuse of the steady coverage policy.
+
+Coverage also requires `exposed_boundaries`, an array with exactly one choice per keyframe interval.
+`null` explicitly makes cloth outside the selected body coverage adiabatic; a film object uses the
+same fields as above and applies to those exposed faces in original source-material orientation.
+If that interval has no exposed cloth, the field has no exchange area. No ambient temperature is
+inferred. At each new accepted pose, actual clipped overlap is rebuilt, and the existing first-order
+enthalpy remapper transfers covered/exposed cloth storage without elapsed time. Material entering
+or leaving body coverage therefore keeps its heat rather than resetting to the initial temperature.
+Bare body fractions remain single-counted parallel paths with no textile heat storage.
+
+Each requested history is independently `available` or `refused` beneath `motion.result`. A missing
+property, invalid thermal domain or even late work-budget failure retains the complete mechanical
+trajectory, the other thermal consumer, manufacturing and the initial static results. No partial
+heat history is published. If mechanics fails, neither its partial motion nor partial heat is a result.
+Malformed JSON/unknown fields still refuse parsing; independent consumer refusal applies to validly
+decoded policies and numerical inputs. Material substitutions always start separate temperature states.
+
+Reports retain sample/interval indices, physical time, temperature extrema, signed boundary energy
+and physical stored change in joules, plus the final temperature fields and source identities. A
+coverage history additionally retains remap accounting, bare exchange, explicit body fields and a
+source-complete final `ftx-thermal-motion-state/1` checkpoint, restorable by the existing Frame API.
+The checkpoint has the final state; physical time belongs to its parent history. Remap residual is
+reported **separately**, never disguised as environmental heat. Net storage heat is accumulated
+before cancellation of bare-body paths; incoming/outgoing totals include those paths. Initial and
+final frame identities tie the thermal geometry to the retained motion. Independent-sheet and
+coverage totals are alternative model domains and must not be added together.
+
+Each thermal policy permits 1..64 cells per layer, maximum substeps in 1e-9..1 seconds and up to
+10000000 cell steps (coverage additionally counts body-face steps). Whole-session reservations
+across both thermal consumers and all attempted material alternatives are capped at 20000000
+cell steps and 40000000 coverage geometry operations. Reservations persist after a later refusal;
+use realistic declared limits rather than maximum values for every candidate. Projection/remap work
+is checked after each existing bounded kernel; limit exhaustion refuses rather than truncating.
+
+These are **one-way** motion-to-heat calculations with prescribed films, not two-way temperature
+feedback, mechanical/frictional heating, moisture, thermoregulation or empirical comfort prediction.
+First-order remapping can mix unresolved gradients. Time/space refinement and held-out measurements
+remain necessary; a small energy residual alone proves neither physical accuracy nor a warmth rating.
+The comparator's existing objectives still describe the initial static result, not transient energy.
+
 ## Independent thermal consumers
 
 Optional `surface` accepts the existing `ftx-steady-surface-conditions/1`: prescribed films or the
@@ -294,6 +378,9 @@ including independent refusals and the initial settledness warning. Raw reports 
 sample arrays and material history. The existing single-fold viewer remains a static-workflow
 viewer; these controls do not silently replace it with an untested endpoint animation. Editing the
 scenario's time/pose policy invalidates these results through the existing request lifecycle.
+Requested transient histories add separate time/temperature/energy tables with independent refusals,
+remap residuals and lazy source/checkpoint inspection. The page displays Rust results without summing
+energy or deriving a warmth score. Its existing scenario download retains the exact thermal policy.
 
 The existing frontend tests include optional **real compiled WASM** execution without a model
 asset or native executable:
@@ -333,12 +420,16 @@ prism, with actual drape/steady heat, unchanged parameters across poses, visible
 identical native reports and transport-only material swaps. Prescribed motion additionally checks
 every accepted sample against direct solver continuation, source-model endpoint equality, preserved
 shape, timing-dependent response, fresh endpoint heat and late-failure isolation. Library tests
-compare against direct production consumers and verify pose-dependent geometry. This is a positive synthetic model-backed
-software run, not a successful anatomical garment fit, and target compilation alone is not WASM
+also verify transient sheet recurrence, reference-mass storage, conservative coverage remap, final
+checkpoint restoration and independent thermal failures. The synthetic native motion fixture now
+contains both transient consumers; the optional compiled-WASM replay compares their full reports.
+These are deterministic software and numerical conservation checks, not measured heat-flux data.
+This is a positive synthetic model-backed software run, not a successful anatomical garment fit,
+and target compilation alone is not WASM
 execution parity. Converted anatomical Anny assets were unavailable during this delivery.
 
 `ftx-ms2` stays open for propagated uncertainty, finishing effects and empirical inventory/garment-mass
-acceptance, expanded body/pose policies, transient thermal coupling, qualified motion objectives and
+acceptance, expanded body/pose policies, two-way thermal coupling, qualified motion objectives and
 physical acceptance of the nominal comparison path. Standing-arm motion continuation is available;
 it does not establish an anatomical or empirical ride-up experiment.
 Complete declared pre-finishing assembly accounting is available; it cannot discover an omitted component.
