@@ -8,6 +8,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod leather;
 mod mit;
 mod nist;
 
@@ -183,6 +184,7 @@ impl Catalog {
         catalog.materials.extend(hfm.materials);
         catalog.materials.extend(nist::records());
         catalog.materials.extend(mit::records());
+        catalog.materials.extend(leather::records());
         let woven = Self::from_json(include_str!("material_catalog/woven-measurements.json"))?;
         catalog.materials.extend(woven.materials);
         let supplier = Self::from_json(include_str!("material_catalog/supplier-apparel.json"))?;

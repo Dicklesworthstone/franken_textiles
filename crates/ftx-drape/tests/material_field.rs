@@ -2,6 +2,9 @@
 use ftx_core::{Vec2, Vec3};
 use ftx_drape::cloth::SheetMaterial;
 use ftx_drape::{ClothModel, Membrane, Solver};
+use ftx_pattern::material_catalog::Selection;
+use ftx_pattern::material_response::CompiledMembrane;
+use ftx_pattern::materials::{Catalog, Material};
 
 fn sheet(scale: f64) -> SheetMaterial {
     SheetMaterial {
@@ -26,6 +29,25 @@ fn geometry() -> (Vec<[usize; 3]>, Vec<[Vec2; 3]>, Vec<Vec3>) {
 fn model(materials: &[SheetMaterial]) -> ClothModel {
     let (tris, local, _) = geometry();
     ClothModel::from_material_triangles(4, &tris, &local, materials).unwrap()
+}
+
+fn nonlinear_record() -> Material {
+    serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-nonlinear.json"
+    ))
+    .unwrap()
+}
+
+fn nonlinear(scale: f64) -> CompiledMembrane {
+    let mut record = nonlinear_record();
+    let response = record.membrane_response.as_mut().unwrap();
+    for curve in [&mut response.warp, &mut response.weft, &mut response.shear] {
+        for point in &mut curve.points {
+            point[1] *= scale;
+        }
+    }
+    response.coupling.value *= scale;
+    response.compile(&record.sources, true).unwrap()
 }
 
 #[test]
@@ -131,6 +153,109 @@ fn substitution_changes_only_assigned_elements_and_is_atomic_on_failure() {
     assert!(!m.is_heterogeneous());
     assert_eq!(m.material(1), sheet(3.0).membrane);
     assert_eq!(m.hinge_rigidity(0), sheet(3.0).bending_nm);
+}
+
+#[test]
+fn material_replacement_clears_old_nonlinear_laws_before_binding_new_mixed_response() {
+    let sheets = [sheet(2.0), sheet(6.0)];
+    let mut replaced = model(&[sheet(1.0), sheet(4.0)]);
+    replaced
+        .set_membrane_responses(&[Some(nonlinear(1.0)), Some(nonlinear(3.0))])
+        .unwrap();
+    let (_, _, mut x) = geometry();
+    x[1].x = 1.12;
+    x[2].z = 0.03;
+    let old_energy = replaced.elastic_energy(&x);
+    replaced.set_materials(&sheets).unwrap();
+    assert!(replaced.membrane_response(0).is_none());
+    assert!(replaced.membrane_response(1).is_none());
+    let mut fresh = model(&sheets);
+    assert_eq!(replaced.elastic_energy(&x), fresh.elastic_energy(&x));
+    assert_ne!(replaced.elastic_energy(&x), old_energy);
+
+    // Scene construction binds the new nonlinear field after effective sheets and gather factors.
+    // An omitted response must remain linear even when that triangle used to have a nonlinear law.
+    let responses = [None, Some(nonlinear(7.0))];
+    replaced.set_membrane_responses(&responses).unwrap();
+    fresh.set_membrane_responses(&responses).unwrap();
+    assert!(replaced.membrane_response(0).is_none());
+    assert_eq!(replaced.membrane_response(1), responses[1].as_ref());
+    let pins = [[true; 3], [true; 3], [false; 3], [false; 3]];
+    let mut a = Solver::new(replaced, x.clone(), &pins, Vec3::new(0.0, 0.0, -9.81));
+    let mut b = Solver::new(fresh, x, &pins, Vec3::new(0.0, 0.0, -9.81));
+    for _ in 0..3 {
+        assert_eq!(a.elastic_forces(), b.elastic_forces());
+        assert_eq!(a.step(0.001).unwrap(), b.step(0.001).unwrap());
+        assert_eq!(a.x, b.x);
+        assert_eq!(a.v, b.v);
+    }
+}
+
+#[test]
+fn failed_material_replacement_keeps_nonlinear_response_and_coefficients_atomic() {
+    let mut m = model(&[sheet(1.0), sheet(4.0)]);
+    m.set_membrane_responses(&[Some(nonlinear(1.0)), None])
+        .unwrap();
+    let before = format!("{m:?}");
+    let (_, _, mut x) = geometry();
+    x[1].x = 1.08;
+    let energy = m.elastic_energy(&x);
+    let mut underflow = sheet(2.0);
+    // Passes material validation but fails mass assembly, after the first triangle is processed.
+    underflow.areal_kg_m2 = f64::from_bits(1);
+    for materials in [vec![sheet(2.0)], vec![sheet(2.0), underflow]] {
+        assert!(m.set_materials(&materials).is_err());
+        assert_eq!(format!("{m:?}"), before);
+        assert_eq!(m.elastic_energy(&x), energy);
+    }
+}
+
+#[test]
+fn replacing_nonlinear_material_cannot_reuse_accepted_maxwell_history() {
+    let mut selection: Selection = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-relaxation.json"
+    ))
+    .unwrap();
+    let mut record = nonlinear_record();
+    record.membrane_relaxation = selection
+        .record
+        .as_ref()
+        .unwrap()
+        .membrane_relaxation
+        .clone();
+    selection.id.clone_from(&record.id);
+    selection.record = Some(record);
+    let resolved = Catalog::builtin().unwrap().resolve(&selection).unwrap();
+    let mechanics = resolved.mechanics().unwrap();
+    let sheet = SheetMaterial {
+        membrane: Membrane::orthotropic(
+            mechanics.warp_n_m,
+            mechanics.weft_n_m,
+            mechanics.poisson,
+            mechanics.shear_n_m,
+            1.0,
+        ),
+        bending_nm: mechanics.bending_nm,
+        areal_kg_m2: mechanics.areal_kg_m2,
+    };
+    let mut m = model(&[sheet; 2]);
+    m.set_membrane_responses(&vec![resolved.membrane_response().unwrap(); 2])
+        .unwrap();
+    let (_, _, mut x) = geometry();
+    x[1].x = 1.02;
+    let mut solver = Solver::new(m, x, &[[true; 3]; 4], Vec3::ZERO)
+        .with_relaxation(&vec![resolved.membrane_relaxation().unwrap(); 2])
+        .unwrap();
+    solver.step(0.01).unwrap();
+    assert!(solver.relaxation_report().unwrap().is_some());
+    // Identical scalar coefficients cannot hide removal of the old nonlinear source law.
+    solver.model.set_materials(&[sheet; 2]).unwrap();
+    let positions = solver.x.clone();
+    let velocities = solver.v.clone();
+    assert!(solver.relaxation_report().is_err());
+    assert!(solver.step(0.01).is_err());
+    assert_eq!(solver.x, positions);
+    assert_eq!(solver.v, velocities);
 }
 
 #[test]
