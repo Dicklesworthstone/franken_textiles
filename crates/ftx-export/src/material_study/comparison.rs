@@ -36,6 +36,8 @@ pub enum Consumer {
     Surface,
     /// Successful declared body-patch/layer coverage heat on an admitted drape.
     Coverage,
+    /// Complete prescribed motion starting at this admitted drape, not independent static poses.
+    Motion,
 }
 
 /// Fixed-dimension output names; values are read only from the actual corresponding consumer.
@@ -72,6 +74,8 @@ pub enum Metric {
     IndependentSurfacePowerW,
     /// Signed heat through the declared body coverage domain (W), not assumed whole-wearer heat.
     BodyCoveragePowerW,
+    /// Peak absolute original-panel edge strain (%) over the initial state and accepted motion samples.
+    MotionMaxAbsoluteEdgeStrainPct,
 }
 
 impl Metric {
@@ -88,6 +92,7 @@ impl Metric {
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
             Self::IndependentSurfacePowerW => Consumer::Surface,
             Self::BodyCoveragePowerW => Consumer::Coverage,
+            Self::MotionMaxAbsoluteEdgeStrainPct => Consumer::Motion,
         }
     }
     fn unit(self, currency: Option<&str>) -> &str {
@@ -101,11 +106,12 @@ impl Metric {
             Self::StitchIntervals | Self::UsedStockCount => "count",
             Self::FeedSeconds => "s",
             Self::SimulatedClothMassKg => "kg",
-            Self::MaxAbsoluteEdgeStrainPct => "%",
+            Self::MaxAbsoluteEdgeStrainPct | Self::MotionMaxAbsoluteEdgeStrainPct => "%",
             Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW => "W",
         }
     }
-    fn value(self, row: &Alternative, simulation: &Value) -> Option<f64> {
+    fn value(self, row: &Alternative, admitted: &Numerical<'_>) -> Option<f64> {
+        let simulation = admitted.drape;
         match self {
             Self::StockAreaM2 => row.metrics.stock_area_m2,
             Self::ExternalCutAreaM2 => row.metrics.external_cut_area_m2,
@@ -130,6 +136,9 @@ impl Metric {
             }
             Self::BodyCoveragePowerW => {
                 simulation["coverage"]["result"]["steady"]["power_w"].as_f64()
+            }
+            Self::MotionMaxAbsoluteEdgeStrainPct => {
+                admitted.motion["metrics"]["max_absolute_edge_strain_pct"].as_f64()
             }
         }
     }
@@ -241,6 +250,9 @@ pub struct Report {
     pub uncertainty_propagated: bool,
     /// Always false, including when all computed constraints pass.
     pub physical_validation_claim: bool,
+    /// True only when the policy requires complete motion, directly or through a motion objective.
+    /// False means a static/manufacturing frontier, even if the report also contains a trajectory.
+    pub motion_required: bool,
     /// Boundaries of the comparison and its source-data admission.
     pub notes: Vec<&'static str>,
 }
@@ -255,10 +267,10 @@ impl Policy {
         if self.objectives.is_empty()
             || self.objectives.len() > 16
             || self.constraints.len() > 64
-            || self.required_consumers.len() > 8
+            || self.required_consumers.len() > 9
         {
             return Err(invalid(
-                "comparison needs 1..16 objectives, at most 64 constraints and 8 consumers",
+                "comparison needs 1..16 objectives, at most 64 constraints and 9 consumers",
             ));
         }
         let mut metrics = BTreeSet::new();
@@ -289,7 +301,9 @@ impl Policy {
                 Consumer::Sewing => request.sewing.is_some(),
                 Consumer::Purchasing => request.purchasing.is_some(),
                 Consumer::AssemblyMass => request.assembly_mass.is_some(),
-                Consumer::Drape | Consumer::Surface | Consumer::Coverage => additional_consumer,
+                Consumer::Drape | Consumer::Surface | Consumer::Coverage | Consumer::Motion => {
+                    additional_consumer
+                }
             };
             if !requested {
                 return Err(invalid(format!(
@@ -315,9 +329,16 @@ impl Policy {
             .collect()
     }
     fn needs_simulation(&self) -> bool {
-        self.consumers()
-            .iter()
-            .any(|c| matches!(c, Consumer::Drape | Consumer::Surface | Consumer::Coverage))
+        self.consumers().iter().any(|c| {
+            matches!(
+                c,
+                Consumer::Drape | Consumer::Surface | Consumer::Coverage | Consumer::Motion
+            )
+        })
+    }
+
+    fn needs_motion(&self) -> bool {
+        self.consumers().contains(&Consumer::Motion)
     }
 
     pub(super) fn evaluate(
@@ -404,6 +425,7 @@ impl Policy {
             incomparable,
             uncertainty_propagated: false,
             physical_validation_claim: false,
+            motion_required: self.needs_motion(),
             notes: vec![
                 "Nominal computed outputs only; source bounds are not propagated uncertainty intervals. Estimate permission stays with each source selection.",
                 "The frontier is conditional on the evaluated alternatives, constraints, process policy and reported-protocol admission. Scalar pre-screening may have removed better garment alternatives.",
@@ -411,6 +433,7 @@ impl Policy {
                 "Stock mass includes waste, costs are dated complete independent order observations, and feed time excludes handling. No empirical fit, warmth, hardware authorization or global optimum is claimed.",
                 "Scenario objectives require matching pattern/body/scenario identities, geometric settledness and clear gating. Geometric settledness is not viscoelastic stress equilibrium or empirical fit; simulated cloth mass excludes omitted components.",
                 "Heat powers keep their signed directions and distinct sheet/domain bases. Strain uses the production report's edge extrema and precision, not an invented fit score. Different nonlinear constitutive records are conservatively protocol-incomparable unless explicitly admitted.",
+                "Motion is required only when declared by the comparison policy. Motion objectives use a complete source/path/time-matched trajectory from a settled, gating-clear initial drape; the final moving state need not be at rest. Peak strain is over original-panel edges and retained samples, not continuous-time rupture or anatomical fit.",
             ],
         }
     }
@@ -446,8 +469,18 @@ impl Policy {
         } else {
             &Value::Null
         };
+        let mut admitted = Numerical {
+            drape: simulation,
+            motion: &Value::Null,
+        };
+        if self.needs_motion() && !simulation.is_null() {
+            match admit_motion(descriptor, simulation) {
+                Ok(motion) => admitted.motion = motion,
+                Err(e) => result.exclusions.push(e),
+            }
+        }
         for consumer in self.consumers() {
-            if !consumer_available(row, consumer, simulation) {
+            if !consumer_available(row, consumer, &admitted) {
                 result.exclusions.push(invalid(format!(
                     "comparison requires available {consumer:?} with complete required coverage"
                 )));
@@ -455,10 +488,10 @@ impl Policy {
         }
         for metric in self.metrics() {
             match metric
-                .value(row, simulation)
+                .value(row, &admitted)
                 .filter(|v| v.is_finite() && (metric.signed() || *v >= 0.))
             {
-                Some(value) if consumer_available(row, metric.consumer(), simulation) => {
+                Some(value) if consumer_available(row, metric.consumer(), &admitted) => {
                     result.readings.insert(
                         metric,
                         Reading {
@@ -603,7 +636,14 @@ impl Policy {
     }
 }
 
-fn consumer_available(row: &Alternative, consumer: Consumer, simulation: &Value) -> bool {
+// Each reference is either independently admitted or null. A failed motion must not make a valid
+// static reading vanish, and an available status alone must not admit stale numerical results.
+struct Numerical<'a> {
+    drape: &'a Value,
+    motion: &'a Value,
+}
+
+fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerical<'_>) -> bool {
     match consumer {
         Consumer::Cutting => row.cutting.value().is_some(),
         Consumer::FiniteStock => row.finite_stock.value().is_some(),
@@ -618,9 +658,10 @@ fn consumer_available(row: &Alternative, consumer: Consumer, simulation: &Value)
                     b["pattern_sha256"].as_str() == Some(r.pattern_sha256.as_str())
                 })
         }),
-        Consumer::Drape => !simulation.is_null(),
-        Consumer::Surface => simulation["surface"]["status"] == "available",
-        Consumer::Coverage => simulation["coverage"]["status"] == "available",
+        Consumer::Drape => !admitted.drape.is_null(),
+        Consumer::Surface => admitted.drape["surface"]["status"] == "available",
+        Consumer::Coverage => admitted.drape["coverage"]["status"] == "available",
+        Consumer::Motion => !admitted.motion.is_null(),
     }
 }
 
@@ -658,4 +699,103 @@ fn admit_simulation(
         ));
     }
     Ok(())
+}
+
+fn same_identity(actual: &Value, expected: &Value) -> bool {
+    expected
+        .as_str()
+        .is_some_and(|s| !s.is_empty() && actual.as_str() == Some(s))
+}
+
+fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Value, Refusal> {
+    let request = &descriptor["scenario"]["motion"];
+    let motion = &simulation["motion"]["result"];
+    if request["schema"] != "ftx-drape-motion/1"
+        || simulation["motion"]["status"] != "available"
+        || motion["schema"] != "ftx-drape-motion-result/1"
+        || !same_identity(&motion["path_sha256"], &descriptor["motion_path"]["sha256"])
+        || !same_identity(
+            &motion["initial_positions_sha256"],
+            &simulation["positions_sha256"],
+        )
+        || motion["continuous_contact_checked"] != true
+        || motion["initial_drape_settled"] != true
+        || !motion["initial_drape_gating"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    {
+        return Err(invalid(
+            "motion comparison needs successful checked motion matching the requested path and admitted initial drape",
+        ));
+    }
+    let frames = request["keyframes"]
+        .as_array()
+        .filter(|f| !f.is_empty() && f.len() <= 16)
+        .ok_or_else(|| invalid("motion comparison has no bounded requested keyframes"))?;
+    let samples = motion["samples"]
+        .as_array()
+        .filter(|s| !s.is_empty() && s.len() <= 512)
+        .ok_or_else(|| invalid("motion comparison needs the complete accepted sample sequence"))?;
+    let endpoints = motion["keyframes"]
+        .as_array()
+        .filter(|f| f.len() == frames.len())
+        .ok_or_else(|| invalid("motion comparison needs every requested endpoint"))?;
+    let duration = motion["duration_s"]
+        .as_f64()
+        .filter(|t| t.is_finite() && *t > 0.)
+        .ok_or_else(|| invalid("motion comparison has no finite physical duration"))?;
+    if frames.last().and_then(|f| f["time_s"].as_f64()) != Some(duration)
+        || samples.last().and_then(|s| s["time_s"].as_f64()) != Some(duration)
+        || !motion["trials"].as_u64().is_some_and(|n| {
+            n >= samples.len() as u64 && request["max_trials"].as_u64().is_some_and(|max| n <= max)
+        })
+    {
+        return Err(invalid(
+            "motion comparison refuses partial or mismatched-duration trajectories",
+        ));
+    }
+    let mut previous = 0.;
+    for sample in samples {
+        let time = sample["time_s"]
+            .as_f64()
+            .filter(|t| t.is_finite() && *t > previous && *t <= duration)
+            .ok_or_else(|| invalid("motion comparison requires ordered physical sample times"))?;
+        if sample["solve"]["converged"] != true {
+            return Err(invalid(
+                "motion comparison refuses an unconverged accepted substep",
+            ));
+        }
+        previous = time;
+    }
+    let mut next_sample = 0;
+    for (frame, endpoint) in frames.iter().zip(endpoints) {
+        let index = endpoint["sample_index"]
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|&n| n >= next_sample && n < samples.len())
+            .ok_or_else(|| {
+                invalid("motion comparison requires ordered, retained endpoint samples")
+            })?;
+        let sample = &samples[index];
+        if endpoint["time_s"] != frame["time_s"]
+            || endpoint["time_s"] != sample["time_s"]
+            || endpoint["arm_abduction_deg"] != frame["arm_abduction_deg"]
+            || !sample["positions_m"].is_array()
+            || !sample["body_positions_m"].is_array()
+            || endpoint["positions_sha256"].as_str() != Some(hash(&sample["positions_m"])?.as_str())
+            || endpoint["body_collision_sha256"].as_str()
+                != Some(hash(&(&sample["body_positions_m"], &motion["body_triangles"]))?.as_str())
+        {
+            return Err(invalid(
+                "motion comparison refuses stale endpoint pose, time or geometry",
+            ));
+        }
+        next_sample = index + 1;
+    }
+    if next_sample != samples.len() {
+        return Err(invalid(
+            "motion comparison needs the final requested endpoint, without extra samples",
+        ));
+    }
+    Ok(motion)
 }
