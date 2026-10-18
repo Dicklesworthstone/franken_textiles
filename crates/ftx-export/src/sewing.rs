@@ -612,7 +612,7 @@ impl SewPlan {
                     sides[1].material_sha256.clone(),
                     usize::try_from(plies[1]).expect("validated ply count"),
                 ))
-                    .collect()
+                .collect()
             };
             let identity: Vec<_> = options
                 .qualifications
