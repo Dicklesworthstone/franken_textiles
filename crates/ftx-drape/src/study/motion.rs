@@ -41,6 +41,10 @@ pub struct Request {
     /// Its explicit initial temperature applies at motion time zero, not during initial draping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transient_surface: Option<heat::SurfaceRequest>,
+    /// Optional transient layer/body-domain heat, with material enthalpy remapped on every
+    /// accepted geometric sample. Independent of sheet heat and steady endpoint snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transient_coverage: Option<heat::coverage::Request>,
 }
 
 impl Request {
@@ -201,6 +205,10 @@ pub(super) fn evaluate(
         .transient_surface
         .as_ref()
         .map(|policy| policy.start(run, &request.keyframes, heat_budget));
+    let mut coverage_heat = request
+        .transient_coverage
+        .as_ref()
+        .map(|policy| policy.start(run, body.collision, request.keyframes.len(), heat_budget));
     let faces: Vec<_> = run
         .scene
         .solver
@@ -266,6 +274,17 @@ pub(super) fn evaluate(
             {
                 surface_heat = Some(Err(refusal));
             }
+            if let Some(Ok(history)) = &mut coverage_heat
+                && let Err(refusal) = history.advance(
+                    &sample.cloth,
+                    &sample.body,
+                    previous_time + sample.time_s,
+                    i,
+                    samples.len(),
+                )
+            {
+                coverage_heat = Some(Err(refusal));
+            }
             samples.push(json!({"time_s":previous_time + sample.time_s,
                 "positions_m":sample.cloth,"body_positions_m":sample.body,
                 "solve":{"converged":sample.solve.converged,"iterations":sample.solve.iterations,
@@ -314,6 +333,14 @@ pub(super) fn evaluate(
         );
         result["thermal_basis"] = json!(
             "Steady endpoint snapshots and a separate requested independent-sheet transient history. These heat bases are not interchangeable."
+        );
+    }
+    if let Some(history) = coverage_heat {
+        result["transient_coverage"] = outcome(
+            history.and_then(|h| h.finish(&path.sha256, &initial_positions_sha256, previous_time)),
+        );
+        result["thermal_basis"] = json!(
+            "Steady endpoint snapshots and separately requested transient sheet/coverage histories. Their domains and energy totals are not interchangeable."
         );
     }
     Ok(result)

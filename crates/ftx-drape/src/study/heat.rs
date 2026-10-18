@@ -16,6 +16,8 @@ use crate::{
     },
 };
 
+pub mod coverage;
+
 /// Explicit transient policy for independent cloth sheets during prescribed motion.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +45,7 @@ pub struct SurfaceRequest {
 #[derive(Default)]
 pub(super) struct Budget {
     reserved_cell_steps: usize,
+    reserved_geometry_operations: usize,
 }
 
 impl Budget {
@@ -51,6 +54,16 @@ impl Budget {
         if self.reserved_cell_steps > 20_000_000 {
             return Err(budget(
                 "motion heat exceeds 20000000 reserved session cell steps",
+            ));
+        }
+        Ok(())
+    }
+
+    fn reserve_geometry(&mut self, count: usize) -> Result<(), Refusal> {
+        self.reserved_geometry_operations = self.reserved_geometry_operations.saturating_add(count);
+        if self.reserved_geometry_operations > 40_000_000 {
+            return Err(budget(
+                "motion heat exceeds 40000000 reserved session geometry operations",
             ));
         }
         Ok(())

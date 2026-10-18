@@ -8,7 +8,7 @@ use ftx_drape::{
     thermal::steady::coverage::request as coverage,
 };
 use ftx_pattern::Pattern;
-use serde_json::json;
+use serde_json::{Value, json};
 
 struct Form;
 impl PartFrames for Form {
@@ -513,4 +513,370 @@ fn motion_rejects_stale_body_policy_and_invalid_time_before_numerical_work() {
     let mut session = Session::new(&s, &body).unwrap();
     session.set_motion_path(Ok(path)).unwrap();
     assert!(session.descriptor()["motion_path"]["refusal"].is_object());
+}
+
+fn heat_pattern() -> Pattern {
+    let mut raw = pattern().raw().clone();
+    raw["fabric"]["material"]["record"]["properties"]["specific_heat"] = json!({
+        "value":1000.,"unit":"J/(kg*K)","source":"test","evidence":"estimate",
+        "method":"Synthetic software gate; not measured textile data"});
+    Pattern::new(raw)
+}
+
+fn heat_scenario() -> Scenario {
+    let mut s = motion_scenario();
+    s.motion.as_mut().unwrap().transient_surface = Some(serde_json::from_value(json!({
+        "schema":"ftx-motion-surface-heat/1","initial_temperature_c":15.,
+        "cells_per_layer":1,"max_step_s":0.0005,"max_cell_steps":100000,
+        "boundaries":[
+            {"inside_c":40.,"outside_c":5.,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2},
+            {"inside_c":5.,"outside_c":40.,"inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}
+        ]})).unwrap());
+    s
+}
+
+fn moving(s: &Scenario, p: &Pattern) -> Value {
+    let f = form();
+    let b = body(&f);
+    let mut session = Session::new(s, &b).unwrap();
+    session.set_motion_path(Ok(path(s, &b))).unwrap();
+    session.evaluate(p, |_| {}).unwrap()
+}
+
+#[test]
+fn transient_motion_uses_every_actual_sample_without_temperature_restart() {
+    use ftx_drape::thermal::{Boundary, surface::Surface};
+    let s = heat_scenario();
+    let p = heat_pattern();
+    let result = moving(&s, &p);
+    let motion = &result["motion"]["result"];
+    let heat = &motion["transient_surface"];
+    assert_eq!(heat["status"], "available", "{heat}");
+    let h = &heat["result"];
+    let model = Surface::from_snapshot(&h["model"]).unwrap();
+    let mut state = model.initial(15.).unwrap();
+    let mut time = 0.;
+    let mut stored = 0.;
+    let mut net = 0.;
+    let samples = motion["samples"].as_array().unwrap();
+    assert_eq!(h["trace"].as_array().unwrap().len(), samples.len());
+    for (i, sample) in samples.iter().enumerate() {
+        let t = sample["time_s"].as_f64().unwrap();
+        let row = &h["trace"][i];
+        assert_eq!(row["sample_index"], i);
+        assert_eq!(row["time_s"], t);
+        let interval = row["interval_index"].as_u64().unwrap() as usize;
+        let film = s
+            .motion
+            .as_ref()
+            .unwrap()
+            .transient_surface
+            .as_ref()
+            .unwrap()
+            .boundaries[interval];
+        let boundary = Boundary {
+            inside_c: film.inside_c,
+            outside_c: film.outside_c,
+            inside_resistance: film.inside_resistance_m2_k_w,
+            outside_resistance: film.outside_resistance_m2_k_w,
+        };
+        let x: Vec<Vec3> = serde_json::from_value(sample["positions_m"].clone()).unwrap();
+        let steps = row["thermal_substeps"].as_u64().unwrap();
+        let dt = (t - time) / steps as f64;
+        for _ in 0..steps {
+            let next = model
+                .advance(&state, &x, dt, &vec![boundary; model.column_count()])
+                .unwrap();
+            stored += next.stored_change_j;
+            net += dt * (next.inside_heat_w - next.outside_heat_w);
+            state = next.state;
+        }
+        assert_eq!(row["stored_change_j"], stored);
+        assert_eq!(row["net_boundary_energy_j"], net);
+        time = t;
+    }
+    assert_eq!(h["final"]["temperature_c"], json!(state.temperature_c()));
+    assert_eq!(h["duration_s"], motion["duration_s"]);
+    assert_eq!(h["path_sha256"], motion["path_sha256"]);
+    assert_eq!(h["initial_positions_sha256"], result["positions_sha256"]);
+    assert!(h["balance_error_j"].as_f64().unwrap().abs() < 1e-9);
+    // Independent one-cell reference-mass accounting: no current-area heat capacity.
+    let expected = h["model"]["patches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(state.temperature_c())
+        .map(|(patch, temp)| {
+            patch["reference_area_m2"].as_f64().unwrap() * 0.2 * 1000. * (temp[0] - 15.)
+        })
+        .sum::<f64>();
+    assert!((stored - expected).abs() < 1e-10);
+    let mut no_heat = s.clone();
+    no_heat.motion.as_mut().unwrap().transient_surface = None;
+    let ordinary = moving(&no_heat, &p);
+    assert_eq!(ordinary["drape"], result["drape"]);
+    assert_eq!(ordinary["motion"]["result"]["samples"], motion["samples"]);
+    assert_eq!(
+        ordinary["motion"]["result"]["keyframes"],
+        motion["keyframes"]
+    );
+}
+
+#[test]
+fn transient_material_edits_change_temperatures_not_mechanics_and_repeat_cleanly() {
+    let s = heat_scenario();
+    let p = heat_pattern();
+    let a = moving(&s, &p);
+    for (key, value) in [("specific_heat", 2000.), ("thermal_conductivity", 0.1)] {
+        let b = moving(&s, &changed(&p, key, value));
+        let am = &a["motion"]["result"];
+        let bm = &b["motion"]["result"];
+        assert_eq!(bm["transient_surface"]["status"], "available");
+        assert_eq!(am["samples"], bm["samples"]);
+        assert_ne!(
+            am["transient_surface"]["result"]["model"]["sha256"],
+            bm["transient_surface"]["result"]["model"]["sha256"]
+        );
+        assert_ne!(
+            am["transient_surface"]["result"]["final"]["temperature_c"],
+            bm["transient_surface"]["result"]["final"]["temperature_c"]
+        );
+    }
+    assert_eq!(moving(&s, &p), a);
+}
+
+#[test]
+fn transient_missing_storage_and_late_budget_failure_preserve_complete_motion() {
+    let mut s = heat_scenario();
+    let without_capacity = moving(&s, &pattern());
+    assert_eq!(without_capacity["surface"]["status"], "available");
+    assert_eq!(without_capacity["motion"]["status"], "available");
+    assert_eq!(
+        without_capacity["motion"]["result"]["transient_surface"]["status"],
+        "refused"
+    );
+    let p = heat_pattern();
+    let good = moving(&s, &p);
+    let cells = good["triangles"].as_array().unwrap().len();
+    s.motion
+        .as_mut()
+        .unwrap()
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .max_cell_steps = cells * 2;
+    let late = moving(&s, &p);
+    assert_eq!(late["motion"]["status"], "available");
+    assert_eq!(
+        late["motion"]["result"]["samples"],
+        good["motion"]["result"]["samples"]
+    );
+    assert_eq!(late["drape"], good["drape"]);
+    let heat = &late["motion"]["result"]["transient_surface"];
+    assert_eq!(heat["status"], "refused", "{heat}");
+    assert!(heat["result"].is_null());
+    assert_eq!(heat["refusal"]["code"], "budget_exceeded");
+    s.motion
+        .as_mut()
+        .unwrap()
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .boundaries
+        .pop();
+    assert_eq!(
+        moving(&s, &p)["motion"]["result"]["transient_surface"]["status"],
+        "refused"
+    );
+}
+
+fn coverage_heat_scenario() -> Scenario {
+    let mut s = heat_scenario();
+    let c = s.coverage.as_ref().unwrap();
+    let request = json!({"schema":"ftx-motion-coverage-heat/1",
+        "body_triangle_ids":c.body_triangle_ids,"instance_layers":c.instance_layers,
+        "settings":c.settings,"initial_temperature_c":15.,
+        "boundaries":s.motion.as_ref().unwrap().transient_surface.as_ref().unwrap().boundaries,
+        "exposed_boundaries":[null,null],"max_step_s":0.0005,
+        "max_cell_steps":100000,"max_geometry_operations":2000000});
+    s.motion.as_mut().unwrap().transient_coverage = Some(serde_json::from_value(request).unwrap());
+    s
+}
+
+#[test]
+fn moving_body_coverage_heat_matches_direct_conservative_remap_and_physical_steps() {
+    use ftx_drape::thermal::{
+        Boundary,
+        surface::{Surface, coverage::motion::Frame, projection},
+    };
+    let s = coverage_heat_scenario();
+    let result = moving(&s, &heat_pattern());
+    let motion = &result["motion"]["result"];
+    let outcome = &motion["transient_coverage"];
+    assert_eq!(outcome["status"], "available", "{outcome:#}");
+    let h = &outcome["result"];
+    let saved = &h["checkpoint"]["frame"];
+    let source = Surface::from_snapshot(&saved["source"]).unwrap();
+    let projection: projection::Request = serde_json::from_value(saved["request"].clone()).unwrap();
+    let triangles: Vec<[usize; 3]> =
+        serde_json::from_value(saved["projection"]["layout"]["body_triangles"].clone()).unwrap();
+    let mut frame = Frame::new(
+        source.clone(),
+        serde_json::from_value(result["positions_m"].clone()).unwrap(),
+        form().vertices,
+        &triangles,
+        projection.clone(),
+    )
+    .unwrap();
+    assert_eq!(h["initial_frame_sha256"], frame.sha256());
+    let mut state = frame.initial(15.).unwrap();
+    let (mut time, mut net, mut stored, mut remap_sum) = (0., 0., 0., 0.);
+    let policy = s
+        .motion
+        .as_ref()
+        .unwrap()
+        .transient_coverage
+        .as_ref()
+        .unwrap();
+    let trace = h["trace"].as_array().unwrap();
+    assert_eq!(trace.len(), motion["samples"].as_array().unwrap().len());
+    assert!(
+        trace
+            .iter()
+            .any(|v| v["covered_area_m2"].as_f64().unwrap() > 0.)
+    );
+    for (sample, t) in motion["samples"].as_array().unwrap().iter().zip(trace) {
+        let next = Frame::new(
+            source.clone(),
+            serde_json::from_value(sample["positions_m"].clone()).unwrap(),
+            serde_json::from_value(sample["body_positions_m"].clone()).unwrap(),
+            &triangles,
+            projection.clone(),
+        )
+        .unwrap();
+        let transfer = next.remap(&frame, &state).unwrap();
+        assert_eq!(t["remap"], json!(transfer.balance));
+        remap_sum += transfer.balance.residual_j;
+        state = transfer.state;
+        frame = next;
+        let b = policy.boundaries[t["interval_index"].as_u64().unwrap() as usize];
+        let boundaries = vec![
+            Boundary {
+                inside_c: b.inside_c,
+                outside_c: b.outside_c,
+                inside_resistance: b.inside_resistance_m2_k_w,
+                outside_resistance: b.outside_resistance_m2_k_w
+            };
+            triangles.len()
+        ];
+        let end = sample["time_s"].as_f64().unwrap();
+        let n = t["thermal_substeps"].as_u64().unwrap();
+        let dt = (end - time) / n as f64;
+        for _ in 0..n {
+            let step = frame.advance(&state, dt, &boundaries).unwrap();
+            net += dt * step.net_heat_w();
+            stored += step.stored_change_j();
+            state = step.into_state();
+        }
+        time = end;
+        assert_eq!(t["frame_sha256"], frame.sha256());
+    }
+    assert_eq!(h["net_boundary_energy_j"], net);
+    assert_eq!(h["physical_stored_change_j"], stored);
+    assert_eq!(h["signed_remap_residual_j"], remap_sum);
+    assert!(h["balance_error_j"].as_f64().unwrap().abs() < 1e-9);
+    assert!(h["absolute_remap_residual_j"].as_f64().unwrap() < 1e-9);
+    assert_eq!(h["checkpoint"], frame.checkpoint(&state).unwrap());
+    let (restored, restored_state) = Frame::from_checkpoint(&h["checkpoint"]).unwrap();
+    assert_eq!(
+        restored.checkpoint(&restored_state).unwrap(),
+        h["checkpoint"]
+    );
+    assert_eq!(moving(&s, &heat_pattern()), result);
+}
+
+#[test]
+fn exposed_heat_and_coverage_refusals_are_independent_of_motion_and_other_consumers() {
+    let mut s = coverage_heat_scenario();
+    let p = heat_pattern();
+    let base = moving(&s, &p);
+    assert_eq!(
+        base["motion"]["result"]["transient_coverage"]["status"],
+        "available"
+    );
+    let film = s
+        .motion
+        .as_ref()
+        .unwrap()
+        .transient_coverage
+        .as_ref()
+        .unwrap()
+        .boundaries[0];
+    s.motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap()
+        .exposed_boundaries = vec![Some(film), Some(film)];
+    let exposed = moving(&s, &p);
+    assert_eq!(
+        exposed["motion"]["result"]["transient_coverage"]["status"],
+        "available"
+    );
+    assert_eq!(
+        base["motion"]["result"]["samples"],
+        exposed["motion"]["result"]["samples"]
+    );
+    assert_ne!(
+        base["motion"]["result"]["transient_coverage"]["result"]["checkpoint"]["exposed_temperature_c"],
+        exposed["motion"]["result"]["transient_coverage"]["result"]["checkpoint"]["exposed_temperature_c"]
+    );
+    for mode in 0..5 {
+        let mut bad = s.clone();
+        let policy = bad
+            .motion
+            .as_mut()
+            .unwrap()
+            .transient_coverage
+            .as_mut()
+            .unwrap();
+        match mode {
+            0 => policy.body_triangle_ids.push(policy.body_triangle_ids[0]),
+            1 => policy.exposed_boundaries.clear(),
+            2 => policy.max_geometry_operations = 1,
+            3 => {
+                policy
+                    .instance_layers
+                    .insert("nonexistent".into(), "shell".into());
+            }
+            _ => policy.max_cell_steps = base["triangles"].as_array().unwrap().len() * 2,
+        }
+        let r = moving(&bad, &p);
+        assert_eq!(r["motion"]["status"], "available");
+        assert_eq!(
+            r["motion"]["result"]["transient_coverage"]["status"], "refused",
+            "mode {mode}"
+        );
+        assert!(r["motion"]["result"]["transient_coverage"]["result"].is_null());
+        assert_eq!(
+            r["motion"]["result"]["samples"],
+            base["motion"]["result"]["samples"]
+        );
+        assert_eq!(r["drape"], base["drape"]);
+        assert_eq!(
+            r["motion"]["result"]["transient_surface"]["status"],
+            "available"
+        );
+    }
+    let missing = moving(&s, &pattern());
+    assert_eq!(missing["motion"]["status"], "available");
+    assert_eq!(
+        missing["motion"]["result"]["transient_coverage"]["status"],
+        "refused"
+    );
+    assert_eq!(
+        missing["motion"]["result"]["keyframes"][0]["coverage"]["status"],
+        "available"
+    );
 }
