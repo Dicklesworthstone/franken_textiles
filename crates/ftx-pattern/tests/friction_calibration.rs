@@ -105,7 +105,7 @@ fn consuming_an_estimate_is_separate_from_observation_and_sheet_permission() {
 fn held_out_forces_do_not_leak_and_no_check_is_explicit() {
     let db = catalog();
     let mut i = input();
-    i.experiments[1].samples[0].pull_n = [7.0, 8.0];
+    i.experiments[1].samples[0].pull_n = [Some(7.0), Some(8.0)];
     assert!(calibrate(&i, &db).unwrap_err().message.contains("held-out"));
     i.max_rms_scaled = 1e5;
     i.max_peak_scaled = 1e5;
@@ -120,7 +120,10 @@ fn frame_rotation_and_force_scaling_do_not_change_the_coefficient() {
     let mut i = input();
     for e in &mut i.experiments {
         for s in &mut e.samples {
-            s.pull_n = [-s.pull_n[1] * 1000.0, s.pull_n[0] * 1000.0];
+            s.pull_n = [
+                s.pull_n[1].map(|v| -v * 1000.0),
+                s.pull_n[0].map(|v| v * 1000.0),
+            ];
             s.velocity_m_s = [-s.velocity_m_s[1], s.velocity_m_s[0]];
             s.normal_n *= 1000.0;
             s.scale_n *= 1000.0;
@@ -133,17 +136,17 @@ fn frame_rotation_and_force_scaling_do_not_change_the_coefficient() {
 fn transverse_adhesive_and_wrong_sign_forces_cannot_masquerade_as_friction() {
     let db = catalog();
     let mut i = input();
-    i.experiments[0].samples[0].pull_n[1] = 1.0;
+    i.experiments[0].samples[0].pull_n[1] = Some(1.0);
     assert!(calibrate(&i, &db).is_err());
     i = input();
     for e in &mut i.experiments {
         for s in &mut e.samples {
-            s.pull_n = s.pull_n.map(|v| -v);
+            s.pull_n = s.pull_n.map(|v| v.map(|x| -x));
         }
     }
     assert!(calibrate(&i, &db).is_err());
     i = input();
-    i.experiments[0].samples[0].pull_n[0] += 0.5;
+    i.experiments[0].samples[0].pull_n[0] = Some(1.3);
     assert!(calibrate(&i, &db).is_err());
 }
 
@@ -153,7 +156,7 @@ fn zero_and_greater_than_one_friction_are_not_clamped() {
         let mut i = input();
         for e in &mut i.experiments {
             for s in &mut e.samples {
-                s.pull_n = s.pull_n.map(|v| v * mu / 0.4);
+                s.pull_n = s.pull_n.map(|v| v.map(|x| x * mu / 0.4));
             }
         }
         near(calibrate(&i, &catalog()).unwrap().coefficient.value, mu);
@@ -211,7 +214,8 @@ fn malformed_nonfinite_stationary_and_unloaded_acquisitions_refuse() {
         |i| i.experiments[0].samples[0].normal_n = f64::NAN,
         |i| i.experiments[0].samples[0].velocity_m_s = [0.0, 0.0],
         |i| i.experiments[0].samples[0].scale_n = 0.0,
-        |i| i.experiments[0].samples[0].pull_n = [f64::INFINITY, 0.0],
+        |i| i.experiments[0].samples[0].pull_n = [Some(f64::INFINITY), Some(0.0)],
+        |i| i.experiments[0].samples[0].pull_n = [None, None],
         |i| i.experiments[0].source = "missing".into(),
         |i| i.experiments[1].id = i.experiments[0].id.clone(),
         |i| i.experiments[0].partition = ftx_pattern::material_calibration::Partition::Check,
@@ -254,4 +258,32 @@ fn deterministic_receipts_and_target_locks_preserve_scope() {
     };
     materials[1] = materials[0].clone();
     assert!(calibrate(&changed, &db).is_err());
+}
+
+#[test]
+fn one_axis_instrument_keeps_unmeasured_force_components_unknown() {
+    let mut i = input();
+    for e in &mut i.experiments {
+        for s in &mut e.samples {
+            s.pull_n[1] = None;
+        }
+    }
+    let r = calibrate(&i, &catalog()).unwrap();
+    near(r.coefficient.value, 0.4);
+    assert_eq!(r.fit.components, 2);
+    assert_eq!(r.check.unwrap().components, 1);
+    assert!(r.predictions.iter().all(|p| p.residual_n[1].is_none()));
+    for e in &mut i.experiments {
+        for s in &mut e.samples {
+            s.velocity_m_s = [0.0, 0.01];
+            s.pull_n = [Some(0.0), None];
+        }
+    }
+    // Measuring only perpendicular zero force cannot identify the missing sliding force.
+    assert!(
+        calibrate(&i, &catalog())
+            .unwrap_err()
+            .message
+            .contains("slip direction")
+    );
 }

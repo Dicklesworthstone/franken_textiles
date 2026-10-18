@@ -40,6 +40,8 @@ mod thermal_transient;
 mod bending_calibration;
 #[path = "material_workbench/cutting.rs"]
 mod cutting;
+#[path = "material_workbench/friction.rs"]
+mod friction_calibration;
 #[path = "material_workbench/relaxation.rs"]
 mod relaxation_calibration;
 
@@ -59,6 +61,7 @@ ftx-materials thermal-at ID TEMPERATURE-C [--allow-estimates]
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
 ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
+ftx-materials calibrate-friction SLIDING.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
 ftx-materials thermal-steady STACK.json
 ftx-materials thermal-steady-surface SIM_REPORT.json CONDITIONS.json
@@ -86,6 +89,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-steady-coverage` recomputes layered body coverage and heat directly from retained drape materials, without invented storage.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
 `calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
+`calibrate-friction` identifies explicit pair/self/body kinetic coefficients from corrected steady sliding forces.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
 `thermal-coverage` couples mapped layers and bare body areas; generated geometry receipts are replayed.
 `thermal-map` derives coverage polygons from actual cloth and body geometry under a local-normal closure.
@@ -231,6 +235,8 @@ fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["calibrate-friction", path] => friction_calibration::run(path, false),
+        ["calibrate-friction", path, "--allow-estimates"] => friction_calibration::run(path, true),
         ["screen", path] => screening::run(path),
         ["study", pattern, request] => screening::study(pattern, request),
         [

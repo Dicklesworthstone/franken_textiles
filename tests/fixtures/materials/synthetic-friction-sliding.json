@@ -1,0 +1,240 @@
+{
+  "schema": "ftx-friction-calibration/1",
+  "target": {
+    "kind": "pair",
+    "materials": [
+      {
+        "id": "friction-sheet-a",
+        "allow_estimates": true,
+        "record": {
+          "id": "friction-sheet-a",
+          "name": "Synthetic sliding sheet, not a named textile",
+          "form": "woven",
+          "properties": {
+            "areal_density": {
+              "value": 0.2,
+              "unit": "kg/m2",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "thickness": {
+              "value": 0.0006,
+              "unit": "m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "warp_stiffness": {
+              "value": 100,
+              "unit": "N/m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "weft_stiffness": {
+              "value": 40,
+              "unit": "N/m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "shear_stiffness": {
+              "value": 10,
+              "unit": "N/m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "poisson_warp_weft": {
+              "value": 0.2,
+              "unit": "1",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "bending_rigidity": {
+              "value": 3e-05,
+              "unit": "N*m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "friction_skin": {
+              "value": 0.2,
+              "unit": "1",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "friction_self": {
+              "value": 0.3,
+              "unit": "1",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            }
+          },
+          "sources": {
+            "sheet": {
+              "reference": "test:synthetic-friction-sheet",
+              "accessed_on": "2026-10-18",
+              "note": "Entire record synthetic; no real material or garment qualification"
+            }
+          }
+        }
+      },
+      {
+        "id": "friction-sheet-b",
+        "allow_estimates": true,
+        "record": {
+          "id": "friction-sheet-b",
+          "name": "Synthetic sliding sheet, not a named textile",
+          "form": "woven",
+          "properties": {
+            "areal_density": {
+              "value": 0.4,
+              "unit": "kg/m2",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "thickness": {
+              "value": 0.0006,
+              "unit": "m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "warp_stiffness": {
+              "value": 400,
+              "unit": "N/m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "weft_stiffness": {
+              "value": 160,
+              "unit": "N/m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "shear_stiffness": {
+              "value": 40,
+              "unit": "N/m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "poisson_warp_weft": {
+              "value": 0.2,
+              "unit": "1",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "bending_rigidity": {
+              "value": 6e-05,
+              "unit": "N*m",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "friction_skin": {
+              "value": 0.2,
+              "unit": "1",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            },
+            "friction_self": {
+              "value": 0.3,
+              "unit": "1",
+              "source": "sheet",
+              "evidence": "estimate",
+              "method": "Synthetic software fixture, not a textile measurement"
+            }
+          },
+          "sources": {
+            "sheet": {
+              "reference": "test:synthetic-friction-sheet",
+              "accessed_on": "2026-10-18",
+              "note": "Entire record synthetic; no real material or garment qualification"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "method": "Synthetic corrected steady-pull vector oracle; coefficient 0.4, no apparatus drag or inertia",
+  "conditions": {
+    "purpose": "Synthetic numerical regression only; not a measured textile pair"
+  },
+  "fitted_on": "2026-10-18",
+  "sources": {
+    "acquisition": {
+      "reference": "test:synthetic-sliding-oracle",
+      "accessed_on": "2026-10-18",
+      "note": "All forces and velocities are synthetic known answers"
+    }
+  },
+  "experiments": [
+    {
+      "id": "fitting-acquisition",
+      "source": "acquisition",
+      "evidence": "estimate",
+      "partition": "fit",
+      "samples": [
+        {
+          "normal_n": 2.0,
+          "pull_n": [
+            0.8,
+            0.0
+          ],
+          "velocity_m_s": [
+            0.01,
+            0.0
+          ],
+          "scale_n": 0.1
+        },
+        {
+          "normal_n": 5.0,
+          "pull_n": [
+            -1.2,
+            1.6
+          ],
+          "velocity_m_s": [
+            -0.03,
+            0.04
+          ],
+          "scale_n": 0.1
+        }
+      ]
+    },
+    {
+      "id": "held-out-acquisition",
+      "source": "acquisition",
+      "evidence": "estimate",
+      "partition": "check",
+      "samples": [
+        {
+          "normal_n": 3.0,
+          "pull_n": [
+            0.0,
+            -1.2
+          ],
+          "velocity_m_s": [
+            0.0,
+            -0.02
+          ],
+          "scale_n": 0.1
+        }
+      ]
+    }
+  ],
+  "allow_estimated_observations": true,
+  "replace_existing": false,
+  "max_rms_scaled": 1e-08,
+  "max_peak_scaled": 1e-08
+}

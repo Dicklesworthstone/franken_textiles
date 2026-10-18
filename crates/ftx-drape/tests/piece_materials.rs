@@ -654,3 +654,6 @@ fn explicit_cross_friction_changes_slip_on_the_assembled_two_sheet_model() {
         "{no_friction} vs {friction}"
     );
 }
+
+#[path = "piece_materials/friction_acquisition.rs"]
+mod friction_acquisition;

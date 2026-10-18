@@ -149,7 +149,8 @@ pub struct Sample {
     /// Actual compressive normal contact load, N; not guessed from nominal sled mass.
     pub normal_n: f64,
     /// Corrected pulling force in N, pointing WITH slip. Remove apparatus drag, gravity and inertia.
-    pub pull_n: [f64; 2],
+    /// Null denotes an unmeasured component, not a zero-force observation.
+    pub pull_n: [Option<f64>; 2],
     /// Measured nonzero relative tangent velocity, m/s. Zero-speed/breakaway data are not this law.
     pub velocity_m_s: [f64; 2],
     /// Positive residual weighting scale, N; not automatically a measurement standard deviation.
@@ -213,8 +214,8 @@ pub struct Prediction {
     pub partition: Partition,
     /// Pull predicted by the scalar isotropic law, N.
     pub pull_n: [f64; 2],
-    /// Predicted minus observed, N, including transverse errors.
-    pub residual_n: [f64; 2],
+    /// Predicted minus observed, N, including transverse errors; unmeasured components stay absent.
+    pub residual_n: [Option<f64>; 2],
 }
 
 /// Numerical fit plus the complete input and the exact resolved pre-fit specimen records.
@@ -268,8 +269,10 @@ fn sample_frame(s: &Sample) -> Result<([f64; 2], f64), Refusal> {
         || s.scale_n <= 0.0
         || s.pull_n
             .iter()
+            .flatten()
             .chain(&s.velocity_m_s)
             .any(|x| !x.is_finite())
+        || s.pull_n.iter().all(Option::is_none)
         || !speed.is_finite()
         || speed <= 0.0
     {
@@ -382,11 +385,19 @@ pub fn calibrate(input: &Input, catalog: &Catalog) -> Result<Report, Refusal> {
             let (direction, speed) = sample_frame(s)?;
             if e.partition == Partition::Fit {
                 let load = s.normal_n / s.scale_n;
-                let pull = s.pull_n.map(|v| v / s.scale_n);
-                if !load.is_finite() || load <= 0.0 || pull.iter().any(|v| !v.is_finite()) {
+                if !load.is_finite() || load <= 0.0 {
                     return Err(invalid("friction weighting arithmetic overflow/underflow"));
                 }
-                rows.push((load, direction, pull));
+                for (component, observed) in s.pull_n.iter().enumerate() {
+                    if let Some(force) = observed {
+                        let x = load * direction[component];
+                        let y = force / s.scale_n;
+                        if !x.is_finite() || !y.is_finite() {
+                            return Err(invalid("friction component weighting overflow"));
+                        }
+                        rows.push((x, y));
+                    }
+                }
                 normal = [normal[0].min(s.normal_n), normal[1].max(s.normal_n)];
                 speeds = [speeds[0].min(speed), speeds[1].max(speed)];
             }
@@ -398,21 +409,22 @@ pub fn calibrate(input: &Input, catalog: &Catalog) -> Result<Report, Refusal> {
         ));
     }
     // Normalize both columns and loads before products; no raw squared force can overflow the fit.
-    let xscale = rows.iter().map(|r| r.0).fold(0.0, f64::max);
-    let yscale = rows
-        .iter()
-        .flat_map(|r| r.2)
-        .map(f64::abs)
-        .fold(0.0, f64::max);
+    let xscale = rows.iter().map(|r| r.0.abs()).fold(0.0, f64::max);
+    let yscale = rows.iter().map(|r| r.1.abs()).fold(0.0, f64::max);
+    if xscale <= 0.0 {
+        return Err(invalid(
+            "no measured force component observes the slip direction",
+        ));
+    }
     let mu = if yscale == 0.0 {
         0.0
     } else {
         let mut xx = 0.0;
         let mut xy = 0.0;
-        for &(load, direction, pull) in &rows {
+        for &(load, pull) in &rows {
             let x = load / xscale;
             xx += x * x;
-            xy += x * (direction[0] * (pull[0] / yscale) + direction[1] * (pull[1] / yscale));
+            xy += x * (pull / yscale);
         }
         (xy / xx) * (yscale / xscale)
     };
@@ -428,20 +440,21 @@ pub fn calibrate(input: &Input, catalog: &Catalog) -> Result<Report, Refusal> {
         for (sample, s) in e.samples.iter().enumerate() {
             let (direction, _) = sample_frame(s)?;
             let pull = direction.map(|d| mu * s.normal_n * d);
-            let residual: [f64; 2] = std::array::from_fn(|j| pull[j] - s.pull_n[j]);
-            let scaled = residual.map(|r| r / s.scale_n);
+            let residual: [Option<f64>; 2] =
+                std::array::from_fn(|j| s.pull_n[j].map(|p| pull[j] - p));
+            let scaled = residual.map(|r| r.map(|v| v / s.scale_n));
             if pull
                 .iter()
-                .chain(&residual)
-                .chain(&scaled)
+                .chain(residual.iter().flatten())
+                .chain(scaled.iter().flatten())
                 .any(|v| !v.is_finite())
             {
                 return Err(invalid("friction prediction/residual overflow"));
             }
             if e.partition == Partition::Fit {
-                errors.extend(scaled);
+                errors.extend(scaled.into_iter().flatten());
             } else {
-                checks.extend(scaled);
+                checks.extend(scaled.into_iter().flatten());
             }
             predictions.push(Prediction {
                 experiment: e.id.clone(),
