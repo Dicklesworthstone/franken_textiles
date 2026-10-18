@@ -1333,6 +1333,65 @@ replay verifies software propagation; it does not establish measured jacket fit 
 
 ---
 
+### 25.12 Measured leather and material-following exterior cooling
+
+**Delivered measured transport (`ftx-ml1`).** Commit `956fd391` adds ten bovine leather study
+sample groups and 40 numeric observations from Kopitar et al. (2022), DOI
+[`10.1177/15280837221077048`](https://doi.org/10.1177/15280837221077048), Tables 4–5.
+Together with the supplier tranche in §25.11, the current built-in catalog has **106 records**.
+Each leather selection preserves tanning, finish and neck/back sampling, measured thickness and
+dry/vapor resistance, published effective conductivity, original units and separate reported SD/CV.
+Existing steady transport and thickness-based manufacturing consumers use these records without
+new physics branches. The [commit's CI run](https://github.com/Dicklesworthstone/franken_textiles/actions/runs/39159137113)
+passed formatting, strict Clippy, workspace tests, Python checks, wasm compilation and JavaScript
+checks. See `docs/measured-leather.md` for the executable comparison and source limitations.
+
+This is a measured single-protocol contribution, not complete cowhide characterization. Thermal
+and vapor tests have different air temperature/humidity conditions. Thickness pressure, thickness
+sample count and preconditioning are not numerically supplied by the article. SD/CV remain sample
+variability rather than tolerance bounds. Areal mass, heat capacity, directional mechanics, friction,
+temperature dependence, prices and qualified machine recipes remain absent. A missing number never
+becomes zero or a default from a fiber name; missing data blocks only the consumers that require it.
+
+**Delivered transient exterior exchange (`ftx-ex1`).** Core commit `c0735cc0` and adapter commit
+`383db5da` extend the existing conservative thermal step and material-following surface/motion paths
+with prescribed convection and source-qualified exterior radiation. The exposed face temperature
+is solved consistently; reference mass is preserved while current area changes, and signed
+convective/radiative energy is reported separately from numerical residuals. Each accepted motion
+interval uses the same frozen finish/emissivity selection. Prescribed coefficients do not infer wind
+or ventilation. The [complete adapter CI run](https://github.com/Dicklesworthstone/franken_textiles/actions/runs/39160779479)
+passed formatting, strict Clippy, workspace tests, Python checks, wasm compilation and JavaScript
+checks. Native core, CLI and motion analytic/replay checks establish this software path. The shared
+WASM motion entry point compiles; this delivery does not claim browser-runtime numerical parity,
+measured garment agreement or whole-wearer comfort.
+
+**Remaining end-to-end priorities:**
+
+1. **Matched material lots (`ftx-tm2`, `ftx-tme`, `ftx-md1`).** Characterize linen,
+   treated cowhide, performance knits and fills together with yarn/construction/finish, conditioned
+   mass and thickness, directional membrane/shear/bending, pair friction and compatible transport.
+   Preserve fill compression/loft separately from shell mechanics. Use held-out coupons and then
+   the unchanged jacket/body comparisons in `ftx-tm8`/`ftx-tmf`; these empirical gates stay open.
+2. **Exterior coverage during motion (`ftx-ex2`, `ftx-tmb`).** Couple exterior exchange to explicit
+   layer order, exposed faces and changing body/cloth overlap. Covered body area must be counted
+   once; hidden lining must not radiate as an independently exposed shell. Preserve stored heat
+   across conservative remapping and report uncovered or ambiguous regions. Test moving partial
+   coverage and layer rearrangement before claiming full-garment heat loss.
+3. **Source and process qualification (`ftx-sr2`, `ftx-tm6`, `ftx-tmc`, `ftx-sp2`).** Extend reliable
+   live quotes and reviewed specification revisions while binding measurements to exact lots.
+   Compare dated offers only across compatible currency, region, quality and sale/order terms.
+   Qualify compression, moisture, air gaps and finish effects, then measured seam stacks, thread,
+   needle, feed and machine envelopes. Material substitution must rerun these consumers and
+   invalidate prior results; hardware execution remains a separate authorized operation.
+
+The MIT ground-truth archive was inspected read-only under `ftx-md1`: its workbook contains 52
+lettered specimen rows with thickness, area weight, bulk density and beam bending. It also exposes
+raw/summary discrepancies for silk #4, Lycra #29 and taffeta #7 aggregation. These findings are
+research leads, not newly ingested records. Retain raw identities and resolve the discrepancies;
+missing coupon width, direction and conditioning still prevent a justified sheet-bending conversion.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

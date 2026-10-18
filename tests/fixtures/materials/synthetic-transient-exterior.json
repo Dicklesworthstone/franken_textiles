@@ -1,0 +1,90 @@
+{
+  "schema": "ftx-thermal-transient/1",
+  "layers": [{
+    "id": "synthetic-transient-exterior-sheet",
+    "allow_estimates": true,
+    "record": {
+      "id": "synthetic-transient-exterior-sheet",
+      "name": "Synthetic optical/thermal storage sheet; NOT a measured textile",
+      "form": "woven",
+      "properties": {
+        "areal_density": {
+          "value": 0.2,
+          "unit": "kg/m2",
+          "evidence": "estimate",
+          "source": "synthetic",
+          "method": "Declared synthetic areal mass for a numerical storage example",
+          "conditions": {"specimen": "synthetic-coupon", "conditioning": "synthetic-dry"}
+        },
+        "specific_heat": {
+          "value": 1000.0,
+          "unit": "J/(kg*K)",
+          "evidence": "estimate",
+          "source": "synthetic",
+          "method": "Declared synthetic heat capacity for a numerical storage example",
+          "conditions": {"specimen": "synthetic-coupon", "conditioning": "synthetic-dry"}
+        },
+        "thermal_resistance": {
+          "value": 0.4,
+          "unit": "m2*K/W",
+          "evidence": "estimate",
+          "source": "synthetic",
+          "method": "Declared synthetic resistance for a numerical example",
+          "conditions": {"specimen": "synthetic-coupon", "conditioning": "synthetic-dry"}
+        },
+        "emissivity": {
+          "value": 0.8,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "synthetic",
+          "method": "Declared synthetic total-hemispherical optical coefficient",
+          "conditions": {
+            "specimen": "synthetic-coupon",
+            "conditioning": "synthetic-dry",
+            "face": "public",
+            "spectral_basis": "total_hemispherical",
+            "temperature_min_c": "-80",
+            "temperature_max_c": "80"
+          }
+        }
+      },
+      "sources": {
+        "synthetic": {
+          "reference": "test:transient-exterior-exchange-example",
+          "accessed_on": "2026-10-18",
+          "note": "Assumed demonstration coefficients, not empirical fabric evidence"
+        }
+      }
+    }
+  }],
+  "interface_resistance_m2_k_w": [],
+  "cells_per_layer": 4,
+  "area_m2": 0.5,
+  "inside_c": 35.0,
+  "outside_c": 5.0,
+  "inside_resistance_m2_k_w": 0.1,
+  "outside_resistance_m2_k_w": 0.0,
+  "initial_temperature_c": 10.0,
+  "step_seconds": 0.5,
+  "steps": 40,
+  "record_every": 10,
+  "exterior_exchange": {
+    "air_c": 5.0,
+    "convection_w_m2_k": 3.0,
+    "surface_temperature_range_c": [-80.0, 80.0],
+    "convection_source": {
+      "reference": "test:prescribed-exterior-convection",
+      "accessed_on": "2026-10-18",
+      "note": "Synthetic boundary coefficient; not a wind correlation or measurement"
+    },
+    "convection_evidence": "estimate",
+    "convection_conditions": "Illustrative constant h on an independent sheet; no inferred wind or motion correlation",
+    "allow_estimates": true,
+    "radiation": {
+      "ambient_c": -10.0,
+      "emissivity_property": "emissivity",
+      "exposed_face": "public",
+      "allow_opaque_gray_approximation": true
+    }
+  }
+}

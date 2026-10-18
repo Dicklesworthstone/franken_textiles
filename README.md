@@ -52,6 +52,28 @@ bands, fold-up animation, metrics and flags), `ftx-export` (every deliverable an
 The plan is written to be falsifiable: it names kill gates that can stop the body port or the drape solver
 early and fall back to the reference's tools.
 
+### Material substitutions and heat
+
+Material observations, construction, finish and source conditions travel with each resolved selection.
+The same selection supplies the consumers it can support; an absent mechanical or thermal measurement
+stays absent. Start with the [catalog guide](docs/material-catalog.md) and
+[piece-specific material assignments](docs/piece-materials.md).
+
+- [Measured leather](docs/measured-leather.md): ten bovine leather sample groups distinguish tanning,
+  finishes and neck/back locations, with measured dry/vapor resistance and thickness.
+- [Transient exterior heat](docs/transient-exterior-heat.md): run source-qualified convection and
+  material-following radiation on a layer stack, a saved drape or a complete motion history. Reports
+  retain the exposed face temperature, separate signed heat contributions and reference-mass storage.
+- [Material studies](docs/material-scenario-studies.md): compare substitutions through shared scenario
+  execution and explicit objectives, retaining the material and geometry used by each result.
+
+Try the self-contained synthetic heat example (its numbers demonstrate the solver, not a real fabric):
+
+```sh
+cargo run -p ftx-cli --bin ftx-materials -- thermal-transient \
+  tests/fixtures/materials/synthetic-transient-exterior.json
+```
+
 ---
 
 ## TL;DR
