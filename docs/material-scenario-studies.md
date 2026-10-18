@@ -144,10 +144,12 @@ Each endpoint independently recompiles source-locked steady sheet transport and 
 the **new cloth and body geometry**. These are equilibrium snapshots, not a transient-temperature
 history, energy accumulated during motion or a comfort prediction. A thermal refusal does not erase
 the completed mechanical trajectory. The scenario's original `drape`, `surface`, `coverage`, positions
-and comparison objectives continue to describe the **initial static drape**, not the moved state.
-The current comparator does not rank motion histories or require motion success. Inspect its separate
-status; a static frontier is not a motion-qualified frontier. Neither initial geometric settledness
-nor successful implicit substeps establish viscoelastic equilibrium or empirical garment accuracy.
+and existing static comparison metrics continue to describe the **initial static drape**.
+Explicit motion/transient objectives
+and the `motion`, `transient_surface` and `transient_coverage` required consumers below qualify a frontier
+by the complete requested histories. A study using only static objectives still needs an explicit
+motion consumer if movement must succeed. Neither initial geometric settledness nor successful
+implicit substeps establish viscoelastic equilibrium or empirical garment accuracy.
 
 Admission permits 1..16 endpoints through 60 seconds, 0..180-degree angles, maximum substeps in
 1e-9..1 seconds, 1..512 attempted substeps for the **entire** trajectory, up to one million pairs
@@ -244,7 +246,8 @@ These are **one-way** motion-to-heat calculations with prescribed films, not two
 feedback, mechanical/frictional heating, moisture, thermoregulation or empirical comfort prediction.
 First-order remapping can mix unresolved gradients. Time/space refinement and held-out measurements
 remain necessary; a small energy residual alone proves neither physical accuracy nor a warmth rating.
-The comparator's existing objectives still describe the initial static result, not transient energy.
+The comparator's existing metric names still describe the initial static result. The separate
+motion metrics below compare signed cumulative energy and final cloth-cell temperatures.
 
 ## Independent thermal consumers
 
@@ -315,6 +318,75 @@ objective intervals. Geometric settledness is not viscoelastic equilibrium, meas
 comfort or proof that the requested run duration was physically sufficient. Positive admission tests
 use explicitly synthetic callback outcomes; the actual cylinder integration test demonstrates that
 clear-gating but drifting cloth is excluded. No settled anatomical garment experiment is claimed.
+
+### Motion-qualified objectives
+
+The same comparison policy now accepts the following separate metrics. They read the actual complete
+production motion/heat results; they do not replace or reinterpret initial static metrics.
+
+| Metric | Unit | Meaning |
+|---|---|---|
+| `motion_max_absolute_edge_strain_pct` | % | Peak absolute panel-edge strain across the initial state and every accepted mechanical sample. |
+| `transient_surface_inside_energy_j` | J | Signed energy through the inward boundary of independent sheets over the complete motion. |
+| `transient_surface_net_boundary_energy_j` | J | Signed inward minus outward boundary energy of independent sheets. |
+| `transient_surface_min_sample_temperature_c` | C | Minimum sheet temperature over the initial state and all accepted sample endpoints. |
+| `transient_surface_max_sample_temperature_c` | C | Maximum sheet temperature over the initial state and all accepted sample endpoints. |
+| `transient_surface_final_min_temperature_c` | C | Minimum independent-sheet cell temperature at the final accepted sample. |
+| `transient_surface_final_max_temperature_c` | C | Maximum independent-sheet cell temperature at the final accepted sample. |
+| `transient_coverage_inside_energy_j` | J | Signed inward boundary energy of covered, exposed and bare paths in the declared coverage model. |
+| `transient_coverage_net_boundary_energy_j` | J | Signed physical boundary energy into cloth storage, excluding remap residual and cancelling bare-body paths. |
+| `transient_coverage_min_sample_temperature_c` | C | Minimum covered/exposed cloth temperature over the initial state and all accepted sample endpoints. |
+| `transient_coverage_max_sample_temperature_c` | C | Maximum covered/exposed cloth temperature over the initial state and all accepted sample endpoints. |
+| `transient_coverage_final_min_temperature_c` | C | Minimum final covered/exposed cloth-cell temperature. |
+| `transient_coverage_final_max_temperature_c` | C | Maximum final covered/exposed cloth-cell temperature. |
+
+For example, after authoring a common `scenario.motion` with `transient_coverage`, this study policy
+compares peak motion strain, signed inward energy and complete declared assembly mass:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [
+    {"metric": "motion_max_absolute_edge_strain_pct", "direction": "minimize"},
+    {"metric": "transient_coverage_inside_energy_j", "direction": "minimize"},
+    {"metric": "assembly_mass_kg", "direction": "minimize"}
+  ],
+  "required_consumers": ["sewing"],
+  "allow_mixed_protocols": false
+}
+```
+
+This needs the study's actual `assembly_mass` inventory and sewing request. Objectives automatically
+require their consumers: transient metrics require both complete motion and their specific heat
+history. Alternatively, add `motion`, `transient_surface` or `transient_coverage` to `required_consumers`
+when completion matters even though the objective is cost, static heat or another metric. Successful
+motion does not require unrequested heat; a refused independent-sheet history does not block a
+coverage-only comparison, and a coverage refusal does not block a sheet-only comparison.
+The returned `comparison.motion_required` states whether the policy requires completed movement;
+merely supplying a motion scenario does not change an existing static comparison policy.
+
+Admission retains the initial settled/gating-clear requirement. Motion must match the descriptor's
+path and the initial drape's position identity, retain converged, contact-checked samples through the
+exact requested duration, and link every requested endpoint time/pose to its accepted geometry.
+Each required thermal history must retain the exact requested initial temperature, boundary/layer
+policy and duration, with one time/interval/geometry-linked row for every accepted mechanical sample.
+A late mechanical or thermal refusal, stale path, incomplete history or missing requested metric
+excludes that candidate. Its successful manufacturing and initial static outputs remain available;
+none can supply a substitute motion reading. Different heat-capacity methods, conditioning or evidence
+make transient alternatives incomparable by default, alongside the existing mechanical and transport
+protocol checks. Steady-only comparisons do not acquire a new heat-capacity requirement.
+
+Energy retains its sign, and degrees Celsius can be negative. Minimizing signed inward energy is
+not minimizing its absolute magnitude, and warmer cloth is not automatically a warmer wearer.
+Independent-sheet and coverage histories are alternative domains whose totals must not be added.
+Coverage temperature extrema include exposed cloth; they are neither average temperatures nor
+anatomical body temperatures. Net physical boundary energy excludes enthalpy-remap residual, which
+remains separately reported. Missing final temperature extrema never become the initial temperature.
+The `*_sample_temperature_c` metrics include the initial state and all retained mechanical sample
+endpoints; `*_final_*_temperature_c` metrics use only the last accepted sample. Neither includes
+unreported thermal substep extrema or establishes a continuous-time temperature bound.
+These remain nominal, one-way simulated outcomes, with no thermoregulation, comfort, fit, uncertainty
+propagation or empirical accuracy claim.
 
 ## Reports and replay
 

@@ -39,6 +39,13 @@ introducing a numerical crate dependency here. Signed heat, simulated-cloth mass
 strain require matching pattern/body/scenario identities, geometric settledness and clear gating;
 required heat consumers retain their own validity domains. Callback serialization occurs only when
 needed, one alternative at a time. Full scenario context qualifies the top-level comparison.
+Explicit motion consumers/objectives additionally require the requested complete converged trajectory,
+its path/initial/end geometry links and physical duration. Independent-sheet and body-coverage
+transient objectives separately admit complete policy/time/geometry-linked histories for signed
+incoming/net boundary energy and separately initial-inclusive sampled or final cloth-cell temperature
+extrema. `motion_required` exposes whether the comparison policy requires movement. Heat-capacity protocols participate only
+for transient comparisons. Required motion/history failures never borrow initial static outputs;
+existing static metric names and default consumer requirements keep their original meaning.
 See `docs/material-scenario-studies.md`; geometric settledness is not stress equilibrium or fit.
 
 **Text and numbers** (`text.rs`, §2). `fnum` (fixed-point, ties to even on the exact binary value, trailing

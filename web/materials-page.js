@@ -128,11 +128,19 @@ function screening(parent, r) {
   }
 }
 function objectiveComparison(parent, r) {
+  const motionQualified = r.motion_required === true;
   const note = document.createElement("p");
   note.textContent = `Computed ${r.policy.basis} frontier: ${r.frontier.length ? r.frontier.join(", ") : "No eligible non-dominated alternatives"}. ` +
     (r.policy.allow_mixed_protocols ? "Mixed source protocols explicitly admitted. " : "Reported input protocols must match. ") +
     "Conditional on these inputs and evaluated alternatives; no propagated uncertainty, empirical fit or global optimum claim.";
   parent.append(note);
+  const scope = document.createElement("p");
+  scope.textContent = motionQualified ?
+    "Motion-qualified comparison: a complete admitted trajectory is required. Each declared motion heat objective also requires its complete thermal history. " +
+      "Initial static objectives retain their initial-frame meaning; signed energy uses the requested sheet or body-coverage domain." :
+    "This comparison does not require motion completion. Static drape or heat objectives, when requested, describe the initial state. " +
+      "Any separately requested motion or transient heat must be inspected in its own result.";
+  parent.append(scope);
   const objectives = r.policy.objectives;
   const constraints = r.policy.constraints.filter(c => !objectives.some(o => o.metric === c.metric));
   const metrics = [...objectives, ...constraints];
@@ -192,7 +200,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
 function motionComparison(parent, rows, simulations, requested) {
   if (!requested && ![...simulations.values()].some(o => available(o)?.motion)) return;
   const note = document.createElement("p");
-  note.textContent = "Motion continues the initial sewn cloth; it does not re-drape each pose. Initial static metrics and the computed frontier remain separate. " +
+  note.textContent = "Motion continues the initial sewn cloth; it does not re-drape each pose. Motion enters the computed frontier through explicitly declared motion objectives or required consumers. " +
     "Endpoint steady snapshots are separate from explicitly requested transient histories. Successful motion is not a settled-garment or empirical fit claim.";
   parent.append(note);
   const t = table(parent, "Prescribed motion — complete trajectory or refusal", ["Alternative", "Motion", "Initial drape settled",

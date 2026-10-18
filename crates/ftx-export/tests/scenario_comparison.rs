@@ -744,3 +744,124 @@ fn heat_capacity_protocols_are_compared_and_missing_thermal_policy_cannot_qualif
         .unwrap();
     assert!(result.comparison.unwrap().frontier.is_empty());
 }
+
+#[test]
+fn net_boundary_energy_keeps_signed_domains_without_substituting_incoming_heat_or_remap_error() {
+    let mut r = heat_request();
+    r.comparison.as_mut().unwrap().objectives = serde_json::from_value(json!([
+        {"metric":"transient_surface_net_boundary_energy_j","direction":"minimize"},
+        {"metric":"transient_coverage_net_boundary_energy_j","direction":"minimize"}]))
+    .unwrap();
+    let evaluate = |key: &str, p: &Pattern| {
+        let mut s = synthetic_heat(p, -100., 100.);
+        for (name, stored, net) in [
+            (
+                "transient_surface",
+                "stored_change_j",
+                if key == "a" { -3. } else { -1. },
+            ),
+            (
+                "transient_coverage",
+                "physical_stored_change_j",
+                if key == "a" { 7. } else { 2. },
+            ),
+        ] {
+            let h = &mut s["motion"]["result"][name]["result"];
+            h["net_boundary_energy_j"] = json!(net);
+            h[stored] = json!(net);
+            h["outside_energy_j"] = json!(h["inside_energy_j"].as_f64().unwrap() - net);
+        }
+        Ok(s)
+    };
+    let report = run_heat(&r, evaluate);
+    assert_eq!(report["comparison"]["frontier"], json!(["a", "b"]));
+    let readings = &report["comparison"]["alternatives"][0]["readings"];
+    assert_eq!(
+        readings["transient_surface_net_boundary_energy_j"]["value"],
+        -3.
+    );
+    assert_eq!(
+        readings["transient_coverage_net_boundary_energy_j"]["value"],
+        7.
+    );
+    assert_eq!(
+        readings["transient_surface_net_boundary_energy_j"]["unit"],
+        "J"
+    );
+    r.comparison.as_mut().unwrap().objectives[0].direction = Direction::Maximize;
+    assert_eq!(
+        run_heat(&r, evaluate)["comparison"]["frontier"],
+        json!(["b"])
+    );
+    for name in ["transient_surface", "transient_coverage"] {
+        let report = run_heat(&r, |key, p| {
+            let mut s = evaluate(key, p)?;
+            if key == "a" {
+                s["motion"]["result"][name]["result"]["net_boundary_energy_j"] = Value::Null;
+            }
+            Ok(s)
+        });
+        assert_eq!(report["comparison"]["frontier"], json!(["b"]));
+        assert!(
+            report["comparison"]["alternatives"][0]["readings"]
+                [format!("{name}_net_boundary_energy_j")]
+            .is_null()
+        );
+        let other = if name == "transient_surface" {
+            "transient_coverage"
+        } else {
+            "transient_surface"
+        };
+        assert!(
+            report["comparison"]["alternatives"][0]["readings"]
+                [format!("{other}_net_boundary_energy_j")]
+            .is_object()
+        );
+    }
+}
+
+#[test]
+fn final_temperature_objectives_use_the_last_sample_without_changing_initial_inclusive_extrema() {
+    let mut r = heat_request();
+    r.comparison.as_mut().unwrap().objectives = serde_json::from_value(json!([
+        {"metric":"transient_surface_final_min_temperature_c","direction":"maximize"},
+        {"metric":"transient_surface_final_max_temperature_c","direction":"minimize"},
+        {"metric":"transient_coverage_final_min_temperature_c","direction":"maximize"},
+        {"metric":"transient_coverage_final_max_temperature_c","direction":"minimize"}]))
+    .unwrap();
+    let evaluate = |key: &str, p: &Pattern| {
+        let mut s = synthetic_heat(p, 0., 0.);
+        for name in ["transient_surface", "transient_coverage"] {
+            s["motion"]["result"][name]["result"]["trace"][1]["temperature_range_c"] = if key == "a"
+            {
+                json!([-6., -3.])
+            } else {
+                json!([-7., -5.])
+            };
+        }
+        Ok(s)
+    };
+    let report = run_heat(&r, evaluate);
+    assert_eq!(report["comparison"]["frontier"], json!(["a", "b"]));
+    for name in ["transient_surface", "transient_coverage"] {
+        let a = &report["comparison"]["alternatives"][0]["readings"];
+        let b = &report["comparison"]["alternatives"][1]["readings"];
+        assert_eq!(a[format!("{name}_final_min_temperature_c")]["value"], -6.);
+        assert_eq!(a[format!("{name}_final_max_temperature_c")]["value"], -3.);
+        assert_eq!(b[format!("{name}_final_min_temperature_c")]["value"], -7.);
+        assert_eq!(b[format!("{name}_final_max_temperature_c")]["value"], -5.);
+        assert_eq!(a[format!("{name}_final_min_temperature_c")]["unit"], "C");
+        assert_eq!(a[format!("{name}_min_sample_temperature_c")]["value"], -12.);
+        assert_eq!(b[format!("{name}_max_sample_temperature_c")]["value"], -4.);
+    }
+    r.comparison.as_mut().unwrap().constraints.push(
+        serde_json::from_value(
+            json!({"metric":"transient_coverage_final_max_temperature_c","maximum":-4.}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        run_heat(&r, evaluate)["comparison"]["frontier"],
+        json!(["b"])
+    );
+}

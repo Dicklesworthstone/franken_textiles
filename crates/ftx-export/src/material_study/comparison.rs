@@ -92,6 +92,18 @@ pub enum Metric {
     TransientCoverageMinSampleTemperatureC,
     /// Highest covered/exposed cloth temperature (C) at the initial and retained sample endpoints.
     TransientCoverageMaxSampleTemperatureC,
+    /// Signed net boundary energy of independent sheets over the complete motion (J).
+    TransientSurfaceNetBoundaryEnergyJ,
+    /// Signed physical boundary energy into covered/exposed cloth storage, excluding remap error (J).
+    TransientCoverageNetBoundaryEnergyJ,
+    /// Lowest independent-sheet cell temperature (C) at the final accepted mechanical sample.
+    TransientSurfaceFinalMinTemperatureC,
+    /// Highest independent-sheet cell temperature (C) at the final accepted mechanical sample.
+    TransientSurfaceFinalMaxTemperatureC,
+    /// Lowest covered/exposed cloth-cell temperature (C) at the final accepted mechanical sample.
+    TransientCoverageFinalMinTemperatureC,
+    /// Highest covered/exposed cloth-cell temperature (C) at the final accepted mechanical sample.
+    TransientCoverageFinalMaxTemperatureC,
 }
 
 impl Metric {
@@ -111,10 +123,16 @@ impl Metric {
             Self::MotionMaxAbsoluteEdgeStrainPct => Consumer::Motion,
             Self::TransientSurfaceInsideEnergyJ
             | Self::TransientSurfaceMinSampleTemperatureC
-            | Self::TransientSurfaceMaxSampleTemperatureC => Consumer::TransientSurface,
+            | Self::TransientSurfaceMaxSampleTemperatureC
+            | Self::TransientSurfaceNetBoundaryEnergyJ
+            | Self::TransientSurfaceFinalMinTemperatureC
+            | Self::TransientSurfaceFinalMaxTemperatureC => Consumer::TransientSurface,
             Self::TransientCoverageInsideEnergyJ
             | Self::TransientCoverageMinSampleTemperatureC
-            | Self::TransientCoverageMaxSampleTemperatureC => Consumer::TransientCoverage,
+            | Self::TransientCoverageMaxSampleTemperatureC
+            | Self::TransientCoverageNetBoundaryEnergyJ
+            | Self::TransientCoverageFinalMinTemperatureC
+            | Self::TransientCoverageFinalMaxTemperatureC => Consumer::TransientCoverage,
         }
     }
     fn unit(self, currency: Option<&str>) -> &str {
@@ -130,11 +148,18 @@ impl Metric {
             Self::SimulatedClothMassKg => "kg",
             Self::MaxAbsoluteEdgeStrainPct | Self::MotionMaxAbsoluteEdgeStrainPct => "%",
             Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW => "W",
-            Self::TransientSurfaceInsideEnergyJ | Self::TransientCoverageInsideEnergyJ => "J",
+            Self::TransientSurfaceInsideEnergyJ
+            | Self::TransientCoverageInsideEnergyJ
+            | Self::TransientSurfaceNetBoundaryEnergyJ
+            | Self::TransientCoverageNetBoundaryEnergyJ => "J",
             Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
             | Self::TransientCoverageMinSampleTemperatureC
-            | Self::TransientCoverageMaxSampleTemperatureC => "C",
+            | Self::TransientCoverageMaxSampleTemperatureC
+            | Self::TransientSurfaceFinalMinTemperatureC
+            | Self::TransientSurfaceFinalMaxTemperatureC
+            | Self::TransientCoverageFinalMinTemperatureC
+            | Self::TransientCoverageFinalMaxTemperatureC => "C",
         }
     }
     fn value(self, row: &Alternative, admitted: &Numerical<'_>) -> Option<f64> {
@@ -185,6 +210,24 @@ impl Metric {
             Self::TransientCoverageMaxSampleTemperatureC => {
                 Some(admitted.transient_coverage.as_ref()?.range_c[1])
             }
+            Self::TransientSurfaceNetBoundaryEnergyJ => {
+                admitted.transient_surface.as_ref()?.result["net_boundary_energy_j"].as_f64()
+            }
+            Self::TransientCoverageNetBoundaryEnergyJ => {
+                admitted.transient_coverage.as_ref()?.result["net_boundary_energy_j"].as_f64()
+            }
+            Self::TransientSurfaceFinalMinTemperatureC => {
+                Some(admitted.transient_surface.as_ref()?.final_range_c[0])
+            }
+            Self::TransientSurfaceFinalMaxTemperatureC => {
+                Some(admitted.transient_surface.as_ref()?.final_range_c[1])
+            }
+            Self::TransientCoverageFinalMinTemperatureC => {
+                Some(admitted.transient_coverage.as_ref()?.final_range_c[0])
+            }
+            Self::TransientCoverageFinalMaxTemperatureC => {
+                Some(admitted.transient_coverage.as_ref()?.final_range_c[1])
+            }
         }
     }
     fn signed(self) -> bool {
@@ -198,6 +241,12 @@ impl Metric {
                 | Self::TransientSurfaceMaxSampleTemperatureC
                 | Self::TransientCoverageMinSampleTemperatureC
                 | Self::TransientCoverageMaxSampleTemperatureC
+                | Self::TransientSurfaceNetBoundaryEnergyJ
+                | Self::TransientCoverageNetBoundaryEnergyJ
+                | Self::TransientSurfaceFinalMinTemperatureC
+                | Self::TransientSurfaceFinalMaxTemperatureC
+                | Self::TransientCoverageFinalMinTemperatureC
+                | Self::TransientCoverageFinalMaxTemperatureC
         )
     }
 }
@@ -500,7 +549,7 @@ impl Policy {
                 "Heat powers keep their signed directions and distinct sheet/domain bases. Strain uses the production report's edge extrema and precision, not an invented fit score. Different nonlinear constitutive records are conservatively protocol-incomparable unless explicitly admitted.",
                 "Motion is required only when declared by the comparison policy. Motion objectives use a complete source/path/time-matched trajectory from a settled, gating-clear initial drape; the final moving state need not be at rest. Peak strain is over original-panel edges and retained samples, not continuous-time rupture or anatomical fit.",
                 "Transient objectives require a complete policy/path/geometry/time-matched history at every accepted mechanical sample. Energy retains its incoming-side sign and model domain; coverage includes bare paths and explicitly exposed-cloth films, not certified whole-wearer loss. Sheet and coverage energies must not be added together.",
-                "Temperature extrema include the declared initial state and retained mechanical sample endpoints, not a continuous-time bound or the extrema of unreported thermal substeps. Numerical energy/remap residuals remain in source reports; nominal admission is not empirical accuracy, a comfort threshold, or propagated uncertainty.",
+                "Sample temperature extrema include the declared initial state and retained mechanical sample endpoints; final temperature extrema use only the final accepted sample. Neither is a continuous-time bound or the extrema of unreported thermal substeps. Net boundary energy excludes remap residual and cancelling bare-body paths. Numerical energy/remap residuals remain in source reports; nominal admission is not empirical accuracy, a comfort threshold, or propagated uncertainty.",
             ],
         }
     }
@@ -739,6 +788,7 @@ struct Numerical<'a> {
 struct Heat<'a> {
     result: &'a Value,
     range_c: [f64; 2],
+    final_range_c: [f64; 2],
 }
 
 fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerical<'_>) -> bool {
@@ -968,6 +1018,7 @@ fn admit_heat<'a>(
         .filter(|t| *t >= -273.15)
         .ok_or_else(|| fail("initial temperature must be finite and above absolute zero"))?;
     let mut range = [initial, initial];
+    let mut final_range = None;
     let mut steps = 0_u64;
     let mut interval = 0;
     for (i, (row, sample)) in trace.iter().zip(samples).enumerate() {
@@ -1002,6 +1053,7 @@ fn admit_heat<'a>(
             (Some(lo), Some(hi)) if lo >= -273.15 && lo <= hi => {
                 range[0] = range[0].min(lo);
                 range[1] = range[1].max(hi);
+                final_range = Some([lo, hi]);
             }
             _ => {
                 return Err(fail(
@@ -1059,5 +1111,7 @@ fn admit_heat<'a>(
     Ok(Heat {
         result: h,
         range_c: range,
+        final_range_c: final_range
+            .ok_or_else(|| fail("missing final sampled temperature range"))?,
     })
 }

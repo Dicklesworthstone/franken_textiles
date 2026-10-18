@@ -847,4 +847,94 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     save(&dir.join("body-input.json"), &body_request);
     assert_eq!(read(&dir.join("accepted.json")), accepted);
     assert_eq!(std::fs::read(dir.join("model.ftxbody")).unwrap(), bytes);
+
+    // Rank the actual histories through both native adapters, retaining the existing initial
+    // settledness gate. This short-motion fixture is not promoted to an accepted garment by
+    // changing a flag. Its source-complete output is also replayed through compiled WASM.
+    let mut compared_study = study.clone();
+    compared_study["comparison"] = json!({"basis":"nominal", "objectives":[
+        {"metric":"motion_max_absolute_edge_strain_pct","direction":"minimize"},
+        {"metric":"transient_surface_inside_energy_j","direction":"minimize"},
+        {"metric":"transient_surface_net_boundary_energy_j","direction":"minimize"},
+        {"metric":"transient_coverage_net_boundary_energy_j","direction":"minimize"},
+        {"metric":"transient_coverage_final_min_temperature_c","direction":"maximize"}],
+        "required_consumers":["transient_surface","transient_coverage"]});
+    save(&dir.join("study.json"), &compared_study);
+    let compared = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    assert_eq!(
+        compared,
+        run(
+            env!("CARGO_BIN_EXE_ftx"),
+            &["--json", "materials", "scenario-study"]
+        )
+    );
+    assert_eq!(compared["simulations"], slower["simulations"]);
+    // The policy changes the canonical study identity, while every manufacturing outcome stays
+    // unchanged as parsed JSON. Scenario-only comparison remains top-level.
+    let compared_request: ftx_export::material_study::Request =
+        serde_json::from_value(compared_study).unwrap();
+    let mut expected_manufacturing = slower["manufacturing"].clone();
+    expected_manufacturing["request_sha256"] =
+        json!(sha256_hex(&serde_json::to_vec(&compared_request).unwrap()));
+    assert_ne!(
+        expected_manufacturing["request_sha256"],
+        slower["manufacturing"]["request_sha256"]
+    );
+    assert_eq!(compared["manufacturing"], expected_manufacturing);
+    assert_ne!(compared["request_sha256"], slower["request_sha256"]);
+    assert_eq!(
+        compared["comparison"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        !compared["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        compared["comparison"]["context_sha256"],
+        compared["request_sha256"]
+    );
+    assert_eq!(compared["comparison"]["motion_required"], true);
+    for (candidate, evaluated) in compared["comparison"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(compared["simulations"].as_array().unwrap())
+    {
+        let result = &evaluated["evaluation"]["result"];
+        assert_eq!(candidate["key"], evaluated["key"]);
+        assert_eq!(result["drape"]["settled"], true);
+        assert_eq!(result["metrics"]["simulation_gating_clear"], true);
+        assert_eq!(candidate["eligible"], true, "{candidate}");
+        assert!(candidate["exclusions"].as_array().unwrap().is_empty());
+        let motion = &result["motion"]["result"];
+        assert_eq!(
+            candidate["readings"]["motion_max_absolute_edge_strain_pct"]["value"],
+            motion["metrics"]["max_absolute_edge_strain_pct"]
+        );
+        assert_eq!(
+            candidate["readings"]["transient_surface_inside_energy_j"]["value"],
+            motion["transient_surface"]["result"]["inside_energy_j"]
+        );
+        for name in ["transient_surface", "transient_coverage"] {
+            assert_eq!(
+                candidate["readings"][format!("{name}_net_boundary_energy_j")]["value"],
+                motion[name]["result"]["net_boundary_energy_j"]
+            );
+        }
+        assert_eq!(
+            candidate["readings"]["transient_coverage_final_min_temperature_c"]["value"],
+            motion["transient_coverage"]["result"]["trace"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["temperature_range_c"][0]
+        );
+    }
+    save(&dir.join("motion-report.json"), &compared);
 }

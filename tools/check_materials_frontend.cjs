@@ -474,7 +474,7 @@ test('computed objectives display Rust admission, signed units and incomparabili
   const comparison = {
     policy: { basis: 'nominal', allow_mixed_protocols: false,
       objectives: [{ metric: 'independent_surface_power_w', direction: 'minimize' }], constraints: [] },
-    frontier: ['A'], uncertainty_propagated: false,
+    frontier: ['A'], motion_required: false, uncertainty_propagated: false,
     alternatives: [
       { key: 'A', eligible: true, dominated_by: [], exclusions: [], readings: { independent_surface_power_w: { value: -8, unit: 'W' } } },
       { key: 'B', eligible: false, dominated_by: [], exclusions: [{ message: 'not settled' }], readings: {} }],
@@ -486,6 +486,7 @@ test('computed objectives display Rust admission, signed units and incomparabili
   const s = section(p, 'Fresh drape and heat alternatives');
   assert.match(visibleText(s), /Computed nominal frontier: A/);
   assert.match(visibleText(s), /Reported input protocols must match/);
+  assert.match(visibleText(s), /does not require motion completion/);
   assert.match(visibleText(s), /A \/ <C>: Different conditioning/);
   const t = descendants(s).find(n => n.tag === 'table');
   assert.deepEqual(plain(t.children[2].children.map(n => n.textContent)), ['A', 'Eligible', 'None reported', '-8 W']);
@@ -497,6 +498,26 @@ test('computed objectives display Rust admission, signed units and incomparabili
   const m = section(p, 'Fixed-pattern manufacturing alternatives');
   assert.match(visibleText(m), /No eligible non-dominated alternatives/);
   assert.match(visibleText(m), /Mixed source protocols explicitly admitted/);
+
+  // A refused motion cannot look qualified merely because static heat is available. Display the
+  // Rust frontier and signed, domain-specific readings verbatim, including below-zero temperatures.
+  comparison.motion_required = true;
+  comparison.policy = { basis: 'nominal', allow_mixed_protocols: false, constraints: [],
+    required_consumers: ['transient_coverage'], objectives: [
+      { metric: 'transient_surface_net_boundary_energy_j', direction: 'minimize' },
+      { metric: 'transient_surface_final_min_temperature_c', direction: 'maximize' }] };
+  comparison.alternatives[0].readings = {
+    transient_surface_net_boundary_energy_j: { value: -3, unit: 'J', consumer: 'transient_surface' },
+    transient_surface_final_min_temperature_c: { value: -5, unit: 'C', consumer: 'transient_surface' } };
+  comparison.alternatives[1].exclusions = [{ message: 'complete motion coverage history required' }];
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.match(visibleText(s), /Motion-qualified comparison/);
+  const motionTable = descendants(s).find(n => n.tag === 'table');
+  assert.deepEqual(plain(motionTable.children[2].children.map(n => n.textContent)),
+    ['A', 'Eligible', 'None reported', '-3 J', '-5 C']);
+  assert.deepEqual(plain(motionTable.children[3].children.map(n => n.textContent)),
+    ['B', 'Excluded: complete motion coverage history required', 'None reported', 'Unknown', 'Unknown']);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true);
 });
 
 test('assembly mass and finite stock retain independent totals and refusals in manufacturing and scenario studies', async () => {

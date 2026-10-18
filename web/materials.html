@@ -123,15 +123,22 @@ current-geometry heat evaluation. Without a <code>motion</code> request this rem
 declared time/arm-angle keyframes, preserving velocities and material history. It uses the selected shape without refitting.
 Each interval follows checked linear body-vertex chords, not a certified anatomical joint path. The report retains every accepted
 adaptive substep, maximum panel-edge strain and independent steady endpoint heat. Failed motion publishes no partial trajectory;
-initial static results stay separate. Existing comparison objectives still describe the initial static drape, not a motion frontier.
+initial static results stay separate. Choose <code>motion_max_absolute_edge_strain_pct</code> to compare the maximum strain across the complete trajectory.
+Requiring <code>motion</code>, <code>transient_surface</code> or <code>transient_coverage</code> excludes incomplete histories from the computed frontier.
 Optional <code>motion.transient_surface</code> and <code>motion.transient_coverage</code> carry temperatures through every accepted sample.
 They require sourced heat capacity plus their own initial temperatures, interval films and budgets. Coverage also requires exact body/layer assignments
 and explicit exposed-cloth conditions. The results separately report physical stored heat, signed boundary energy and remap error;
 these histories are not interchangeable with each other or steady power snapshots. A heat refusal preserves successful mechanics.
+Motion heat objectives use <code>transient_surface_</code> or <code>transient_coverage_</code> with <code>inside_energy_j</code>,
+<code>net_boundary_energy_j</code>, <code>final_min_temperature_c</code> or <code>final_max_temperature_c</code>.
+Use <code>min_sample_temperature_c</code> or <code>max_sample_temperature_c</code> for extrema across the initial state and retained sample endpoints;
+these differ from the final endpoint temperature and are not continuous-time bounds.
+Select minimize or maximize explicitly: signed energy can reverse with the environment, and net energy is stored-heat change, not a warmth score.
 No two-way thermomechanical, body self-intersection, seated/squat or empirical ride-up claim is made.</p>
-<p class="note">Heat on a flagged or unsettled final frame is not an accepted fit prediction. Signed surface power and body-coverage power
-have different bases and are not interchangeable. Declared heat, strain and simulated-cloth-mass objectives require both settledness and clear gating;
-an available heat number on an unfinished frame is excluded. There is no hidden weighted score, whole-wearer warmth rating or global garment winner.</p>
+<p class="note">Scenario comparisons require a settled initial drape with clear gating. Static heat, strain and simulated-cloth-mass objectives describe
+that initial frame. Motion objectives additionally require complete, converged continuation; the final moving state need not be at rest.
+Signed surface power and body-coverage power have different bases and are not interchangeable.
+There is no hidden weighted score, whole-wearer warmth rating or global garment winner.</p>
 <p>Changing either request, measurements, body or original pattern withdraws affected results. Cancel terminates the worker,
 including synchronous simulation. Raw reports and exact input JSON are downloadable; keep the source-identified body model locally for replay.</p>
 </div></div>
