@@ -3,7 +3,7 @@ use ftx_core::{Refusal, Vec3, intersection::validate_mesh};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Scenario, budget, coverage_at, hash, invalid, omitted, outcome};
+use super::{Scenario, budget, coverage_at, hash, heat, invalid, omitted, outcome};
 use crate::{
     motion::{MotionOptions, advance_body},
     run::{DrapeBody, DrapeRun},
@@ -37,6 +37,10 @@ pub struct Request {
     pub max_pairs: usize,
     /// Total retained body plus cloth vertex samples, including the initial state, 1..=2000000.
     pub max_sample_vertices: usize,
+    /// Optional independent-sheet transient temperatures on every accepted mechanical sample.
+    /// Its explicit initial temperature applies at motion time zero, not during initial draping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transient_surface: Option<heat::SurfaceRequest>,
 }
 
 impl Request {
@@ -163,6 +167,7 @@ pub(super) fn evaluate(
     scenario: &Scenario,
     body: &DrapeBody<'_>,
     run: &mut DrapeRun,
+    heat_budget: &mut heat::Budget,
     mut progress: impl FnMut(&str),
 ) -> Result<Value, Refusal> {
     path.validate_for(request, body)?;
@@ -190,6 +195,12 @@ pub(super) fn evaluate(
         .ok_or_else(|| budget("motion sample budget cannot retain initial and final body/cloth"))?;
     let mut remaining_trials = request.max_trials;
     let initial_positions_sha256 = hash(&run.scene.solver.x)?;
+    // The thermal state is private to this material run. Its failure never aborts mechanics;
+    // conversely a mechanical failure publishes neither a partial path nor its partial heat.
+    let mut surface_heat = request
+        .transient_surface
+        .as_ref()
+        .map(|policy| policy.start(run, &request.keyframes, heat_budget));
     let faces: Vec<_> = run
         .scene
         .solver
@@ -245,6 +256,16 @@ pub(super) fn evaluate(
         pairs_tested += report.pairs_tested;
         for sample in report.samples {
             peak_strain = peak_strain.max(strain(&sample.cloth)?);
+            if let Some(Ok(history)) = &mut surface_heat
+                && let Err(refusal) = history.advance(
+                    &sample.cloth,
+                    previous_time + sample.time_s,
+                    i,
+                    samples.len(),
+                )
+            {
+                surface_heat = Some(Err(refusal));
+            }
             samples.push(json!({"time_s":previous_time + sample.time_s,
                 "positions_m":sample.cloth,"body_positions_m":sample.body,
                 "solve":{"converged":sample.solve.converged,"iterations":sample.solve.iterations,
@@ -274,8 +295,7 @@ pub(super) fn evaluate(
         );
         previous_time = frame.time_s;
     }
-    Ok(
-        json!({"schema":"ftx-drape-motion-result/1","path_sha256":path.sha256,
+    let mut result = json!({"schema":"ftx-drape-motion-result/1","path_sha256":path.sha256,
         "initial_positions_sha256":initial_positions_sha256,"initial_body_collision_sha256":path.initial_sha256,
         "initial_drape_settled":run.report["settled"],"initial_drape_gating":run.report["gating"],
         "duration_s":previous_time,"trials":request.max_trials-remaining_trials,"pairs_tested":pairs_tested,
@@ -287,6 +307,14 @@ pub(super) fn evaluate(
         "bending_history":run.scene.solver.bending_plasticity_report()?,
         "continuous_contact_checked":true,"physical_validation_claim":false,"comfort_claim":false,
         "thermal_basis":"Independent steady endpoint snapshots, not transient temperatures or heat during motion.",
-        "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."}),
-    )
+        "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."});
+    if let Some(history) = surface_heat {
+        result["transient_surface"] = outcome(
+            history.and_then(|h| h.finish(&path.sha256, &initial_positions_sha256, previous_time)),
+        );
+        result["thermal_basis"] = json!(
+            "Steady endpoint snapshots and a separate requested independent-sheet transient history. These heat bases are not interchangeable."
+        );
+    }
+    Ok(result)
 }

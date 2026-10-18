@@ -24,6 +24,7 @@ use crate::{
 };
 
 pub mod fitted;
+pub mod heat;
 pub mod motion;
 mod options;
 
@@ -126,6 +127,7 @@ pub struct Session<'a, 'body> {
     scenario_sha256: String,
     charged_vertex_frames: usize,
     motion_path: Option<Result<motion::Path, Refusal>>,
+    heat_budget: heat::Budget,
 }
 
 impl<'a, 'body> Session<'a, 'body> {
@@ -155,6 +157,7 @@ impl<'a, 'body> Session<'a, 'body> {
             scenario_sha256,
             charged_vertex_frames: 0,
             motion_path: None,
+            heat_budget: heat::Budget::default(),
         })
     }
 
@@ -289,9 +292,15 @@ impl<'a, 'body> Session<'a, 'body> {
             "note":"Heat is evaluated on this final computed frame even when drape flags require review. No scalar ranking or empirical fit/whole-wearer claim is made."});
         if let Some(request) = &self.scenario.motion {
             result["motion"] = outcome(match &self.motion_path {
-                Some(Ok(path)) => {
-                    motion::evaluate(request, path, self.scenario, self.body, &mut run, progress)
-                }
+                Some(Ok(path)) => motion::evaluate(
+                    request,
+                    path,
+                    self.scenario,
+                    self.body,
+                    &mut run,
+                    &mut self.heat_budget,
+                    progress,
+                ),
                 Some(Err(refusal)) => Err(refusal.clone()),
                 None => Err(invalid(
                     "motion needs prepared endpoint meshes from the same body shape",
