@@ -41,6 +41,9 @@ pub struct Quote {
     pub offer_id: String,
     /// Exact material identity; finished garments cannot stand in for raw fabric.
     pub material_id: String,
+    /// Optional exact resolved material snapshot. A same-ID change cannot reuse a locked offer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_sha256: Option<String>,
     /// Supplier identity.
     pub supplier: String,
     /// Exact SKU/variant/tier locator.
@@ -71,6 +74,10 @@ pub struct Quote {
     pub valid_through: Option<String>,
     /// Whether that exact offer was available then; latest unavailable does not revive an old price.
     pub available: bool,
+    /// Observed finite capacity in this quote's `unit`, NOT packages or pattern-piece area.
+    /// Zero means no quantity; absence means the source did not establish available quantity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_quantity: Option<f64>,
     /// Source endpoint or evidence locator.
     pub source: String,
     /// SHA-256 of the retrieved source bytes, for traceability rather than validation.
@@ -107,6 +114,10 @@ pub struct Scope {
     pub requirement: f64,
     /// Dimension of `requirement` and of the returned rate.
     pub basis: Basis,
+    /// Exclude offers whose source does not quantify enough stock for the whole rounded order.
+    /// False retains legacy price observations without claiming known available stock.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_observed_quantity: bool,
 }
 
 /// One eligible quote and its actual minimum/increment-rounded merchandise order.
@@ -122,6 +133,41 @@ pub struct Offer {
     pub acquired: f64,
     /// Merchandise cost on the quote's stated terms, not a checkout or landed-cost guarantee.
     pub order_cost: f64,
+    /// The source supplied enough quantity for this rounded order on its observation date.
+    /// False means unknown capacity, never unlimited stock or a failed quantity check.
+    pub quantity_sufficiency_observed: bool,
+}
+
+/// Why the latest observation in the requested comparable market cannot supply this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionReason {
+    /// The source's inclusive validity window has ended.
+    Expired,
+    /// Observation exceeds the caller's permitted age.
+    Stale,
+    /// The source explicitly reports the offer unavailable.
+    Unavailable,
+    /// A supplied lock belongs to a different resolved material, even if its ID is unchanged.
+    MaterialSnapshotMismatch,
+    /// The caller requires observed capacity and the source has not supplied it.
+    UnknownQuantity,
+    /// The minimum/increment-rounded order exceeds the stated capacity.
+    InsufficientQuantity,
+    /// The sale unit cannot supply the requested area/mass dimension.
+    IncompatibleBasis,
+}
+
+/// Retained source observation for an excluded order, without reviving an older price.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExcludedOffer {
+    /// Exact source observation and its immutable evidence locator.
+    pub quote: Quote,
+    /// Stable, machine-readable reason.
+    pub reason: ExclusionReason,
+    /// Complete rounded quantity in the quote's sale unit, when rejected for insufficient stock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_order_quantity: Option<f64>,
 }
 
 /// A price sample with enough context to reproduce its membership and calculations.
@@ -133,6 +179,9 @@ pub struct PriceSample {
     pub scope: Scope,
     /// Eligible, latest-per-offer observations in stable offer-ID order.
     pub offers: Vec<Offer>,
+    /// Ineligible latest observations in the same market, in stable offer-ID order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub excluded_offers: Vec<ExcludedOffer>,
     /// Linear-interpolated p10, median and p90 of offered unit rates; None for an empty sample.
     pub rate_p10_p50_p90: Option<[f64; 3]>,
     /// This statistic summarizes observed offers, not the unknown worldwide market population.
@@ -148,6 +197,15 @@ fn positive(name: &str, value: f64) -> Result<f64, Refusal> {
         return Err(invalid(format!("{name} must be finite and positive")));
     }
     Ok(value)
+}
+
+// The final integer-increment multiplication may round up by one binary ULP (3 * 0.05,
+// for example). Admit only that arithmetic rounding at a stock endpoint; do not enlarge
+// source inventory by an application-level tolerance or alter the emitted order quantity.
+fn within_capacity(order_quantity: f64, available_quantity: f64) -> bool {
+    available_quantity > 0.0
+        && (order_quantity <= available_quantity
+            || order_quantity.next_down() <= available_quantity)
 }
 
 // Gregorian ordinal. Restrict the interface to real ISO calendar dates, not lexical approximations.
@@ -218,6 +276,18 @@ impl Quote {
         {
             return Err(invalid("quote needs the source SHA-256"));
         }
+        if let Some(digest) = &self.material_sha256
+            && (digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err(invalid("quote material lock must be a SHA-256"));
+        }
+        if let Some(quantity) = self.available_quantity
+            && (!quantity.is_finite() || quantity < 0.0)
+        {
+            return Err(invalid(
+                "observed available quantity must be finite and nonnegative in sale units",
+            ));
+        }
         let observed = day(&self.observed_on)?;
         if let Some(expiry) = &self.valid_through
             && day(expiry)? < observed
@@ -269,6 +339,7 @@ impl Quote {
             order_quantity,
             acquired,
             order_cost,
+            quantity_sufficiency_observed: self.available_quantity.is_some(),
         }))
     }
 }
@@ -353,19 +424,57 @@ impl QuoteBook {
             }
         }
         let mut offers = Vec::new();
+        let mut excluded_offers = Vec::new();
         for q in latest.values() {
             // Apply expiry AFTER selecting the latest observation: expired prices must not revive
             // an older unbounded quote. Do this before width/order arithmetic for ineligible data.
-            if let Some(expiry) = &q.valid_through
-                && day(expiry)? < as_of
+            let reason = if q
+                .valid_through
+                .as_ref()
+                .map(|expiry| day(expiry))
+                .transpose()?
+                .is_some_and(|expiry| expiry < as_of)
             {
+                Some(ExclusionReason::Expired)
+            } else if !q.available {
+                Some(ExclusionReason::Unavailable)
+            } else if as_of - day(&q.observed_on)? > i64::from(scope.max_age_days) {
+                Some(ExclusionReason::Stale)
+            } else if q
+                .material_sha256
+                .as_ref()
+                .is_some_and(|digest| !digest.eq_ignore_ascii_case(material.sha256()))
+            {
+                Some(ExclusionReason::MaterialSnapshotMismatch)
+            } else if scope.require_observed_quantity && q.available_quantity.is_none() {
+                Some(ExclusionReason::UnknownQuantity)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                excluded_offers.push(ExcludedOffer {
+                    quote: (*q).clone(),
+                    reason,
+                    required_order_quantity: None,
+                });
                 continue;
             }
-            if q.available
-                && as_of - day(&q.observed_on)? <= i64::from(scope.max_age_days)
-                && let Some(offer) = q.offer(material, scope)?
-            {
-                offers.push(offer);
+            match q.offer(material, scope)? {
+                Some(offer)
+                    if q.available_quantity
+                        .is_none_or(|limit| within_capacity(offer.order_quantity, limit)) =>
+                {
+                    offers.push(offer);
+                }
+                offer => excluded_offers.push(ExcludedOffer {
+                    quote: (*q).clone(),
+                    reason: if offer.is_some() {
+                        ExclusionReason::InsufficientQuantity
+                    } else {
+                        ExclusionReason::IncompatibleBasis
+                    },
+                    required_order_quantity: offer.map(|o| o.order_quantity),
+                }),
             }
         }
         let rates: Vec<f64> = offers.iter().map(|o| o.rate).collect();
@@ -375,6 +484,7 @@ impl QuoteBook {
             material_sha256: material.sha256().into(),
             scope: scope.clone(),
             offers,
+            excluded_offers,
             rate_p10_p50_p90: percentiles,
             population_claim: false,
         })
@@ -399,6 +509,7 @@ mod tests {
         Quote {
             offer_id: "supplier/sku/retail".into(),
             material_id: "fs_il019_natural".into(),
+            material_sha256: None,
             supplier: "supplier".into(),
             sku: "sku/retail".into(),
             price: 10.,
@@ -413,6 +524,7 @@ mod tests {
             observed_on: "2026-10-13".into(),
             valid_through: None,
             available: true,
+            available_quantity: None,
             source: "https://example.org/synthetic".into(),
             source_sha256: "0".repeat(64),
         }
@@ -427,6 +539,7 @@ mod tests {
             max_age_days: 7,
             requirement: 2.,
             basis: Basis::Area,
+            require_observed_quantity: false,
         }
     }
     fn book(quotes: Vec<Quote>) -> QuoteBook {
@@ -509,6 +622,196 @@ mod tests {
         assert!(
             book(vec![old, latest])
                 .evaluate(&material(), &scope())
+                .unwrap()
+                .offers
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn legacy_quotes_preserve_serialization_and_unknown_capacity_is_explicit() {
+        let q = quote();
+        let value = serde_json::to_value(&q).unwrap();
+        assert!(value.get("material_sha256").is_none());
+        assert!(value.get("available_quantity").is_none());
+        assert_eq!(serde_json::from_value::<Quote>(value).unwrap(), q);
+        assert!(
+            serde_json::to_value(scope())
+                .unwrap()
+                .get("require_observed_quantity")
+                .is_none()
+        );
+        let history = book(vec![q]);
+        let observed = history.evaluate(&material(), &scope()).unwrap();
+        assert!(!observed.offers[0].quantity_sufficiency_observed);
+        let mut s = scope();
+        s.require_observed_quantity = true;
+        let strict = history.evaluate(&material(), &s).unwrap();
+        assert!(strict.offers.is_empty());
+        assert!(strict.rate_p10_p50_p90.is_none());
+        assert_eq!(
+            strict.excluded_offers[0].reason,
+            ExclusionReason::UnknownQuantity
+        );
+    }
+
+    #[test]
+    fn observed_capacity_gates_the_whole_increment_rounded_order_in_sale_units() {
+        let mut q = quote();
+        q.unit = SaleUnit::SquareMeter;
+        q.available_quantity = Some(2.25);
+        let mut s = scope();
+        s.requirement = 2.1;
+        let excluded = book(vec![q.clone()]).evaluate(&material(), &s).unwrap();
+        assert!(excluded.offers.is_empty());
+        assert_eq!(
+            excluded.excluded_offers[0].reason,
+            ExclusionReason::InsufficientQuantity
+        );
+        assert_eq!(
+            excluded.excluded_offers[0].required_order_quantity,
+            Some(2.5)
+        );
+        assert_eq!(
+            excluded.excluded_offers[0].quote.available_quantity,
+            Some(2.25)
+        );
+        q.available_quantity = Some(2.5);
+        let accepted = book(vec![q.clone()]).evaluate(&material(), &s).unwrap();
+        assert_eq!(accepted.offers[0].order_quantity, 2.5);
+        assert_eq!(accepted.offers[0].order_cost, 50.0);
+        assert!(accepted.offers[0].quantity_sufficiency_observed);
+        // Minimum quantities count too; net required area is not the merchandise order.
+        q.minimum_quantity = 3.0;
+        assert!(
+            book(vec![q.clone()])
+                .evaluate(&material(), &s)
+                .unwrap()
+                .offers
+                .is_empty()
+        );
+        q.minimum_quantity = 1.0;
+        q.available_quantity = Some(0.0);
+        assert!(
+            book(vec![q.clone()])
+                .evaluate(&material(), &s)
+                .unwrap()
+                .offers
+                .is_empty()
+        );
+        // For yarn/fill pricing the same source field is kg, without an invented areal density.
+        q.unit = SaleUnit::Kilogram;
+        q.available_quantity = Some(2.5);
+        s.basis = Basis::Mass;
+        let kg = book(vec![q]).evaluate(&material(), &s).unwrap();
+        assert_eq!(kg.offers[0].acquired, 2.5);
+    }
+
+    #[test]
+    fn latest_insufficient_quantity_or_changed_snapshot_never_revives_old_offer() {
+        let m = material();
+        let mut old = quote();
+        old.observed_on = "2026-10-12".into();
+        let mut latest = quote();
+        latest.material_sha256 = Some(m.sha256().to_uppercase());
+        latest.available_quantity = Some(1.5);
+        assert_eq!(
+            book(vec![old.clone(), latest.clone()])
+                .evaluate(&m, &scope())
+                .unwrap()
+                .offers
+                .len(),
+            1
+        );
+        latest.available_quantity = Some(1.0);
+        let limited = book(vec![old.clone(), latest.clone()])
+            .evaluate(&m, &scope())
+            .unwrap();
+        assert!(limited.offers.is_empty());
+        assert_eq!(
+            limited.excluded_offers[0].reason,
+            ExclusionReason::InsufficientQuantity
+        );
+        latest.available_quantity = Some(10.0);
+        latest.material_sha256 = Some("0".repeat(64));
+        let mismatched = book(vec![old.clone(), latest.clone()])
+            .evaluate(&m, &scope())
+            .unwrap();
+        assert!(mismatched.offers.is_empty());
+        assert_eq!(
+            mismatched.excluded_offers[0].reason,
+            ExclusionReason::MaterialSnapshotMismatch
+        );
+        // An explicit historical date still observes the historical source state.
+        let mut prior = scope();
+        prior.as_of = "2026-10-12".into();
+        assert_eq!(
+            book(vec![latest, old])
+                .evaluate(&m, &prior)
+                .unwrap()
+                .offers
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn material_lock_rejects_same_id_width_edits_before_any_price_conversion() {
+        let m = material();
+        let mut q = quote();
+        q.material_sha256 = Some(m.sha256().into());
+        let mut selection = m.frozen_selection();
+        selection.expected_sha256 = None;
+        selection
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .remove("width");
+        let changed = catalog().unwrap().resolve(&selection).unwrap();
+        assert_eq!(m.authored().id, changed.authored().id);
+        let result = book(vec![q]).evaluate(&changed, &scope()).unwrap();
+        assert!(result.offers.is_empty());
+        assert_eq!(
+            result.excluded_offers[0].reason,
+            ExclusionReason::MaterialSnapshotMismatch
+        );
+    }
+
+    #[test]
+    fn malformed_capacity_locks_and_conflicting_stock_observations_refuse() {
+        for quantity in [f64::NAN, f64::INFINITY, -1.0] {
+            let mut q = quote();
+            q.available_quantity = Some(quantity);
+            assert!(q.validate().is_err());
+        }
+        for digest in ["", "invalid", &"g".repeat(64)] {
+            let mut q = quote();
+            q.material_sha256 = Some(digest.into());
+            assert!(q.validate().is_err());
+        }
+        let mut q = quote();
+        q.available_quantity = Some(10.0);
+        assert!(book(vec![quote(), q]).validate().is_err());
+    }
+
+    #[test]
+    fn decimal_increment_endpoint_allows_only_final_multiplication_rounding() {
+        assert!(!within_capacity(f64::from_bits(1), 0.0));
+        let mut q = quote();
+        q.unit = SaleUnit::SquareMeter;
+        q.minimum_quantity = 0.05;
+        q.order_increment = 0.05;
+        q.available_quantity = Some(0.15);
+        let mut s = scope();
+        s.requirement = 0.14;
+        let result = book(vec![q.clone()]).evaluate(&material(), &s).unwrap();
+        assert!(result.offers[0].quantity_sufficiency_observed);
+        assert_eq!(result.offers[0].order_quantity, 3.0 * 0.05);
+        q.available_quantity = Some(0.15 - 1e-12);
+        assert!(
+            book(vec![q])
+                .evaluate(&material(), &s)
                 .unwrap()
                 .offers
                 .is_empty()

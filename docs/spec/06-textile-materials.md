@@ -54,6 +54,25 @@ heat flow in W, not a comfort index, clo certification, temperature rating or su
 Wind, sweating, evaporative transport, air-gap geometry, layer compression, transient storage, seams,
 thermal bridges, metabolism and thermoregulation remain separate, unimplemented coupling work.
 
+## Dated purchasing and finite observed stock
+
+`ftx-textile-quotes/1` may bind an offer to `material_sha256`, the exact resolved material
+snapshot used for its width and specimen identity. A supplied lock must match before any price
+conversion; a same-ID material edit cannot inherit that offer. Legacy observations without the
+optional lock retain their existing ID-based behavior and do not establish snapshot qualification.
+The optional `available_quantity` is the supplier's observed capacity in the quote's original
+`unit`, not packages or the area of pattern pieces. It is finite and nonnegative; absence means
+unknown capacity. The complete minimum/increment-rounded order must fit a stated capacity.
+Neither these dated observations nor their hashes reserve inventory or guarantee stock at checkout.
+
+Price scopes and cut-procurement markets may set `require_observed_quantity: true` to exclude
+unknown capacity; omission preserves legacy observational pricing. Select the latest observation
+in the exact market before checking expiry, availability, snapshot identity or quantity. A later
+insufficient or mismatched observation must not revive an older offer. Eligible offers retain
+whether quantity sufficiency was observed, and excluded latest observations retain their reason.
+Marker procurement must keep total cost unknown when any material has no eligible whole-order
+offer. Missing stock numbers never mean infinite stock or zero cost.
+
 ## Verification
 
 Synthetic unit tests cover anisotropy, explicit estimate admission, missing fields, dimensional mistakes,

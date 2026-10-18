@@ -211,6 +211,88 @@ fn source_width_substitution_changes_layout_and_actual_procurement_cost() {
 }
 
 #[test]
+fn locked_finite_supplier_stock_gates_real_marker_orders_and_material_edits() {
+    let w = setup();
+    let plan = w.ok(PLAN);
+    let shell_hash = plan["rolls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|roll| roll["material"]["authored"]["id"] == "shell")
+        .unwrap()["material"]["sha256"]
+        .clone();
+    let mut shell = quote("shell", 10.0);
+    shell["material_sha256"] = shell_hash;
+    // The marker needs 0.12 m but its source sells 0.05 m increments: 0.125 m is insufficient.
+    shell["available_quantity"] = json!(0.125);
+    let mut knit = quote("knit", 16.0);
+    let publish = |shell: &Value, knit: &Value| {
+        w.write(
+            "quotes.json",
+            &json!({"schema":"ftx-textile-quotes/1","quotes":[shell,knit]}),
+        );
+    };
+    publish(&shell, &knit);
+    let limited = w.ok(PRICE);
+    assert_eq!(limited["complete_offer_coverage"], false);
+    assert!(limited["least_observed_independent_order_total"].is_null());
+    let excluded = limited["roll_prices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["sample"]["excluded_offers"][0]["quote"]["material_id"] == "shell")
+        .unwrap();
+    assert_eq!(
+        excluded["sample"]["excluded_offers"][0]["reason"],
+        "insufficient_quantity"
+    );
+    assert!(
+        (excluded["sample"]["excluded_offers"][0]["required_order_quantity"]
+            .as_f64()
+            .unwrap()
+            - 0.15)
+            .abs()
+            < 1e-14
+    );
+
+    shell["available_quantity"] = json!(0.15);
+    publish(&shell, &knit);
+    let observed_price = w.ok(PRICE);
+    assert_eq!(observed_price["complete_offer_coverage"], true);
+    assert_eq!(observed_price["complete_observed_quantity_coverage"], false);
+    let mut market: Value =
+        serde_json::from_slice(&fs::read(w.0.join("market.json")).unwrap()).unwrap();
+    market["require_observed_quantity"] = json!(true);
+    w.write("market.json", &market);
+    assert_eq!(w.ok(PRICE)["complete_offer_coverage"], false);
+    knit["available_quantity"] = json!(0.1);
+    publish(&shell, &knit);
+    let quantified = w.ok(PRICE);
+    assert_eq!(quantified["complete_offer_coverage"], true);
+    assert_eq!(quantified["complete_observed_quantity_coverage"], true);
+    assert!(
+        (quantified["least_observed_independent_order_total"]
+            .as_f64()
+            .unwrap()
+            - 6.2)
+            .abs()
+            < 1e-10
+    );
+
+    let mut changed = pattern();
+    changed["fabric"] = fabric("shell", 0.075);
+    w.write("pattern.json", &changed);
+    let swapped = w.ok(PRICE);
+    assert_eq!(swapped["complete_offer_coverage"], false);
+    assert!(swapped["least_observed_independent_order_total"].is_null());
+    assert!(
+        swapped["roll_prices"].as_array().unwrap().iter().any(
+            |row| row["sample"]["excluded_offers"][0]["reason"] == "material_snapshot_mismatch"
+        )
+    );
+}
+
+#[test]
 fn preview_is_source_locked_script_free_and_cannot_overwrite_an_existing_file() {
     let w = setup();
     let plan = w.ok(PLAN);
