@@ -38,6 +38,10 @@ pub enum Consumer {
     Coverage,
     /// Complete prescribed motion starting at this admitted drape, not independent static poses.
     Motion,
+    /// Complete independent-sheet temperature history on every admitted mechanical sample.
+    TransientSurface,
+    /// Complete moving body-domain/exposed-cloth history, with its explicit layer/film policy.
+    TransientCoverage,
 }
 
 /// Fixed-dimension output names; values are read only from the actual corresponding consumer.
@@ -76,6 +80,18 @@ pub enum Metric {
     BodyCoveragePowerW,
     /// Peak absolute original-panel edge strain (%) over the initial state and accepted motion samples.
     MotionMaxAbsoluteEdgeStrainPct,
+    /// Signed incoming-side energy (J) for all independent sheets over the whole requested motion.
+    TransientSurfaceInsideEnergyJ,
+    /// Signed incoming-side energy (J) of declared body paths AND exposed-cloth films, not wearer loss.
+    TransientCoverageInsideEnergyJ,
+    /// Lowest sheet temperature (C) among the initial state and retained mechanical sample endpoints.
+    TransientSurfaceMinSampleTemperatureC,
+    /// Highest sheet temperature (C) among the initial state and retained mechanical sample endpoints.
+    TransientSurfaceMaxSampleTemperatureC,
+    /// Lowest covered/exposed cloth temperature (C) at the initial and retained sample endpoints.
+    TransientCoverageMinSampleTemperatureC,
+    /// Highest covered/exposed cloth temperature (C) at the initial and retained sample endpoints.
+    TransientCoverageMaxSampleTemperatureC,
 }
 
 impl Metric {
@@ -93,6 +109,12 @@ impl Metric {
             Self::IndependentSurfacePowerW => Consumer::Surface,
             Self::BodyCoveragePowerW => Consumer::Coverage,
             Self::MotionMaxAbsoluteEdgeStrainPct => Consumer::Motion,
+            Self::TransientSurfaceInsideEnergyJ
+            | Self::TransientSurfaceMinSampleTemperatureC
+            | Self::TransientSurfaceMaxSampleTemperatureC => Consumer::TransientSurface,
+            Self::TransientCoverageInsideEnergyJ
+            | Self::TransientCoverageMinSampleTemperatureC
+            | Self::TransientCoverageMaxSampleTemperatureC => Consumer::TransientCoverage,
         }
     }
     fn unit(self, currency: Option<&str>) -> &str {
@@ -108,6 +130,11 @@ impl Metric {
             Self::SimulatedClothMassKg => "kg",
             Self::MaxAbsoluteEdgeStrainPct | Self::MotionMaxAbsoluteEdgeStrainPct => "%",
             Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW => "W",
+            Self::TransientSurfaceInsideEnergyJ | Self::TransientCoverageInsideEnergyJ => "J",
+            Self::TransientSurfaceMinSampleTemperatureC
+            | Self::TransientSurfaceMaxSampleTemperatureC
+            | Self::TransientCoverageMinSampleTemperatureC
+            | Self::TransientCoverageMaxSampleTemperatureC => "C",
         }
     }
     fn value(self, row: &Alternative, admitted: &Numerical<'_>) -> Option<f64> {
@@ -140,12 +167,37 @@ impl Metric {
             Self::MotionMaxAbsoluteEdgeStrainPct => {
                 admitted.motion["metrics"]["max_absolute_edge_strain_pct"].as_f64()
             }
+            Self::TransientSurfaceInsideEnergyJ => {
+                admitted.transient_surface.as_ref()?.result["inside_energy_j"].as_f64()
+            }
+            Self::TransientCoverageInsideEnergyJ => {
+                admitted.transient_coverage.as_ref()?.result["inside_energy_j"].as_f64()
+            }
+            Self::TransientSurfaceMinSampleTemperatureC => {
+                Some(admitted.transient_surface.as_ref()?.range_c[0])
+            }
+            Self::TransientSurfaceMaxSampleTemperatureC => {
+                Some(admitted.transient_surface.as_ref()?.range_c[1])
+            }
+            Self::TransientCoverageMinSampleTemperatureC => {
+                Some(admitted.transient_coverage.as_ref()?.range_c[0])
+            }
+            Self::TransientCoverageMaxSampleTemperatureC => {
+                Some(admitted.transient_coverage.as_ref()?.range_c[1])
+            }
         }
     }
     fn signed(self) -> bool {
         matches!(
             self,
-            Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW
+            Self::IndependentSurfacePowerW
+                | Self::BodyCoveragePowerW
+                | Self::TransientSurfaceInsideEnergyJ
+                | Self::TransientCoverageInsideEnergyJ
+                | Self::TransientSurfaceMinSampleTemperatureC
+                | Self::TransientSurfaceMaxSampleTemperatureC
+                | Self::TransientCoverageMinSampleTemperatureC
+                | Self::TransientCoverageMaxSampleTemperatureC
         )
     }
 }
@@ -267,10 +319,10 @@ impl Policy {
         if self.objectives.is_empty()
             || self.objectives.len() > 16
             || self.constraints.len() > 64
-            || self.required_consumers.len() > 9
+            || self.required_consumers.len() > 11
         {
             return Err(invalid(
-                "comparison needs 1..16 objectives, at most 64 constraints and 9 consumers",
+                "comparison needs 1..16 objectives, at most 64 constraints and 11 consumers",
             ));
         }
         let mut metrics = BTreeSet::new();
@@ -301,9 +353,12 @@ impl Policy {
                 Consumer::Sewing => request.sewing.is_some(),
                 Consumer::Purchasing => request.purchasing.is_some(),
                 Consumer::AssemblyMass => request.assembly_mass.is_some(),
-                Consumer::Drape | Consumer::Surface | Consumer::Coverage | Consumer::Motion => {
-                    additional_consumer
-                }
+                Consumer::Drape
+                | Consumer::Surface
+                | Consumer::Coverage
+                | Consumer::Motion
+                | Consumer::TransientSurface
+                | Consumer::TransientCoverage => additional_consumer,
             };
             if !requested {
                 return Err(invalid(format!(
@@ -332,13 +387,23 @@ impl Policy {
         self.consumers().iter().any(|c| {
             matches!(
                 c,
-                Consumer::Drape | Consumer::Surface | Consumer::Coverage | Consumer::Motion
+                Consumer::Drape
+                    | Consumer::Surface
+                    | Consumer::Coverage
+                    | Consumer::Motion
+                    | Consumer::TransientSurface
+                    | Consumer::TransientCoverage
             )
         })
     }
 
     fn needs_motion(&self) -> bool {
-        self.consumers().contains(&Consumer::Motion)
+        self.consumers().iter().any(|c| {
+            matches!(
+                c,
+                Consumer::Motion | Consumer::TransientSurface | Consumer::TransientCoverage
+            )
+        })
     }
 
     pub(super) fn evaluate(
@@ -434,6 +499,8 @@ impl Policy {
                 "Scenario objectives require matching pattern/body/scenario identities, geometric settledness and clear gating. Geometric settledness is not viscoelastic stress equilibrium or empirical fit; simulated cloth mass excludes omitted components.",
                 "Heat powers keep their signed directions and distinct sheet/domain bases. Strain uses the production report's edge extrema and precision, not an invented fit score. Different nonlinear constitutive records are conservatively protocol-incomparable unless explicitly admitted.",
                 "Motion is required only when declared by the comparison policy. Motion objectives use a complete source/path/time-matched trajectory from a settled, gating-clear initial drape; the final moving state need not be at rest. Peak strain is over original-panel edges and retained samples, not continuous-time rupture or anatomical fit.",
+                "Transient objectives require a complete policy/path/geometry/time-matched history at every accepted mechanical sample. Energy retains its incoming-side sign and model domain; coverage includes bare paths and explicitly exposed-cloth films, not certified whole-wearer loss. Sheet and coverage energies must not be added together.",
+                "Temperature extrema include the declared initial state and retained mechanical sample endpoints, not a continuous-time bound or the extrema of unreported thermal substeps. Numerical energy/remap residuals remain in source reports; nominal admission is not empirical accuracy, a comfort threshold, or propagated uncertainty.",
             ],
         }
     }
@@ -472,11 +539,29 @@ impl Policy {
         let mut admitted = Numerical {
             drape: simulation,
             motion: &Value::Null,
+            transient_surface: None,
+            transient_coverage: None,
         };
         if self.needs_motion() && !simulation.is_null() {
             match admit_motion(descriptor, simulation) {
                 Ok(motion) => admitted.motion = motion,
                 Err(e) => result.exclusions.push(e),
+            }
+        }
+        if !admitted.motion.is_null() {
+            for (consumer, target) in [
+                (Consumer::TransientSurface, &mut admitted.transient_surface),
+                (
+                    Consumer::TransientCoverage,
+                    &mut admitted.transient_coverage,
+                ),
+            ] {
+                if self.consumers().contains(&consumer) {
+                    match admit_heat(descriptor, admitted.motion, consumer) {
+                        Ok(heat) => *target = Some(heat),
+                        Err(e) => result.exclusions.push(e),
+                    }
+                }
             }
         }
         for consumer in self.consumers() {
@@ -561,8 +646,11 @@ impl Policy {
             keys.insert("areal_density");
         }
         let mechanics = self.needs_simulation();
-        let thermal =
-            consumers.contains(&Consumer::Surface) || consumers.contains(&Consumer::Coverage);
+        let transient = consumers.contains(&Consumer::TransientSurface)
+            || consumers.contains(&Consumer::TransientCoverage);
+        let thermal = transient
+            || consumers.contains(&Consumer::Surface)
+            || consumers.contains(&Consumer::Coverage);
         if mechanics {
             keys.extend(
                 ftx_pattern::materials::MECHANICAL_PROPERTIES
@@ -572,6 +660,9 @@ impl Policy {
         }
         if thermal {
             keys.extend(["thermal_conductivity", "thermal_resistance", "emissivity"]);
+        }
+        if transient {
+            keys.extend(["areal_density", "specific_heat", "thickness"]);
         }
         let pieces = bound["pattern"]["pieces"]
             .as_array()
@@ -641,6 +732,13 @@ impl Policy {
 struct Numerical<'a> {
     drape: &'a Value,
     motion: &'a Value,
+    transient_surface: Option<Heat<'a>>,
+    transient_coverage: Option<Heat<'a>>,
+}
+
+struct Heat<'a> {
+    result: &'a Value,
+    range_c: [f64; 2],
 }
 
 fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerical<'_>) -> bool {
@@ -662,6 +760,8 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
         Consumer::Surface => admitted.drape["surface"]["status"] == "available",
         Consumer::Coverage => admitted.drape["coverage"]["status"] == "available",
         Consumer::Motion => !admitted.motion.is_null(),
+        Consumer::TransientSurface => admitted.transient_surface.is_some(),
+        Consumer::TransientCoverage => admitted.transient_coverage.is_some(),
     }
 }
 
@@ -798,4 +898,166 @@ fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Val
         ));
     }
     Ok(motion)
+}
+
+fn finite(value: &Value) -> Option<f64> {
+    value.as_f64().filter(|x| x.is_finite())
+}
+
+fn admit_heat<'a>(
+    descriptor: &Value,
+    motion: &'a Value,
+    consumer: Consumer,
+) -> Result<Heat<'a>, Refusal> {
+    let (name, schema, request_schema, coverage) = match consumer {
+        Consumer::TransientSurface => (
+            "transient_surface",
+            "ftx-motion-surface-heat-result/1",
+            "ftx-motion-surface-heat/1",
+            false,
+        ),
+        Consumer::TransientCoverage => (
+            "transient_coverage",
+            "ftx-motion-coverage-heat-result/1",
+            "ftx-motion-coverage-heat/1",
+            true,
+        ),
+        _ => return Err(invalid("not a transient comparison consumer")),
+    };
+    let request = &descriptor["scenario"]["motion"][name];
+    let h = &motion[name]["result"];
+    let fail = |message: &str| invalid(format!("{consumer:?}: {message}"));
+    if request["schema"] != request_schema
+        || motion[name]["status"] != "available"
+        || h["schema"] != schema
+        || &h["request"] != request
+        || h["duration_s"] != motion["duration_s"]
+        || !same_identity(&h["path_sha256"], &motion["path_sha256"])
+        || !same_identity(
+            &h["initial_positions_sha256"],
+            &motion["initial_positions_sha256"],
+        )
+    {
+        return Err(fail(
+            "complete thermal history must match the requested policy and admitted motion",
+        ));
+    }
+    // Admission is deliberately tied to the actual accepted sequence, not an old scalar summary.
+    // This is consistency checking of trusted production output, not an authenticity certificate.
+    let samples = motion["samples"]
+        .as_array()
+        .ok_or_else(|| fail("missing admitted mechanical sequence"))?;
+    let endpoints = motion["keyframes"]
+        .as_array()
+        .ok_or_else(|| fail("missing admitted mechanical endpoints"))?;
+    let trace = h["trace"]
+        .as_array()
+        .filter(|t| !t.is_empty() && t.len() == samples.len())
+        .ok_or_else(|| fail("thermal history must cover every accepted mechanical sample"))?;
+    if !request["boundaries"]
+        .as_array()
+        .is_some_and(|b| b.len() == endpoints.len())
+        || (coverage
+            && !request["exposed_boundaries"]
+                .as_array()
+                .is_some_and(|b| b.len() == endpoints.len()))
+    {
+        return Err(fail("missing explicit interval boundary policy"));
+    }
+    let initial = finite(&request["initial_temperature_c"])
+        .filter(|t| *t >= -273.15)
+        .ok_or_else(|| fail("initial temperature must be finite and above absolute zero"))?;
+    let mut range = [initial, initial];
+    let mut steps = 0_u64;
+    let mut interval = 0;
+    for (i, (row, sample)) in trace.iter().zip(samples).enumerate() {
+        while endpoints[interval]["sample_index"]
+            .as_u64()
+            .is_some_and(|last| last < i as u64)
+        {
+            interval += 1;
+            if interval >= endpoints.len() {
+                return Err(fail("thermal history extends beyond the requested motion"));
+            }
+        }
+        if row["sample_index"].as_u64() != Some(i as u64)
+            || row["interval_index"].as_u64() != Some(interval as u64)
+            || row["time_s"] != sample["time_s"]
+            || row["positions_sha256"].as_str() != Some(hash(&sample["positions_m"])?.as_str())
+            || (coverage
+                && row["body_positions_sha256"].as_str()
+                    != Some(hash(&sample["body_positions_m"])?.as_str()))
+        {
+            return Err(fail(
+                "stale or missing thermal sample time, interval or geometry",
+            ));
+        }
+        let temperatures = row["temperature_range_c"]
+            .as_array()
+            .filter(|v| v.len() == 2)
+            .ok_or_else(|| fail("missing sampled temperature range"))?;
+        let lo = finite(&temperatures[0]);
+        let hi = finite(&temperatures[1]);
+        match (lo, hi) {
+            (Some(lo), Some(hi)) if lo >= -273.15 && lo <= hi => {
+                range[0] = range[0].min(lo);
+                range[1] = range[1].max(hi);
+            }
+            _ => {
+                return Err(fail(
+                    "sampled temperatures must be finite, ordered and physical",
+                ));
+            }
+        }
+        steps = row["thermal_substeps"]
+            .as_u64()
+            .filter(|&n| n > 0)
+            .and_then(|n| steps.checked_add(n))
+            .ok_or_else(|| fail("missing or overflowing thermal substep count"))?;
+    }
+    if h["thermal_steps"].as_u64() != Some(steps)
+        || !h["cell_steps"].as_u64().is_some_and(|n| {
+            n >= steps
+                && request["max_cell_steps"]
+                    .as_u64()
+                    .is_some_and(|max| n <= max)
+        })
+    {
+        return Err(fail(
+            "thermal work counts do not describe the complete admitted history",
+        ));
+    }
+    // Keep physical storage separate from remap error. Neither residual becomes incoming heat.
+    let stored = if coverage {
+        "physical_stored_change_j"
+    } else {
+        "stored_change_j"
+    };
+    for field in [
+        "inside_energy_j",
+        "outside_energy_j",
+        "net_boundary_energy_j",
+        stored,
+        "balance_error_j",
+        "absolute_step_balance_error_j",
+    ] {
+        if finite(&h[field]).is_none() {
+            return Err(fail("missing finite full-history energy accounting"));
+        }
+    }
+    if coverage {
+        for field in [
+            "bare_energy_j",
+            "signed_remap_residual_j",
+            "absolute_remap_residual_j",
+        ] {
+            if finite(&h[field]).is_none() {
+                return Err(fail("missing separate bare-body and remap accounting"));
+            }
+        }
+    }
+    Ok(Heat {
+        result: h,
+        range_c: range,
+    })
 }

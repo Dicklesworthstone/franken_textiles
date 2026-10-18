@@ -427,3 +427,320 @@ fn unrequested_motion_or_failed_path_never_qualifies_a_scenario() {
         ftx_export::material_study::Outcome::Available { .. }
     )));
 }
+
+fn heat_descriptor() -> Value {
+    let mut d = motion_descriptor();
+    let film = json!({"inside_c":-5.,"outside_c":-15.,
+        "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2});
+    for (name, schema) in [
+        ("transient_surface", "ftx-motion-surface-heat/1"),
+        ("transient_coverage", "ftx-motion-coverage-heat/1"),
+    ] {
+        d["scenario"]["motion"][name] = json!({"schema":schema,
+            "initial_temperature_c":-12.,"boundaries":[film,film],
+            "max_step_s":0.25,"max_cell_steps":100});
+    }
+    d["scenario"]["motion"]["transient_surface"]["cells_per_layer"] = json!(2);
+    d["scenario"]["motion"]["transient_coverage"]["exposed_boundaries"] = json!([null, null]);
+    d
+}
+
+fn heat_request() -> Request {
+    let mut r = motion_request();
+    r.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal","objectives":[
+        {"metric":"transient_surface_inside_energy_j","direction":"minimize"},
+        {"metric":"transient_coverage_inside_energy_j","direction":"minimize"}],
+        "constraints":[
+            {"metric":"transient_surface_min_sample_temperature_c","minimum":-12.},
+            {"metric":"transient_surface_max_sample_temperature_c","maximum":-2.},
+            {"metric":"transient_coverage_min_sample_temperature_c","minimum":-12.},
+            {"metric":"transient_coverage_max_sample_temperature_c","maximum":-2.}]}))
+        .unwrap(),
+    );
+    // Qualifiers are synthetic, equal across alternatives, and present independently of values.
+    for v in &mut r.variants {
+        v.changes
+            .default
+            .as_mut()
+            .unwrap()
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .insert(
+                "specific_heat".into(),
+                serde_json::from_value(json!({"value":1000.,"unit":"J/(kg*K)",
+                "evidence":"estimate","source":"test","method":"synthetic heat comparison"}))
+                .unwrap(),
+            );
+    }
+    r
+}
+
+fn synthetic_heat(p: &Pattern, inside_j: f64, coverage_j: f64) -> Value {
+    let mut s = synthetic_motion(p, 5.);
+    let d = heat_descriptor();
+    for (name, schema, energy) in [
+        (
+            "transient_surface",
+            "ftx-motion-surface-heat-result/1",
+            inside_j,
+        ),
+        (
+            "transient_coverage",
+            "ftx-motion-coverage-heat-result/1",
+            coverage_j,
+        ),
+    ] {
+        let motion = &s["motion"]["result"];
+        let trace: Vec<_> = motion["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(i, sample)| {
+                json!({"sample_index":i,"interval_index":i,"time_s":sample["time_s"],
+                "thermal_substeps":2,"temperature_range_c":[-8.,if i==0 {-4.} else {-2.}],
+                "positions_sha256":digest(&sample["positions_m"]),
+                "body_positions_sha256":digest(&sample["body_positions_m"])})
+            })
+            .collect();
+        let h = json!({"schema":schema,"request":d["scenario"]["motion"][name],
+            "path_sha256":motion["path_sha256"],"initial_positions_sha256":motion["initial_positions_sha256"],
+            "duration_s":motion["duration_s"],"cell_steps":8,"thermal_steps":4,
+            "inside_energy_j":energy,"outside_energy_j":energy,"net_boundary_energy_j":0.,
+            "stored_change_j":0.,"physical_stored_change_j":0.,"balance_error_j":0.,
+            "absolute_step_balance_error_j":0.,"bare_energy_j":3.,
+            "signed_remap_residual_j":1e-9,"absolute_remap_residual_j":1e-9,"trace":trace});
+        s["motion"]["result"][name] = json!({"status":"available","result":h});
+    }
+    s
+}
+
+fn run_heat(r: &Request, f: impl FnMut(&str, &Pattern) -> Result<Value, Refusal>) -> Value {
+    serde_json::to_value(
+        r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &heat_descriptor(), f)
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn transient_objectives_preserve_energy_signs_domains_and_initial_inclusive_temperature_extrema() {
+    let mut r = heat_request();
+    let report = run_heat(&r, |key, p| {
+        Ok(if key == "a" {
+            synthetic_heat(p, -8., 6.)
+        } else {
+            synthetic_heat(p, -4., 2.)
+        })
+    });
+    assert_eq!(report["comparison"]["motion_required"], true);
+    assert_eq!(report["comparison"]["frontier"], json!(["a", "b"]));
+    let readings = &report["comparison"]["alternatives"][0]["readings"];
+    assert_eq!(readings["transient_surface_inside_energy_j"]["value"], -8.);
+    assert_eq!(readings["transient_surface_inside_energy_j"]["unit"], "J");
+    assert_eq!(readings["transient_coverage_inside_energy_j"]["value"], 6.);
+    assert_eq!(
+        readings["transient_surface_min_sample_temperature_c"]["value"],
+        -12.
+    );
+    assert_eq!(
+        readings["transient_surface_max_sample_temperature_c"]["value"],
+        -2.
+    );
+    assert_eq!(
+        readings["transient_coverage_min_sample_temperature_c"]["unit"],
+        "C"
+    );
+    assert_eq!(
+        readings["transient_coverage_max_sample_temperature_c"]["value"],
+        -2.
+    );
+    r.comparison.as_mut().unwrap().objectives[0].direction = Direction::Maximize;
+    let changed = run_heat(&r, |key, p| {
+        Ok(if key == "a" {
+            synthetic_heat(p, -8., 6.)
+        } else {
+            synthetic_heat(p, -4., 2.)
+        })
+    });
+    assert_eq!(changed["comparison"]["frontier"], json!(["b"]));
+    assert_eq!(changed["simulations"], report["simulations"]);
+    assert_eq!(
+        changed["manufacturing"]["alternatives"],
+        report["manufacturing"]["alternatives"]
+    );
+    r.comparison.as_mut().unwrap().constraints[1].maximum = Some(-3.);
+    let constrained = run_heat(&r, |_, p| Ok(synthetic_heat(p, -8., 6.)));
+    assert_eq!(constrained["comparison"]["frontier"], json!([]));
+    // Initial temperature is included even when it exceeds every retained endpoint temperature.
+    let mut d = heat_descriptor();
+    d["scenario"]["motion"]["transient_surface"]["initial_temperature_c"] = json!(10.);
+    r.comparison.as_mut().unwrap().constraints.clear();
+    r.comparison.as_mut().unwrap().objectives = serde_json::from_value(json!([
+        {"metric":"transient_surface_max_sample_temperature_c","direction":"minimize"}]))
+    .unwrap();
+    let result = r
+        .evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |_, p| {
+            let mut s = synthetic_heat(p, 0., 0.);
+            s["motion"]["result"]["transient_surface"]["result"]["request"] =
+                d["scenario"]["motion"]["transient_surface"].clone();
+            Ok(s)
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(result).unwrap()["comparison"]["alternatives"][0]["readings"]["transient_surface_max_sample_temperature_c"]
+            ["value"],
+        10.
+    );
+}
+
+#[test]
+fn partial_stale_or_invalid_thermal_histories_cannot_win_or_erase_independent_results() {
+    let mut r = heat_request();
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    for name in ["transient_surface", "transient_coverage"] {
+        for fault in [
+            "status",
+            "policy",
+            "path",
+            "initial",
+            "duration",
+            "trace",
+            "index",
+            "interval",
+            "time",
+            "geometry",
+            "range",
+            "reversed_range",
+            "absolute_zero",
+            "steps",
+            "cells",
+            "energy",
+        ] {
+            let result = run_heat(&r, |key, p| {
+                let mut s = synthetic_heat(p, -100., -100.);
+                if key == "a" {
+                    let h = &mut s["motion"]["result"][name]["result"];
+                    match fault {
+                        "status" => *h = Value::Null,
+                        "policy" => h["request"]["initial_temperature_c"] = json!(99.),
+                        "path" => h["path_sha256"] = json!("old"),
+                        "initial" => h["initial_positions_sha256"] = json!("old"),
+                        "duration" => h["duration_s"] = json!(0.5),
+                        "trace" => {
+                            h["trace"].as_array_mut().unwrap().pop();
+                        }
+                        "index" => h["trace"][1]["sample_index"] = json!(0),
+                        "interval" => h["trace"][1]["interval_index"] = json!(0),
+                        "time" => h["trace"][1]["time_s"] = json!(0.7),
+                        "geometry" => {
+                            h["trace"][1][if name == "transient_coverage" {
+                                "body_positions_sha256"
+                            } else {
+                                "positions_sha256"
+                            }] = json!("old")
+                        }
+                        "range" => h["trace"][1]["temperature_range_c"] = Value::Null,
+                        "reversed_range" => h["trace"][1]["temperature_range_c"] = json!([10., 5.]),
+                        "absolute_zero" => {
+                            h["trace"][1]["temperature_range_c"] = json!([-300., 5.])
+                        }
+                        "steps" => h["thermal_steps"] = json!(3),
+                        "cells" => h["cell_steps"] = json!(101),
+                        "energy" => h["inside_energy_j"] = Value::Null,
+                        _ => unreachable!(),
+                    }
+                }
+                Ok(s)
+            });
+            assert_eq!(
+                result["comparison"]["frontier"],
+                json!(["b"]),
+                "{name}/{fault}"
+            );
+            let other = if name == "transient_surface" {
+                "transient_coverage"
+            } else {
+                "transient_surface"
+            };
+            assert!(
+                result["comparison"]["alternatives"][0]["readings"]
+                    [format!("{other}_inside_energy_j")]
+                .is_object()
+            );
+            assert_eq!(
+                result["simulations"][0]["evaluation"]["result"]["motion"]["status"],
+                "available"
+            );
+            assert_eq!(
+                result["manufacturing"]["alternatives"][0]["cutting"]["status"],
+                "available"
+            );
+        }
+    }
+    r.comparison.as_mut().unwrap().constraints.clear();
+    r.comparison.as_mut().unwrap().objectives.truncate(1);
+    let surface_only = run_heat(&r, |_, p| {
+        let mut s = synthetic_heat(p, 0., 0.);
+        s["motion"]["result"]["transient_coverage"] = json!({"status":"refused"});
+        Ok(s)
+    });
+    assert_eq!(surface_only["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(
+        surface_only["comparison"]["alternatives"][0]["readings"]["transient_surface_inside_energy_j"]
+            ["value"],
+        0.
+    );
+    r.comparison.as_mut().unwrap().required_consumers =
+        serde_json::from_value(json!(["transient_coverage"])).unwrap();
+    let required = run_heat(&r, |_, p| {
+        let mut s = synthetic_heat(p, 0., 0.);
+        s["motion"]["result"]["transient_coverage"] = json!({"status":"refused"});
+        Ok(s)
+    });
+    assert_eq!(required["comparison"]["frontier"], json!([]));
+}
+
+#[test]
+fn heat_capacity_protocols_are_compared_and_missing_thermal_policy_cannot_qualify() {
+    let mut r = heat_request();
+    r.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("specific_heat")
+        .unwrap()
+        .method = "Different characterization".into();
+    let result = run_heat(&r, |key, p| {
+        Ok(synthetic_heat(p, if key == "a" { -8. } else { -4. }, 0.))
+    });
+    assert_eq!(result["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(
+        result["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    let result = run_heat(&r, |key, p| {
+        Ok(synthetic_heat(p, if key == "a" { -8. } else { -4. }, 0.))
+    });
+    assert_eq!(result["comparison"]["frontier"], json!(["a"]));
+    let mut d = heat_descriptor();
+    d["scenario"]["motion"]["transient_surface"] = Value::Null;
+    let result = r
+        .evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |_, p| {
+            Ok(synthetic_heat(p, 0., 0.))
+        })
+        .unwrap();
+    assert!(result.comparison.unwrap().frontier.is_empty());
+}
