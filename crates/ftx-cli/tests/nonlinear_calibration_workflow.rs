@@ -54,7 +54,17 @@ fn both_native_commands_replay_the_same_source_complete_nonlinear_material() {
     assert_eq!(denied["calibration"], fitted["calibration"]);
     let pattern = Pattern::new(json!({"fabric":{"material":fitted["selection"]}}));
     let physical = material::resolve(&pattern, &DrapeOptions::default()).unwrap();
-    let law = physical.response.unwrap();
+    let selection = serde_json::from_value(fitted["selection"].clone()).unwrap();
+    let selected = ftx_pattern::textile_import::catalog()
+        .unwrap()
+        .resolve(&selection)
+        .unwrap();
+    let law = selected.membrane_response().unwrap().unwrap();
+    assert_eq!(
+        physical.report["nonlinear_strain_range"],
+        json!(law.strain_range())
+    );
+    assert_eq!(physical.report["record_sha256"], selected.sha256());
     let stress = law.try_evaluate([0.17, -0.08, -0.6]).unwrap().stress;
     for (actual, expected) in stress.into_iter().zip([63.2, -4.7, -30.]) {
         assert!((actual - expected).abs() < 1e-9);
