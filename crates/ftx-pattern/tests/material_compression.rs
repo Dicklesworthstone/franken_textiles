@@ -222,6 +222,44 @@ fn nonlinear_thermal_and_history_models_cannot_silently_survive_scalar_condition
 }
 
 #[test]
+fn pressure_preparation_discards_unqualified_optical_faces_and_keeps_the_original() {
+    let mut input = fixture();
+    let mut q = input.material.properties["areal_density"].clone();
+    q.value = 0.8;
+    q.unit = "1".into();
+    q.bounds = None;
+    q.method = "Synthetic optical observation without pressure qualification".into();
+    q.conditions.insert("face".into(), "finish".into());
+    q.conditions
+        .insert("specimen".into(), input.specimen.clone());
+    q.conditions
+        .insert("conditioning".into(), input.conditioning.clone());
+    input.material.properties.insert("emissivity".into(), q);
+    input.material.optical_faces = Some(serde_json::from_value(json!({
+        "positive":{"face":"finish", "emissivity_property":"emissivity"},
+        "source":"synthetic", "evidence":"estimate", "method":"Synthetic face assignment, not pressure-qualified",
+        "specimen":input.specimen, "conditioning":input.conditioning
+    })).unwrap());
+    let original = serde_json::to_value(&input).unwrap();
+    let report = condition(&input).unwrap();
+    assert!(report.material.optical_faces.is_none());
+    assert!(!report.material.properties.contains_key("emissivity"));
+    assert!(
+        report
+            .discarded_properties
+            .iter()
+            .any(|key| key == "emissivity")
+    );
+    assert_eq!(report.discarded_responses, ["optical_faces"]);
+    assert!(report.input.material.optical_faces.is_some());
+    assert_eq!(serde_json::to_value(&input).unwrap(), original);
+    let prepared = catalog().resolve(&report.selection).unwrap();
+    assert!(prepared.material().optical_faces.is_none());
+    assert!(prepared.mechanics().is_ok());
+    assert!(prepared.thermal_resistance().is_ok());
+}
+
+#[test]
 fn domain_sources_conditions_loft_and_dimensions_refuse_without_mutation() {
     for case in 0..19 {
         let mut input = fixture();

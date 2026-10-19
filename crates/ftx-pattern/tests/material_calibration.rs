@@ -66,6 +66,7 @@ fn input() -> Input {
             membrane_response: None,
             membrane_relaxation: None,
             thermal_response: None,
+            optical_faces: None,
             sources: BTreeMap::from([(
                 "synthetic".into(),
                 Source {

@@ -223,7 +223,7 @@ pub(super) fn records() -> Vec<Material> {
                 ("thermal_conductivity".into(), conductivity),
                 ("vapor_resistance".into(), vapor),
             ]),
-            membrane_response: None, membrane_relaxation: None, thermal_response: None,
+            membrane_response: None, membrane_relaxation: None, thermal_response: None, optical_faces: None,
             sources: BTreeMap::from([("paper".into(), Source {
                 reference: ARTICLE.into(), accessed_on: "2026-10-18".into(),
                 note: "Kopitar, Zuvela Bosnjak, Akalovic and Skenderi (2022), Thermophysiological properties of bovine leather in dependence on the sampling point, tanning and finishing agents. Journal of Industrial Textiles 51(5S), 8906S–8924S. DOI 10.1177/15280837221077048. Tables 1, 4–5 and Test methods; verified against publisher PDF pages 10–11. Source rounding and independently printed SD/CV retained without reconciliation. Thickness sample count, test-pressure value and specimen preconditioning not reported; thermal and vapor test climates differ.".into(),

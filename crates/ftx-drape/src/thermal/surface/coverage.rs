@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, Vec3, receipt::sha256_hex};
+use ftx_pattern::material_optics::Side;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -81,6 +82,9 @@ pub struct Coverage {
 pub struct CoverageState {
     sha256: String,
     temperatures: Vec<Vec<f64>>,
+    // A fresh uniform state has no geometric orientation yet. Solved/remapped states bind each
+    // layer's body-outward cell order to the material normal; a pose cannot silently reverse it.
+    orientation: Option<Vec<Vec<Option<Side>>>>,
 }
 
 impl CoverageState {
@@ -128,8 +132,8 @@ pub struct BodyHeat {
 #[derive(Clone, Copy, Debug)]
 pub struct ExteriorConditions<'a> {
     /// One environment per body triangle, qualified against each active region's outermost sheet.
-    /// The caller identifies the physical exposed face; free-form observation labels do not infer
-    /// a public/reverse orientation from vertex normals.
+    /// Automatic material-face mode resolves each active outer sheet separately from its signed
+    /// cloth/body normal. Explicit mode retains the caller's qualified physical face selection.
     pub environments: &'a [Exterior],
     /// One film boundary per body triangle, or empty only when every body triangle is fully covered.
     /// Active bare paths must share the covered path's prescribed inside/body temperature.
@@ -221,6 +225,28 @@ fn positions(x: &[Vec3], count: usize) -> Result<(), Refusal> {
         return Err(invalid("coverage pose needs every finite vertex in metres"));
     }
     Ok(())
+}
+
+// Shared with motion's depth remapper and the transport-only coverage consumer. A mirrored pattern
+// is meshed CCW again: its retained vertex order, not its .L name, defines the positive material side.
+pub(in crate::thermal) fn material_side(
+    cloth_vertices: [usize; 3],
+    cloth: &[Vec3],
+    body_vertices: [usize; 3],
+    body: &[Vec3],
+) -> Option<Side> {
+    let [a, b, c] = cloth_vertices.map(|i| cloth[i]);
+    let cloth_normal = (b - a).cross(c - a);
+    let [a, b, c] = body_vertices.map(|i| body[i]);
+    let body_normal = (b - a).cross(c - a);
+    let cosine = (cloth_normal / cloth_normal.norm()).dot(body_normal / body_normal.norm());
+    if !cosine.is_finite() || cosine.abs() <= 1e-12 {
+        None
+    } else if cosine < 0.0 {
+        Some(Side::Negative)
+    } else {
+        Some(Side::Positive)
+    }
 }
 
 impl Layout {
@@ -454,6 +480,7 @@ impl Coverage {
         Ok(CoverageState {
             sha256: self.sha256.clone(),
             temperatures: self.models.iter().map(|m| vec![t; m.cells()]).collect(),
+            orientation: None,
         })
     }
 
@@ -473,7 +500,8 @@ impl Coverage {
     /// Advance source-following heat storage without replacing reference masses as the poses change.
     ///
     /// # Errors
-    /// State from another material/topology, invalid time, geometry or boundary, or failed solve.
+    /// State from another material/topology, reversed material orientation without motion remapping,
+    /// invalid time, geometry or boundary, or failed solve.
     pub fn advance(
         &self,
         old: &CoverageState,
@@ -599,10 +627,38 @@ impl Coverage {
                 outside_heat_w: bare,
             });
         }
+        let orientation: Vec<Vec<_>> = self
+            .layout
+            .regions
+            .iter()
+            .map(|region| {
+                region
+                    .layers
+                    .iter()
+                    .map(|portion| {
+                        material_side(
+                            self.source.patches[portion.cloth_triangle].vertices,
+                            cloth,
+                            self.layout.body_triangles[region.body_triangle],
+                            body,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        if old
+            .and_then(|s| s.orientation.as_ref())
+            .is_some_and(|previous| previous != &orientation)
+        {
+            return Err(invalid(
+                "coverage material orientation changed; use thermal motion remap to preserve through-thickness temperatures",
+            ));
+        }
         let mut result = CoverageStep {
             state: CoverageState {
                 sha256: self.sha256.clone(),
                 temperatures: Vec::new(),
+                orientation: Some(orientation),
             },
             regions: Vec::new(),
             body: fields,
@@ -651,6 +707,26 @@ impl Coverage {
             let b = boundaries[region.body_triangle];
             let state = if let Some(e) = exterior {
                 let outer = region.layers.last().expect("nonempty region");
+                let environment = &e.environments[region.body_triangle];
+                let side = if environment
+                    .radiation
+                    .as_ref()
+                    .is_some_and(|r| r.automatic_material_face)
+                {
+                    result
+                        .state
+                        .orientation
+                        .as_ref()
+                        .expect("bound orientation")[i]
+                        .last()
+                        .copied()
+                        .flatten()
+                        .ok_or_else(|| {
+                            invalid("automatic optical face needs an unambiguous cloth/body normal")
+                        })?
+                } else {
+                    Side::Positive
+                };
                 let outer_area = positive(
                     "allocated outer cloth area",
                     cloth_areas[outer.cloth_triangle] * outer.fraction,
@@ -659,8 +735,9 @@ impl Coverage {
                     old.map(|o| o.temperatures[i].as_slice()),
                     seconds,
                     b,
-                    &e.environments[region.body_triangle],
+                    environment,
                     outer_area / a,
+                    side,
                 )?;
                 let convective = outer_area * next.exchange.convective_flux_w_m2;
                 let radiative = outer_area * next.exchange.radiative_flux_w_m2;

@@ -25,6 +25,8 @@ pub(crate) use io::for_drape;
 #[serde(deny_unknown_fields)]
 pub struct Patch {
     /// Vertex indices in the deformed surface, in the same frame and metres as the drape solver.
+    /// Their ordered normal is the canonical positive/outside material side. Reordering indices
+    /// changes source identity; ordinary mirrored pattern instances already preserve CCW order.
     pub vertices: [usize; 3],
     /// Material's undeformed area in m²; never substitute the deformed area here.
     pub reference_area_m2: f64,

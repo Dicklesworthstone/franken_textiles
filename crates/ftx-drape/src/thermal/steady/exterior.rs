@@ -9,6 +9,7 @@ use crate::thermal::{invalid, nonnegative, positive, temperature};
 use ftx_core::Refusal;
 use ftx_pattern::{
     material_catalog::ResolvedMaterial,
+    material_optics::Side,
     materials::{Evidence, Source},
 };
 use serde::{Deserialize, Serialize};
@@ -23,10 +24,17 @@ pub const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
 pub struct AmbientRadiation {
     /// Blackbody-equivalent enclosure temperature in Celsius, independent of air temperature.
     pub ambient_c: f64,
-    /// Exact property key in the OUTERMOST selected material; no generic-fiber fallback.
+    /// Exact property key in the OUTERMOST selected material in explicit mode.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub emissivity_property: String,
     /// Explicit physical face, matching the observation's `face` condition (e.g. `public`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub exposed_face: String,
+    /// Resolve the actual side through the selected material's source-bearing `optical_faces`.
+    /// Explicit face/property strings must be omitted in this mode. Covered regions use their
+    /// current cloth/body normals; independent columns use their canonical positive outside face.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automatic_material_face: bool,
     /// Affirmative admission of opaque, diffuse, gray, full-enclosure exchange with unit view factor.
     pub allow_opaque_gray_approximation: bool,
 }
@@ -68,16 +76,35 @@ pub struct ExteriorState {
     pub radiative_flux_w_m2: f64,
     /// False means radiation was explicitly omitted, not that a zero emissivity was measured.
     pub radiation_enabled: bool,
+    /// Actual observation selected by material orientation, absent for explicit-face mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material_face: Option<MaterialFace>,
     /// Current outer cloth area / model reference area; one for independent equal-area columns.
     pub outer_area_per_model_area: f64,
     /// Conduction minus the area-scaled sum of convection/radiation, W/m² of model area.
     pub balance_residual_w_m2: f64,
 }
 
+/// Source-locked optical selection for the physical face used in this exchange result.
+#[derive(Clone, Debug, Serialize)]
+pub struct MaterialFace {
+    /// Side of the retained source triangle's oriented normal.
+    pub side: Side,
+    /// Exact physical face label in the optical observation.
+    pub face: String,
+    /// Property key whose qualified value supplied emissivity.
+    pub emissivity_property: String,
+    /// Source key for the observation-to-orientation mapping in the selected material.
+    pub mapping_source: String,
+    /// Immutable material identity, including the mapping and its source evidence.
+    pub material_sha256: String,
+}
+
 pub(in crate::thermal) struct Exchange<'a> {
     input: &'a Exterior,
     pub(in crate::thermal) emissivity: f64,
     pub(in crate::thermal) domain: [f64; 2],
+    pub(in crate::thermal) material_face: Option<MaterialFace>,
 }
 
 fn range([lo, hi]: [f64; 2]) -> Result<[f64; 2], Refusal> {
@@ -90,9 +117,10 @@ fn range([lo, hi]: [f64; 2]) -> Result<[f64; 2], Refusal> {
 }
 
 impl<'a> Exchange<'a> {
-    pub(in crate::thermal) fn new(
+    pub(in crate::thermal) fn on_side(
         input: &'a Exterior,
         outer: &ResolvedMaterial,
+        side: Side,
     ) -> Result<Self, Refusal> {
         temperature(input.air_c)?;
         nonnegative("prescribed convection coefficient", input.convection_w_m2_k)?;
@@ -109,19 +137,46 @@ impl<'a> Exchange<'a> {
             ));
         }
         let mut emissivity = 0.0;
+        let mut material_face = None;
         if let Some(r) = &input.radiation {
             temperature(r.ambient_c)?;
-            if !r.allow_opaque_gray_approximation || r.exposed_face.trim().is_empty() {
-                return Err(invalid(
-                    "radiation needs an explicit face and opaque-gray enclosure consent",
-                ));
+            if !r.allow_opaque_gray_approximation {
+                return Err(invalid("radiation needs opaque-gray enclosure consent"));
             }
             let m = outer.material();
-            emissivity = m.require(&r.emissivity_property, "1", outer.allows_estimates())?;
-            let q = &m.properties[&r.emissivity_property];
+            let (property, face) = if r.automatic_material_face {
+                if !r.emissivity_property.is_empty() || !r.exposed_face.is_empty() {
+                    return Err(invalid(
+                        "automatic material-face selection cannot also prescribe a face or property",
+                    ));
+                }
+                let selected = m.optical_face(side, outer.allows_estimates())?;
+                material_face = Some(MaterialFace {
+                    side,
+                    face: selected.face.clone(),
+                    emissivity_property: selected.emissivity_property.clone(),
+                    mapping_source: m
+                        .optical_faces
+                        .as_ref()
+                        .expect("qualified mapping")
+                        .source
+                        .clone(),
+                    material_sha256: outer.sha256().to_owned(),
+                });
+                (&selected.emissivity_property, &selected.face)
+            } else {
+                if r.exposed_face.trim().is_empty() || r.emissivity_property.trim().is_empty() {
+                    return Err(invalid(
+                        "radiation needs an explicit face and emissivity property",
+                    ));
+                }
+                (&r.emissivity_property, &r.exposed_face)
+            };
+            emissivity = m.require(property, "1", outer.allows_estimates())?;
+            let q = &m.properties[property];
             if !(0.0..=1.0).contains(&emissivity)
                 || q.bounds.is_some_and(|[lo, hi]| lo < 0.0 || hi > 1.0)
-                || q.conditions.get("face") != Some(&r.exposed_face)
+                || q.conditions.get("face") != Some(face)
                 || q.conditions.get("spectral_basis").map(String::as_str)
                     != Some("total_hemispherical")
             {
@@ -175,6 +230,7 @@ impl<'a> Exchange<'a> {
             input,
             emissivity,
             domain,
+            material_face,
         })
     }
 
@@ -225,6 +281,15 @@ impl SteadyConductionModel {
         boundary: Boundary,
         exterior: &Exterior,
     ) -> Result<ExteriorState, Refusal> {
+        self.solve_exterior_on_side(boundary, exterior, Side::Positive)
+    }
+
+    pub(in crate::thermal) fn solve_exterior_on_side(
+        &self,
+        boundary: Boundary,
+        exterior: &Exterior,
+        side: Side,
+    ) -> Result<ExteriorState, Refusal> {
         temperature(boundary.inside_c)?;
         nonnegative("inside film resistance", boundary.inside_resistance)?;
         if boundary.outside_resistance != 0.0 || boundary.outside_c != exterior.air_c {
@@ -232,7 +297,8 @@ impl SteadyConductionModel {
                 "exterior exchange replaces the outside film: use zero outside resistance and outside_c equal to air_c",
             ));
         }
-        let exchange = Exchange::new(exterior, self.layers.last().expect("nonempty model"))?;
+        let exchange =
+            Exchange::on_side(exterior, self.layers.last().expect("nonempty model"), side)?;
         let factor = *self.area_factors.last().expect("nonempty area factors");
         let outer_area_per_model_area = positive("outer cloth/model area ratio", 1.0 / factor)?;
         let mut enclosure = [boundary.inside_c, boundary.inside_c];
@@ -292,6 +358,7 @@ impl SteadyConductionModel {
                             convective_flux_w_m2: convective,
                             radiative_flux_w_m2: radiative,
                             radiation_enabled: exterior.radiation.is_some(),
+                            material_face: exchange.material_face,
                             outer_area_per_model_area,
                         });
                     }

@@ -260,7 +260,7 @@ pub(super) fn records() -> Vec<Material> {
             id: format!("nist/7282/{}", row.slug), name: format!("NISTIR 7282 {} (conditioned historical specimens)", row.name),
             form: if row.slug == "cotton-duck" { Form::Woven } else { Form::Sheet },
             composition: Vec::new(), composition_complete: false, structure, properties,
-            membrane_response: None, membrane_relaxation: None,
+            membrane_response: None, membrane_relaxation: None, optical_faces: None,
             thermal_response: Some(ThermalResponse {
                 specimen, conditioning: CONDITIONING.into(),
                 conductivity: Some(series([row.k[0], row.k[1], 0.0, 0.0], [20.0, 70.0], "W/(m*K)",

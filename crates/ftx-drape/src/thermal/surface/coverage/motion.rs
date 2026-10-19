@@ -12,12 +12,14 @@ use ftx_core::{
     exact::{Sign, orient2d},
     receipt::sha256_hex,
 };
+use ftx_pattern::material_optics::Side;
 use ftx_pattern::material_thermal::ThermalLaw;
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{
     Boundary, Coverage, CoverageState, CoverageStep, ExteriorConditions, Surface, invalid,
+    material_side,
 };
 use crate::thermal::{
     exterior::ExteriorFlux,
@@ -28,8 +30,8 @@ use projection::clip::{Work, area, bounds_overlap, intersection};
 
 /// Canonical inside/outside faces of uncovered cloth, in retained source-triangle order.
 /// Optional environments replace the outside films only on currently exposed fractions.
-/// The caller identifies each canonical outside optical face explicitly; free-form material face
-/// names are not inferred from source normals or from whichever side is nearest a body surface.
+/// Automatic optical mode selects the material's source-bound positive face. The other face retains
+/// its explicit inside film; no nearest-body rule chooses an ambient side for detached cloth.
 #[derive(Clone, Copy, Debug)]
 pub struct ExposedConditions<'a> {
     /// Exactly one boundary per retained source cloth triangle; no implicit broadcast.
@@ -289,21 +291,19 @@ impl Frame {
         let projection = projection::project(&source, &cloth, &body, body_triangles, &request)?;
         let mut reverse = Vec::new();
         for region in &projection.layout.regions {
-            let [a, b, c] = body_triangles[region.body_triangle].map(|i| body[i]);
-            let normal = (b - a).cross(c - a);
-            let normal = normal / normal.norm();
             reverse.push(
                 region
                     .layers
                     .iter()
                     .map(|p| {
-                        let [a, b, c] = source.patches[p.cloth_triangle].vertices.map(|i| cloth[i]);
-                        let cloth_normal = (b - a).cross(c - a);
-                        let cosine = (cloth_normal / cloth_normal.norm()).dot(normal);
-                        if !cosine.is_finite() || cosine == 0.0 {
-                            return Err(invalid("unresolved material-normal orientation in remap"));
-                        }
-                        Ok(cosine < 0.0)
+                        material_side(
+                            source.patches[p.cloth_triangle].vertices,
+                            &cloth,
+                            body_triangles[region.body_triangle],
+                            &body,
+                        )
+                        .map(|side| side == Side::Negative)
+                        .ok_or_else(|| invalid("unresolved material-normal orientation in remap"))
                     })
                     .collect::<Result<Vec<_>, Refusal>>()?,
             );
@@ -352,6 +352,23 @@ impl Frame {
     #[must_use]
     pub fn sha256(&self) -> &str {
         &self.sha256
+    }
+
+    fn coverage_orientation(&self) -> Vec<Vec<Option<Side>>> {
+        self.reverse
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|&reverse| {
+                        Some(if reverse {
+                            Side::Negative
+                        } else {
+                            Side::Positive
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     /// Full frozen input receipt. Source geometry validity remains the projection's caller contract.
@@ -459,6 +476,7 @@ impl Frame {
                 sha256: frame.coverage.sha256.clone(),
                 temperatures: serde_json::from_value(value["temperature_c"].clone())
                     .map_err(|e| invalid(format!("thermal motion temperatures: {e}")))?,
+                orientation: Some(frame.coverage_orientation()),
             },
             exposed,
         };
@@ -644,10 +662,9 @@ impl Frame {
     /// Weather is a step input, not part of material-temperature identity: valid next-interval
     /// conditions may change without remapping or resetting the old state.
     ///
-    /// Optical face names have no automatic binding to a mesh normal. For covered regions the
-    /// caller must select the actual outer physical face on every region assigned an environment;
-    /// for uncovered cloth it must select the canonical source outside face. The existing depth
-    /// reversal in remapping preserves source orientation but does not choose a finish/property.
+    /// Automatic mode selects each region's actual outer material side through its source-bearing
+    /// face mapping, using the same orientation as the depth remapper. For uncovered cloth it selects
+    /// the canonical source positive face. Explicit mode keeps the caller's face/property choice.
     ///
     /// # Errors
     /// Wrong state, array counts or time; invalid active geometry/material/boundary observations;
@@ -1064,6 +1081,7 @@ impl Frame {
             inner: CoverageState {
                 sha256: self.coverage.sha256.clone(),
                 temperatures: output,
+                orientation: Some(self.coverage_orientation()),
             },
             exposed,
         };

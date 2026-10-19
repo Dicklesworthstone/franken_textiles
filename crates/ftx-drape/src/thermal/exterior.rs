@@ -6,9 +6,10 @@
 
 use serde::Serialize;
 
-use super::steady::exterior::{Exchange, Exterior};
+use super::steady::exterior::{Exchange, Exterior, MaterialFace};
 use super::{Boundary, DryThermalModel, State, invalid, nonnegative, positive};
 use ftx_core::Refusal;
+use ftx_pattern::material_optics::Side;
 
 const ITERATIONS: usize = 128;
 
@@ -23,6 +24,9 @@ pub struct ExteriorFlux {
     pub radiative_flux_w_m2: f64,
     /// Whether radiation was requested, rather than assumed to have zero emissivity.
     pub radiation_enabled: bool,
+    /// Actual source-bearing observation chosen for the exposed side in automatic mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material_face: Option<MaterialFace>,
     /// Conductive outgoing flux minus convection and radiation, per current outer cloth m².
     pub balance_residual_w_m2: f64,
 }
@@ -52,7 +56,7 @@ impl DryThermalModel {
         boundary: Boundary,
         exterior: &Exterior,
     ) -> Result<ExteriorStep, Refusal> {
-        self.exterior_step(Some(old), seconds, boundary, exterior, 1.0)
+        self.exterior_step(Some(old), seconds, boundary, exterior, 1.0, Side::Positive)
     }
 
     /// Steady limit of the same discrete column, with its exposed-face balance solved explicitly.
@@ -66,7 +70,7 @@ impl DryThermalModel {
         boundary: Boundary,
         exterior: &Exterior,
     ) -> Result<ExteriorStep, Refusal> {
-        self.exterior_step(None, 1.0, boundary, exterior, 1.0)
+        self.exterior_step(None, 1.0, boundary, exterior, 1.0, Side::Positive)
     }
 
     // Coverage columns use body-area flux and storage units. Their actual outer cloth may have
@@ -78,6 +82,7 @@ impl DryThermalModel {
         boundary: Boundary,
         exterior: &Exterior,
         outer_area_per_model_area: f64,
+        side: Side,
     ) -> Result<ExteriorStep, Refusal> {
         positive("exterior outer/model area ratio", outer_area_per_model_area)?;
         if let Some(old) = old {
@@ -96,7 +101,8 @@ impl DryThermalModel {
                 "exterior exchange replaces the outside film: use zero outside resistance and outside_c equal to air_c",
             ));
         }
-        let exchange = Exchange::new(exterior, self.layers.last().expect("nonempty model"))?;
+        let exchange =
+            Exchange::on_side(exterior, self.layers.last().expect("nonempty model"), side)?;
         let solve = |b| match old {
             Some(t) => self.advance(t, seconds, b),
             None => self.steady(b),
@@ -119,6 +125,7 @@ impl DryThermalModel {
                     convective_flux_w_m2: convective,
                     radiative_flux_w_m2: radiative,
                     radiation_enabled: exterior.radiation.is_some(),
+                    material_face: exchange.material_face.clone(),
                     balance_residual_w_m2: residual,
                 },
             }))

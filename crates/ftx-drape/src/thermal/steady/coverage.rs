@@ -12,6 +12,7 @@ use crate::thermal::{
     temperature,
 };
 use ftx_core::{Refusal, Vec3};
+use ftx_pattern::material_optics::Side;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -323,7 +324,26 @@ impl SteadyCoverage {
             let model = model.with_area_factors(factors)?;
             let b = boundaries[region.body_triangle];
             let conduction = if let Some((environments, _)) = exterior {
-                let state = model.solve_exterior(b, &environments[region.body_triangle])?;
+                let environment = &environments[region.body_triangle];
+                let side = if environment
+                    .radiation
+                    .as_ref()
+                    .is_some_and(|r| r.automatic_material_face)
+                {
+                    let outer = region.layers.last().expect("nonempty region");
+                    crate::thermal::surface::coverage::material_side(
+                        self.source.patches[outer.cloth_triangle].vertices,
+                        cloth,
+                        self.layout.body_triangles[region.body_triangle],
+                        body,
+                    )
+                    .ok_or_else(|| {
+                        invalid("automatic optical face needs an unambiguous cloth/body normal")
+                    })?
+                } else {
+                    Side::Positive
+                };
+                let state = model.solve_exterior_on_side(b, environment, side)?;
                 let conduction = state.conduction.clone();
                 exterior_states.push(state);
                 conduction

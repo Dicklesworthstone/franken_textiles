@@ -2,7 +2,12 @@
 use ftx_core::Vec3;
 use ftx_drape::thermal::{
     Boundary, DryThermalModel,
-    steady::exterior::{Exterior, STEFAN_BOLTZMANN},
+    steady::{
+        SteadyConductionModel,
+        coverage::SteadyCoverage,
+        exterior::{Exterior, STEFAN_BOLTZMANN},
+        surface::SteadySurface,
+    },
     surface::{
         Patch, Surface,
         coverage::{Coverage, CoverageStep, ExteriorConditions, Layout, Portion, Region},
@@ -17,7 +22,7 @@ const RESISTANCES: [f64; 2] = [0.2, 0.4];
 const INTERFACE: f64 = 0.1;
 const INSIDE_FILM: f64 = 0.1;
 
-fn column(id: &str, index: usize, eps: Option<f64>, reference: &str) -> DryThermalModel {
+fn selection(id: &str, index: usize, eps: Option<f64>, reference: &str) -> Selection {
     let conditions = json!({"specimen":id,"conditioning":"synthetic-dry"});
     let q = |value, unit| json!({"value":value,"unit":unit,"source":"test","evidence":"estimate","method":"Synthetic independent known answer","conditions":conditions});
     let mut selection = json!({"id":id,"allow_estimates":true,"record":{
@@ -36,13 +41,42 @@ fn column(id: &str, index: usize, eps: Option<f64>, reference: &str) -> DryTherm
             "spectral_basis":"total_hemispherical","temperature_min_c":"-200","temperature_max_c":"200"
         });
     }
-    let selection: Selection = serde_json::from_value(selection).unwrap();
+    serde_json::from_value(selection).unwrap()
+}
+
+fn column(id: &str, index: usize, eps: Option<f64>, reference: &str) -> DryThermalModel {
+    selected_column(&selection(id, index, eps, reference))
+}
+
+fn selected_column(selection: &Selection) -> DryThermalModel {
     DryThermalModel::new(
-        vec![Catalog::builtin().unwrap().resolve(&selection).unwrap()],
+        vec![Catalog::builtin().unwrap().resolve(selection).unwrap()],
         vec![],
         1,
     )
     .unwrap()
+}
+
+fn asymmetric_selection(id: &str, index: usize, positive: f64, negative: f64) -> Selection {
+    let mut selected = serde_json::to_value(selection(
+        id,
+        index,
+        Some(positive),
+        "test:coverage-optical-orientation",
+    ))
+    .unwrap();
+    let record = &mut selected["record"];
+    let mut reverse = record["properties"]["emissivity"].clone();
+    reverse["value"] = json!(negative);
+    reverse["conditions"]["face"] = json!("reverse");
+    record["properties"]["reverse_emissivity"] = reverse;
+    record["optical_faces"] = json!({
+        "positive":{"face":"public","emissivity_property":"emissivity"},
+        "negative":{"face":"reverse","emissivity_property":"reverse_emissivity"},
+        "source":"test","evidence":"estimate","method":"Synthetic oriented coupon mapping",
+        "specimen":id,"conditioning":"synthetic-dry"
+    });
+    serde_json::from_value(selected).unwrap()
 }
 
 fn source(lining_eps: Option<f64>, shell_eps: Option<f64>, reference: &str) -> Surface {
@@ -142,6 +176,38 @@ fn environment(h: f64, air: f64, radiant: Option<f64>) -> Exterior {
     .unwrap()
 }
 
+fn automatic_environment() -> Exterior {
+    let mut exterior = environment(3., 5., Some(-10.));
+    let radiation = exterior.radiation.as_mut().unwrap();
+    radiation.automatic_material_face = true;
+    radiation.emissivity_property.clear();
+    radiation.exposed_face.clear();
+    exterior
+}
+
+fn selected_face(flux: &impl serde::Serialize, selection: &Selection, negative: bool) {
+    let face = serde_json::to_value(flux).unwrap()["material_face"].clone();
+    assert_eq!(face["side"], if negative { "negative" } else { "positive" });
+    assert_eq!(face["face"], if negative { "reverse" } else { "public" });
+    assert_eq!(
+        face["emissivity_property"],
+        if negative {
+            "reverse_emissivity"
+        } else {
+            "emissivity"
+        }
+    );
+    assert_eq!(face["mapping_source"], "test");
+    assert_eq!(
+        face["material_sha256"],
+        Catalog::builtin()
+            .unwrap()
+            .resolve(selection)
+            .unwrap()
+            .sha256()
+    );
+}
+
 fn near(actual: f64, expected: f64) {
     assert!(
         (actual - expected).abs() < 1e-8 * (1. + expected.abs()),
@@ -205,6 +271,291 @@ fn conserved(step: &CoverageStep, seconds: f64) {
                 + seconds * (power_budget + power_roundoff)
                 + energy_roundoff
     );
+}
+
+#[test]
+fn automatic_faces_resolve_each_region_and_bind_accepted_depth_orientation() {
+    let selected = asymmetric_selection("two-sided", 0, 0.9, 0.1);
+    let build = |selected: &Selection| {
+        let source = Surface::new(
+            vec![selected_column(selected)],
+            6,
+            vec![
+                Patch {
+                    vertices: [0, 1, 2],
+                    reference_area_m2: 0.25,
+                    column: 0,
+                },
+                Patch {
+                    vertices: [3, 5, 4],
+                    reference_area_m2: 0.75,
+                    column: 0,
+                },
+            ],
+        )
+        .unwrap();
+        let mut mapping = layout();
+        mapping.regions = (0..2)
+            .map(|i| Region {
+                id: format!("side-{i}"),
+                body_triangle: 0,
+                body_fraction: 0.5,
+                layers: vec![Portion {
+                    layer: "sheet".into(),
+                    cloth_triangle: i,
+                    fraction: 1.,
+                }],
+                interface_resistance_m2_k_w: vec![],
+            })
+            .collect();
+        Coverage::new(source, mapping).unwrap()
+    };
+    let model = build(&selected);
+    // Two spatially disjoint halves of the same body triangle. Only the second sheet's
+    // retained vertex-order normal is reversed; weather is a single shared body entry.
+    let cloth = vec![
+        Vec3::new(0., 0., 0.1),
+        Vec3::new(1., 0., 0.1),
+        Vec3::new(0., 1., 0.1),
+        Vec3::new(1., 0., 0.1),
+        Vec3::new(2., 0., 0.1),
+        Vec3::new(0., 1., 0.1),
+    ];
+    let body = vec![Vec3::ZERO, Vec3::new(2., 0., 0.), Vec3::new(0., 1., 0.)];
+    let environments = [automatic_environment()];
+    let boundaries = [boundary(35., 5.)];
+    let conditions = ExteriorConditions {
+        environments: &environments,
+        bare_boundaries: &[],
+    };
+    let steady = model
+        .steady_exterior(&cloth, &body, &boundaries, conditions)
+        .unwrap();
+    let rows = &steady.exterior_exchange.as_ref().unwrap().regions;
+    assert_eq!(rows.len(), 2);
+    for (i, eps) in [0.9, 0.1].into_iter().enumerate() {
+        let row = &rows[i];
+        assert_eq!(row.body_triangle, 0);
+        assert_eq!(row.outer_cloth_triangle, i);
+        selected_face(&row.flux, &selected, i == 1);
+        near(row.outer_area_m2, 0.5);
+        let surface = row.flux.surface_c;
+        let convective = 3. * (surface - 5.);
+        let radiative = eps * STEFAN_BOLTZMANN * (fourth(surface) - fourth(-10.));
+        // These independent equations uniquely determine the exterior temperature and power.
+        let conduction = (35. - surface) / (INSIDE_FILM + RESISTANCES[0]);
+        near(row.flux.convective_flux_w_m2, convective);
+        near(row.flux.radiative_flux_w_m2, radiative);
+        near(conduction, convective + radiative);
+        near(steady.regions[i].outside_heat_w, 0.5 * conduction);
+    }
+    assert!(rows[0].radiative_heat_w > rows[1].radiative_heat_w);
+    conserved(&steady, 1.);
+
+    // Optical-side selection also works with transport-only observations: neither heat
+    // capacity nor mass may be invented to enter this independent steady consumer.
+    let mut transport_only = selected.clone();
+    let properties = &mut transport_only.record.as_mut().unwrap().properties;
+    properties.remove("specific_heat");
+    properties.remove("areal_density");
+    let material = Catalog::builtin()
+        .unwrap()
+        .resolve(&transport_only)
+        .unwrap();
+    assert!(DryThermalModel::new(vec![material.clone()], vec![], 1).is_err());
+    let frozen = model.snapshot();
+    let transport = SteadyCoverage::new(
+        SteadySurface::new(
+            vec![SteadyConductionModel::new(vec![material], vec![]).unwrap()],
+            6,
+            serde_json::from_value(frozen["source"]["patches"].clone()).unwrap(),
+        )
+        .unwrap(),
+        serde_json::from_value(frozen["layout"].clone()).unwrap(),
+    )
+    .unwrap();
+    let solved = transport
+        .solve_exterior(&cloth, &body, &boundaries, &environments, &[])
+        .unwrap();
+    for (i, actual) in solved.regions.iter().enumerate() {
+        selected_face(actual, &transport_only, i == 1);
+        near(actual.surface_c, rows[i].flux.surface_c);
+        near(actual.radiative_flux_w_m2, rows[i].flux.radiative_flux_w_m2);
+        near(
+            solved.steady.regions[i].power_w,
+            steady.regions[i].outside_heat_w,
+        );
+    }
+    let restored = SteadyCoverage::from_snapshot(&transport.snapshot().unwrap()).unwrap();
+    let replayed = restored
+        .solve_exterior(&cloth, &body, &boundaries, &environments, &[])
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&solved).unwrap(),
+        serde_json::to_value(&replayed).unwrap()
+    );
+
+    let first = model
+        .advance_exterior(
+            &model.initial(10.).unwrap(),
+            &cloth,
+            &body,
+            2.,
+            &boundaries,
+            conditions,
+        )
+        .unwrap();
+    conserved(&first, 2.);
+    near(
+        first.stored_change_j,
+        25. * (first.state.temperature_c()[0][0] - 10.)
+            + 75. * (first.state.temperature_c()[1][0] - 10.),
+    );
+    let replay = Coverage::from_snapshot(&model.snapshot()).unwrap();
+    let next = model
+        .advance_exterior(&first.state, &cloth, &body, 3., &boundaries, conditions)
+        .unwrap();
+    let repeated = replay
+        .advance_exterior(&first.state, &cloth, &body, 3., &boundaries, conditions)
+        .unwrap();
+    assert_eq!(next.state.temperature_c(), repeated.state.temperature_c());
+    assert_eq!(
+        serde_json::to_value(&next.exterior_exchange).unwrap(),
+        serde_json::to_value(&repeated.exterior_exchange).unwrap()
+    );
+
+    let saved = first.state.temperature_c().to_vec();
+    let mut reversed = cloth.clone();
+    reversed.swap(1, 2);
+    model
+        .advance(&first.state, &cloth, &body, 1., &boundaries)
+        .unwrap();
+    // Even a film-only continuation must not silently put an accepted depth state on the
+    // other physical side. Motion's conservative remapper is the supported transition.
+    assert!(
+        model
+            .advance_exterior(&first.state, &reversed, &body, 1., &boundaries, conditions)
+            .is_err()
+    );
+    assert!(
+        model
+            .advance(&first.state, &reversed, &body, 1., &boundaries)
+            .is_err()
+    );
+    assert_eq!(first.state.temperature_c(), saved);
+
+    let mut changed = selected.clone();
+    changed
+        .record
+        .as_mut()
+        .unwrap()
+        .optical_faces
+        .as_mut()
+        .unwrap()
+        .method
+        .push_str(" revised");
+    let changed = build(&changed);
+    assert_ne!(changed.snapshot(), model.snapshot());
+    assert!(
+        changed
+            .advance_exterior(&first.state, &cloth, &body, 1., &boundaries, conditions)
+            .is_err()
+    );
+    let mut missing = selected;
+    missing.record.as_mut().unwrap().optical_faces = None;
+    assert!(
+        build(&missing)
+            .steady_exterior(&cloth, &body, &boundaries, conditions)
+            .is_err()
+    );
+}
+
+#[test]
+fn automatic_layer_exposure_uses_the_outer_material_and_its_current_side() {
+    let lining = asymmetric_selection("lining", 0, 0.2, 0.7);
+    let shell = asymmetric_selection("shell", 1, 0.9, 0.05);
+    let build = |lining: &Selection, outer_lining: bool| {
+        let mut mapping = layout();
+        if outer_lining {
+            mapping.regions[0].layers.reverse();
+        }
+        Coverage::new(
+            Surface::new(
+                vec![selected_column(lining), selected_column(&shell)],
+                6,
+                vec![
+                    Patch {
+                        vertices: [0, 1, 2],
+                        reference_area_m2: 0.25,
+                        column: 0,
+                    },
+                    Patch {
+                        vertices: [3, 4, 5],
+                        reference_area_m2: 0.75,
+                        column: 1,
+                    },
+                ],
+            )
+            .unwrap(),
+            mapping,
+        )
+        .unwrap()
+    };
+    let (mut cloth, body) = geometry(0.5, 0.5, 0.5);
+    let environments = [automatic_environment()];
+    let boundaries = [boundary(35., 5.)];
+    let conditions = ExteriorConditions {
+        environments: &environments,
+        bare_boundaries: &[],
+    };
+    let mut hidden = lining.clone();
+    hidden.record.as_mut().unwrap().optical_faces = None;
+    let model = build(&hidden, false);
+    let first = model
+        .steady_exterior(&cloth, &body, &boundaries, conditions)
+        .unwrap();
+    let face = &first.exterior_exchange.as_ref().unwrap().regions[0].flux;
+    selected_face(face, &shell, false);
+    near(
+        face.radiative_flux_w_m2,
+        0.9 * STEFAN_BOLTZMANN * (fourth(face.surface_c) - fourth(-10.)),
+    );
+    cloth.swap(4, 5);
+    let reversed = model
+        .steady_exterior(&cloth, &body, &boundaries, conditions)
+        .unwrap();
+    let face = &reversed.exterior_exchange.as_ref().unwrap().regions[0].flux;
+    selected_face(face, &shell, true);
+    near(
+        face.radiative_flux_w_m2,
+        0.05 * STEFAN_BOLTZMANN * (fourth(face.surface_c) - fourth(-10.)),
+    );
+    assert!(reversed.outside_heat_w < first.outside_heat_w);
+
+    // The geometry and declared layer order now put the original lining on the exterior.
+    for p in &mut cloth[..3] {
+        p.z = 0.2;
+    }
+    for p in &mut cloth[3..] {
+        p.z = 0.1;
+    }
+    assert!(
+        build(&hidden, true)
+            .steady_exterior(&cloth, &body, &boundaries, conditions)
+            .is_err()
+    );
+    let exposed = build(&lining, true)
+        .steady_exterior(&cloth, &body, &boundaries, conditions)
+        .unwrap();
+    let row = &exposed.exterior_exchange.as_ref().unwrap().regions[0];
+    assert_eq!(row.outer_cloth_triangle, 0);
+    assert_eq!(row.outer_layer, "lining");
+    selected_face(&row.flux, &lining, false);
+    near(
+        row.flux.radiative_flux_w_m2,
+        0.2 * STEFAN_BOLTZMANN * (fourth(row.flux.surface_c) - fourth(-10.)),
+    );
+    conserved(&exposed, 1.);
 }
 
 #[test]

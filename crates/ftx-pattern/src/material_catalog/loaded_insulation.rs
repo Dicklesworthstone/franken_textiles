@@ -176,6 +176,7 @@ fn record(row: &Row, compressed: bool) -> Material {
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,
+        optical_faces: None,
         sources: BTreeMap::from([("paper".into(), Source {
             reference: ARTICLE.into(),
             accessed_on: "2026-10-18".into(),

@@ -159,6 +159,7 @@ pub fn import(record: &legacy::Textile) -> Result<Material, Refusal> {
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,
+        optical_faces: None,
         sources: record
             .sources
             .iter()

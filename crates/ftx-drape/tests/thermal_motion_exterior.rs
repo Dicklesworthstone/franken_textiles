@@ -2,7 +2,7 @@
 use ftx_core::Vec3;
 use ftx_drape::thermal::{
     Boundary, DryThermalModel,
-    steady::exterior::Exterior,
+    steady::exterior::{Exterior, STEFAN_BOLTZMANN},
     surface::{
         Patch, Surface,
         coverage::{
@@ -13,7 +13,7 @@ use ftx_drape::thermal::{
     },
 };
 use ftx_pattern::{material_catalog::Selection, materials::Catalog};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
@@ -28,6 +28,66 @@ fn selection() -> Selection {
 
 fn environment() -> Exterior {
     serde_json::from_value(fixture()["exterior_exchange"].clone()).unwrap()
+}
+
+fn asymmetric_selection() -> Selection {
+    let mut value = serde_json::to_value(selection()).unwrap();
+    let record = &mut value["record"];
+    let mut reverse = record["properties"]["emissivity"].clone();
+    reverse["value"] = json!(0.1);
+    reverse["conditions"]["face"] = json!("reverse");
+    record["properties"]["reverse_emissivity"] = reverse;
+    record["optical_faces"] = json!({
+        "positive":{"face":"public","emissivity_property":"emissivity"},
+        "negative":{"face":"reverse","emissivity_property":"reverse_emissivity"},
+        "source":"synthetic","evidence":"estimate","method":"Synthetic oriented coupon mapping",
+        "specimen":"synthetic-coupon","conditioning":"synthetic-dry"
+    });
+    serde_json::from_value(value).unwrap()
+}
+
+fn automatic_environment() -> Exterior {
+    let mut exterior = environment();
+    let radiation = exterior.radiation.as_mut().unwrap();
+    radiation.automatic_material_face = true;
+    radiation.emissivity_property.clear();
+    radiation.exposed_face.clear();
+    exterior
+}
+
+fn optical_flux(
+    flux: &ftx_drape::thermal::exterior::ExteriorFlux,
+    selection: &Selection,
+    negative: bool,
+) {
+    let face = serde_json::to_value(&flux.material_face).unwrap();
+    assert_eq!(face["side"], if negative { "negative" } else { "positive" });
+    assert_eq!(face["face"], if negative { "reverse" } else { "public" });
+    assert_eq!(
+        face["emissivity_property"],
+        if negative {
+            "reverse_emissivity"
+        } else {
+            "emissivity"
+        }
+    );
+    assert_eq!(face["mapping_source"], "synthetic");
+    assert_eq!(
+        face["material_sha256"],
+        Catalog::builtin()
+            .unwrap()
+            .resolve(selection)
+            .unwrap()
+            .sha256()
+    );
+    let t = flux.surface_c + 273.15;
+    let ambient = -10_f64 + 273.15;
+    let eps = if negative { 0.1 } else { 0.8 };
+    near(
+        flux.radiative_flux_w_m2,
+        eps * STEFAN_BOLTZMANN * (t * t * t * t - ambient * ambient * ambient * ambient),
+    );
+    near(flux.convective_flux_w_m2, 3. * (flux.surface_c - 5.));
 }
 
 fn model(selected: &Selection, cells: usize) -> DryThermalModel {
@@ -111,6 +171,166 @@ fn exterior_boundary(inside: f64, environment: &Exterior) -> Boundary {
 
 fn near(a: f64, b: f64) {
     assert!((a - b).abs() < 2e-8 * (1. + b.abs()), "{a} != {b}");
+}
+
+#[test]
+fn oriented_faces_follow_nonuniform_depth_remap_and_canonical_exposure() {
+    let selected = asymmetric_selection();
+    let full = one(&selected, tri(0., 0.04), tri(0., 0.), 4);
+    let mut other_side = tri(0., 0.08);
+    other_side.swap(1, 2);
+    let reversed = one(&selected, tri(0., 0.04), other_side, 4);
+    let away = one(&selected, tri(0., 0.04), tri(4., 0.), 4);
+    let environments = [automatic_environment()];
+    let boundaries = [exterior_boundary(35., &environments[0])];
+    let bare = [film()];
+    let covered = ExteriorConditions {
+        environments: &environments,
+        bare_boundaries: &bare,
+    };
+    let exposed = ExposedConditions {
+        boundaries: &boundaries,
+        environments: Some(&environments),
+    };
+
+    // A separately known steady film network provides a nonuniform initial depth profile.
+    let initial = full
+        .steady(&[Boundary {
+            inside_c: 40.,
+            outside_c: 0.,
+            ..film()
+        }])
+        .unwrap()
+        .into_state();
+    for (i, &t) in initial.temperature_c()[0].iter().enumerate() {
+        near(t, 40. - (40. / 0.7) * (0.15 + 0.1 * i as f64));
+    }
+    // 0.5 m² reference area * 0.2 kg/m² * 1000 J/(kg K), divided into four cells.
+    let energy = |t: &[f64]| 25. * t.iter().sum::<f64>();
+    let initial_energy = energy(&initial.temperature_c()[0]);
+    let first = full
+        .advance_with_exchange(&initial, 0.5, &boundaries, Some(covered), None)
+        .unwrap();
+    optical_flux(
+        &first.heat().exterior_exchange.as_ref().unwrap().regions[0].flux,
+        &selected,
+        false,
+    );
+    near(
+        first.stored_change_j(),
+        energy(&first.heat().state.temperature_c()[0]) - initial_energy,
+    );
+    let mut stored = first.stored_change_j();
+    let mut net = 0.5 * first.net_heat_w();
+    let state = first.into_state();
+    assert!(state.temperature_c()[0][0] > state.temperature_c()[0][3] + 1.);
+    let flipped = reversed.remap(&full, &state).unwrap();
+    let mut expected = state.temperature_c()[0].clone();
+    expected.reverse();
+    assert_eq!(flipped.state.temperature_c()[0], expected);
+    near(
+        energy(&flipped.state.temperature_c()[0]),
+        energy(&state.temperature_c()[0]),
+    );
+    near(flipped.balance.absolute_residual_j, 0.);
+
+    let checkpoint = reversed.checkpoint(&flipped.state).unwrap();
+    let (restored, resumed) = Frame::from_checkpoint(&checkpoint).unwrap();
+    assert_eq!(restored.checkpoint(&resumed).unwrap(), checkpoint);
+    let next = reversed
+        .advance_with_exchange(&flipped.state, 0.75, &boundaries, Some(covered), None)
+        .unwrap();
+    let replay = restored
+        .advance_with_exchange(&resumed, 0.75, &boundaries, Some(covered), None)
+        .unwrap();
+    assert_eq!(
+        next.heat().state.temperature_c(),
+        replay.heat().state.temperature_c()
+    );
+    assert_eq!(
+        serde_json::to_value(&next.heat().exterior_exchange).unwrap(),
+        serde_json::to_value(&replay.heat().exterior_exchange).unwrap()
+    );
+    optical_flux(
+        &next.heat().exterior_exchange.as_ref().unwrap().regions[0].flux,
+        &selected,
+        true,
+    );
+    near(
+        next.stored_change_j(),
+        energy(&next.heat().state.temperature_c()[0]) - energy(&flipped.state.temperature_c()[0]),
+    );
+    stored += next.stored_change_j();
+    net += 0.75 * next.net_heat_w();
+    let negative_state = next.into_state();
+    let left = away.remap(&reversed, &negative_state).unwrap();
+    let mut canonical = negative_state.temperature_c()[0].clone();
+    canonical.reverse();
+    assert_eq!(left.state.exposed_temperature_c()[0], canonical);
+    near(left.balance.absolute_residual_j, 0.);
+
+    // Leaving the body restores canonical depth order and selects the source-positive face,
+    // even though the immediately preceding covered exterior used the negative side.
+    let exposed_step = away
+        .advance_with_exchange(&left.state, 1.25, &boundaries, Some(covered), Some(exposed))
+        .unwrap();
+    let rows = &exposed_step.exposed_exterior_exchange().unwrap().triangles;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].cloth_triangle, 0);
+    near(rows[0].current_area_m2, 0.5);
+    optical_flux(&rows[0].flux, &selected, false);
+    near(
+        rows[0].radiative_heat_w,
+        0.5 * rows[0].flux.radiative_flux_w_m2,
+    );
+    near(
+        exposed_step.stored_change_j(),
+        energy(&exposed_step.exposed_temperature_c()[0]) - energy(&canonical),
+    );
+    near(exposed_step.heat().bare_heat_w, 50.);
+    stored += exposed_step.stored_change_j();
+    net += 1.25 * exposed_step.net_heat_w();
+    let exposed_state = exposed_step.into_state();
+    let returned = full.remap(&away, &exposed_state).unwrap();
+    assert_eq!(
+        returned.state.temperature_c()[0],
+        exposed_state.exposed_temperature_c()[0]
+    );
+    near(returned.balance.absolute_residual_j, 0.);
+    let final_step = full
+        .advance_with_exchange(
+            &returned.state,
+            0.25,
+            &boundaries,
+            Some(covered),
+            Some(exposed),
+        )
+        .unwrap();
+    optical_flux(
+        &final_step
+            .heat()
+            .exterior_exchange
+            .as_ref()
+            .unwrap()
+            .regions[0]
+            .flux,
+        &selected,
+        false,
+    );
+    assert!(
+        final_step
+            .exposed_exterior_exchange()
+            .unwrap()
+            .triangles
+            .is_empty()
+    );
+    stored += final_step.stored_change_j();
+    net += 0.25 * final_step.net_heat_w();
+    near(stored, net);
+    near(
+        stored + flipped.balance.residual_j + left.balance.residual_j + returned.balance.residual_j,
+        energy(&final_step.heat().state.temperature_c()[0]) - initial_energy,
+    );
 }
 
 #[test]

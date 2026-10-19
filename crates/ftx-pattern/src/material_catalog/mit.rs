@@ -82,7 +82,7 @@ pub(super) fn records() -> Vec<Material> {
                 ("areal_density".into(), q(weight, "oz/yd2", "Lowell ACMTRL measurement reported in MIT summary table; test standard not given")),
                 ("specimen_flexural_rigidity".into(), q(bending, "lbf*in2", "Reported bending stiffness of test specimen; coupon width/geometry absent, so no sheet-rigidity conversion")),
             ]),
-            membrane_response: None, membrane_relaxation: None, thermal_response: None,
+            membrane_response: None, membrane_relaxation: None, thermal_response: None, optical_faces: None,
             sources: BTreeMap::from([
                 ("table".into(), Source { reference: TABLE.into(), accessed_on: "2026-10-14".into(),
                     note: format!("Bouman, Xiao, Battaglia and Freeman, Estimating the Material Properties of Fabric from Video, ICCV 2013. Summary table specimen {}. Original numeric units retained; asterisks identify single measurements. No image copied.", i + 1) }),

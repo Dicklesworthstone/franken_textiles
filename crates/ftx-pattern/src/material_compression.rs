@@ -106,7 +106,7 @@ pub struct Report {
     pub interpolated: bool,
     /// Original scalar observations omitted because their pressure applicability was not supplied.
     pub discarded_properties: Vec<String>,
-    /// Original membrane, relaxation and thermal response blocks omitted by this scalar operation.
+    /// Original response blocks and optical face assignments omitted by this scalar operation.
     pub discarded_responses: Vec<String>,
     /// Model selectors omitted so unsupported physical response models cannot remain active.
     pub discarded_structure: Vec<String>,
@@ -157,6 +157,8 @@ fn scalar_record(material: &Material, properties: BTreeMap<String, Quantity>) ->
     result.membrane_response = None;
     result.membrane_relaxation = None;
     result.thermal_response = None;
+    // Pressure observations do not qualify the original face/finish assignment or its optics.
+    result.optical_faces = None;
     result
 }
 
@@ -462,6 +464,7 @@ pub fn condition(input: &Input) -> Result<Report, Refusal> {
             "thermal_response",
             input.material.thermal_response.is_some(),
         ),
+        ("optical_faces", input.material.optical_faces.is_some()),
     ]
     .into_iter()
     .filter(|(_, present)| *present)

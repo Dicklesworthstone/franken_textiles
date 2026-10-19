@@ -129,6 +129,10 @@ pub struct Material {
     /// Condition-qualified temperature observations; no extrapolation or implicit conditioning mix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thermal_response: Option<crate::material_thermal::ThermalResponse>,
+    /// Explicit mapping from oriented source-sheet sides to named optical observations. Missing
+    /// mappings never imply that opposite faces have equal properties.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optical_faces: Option<crate::material_optics::OpticalFaces>,
     /// Sources keyed by stable local identifiers.
     pub sources: BTreeMap<String, Source>,
 }
@@ -283,6 +287,9 @@ impl Material {
         }
         if let Some(response) = &self.thermal_response {
             response.validate(self)?;
+        }
+        if let Some(faces) = &self.optical_faces {
+            faces.validate(self)?;
         }
         if let Some(relaxation) = &self.membrane_relaxation {
             relaxation.validate(&self.sources, true)?;
@@ -577,6 +584,7 @@ mod tests {
             membrane_response: None,
             membrane_relaxation: None,
             thermal_response: None,
+            optical_faces: None,
             sources,
         }
     }

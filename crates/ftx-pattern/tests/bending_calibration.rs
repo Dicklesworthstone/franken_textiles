@@ -19,6 +19,7 @@ fn material() -> Material {
         membrane_response: None,
         membrane_relaxation: None,
         thermal_response: None,
+        optical_faces: None,
         sources: BTreeMap::from([(
             "fixture".into(),
             Source {
