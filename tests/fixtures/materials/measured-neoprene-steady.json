@@ -1,0 +1,12 @@
+{
+  "schema": "ftx-thermal-steady/1",
+  "layers": [
+    {"id": "zagreb/neoprene-2025/m3nob5", "allow_estimates": false}
+  ],
+  "interface_resistance_m2_k_w": [],
+  "area_m2": 0.6,
+  "inside_c": 35.0,
+  "outside_c": 20.0,
+  "inside_resistance_m2_k_w": 0.03,
+  "outside_resistance_m2_k_w": 0.05
+}
