@@ -161,28 +161,49 @@ fn conserved(step: &CoverageStep, seconds: f64) {
         + seconds * (step.inside_heat_w.abs() + step.outside_heat_w.abs());
     assert!(step.balance_error_j.abs() < 1e-8 * scale);
     let exterior = step.exterior_exchange.as_ref().unwrap();
-    near(
-        step.outside_heat_w,
-        exterior.convective_heat_w + exterior.radiative_heat_w + step.bare_heat_w,
-    );
-    // The exterior solver qualifies the signed terms, including opposing convection/radiation.
-    // Convert its per-face tolerance to watts before accumulating different current sheet areas.
-    let tolerance = 1e-9
-        * exterior
-            .regions
-            .iter()
-            .zip(&step.regions)
-            .map(|(face, region)| {
-                face.outer_area_m2
-                    + region.outside_heat_w.abs()
-                    + face.convective_heat_w.abs()
-                    + face.radiative_heat_w.abs()
-            })
-            .sum::<f64>();
+    let mut power_budget = 0.;
+    let mut summed_residual = 0.;
+    let mut gross_power = step.inside_heat_w.abs() + step.bare_heat_w.abs();
+    for region in &exterior.regions {
+        let flux = &region.flux;
+        let convective = flux.convective_flux_w_m2;
+        let radiative = flux.radiative_flux_w_m2;
+        let outgoing = flux.balance_residual_w_m2 + convective + radiative;
+        // The face solver declares a relative signed-term budget in W/m², not absolute zero W.
+        // Opposing convection/radiation must not cancel out of this accuracy scale.
+        let flux_budget = 1e-10 * (1. + outgoing.abs() + convective.abs() + radiative.abs());
+        assert!(flux.balance_residual_w_m2.abs() <= flux_budget);
+        let power_scale =
+            region.outer_area_m2 * (1. + outgoing.abs() + convective.abs() + radiative.abs());
+        let roundoff = 64. * f64::EPSILON * power_scale;
+        let region_budget = region.outer_area_m2 * flux_budget + roundoff;
+        assert!(region.balance_residual_w.abs() <= region_budget);
+        assert!(
+            (region.balance_residual_w - region.outer_area_m2 * flux.balance_residual_w_m2).abs()
+                <= roundoff
+        );
+        power_budget += region_budget;
+        summed_residual += region.balance_residual_w;
+        gross_power += region.convective_heat_w.abs() + region.radiative_heat_w.abs();
+    }
+    let power_roundoff = 64. * f64::EPSILON * (1. + gross_power + step.outside_heat_w.abs());
+    assert!((exterior.balance_residual_w - summed_residual).abs() <= power_roundoff);
+    let physical_outside =
+        exterior.convective_heat_w + exterior.radiative_heat_w + step.bare_heat_w;
+    let power_error = step.outside_heat_w - physical_outside;
+    assert!((power_error - summed_residual).abs() <= power_roundoff);
+    assert!(power_error.abs() <= power_budget + power_roundoff);
+
+    // Independently integrate actual convection/radiation, including its area-scaled face error.
+    let physical_energy_error =
+        step.stored_change_j - seconds * (step.inside_heat_w - physical_outside);
+    let energy_roundoff =
+        64. * f64::EPSILON * (1. + step.stored_change_j.abs() + seconds * gross_power);
     assert!(
-        exterior.balance_residual_w.abs() <= tolerance,
-        "exterior residual {} W exceeds {tolerance} W",
-        exterior.balance_residual_w
+        physical_energy_error.abs()
+            <= step.balance_error_j.abs()
+                + seconds * (power_budget + power_roundoff)
+                + energy_roundoff
     );
 }
 
@@ -358,15 +379,8 @@ fn manufactured_signed_radiation_matches_steady_and_transient_networks() {
         near(region.flux.surface_c, surface);
         near(region.flux.convective_flux_w_m2, convection);
         near(region.flux.radiative_flux_w_m2, radiation);
-        let flux_scale = 1. + (outside_w / shell_area).abs() + convection.abs() + radiation.abs();
-        assert!(region.flux.balance_residual_w_m2.abs() <= 1e-9 * flux_scale);
         near(region.convective_heat_w, shell_area * convection);
         near(region.radiative_heat_w, shell_area * radiation);
-        let power_scale = shell_area
-            + outside_w.abs()
-            + (shell_area * convection).abs()
-            + (shell_area * radiation).abs();
-        assert!(region.balance_residual_w.abs() <= 1e-9 * power_scale);
         assert!(region.flux.radiation_enabled);
         conserved(&step, seconds);
     }
