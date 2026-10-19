@@ -1013,7 +1013,12 @@ fn exterior_motion_case() -> (PathBuf, Value) {
     let bare = motion_map(&report, 0.3, false, 2);
     assert!(bare["layout"]["regions"].as_array().unwrap().is_empty());
     fs::write(root.join("bare.json"), serde_json::to_vec(&bare).unwrap()).unwrap();
-    for (i, f) in input["frames"].as_array_mut().unwrap().iter_mut().enumerate() {
+    for (i, f) in input["frames"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
         f["bare_boundaries"] = f["boundaries"].clone();
         let (air, radiant) = if i == 0 { (5., -10.) } else { (40., 55.) };
         f["boundaries"][0]["outside_c"] = json!(air);
@@ -1032,7 +1037,10 @@ fn motion_cli_exterior_preserves_weather_and_heat_across_exposure_and_restart() 
     let (root, input) = exterior_motion_case();
     let complete = motion_success(&root, &input);
     assert_eq!(complete, motion_success(&root, &input));
-    assert_eq!(complete["input"]["frames"][0]["exterior_exchange"], input["frames"][0]["exterior_exchange"]);
+    assert_eq!(
+        complete["input"]["frames"][0]["exterior_exchange"],
+        input["frames"][0]["exterior_exchange"]
+    );
     assert_eq!(
         complete["input"]["frames"][1]["exposed_exterior_exchange"],
         input["frames"][1]["exposed_exterior_exchange"]
@@ -1131,7 +1139,10 @@ fn motion_cli_exterior_refuses_conflicts_missing_bare_and_unqualified_optics() {
         }) as fn(&mut Value),
         |v| v["frames"][1]["exposed_boundaries"][0]["outside_c"] = json!(39.),
         |v| {
-            v["frames"][0].as_object_mut().unwrap().remove("bare_boundaries");
+            v["frames"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("bare_boundaries");
         },
         |v| {
             v["frames"][1]["exposed_exterior_exchange"] =
@@ -1142,7 +1153,10 @@ fn motion_cli_exterior_refuses_conflicts_missing_bare_and_unqualified_optics() {
                 json!([coverage_exterior(5., -10.), coverage_exterior(5., -10.)]);
         },
         |v| {
-            v["frames"][1].as_object_mut().unwrap().remove("exposed_boundaries");
+            v["frames"][1]
+                .as_object_mut()
+                .unwrap()
+                .remove("exposed_boundaries");
         },
         |v| v["frames"][0]["exterior_exchange"][0]["allow_estimates"] = json!(false),
         |v| {
@@ -1157,7 +1171,11 @@ fn motion_cli_exterior_refuses_conflicts_missing_bare_and_unqualified_optics() {
     }
     let (root, legacy, _) = motion_case(false);
     let legacy = motion_success(&root, &legacy);
-    for field in ["exterior_exchange", "bare_boundaries", "exposed_exterior_exchange"] {
+    for field in [
+        "exterior_exchange",
+        "bare_boundaries",
+        "exposed_exterior_exchange",
+    ] {
         assert!(legacy["input"]["frames"][0].get(field).is_none());
         assert!(legacy["trace"][0].get(field).is_none());
         assert!(legacy["energy"].get(field).is_none());
@@ -1188,10 +1206,11 @@ fn static_coverage_exterior_preserves_geometry_optics_and_signed_energy() {
     assert_eq!(out["comfort_claim"], false);
     assert_eq!(out, success(&report, &mapping, &input));
 
-    let positions: Vec<Vec3> =
-        serde_json::from_value(out["cloth_positions_m"].clone()).unwrap();
+    let positions: Vec<Vec3> = serde_json::from_value(out["cloth_positions_m"].clone()).unwrap();
     let regions = mapping["layout"]["regions"].as_array().unwrap();
-    let fields = out["final"]["exterior_exchange"]["regions"].as_array().unwrap();
+    let fields = out["final"]["exterior_exchange"]["regions"]
+        .as_array()
+        .unwrap();
     assert_eq!(fields.len(), regions.len());
     let mut convection = 0.;
     let mut radiation = 0.;
@@ -1216,24 +1235,43 @@ fn static_coverage_exterior_preserves_geometry_optics_and_signed_energy() {
         near(field["outer_area_m2"].as_f64().unwrap(), area, 1e-14);
         let surface = field["flux"]["surface_c"].as_f64().unwrap();
         let qc = 3. * (surface - 25.);
-        let qr = 0.8 * ftx_drape::thermal::steady::exterior::STEFAN_BOLTZMANN
+        let qr = 0.8
+            * ftx_drape::thermal::steady::exterior::STEFAN_BOLTZMANN
             * (fourth(surface) - fourth(0.));
-        near(field["flux"]["convective_flux_w_m2"].as_f64().unwrap(), qc, 1e-9);
-        near(field["flux"]["radiative_flux_w_m2"].as_f64().unwrap(), qr, 1e-9);
-        near(field["convective_heat_w"].as_f64().unwrap(), area * qc, 1e-10);
-        near(field["radiative_heat_w"].as_f64().unwrap(), area * qr, 1e-10);
+        near(
+            field["flux"]["convective_flux_w_m2"].as_f64().unwrap(),
+            qc,
+            1e-9,
+        );
+        near(
+            field["flux"]["radiative_flux_w_m2"].as_f64().unwrap(),
+            qr,
+            1e-9,
+        );
+        near(
+            field["convective_heat_w"].as_f64().unwrap(),
+            area * qc,
+            1e-10,
+        );
+        near(
+            field["radiative_heat_w"].as_f64().unwrap(),
+            area * qr,
+            1e-10,
+        );
         convection += area * qc;
         radiation += area * qr;
         // Independently integrate the fixture's Cp(T)=1000+20*T over retained reference mass.
         for (layer, portion) in portions.iter().enumerate() {
             let index = portion["cloth_triangle"].as_u64().unwrap() as usize;
-            let reference = report["thermal_surface"]["model"]["patches"][index]
-                ["reference_area_m2"]
-                .as_f64()
-                .unwrap()
-                * portion["fraction"].as_f64().unwrap();
+            let reference =
+                report["thermal_surface"]["model"]["patches"][index]["reference_area_m2"]
+                    .as_f64()
+                    .unwrap()
+                    * portion["fraction"].as_f64().unwrap();
             for cell in 0..2 {
-                let t = out["final"]["temperature_c"][i][2 * layer + cell].as_f64().unwrap();
+                let t = out["final"]["temperature_c"][i][2 * layer + cell]
+                    .as_f64()
+                    .unwrap();
                 storage += reference / 2. * (200. * (t - 10.) + 2. * (t * t - 100.));
             }
         }
@@ -1247,7 +1285,11 @@ fn static_coverage_exterior_preserves_geometry_optics_and_signed_energy() {
         convection + radiation + bare,
         1e-8,
     );
-    near(out["transient"]["stored_energy_change_j"].as_f64().unwrap(), storage, 1e-8);
+    near(
+        out["transient"]["stored_energy_change_j"].as_f64().unwrap(),
+        storage,
+        1e-8,
+    );
     let mut convective_j = 0.;
     let mut radiative_j = 0.;
     let mut bare_j = 0.;
@@ -1263,22 +1305,49 @@ fn static_coverage_exterior_preserves_geometry_optics_and_signed_energy() {
         convective_j += dt * exchange["convective_heat_w"].as_f64().unwrap();
         radiative_j += dt * exchange["radiative_heat_w"].as_f64().unwrap();
         bare_j += dt * sample["bare_heat_w"].as_f64().unwrap();
-        near(exchange["convective_energy_j"].as_f64().unwrap(), convective_j, 1e-10);
-        near(exchange["radiative_energy_j"].as_f64().unwrap(), radiative_j, 1e-10);
+        near(
+            exchange["convective_energy_j"].as_f64().unwrap(),
+            convective_j,
+            1e-10,
+        );
+        near(
+            exchange["radiative_energy_j"].as_f64().unwrap(),
+            radiative_j,
+            1e-10,
+        );
     }
     let exchange = &out["transient"]["exterior_exchange"];
-    near(exchange["convective_energy_j"].as_f64().unwrap(), convective_j, 1e-10);
-    near(exchange["radiative_energy_j"].as_f64().unwrap(), radiative_j, 1e-10);
+    near(
+        exchange["convective_energy_j"].as_f64().unwrap(),
+        convective_j,
+        1e-10,
+    );
+    near(
+        exchange["radiative_energy_j"].as_f64().unwrap(),
+        radiative_j,
+        1e-10,
+    );
     near(exchange["bare_energy_j"].as_f64().unwrap(), bare_j, 1e-10);
     near(
         out["transient"]["outgoing_energy_j"].as_f64().unwrap(),
         convective_j + radiative_j + bare_j,
         1e-8,
     );
-    near(exchange["outside_energy_balance_error_j"].as_f64().unwrap(), 0., 1e-8);
-    near(out["transient"]["balance_error_j"].as_f64().unwrap(), 0., 1e-8);
+    near(
+        exchange["outside_energy_balance_error_j"].as_f64().unwrap(),
+        0.,
+        1e-8,
+    );
+    near(
+        out["transient"]["balance_error_j"].as_f64().unwrap(),
+        0.,
+        1e-8,
+    );
 
-    let count = mapping["layout"]["body_triangles"].as_array().unwrap().len();
+    let count = mapping["layout"]["body_triangles"]
+        .as_array()
+        .unwrap()
+        .len();
     let mut explicit = input.clone();
     for field in ["boundaries", "bare_boundaries", "exterior_exchange"] {
         explicit[field] = json!(vec![input[field][0].clone(); count]);
@@ -1290,7 +1359,10 @@ fn static_coverage_exterior_preserves_geometry_optics_and_signed_energy() {
     assert_ne!(expanded["sha256"], out["sha256"]); // Original boundary declarations stay frozen.
     let mut unsigned = out.clone();
     unsigned.as_object_mut().unwrap().remove("sha256");
-    assert_eq!(out["sha256"], sha256_hex(&serde_json::to_vec(&unsigned).unwrap()));
+    assert_eq!(
+        out["sha256"],
+        sha256_hex(&serde_json::to_vec(&unsigned).unwrap())
+    );
 
     let reflective = sewn_report_with_optics(0.4, true, Some(0.1));
     assert_eq!(
@@ -1300,8 +1372,14 @@ fn static_coverage_exterior_preserves_geometry_optics_and_signed_energy() {
     refused(&reflective, &mapping, &input);
     let changed = success(&reflective, &mapped(&reflective), &input);
     assert_ne!(out["model"]["source"], changed["model"]["source"]);
-    assert_ne!(out["final"]["temperature_c"], changed["final"]["temperature_c"]);
-    assert_eq!(out["steady"]["bare_heat_w"], changed["steady"]["bare_heat_w"]);
+    assert_ne!(
+        out["final"]["temperature_c"],
+        changed["final"]["temperature_c"]
+    );
+    assert_eq!(
+        out["steady"]["bare_heat_w"],
+        changed["steady"]["bare_heat_w"]
+    );
 }
 
 #[test]
@@ -1313,14 +1391,23 @@ fn static_coverage_exterior_refuses_ambiguous_boundaries_and_preserves_legacy_fi
         (|v: &mut Value| v["boundaries"][0]["outside_resistance_m2_k_w"] = json!(0.2))
             as fn(&mut Value),
         |v| v["boundaries"][0]["outside_c"] = json!(24.),
-        |v| { v.as_object_mut().unwrap().remove("bare_boundaries"); },
+        |v| {
+            v.as_object_mut().unwrap().remove("bare_boundaries");
+        },
         |v| v["bare_boundaries"][0]["inside_c"] = json!(29.),
         |v| v["exterior_exchange"] = json!([]),
-        |v| v["exterior_exchange"] = json!([coverage_exterior(25., 0.), coverage_exterior(25., 0.)]),
-        |v| v["bare_boundaries"] = json!([conditions()["boundaries"][0], conditions()["boundaries"][0]]),
+        |v| {
+            v["exterior_exchange"] = json!([coverage_exterior(25., 0.), coverage_exterior(25., 0.)])
+        },
+        |v| {
+            v["bare_boundaries"] =
+                json!([conditions()["boundaries"][0], conditions()["boundaries"][0]])
+        },
         |v| v["exterior_exchange"][0]["allow_estimates"] = json!(false),
         |v| v["exterior_exchange"][0]["radiation"]["exposed_face"] = json!("unqualified-face"),
-        |v| { v.as_object_mut().unwrap().remove("exterior_exchange"); },
+        |v| {
+            v.as_object_mut().unwrap().remove("exterior_exchange");
+        },
     ] {
         let mut invalid = input.clone();
         change(&mut invalid);
@@ -1333,9 +1420,13 @@ fn static_coverage_exterior_refuses_ambiguous_boundaries_and_preserves_legacy_fi
     for field in ["steady", "final", "transient"] {
         assert!(legacy[field].get("exterior_exchange").is_none());
     }
-    assert!(legacy["transient"]["trace"].as_array().unwrap().iter().all(|v| {
-        v.get("exterior_exchange").is_none()
-    }));
+    assert!(
+        legacy["transient"]["trace"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| { v.get("exterior_exchange").is_none() })
+    );
 }
 
 #[test]

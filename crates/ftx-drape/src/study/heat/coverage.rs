@@ -341,15 +341,14 @@ impl History {
             environments: e,
             bare_boundaries: bare_boundaries.as_deref().expect("validated bare schedule"),
         });
-        // No exposed portion means this declared face condition has no active exchange area.
-        // Do not force a refusal merely because a moving piece has just become fully covered.
+        // Declared exterior policies persist at zero active area: the core returns an empty,
+        // zero-power field without qualifying hidden optics. Film-only omission is unchanged.
         let exposed = exposed
-            .filter(|_| self.frame.has_exposed_cloth())
+            .filter(|_| self.frame.has_exposed_cloth() || exposed_exterior.is_some())
             .map(|film| boundary(film).map(|b| vec![b; self.frame.cloth_triangle_count()]))
             .transpose()?;
-        let exposed_environments = exposed_exterior
-            .filter(|_| self.frame.has_exposed_cloth())
-            .map(|e| vec![e; self.frame.cloth_triangle_count()]);
+        let exposed_environments =
+            exposed_exterior.map(|e| vec![e; self.frame.cloth_triangle_count()]);
         let exposed_conditions = exposed.as_deref().map(|b| ExposedConditions {
             boundaries: b,
             environments: exposed_environments.as_deref(),
@@ -497,10 +496,17 @@ impl History {
                 self.exposed_radiative_j,
             ),
         ] {
-            if schedule.as_ref().is_some_and(|v| v.iter().any(Option::is_some)) {
-                result[field] = json!({"convective_energy_j":convective,"radiative_energy_j":radiative});
+            if schedule
+                .as_ref()
+                .is_some_and(|v| v.iter().any(Option::is_some))
+            {
+                result[field] =
+                    json!({"convective_energy_j":convective,"radiative_energy_j":radiative});
             }
         }
         Ok(result)
     }
 }
+
+#[cfg(test)]
+mod tests;

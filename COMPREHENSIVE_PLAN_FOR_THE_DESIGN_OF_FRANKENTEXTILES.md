@@ -1526,6 +1526,65 @@ The broader measured-material, moisture, garment-substitution and machine gates 
 
 ---
 
+
+### 25.15 Exterior heat across layered coverage and motion
+
+The delivered exterior solver now reaches the existing body/cloth coverage topology. Covered
+regions form series-connected material columns; only the region's outermost selected textile
+exchanges convection and radiation with its prescribed environment. Body contact films and
+interfaces retain covered-body-area units, exterior exchange uses allocated current outer-cloth
+area, and sensible heat follows allocated reference mass. Moving or stretching the geometry does
+not create fabric mass or count hidden lining as a second exterior shell. The core increments are
+`bc1380b9` (area-aware coverage), `2258a267` (moving coverage and exposed-cloth continuation)
+and `1c7359d8` (static, saved-map and shared scenario consumers).
+
+`Coverage::{steady_exterior,advance_exterior}` and
+`Frame::advance_with_exchange` share the existing constant/temperature-dependent material
+transport and storage solvers. A covered environment is indexed by body triangle and qualifies
+each active region's outermost material observation. Bare-body fractions require separately
+declared films with the same prescribed body temperature; textile emissivity never becomes
+skin emissivity. Uncovered cloth retains its canonical through-thickness state and is adiabatic
+unless explicit face conditions are supplied. Qualified exterior exchange may be selected
+independently for covered and uncovered cloth.
+
+The existing material-coordinate polygon/depth remapper and frozen checkpoints preserve
+covered-to-exposed-to-covered continuation. Changing the next interval's air/radiant temperature
+or prescribed convection does not reset material temperatures. Source/material or topology edits
+still invalidate incompatible state; edits to previously reported conditions change the result
+receipt. Physical boundary energy, numerical remap residuals and exterior face-equation residuals
+remain separate. Signed convection and radiation are reported by active region/source triangle
+and accumulated over the requested intervals.
+
+The native static coverage and saved-map motion consumers, plus the shared material-scenario
+motion evaluator used by native and WASM entry points, accept optional exterior schedules and
+explicit bare/exposed conditions. Omitted fields retain the film-only behavior. The actual
+material observations, boundary policies, geometry and final face fields remain in the frozen
+inputs/results. See `docs/thermal-motion.md` for the interval contract and
+`docs/thermal-coverage.md` for static coverage. Independent tests exercise unequal body/cloth
+areas and reference masses, two-cell conduction networks, manufactured signed radiation,
+partial-body coverage, material changes, moving exposure and checkpoint continuation.
+
+**Measured optical observations (`ftx-op1`).** The current 115-record built-in catalog has no
+optical observations qualified for this radiation model. Acquire matched optical and thermal
+measurements for an ordinary woven, a performance knit and finished cowhide, retaining specimen,
+actual face, finish, ply count, conditioning, temperature validity, spectral/angular basis and
+uncertainty. Keep partial observations useful in the database without promoting them into a
+solver coefficient. Belliveau et al. (DOI [10.1177/0040517519888825](https://doi.org/10.1177/0040517519888825))
+is a useful ordinary-apparel source lead, but its camera-band, two-ply measurements cannot be
+relabelled as total hemispherical single-sheet emissivity. Missing spectral/angular evidence
+and matched transport/storage remain explicit acquisition work.
+
+**Remaining physical and automation gates stay open.** This completes a software propagation
+slice of `ftx-ex2`; its independent measured garment experiments and uncertainty acceptance
+remain required. Optical observations currently have free-form face names. The caller must
+identify the actual exposed physical face; mesh normals alone cannot choose a named coating or
+finish. `ftx-ex3` tracks explicit source-face orientation and automatic property selection across
+reversed pieces and layer changes. Measured ventilation, non-unit view factors, pressure-dependent
+loft, moisture/evaporation, full wearer thermoregulation and the fixed-jacket empirical gates in
+`ftx-tm2`/`ftx-tm8`/`ftx-tmf` are not established by these numerical results.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

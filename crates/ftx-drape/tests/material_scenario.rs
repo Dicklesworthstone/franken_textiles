@@ -1001,10 +1001,8 @@ fn moving_coverage_exterior_consumes_frozen_weather_without_restarting_material_
                 .unwrap();
             frame.body_triangle_count()
         ];
-        let exposed_boundaries = vec![
-            film(policy.exposed_boundaries[i].unwrap());
-            frame.cloth_triangle_count()
-        ];
+        let exposed_boundaries =
+            vec![film(policy.exposed_boundaries[i].unwrap()); frame.cloth_triangle_count()];
         let exposed_environments = vec![
             policy.exposed_exterior_exchange.as_ref().unwrap()[i]
                 .clone()
@@ -1085,8 +1083,7 @@ fn moving_coverage_exterior_consumes_frozen_weather_without_restarting_material_
         motion["samples"]
     );
     assert_ne!(
-        different_finish["motion"]["result"]["transient_coverage"]["result"]["checkpoint"]
-            ["exposed_temperature_c"],
+        different_finish["motion"]["result"]["transient_coverage"]["result"]["checkpoint"]["exposed_temperature_c"],
         h["checkpoint"]["exposed_temperature_c"]
     );
 }
@@ -1110,7 +1107,11 @@ fn coverage_exterior_schedule_and_optical_refusals_preserve_other_motion_consume
             1 => policy.bare_boundaries = None,
             2 => policy.boundaries[1].outside_resistance_m2_k_w = 0.2,
             3 => policy.exposed_boundaries[1] = None,
-            4 => policy.exposed_exterior_exchange.as_mut().unwrap().truncate(1),
+            4 => policy
+                .exposed_exterior_exchange
+                .as_mut()
+                .unwrap()
+                .truncate(1),
             5 => {
                 policy.exterior_exchange.as_mut().unwrap()[0]
                     .as_mut()

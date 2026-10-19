@@ -158,7 +158,36 @@ fn covered_exposed_and_recovered_material_keeps_energy_and_checkpointed_weather(
                 + step.exterior_radiative_heat_w().unwrap());
         bare_energy += seconds * step.heat().bare_heat_w;
         near(step.balance_error_j(), 0.);
-        near(step.exterior_balance_residual_w().unwrap(), 0.);
+        // Exterior acceptance is per current outer cloth area, not a fixed watt threshold.
+        // Keep this boundary-equation check separate from analytic storage and remap checks.
+        let covered_faces = step
+            .heat()
+            .exterior_exchange
+            .iter()
+            .flat_map(|e| e.regions.iter().map(|r| (r.outer_area_m2, &r.flux)));
+        let exposed_faces = step
+            .exposed_exterior_exchange()
+            .into_iter()
+            .flat_map(|e| e.triangles.iter().map(|r| (r.current_area_m2, &r.flux)));
+        let tolerance = covered_faces
+            .chain(exposed_faces)
+            .map(|(area, flux)| {
+                let outgoing = flux.convective_flux_w_m2
+                    + flux.radiative_flux_w_m2
+                    + flux.balance_residual_w_m2;
+                1.01e-10
+                    * area
+                    * (1.
+                        + outgoing.abs()
+                        + flux.convective_flux_w_m2.abs()
+                        + flux.radiative_flux_w_m2.abs())
+            })
+            .sum::<f64>();
+        let residual = step.exterior_balance_residual_w().unwrap();
+        assert!(
+            residual.abs() <= tolerance,
+            "exterior residual {residual} W exceeds area/flux-scaled tolerance {tolerance} W"
+        );
     };
 
     let first = full

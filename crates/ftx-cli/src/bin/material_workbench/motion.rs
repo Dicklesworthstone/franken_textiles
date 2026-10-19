@@ -277,16 +277,13 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
             || f.boundaries.is_empty()
             || f.boundaries.len() > 65_536
             || f.exposed_boundaries.len() > 65_536
-            || f
-                .exterior_exchange
+            || f.exterior_exchange
                 .as_ref()
                 .is_some_and(|v| v.is_empty() || v.len() > 65_536)
-            || f
-                .bare_boundaries
+            || f.bare_boundaries
                 .as_ref()
                 .is_some_and(|v| v.is_empty() || v.len() > 65_536)
-            || f
-                .exposed_exterior_exchange
+            || f.exposed_exterior_exchange
                 .as_ref()
                 .is_some_and(|v| v.is_empty() || v.len() > 65_536)
             || last_time.is_some_and(|t| f.time_seconds <= t)
@@ -387,7 +384,9 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
             .transpose()?;
         let covered_exterior = environments.as_deref().map(|e| ExteriorConditions {
             environments: e,
-            bare_boundaries: bare_boundaries.as_deref().expect("validated bare conditions"),
+            bare_boundaries: bare_boundaries
+                .as_deref()
+                .expect("validated bare conditions"),
         });
         let exposed_boundaries: Option<Vec<Boundary>> = if f.exposed_boundaries.is_empty() {
             None
@@ -455,10 +454,11 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
             totals.incoming_energy_j += dt * step.inside_heat_w();
             totals.outgoing_energy_j += dt * step.outside_heat_w();
             if let Some(e) = &heat.exterior_exchange {
-                totals
-                    .exterior_exchange
-                    .get_or_insert_default()
-                    .add(dt, e.convective_heat_w, e.radiative_heat_w);
+                totals.exterior_exchange.get_or_insert_default().add(
+                    dt,
+                    e.convective_heat_w,
+                    e.radiative_heat_w,
+                );
                 covered_energy.add(dt, e.convective_heat_w, e.radiative_heat_w);
             }
             if let Some(e) = step.exposed_exterior_exchange() {

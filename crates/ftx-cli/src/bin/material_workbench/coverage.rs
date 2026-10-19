@@ -324,8 +324,7 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
                 return Err(invalid("coverage accumulated energy overflow"));
             }
             if i % t.record_every == 0 || i == t.steps {
-                let mut sample =
-                    json!({"time_seconds":i as f64 * t.step_seconds,"stored_energy_change_j":stored,
+                let mut sample = json!({"time_seconds":i as f64 * t.step_seconds,"stored_energy_change_j":stored,
                     "inside_heat_w":next.inside_heat_w,"outside_heat_w":next.outside_heat_w,
                     "bare_heat_w":next.bare_heat_w,"net_heat_w":next.net_heat_w});
                 if let Some(e) = &next.exterior_exchange {
