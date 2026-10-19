@@ -234,6 +234,60 @@ fn partial_records_are_inspectable_not_automatically_simulation_ready() {
 }
 
 #[test]
+fn permanent_membrane_selection_uses_the_same_law_and_independent_readiness() {
+    use ftx_pattern::material_catalog::Selection;
+    let text = include_str!("../../../tests/fixtures/materials/synthetic-membrane-plasticity.json");
+    let mut selected: Value = serde_json::from_str(text).unwrap();
+    let detail: Value = serde_json::from_str(&materials::inspect(text).unwrap()).unwrap();
+    assert_eq!(
+        detail["capabilities"]["mechanical_coefficients"]["ready"],
+        true
+    );
+    let frozen = detail["selection_json"].as_str().unwrap();
+    assert_eq!(
+        detail,
+        serde_json::from_str::<Value>(&materials::inspect(frozen).unwrap()).unwrap()
+    );
+    let snapshot = ftx_pattern::textile_import::catalog()
+        .unwrap()
+        .resolve(&serde_json::from_str::<Selection>(frozen).unwrap())
+        .unwrap();
+    let law = snapshot.membrane_plasticity().unwrap().unwrap();
+    let edits = format!(r#"{{"schema":"ftx-material-bindings/1","default":{frozen}}}"#);
+    let bound: Value = serde_json::from_str(&materials::bind(PATTERN, &edits).unwrap()).unwrap();
+    assert_eq!(bound["drape_materials_with_self_contact"]["ready"], true);
+    let pattern = Pattern::from_json(bound["pattern_json"].as_str().unwrap()).unwrap();
+    let resolved =
+        ftx_drape::material::resolve(&pattern, &ftx_drape::run::DrapeOptions::default()).unwrap();
+    assert_eq!(
+        resolved.report["membrane_plasticity_law_sha256"],
+        law.fingerprint()
+    );
+    assert_eq!(
+        bound["pattern"]["pieces"],
+        serde_json::from_str::<Value>(PATTERN).unwrap()["pieces"]
+    );
+    selected["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("membrane_yield_weft");
+    let detail: Value =
+        serde_json::from_str(&materials::inspect(&selected.to_string()).unwrap()).unwrap();
+    assert_eq!(
+        detail["capabilities"]["mechanical_coefficients"]["ready"],
+        false
+    );
+    assert_eq!(detail["capabilities"]["steady_conduction"]["ready"], true);
+    let bound: Value =
+        serde_json::from_str(&materials::bind(PATTERN, &changes(selected).to_string()).unwrap())
+            .unwrap();
+    assert_eq!(
+        bound["drape_materials_without_self_contact"]["ready"],
+        false
+    );
+}
+
+#[test]
 fn pressure_conditioned_selection_replays_through_binding_and_actual_consumers() {
     use ftx_pattern::{material_compression, materials::Catalog};
     let request = include_str!("../../../tests/fixtures/materials/synthetic-compression.json");

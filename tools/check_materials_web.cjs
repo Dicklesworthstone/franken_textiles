@@ -115,6 +115,25 @@ const server = http.createServer((req, res) => {
     await input('calibrationRequest',{}); assert.equal(await page.isDisabled('#assign'),true);
     assert.equal(await page.locator('a[download="material-calibration.json"]').count(),0);
     assert.notEqual(await run('calibrate'),''); assert.equal(await page.isDisabled('#assign'),true);
+    const permanent=load('synthetic-membrane-plasticity.json'), permanentLaws=[];
+    for (const yieldWarp of [0.2,0.6]) {
+      const selected=structuredClone(permanent);
+      selected.record.properties.membrane_yield_warp.value=yieldWarp;
+      const bound=await assign(selected);
+      assert.deepEqual(bound.pieces,load('synthetic-sewing-pattern.json').pieces);
+      const binding=JSON.parse(await download('material-bindings.json'));
+      assert.equal(binding.drape_materials_without_self_contact.ready,true);
+      const filename=path.join(work,`permanent-${yieldWarp}.json`);
+      fs.writeFileSync(filename,await download('pattern.json'));
+      const expected=JSON.parse(invoke('resolve',filename));
+      assert.deepEqual(binding.drape_materials_without_self_contact.value,expected);
+      assert.match(expected.membrane_plasticity_law_sha256,/^[a-f0-9]{64}$/);
+      permanentLaws.push(expected.membrane_plasticity_law_sha256);
+    }
+    assert.notEqual(...permanentLaws);
+    delete permanent.record.properties.membrane_yield_weft;
+    await assign(permanent);
+    assert.equal(JSON.parse(await download('material-bindings.json')).drape_materials_without_self_contact.ready,false);
     let bound = await assign(sheet(0.1,0.4));
     assert.deepEqual(bound.pieces, load('synthetic-sewing-pattern.json').pieces);
     const boundPath = path.join(work,'bound.json'), selectionPath = write('selection.json',sheet(0.1,0.4));
@@ -189,7 +208,7 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => !document.getElementById('error').hidden);
     assert.equal(await page.locator('a[download="pattern.json"]').count(),0); assert.equal(await page.isDisabled('#bind'),true);
     assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
-    console.log('PASS: real browser nonlinear/proportional/directional calibration with fixed and identified times, estimate admission, catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, automatic asymmetric optical faces, invalidation and model refusal.');
+    console.log('PASS: real browser nonlinear/proportional/directional calibration with fixed and identified times, estimate admission, catalog, frozen binding, permanent membrane law selection, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, automatic asymmetric optical faces, invalidation and model refusal.');
     console.log('No successful model-backed browser drape or real textile validation asserted. Artifacts:',work);
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(e => { console.error(e); server.close(); process.exitCode=1; });

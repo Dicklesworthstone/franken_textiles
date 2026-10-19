@@ -1766,6 +1766,50 @@ observations with conservative continuation. See [wet-denim-measurements.md](doc
 
 ---
 
+### 25.21 Source-qualified permanent in-plane stretch
+
+**Delivered software slice (`ftx-ps1`, supports `ftx-tm4`).** A material can now opt in to
+`orthotropic_green_return_map/1` through `structure.membrane_plasticity_model`. Twelve explicit
+warp/weft/shear yield, hardening, total-strain and accumulation quantities must match the specimen
+and conditioning of all four scalar elastic observations. The same normalized material snapshot
+supplies the elastic tensor and binds history identity. Missing or incompatible evidence refuses;
+the catalog gains no guessed textile yields, damage thresholds or fiber-name rules.
+
+The bounded associated return map uses raw reference-frame Green strain `[E11,E22,2E12]` and
+work-conjugate second-Piola sheet resultants in N/m. Consistent condensed derivatives replace each
+selected triangle's elastic contribution once. Physical elastic-plus-hardening storage and
+nonnegative plastic dissipation are reported separately in joules using retained reference area.
+Current and permanent metrics must remain positive definite, and total/accumulated strain must
+stay inside their authored domains. This additive phenomenological law captures permanent set,
+elastic unloading and directional isotropic hardening; it does not implement damage or rupture.
+
+Existing default/per-piece material binding, unchanged-pattern sewing and prescribed-body motion
+consume the law after grain mapping and seam welding. Selected triangles require the exact tensor,
+unit compression factors and no simultaneous Maxwell/nonlinear membrane law. Other triangles keep
+their own models. History starts pristine relative to the authored reference metric; kinematic
+placement is not an inferred forming process. Physical step acceptance commits geometry, velocity,
+contact and material memories together. Trials and failed steps cannot advance permanent strain;
+cloning and motion continuation preserve it. Static/speed-only settling refuses an unspecified
+irreversible loading path.
+
+The ordinary synthetic selection and executable commands are documented in
+[material-membrane-plasticity.md](docs/material-membrane-plasticity.md). Drape and motion reports
+retain `membrane_plasticity_history`, law hashes, accepted strain, storage and dissipation.
+Checked library reactions expose the frozen accepted state and refuse stale or invalid history.
+The 17 new material/solver checks pass within 76 focused Rust tests, including existing bending
+and Maxwell checks and actual native sewn/motion workflows. Formatting, strict workspace all-target
+Clippy, the wasm32 build and compiled-WASM/actual-worker/native equality pass. Complete workspace
+testing and Chromium navigation remain unverified in this session after compiler SIGKILL and page
+crashes in the constrained test environment; numerical tests do not establish empirical agreement.
+
+**Remaining consequential work.** `ftx-ps1` and `ftx-tm4` remain open for measured matched cyclic
+warp/weft/shear data, independent loading/unloading/reloading acceptance, stiffness degradation,
+damage and rupture. A same-triangle Maxwell/nonlinear plastic law, gather softening, conditioning,
+remeshing/restart transfer and plastic-work heat coupling require their own qualified models.
+No numerical success supplies missing linen/leather/knit parameters or closes `ftx-tm2`/`ftx-tm8`.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
