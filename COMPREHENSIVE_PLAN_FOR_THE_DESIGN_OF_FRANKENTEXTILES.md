@@ -1473,6 +1473,59 @@ establish measured garment fit/warmth, complete textile failure behavior or robo
 
 ---
 
+### 25.14 Material-conditioned compression and less wasteful cutting
+
+**Grain-qualified stock use (`ftx-gr1`, supports `ftx-tm7`).** Commit `367677b` adds explicit
+180-degree reversal permission to both roll polygon nesting and finite hide/remnant allocation.
+Permission names the exact material SHA-256 being cut; a replacement textile, nap or finish cannot
+inherit it silently. One-way grain remains the default. Outer cuts, holes, drills, directed grain
+and affine transforms move together, without mirroring or crossgrain substitution. Defects,
+clearances and occupied residual stock remain checked. The completed feasible marker survives a
+bounded roll-search limit. A synthetic pair of triangular pieces now uses a 120 mm marker instead
+of over 200 mm, and the existing increment-rounded procurement consumer reduces its order from
+$2.50 to $1.50. A second test makes an otherwise unusable remnant usable. These are reproducible
+geometry/accounting results, not global nesting optimality or physical cutter qualification.
+
+**Prepared pressure states (`ftx-cp1`, supports `ftx-tmc`).**
+`ftx-material-compression/1` prepares the existing frozen material selection at a declared normal
+pressure from matched specimen, conditioning and loading-branch observations. Exact observed knots
+retain source quantities and units. Interpolation needs explicit estimate consent and stays inside
+the characterized interval. Retaining another scalar requires explicit source-bearing invariance
+evidence over the interval; its original fixed-pressure observation must also be covered. Reference
+areal mass keeps its original quantity. Unqualified scalars and old nonlinear, relaxation and
+temperature-dependent response blocks/selectors are removed and reported, preventing a new loft
+from retaining an unrelated resistance, density, stiffness or history law.
+
+Both native commands and the browser workbench expose this operation. The output carries a normal
+`Selection` and exact Rust-serialized `selection_json`, so assignment reaches existing drape contact
+thickness, sheet mass, mechanics, steady/transient heat, cutting and study consumers without a new
+material solver. Sewing refuses a selected compressed thickness where unloaded stack clearance is
+required. The synthetic fixture gives 15 mm thickness and 0.375 m² K/W at 250 Pa, with invariant
+100 J/(m² K) heat capacity; actual sewn-band tests also exercise pressure-dependent contact and
+thermal transport with unchanged reference mass. This is an operator-prescribed state, not solved
+normal contact pressure, reversible fill mechanics, a pressure trajectory or validated seam bulk.
+See `docs/pressure-conditioned-materials.md` and `tests/fixtures/materials/synthetic-compression.json`.
+
+**Measured loaded insulation (`ftx-li1`, supports `ftx-tm2` and `ftx-tmc`).** Six Rogale et al.
+(2023) records represent polyester fleece, polyester spacer and a quilted polyester/polypropylene
+assembly at 0.95 N and 9.5 N, bringing the catalog to **115 records** with the preceding cotton
+tranche. Published group mass and directly measured thickness/displacement/resistance retain their
+own conditions. Loaded thickness derived by subtraction is an explicit estimate; the directly
+measured resistance remains usable without admitting that estimate. The existing steady heat
+consumers change automatically when the selected force state changes. Numerical loaded area is
+absent, so force cannot be converted into pressure knots for the new preparation API. Missing heat
+capacity and mechanical coefficients remain unavailable. See `docs/loaded-insulation-measurements.md`.
+
+**Next critical coupling (`ftx-cp2`).** Obtain matched pressure-area/force, thickness, thermal
+transport and loading/unloading/recovery observations for real fills and layered fabrics. Then
+couple local contact pressure and compression state to geometry and heat while conserving
+reference mass, tracking mechanical work/dissipation and rolling back failed motion steps. Preserve
+separate branches and relaxation durations; measurements after unloading cannot become sustained
+pressure observations. Validate held-out compressed coupons before fixed-pattern garment comparisons.
+The broader measured-material, moisture, garment-substitution and machine gates remain open.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

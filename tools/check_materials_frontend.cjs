@@ -630,6 +630,11 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     ftx.initSync({ module: fs.readFileSync(path.join(pkg, 'ftx_wasm_bg.wasm')) });
     const w = await workerModule({ bindings: ftx });
     const fixture = n => fs.readFileSync(path.join(__dirname, '../tests/fixtures/materials', n), 'utf8');
+    for (const admission of [false, true]) {
+      const calibration = JSON.parse(ftx.material_calibrate_nonlinear(fixture('synthetic-nonlinear-swatch.json'), admission));
+      assert.equal(calibration.material.capabilities.mechanical_coefficients.ready, admission);
+      assert.deepEqual(calibration.material, JSON.parse(ftx.material_inspect(calibration.material.selection_json)));
+    }
     const compressionRequest = fixture('synthetic-compression.json');
     const prepared = await w.send({ type: 'pressure', compressionRequest });
     assert.equal(prepared.type, 'result', prepared.message);

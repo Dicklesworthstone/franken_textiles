@@ -151,7 +151,7 @@ pub fn calibrate_nonlinear(input: &str, allow_estimates: bool) -> Result<String,
     })?;
     serde_json::to_string(
         &json!({"calibration":report,"selection":snapshot.frozen_selection(),
-        "material":detail(&snapshot),"fit_claim":false}),
+        "material":detail(&snapshot)?,"fit_claim":false}),
     )
     .map_err(invalid)
 }
