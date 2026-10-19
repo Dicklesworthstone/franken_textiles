@@ -127,7 +127,11 @@ fn declared_exterior_survives_full_partial_full_partial_coverage_with_heat_intac
         if offset == 0. {
             assert!(!history.frame.has_exposed_cloth());
             assert_eq!(exchange["triangles"], json!([]));
-            for key in ["convective_heat_w", "radiative_heat_w", "balance_residual_w"] {
+            for key in [
+                "convective_heat_w",
+                "radiative_heat_w",
+                "balance_residual_w",
+            ] {
                 assert_eq!(exchange[key], 0.);
                 assert_eq!(trace[key], 0.);
             }
@@ -150,7 +154,9 @@ fn declared_exterior_survives_full_partial_full_partial_coverage_with_heat_intac
         }
         assert!((stored - history.stored_j - history.signed_remap_j).abs() < 1e-8);
     }
-    let out = history.finish("synthetic-path", "synthetic-start", 2.).unwrap();
+    let out = history
+        .finish("synthetic-path", "synthetic-start", 2.)
+        .unwrap();
     assert_eq!(out["trace"].as_array().unwrap().len(), 4);
     assert_eq!(
         out["request"]["exposed_exterior_exchange"]

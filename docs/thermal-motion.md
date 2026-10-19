@@ -196,17 +196,21 @@ within the donor temperature range. It is a first-order mixing operation: coarse
 loses unresolved gradients, and remapping back cannot recreate them. Projection and
 remap accuracy must be studied separately from physical time-step refinement.
 
-The trace reports remap energy separately from physical boundary heat:
+Each trace entry reports interval heat separately from remap diagnostics:
 
 - `physical_stored_change_j` and `net_boundary_energy_j` are the time-integrated heat
   calculation. The net is accumulated before cancellation of bare-body heat paths.
-- `signed_remap_residual_j` and `absolute_remap_residual_j` describe numerical transfer
+- `remap.residual_j` and `remap.absolute_residual_j` describe numerical transfer
   imbalance, **not** an environmental heat source. Per-cloth errors cannot cancel out
-  unnoticed. `material_energy_change_including_remap_j` includes this residual explicitly.
-- `polygon_roundoff_m2` records area changes from canonicalizing floating-point inward
-  corners in mathematically convex material footprints. Original geometric receipts
-  remain unchanged. Genuine nonconvex polygons refuse; material-allocation and energy
-  acceptance tolerances are not relaxed to accommodate missing donors.
+  unnoticed. Invocation totals are `energy.signed_remap_residual_j` and
+  `energy.absolute_remap_residual_j`; the top-level
+  `material_energy_change_including_remap_j` includes the signed residual explicitly.
+- `remap.polygon_roundoff_m2` records area changes from canonicalizing floating-point
+  inward corners in mathematically convex material footprints. Original geometric
+  receipts remain unchanged. Genuine nonconvex polygons refuse; material-allocation
+  and energy acceptance tolerances are not relaxed to accommodate missing donors.
+
+A trace entry has `remap: null` when its source and destination frames are unchanged.
 
 The polygon correction addresses a real sewn-band regression: inverse barycentric
 roundoff created a microscopic inward edge whose infinite clipping plane discarded a

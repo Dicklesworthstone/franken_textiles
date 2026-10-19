@@ -309,8 +309,8 @@ measured warmth, fire safety, PPE certification or machine-process permission.
 
 For prescribed pose sequences, conservative material-temperature remapping and resumable
 heat histories, use `ftx-materials thermal-motion`; see [thermal-motion.md](thermal-motion.md).
-This path requires geometry-derived maps and an unchanged covered material domain, not
-arbitrary appearance/disappearance of cloth or automatic temperature initialization.
+This path requires geometry-derived maps and unchanged source materials and cloth
+topology; portions may enter or leave body coverage without temperature resets.
 
 ## Exterior convection and radiation
 
