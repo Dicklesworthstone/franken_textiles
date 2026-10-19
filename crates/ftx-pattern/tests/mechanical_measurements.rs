@@ -23,9 +23,15 @@ fn source_shear_and_construction_normalize_without_changing_axes() {
     let catalog = Catalog::builtin().unwrap();
     // Independent Table 1/Table 3 known answers: x is weft and y is warp.
     let expected = [
-        (0.000_660, 2480., 2260., 64.7262, 98_070., 295_900., 174_900.),
-        (0.000_822, 2300., 1420., 215.4462, 262_100., 652_000., 287_900.),
-        (0.000_769, 4500., 2340., 72.64743, 94_470., 325_300., 158_100.),
+        (
+            0.000_660, 2480., 2260., 64.7262, 98_070., 295_900., 174_900.,
+        ),
+        (
+            0.000_822, 2300., 1420., 215.4462, 262_100., 652_000., 287_900.,
+        ),
+        (
+            0.000_769, 4500., 2340., 72.64743, 94_470., 325_300., 158_100.,
+        ),
     ];
     for (id, (h, warp, weft, shear, source_shear, bx, by)) in IDS.into_iter().zip(expected) {
         let resolved = catalog.resolve(&selection(id)).unwrap();
@@ -62,7 +68,10 @@ fn original_fits_and_ambiguous_units_never_complete_a_mechanical_law() {
         let resolved = catalog.resolve(&selected).unwrap();
         let material = resolved.material();
         assert_eq!(material.properties.len(), 33);
-        assert_eq!(material.structure["source_weight_value_without_unit"], weight);
+        assert_eq!(
+            material.structure["source_weight_value_without_unit"],
+            weight
+        );
         for absent in [
             "areal_density",
             "warp_stiffness",
@@ -117,7 +126,10 @@ fn frozen_source_records_preserve_conditions_coefficients_and_missing_units() {
     let frozen = resolved.frozen_selection();
     let encoded = serde_json::to_string(&frozen).unwrap();
     let replay: Selection = serde_json::from_str(&encoded).unwrap();
-    assert_eq!(catalog.resolve(&replay).unwrap().sha256(), resolved.sha256());
+    assert_eq!(
+        catalog.resolve(&replay).unwrap().sha256(),
+        resolved.sha256()
+    );
     assert!(encoded.contains("10.1007/s00366-026-02343-z"));
     assert!(encoded.contains("source_weight_value_without_unit"));
     let mut changed = replay.clone();
