@@ -54,7 +54,7 @@ fn both_native_commands_replay_the_same_source_complete_nonlinear_material() {
     assert_eq!(denied["calibration"], fitted["calibration"]);
     let pattern = Pattern::new(json!({"fabric":{"material":fitted["selection"]}}));
     let physical = material::resolve(&pattern, &DrapeOptions::default()).unwrap();
-    let selection = serde_json::from_value(fitted["selection"].clone()).unwrap();
+    let selection = serde_json::from_str(fitted["selection_json"].as_str().unwrap()).unwrap();
     let selected = ftx_pattern::textile_import::catalog()
         .unwrap()
         .resolve(&selection)

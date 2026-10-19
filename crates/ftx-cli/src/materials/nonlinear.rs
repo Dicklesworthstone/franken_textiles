@@ -37,8 +37,11 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
         snapshot.bending_plasticity()?;
         Ok::<(), Refusal>(())
     })();
+    let selection = snapshot.frozen_selection();
+    let selection_json = serde_json::to_string(&selection)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     Ok(
-        json!({"calibration":report,"selection":snapshot.frozen_selection(),
+        json!({"calibration":report,"selection":selection,"selection_json":selection_json,
         "simulation_ready":mechanics.is_ok(),"mechanics_refusal":mechanics.err(),
         "fit_claim":false,"calibration_observations_are_not_independent_garment_validation":true}),
     )

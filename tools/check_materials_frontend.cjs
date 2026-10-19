@@ -8,6 +8,19 @@ const vm = require('node:vm');
 const read = name => fs.readFileSync(path.join(__dirname, '../web', name), 'utf8');
 const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const calibrationSelection = admission => `{"id":"identified","expected_sha256":"locked","allow_estimates":${admission},"value":-0.0,"coefficient":1.0}`;
+function calibrationReport(mode = 'nonlinear', admission = false, check = true) {
+  const selection = calibrationSelection(admission), quality = { components: 12, rms_scaled: 0.02, peak_scaled: 0.04 };
+  return { selection: JSON.parse(selection), selection_json: selection, fit_claim: false,
+    material: { selection: JSON.parse(selection), selection_json: selection, snapshot: { id: 'identified' },
+      capabilities: { mechanical_coefficients: admission ? {ready:true} : {ready:false,refusal:{message:'Fitted estimates need admission'}} } },
+    calibration: { schema: mode === 'nonlinear' ? 'ftx-nonlinear-swatch-calibration-report/1' : 'ftx-relaxation-calibration-report/1',
+      input: { orthotropic: mode === 'relaxation' ? {times_seconds:[0.3,8]} : undefined,
+        strain_range: [[-0.1,0.2],[-0.2,0.3],[-0.4,0.4]], max_rms_scaled:0.05, max_peak_scaled:0.1 },
+      fitted_strain_range: [[-0.1,0.2],[-0.2,0.3],[-0.4,0.4]],
+      material: { membrane_relaxation: { orthotropic_branches: [{id:'warp'},{id:'shear'}] } },
+      fit: quality, check: check ? quality : null, input_sha256:'source-lock', missing_mechanics:[] } };
+}
 
 async function workerModule({ failFold = false, failExport = false, trap = false, rejectLoad = false,
   failScenario = false, trapScenario = false, bindings = null } = {}) {
@@ -21,6 +34,8 @@ async function workerModule({ failFold = false, failExport = false, trap = false
       const selection = '{"id":"compressed","allow_estimates":true,"value":-0.0}';
       return `{"selection":${selection},"selection_json":${JSON.stringify(selection)},"input":{"pressure_pa":250.0},"interpolated":true}`;
     },
+    material_calibrate_nonlinear: (r, a) => { called.push(['calibrate-nonlinear',r,a]); return JSON.stringify(calibrationReport('nonlinear',a)); },
+    material_calibrate_relaxation: (r, a) => { called.push(['calibrate-relaxation',r,a]); return JSON.stringify(calibrationReport('relaxation',a)); },
     material_screen: r => { called.push(['screen', r]); return '{"alternatives":[],"coefficient":1.0}'; },
     material_study: (p, r) => { called.push(['study', p, r]); return '{"alternatives":[],"coordinate":-0.0}'; },
     material_scenario_study: (b, p, r, s, m) => {
@@ -156,6 +171,26 @@ test('pressure conditioning preserves exact request and frozen selection through
   assert.equal(result.result.inspection.selection.id, 'compressed');
 });
 
+test('calibration worker routes both shared engines with explicit consent and lossless reusable selections', async () => {
+  const w = await workerModule(), input = '{"coefficient":1.0,"origin":-0.0}';
+  for (const mode of ['nonlinear','relaxation']) for (const allowEstimates of [false,true]) {
+    const result = await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest:input,allowEstimates,request:19});
+    assert.equal(result.type,'result'); assert.equal(result.request,19);
+    assert.deepEqual(w.called.at(-1),['calibrate-'+mode,input,allowEstimates]);
+    assert.equal(result.result.material.capabilities.mechanical_coefficients.ready,allowEstimates);
+    assert.equal(result.files[0].text,JSON.stringify(calibrationReport(mode,allowEstimates)));
+    assert.equal(result.files[1].text,calibrationSelection(allowEstimates));
+    assert.equal(result.files[2].text,input);
+  }
+  for (const bad of [{calibrationMode:'arbitrary',allowEstimates:false},{calibrationMode:'nonlinear',allowEstimates:'true'}]) {
+    const count=w.called.length;
+    assert.equal((await w.send({type:'calibrate',calibrationRequest:input,...bad})).type,'error');
+    assert.equal(w.called.length,count);
+  }
+  const incomplete=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_nonlinear:()=>'{"selection":{"id":"old"}}'}});
+  assert.match((await incomplete.send({type:'calibrate',calibrationMode:'nonlinear',allowEstimates:false,calibrationRequest:input})).message,/selection and capability bridge/);
+});
+
 test('scenario studies retain partial failures and free the fresh model on success, refusal and trap', async () => {
   for (const mode of [{}, { failScenario: true }, { trapScenario: true }]) {
     const w = await workerModule(mode);
@@ -264,7 +299,6 @@ test('catalog changes cannot publish another material inspection or silently ena
   const reading = p.e.selectionFile.onchange(); p.e.catalog.value = 'latest'; p.e.catalog.onchange();
   d.resolve('{"id":"late"}'); await reading; assert.equal(JSON.parse(p.e.selection.value).id, 'latest');
 });
-
 test('pressure-conditioned selections enter ordinary piece bindings without a numeric JSON round trip', async () => {
   const p = await pageModule(); await p.load();
   const request = '{"pressure_pa":250.0,"source_value":-0.0}';
@@ -300,6 +334,57 @@ test('a newer selection cancels a delayed pressure request before it can replace
   assert.equal(JSON.parse(p.e.selection.value).id, 'newer-material');
   assert.equal(p.e.assign.disabled, true);
 });
+
+test('identified swatches show independent errors, retain their source across pattern loading and bind without numeric mutation', async () => {
+  const p=await pageModule(), input='{"coefficient":1.0,"origin":-0.0}';
+  p.e.calibrationMode.value='nonlinear'; p.select('calibrationRequest',input); p.e.calibrationRequest.handlers.change();
+  assert.equal(p.e.calibrate.disabled,false); assert.equal(p.e.calibrationEstimates.checked,false);
+  await p.e.calibrate.onclick();
+  assert.equal(p.current().messages.at(-1).calibrationRequest,input);
+  assert.equal(p.current().messages.at(-1).allowEstimates,false);
+  const selection=calibrationSelection(false);
+  p.emit(calibrationReport('nonlinear',false,false),[{name:'calibrated-selection.json',text:selection,mime:'application/json'}]);
+  const s=section(p,'Identified material behavior');
+  assert.match(visibleText(s),/Held out: not supplied/);
+  assert.match(visibleText(s),/Fitted estimates need admission/);
+  assert.match(visibleText(s),/Strain domain from fitting observations/);
+  assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,true);
+  await p.load(); assert.equal(s.hidden,false); assert.equal(p.live.size,1); assert.equal(p.e.assign.disabled,false);
+  p.e.target.value='front'; p.e.assign.onclick(); await p.e.bind.onclick();
+  assert.ok(p.current().messages.at(-1).changes.includes(selection));
+  assert.equal(JSON.parse(p.current().messages.at(-1).changes).pieces.front.allow_estimates,false);
+});
+
+test('calibration consent and response changes withdraw only the prepared result and cannot revive stale work', async () => {
+  const p=await pageModule(); await p.load();
+  p.e.calibrationMode.value='relaxation'; p.e.calibrationEstimates.checked=true;
+  p.select('calibrationRequest'); p.e.calibrationRequest.handlers.change(); await p.e.calibrate.onclick();
+  assert.equal(p.current().messages.at(-1).calibrationMode,'relaxation');
+  p.emit(calibrationReport('relaxation',true),[{name:'calibrated-selection.json',text:calibrationSelection(true),mime:'application/json'}]);
+  assert.match(visibleText(section(p,'Identified material behavior')),/Directional relaxation/);
+  p.e.calibrationEstimates.checked=false; p.e.calibrationEstimates.handlers.change();
+  assert.equal(p.live.size,0); assert.equal(p.e.assign.disabled,true);
+  await p.e.calibrate.onclick(); const old=p.current(), id=old.messages.at(-1).request;
+  p.e.calibrationMode.value='nonlinear'; p.e.calibrationMode.handlers.change(); p.ready();
+  old.emit({type:'result',request:id,result:calibrationReport('relaxation',true),files:[]});
+  assert.equal(old.dead,true); assert.equal(section(p,'Identified material behavior').hidden,true);
+  assert.equal(p.e.assign.disabled,true);
+  const delay=deferred(); p.e.calibrationRequest.files[0].text=()=>delay.promise;
+  const before=p.current(), running=p.e.calibrate.onclick();
+  p.e.catalog.value='newer'; p.e.catalog.onchange(); p.ready(); delay.resolve('{}'); await running;
+  assert.equal(before.messages.length,0); assert.equal(JSON.parse(p.e.selection.value).id,'newer');
+});
+
+test('a refused replacement calibration leaves no previous selection or report available for assignment', async () => {
+  const p=await pageModule(); await p.load(); p.e.calibrationMode.value='nonlinear'; p.select('calibrationRequest');
+  await p.e.calibrate.onclick(); p.emit(calibrationReport(),[{name:'material-calibration.json',text:'{}',mime:'application/json'}]);
+  assert.equal(p.live.size,1); assert.equal(p.e.assign.disabled,false);
+  await p.e.calibrate.onclick(); const request=p.current().messages.at(-1).request;
+  p.current().emit({type:'error',request,message:'held-out peak exceeds declared budget'});
+  assert.match(p.e.error.textContent,/held-out peak/); assert.equal(p.live.size,0);
+  assert.equal(p.e.assign.disabled,true); assert.equal(section(p,'Identified material behavior').hidden,true);
+});
+
 test('material changes withdraw drape and thermal outputs while environment edits preserve mechanics', async () => {
   const p = await pageModule(); await p.load(); await p.bind();
   for (const k of ['measurements', 'fit', 'body', 'heatConditions']) p.select(k);
@@ -634,6 +719,27 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
       const calibration = JSON.parse(ftx.material_calibrate_nonlinear(fixture('synthetic-nonlinear-swatch.json'), admission));
       assert.equal(calibration.material.capabilities.mechanical_coefficients.ready, admission);
       assert.deepEqual(calibration.material, JSON.parse(ftx.material_inspect(calibration.material.selection_json)));
+    }
+    for (const [mode, filename] of [['nonlinear','synthetic-nonlinear-swatch.json'],
+      ['relaxation','synthetic-relaxation-history.json']]) {
+      const calibrationRequest = fixture(filename);
+      for (const allowEstimates of [false, true]) {
+        const identified = await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest,allowEstimates});
+        assert.equal(identified.type,'result',identified.message);
+        const expected = ftx[`material_calibrate_${mode}`](calibrationRequest,allowEstimates);
+        assert.equal(identified.files[0].text,expected);
+        assert.equal(identified.files[1].text,identified.result.selection_json);
+        assert.equal(identified.files[2].text,calibrationRequest);
+        assert.deepEqual(JSON.parse(ftx.material_inspect(identified.result.selection_json)),identified.result.material);
+        assert.equal(identified.result.selection.allow_estimates,allowEstimates);
+        assert.equal(identified.result.material.capabilities.mechanical_coefficients.ready,allowEstimates);
+        const changes = `{"schema":"ftx-material-bindings/1","default":${identified.result.selection_json}}`;
+        const binding = await w.send({type:'bind',pattern:fixture('synthetic-sewing-pattern.json'),changes});
+        assert.equal(binding.type,'result',binding.message);
+        assert.equal(binding.result.geometry_changed,false);
+        assert.equal(binding.result.pattern.fabric.material.expected_sha256,identified.result.selection.expected_sha256);
+        assert.equal(binding.result.drape_materials_with_self_contact.ready,allowEstimates);
+      }
     }
     const compressionRequest = fixture('synthetic-compression.json');
     const prepared = await w.send({ type: 'pressure', compressionRequest });

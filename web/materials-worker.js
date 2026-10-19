@@ -35,6 +35,20 @@ self.onmessage = async ({ data: msg }) => {
           file("pressure-conditioned-selection.json", result.selection_json),
           file("compression-request.json", msg.compressionRequest)];
         break;
+      case "calibrate": {
+        const identify = ({ nonlinear: ftx.material_calibrate_nonlinear,
+          relaxation: ftx.material_calibrate_relaxation })[msg.calibrationMode];
+        if (!["nonlinear", "relaxation"].includes(msg.calibrationMode)) throw Error("Choose the response to identify.");
+        if (typeof identify !== "function") throw Error("Rebuild web/pkg: missing material calibration engine.");
+        if (typeof msg.allowEstimates !== "boolean") throw Error("Declare admission of fitted estimates explicitly.");
+        raw = identify(msg.calibrationRequest, msg.allowEstimates); result = json(raw);
+        if (typeof result.selection_json !== "string" || !result.material?.capabilities) {
+          throw Error("Rebuild web/pkg: missing calibrated selection and capability bridge.");
+        }
+        files = [file("material-calibration.json", raw), file("calibrated-selection.json", result.selection_json),
+          file("calibration-input.json", msg.calibrationRequest)];
+        break;
+      }
       case "screen":
         raw = ftx.material_screen(msg.screenRequest); result = json(raw);
         files = [file("material-screen.json", raw), file("screen-request.json", msg.screenRequest)];

@@ -6,6 +6,8 @@ use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
 mod nonlinear;
+#[path = "bin/material_workbench/relaxation.rs"]
+mod relaxation;
 mod scenario;
 mod screen;
 mod stock;
@@ -13,14 +15,19 @@ mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
-    if action == "calibrate-nonlinear" {
+    if matches!(action, "calibrate-nonlinear" | "calibrate-relaxation") {
         known_options(args, "materials", &["allow-estimates"])?;
         let [path] = &args.positional[2..] else {
             return Err(bad_input(
-                "usage: ftx materials calibrate-nonlinear SWATCHES.json [--allow-estimates]",
+                "usage: ftx materials calibrate-nonlinear SWATCHES.json | calibrate-relaxation HISTORIES.json [--allow-estimates]",
             ));
         };
-        let result = nonlinear::run(path, args.options.contains_key("allow-estimates"))?;
+        let allow = args.options.contains_key("allow-estimates");
+        let result = if action == "calibrate-relaxation" {
+            relaxation::run(path, allow)?
+        } else {
+            nonlinear::run(path, allow)?
+        };
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }

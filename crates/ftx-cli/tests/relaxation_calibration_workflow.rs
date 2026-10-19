@@ -75,6 +75,20 @@ fn acquisition_to_locked_selection_to_pattern_keeps_geometry_and_estimate_policy
     assert_eq!(denied["selection"]["allow_estimates"], false);
     assert!(denied["mechanics_refusal"].is_object());
     let fitted = w.ok(FIT);
+    let primary = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&w.0)
+        .arg("materials")
+        .args(FIT)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        primary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&primary.stderr)
+    );
+    let primary: Value = serde_json::from_slice(&primary.stdout).unwrap();
+    assert_eq!(primary["result"], fitted);
     assert_eq!(fitted["simulation_ready"], true);
     assert_eq!(fitted["fit_claim"], false);
     assert_eq!(fitted["empirical_validation_claim"], false);
@@ -100,7 +114,11 @@ fn acquisition_to_locked_selection_to_pattern_keeps_geometry_and_estimate_policy
     assert_eq!(fitted, w.ok(FIT));
     let original = pattern();
     w.write("pattern.json", &original);
-    w.write("selection.json", &fitted["selection"]);
+    fs::write(
+        w.0.join("selection.json"),
+        fitted["selection_json"].as_str().unwrap(),
+    )
+    .unwrap();
     let bound = w.ok(&["bind", "pattern.json", "selection.json", "bound.json"]);
     assert_eq!(bound["geometry_changed"], false);
     let bytes = fs::read(w.0.join("bound.json")).unwrap();
@@ -141,6 +159,19 @@ fn held_out_failure_and_unknown_permission_do_not_publish_partial_results() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("held-out"));
     let out = w.run(&["calibrate-relaxation", "histories.json", "--allow-anything"]);
     assert!(!out.status.success());
+    assert!(out.stdout.is_empty());
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&w.0)
+        .args([
+            "materials",
+            "calibrate-relaxation",
+            "histories.json",
+            "--allow-anything",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
     assert!(out.stdout.is_empty());
 }
 

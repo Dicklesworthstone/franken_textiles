@@ -2,10 +2,11 @@
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "coverage", "cut", "stock", "price", "sew"];
-const operations = [...boundOperations, "screen", "study", "scenario", "pressure"];
+const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "calibrate"];
+const selectionOperations = ["inspect", "pressure", "calibrate"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
-let pressureInspected = false;
+let preparedBy = null;
 let sourceText = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
@@ -15,7 +16,7 @@ for (const op of operations) {
   const section = document.createElement("div"); section.hidden = true;
   const title = document.createElement("h3"); title.textContent = ({ screen: "Source-qualified screening",
     study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives",
-    pressure: "Pressure-conditioned material" })[op] || op;
+    pressure: "Pressure-conditioned material", calibrate: "Identified material behavior" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
   section.append(title, summary, comparison, links); $("outputs").append(section);
@@ -31,6 +32,7 @@ function controls() {
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
   $("pressure").disabled ||= !has("compressionRequest");
+  $("calibrate").disabled ||= !has("calibrationRequest");
   $("study").disabled ||= !source || !has("studyRequest");
   $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || (!has("scenarioBody") && !has("measurements"));
   $("exports").disabled ||= !has("measurements") || !has("fit");
@@ -311,6 +313,33 @@ function inspectResult(r, selectionJson) {
   }
   $("capabilities").append(table);
 }
+function calibrationResult(parent, r) {
+  const c = r.calibration, nonlinear = c.schema === "ftx-nonlinear-swatch-calibration-report/1";
+  const method = nonlinear ? "Nonlinear stretch and shear" : c.input.orthotropic ?
+    "Directional relaxation at the declared times" : "Proportional relaxation ratios and times";
+  const t = table(parent, "Observed force errors — independent partitions", ["Partition", "Measured components", "Scaled RMS", "Scaled peak"]);
+  for (const [name, quality] of [["Fit", c.fit], ["Held out", c.check]]) {
+    cells(t, [quality ? name : `${name}: not supplied`, metric(quality?.components), metric(quality?.rms_scaled), metric(quality?.peak_scaled)]);
+  }
+  const range = nonlinear ? c.fitted_strain_range : c.input.strain_range;
+  const domain = table(parent, nonlinear ? "Strain domain from fitting observations" : "Source-declared strain applicability",
+    ["Material direction", "Minimum Green strain", "Maximum Green strain"]);
+  for (const [i, axis] of ["Warp / wale (E11)", "Weft / course (E22)", "Engineering shear (2 E12)"].entries()) {
+    cells(domain, [axis, metric(range?.[i]?.[0]), metric(range?.[i]?.[1])]);
+  }
+  const note = document.createElement("p");
+  note.textContent = "Scaled errors use the input's declared force scales; they are not confidence intervals. " +
+    "An absent held-out partition is not a passed check. Fitted coefficients remain estimates, and coefficient availability does not establish a successful garment simulation or measured fit.";
+  parent.append(note);
+  if (!nonlinear) detail(parent, "Identified recovery branches and initial-state declaration (display only)", c.material.membrane_relaxation);
+  detail(parent, "Complete observations, predictions, residuals and identification diagnostics (display only)", c);
+  return { response: method, material_id: r.selection.id, allow_estimates: r.selection.allow_estimates,
+    mechanical_coefficients_available: r.material.capabilities.mechanical_coefficients?.ready === true,
+    mechanics_refusal: r.material.capabilities.mechanical_coefficients?.refusal,
+    missing_mechanics: c.missing_mechanics, input_sha256: c.input_sha256,
+    error_budgets: { max_rms_scaled: c.input.max_rms_scaled, max_peak_scaled: c.input.max_peak_scaled },
+    next: "Review capabilities, then assign the identified selection above and bind the pattern." };
+}
 function show(op, msg) {
   const r = msg.result;
   if (op === "catalog") {
@@ -321,7 +350,7 @@ function show(op, msg) {
       $("catalog").append(option);
     }
   } else if (op === "inspect") {
-    pressureInspected = false; inspectResult(r);
+    preparedBy = null; inspectResult(r);
   } else if (op === "bind") {
     bound = r;
     const pre = document.createElement("pre"); pre.textContent = text({ pattern_sha256: r.pattern_sha256, geometry_changed: r.geometry_changed,
@@ -329,13 +358,14 @@ function show(op, msg) {
     $("boundSummary").replaceChildren(pre);
     for (const f of msg.files) link(op, $("bindFiles"), f);
   } else {
-    if (op === "pressure") {
-      ++selectionRead; pressureInspected = true;
+    if (op === "pressure" || op === "calibrate") {
+      ++selectionRead; preparedBy = op;
       $("selection").value = r.selection_json;
-      inspectResult(r.inspection, r.selection_json);
+      inspectResult(op === "pressure" ? r.inspection : r.material, r.selection_json);
     }
     const s = sections.get(op); s.section.hidden = false;
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
+      op === "calibrate" ? calibrationResult(s.comparison, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, rolls: r.rolls.map(x => ({ material: x.material?.authored?.id,
         width_m: x.width_m, length_m: x.length_m, stock_mass_kg: x.stock_mass_kg, utilization: x.utilization })), limitations: r.limitations } :
@@ -382,7 +412,7 @@ async function execute(op) {
   if (op === "bind") clear(["bind", ...boundOperations]);
   else if (op === "fold") clear(["fold", "heat", "coverage"]);
   else if (sections.has(op)) clear([op]);
-  if (op === "inspect" || op === "pressure") { ++selectionRead; pressureInspected = false; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); }
+  if (selectionOperations.includes(op)) { ++selectionRead; preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); }
   const id = ++sequence; pending = { id, op }; $("error").hidden = true;
   $("status").textContent = `Running ${op}…`; controls();
   try {
@@ -391,6 +421,11 @@ async function execute(op) {
     else if (op === "inspect") msg.selection = $("selection").value;
     else if (op === "bind") { msg.pattern = sourceText; msg.changes = changes(); }
     else if (op === "pressure") msg.compressionRequest = await read("compressionRequest");
+    else if (op === "calibrate") {
+      msg.calibrationMode = $("calibrationMode").value;
+      msg.allowEstimates = $("calibrationEstimates").checked;
+      msg.calibrationRequest = await read("calibrationRequest");
+    }
     else if (op === "screen") msg.screenRequest = await read("screenRequest");
     else if (op === "study" || op === "scenario") {
       if (!sourceText) throw Error("Load the original pattern first.");
@@ -432,25 +467,25 @@ $("cancel").onclick = () => { start(); $("status").textContent = "Cancelled; rel
 $("catalog").onchange = () => {
   if (!$("catalog").value) return;
   ++selectionRead;
-  if (pending?.op === "inspect" || pending?.op === "pressure") start();
+  if (selectionOperations.includes(pending?.op)) start();
   $("selection").value = text({ id: $("catalog").value, allow_estimates: false });
-  pressureInspected = false; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); controls();
+  preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); controls();
 };
 $("selection").addEventListener("input", () => {
   ++selectionRead;
-  pressureInspected = false; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
-  if (pending?.op === "inspect" || pending?.op === "pressure") start(); controls();
+  preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
+  if (selectionOperations.includes(pending?.op)) start(); controls();
 });
 $("selectionFile").onchange = async () => {
-  const rev = ++selectionRead; pressureInspected = false; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
-  if (pending?.op === "inspect" || pending?.op === "pressure") start(); controls();
+  const rev = ++selectionRead; preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
+  if (selectionOperations.includes(pending?.op)) start(); controls();
   try { const data = await read("selectionFile"); if (rev !== selectionRead) return;
     $("selection").value = data; controls(); }
   catch (e) { if (rev === selectionRead) error(String(e.message || e)); }
 };
 $("patternFile").onchange = async () => {
   const rev = ++patternRead; source = null; sourceText = null; defaultChange = null; pieceChanges.clear(); edits();
-  invalidate(["bind", ...operations]); $("patternName").textContent = "No pattern loaded.";
+  invalidate(["bind", ...boundOperations, "study", "scenario"]); $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
   base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
   try { const raw = await read("patternFile"), data = JSON.parse(raw); if (rev !== patternRead) return;
@@ -466,13 +501,16 @@ $("assign").onclick = () => {
   edits(); invalidate(["bind", ...boundOperations]);
 };
 $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); edits(); invalidate(["bind", ...boundOperations]); };
-$("compressionRequest").addEventListener("change", () => {
-  if (pressureInspected) {
-    ++selectionRead; pressureInspected = false; inspected = null;
-    $("detail").textContent = ""; $("capabilities").replaceChildren();
-  }
-  invalidate(["pressure"]);
-});
+for (const [id, operation] of [["compressionRequest", "pressure"], ["calibrationRequest", "calibrate"],
+  ["calibrationMode", "calibrate"], ["calibrationEstimates", "calibrate"]]) {
+  $(id).addEventListener("change", () => {
+    if (preparedBy === operation) {
+      ++selectionRead; preparedBy = null; inspected = null;
+      $("detail").textContent = ""; $("capabilities").replaceChildren();
+    }
+    invalidate([operation]);
+  });
+}
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","coverage","scenario"], fit:["exports","fold","heat","coverage"],
   body:["fold","heat","coverage","scenario"], selfContact:["fold","heat","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"],

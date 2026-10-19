@@ -71,6 +71,71 @@ fn nonlinear_swatch_api_reuses_native_identification_and_binding() {
     assert!(materials::calibrate_nonlinear(&tampered.to_string(), true).is_err());
     assert!(materials::calibrate_nonlinear("{}", true).is_err());
 }
+
+#[test]
+fn timed_history_api_identifies_and_binds_the_native_recovery_spectrum() {
+    let input = include_str!("../../../tests/fixtures/materials/synthetic-relaxation-history.json");
+    let denied: Value =
+        serde_json::from_str(&materials::calibrate_relaxation(input, false).unwrap()).unwrap();
+    let fitted: Value =
+        serde_json::from_str(&materials::calibrate_relaxation(input, true).unwrap()).unwrap();
+    let native = ftx_pattern::material_relaxation::calibration::calibrate(
+        &serde_json::from_str(input).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(fitted["calibration"], serde_json::to_value(native).unwrap());
+    assert_eq!(denied["calibration"], fitted["calibration"]);
+    for (report, ready) in [(&denied, false), (&fitted, true)] {
+        assert_eq!(
+            report["material"]["capabilities"]["mechanical_coefficients"]["ready"],
+            ready
+        );
+        let selection = report["selection_json"].as_str().unwrap();
+        let inspected: Value =
+            serde_json::from_str(&materials::inspect(selection).unwrap()).unwrap();
+        assert_eq!(inspected, report["material"]);
+        let changes = format!(r#"{{"schema":"ftx-material-bindings/1","default":{selection}}}"#);
+        let bound: Value =
+            serde_json::from_str(&materials::bind(PATTERN, &changes).unwrap()).unwrap();
+        assert_eq!(
+            bound["drape_materials_without_self_contact"]["ready"],
+            ready
+        );
+        assert_eq!(bound["geometry_changed"], false);
+    }
+    let mut failed: Value = serde_json::from_str(input).unwrap();
+    failed["experiments"][1]["samples"][8]["nominal_n_m"][0][0] = json!(50000.);
+    assert!(materials::calibrate_relaxation(&failed.to_string(), true).is_err());
+    assert!(materials::calibrate_relaxation("{}", true).is_err());
+}
+
+#[test]
+fn calibration_selection_text_preserves_signed_zero_through_actual_binding() {
+    for (fixture, fit) in [
+        (
+            include_str!("../../../tests/fixtures/materials/synthetic-nonlinear-swatch.json"),
+            materials::calibrate_nonlinear as fn(&str, bool) -> _,
+        ),
+        (
+            include_str!("../../../tests/fixtures/materials/synthetic-relaxation-history.json"),
+            materials::calibrate_relaxation,
+        ),
+    ] {
+        let mut input: Value = serde_json::from_str(fixture).unwrap();
+        input["material"]["properties"]["friction_skin"]["value"] = json!(-0.0);
+        let fitted: Value = serde_json::from_str(&fit(&input.to_string(), true).unwrap()).unwrap();
+        let text = fitted["selection_json"].as_str().unwrap();
+        assert!(text.contains("-0.0"));
+        assert!(materials::inspect(text).is_ok());
+        let changes = format!(r#"{{"schema":"ftx-material-bindings/1","default":{text}}}"#);
+        let bound: Value =
+            serde_json::from_str(&materials::bind(PATTERN, &changes).unwrap()).unwrap();
+        assert_eq!(bound["drape_materials_without_self_contact"]["ready"], true);
+        // Browser JSON reserialization may erase this sign while keeping the stale hash.
+        let changed = text.replace("-0.0", "0.0");
+        assert!(materials::inspect(&changed).is_err());
+    }
+}
 fn bind(p: &Value, c: &Value) -> Value {
     serde_json::from_str(&materials::bind(&p.to_string(), &c.to_string()).unwrap()).unwrap()
 }

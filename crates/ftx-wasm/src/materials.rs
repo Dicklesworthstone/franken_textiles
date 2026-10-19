@@ -149,8 +149,10 @@ pub fn calibrate_nonlinear(input: &str, allow_estimates: bool) -> Result<String,
         allow_estimates,
         ..Selection::default()
     })?;
+    let selection = snapshot.frozen_selection();
+    let selection_json = serde_json::to_string(&selection).map_err(invalid)?;
     serde_json::to_string(
-        &json!({"calibration":report,"selection":snapshot.frozen_selection(),
+        &json!({"calibration":report,"selection":selection,"selection_json":selection_json,
         "material":detail(&snapshot)?,"fit_claim":false}),
     )
     .map_err(invalid)
@@ -167,6 +169,46 @@ pub fn material_calibrate_nonlinear(
     allow_estimates: bool,
 ) -> Result<String, wasm_bindgen::JsError> {
     calibrate_nonlinear(input, allow_estimates)
+        .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
+/// Identify a source-qualified recovery spectrum using the same timed histories as native code.
+/// Observation consent and admission of fitted estimates remain independent policies.
+///
+/// # Errors
+/// Oversized/invalid input, unidentifiable histories, inadmissible evidence, or failed residual
+/// budgets. An identified spectrum does not supply missing mass, bending, friction or transport.
+pub fn calibrate_relaxation(input: &str, allow_estimates: bool) -> Result<String, Refusal> {
+    budget(&[input])?;
+    let input = serde_json::from_str(input).map_err(invalid)?;
+    let report = ftx_pattern::material_relaxation::calibration::calibrate(&input)?;
+    let snapshot = textile_import::catalog()?.resolve(&Selection {
+        id: report.material.id.clone(),
+        record: Some(report.material.clone()),
+        allow_estimates,
+        ..Selection::default()
+    })?;
+    let selection = snapshot.frozen_selection();
+    let selection_json = serde_json::to_string(&selection).map_err(invalid)?;
+    serde_json::to_string(
+        &json!({"calibration":report,"selection":selection,"selection_json":selection_json,
+        "material":detail(&snapshot)?,"fit_claim":false,"empirical_validation_claim":false,
+        "time_integration":"Calibration analytically integrates piecewise-linear Green strain; the drape solver uses backward Euler and requires time-step refinement."}),
+    )
+    .map_err(invalid)
+}
+
+/// Browser recovery identification through the same material authority and timed-history fitter.
+///
+/// # Errors
+/// Same refusals as [`calibrate_relaxation`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_calibrate_relaxation(
+    input: &str,
+    allow_estimates: bool,
+) -> Result<String, wasm_bindgen::JsError> {
+    calibrate_relaxation(input, allow_estimates)
         .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 

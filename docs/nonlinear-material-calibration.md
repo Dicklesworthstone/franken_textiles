@@ -4,12 +4,23 @@
 `ftx-materials calibrate-nonlinear SWATCHES.json --allow-estimates` identify the existing
 tabulated membrane law from source-bearing planar deformation and force observations. The result
 includes the complete input, fitted material, separate fit/held-out residuals, missing mechanics and
-a portable, hash-locked `selection`. Bind that selection with the existing material-binding commands;
+a portable, hash-locked `selection` plus its exact `selection_json` text. Bind that text with the existing material-binding commands;
 the ordinary drape resolver and per-piece material path consume the curves without solver edits.
 
 The browser binding `material_calibrate_nonlinear(inputJson, allowEstimates)` calls the same Rust
 identification engine. Its output adds the existing material capability report. It performs no network
-access or file writes. This is an API; the browser workbench does not yet have a swatch-acquisition UI.
+access or file writes. The [browser material workbench](browser-material-workbench.md) exposes this
+same operation: choose nonlinear swatches, import the acquisition JSON, and identify the material.
+Inspect the separate fit and held-out residuals, characterized strain domain, evidence and missing
+capabilities before applying the selection to the pattern default or selected pieces. Fitted estimates
+require explicit consent. The workbench also supports timed recovery histories through the shared
+relaxation fitter.
+
+The complete calibration report, original acquisition text and frozen selection can be downloaded
+independently of a pattern. Preserve `selection_json` as text when transferring it between tools:
+parsing and reserializing its embedded evidence can change signed zero and invalidate its source lock.
+Failed identification, file replacement or changes to estimate consent invalidate the pending
+selection, so a prior result cannot be applied accidentally.
 
 ## Input and observation frames
 

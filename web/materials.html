@@ -42,6 +42,18 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <p class="note">The request supplies its exact specimen, loading branch, pressure observations and target pressure in pascals.
 Interpolation requires explicit consent. Properties without pressure qualification remain unavailable.
 The prepared selection can be assigned below; it does not infer garment contact pressure or presser-foot clearance.</p>
+<h3>Identify behavior from swatch measurements</h3>
+<label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch and shear</option><option value="relaxation">Relaxation, creep and recovery</option></select></label>
+<label>Source-bearing swatch or complete history JSON <input id="calibrationRequest" type="file" accept=".json,application/json"></label>
+<label><input id="calibrationEstimates" type="checkbox"> Admit the fitted estimates to this material selection</label>
+<button id="calibrate" data-command="calibrate" disabled>Identify material behavior</button>
+<p class="note">The request owns the specimen, acquisition method, conditioning, fit/check partitions and error budgets.
+Nonlinear swatches use <code>ftx-nonlinear-swatch-calibration/1</code>; timed histories use <code>ftx-relaxation-calibration/1</code>.
+A timed request declares its independent equilibrium response and proportional relaxation search bounds.
+Estimated input observations and replacement of an existing law
+require separate consent in the file. The checkbox only admits the fitted output estimates; missing mass, bending or contact data stay missing.</p>
+<p class="note">Review fit and held-out errors below, then assign the exact identified selection in section 2.
+Download the complete report, original input and frozen selection for reuse. No specimen data leaves this tab.</p>
 </section>
 <section><h2>2. Bind the same pattern</h2>
 <label>Original pattern JSON <input id="patternFile" type="file" accept=".json,application/json"></label>

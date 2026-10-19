@@ -70,9 +70,38 @@ const server = http.createServer((req, res) => {
     assert.match(caps, /specific_heat|areal_density|characterization/);
     await page.setInputFiles('#patternFile', fixture('synthetic-sewing-pattern.json'));
     await page.waitForFunction(() => !document.getElementById('assign').disabled);
+    for (const [mode, filename] of [['nonlinear','synthetic-nonlinear-swatch.json'],
+      ['relaxation','synthetic-relaxation-history.json']]) {
+      await page.selectOption('#calibrationMode',mode);
+      await page.setInputFiles('#calibrationRequest',fixture(filename));
+      for (const admission of [false,true]) {
+        await page.setChecked('#calibrationEstimates',admission);
+        assert.equal(await run('calibrate'),'');
+        const report=JSON.parse(await download('material-calibration.json'));
+        const expected=JSON.parse(invoke('calibrate-'+mode,fixture(filename),...(admission ? ['--allow-estimates'] : [])));
+        assert.deepEqual(report.calibration,expected.calibration);
+        assert.deepEqual(report.selection,expected.selection);
+        assert.equal(report.material.capabilities.mechanical_coefficients.ready,admission);
+        assert.equal(await download('calibration-input.json'),fs.readFileSync(fixture(filename),'utf8'));
+        assert.equal(await download('calibrated-selection.json'),report.selection_json);
+        assert.equal(await page.inputValue('#selection'),report.selection_json);
+        assert.match(await page.locator('#outputs').textContent(),/Observed force errors/);
+        await page.click('#assign'); assert.equal(await run('bind'),'');
+        const selected=JSON.parse(await download('pattern.json'));
+        assert.equal(selected.fabric.material.expected_sha256,report.selection.expected_sha256);
+        assert.deepEqual(selected.pieces,load('synthetic-sewing-pattern.json').pieces);
+        const binding=JSON.parse(await download('material-bindings.json'));
+        assert.equal(binding.drape_materials_with_self_contact.ready,admission);
+      }
+    }
+    await input('calibrationRequest',{}); assert.equal(await page.isDisabled('#assign'),true);
+    assert.equal(await page.locator('a[download="material-calibration.json"]').count(),0);
+    assert.notEqual(await run('calibrate'),''); assert.equal(await page.isDisabled('#assign'),true);
     let bound = await assign(sheet(0.1,0.4));
     assert.deepEqual(bound.pieces, load('synthetic-sewing-pattern.json').pieces);
-    const boundPath = write('bound.json',bound), selectionPath = write('selection.json',sheet(0.1,0.4));
+    const boundPath = path.join(work,'bound.json'), selectionPath = write('selection.json',sheet(0.1,0.4));
+    // Native consumers receive the same frozen number spellings as the browser consumers.
+    fs.writeFileSync(boundPath,await download('pattern.json'));
     invoke('bind',fixture('synthetic-sewing-pattern.json'),selectionPath,path.join(work,'native-bound.json'));
     assert.deepEqual(bound,JSON.parse(fs.readFileSync(path.join(work,'native-bound.json'),'utf8')));
     const cut = {copies:1,gap_mm:2,edge_margin_mm:0,end_margin_mm:0};
@@ -119,7 +148,7 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => !document.getElementById('error').hidden);
     assert.equal(await page.locator('a[download="pattern.json"]').count(),0); assert.equal(await page.isDisabled('#bind'),true);
     assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
-    console.log('PASS: real browser catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, invalidation and model refusal.');
+    console.log('PASS: real browser nonlinear/proportional calibration and estimate admission, catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, invalidation and model refusal.');
     console.log('No successful model-backed browser drape or real textile validation asserted. Artifacts:',work);
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(e => { console.error(e); server.close(); process.exitCode=1; });

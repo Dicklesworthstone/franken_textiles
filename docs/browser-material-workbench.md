@@ -54,6 +54,36 @@ The UI deliberately asks for the existing JSON contracts rather than inventing c
 constants. The synthetic sewing pattern/options under `tests/fixtures/materials/` illustrate process
 inputs, not a real qualified textile or recommended machine configuration.
 
+## Identify material behavior from local observations
+
+Section 1 accepts `ftx-nonlinear-swatch-calibration/1` observations for nonlinear stretch and shear,
+or `ftx-relaxation-calibration/1` complete loading histories for relaxation, creep and recovery.
+Choose the matching response, load the source-bearing JSON and run **Identify material behavior**.
+Timed requests preserve their independent long-time equilibrium and declare proportional
+ratio/time search bounds. The shared Rust
+calibrators own the models, fitting, evidence admission, identifiability and residual gates; the page
+neither fits coefficients itself nor rewrites the supplied measurements.
+
+The **Admit the fitted estimates** checkbox is off initially. It only sets the returned selection's
+estimate policy. Estimated input observations, estimated equilibrium and replacement of an existing
+response require their separate explicit declarations in the uploaded request. A successful fit can
+therefore remain unavailable to simulation; unrelated missing mass, bending and contact evidence
+also remain visible through the ordinary material capability report.
+
+Results separate fit and held-out component counts, scaled RMS/peak errors, their requested budgets,
+and the applicable Green-strain domain. An absent held-out partition says **not supplied**. Nonlinear
+domain endpoints come from fitting observations; timed applicability is source-declared. Complete
+observations, predictions, residuals and fitted recovery branches remain inspectable. These quantities
+are not confidence intervals or independent garment validation.
+
+The generated selection is ready for the same default or source-piece assignment and binding steps.
+Its exact Rust `selection_json` is retained through assignment and download, preserving numeric source
+identities. Download `material-calibration.json`, `calibration-input.json` and `calibrated-selection.json`
+for replay. Changing the response, uploaded observations or fitted-estimate consent withdraws the
+current characterization and its assignable selection; an explicitly assigned frozen material remains
+an independent pending choice. Loading a pattern preserves completed characterization downloads.
+Cancellation, newer selection edits and failed replacement fits cannot republish a previous result.
+
 ## State, privacy and failure behavior
 
 The original pattern is retained separately from pending assignments and the bound result. Assigning
