@@ -36,6 +36,12 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <p class="note">Estimates stay disabled unless this selection explicitly sets <code>allow_estimates</code> to <code>true</code>. A digest-locked selection cannot be edited in place; author a new selection deliberately.</p>
 <button id="inspect" data-command="inspect">Inspect sources &amp; capabilities</button>
 <div id="capabilities"></div><details><summary>Original observations, normalized units and sources</summary><pre id="detail"></pre></details>
+<h3>Prepare a compressed material state</h3>
+<label>Source-qualified pressure characterization JSON <input id="compressionRequest" type="file" accept=".json,application/json"></label>
+<button id="pressure" data-command="pressure" disabled>Prepare material at the requested pressure</button>
+<p class="note">The request supplies its exact specimen, loading branch, pressure observations and target pressure in pascals.
+Interpolation requires explicit consent. Properties without pressure qualification remain unavailable.
+The prepared selection can be assigned below; it does not infer garment contact pressure or presser-foot clearance.</p>
 </section>
 <section><h2>2. Bind the same pattern</h2>
 <label>Original pattern JSON <input id="patternFile" type="file" accept=".json,application/json"></label>

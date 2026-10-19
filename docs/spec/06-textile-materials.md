@@ -80,3 +80,27 @@ non-finite inputs, constitutive stability, zero friction/bending, unsupported ma
 balance, source references/bounds, duplicate catalog IDs and a known-answer series thermal stack. These
 are software/physics checks, not measurements of any commercial fabric. Existing parity paths must remain
 unchanged unless a material is explicitly selected.
+
+## Prescribed pressure conditioning
+
+`ftx-material-compression/1` prepares an ordinary, content-locked `Selection` through
+`material_compression::condition`; it does not add a parallel material or contact solver.
+The request owns the original material, sources, fixed specimen/conditioning/loading branch,
+pressure table and target Pa. Positive loft is nonincreasing on the declared branch. Exact knots
+retain authored observations; in-domain interpolation is an explicitly admitted estimate.
+
+Every retained scalar must be observed in the complete pressure-row keyset or have an explicit
+source-qualified invariant covering the entire table. An original fixed-pressure observation must
+also lie inside that invariant range; malformed or conflicting pressure qualifiers refuse.
+Sampled areal mass is prohibited, and retained reference mass is unchanged. No bulk-density/loft
+mass reconstruction, conductivity mixing or thickness-derived stiffness is inferred. At most one
+thermal resistance/conductivity authority survives. Unqualified scalar properties, response blocks
+and `*_model` selectors are removed and named in the receipt; missing consumer inputs remain missing.
+
+The report's `selection_json` is the exact portable selection text; display-layer numeric
+reserialization must not replace it. Reserved `compression_` structure markers identify the prescribed
+state and prevent reconditioning its incomplete result. Existing unloaded-stack sewing checks refuse
+these selections until an appropriate pressure-qualified process path exists. This establishes neither
+dynamic pressure/loft coupling nor moisture, recovery or empirical garment performance.
+See [Pressure-conditioned materials](../pressure-conditioned-materials.md) for the runnable native and
+browser workflow, full qualification rules and synthetic known answers.

@@ -38,7 +38,7 @@ fn readiness<T: serde::Serialize>(result: Result<T, Refusal>) -> Value {
     }
 }
 
-fn detail(m: &ResolvedMaterial) -> Value {
+fn detail(m: &ResolvedMaterial) -> Result<Value, Refusal> {
     let material = m.material();
     let policy = m.allows_estimates();
     let mechanical = (|| {
@@ -52,12 +52,23 @@ fn detail(m: &ResolvedMaterial) -> Value {
         .map(|law| law.domain());
     let transient = ftx_pattern::material_thermal::ThermalLaw::from_material(material, policy)
         .map(|law| law.domain());
-    json!({"snapshot":m,"selection":m.frozen_selection(),"missing_mechanics":material.missing_mechanics(),
+    let sewing = if material.structure.contains_key("compression_model") {
+        Err(invalid(
+            "Pressure-conditioned thickness does not establish uncompressed sewing-stack clearance.",
+        ))
+    } else {
+        material.require("thickness", "m", policy)
+    };
+    let selection = m.frozen_selection();
+    let selection_json = serde_json::to_string(&selection).map_err(invalid)?;
+    Ok(
+        json!({"snapshot":m,"selection":selection,"selection_json":selection_json,"missing_mechanics":material.missing_mechanics(),
         "capabilities":{"mechanical_coefficients":readiness(mechanical),
             "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
             "stock_width_m":readiness(material.require("width","m",policy)),
-            "sewing_thickness_m":readiness(material.require("thickness","m",policy))},
-        "note":"Coefficient availability is not successful draping, process qualification, empirical fit or a safety rating."})
+            "sewing_thickness_m":readiness(sewing)},
+        "note":"Coefficient availability is not successful draping, process qualification, empirical fit or a safety rating."}),
+    )
 }
 
 /// Discover the existing built-in catalog; original observations remain accessible through inspect.
@@ -97,7 +108,29 @@ pub fn inspect(selection: &str) -> Result<String, Refusal> {
     budget(&[selection])?;
     let s: Selection = serde_json::from_str(selection).map_err(invalid)?;
     let m = textile_import::catalog()?.resolve(&s)?;
-    serde_json::to_string(&detail(&m)).map_err(invalid)
+    serde_json::to_string(&detail(&m)?).map_err(invalid)
+}
+
+/// Prepare the existing frozen material selection at an explicitly characterized normal pressure.
+/// The input owns its specimen, pressure observations, invariance evidence and estimate consent.
+///
+/// # Errors
+/// Input over 64 MiB, unsupported observations, missing qualification or pressure extrapolation.
+pub fn pressure_condition(request: &str) -> Result<String, Refusal> {
+    budget(&[request])?;
+    let input: ftx_pattern::material_compression::Input =
+        serde_json::from_str(request).map_err(invalid)?;
+    serde_json::to_string(&ftx_pattern::material_compression::condition(&input)?).map_err(invalid)
+}
+
+/// Browser pressure conditioning through the same material preparation operation as both CLIs.
+///
+/// # Errors
+/// Same refusals as [`pressure_condition`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_pressure_condition(request: &str) -> Result<String, wasm_bindgen::JsError> {
+    pressure_condition(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
 /// Identify the production nonlinear material law from source-bearing nominal swatch forces.

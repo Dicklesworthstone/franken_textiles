@@ -52,14 +52,15 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
-    if matches!(action, "screen" | "study") {
+    if matches!(action, "screen" | "study" | "pressure-condition") {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
             ("screen", [path]) => screen::run(path)?,
+            ("pressure-condition", [path]) => screen::pressure_condition(path)?,
             ("study", [pattern, request]) => screen::study(pattern, request)?,
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials screen REQUEST.json | study PATTERN.json REQUEST.json",
+                    "usage: ftx materials screen REQUEST.json | study PATTERN.json REQUEST.json | pressure-condition REQUEST.json",
                 ));
             }
         };

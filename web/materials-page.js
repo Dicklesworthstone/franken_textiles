@@ -2,9 +2,10 @@
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "coverage", "cut", "stock", "price", "sew"];
-const operations = [...boundOperations, "screen", "study", "scenario"];
+const operations = [...boundOperations, "screen", "study", "scenario", "pressure"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
+let pressureInspected = false;
 let sourceText = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
@@ -13,7 +14,8 @@ const sections = new Map();
 for (const op of operations) {
   const section = document.createElement("div"); section.hidden = true;
   const title = document.createElement("h3"); title.textContent = ({ screen: "Source-qualified screening",
-    study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives" })[op] || op;
+    study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives",
+    pressure: "Pressure-conditioned material" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
   section.append(title, summary, comparison, links); $("outputs").append(section);
@@ -28,6 +30,7 @@ function controls() {
   $("reset").disabled = !!pending || !source;
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
+  $("pressure").disabled ||= !has("compressionRequest");
   $("study").disabled ||= !source || !has("studyRequest");
   $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || (!has("scenarioBody") && !has("measurements"));
   $("exports").disabled ||= !has("measurements") || !has("fit");
@@ -295,6 +298,19 @@ function comparison(op, r) {
     comparison_basis: r.comparison ? "Declared nominal objectives evaluated by Rust; conditional Pareto set, not an empirical fit/warmth claim or global optimum." :
       "Actual consumer results; no computed objectives requested. Unknowns are not zero, and no ranking is inferred by this page." };
 }
+function inspectResult(r, selectionJson) {
+  inspected = selectionJson || r.selection_json || text(r.selection);
+  $("detail").textContent = text(r.snapshot);
+  $("capabilities").replaceChildren();
+  const table = document.createElement("table");
+  for (const [name, state] of Object.entries(r.capabilities)) {
+    const row = document.createElement("tr"), a = document.createElement("th"), b = document.createElement("td");
+    a.textContent = name.replaceAll("_", " ");
+    b.textContent = state.ready ? "Coefficient inputs available" : state.refusal.message;
+    row.append(a, b); table.append(row);
+  }
+  $("capabilities").append(table);
+}
 function show(op, msg) {
   const r = msg.result;
   if (op === "catalog") {
@@ -305,17 +321,7 @@ function show(op, msg) {
       $("catalog").append(option);
     }
   } else if (op === "inspect") {
-    inspected = r.selection;
-    $("detail").textContent = text(r.snapshot);
-    $("capabilities").replaceChildren();
-    const table = document.createElement("table");
-    for (const [name, state] of Object.entries(r.capabilities)) {
-      const row = document.createElement("tr"), a = document.createElement("th"), b = document.createElement("td");
-      a.textContent = name.replaceAll("_", " ");
-      b.textContent = state.ready ? "Coefficient inputs available" : state.refusal.message;
-      row.append(a, b); table.append(row);
-    }
-    $("capabilities").append(table);
+    pressureInspected = false; inspectResult(r);
   } else if (op === "bind") {
     bound = r;
     const pre = document.createElement("pre"); pre.textContent = text({ pattern_sha256: r.pattern_sha256, geometry_changed: r.geometry_changed,
@@ -323,6 +329,11 @@ function show(op, msg) {
     $("boundSummary").replaceChildren(pre);
     for (const f of msg.files) link(op, $("bindFiles"), f);
   } else {
+    if (op === "pressure") {
+      ++selectionRead; pressureInspected = true;
+      $("selection").value = r.selection_json;
+      inspectResult(r.inspection, r.selection_json);
+    }
     const s = sections.get(op); s.section.hidden = false;
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis } :
@@ -334,7 +345,12 @@ function show(op, msg) {
           gross_area_m2: m.gross_area_m2, defect_free_area_m2: m.defect_free_area_m2, utilization: m.utilization,
           stock_mass_kg: m.stock_mass_kg, mass_unavailable: m.mass_unavailable })), limitations: r.limitations } :
       op === "sew" ? { schema: r.schema, stitches: r.stitches?.length, hardware_execution_authorized: r.plan?.hardware_execution_authorized } :
-      op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } : r;
+      op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } :
+      op === "pressure" ? { material_id: r.selection.id, pressure_pa: r.input.pressure_pa,
+        pressure_range_pa: r.pressure_range_pa, bracket_pa: r.bracket_pa, interpolated: r.interpolated,
+        discarded_properties: r.discarded_properties, discarded_responses: r.discarded_responses,
+        discarded_structure: r.discarded_structure,
+        next: "Review the prepared selection's capabilities, then assign it to the pattern above." } : r;
     s.summary.textContent = text(summary);
     for (const f of msg.files) {
       const url = link(op, s.links, f);
@@ -356,21 +372,25 @@ async function read(id, binary = false) {
   if (!binary) JSON.parse(data);
   return data;
 }
-function changes() { return { schema: "ftx-material-bindings/1", default: defaultChange, pieces: Object.fromEntries(pieceChanges) }; }
-function edits() { $("edits").textContent = text(changes()); }
+function changes() {
+  const pieces = [...pieceChanges].map(([id, selection]) => `${JSON.stringify(id)}:${selection}`).join(",");
+  return `{"schema":"ftx-material-bindings/1","default":${defaultChange || "null"},"pieces":{${pieces}}}`;
+}
+function edits() { $("edits").textContent = text(JSON.parse(changes())); }
 async function execute(op) {
   if (!ready || pending) return;
   if (op === "bind") clear(["bind", ...boundOperations]);
   else if (op === "fold") clear(["fold", "heat", "coverage"]);
   else if (sections.has(op)) clear([op]);
-  if (op === "inspect") { ++selectionRead; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); }
+  if (op === "inspect" || op === "pressure") { ++selectionRead; pressureInspected = false; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); }
   const id = ++sequence; pending = { id, op }; $("error").hidden = true;
   $("status").textContent = `Running ${op}…`; controls();
   try {
     const msg = { type: op, request: id };
     if (op === "catalog") msg.query = $("query").value;
     else if (op === "inspect") msg.selection = $("selection").value;
-    else if (op === "bind") { msg.pattern = sourceText; msg.changes = text(changes()); }
+    else if (op === "bind") { msg.pattern = sourceText; msg.changes = changes(); }
+    else if (op === "pressure") msg.compressionRequest = await read("compressionRequest");
     else if (op === "screen") msg.screenRequest = await read("screenRequest");
     else if (op === "study" || op === "scenario") {
       if (!sourceText) throw Error("Load the original pattern first.");
@@ -412,18 +432,18 @@ $("cancel").onclick = () => { start(); $("status").textContent = "Cancelled; rel
 $("catalog").onchange = () => {
   if (!$("catalog").value) return;
   ++selectionRead;
-  if (pending?.op === "inspect") start();
+  if (pending?.op === "inspect" || pending?.op === "pressure") start();
   $("selection").value = text({ id: $("catalog").value, allow_estimates: false });
-  inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); controls();
+  pressureInspected = false; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); controls();
 };
 $("selection").addEventListener("input", () => {
   ++selectionRead;
-  inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
-  if (pending?.op === "inspect") start(); controls();
+  pressureInspected = false; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
+  if (pending?.op === "inspect" || pending?.op === "pressure") start(); controls();
 });
 $("selectionFile").onchange = async () => {
-  const rev = ++selectionRead; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
-  if (pending?.op === "inspect") start(); controls();
+  const rev = ++selectionRead; pressureInspected = false; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
+  if (pending?.op === "inspect" || pending?.op === "pressure") start(); controls();
   try { const data = await read("selectionFile"); if (rev !== selectionRead) return;
     $("selection").value = data; controls(); }
   catch (e) { if (rev === selectionRead) error(String(e.message || e)); }
@@ -446,6 +466,13 @@ $("assign").onclick = () => {
   edits(); invalidate(["bind", ...boundOperations]);
 };
 $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); edits(); invalidate(["bind", ...boundOperations]); };
+$("compressionRequest").addEventListener("change", () => {
+  if (pressureInspected) {
+    ++selectionRead; pressureInspected = false; inspected = null;
+    $("detail").textContent = ""; $("capabilities").replaceChildren();
+  }
+  invalidate(["pressure"]);
+});
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","coverage","scenario"], fit:["exports","fold","heat","coverage"],
   body:["fold","heat","coverage","scenario"], selfContact:["fold","heat","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"],

@@ -723,6 +723,11 @@ fn sheet(pattern: &Pattern, piece_index: usize) -> Result<(ResolvedMaterial, f64
     let selected = resolve_fabric(piece_fabric(pattern, piece_index)?)?
         .ok_or_else(|| bad("sewing needs a source-bearing material selection"))?;
     let material = selected.material();
+    if material.structure.contains_key("compression_model") {
+        return Err(bad(
+            "sewing requires qualified uncompressed sheet thickness; a pressure-conditioned selection cannot establish unloaded stack clearance or presser-foot feasibility",
+        ));
+    }
     if matches!(material.form, Form::Fiber | Form::Yarn | Form::Fill) {
         return Err(bad(
             "sewing requires an identified sheet/hide, not loose fill or yarn",

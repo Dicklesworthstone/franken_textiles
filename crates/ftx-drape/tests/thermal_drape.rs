@@ -181,6 +181,69 @@ fn actual_drape_exports_material_locked_heat_fields_without_changing_geometry() 
 }
 
 #[test]
+fn prescribed_pressure_reaches_sewn_drape_contact_mass_and_heat_transport() {
+    use ftx_drape::thermal::{Boundary, surface::Surface};
+    use ftx_pattern::material_compression;
+    let mut input: material_compression::Input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-compression.json"
+    ))
+    .unwrap();
+    // Thin synthetic sheet geometry for this small sewn band; no measured fabric claim.
+    let thickness = input.samples[0].properties.get_mut("thickness").unwrap();
+    thickness.value = 0.6;
+    thickness.bounds = Some([0.54, 0.66]);
+    let thickness = input.samples[1].properties.get_mut("thickness").unwrap();
+    thickness.value = 0.03; // centimetres, as authored in the shared fixture
+    thickness.bounds = Some([0.027, 0.033]);
+    let boundary = Boundary {
+        inside_c: 40.,
+        outside_c: 20.,
+        inside_resistance: 0.,
+        outside_resistance: 0.,
+    };
+    let mut runs = Vec::new();
+    let mut hashes = Vec::new();
+    for (pressure, offset, resistance) in [(0., 0.0003, 0.5), (500., 0.00015, 0.25)] {
+        input.pressure_pa = pressure;
+        let prepared = material_compression::condition(&input).unwrap();
+        let mut raw = band().raw().clone();
+        raw["fabric"]["material"] = serde_json::to_value(&prepared.selection).unwrap();
+        let pattern = Pattern::new(raw);
+        let resolved = ftx_drape::material::resolve(&pattern, &options()).unwrap();
+        assert!((resolved.options.contact.thickness - offset).abs() < 1e-15);
+        assert!((resolved.fabric.areal_kg_m2 - 0.1).abs() < 1e-15);
+        let solved = run(&pattern, options());
+        let (surface, positions) = Surface::from_drape_report(&solved.report).unwrap();
+        assert_eq!(positions, solved.scene.solver.x);
+        let snapshot = surface.snapshot();
+        assert_eq!(snapshot, solved.thermal_surface(4).unwrap().snapshot());
+        for column in snapshot["columns"].as_array().unwrap() {
+            let capacity: f64 = column["cell_capacity_j_m2_k"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .sum();
+            assert!((capacity - 100.).abs() < 1e-12);
+        }
+        let heat = surface.steady(&positions, &[boundary]).unwrap();
+        for patch in heat.patches {
+            assert!((patch.inside_flux_w_m2 - 20. / resistance).abs() < 1e-10);
+        }
+        hashes.push(snapshot["sha256"].clone());
+        runs.push(solved);
+    }
+    // Pressure changes material/contact/thermal state; it cannot manufacture or discard mass.
+    assert_eq!(runs[0].scene.mesh.faces, runs[1].scene.mesh.faces);
+    assert_eq!(runs[0].scene.mesh.verts2d, runs[1].scene.mesh.verts2d);
+    assert_eq!(
+        runs[0].scene.solver.model.mass,
+        runs[1].scene.solver.model.mass
+    );
+    assert_ne!(hashes[0], hashes[1]);
+}
+
+#[test]
 fn missing_thermal_data_preserves_mechanical_success_and_modified_receipts_refuse() {
     use ftx_drape::thermal::surface::Surface;
     let mechanical = run(&band(), options());

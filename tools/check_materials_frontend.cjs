@@ -16,6 +16,11 @@ async function workerModule({ failFold = false, failExport = false, trap = false
     default: () => rejectLoad ? Promise.reject(Error('bundle unavailable')) : Promise.resolve(),
     material_catalog: q => JSON.stringify({ materials: [], query: q }),
     material_inspect: s => JSON.stringify({ selection: JSON.parse(s) }),
+    material_pressure_condition: r => {
+      called.push(['pressure', r]);
+      const selection = '{"id":"compressed","allow_estimates":true,"value":-0.0}';
+      return `{"selection":${selection},"selection_json":${JSON.stringify(selection)},"input":{"pressure_pa":250.0},"interpolated":true}`;
+    },
     material_screen: r => { called.push(['screen', r]); return '{"alternatives":[],"coefficient":1.0}'; },
     material_study: (p, r) => { called.push(['study', p, r]); return '{"alternatives":[],"coordinate":-0.0}'; },
     material_scenario_study: (b, p, r, s, m) => {
@@ -139,6 +144,18 @@ test('screening and studies call production entry points and download unmodified
   assert.match(study.files[0].text, /-0\.0/);
 });
 
+test('pressure conditioning preserves exact request and frozen selection through the shared worker', async () => {
+  const w = await workerModule(), request = '{"pressure_pa":250.0,"coordinate":-0.0}';
+  const result = await w.send({ type: 'pressure', request: 24, compressionRequest: request });
+  assert.equal(result.type, 'result');
+  assert.deepEqual(w.called.at(-1), ['pressure', request]);
+  assert.equal(result.files[2].name, 'compression-request.json');
+  assert.equal(result.files[2].text, request);
+  assert.equal(result.files[1].text, result.result.selection_json);
+  assert.match(result.files[1].text, /-0\.0/);
+  assert.equal(result.result.inspection.selection.id, 'compressed');
+});
+
 test('scenario studies retain partial failures and free the fresh model on success, refusal and trap', async () => {
   for (const mode of [{}, { failScenario: true }, { trapScenario: true }]) {
     const w = await workerModule(mode);
@@ -246,6 +263,42 @@ test('catalog changes cannot publish another material inspection or silently ena
   const d = deferred(); p.select('selectionFile'); p.e.selectionFile.files[0].text = () => d.promise;
   const reading = p.e.selectionFile.onchange(); p.e.catalog.value = 'latest'; p.e.catalog.onchange();
   d.resolve('{"id":"late"}'); await reading; assert.equal(JSON.parse(p.e.selection.value).id, 'latest');
+});
+
+test('pressure-conditioned selections enter ordinary piece bindings without a numeric JSON round trip', async () => {
+  const p = await pageModule(); await p.load();
+  const request = '{"pressure_pa":250.0,"source_value":-0.0}';
+  p.select('compressionRequest', request); p.e.compressionRequest.handlers.change();
+  assert.equal(p.e.pressure.disabled, false);
+  await p.e.pressure.onclick();
+  assert.equal(p.current().messages.at(-1).compressionRequest, request);
+  const selection = '{"id":"compressed","expected_sha256":"locked","overrides":{"test":{"value":-0.0}},"coefficient":1.0}';
+  p.emit({ selection: JSON.parse(selection), selection_json: selection, input: { pressure_pa: 250 },
+    pressure_range_pa: [0, 500], bracket_pa: [0, 500], interpolated: true,
+    discarded_properties: ['bulk_density'], discarded_responses: [], discarded_structure: [],
+    inspection: { snapshot: { id: 'compressed' }, capabilities: {} } },
+    [{ name: 'pressure-conditioned-selection.json', text: selection, mime: 'application/json' }]);
+  assert.equal(p.e.selection.value, selection); assert.equal(p.e.assign.disabled, false);
+  p.e.target.value = 'front'; p.e.assign.onclick(); await p.e.bind.onclick();
+  const binding = p.current().messages.at(-1).changes;
+  assert.ok(binding.includes(selection));
+  assert.equal(JSON.parse(binding).pieces.front.id, 'compressed');
+  p.emit({ pattern: {}, pattern_json: '{}', pieces: [], pattern_sha256: 'new' });
+  p.e.compressionRequest.handlers.change();
+  assert.equal(p.e.assign.disabled, true);
+  assert.equal(p.live.size, 0);
+});
+
+test('a newer selection cancels a delayed pressure request before it can replace the inspected material', async () => {
+  const p = await pageModule(), delay = deferred(); await p.load();
+  p.select('compressionRequest'); p.e.compressionRequest.files[0].text = () => delay.promise;
+  const old = p.current(), running = p.e.pressure.onclick();
+  p.e.catalog.value = 'newer-material'; p.e.catalog.onchange(); p.ready();
+  delay.resolve('{"pressure_pa":250.0}'); await running;
+  assert.equal(old.dead, true);
+  assert.equal(old.messages.filter(m => m.type === 'pressure').length, 0);
+  assert.equal(JSON.parse(p.e.selection.value).id, 'newer-material');
+  assert.equal(p.e.assign.disabled, true);
 });
 test('material changes withdraw drape and thermal outputs while environment edits preserve mechanics', async () => {
   const p = await pageModule(); await p.load(); await p.bind();
@@ -577,12 +630,34 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     ftx.initSync({ module: fs.readFileSync(path.join(pkg, 'ftx_wasm_bg.wasm')) });
     const w = await workerModule({ bindings: ftx });
     const fixture = n => fs.readFileSync(path.join(__dirname, '../tests/fixtures/materials', n), 'utf8');
+    const compressionRequest = fixture('synthetic-compression.json');
+    const prepared = await w.send({ type: 'pressure', compressionRequest });
+    assert.equal(prepared.type, 'result', prepared.message);
+    const pressureReport = ftx.material_pressure_condition(compressionRequest);
+    assert.equal(prepared.files[0].text, pressureReport);
+    assert.equal(prepared.files[1].text, prepared.result.selection_json);
+    assert.equal(prepared.files[2].text, compressionRequest);
+    assert.equal(prepared.result.inspection.capabilities.steady_conduction.ready, true);
+    assert.equal(prepared.result.inspection.capabilities.transient_thermal.ready, true);
+    assert.equal(prepared.result.inspection.capabilities.sewing_thickness_m.ready, false);
+    assert.equal(prepared.result.material.properties.thickness.value, 0.015);
+    assert.equal(prepared.result.material.properties.thermal_resistance.value, 0.375);
+    assert.equal((await w.send({ type: 'pressure', compressionRequest })).files[0].text, pressureReport);
+    if (process.env.FTX_PRESSURE_REPLAY) {
+      assert.deepEqual(JSON.parse(pressureReport), JSON.parse(fs.readFileSync(process.env.FTX_PRESSURE_REPLAY, 'utf8')));
+    }
     const screenRequest = fixture('screen-insulation.json');
     const screened = await w.send({ type: 'screen', screenRequest });
     assert.equal(screened.type, 'result', screened.message);
     assert.deepEqual(screened.result, JSON.parse(ftx.material_screen(screenRequest)));
     assert.equal(screened.files[1].text, screenRequest);
     const pattern = fixture('synthetic-sewing-pattern.json');
+    const pressureChanges = `{"schema":"ftx-material-bindings/1","default":${prepared.result.selection_json}}`;
+    const pressureBinding = await w.send({ type: 'bind', pattern, changes: pressureChanges });
+    assert.equal(pressureBinding.type, 'result', pressureBinding.message);
+    assert.equal(pressureBinding.result.geometry_changed, false);
+    assert.equal(pressureBinding.result.drape_materials_with_self_contact.ready, true);
+    assert.equal(pressureBinding.result.pattern.fabric.material.expected_sha256, prepared.result.selection.expected_sha256);
     const variants = [['a-wide', 0.1, 0.4], ['b-narrow', 0.06, 2], ['c-unknown-width', null, 0.4]].map(([key, width, thickness]) => {
       const selection = JSON.parse(pattern).fabric.material;
       for (const [name, value, unit] of [['width', width, 'm'], ['thickness', thickness, 'mm'], ['areal_density', 0.2, 'kg/m2']]) {

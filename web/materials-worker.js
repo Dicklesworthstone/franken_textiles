@@ -27,6 +27,14 @@ self.onmessage = async ({ data: msg }) => {
     switch (msg.type) {
       case "catalog": result = json(ftx.material_catalog(msg.query)); break;
       case "inspect": result = json(ftx.material_inspect(msg.selection)); break;
+      case "pressure":
+        raw = ftx.material_pressure_condition(msg.compressionRequest); result = json(raw);
+        if (typeof result.selection_json !== "string") throw Error("Rebuild web/pkg: missing pressure-conditioned selection bridge.");
+        result.inspection = json(ftx.material_inspect(result.selection_json));
+        files = [file("pressure-conditioned-material.json", raw),
+          file("pressure-conditioned-selection.json", result.selection_json),
+          file("compression-request.json", msg.compressionRequest)];
+        break;
       case "screen":
         raw = ftx.material_screen(msg.screenRequest); result = json(raw);
         files = [file("material-screen.json", raw), file("screen-request.json", msg.screenRequest)];

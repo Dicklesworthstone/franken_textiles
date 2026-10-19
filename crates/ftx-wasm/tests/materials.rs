@@ -169,6 +169,69 @@ fn partial_records_are_inspectable_not_automatically_simulation_ready() {
 }
 
 #[test]
+fn pressure_conditioned_selection_replays_through_binding_and_actual_consumers() {
+    use ftx_pattern::{material_compression, materials::Catalog};
+    let request = include_str!("../../../tests/fixtures/materials/synthetic-compression.json");
+    let input: material_compression::Input = serde_json::from_str(request).unwrap();
+    let core = material_compression::condition(&input).unwrap();
+    let text = materials::pressure_condition(request).unwrap();
+    assert_eq!(text, materials::pressure_condition(request).unwrap());
+    let result: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(result, serde_json::to_value(&core).unwrap());
+    let selection_text = result["selection_json"].as_str().unwrap();
+    let selected = Catalog::builtin()
+        .unwrap()
+        .resolve(&serde_json::from_str(selection_text).unwrap())
+        .unwrap();
+    assert_eq!(selected.sha256(), core.selection.expected_sha256.unwrap());
+    let detail: Value = serde_json::from_str(&materials::inspect(selection_text).unwrap()).unwrap();
+    assert_eq!(detail["selection_json"], selection_text);
+    for capability in [
+        "mechanical_coefficients",
+        "steady_conduction",
+        "transient_thermal",
+    ] {
+        assert_eq!(
+            detail["capabilities"][capability]["ready"], true,
+            "{capability}"
+        );
+    }
+    assert_eq!(detail["capabilities"]["sewing_thickness_m"]["ready"], false);
+
+    // Keep the exact Rust selection text across the public binding boundary.
+    let edits = format!(r#"{{"schema":"ftx-material-bindings/1","default":{selection_text}}}"#);
+    let bound: Value = serde_json::from_str(&materials::bind(PATTERN, &edits).unwrap()).unwrap();
+    assert_eq!(bound["geometry_changed"], false);
+    let pattern = bound["pattern_json"].as_str().unwrap();
+    let resolved = ftx_drape::material::resolve(
+        &Pattern::from_json(pattern).unwrap(),
+        &ftx_drape::run::DrapeOptions::default(),
+    )
+    .unwrap();
+    assert!((resolved.fabric.areal_kg_m2 - 0.1).abs() < 1e-15);
+    assert!((resolved.options.contact.thickness - 0.0075).abs() < 1e-15);
+    let cut: Value =
+        serde_json::from_str(&manufacturing::cut_plan(pattern, &cut()).unwrap()).unwrap();
+    assert_eq!(cut["rolls"][0]["material"]["sha256"], selected.sha256());
+    let refusal = manufacturing::sew_plan(pattern, SEW).unwrap_err();
+    assert!(refusal.message.contains("uncompressed sheet thickness"));
+    assert!(manufacturing::sew_plan(PATTERN, SEW).is_ok());
+}
+
+#[test]
+fn pressure_api_refuses_unqualified_or_out_of_domain_requests() {
+    let mut request: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-compression.json"
+    ))
+    .unwrap();
+    request["pressure_pa"] = json!(501.0);
+    assert!(materials::pressure_condition(&request.to_string()).is_err());
+    request["pressure_pa"] = json!(250.0);
+    request["invariants"]["areal_density"]["conditions"]["pressure_pa"] = json!("2000");
+    assert!(materials::pressure_condition(&request.to_string()).is_err());
+}
+
+#[test]
 fn malformed_binding_and_stale_material_or_pair_evidence_do_not_publish_success() {
     let raw: Value = serde_json::from_str(PATTERN).unwrap();
     let mut c = changes(selection(0.1, 0.4));
