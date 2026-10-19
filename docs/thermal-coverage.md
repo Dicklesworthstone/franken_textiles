@@ -349,6 +349,19 @@ Radiation uses each region's **outermost frozen material** and its qualified fac
 specimen, spectral basis and temperature range. Missing data refuses; omit `radiation`
 for convection alone. Changing a finish requires a newly saved drape and matching map.
 
+For materials with a source-bearing `optical_faces` assignment, replace the example's
+explicit face/property strings with `"automatic_material_face": true`. The current
+outer cloth normal relative to the body normal selects its positive or negative
+observation; mirrored instance names do not add another flip. The report retains the
+actual selection under each region's `flux.material_face`. A missing side, mismatched
+specimen or unqualified observation refuses. Explicit-face mode keeps the caller's
+physical assignment. See [material optical faces](material-optical-faces.md) for a
+runnable asymmetric example and the mapping contract.
+
+Stored through-thickness temperatures also retain their material orientation. Once
+that orientation is bound, the library's direct coverage advance refuses a reversal;
+use the motion remapper so heat stays on the correct physical side.
+
 `steady.exterior_exchange` and `final.exterior_exchange` retain each outer source
 triangle, layer, allocated current area, solved surface temperature and signed fluxes.
 Exterior flux uses current outer cloth area; storage retains allocated reference mass.

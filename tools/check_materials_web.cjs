@@ -160,13 +160,36 @@ const server = http.createServer((req, res) => {
       conditions:fs.readFileSync(fixture('steady-coverage-conditions.json'),'utf8')});
     assert.equal(coverage.type,'result');
     assert.deepEqual(coverage.result,JSON.parse(invoke('thermal-steady-coverage',fixture('synthetic-steady-surface-report.json'),fixture('steady-coverage-map.json'),fixture('steady-coverage-conditions.json'))));
+    // Actual compiled browser solver: explicit source-normal assignment changes the selected finish.
+    const opticalStack = load('synthetic-asymmetric-exterior.json'), opticalResults = [];
+    const browserSteady = request => page.evaluate(async request => {
+      const ftx = await import('./pkg/ftx_wasm.js'); await ftx.default();
+      try { return {result:JSON.parse(ftx.thermal_steady(request))}; }
+      catch (e) { return {error:String(e)}; }
+    }, JSON.stringify(request));
+    for (const reversed of [false,true]) {
+      const input = structuredClone(opticalStack), faces = input.layers[0].record.optical_faces;
+      if (reversed) [faces.positive,faces.negative] = [faces.negative,faces.positive];
+      const computed = await browserSteady(input);
+      assert.equal(computed.error,undefined);
+      assert.deepEqual(computed.result,JSON.parse(invoke('thermal-steady',write(`optical-${reversed}.json`,input))));
+      const selected = computed.result.exterior_exchange.material_face;
+      assert.equal(selected.side,'positive');
+      assert.equal(selected.face,reversed ? 'reverse' : 'finish');
+      assert.equal(selected.emissivity_property,reversed ? 'reverse_emissivity' : 'finish_emissivity');
+      opticalResults.push(computed.result);
+    }
+    assert.notEqual(opticalResults[0].power_w,opticalResults[1].power_w);
+    assert.notEqual(opticalResults[0].request_sha256,opticalResults[1].request_sha256);
+    delete opticalStack.layers[0].record.optical_faces;
+    assert.match((await browserSteady(opticalStack)).error,/no source-sheet optical face mapping/);
     const badModel = await worker({type:'fold',bytes:new ArrayBuffer(8),pattern:JSON.stringify(bound),fit:'{}',measurements:'{}',selfContactMm:2});
     assert.equal(badModel.type,'error');
     await page.setInputFiles('#patternFile',{name:'bad.json',mimeType:'application/json',buffer:Buffer.from('{')});
     await page.waitForFunction(() => !document.getElementById('error').hidden);
     assert.equal(await page.locator('a[download="pattern.json"]').count(),0); assert.equal(await page.isDisabled('#bind'),true);
     assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
-    console.log('PASS: real browser nonlinear/proportional/directional calibration with fixed and identified times, estimate admission, catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, invalidation and model refusal.');
+    console.log('PASS: real browser nonlinear/proportional/directional calibration with fixed and identified times, estimate admission, catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, automatic asymmetric optical faces, invalidation and model refusal.');
     console.log('No successful model-backed browser drape or real textile validation asserted. Artifacts:',work);
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(e => { console.error(e); server.close(); process.exitCode=1; });

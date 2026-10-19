@@ -54,6 +54,16 @@ The UI deliberately asks for the existing JSON contracts rather than inventing c
 constants. The synthetic sewing pattern/options under `tests/fixtures/materials/` illustrate process
 inputs, not a real qualified textile or recommended machine configuration.
 
+Optional material `optical_faces` assignments survive inspection, freezing, piece binding and the
+retained drape receipt. In the existing heat-condition JSON, set
+`radiation.automatic_material_face: true` and omit explicit face/property strings. Independent
+sheets use their canonical positive outside face; layered coverage selects the actual outer side
+from cloth/body normals. The result retains the chosen observation and material identity.
+No face editor or missing optical data is supplied by the page. See
+[material optical faces](material-optical-faces.md) for the source, specimen, spectral and
+temperature qualifications and a runnable synthetic stack. The same stack request is available
+through the exported `thermal_steady` WASM API; it is not an additional workbench upload mode.
+
 ## Identify material behavior from local observations
 
 Section 1 accepts `ftx-nonlinear-swatch-calibration/1` observations for nonlinear stretch and shear,

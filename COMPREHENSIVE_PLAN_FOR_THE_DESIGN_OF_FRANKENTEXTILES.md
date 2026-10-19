@@ -1564,7 +1564,7 @@ inputs/results. See `docs/thermal-motion.md` for the interval contract and
 areas and reference masses, two-cell conduction networks, manufactured signed radiation,
 partial-body coverage, material changes, moving exposure and checkpoint continuation.
 
-**Measured optical observations (`ftx-op1`).** The current 115-record built-in catalog has no
+**Measured optical observations (`ftx-op1`).** The current 148-record built-in catalog has no
 optical observations qualified for this radiation model. Acquire matched optical and thermal
 measurements for an ordinary woven, a performance knit and finished cowhide, retaining specimen,
 actual face, finish, ply count, conditioning, temperature validity, spectral/angular basis and
@@ -1576,10 +1576,10 @@ and matched transport/storage remain explicit acquisition work.
 
 **Remaining physical and automation gates stay open.** This completes a software propagation
 slice of `ftx-ex2`; its independent measured garment experiments and uncertainty acceptance
-remain required. Optical observations currently have free-form face names. The caller must
-identify the actual exposed physical face; mesh normals alone cannot choose a named coating or
-finish. `ftx-ex3` tracks explicit source-face orientation and automatic property selection across
-reversed pieces and layer changes. Measured ventilation, non-unit view factors, pressure-dependent
+remain required. Named optical observations can now be bound to source-sheet orientation and
+selected automatically as described in §25.18; without that declaration, explicit-face mode
+retains the caller's physical assignment. `ftx-ex3` remains open for independent asymmetric-coupon
+validation. Measured ventilation, non-unit view factors, pressure-dependent
 loft, moisture/evaporation, full wearer thermoregulation and the fixed-jacket empirical gates in
 `ftx-tm2`/`ftx-tm8`/`ftx-tmf` are not established by these numerical results.
 
@@ -1666,6 +1666,53 @@ Explicit model-order comparison, competing-spectrum ambiguity and meaningful par
 remain part of `ftx-rc2`. Matched physical coupons and garment validation remain `ftx-rc1`,
 `ftx-tm2` and `ftx-tm8`; synthetic numerical success does not close those empirical gates.
 Missing mass, bending, friction, heat/moisture or machine-recipe evidence stays missing.
+
+---
+
+### 25.18 Oriented material optics and measured neoprene assemblies
+
+**Delivered material-to-exterior integration (`ftx-ex3`).** Optional source-bearing
+`Material.optical_faces` binds positive/negative source-sheet sides to exact optical
+observations. Automatic radiation selects the current outer covered side using the same
+cloth/body-normal authority as through-thickness temperature remapping. Independent columns
+and explicitly exposed cloth use the canonical positive outside face; the other face keeps
+its declared inside film. Mirrored piece names introduce no extra flip. No nearest-body,
+second ambient face, skin emissivity or arbitrary finish label is inferred.
+
+The mapping preserves source, evidence, specimen and conditioning and participates in ordinary
+material hashes. Missing assignments, uncharacterized sides, unadmitted estimates and unsupported
+optical spectral/temperature qualifications refuse. Existing explicit-face requests remain valid.
+Results retain the selected side, observation and material identity. Stored coverage temperatures
+bind layer orientation; direct reversal requires motion remapping, which preserves reference
+enthalpy through exposure changes and checkpoints. Pressure-conditioned preparation discards and
+reports stale optical assignments. See [material-optical-faces.md](docs/material-optical-faces.md).
+
+Validation includes 111 passing focused Rust tests: 62 thermal core, 16 material
+optics/conditioning, 11 catalog and 22 actual CLI tests, plus pinned formatting,
+strict workspace Clippy and the `wasm32-unknown-unknown` build.
+Native acceptance covers sewn mirrored pieces, opposite body sides, automatic face reports,
+missing-map refusal, measured material substitution and offline replay. Compiled WASM and
+the actual worker match native results, including automatic asymmetric optical selection
+and missing-map refusal. A complete Chromium pass is not established by this session.
+Independent asymmetric-coupon and garment
+validation remain open under `ftx-ex3`, `ftx-op1` and `ftx-tm8`.
+
+**Measured catalog expansion (`ftx-tm2`).** The catalog now contains 148 records, including
+33 unlined, one-sided-lined and both-sided-lined neoprene specimen groups from
+[Potočić Matković et al. (2025), DOI 10.3390/polym17212820](https://doi.org/10.3390/polym17212820).
+All 231 imported quantities were independently matched to the source XML tables: reference
+thickness, areal mass, dry thermal resistance and four pressure-specific compression displacements
+per group. Original units, separate instrument protocols, specimen-group identities and reported
+limits are retained. Measured dry resistance feeds the existing steady and layered conduction
+consumers through ordinary material selection; estimates are not needed for those observations.
+
+The displacement zero/preload and compatibility with the separate 1 kPa thickness reference
+remain unspecified. These observations do not become loaded thickness, pressure-invariant mass,
+measured loaded thermal resistance or a recovery law. `ftx-np1` tracks the focused source-reference
+and loaded-thermal acquisition supporting `ftx-tm2`/`ftx-cp2`, without blocking already qualified
+dry conduction. See [measured-neoprene.md](docs/measured-neoprene.md). Specific heat, directional
+mechanics, bending/contact, moisture and qualified optical observations remain separate missing
+inputs; the new records do not close the linen/leather/knit or independent garment gates.
 
 ---
 

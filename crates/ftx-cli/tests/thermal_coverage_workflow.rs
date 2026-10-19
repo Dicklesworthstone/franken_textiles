@@ -80,6 +80,15 @@ fn sewn_report_with_law(shell_r: f64, variable: bool) -> Value {
     sewn_report_with_optics(shell_r, variable, None)
 }
 fn sewn_report_with_optics(shell_r: f64, variable: bool, emissivity: Option<f64>) -> Value {
+    sewn_report_with_oriented_optics(shell_r, variable, emissivity, None, false)
+}
+fn sewn_report_with_oriented_optics(
+    shell_r: f64,
+    variable: bool,
+    emissivity: Option<f64>,
+    reverse_emissivity: Option<f64>,
+    mirrored: bool,
+) -> Value {
     let material = |r| {
         let mut selection = sheet(r, variable);
         if let Some(value) = emissivity {
@@ -90,20 +99,42 @@ fn sewn_report_with_optics(shell_r: f64, variable: bool, emissivity: Option<f64>
                     "face":"public","spectral_basis":"total_hemispherical",
                     "temperature_min_c":"-80","temperature_max_c":"80"}});
         }
+        if let Some(value) = reverse_emissivity {
+            let mut reverse = selection["record"]["properties"]["emissivity"].clone();
+            reverse["value"] = json!(value);
+            reverse["conditions"]["face"] = json!("reverse");
+            selection["record"]["properties"]["reverse_emissivity"] = reverse;
+            selection["record"]["optical_faces"] = json!({
+                "positive":{"face":"public", "emissivity_property":"emissivity"},
+                "negative":{"face":"reverse", "emissivity_property":"reverse_emissivity"},
+                "source":"test", "evidence":"estimate", "method":"Synthetic assignment to oriented source sheet",
+                "specimen":"test:coverage-cli", "conditioning":"synthetic-dry"});
+        }
         selection
     };
     let w = 40. * std::f64::consts::PI;
-    let pieces: Vec<_> = ["front","back"].into_iter().enumerate().map(|(i,id)| json!({
+    let mut pieces: Vec<_> = ["front","back"].into_iter().enumerate().map(|(i,id)| json!({
         "id":id,"cut":{"qty":1},"vertices":{"a":[0,0],"b":[w,0],"c":[w,20],"d":[0,20]},
         "edges":[{"id":"bottom","from":"a","to":"b"},{"id":"right","from":"b","to":"c"},
             {"id":"top","from":"c","to":"d"},{"id":"left","from":"d","to":"a"}],
         "notches":[],"grain":[[0,0],[0,20]],"fabric":{"material":material(if i==0 {0.1} else {shell_r})},
         "placement":{"part":"torso","radius_mm":40,"x0":w/2.,"theta_deg":180*i}
     })).collect();
+    let seams = if mirrored {
+        pieces.truncate(1);
+        pieces[0]["id"] = json!("panel");
+        pieces[0]["cut"]["qty"] = json!(2);
+        pieces[0]["placement"]["x0"] = json!(0.);
+        json!([
+            {"id":"back_join","a":"panel.R/right","b":"panel.L/right"},
+            {"id":"front_join","a":"panel.R/left","b":"panel.L/left"}])
+    } else {
+        json!([
+            {"id":"right_join","a":"front/right","b":"back/left"},
+            {"id":"left_join","a":"back/right","b":"front/left"}])
+    };
     let pattern = Pattern::new(json!({"schema":"fabric-pattern/1","units":"mm",
-        "fabric":{"material":material(0.1)},"pieces":pieces,"seams":[
-        {"id":"right_join","a":"front/right","b":"back/left"},
-        {"id":"left_join","a":"back/right","b":"front/left"}]}));
+        "fabric":{"material":material(0.1)},"pieces":pieces,"seams":seams}));
     let (vertices, tris) = cylinder();
     let body = Body::new(vertices, tris, 0.01).unwrap();
     drape(
@@ -1192,6 +1223,180 @@ fn static_exterior_conditions() -> Value {
     input["transient"]["steps"] = json!(4);
     input["transient"]["record_every"] = json!(1);
     input
+}
+
+fn automatic_exterior_conditions() -> Value {
+    let mut input = static_exterior_conditions();
+    input["exterior_exchange"][0]["radiation"] = json!({
+        "ambient_c":0., "automatic_material_face":true, "allow_opaque_gray_approximation":true});
+    input
+}
+
+fn compare_automatic_coverage_with_core(report: &Value, map: &Value, input: &Value) -> Value {
+    use ftx_drape::thermal::{
+        Boundary,
+        steady::exterior::Exterior,
+        surface::{
+            Surface,
+            coverage::{Coverage, ExteriorConditions, Layout},
+        },
+    };
+    let out = success(report, map, input);
+    let (source, cloth) = Surface::from_drape_report(report).unwrap();
+    let body: Vec<Vec3> = serde_json::from_value(map["body_positions_m"].clone()).unwrap();
+    let layout: Layout = serde_json::from_value(map["layout"].clone()).unwrap();
+    let coverage = Coverage::new(source, layout).unwrap();
+    let boundary = |v: &Value| Boundary {
+        inside_c: v["inside_c"].as_f64().unwrap(),
+        outside_c: v["outside_c"].as_f64().unwrap(),
+        inside_resistance: v["inside_resistance_m2_k_w"].as_f64().unwrap(),
+        outside_resistance: v["outside_resistance_m2_k_w"].as_f64().unwrap(),
+    };
+    let count = coverage.body_triangle_count();
+    let boundaries = vec![boundary(&input["boundaries"][0]); count];
+    let bare = vec![boundary(&input["bare_boundaries"][0]); count];
+    let environment: Exterior =
+        serde_json::from_value(input["exterior_exchange"][0].clone()).unwrap();
+    let environments = vec![environment; count];
+    let conditions = ExteriorConditions {
+        environments: &environments,
+        bare_boundaries: &bare,
+    };
+    let steady = coverage
+        .steady_exterior(&cloth, &body, &boundaries, conditions)
+        .unwrap();
+    assert_eq!(
+        out["steady"]["exterior_exchange"],
+        json!(steady.exterior_exchange)
+    );
+    let mut state = coverage.initial(10.).unwrap();
+    for _ in 0..4 {
+        state = coverage
+            .advance_exterior(&state, &cloth, &body, 0.5, &boundaries, conditions)
+            .unwrap()
+            .state;
+    }
+    assert_eq!(out["final"]["temperature_c"], json!(state.temperature_c()));
+    out
+}
+
+#[test]
+fn automatic_optical_faces_follow_retained_normals_of_actual_mirrored_sewn_pieces() {
+    let report = sewn_report_with_oriented_optics(0.4, false, Some(0.2), Some(0.85), true);
+    let thermal = &report["thermal_surface"];
+    assert_eq!(thermal["instances"], json!(["panel.R", "panel.L"]));
+    let positions: Vec<Vec3> = serde_json::from_value(thermal["positions_m"].clone()).unwrap();
+    for patch in thermal["model"]["patches"].as_array().unwrap() {
+        let vertices: [usize; 3] = serde_json::from_value(patch["vertices"].clone()).unwrap();
+        let [a, b, c] = vertices.map(|i| positions[i]);
+        let centre = (a + b + c) / 3.;
+        // Independent public-side geometry: both mirror instances retain an outward CCW normal.
+        assert!((b - a).cross(c - a).dot(Vec3::new(centre.x, centre.y, 0.)) > 0.);
+    }
+    let mut request = projection_input();
+    request["instance_layers"] = json!({"panel.R":"shell", "panel.L":"shell"});
+    let (mapped, _) = map_invoke(&report, &body_obj(), &request);
+    assert!(
+        mapped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mapped.stderr)
+    );
+    let map: Value = serde_json::from_slice(&mapped.stdout).unwrap();
+    let input = automatic_exterior_conditions();
+    let out = compare_automatic_coverage_with_core(&report, &map, &input);
+    assert!(out["final"]["covered_area_m2"].as_f64().unwrap() > 0.);
+    assert!(out["final"]["bare_heat_w"].as_f64().unwrap() > 0.);
+    let mut owners = [false; 2];
+    for region in out["final"]["exterior_exchange"]["regions"]
+        .as_array()
+        .unwrap()
+    {
+        let triangle = region["outer_cloth_triangle"].as_u64().unwrap() as usize;
+        owners[thermal["triangle_instance"][triangle].as_u64().unwrap() as usize] = true;
+        let selected = &region["flux"]["material_face"];
+        assert_eq!(selected["side"], "positive");
+        assert_eq!(selected["face"], "public");
+        assert_eq!(selected["emissivity_property"], "emissivity");
+        let column = thermal["model"]["patches"][triangle]["column"]
+            .as_u64()
+            .unwrap() as usize;
+        assert_eq!(
+            selected["material_sha256"],
+            thermal["model"]["columns"][column]["layers"][0]["sha256"]
+        );
+    }
+    assert_eq!(owners, [true, true]);
+
+    let unmapped = sewn_report_with_oriented_optics(0.4, false, Some(0.2), None, true);
+    let (new_map, _) = map_invoke(&unmapped, &body_obj(), &request);
+    assert!(new_map.status.success());
+    let new_map: Value = serde_json::from_slice(&new_map.stdout).unwrap();
+    let (failure, _) = invoke(&unmapped, &new_map, &input);
+    assert_eq!(failure.status.code(), Some(2));
+    assert!(failure.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&failure.stderr).contains("no source-sheet optical face mapping")
+    );
+}
+
+#[test]
+fn automatic_coverage_cli_uses_opposite_observation_on_reversed_full_body_regions() {
+    let report = sewn_report_with_oriented_optics(0.4, false, Some(0.2), Some(0.85), false);
+    let thermal = &report["thermal_surface"];
+    let cloth: Vec<Vec3> = serde_json::from_value(thermal["positions_m"].clone()).unwrap();
+    let patches = thermal["model"]["patches"].as_array().unwrap();
+    let triangle = 0;
+    let indices: [usize; 3] =
+        serde_json::from_value(patches[triangle]["vertices"].clone()).unwrap();
+    let [a, b, c] = indices.map(|i| cloth[i]);
+    let mut results = Vec::new();
+    for (reversed, fraction) in [(false, 1.0), (true, 1.0), (true, 0.5)] {
+        let mut normal = (b - a).cross(c - a);
+        normal = normal / normal.norm();
+        let shift = normal * if reversed { -0.005 } else { 0.005 };
+        let body = vec![a - shift, b - shift, c - shift];
+        let face = if reversed { [0, 2, 1] } else { [0, 1, 2] };
+        let map = json!({"schema":"ftx-drape-thermal-coverage/1",
+            "drape_thermal_frame_sha256":thermal["sha256"], "body_positions_m":body,
+            "layout":{"schema":"ftx-thermal-coverage-layout/1", "mapping_basis":"Synthetic declared same-coupon region on the requested physical side",
+                "body_vertex_count":3,"body_triangles":[face],"cells_per_layer":2,
+                "regions":[{"id":"selected-face","body_triangle":0,"body_fraction":fraction,
+                    "layers":[{"layer":"shell","cloth_triangle":triangle,"fraction":fraction}],"interface_resistance_m2_k_w":[]}]}});
+        let out =
+            compare_automatic_coverage_with_core(&report, &map, &automatic_exterior_conditions());
+        let actual = &out["final"]["exterior_exchange"]["regions"][0]["flux"]["material_face"];
+        assert_eq!(
+            actual["side"],
+            if reversed { "negative" } else { "positive" }
+        );
+        assert_eq!(actual["face"], if reversed { "reverse" } else { "public" });
+        assert_eq!(
+            actual["emissivity_property"],
+            if reversed {
+                "reverse_emissivity"
+            } else {
+                "emissivity"
+            }
+        );
+        near(
+            out["final"]["covered_area_m2"].as_f64().unwrap(),
+            out["final"]["body_area_m2"].as_f64().unwrap() * fraction,
+            1e-15,
+        );
+        assert_eq!(
+            out["final"]["bare_heat_w"].as_f64().unwrap() == 0.,
+            fraction == 1.
+        );
+        results.push(out);
+    }
+    assert_ne!(
+        results[0]["final"]["temperature_c"],
+        results[1]["final"]["temperature_c"]
+    );
+    assert_eq!(
+        results[1]["final"]["temperature_c"],
+        results[2]["final"]["temperature_c"]
+    );
 }
 
 #[test]

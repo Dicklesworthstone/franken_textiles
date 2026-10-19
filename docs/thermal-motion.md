@@ -139,11 +139,17 @@ power uses the current uncovered source-triangle fraction. Storage in both follo
 Bare-body film power is already included in the normal boundary totals; do not add it
 again to reconstruct total outgoing heat.
 
-Physical face selection is the caller's responsibility. Arbitrary observation labels
-such as `public` are not bound automatically to vertex normals. A covered environment
-must name the actual outer physical face for every region assigned to it; an exposed
-environment names the canonical source outside face. Depth remapping preserves source
-orientation but does not choose a finish or certify an asymmetric-face assignment.
+Materials can bind named observations to canonical source-sheet sides with
+`optical_faces`. Set `radiation.automatic_material_face: true` and omit explicit
+face/property strings to select the actual outer covered side from current cloth/body
+normals. The same authority controls through-thickness temperature remapping, including
+reversals and checkpoint continuation; mirrored instance names introduce no extra flip.
+For uncovered cloth, automatic selection uses the canonical positive source face;
+the negative face keeps its explicit inside film. No nearest-body or second ambient
+face is inferred. Explicit-face mode retains the caller's physical assignment.
+Each active face result includes `material_face` only in automatic mode. Missing
+mappings, sides or optical qualifications refuse. See
+[material optical faces](material-optical-faces.md) for the source-bearing declaration.
 
 Valid weather and reservoir changes apply in the next interval, including after a
 checkpoint restart, without resetting stored temperatures. A changed source material

@@ -76,8 +76,22 @@ const parse = JSON.parse;
   assert.deepEqual(heat.result,parse(invoke('thermal-steady-surface',fixture('synthetic-steady-surface-report.json'),fixture('steady-surface-conditions.json'))));
   const coverage=await send('coverage',{report,map:read('steady-coverage-map.json'),conditions:read('steady-coverage-conditions.json')});
   assert.deepEqual(coverage.result,parse(invoke('thermal-steady-coverage',fixture('synthetic-steady-surface-report.json'),fixture('steady-coverage-map.json'),fixture('steady-coverage-conditions.json'))));
+  const opticalStack=parse(read('synthetic-asymmetric-exterior.json')), opticalResults=[];
+  for (const reversed of [false,true]) {
+    const input=structuredClone(opticalStack), faces=input.layers[0].record.optical_faces;
+    if(reversed) [faces.positive,faces.negative]=[faces.negative,faces.positive];
+    const actual=parse(ftx.thermal_steady(JSON.stringify(input)));
+    assert.deepEqual(actual,parse(invoke('thermal-steady',write(`optical-${reversed}.json`,input))));
+    assert.equal(actual.exterior_exchange.material_face.side,'positive');
+    assert.equal(actual.exterior_exchange.material_face.face,reversed ? 'reverse' : 'finish');
+    opticalResults.push(actual);
+  }
+  assert.notEqual(opticalResults[0].power_w,opticalResults[1].power_w);
+  assert.notEqual(opticalResults[0].request_sha256,opticalResults[1].request_sha256);
+  delete opticalStack.layers[0].record.optical_faces;
+  assert.throws(()=>ftx.thermal_steady(JSON.stringify(opticalStack)),/no source-sheet optical face mapping/);
   await context.self.onmessage({data:{type:'fold',bytes:new ArrayBuffer(8),pattern:JSON.stringify(original),measurements:'{}',fit:'{}'}});
   assert.equal(sent.at(-1).type,'error');
-  console.log('PASS: compiled WASM + actual worker/native equality for binding, stock, SVG, sewing, purchasing and frozen thermal surface/coverage; material-driven changes and malformed model refusal.');
+  console.log('PASS: compiled WASM + actual worker/native equality for binding, stock, SVG, sewing, purchasing and frozen thermal surface/coverage; automatic asymmetric optical faces, material-driven changes and malformed model refusal.');
   console.log('Browser navigation and successful model-backed drape NOT asserted. Test outputs:',work);
 })().catch(e=>{console.error(e);process.exitCode=1;});
