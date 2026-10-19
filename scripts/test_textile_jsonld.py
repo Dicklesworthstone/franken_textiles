@@ -55,6 +55,17 @@ class JsonLdTests(unittest.TestCase):
         q, _ = r.extract_jsonld(e, json.dumps(graph).encode(), NOW)
         self.assertEqual(q["price"], 12.99)
 
+    def test_reviewed_material_snapshot_lock_survives_without_inventing_capacity(self):
+        e = manifest_entry(); e["material_sha256"] = "c3" * 32
+        e["required_page_text"] = ["Sold per half yard"]
+        q, receipt = self.extract(e=e)
+        self.assertEqual(q["material_sha256"], e["material_sha256"])
+        self.assertEqual(receipt["manifest_entry"]["material_sha256"], e["material_sha256"])
+        self.assertEqual(receipt["manifest_entry"]["required_page_text"], e["required_page_text"])
+        self.assertNotIn("available_quantity", q)
+        e["material_sha256"] = "not-a-hash"
+        with self.assertRaises(ValueError): self.extract(e=e)
+
     def test_explicit_offer_ref_not_cheapest_or_first_offer(self):
         p = product(); other = dict(p["offers"], **{"@id": "#other", "price": "0.01"})
         p["offers"] = [other, p["offers"]]

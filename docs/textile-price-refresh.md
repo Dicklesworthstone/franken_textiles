@@ -215,3 +215,62 @@ Primary structured-data interface reference, checked 2026-10-14: https://schema.
 Offline regressions cover graph/variant selection, conflicting prices, explicit stock and tax,
 conditional offers, source/quote expiry, broken JSON-LD, bounded traversal, and complete CLI evidence
 publication. They do not establish live supplier qualification or worldwide price coverage.
+
+## Exact material snapshots and finite source quantities
+
+An offer can now include two optional fields in the existing quote format:
+
+```json
+{
+  "material_sha256": "<64 hexadecimal digits from the reviewed resolved material>",
+  "available_quantity": 1.25
+}
+```
+
+These are additions to a complete quote, not a standalone observation. The material hash binds
+the quote to the exact source-bearing material and evidence policy, including its usable width.
+Changing a same-ID fabric's width, finish, source observations or estimate policy invalidates a
+locked offer before unit conversion. An omitted lock preserves existing ID-based pricing and
+does not establish snapshot qualification. Old quotes still serialize without either new field.
+
+`available_quantity` is the source's observed maximum supply in the quote's **original sale unit**.
+For a price per half linear yard (`quantity: 0.5`, `unit: "linear_yard"`), a capacity of `1.25`
+means 1.25 yards, not 1.25 half-yard packages. Capacity must be finite and nonnegative. A known
+zero cannot supply any positive order; an omitted capacity remains unknown. It is not a price-tier
+ceiling, a continuous-cut-length guarantee or a reason to guess usable hide area.
+
+The order calculation includes both the minimum quantity and the selling increment. For example,
+a 2.1 m² marker with 0.5 m² order increments needs 2.5 m² of purchasable stock; a source reporting
+2.25 m² is excluded even though it exceeds the net requirement. Endpoint comparison accounts for
+one final binary multiplication rounding step (such as `3 × 0.05`); it does not add an inventory
+allowance or change the reported order quantity.
+
+All three adapters accept the optional reviewed `material_sha256` in their manifest entry and
+preserve it in the source receipt and quote. Only the CSV adapter currently imports quantified
+stock: add the mapping below to its existing `columns` object, and document the sale-unit meaning
+in the reviewed `basis_note`:
+
+```json
+"available_quantity": "AVAILABLE_YARDS"
+```
+
+The exact selected row must then contain a plain nonnegative decimal in that column. Missing,
+ambiguous, nonfinite or unrepresentable values refuse the refresh; they never become zero or
+unlimited supply. CSV variant, region, SKU, unit and selling-basis checks remain in force, and the
+complete source response is retained. Without this reviewed mapping, numeric stock columns are
+ignored. Shopify/JSON-LD availability labels still provide only a boolean, so their capacity
+remains unknown. No static inventory number is copied from the reviewed manifest into live quotes.
+
+Set `"require_observed_quantity": true` in a `price` scope or `cut-price` market to require source
+quantity sufficient for every complete rounded order. Omission retains observational price
+comparison with unknown capacity. Every accepted offer reports `quantity_sufficiency_observed`.
+The marker report's `complete_observed_quantity_coverage` describes the chosen least-cost orders;
+it can be false even when a legacy observational cost is available. If any material has no eligible
+offer, the total remains unknown. `excluded_offers` retain the latest source row and a reason such
+as `insufficient_quantity`, `unknown_quantity` or `material_snapshot_mismatch`; insufficient-stock
+rows also report `required_order_quantity` in their source sale unit.
+
+The latest observation is selected before these checks, so a later exhausted or rebound offer
+cannot resurrect an older unlimited or cheaper observation. Independent material orders are not
+pooled. None of these results reserves inventory, establishes market population percentiles,
+confirms a live supplier's current stock or authorizes a purchase. Tests use synthetic data.

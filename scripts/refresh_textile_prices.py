@@ -32,6 +32,7 @@ LIMIT = 4 * 1024 * 1024
 SCHEMA = "ftx-textile-quotes/1"
 FIELDS = ("offer_id", "material_id", "supplier", "sku", "quantity", "unit",
           "minimum_quantity", "order_increment", "currency", "region", "quality", "terms")
+OPTIONAL_FIELDS = {"material_sha256"}
 
 
 def load(raw: bytes, *, object_only=True):
@@ -235,7 +236,14 @@ def validate_basis(entry: dict) -> None:
         n = entry[key]
         if type(n) not in (int, float) or not math.isfinite(n) or n <= 0:
             raise ValueError(f"{key} must be finite and positive")
+    if "material_sha256" in entry and (not isinstance(entry["material_sha256"], str)
+            or not re.fullmatch(r"[0-9a-fA-F]{64}", entry["material_sha256"])):
+        raise ValueError("material_sha256 must be the reviewed exact material snapshot hash")
     dt.date.fromisoformat(entry["basis_reviewed_on"])
+
+
+def quote_basis(entry: dict) -> dict:
+    return {key: entry[key] for key in (*FIELDS, *sorted(OPTIONAL_FIELDS)) if key in entry}
 
 
 def observation_time(entry: dict, observed: dt.datetime) -> dt.datetime:
@@ -251,7 +259,7 @@ def observation_time(entry: dict, observed: dt.datetime) -> dt.datetime:
 def validate_entry(entry: dict) -> None:
     required = set(FIELDS) | {"product_url", "cart_url", "variant_id", "basis_source",
                               "basis_note", "basis_reviewed_on", "required_description_text"}
-    if set(entry) != required:
+    if set(entry) - OPTIONAL_FIELDS != required:
         raise ValueError(f"manifest entry fields differ: {sorted(set(entry) ^ required)}")
     validate_basis(entry)
     if type(entry["variant_id"]) is not int or entry["variant_id"] <= 0:
@@ -301,7 +309,7 @@ def extract(entry: dict, product_raw: bytes, cart_before_raw: bytes, cart_after_
     if product.get("requires_selling_plan") or variant.get("requires_selling_plan"):
         raise ValueError("subscription-only prices need a separate selling-plan adapter")
     digest = hashlib.sha256(product_raw).hexdigest()
-    quote = {key: entry[key] for key in FIELDS}
+    quote = quote_basis(entry)
     quote.update(price=amount / 100.0, observed_on=observed.date().isoformat(),
                  available=variant["available"], source=entry["product_url"], source_sha256=digest)
     # Cart response tokens/cookies are NOT persisted. Only the needed currency attestation is retained.
@@ -318,7 +326,7 @@ CSV_FIELDS = {"sku", "price", "currency", "available", "quantity", "unit",
               "minimum_quantity", "order_increment"}
 
 
-def decimal_number(text: str) -> Decimal:
+def decimal_number(text: str, *, allow_zero=False) -> Decimal:
     """No currency-symbol, thousands-separator, exponent or locale guessing."""
     if not isinstance(text, str) or not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", text):
         raise ValueError("expected a plain unsigned decimal number")
@@ -327,21 +335,21 @@ def decimal_number(text: str) -> Decimal:
         number = float(value)
     except (InvalidOperation, OverflowError) as error:
         raise ValueError("unrepresentable decimal number") from error
-    if not math.isfinite(number) or number <= 0:
-        raise ValueError("number must be finite, positive and representable")
+    if not math.isfinite(number) or number < 0 or (number == 0 and (not allow_zero or value != 0)):
+        raise ValueError("number must be finite and representable; zero is allowed only for observed stock")
     return value
 
 
 def validate_csv(entry: dict) -> None:
     required = set(FIELDS) | {"adapter", "source_url", "basis_source", "basis_note",
                               "basis_reviewed_on", "columns", "match", "availability", "delimiter"}
-    if set(entry) != required or entry["adapter"] != "csv_v1":
+    if set(entry) - OPTIONAL_FIELDS != required or entry["adapter"] != "csv_v1":
         raise ValueError("CSV manifest fields differ from csv_v1")
     validate_basis(entry)
     if origin(entry["source_url"]) != origin(entry["basis_source"]):
         raise ValueError("CSV and selling-basis evidence must share the supplier origin")
     columns = entry["columns"]
-    if (not isinstance(columns, dict) or set(columns) != CSV_FIELDS
+    if (not isinstance(columns, dict) or set(columns) - {"available_quantity"} != CSV_FIELDS
             or any(not isinstance(c, str) or not c.strip() for c in columns.values())
             or len(set(columns.values())) != len(columns)):
         raise ValueError("CSV needs distinct, explicit column names for every observed field")
@@ -406,10 +414,12 @@ def extract_csv(entry: dict, source_raw: bytes, observed: dt.datetime) -> tuple[
     if stock not in entry["availability"]["available"] + entry["availability"]["unavailable"]:
         raise ValueError("unknown CSV availability; missing stock is not in stock")
     digest = hashlib.sha256(source_raw).hexdigest()
-    quote = {key: entry[key] for key in FIELDS}
+    quote = quote_basis(entry)
     quote.update(price=float(decimal_number(row[columns["price"]])), observed_on=observed.date().isoformat(),
                  available=stock in entry["availability"]["available"],
                  source=entry["source_url"], source_sha256=digest)
+    if "available_quantity" in columns:
+        quote["available_quantity"] = float(decimal_number(row[columns["available_quantity"]], allow_zero=True))
     receipt = {"schema": "ftx-source-refresh/1", "adapter": "csv_v1", "observed_at": observed.isoformat(),
                "manifest_entry": entry, "source_sha256": digest, "selected_record": number,
                "quantity_basis": "source_columns_checked_against_reviewed_manifest",
@@ -500,7 +510,7 @@ def jsonld_nodes(source_raw: bytes, source_format: str) -> tuple[list[dict], dic
 def validate_jsonld(entry: dict) -> None:
     required = set(FIELDS) | {"adapter", "source_url", "basis_source", "basis_note", "basis_reviewed_on",
                               "source_format", "offer_ref", "tax_included", "required_description_text"}
-    if set(entry) - {"required_page_text"} != required or entry["adapter"] != "jsonld_v1":
+    if set(entry) - OPTIONAL_FIELDS - {"required_page_text"} != required or entry["adapter"] != "jsonld_v1":
         raise ValueError("JSON-LD manifest fields differ from jsonld_v1")
     validate_basis(entry)
     if origin(entry["source_url"]) != origin(entry["basis_source"]):
@@ -623,7 +633,7 @@ def extract_jsonld(entry: dict, source_raw: bytes, observed: dt.datetime) -> tup
     if not isinstance(stock, str) or stock not in stock_values:
         raise ValueError("JSON-LD stock missing, unknown, preorder or backorder")
     digest = hashlib.sha256(source_raw).hexdigest()
-    quote = {key: entry[key] for key in FIELDS}
+    quote = quote_basis(entry)
     quote.update(price=float(amounts[0]), observed_on=observed.date().isoformat(), available=stock_values[stock],
                  source=entry["source_url"], source_sha256=digest)
     if expiry is not None:

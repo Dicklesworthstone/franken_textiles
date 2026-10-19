@@ -77,18 +77,21 @@ fn both_native_commands_replay_the_same_source_complete_nonlinear_material() {
 
 #[test]
 fn nonlinear_command_does_not_interpret_unknown_flags_as_permission() {
-    for binary in [
-        env!("CARGO_BIN_EXE_ftx"),
-        env!("CARGO_BIN_EXE_ftx-materials"),
+    // The primary command uses the shared refusal exit code; the companion uses 2.
+    for (binary, refused) in [
+        (env!("CARGO_BIN_EXE_ftx"), 3),
+        (env!("CARGO_BIN_EXE_ftx-materials"), 2),
     ] {
         let mut command = Command::new(binary);
         if binary == env!("CARGO_BIN_EXE_ftx") {
             command.arg("materials");
         }
         let output = command
-            .args(["calibrate-nonlinear", FIXTURE, "--allow-anything"])
+            .args(["calibrate-nonlinear", FIXTURE, "--allow-anything", "true"])
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(output.status.code(), Some(refused));
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
     }
 }

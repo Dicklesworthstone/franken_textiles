@@ -80,6 +80,18 @@ class RefreshTests(unittest.TestCase):
         p = product(); p["price_min"] = 1; p["variants"][1]["compare_at_price"] = 50000
         self.assertEqual(self.extract(p=p)[0]["price"], 12.99)
 
+    def test_reviewed_material_lock_is_optional_and_not_a_source_inventory_number(self):
+        e = entry(); e["material_sha256"] = "a1" * 32
+        q, receipt = self.extract(e=e)
+        self.assertEqual(q["material_sha256"], e["material_sha256"])
+        self.assertEqual(receipt["manifest_entry"]["material_sha256"], e["material_sha256"])
+        self.assertNotIn("available_quantity", q)
+        for digest in [None, True, "", "g" * 64, "0" * 63]:
+            e["material_sha256"] = digest
+            with self.subTest(digest=digest), self.assertRaises(ValueError): self.extract(e=e)
+        e = entry(); e["available_quantity"] = 100
+        with self.assertRaises(ValueError): self.extract(e=e)
+
     def test_currency_changed_or_missing_refuses_without_fx(self):
         for c in ({"currency":"EUR", "items":[], "item_count":0}, {"items":[], "item_count":0}):
             with self.assertRaises(ValueError): self.extract(after=raw(c))
@@ -193,6 +205,29 @@ class CsvRefreshTests(unittest.TestCase):
         self.assertEqual(receipt["selected_record"], 4)
         with self.assertRaises(ValueError): r.extract_csv(csv_entry(), csv_raw(rows[:2]), NOW)
         with self.assertRaises(ValueError): r.extract_csv(csv_entry(), csv_raw([row, row]), NOW)
+
+    def test_explicit_available_sale_units_and_material_lock_preserve_source_evidence(self):
+        e = csv_entry(); e["material_sha256"] = "b2" * 32
+        e["columns"]["available_quantity"] = "AVAILABLE_YARDS"
+        row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
+        data = csv_raw([dict(row, AVAILABLE_YARDS="1.25")])
+        q, receipt = r.extract_csv(e, data, NOW)
+        self.assertEqual(q["available_quantity"], 1.25)
+        self.assertEqual(q["unit"], "linear_yard")
+        self.assertEqual(q["quantity"], 0.5)  # NOT 1.25 half-yard packages.
+        self.assertEqual(q["material_sha256"], "b2" * 32)
+        self.assertEqual(q["source_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(receipt["manifest_entry"]["columns"]["available_quantity"], "AVAILABLE_YARDS")
+        zero, _ = r.extract_csv(e, csv_raw([dict(row, AVAILABLE_YARDS="0", AVAILABLE="no")]), NOW)
+        self.assertEqual(zero["available_quantity"], 0.0)
+        self.assertFalse(zero["available"])
+        for value in ["", "-1", "unknown", "1e2", "0." + "0" * 400 + "1", "9" * 400]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                r.extract_csv(e, csv_raw([dict(row, AVAILABLE_YARDS=value)]), NOW)
+        with self.assertRaises(ValueError): r.extract_csv(e, csv_raw(), NOW)
+        # No reviewed column means capacity is unknown, even if the feed has unrelated numbers.
+        unreviewed, _ = r.extract_csv(csv_entry(), data, NOW)
+        self.assertNotIn("available_quantity", unreviewed)
 
     def test_basis_currency_and_stock_drift_refuse(self):
         row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
