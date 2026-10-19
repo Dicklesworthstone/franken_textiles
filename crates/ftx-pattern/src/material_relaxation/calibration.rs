@@ -17,7 +17,7 @@ use crate::materials::{Evidence, Form, Material, Quantity, Source};
 mod fit;
 mod orthotropic;
 
-pub use orthotropic::{Candidate, OrthotropicFitReport, OrthotropicInput};
+pub use orthotropic::{Candidate, OrthotropicFitReport, OrthotropicInput, TimeSearchReport};
 
 /// Portable measurement-to-material input schema.
 pub const SCHEMA: &str = "ftx-relaxation-calibration/1";

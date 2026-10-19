@@ -59,8 +59,10 @@ inputs, not a real qualified textile or recommended machine configuration.
 Section 1 accepts `ftx-nonlinear-swatch-calibration/1` observations for nonlinear stretch and shear,
 or `ftx-relaxation-calibration/1` complete loading histories for relaxation, creep and recovery.
 Choose the matching response, load the source-bearing JSON and run **Identify material behavior**.
-Timed requests preserve their independent long-time equilibrium and choose either proportional
-ratio/time search or an explicit `orthotropic` time grid for directional recovery. The shared Rust
+Timed requests preserve their independent long-time equilibrium. Directional recovery accepts either
+fixed `orthotropic.times_seconds` or one to three nonoverlapping `orthotropic.time_bounds_seconds`
+windows for identifying the times. Omit or leave empty the other field; supplying both is refused.
+Proportional ratio/time search uses its separate top-level time bounds. The shared Rust
 calibrators own the models, fitting, evidence admission, identifiability and residual gates; the page
 neither fits coefficients itself nor rewrites the supplied measurements.
 
@@ -76,13 +78,30 @@ domain endpoints come from fitting observations; timed applicability is source-d
 observations, predictions, residuals and fitted recovery branches remain inspectable. These quantities
 are not confidence intervals or independent garment validation.
 
-For directional recovery, the table reports each supplied time and its published warp, weft, normal
-coupling and shear tensor entries in N/m. Inactive candidates remain visible with their explicit zero
-coefficients; an entirely inactive spectrum retains the independently supplied equilibrium response.
-Candidate times are fixed inputs, not automatically optimized. The full report separately preserves
+For directional recovery, the table reports each time and its published warp, weft, normal
+coupling and shear tensor entries in N/m. Fixed candidate times remain supplied inputs, not
+automatically optimized. In this fixed mode, inactive candidates remain visible with their explicit
+zero coefficients; an entirely inactive spectrum retains the independently supplied equilibrium response.
+Searched times each require a retained observable recovery branch; individual directional coefficients
+may still be zero. When time windows are
+declared instead, the page shows the identified time beside both bounds, its scaled force/log-time
+sensitivity with fitted tensors held fixed, and its distance to the closest window boundary as a
+fraction of the log-time window.
+A fraction of zero is an endpoint and 0.5 is the center. The local optimizer table reports converged
+and attempted starts, iterations in the selected solve, total objective evaluations, projected tensor
+iterations across all solves, maximum scaled gradient and joint stiffness/time excitation pivot.
+The gradient describes the objective slope after fitting the tensors; the pivot describes the
+column-normalized FIT information for tensor coefficients and log-times. These diagnostics accompany the held-out errors;
+they do not establish a global optimum, a unique spectrum or statistical confidence.
+
+The full report separately preserves
 unconstrained, physically constrained and explicitly thresholded values. Fit and held-out errors refer
 to the final published law, including threshold decisions. Small errors do not establish a unique
 spectrum or extend its source-qualified strain applicability.
+
+`tests/fixtures/materials/synthetic-orthotropic-relaxation-search.json` illustrates bounded time
+identification with independent directional responses. It is an artificial software fixture, not a
+measured textile characterization.
 
 The generated selection is ready for the same default or source-piece assignment and binding steps.
 Its exact Rust `selection_json` is retained through assignment and download, preserving numeric source

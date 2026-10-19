@@ -5,7 +5,8 @@ from timed force/deformation acquisitions, then returns the ordinary frozen mate
 by `bind`, `resolve`, sewn garments and body-motion continuation. The original mode identifies
 positive proportional stiffness ratios and relaxation times. The optional orthotropic mode identifies
 independent warp/wale, weft/course, signed normal coupling and bias tensors at explicitly supplied
-candidate times. The equilibrium membrane must already be independently characterized. This is the
+candidate times, or jointly identifies those tensors and one to three times inside separate declared
+windows. The equilibrium membrane must already be independently characterized. This is the
 measurement-to-consumer slice of `ftx-tm2`, `ftx-tm4` and `ftx-rc1`; physical specimen and garment
 validation remain separate requirements.
 
@@ -116,8 +117,8 @@ The same `ftx-relaxation-calibration/1` input can replace the proportional time 
 }
 ```
 
-Omit `time_bounds_seconds` or supply an empty array. Nonempty search windows and orthotropic mode
-together refuse. Supply one to eight strictly increasing positive candidate times; these times are
+Omit the top-level `time_bounds_seconds` or supply an empty array: those windows belong to the
+proportional model. Supply one to eight strictly increasing positive candidate times; these times are
 fixed modeling choices, not optimized decay measurements or uncertainty bounds. The fit identifies
 four independent coefficients per candidate, in N/m:
 
@@ -178,6 +179,61 @@ intentionally inactive. Run it through the same native command or browser histor
 selection automatically reaches existing per-piece mechanics, sewing continuation and body-motion
 history. It is a numerical software specimen, not measured performance-knit or leather data.
 
+## Identifying independent directional times
+
+When decay times are unknown, replace the fixed `orthotropic.times_seconds` with separate nested
+directional windows:
+
+```json
+"orthotropic": {
+  "time_bounds_seconds": [[0.1, 0.9], [1.0, 4.0], [5.0, 24.0]],
+  "zero_threshold_n_m": 1e-7
+}
+```
+
+Supply one to three positive, ordered, nonoverlapping windows. Omit `orthotropic.times_seconds` or
+leave it empty; nonempty fixed times and nested windows together refuse. These windows declare the
+number of branches and restrict their search. They are not confidence intervals. The existing
+fixed-time mode retains its original arithmetic, report fields and source identities.
+
+The bounded search operates on log-times. Every trial rebuilds the exact FIT force design and solves
+the same constrained tensor problem used by the fixed-time mode. An analytic envelope gradient
+differentiates this minimized objective; it does not treat a frozen tensor's residual Jacobian as the
+derivative of the entire fit. Deterministic starts use every combination of 20%, 50% and 80% positions
+inside the log-windows. BFGS steps use a bounded log-time movement and a decreasing-objective line
+search. The selected local minimum has the smallest FIT squared residual among converged starts.
+Held-out forces, acceptance budgets and the explicit zero threshold never choose times or starts.
+
+Work is bounded across all starts: at most 1,024 objective evaluations, 262,144 projected tensor
+iterations, 120 accepted time iterations per start and 20 backtracking trials per iteration. Exhausting
+a global budget refuses instead of publishing a partly searched spectrum. These bounds are deliberate
+for the shared native/browser engine; convergence does not certify a unique or global optimum.
+
+An optimized time must have observable force sensitivity and be distinguishable from all fitted
+amplitudes and other times using FIT observations alone. The complete column-normalized joint force
+Jacobian must pass the reported excitation gate. A time within 0.001% of either log-window boundary
+refuses. A whole branch that becomes inactive after the explicit threshold also refuses: a zero
+spring does not identify a decay time. Individual inactive warp, weft, coupling or shear coefficients
+remain allowed when the acquisition resolves the tensor and time. Actual compiled-law FIT/CHECK
+replay and both residual gates still run after thresholding.
+
+The optional `orthotropic_fit.time_search` receipt distinguishes identified times from supplied fixed
+times. It records every declared window through the original input, each fitted tensor/time through
+the candidates, attempted/converged starts, selected outer iterations, total objective evaluations
+and total projected tensor iterations. `gradient_scaled_max` is
+`max |dSSE/dlog(tau)| / (2 * sensitivity * (1 + sqrt(SSE)))`, with a convergence threshold of `1e-10`;
+it is an objective stationarity diagnostic, not an uncertainty estimate. `time_sensitivity` contains
+the scaled FIT force derivative norms with respect to log-times at the fitted tensors.
+`joint_excitation_pivot` is the smallest Cholesky pivot of the column-normalized joint Gram matrix,
+required to exceed `1e-7`; `boundary_distance_fraction` measures the closest boundary distance as a
+fraction of the corresponding log-window width. These diagnostics describe local numerical behavior.
+
+`tests/fixtures/materials/synthetic-orthotropic-relaxation-search.json` uses the same independently
+calculated directional observations as the fixed fixture, with the three windows above and without
+the inactive 32-second candidate. The independent truth is 0.3, 2 and 8 seconds with the first three
+tensors in the table. Run it through the same native command, WASM export or browser history upload;
+retain the report and use its exact `selection_json` for the ordinary material-binding workflow.
+
 ## Solver agreement and remaining work
 
 Calibration uses continuous-time analytic history integration. The actual cloth solver uses backward
@@ -193,7 +249,10 @@ sensitivities, frozen identities and refusal paths. These are synthetic numerica
 not a calibrated library of real linen, leather or performance-knit specimens. Additional checks cover
 directional tensor recovery, inactive axes/candidates, signed coupling, constrained noisy forces,
 partial sensors, nonlinear equilibrium, source/conditioning conflicts and actual compiled-law replay.
-Automatic directional time optimization, fixed-equilibrium error, strain uncertainty, temperature/wet
+Additional automatic-time checks recover the independent three-branch truth, one/two-branch spectra
+with inactive axes, and a constrained noisy spectrum with differently scaled force sensors. The exact
+profile-objective gradient is checked against finite differences that re-fit the PSD tensors.
+Automatic model-order comparison, fixed-equilibrium error, strain uncertainty, temperature/wet
 dependence, plastic set and damage remain outside this estimator. Broader measurements and independent
 garment checks are required.
 

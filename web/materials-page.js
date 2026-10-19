@@ -315,8 +315,10 @@ function inspectResult(r, selectionJson) {
 }
 function calibrationResult(parent, r) {
   const c = r.calibration, nonlinear = c.schema === "ftx-nonlinear-swatch-calibration-report/1";
+  const timeSearch = c.orthotropic_fit?.time_search;
   const method = nonlinear ? "Nonlinear stretch and shear" : c.input.orthotropic ?
-    "Directional relaxation at the declared times" : "Proportional relaxation ratios and times";
+    timeSearch ? "Directional relaxation with times identified within declared bounds" : "Directional relaxation at the declared times" :
+    "Proportional relaxation ratios and times";
   const t = table(parent, "Observed force errors — independent partitions", ["Partition", "Measured components", "Scaled RMS", "Scaled peak"]);
   for (const [name, quality] of [["Fit", c.fit], ["Held out", c.check]]) {
     cells(t, [quality ? name : `${name}: not supplied`, metric(quality?.components), metric(quality?.rms_scaled), metric(quality?.peak_scaled)]);
@@ -328,15 +330,42 @@ function calibrationResult(parent, r) {
     cells(domain, [axis, metric(range?.[i]?.[0]), metric(range?.[i]?.[1])]);
   }
   if (c.orthotropic_fit) {
-    const recovery = table(parent, "Directional recovery — published stiffness at supplied times", ["Time (s)", "Retained branch",
+    const recovery = table(parent, timeSearch ? "Directional recovery — published stiffness at identified times" :
+      "Directional recovery — published stiffness at supplied times", ["Time (s)", "Retained branch",
       "Warp / wale (N/m)", "Weft / course (N/m)", "Normal coupling (N/m)", "Shear (N/m)"]);
     for (const row of c.orthotropic_fit.candidates) {
       cells(recovery, [metric(row.time_seconds), row.active ? "Active" : "Inactive", ...row.stiffness_n_m.map(metric)]);
     }
-    const fixed = document.createElement("p");
-    fixed.textContent = "Candidate times are supplied by the request, not optimized from the histories. The table shows the published tensors after any explicit zero threshold. " +
-      "Inactive candidates remain visible; an entirely inactive spectrum retains only the supplied equilibrium. The source-declared strain domain is not inferred from small residuals.";
-    parent.append(fixed);
+    if (timeSearch) {
+      const windows = table(parent, "Directional time search — declared windows and local sensitivity",
+        ["Minimum time (s)", "Identified time (s)", "Maximum time (s)", "Time sensitivity", "Log-window boundary distance"]);
+      for (const [i, row] of c.orthotropic_fit.candidates.entries()) {
+        const bounds = c.input.orthotropic.time_bounds_seconds[i];
+        cells(windows, [metric(bounds[0]), metric(row.time_seconds), metric(bounds[1]),
+          metric(timeSearch.time_sensitivity[i]), metric(timeSearch.boundary_distance_fraction[i])]);
+      }
+      const diagnostics = table(parent, "Directional time search — local optimizer diagnostics", ["Diagnostic", "Value"]);
+      for (const row of [
+        ["Converged starts / attempted", `${metric(timeSearch.starts_converged)} / ${metric(timeSearch.starts_attempted)}`],
+        ["Iterations in selected solve", metric(timeSearch.iterations)],
+        ["Objective evaluations across starts and trials", metric(timeSearch.objective_evaluations)],
+        ["Projected tensor iterations across all solves", metric(timeSearch.projected_iterations)],
+        ["Maximum scaled gradient", metric(timeSearch.gradient_scaled_max)],
+        ["Joint stiffness / time excitation pivot", metric(timeSearch.joint_excitation_pivot)]
+      ]) cells(diagnostics, row);
+      const interpretation = document.createElement("p");
+      interpretation.textContent = "Times were identified within the request's declared windows. Boundary distance is a fraction of the log-time window: 0 is an endpoint and 0.5 is its center. " +
+        "Time sensitivity is the scaled force response to log-time changes with fitted tensors held fixed. The gradient measures the remaining objective slope after fitting the tensors; the joint excitation pivot uses column-normalized fit data. " +
+        "Review local convergence and excitation alongside the held-out errors; these diagnostics do not establish a global optimum, a unique spectrum or confidence intervals.";
+      parent.append(interpretation);
+    }
+    const scope = document.createElement("p");
+    scope.textContent = (timeSearch ?
+      "Every identified time must retain an observable recovery branch; individual directional coefficients may still be zero. " :
+      "Candidate times are supplied by the request, not optimized from the histories. Inactive candidates remain visible; an entirely inactive spectrum retains only the supplied equilibrium. ") +
+      "The table shows the published tensors after any explicit zero threshold. " +
+      "The source-declared strain domain is not inferred from small residuals.";
+    parent.append(scope);
     detail(parent, "Unconstrained, physically constrained and published candidate tensors (display only)", c.orthotropic_fit);
   }
   const note = document.createElement("p");

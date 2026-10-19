@@ -71,7 +71,8 @@ const server = http.createServer((req, res) => {
     await page.setInputFiles('#patternFile', fixture('synthetic-sewing-pattern.json'));
     await page.waitForFunction(() => !document.getElementById('assign').disabled);
     for (const [mode, filename] of [['nonlinear','synthetic-nonlinear-swatch.json'],
-      ['relaxation','synthetic-relaxation-history.json'], ['relaxation','synthetic-orthotropic-relaxation-history.json']]) {
+      ['relaxation','synthetic-relaxation-history.json'], ['relaxation','synthetic-orthotropic-relaxation-history.json'],
+      ['relaxation','synthetic-orthotropic-relaxation-search.json']]) {
       await page.selectOption('#calibrationMode',mode);
       await page.setInputFiles('#calibrationRequest',fixture(filename));
       for (const admission of [false,true]) {
@@ -87,8 +88,21 @@ const server = http.createServer((req, res) => {
         assert.equal(await page.inputValue('#selection'),report.selection_json);
         assert.match(await page.locator('#outputs').textContent(),/Observed force errors/);
         if (report.calibration.orthotropic_fit) {
-          assert.match(await page.locator('#outputs').textContent(),/Directional recovery — published stiffness at supplied times/);
-          assert.match(await page.locator('#outputs').textContent(),/Inactive/);
+          const c=report.calibration, search=c.orthotropic_fit.time_search;
+          assert.match(await page.locator('#outputs').textContent(),search ?
+            /Directional recovery — published stiffness at identified times/ : /Directional recovery — published stiffness at supplied times/);
+          if (search) {
+            const windows=page.locator('table').filter({has:page.locator('caption',{
+              hasText:'Directional time search — declared windows and local sensitivity'})});
+            for (const [i, row] of c.orthotropic_fit.candidates.entries()) {
+              const bounds=c.input.orthotropic.time_bounds_seconds[i];
+              assert.deepEqual(await windows.locator('tr').nth(i+1).locator('td').allTextContents(),
+                [bounds[0],row.time_seconds,bounds[1],search.time_sensitivity[i],search.boundary_distance_fraction[i]].map(String));
+            }
+            assert.ok(search.starts_converged>0);
+            assert.equal(search.starts_attempted,c.starts_attempted);
+            assert.match(await page.locator('#outputs').textContent(),/Directional time search — local optimizer diagnostics/);
+          } else assert.match(await page.locator('#outputs').textContent(),/Inactive/);
         }
         await page.click('#assign'); assert.equal(await run('bind'),'');
         const selected=JSON.parse(await download('pattern.json'));
@@ -152,7 +166,7 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => !document.getElementById('error').hidden);
     assert.equal(await page.locator('a[download="pattern.json"]').count(),0); assert.equal(await page.isDisabled('#bind'),true);
     assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
-    console.log('PASS: real browser nonlinear/proportional/directional calibration and estimate admission, catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, invalidation and model refusal.');
+    console.log('PASS: real browser nonlinear/proportional/directional calibration with fixed and identified times, estimate admission, catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, invalidation and model refusal.');
     console.log('No successful model-backed browser drape or real textile validation asserted. Artifacts:',work);
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(e => { console.error(e); server.close(); process.exitCode=1; });

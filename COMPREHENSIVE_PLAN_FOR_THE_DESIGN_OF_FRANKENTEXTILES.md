@@ -1614,17 +1614,58 @@ The browser displays the retained directional tensors and runs the same fixture 
 native identification, exact binding and capability checks. See `docs/relaxation-calibration.md`
 and `docs/browser-material-workbench.md`.
 
-**Next consequential identification work (`ftx-rc2`).** Directional candidate times are supplied
-by the caller; they are not automatically optimized or inferred durations. Add bounded, observable
-time identification and explicit model-order comparison without using held-out histories to select
-the model. Preserve inactive directions, physical tensor constraints, reproducible initialization
-and honest sensitivity/domain limits. Numerical convergence is not coefficient uncertainty.
+**Next consequential identification work (`ftx-rc2`).** The fixed-candidate mode above takes
+supplied times; bounded automatic directional time identification is now implemented in §25.17.
+Explicit model-order comparison and competing-spectrum ambiguity remain open. Preserve inactive
+directions, physical tensor constraints, reproducible initialization and honest sensitivity/domain
+limits without using held-out histories to select the model. Numerical convergence is not
+coefficient uncertainty.
 
 **Empirical and material-state priorities remain open.** Matched real linen, treated cowhide and
 performance-knit acquisitions and independent sewn-garment checks still gate `ftx-tm2`,
 `ftx-tm8` and `ftx-rc1`. Residual in-plane stretch and damage (`ftx-ps1`), contact-coupled
 compression/heat (`ftx-cp2`), moisture and qualified machine recipes remain separate work.
 A successful fit does not supply missing mass, bending, friction, transport or process evidence.
+
+### 25.17 Bounded automatic directional recovery-time identification
+
+**Recover times as well as tensors (`ftx-rc2`).** An optional directional request now supplies
+one to three separate positive `orthotropic.time_bounds_seconds` windows instead of exact
+candidate times. A deterministic bounded multistart search identifies one recovery time in each
+window while the shared convex fit identifies its independent warp/wale, weft/course, signed
+coupling and shear tensor. Finite-ramp acquisition integration, independent equilibrium, source
+conditions and material compilation remain the existing mechanisms. The resulting selection
+drives the existing cloth solver and per-piece sewn histories without simulation-code changes.
+
+Only FIT observations determine the times and tensors. Exact log-time derivatives drive the
+profile objective; each trial solves the positive-semidefinite tensor subproblem. Stationarity,
+joint amplitude/time excitation and distance from search boundaries must pass independently of
+the caller's residual budgets. Every searched time requires a retained observable branch; inactive
+directions remain supported. Fixed-time mode continues to preserve inactive candidates and
+equilibrium-only outcomes, with unchanged input hashes and method text. Automatic search refuses
+after 1,024 total objective evaluations or 262,144 projected tensor iterations rather than
+publishing a partial best result.
+
+The report and browser expose attempted/converged starts, selected iterations, total objective and
+tensor work, scaled objective gradient, time sensitivities, joint excitation and normalized boundary
+distances. Search windows are limits, not confidence intervals. A converged local minimum is not a
+global-optimum proof or a unique material spectrum. Final thresholded tensors still replay through
+the ordinary compiled law against separate FIT and held-out CHECK residual budgets.
+
+Independent synthetic acquisitions cover one, two and three active times, inactive directions,
+signed coupling, finite ramps and held-out unloading. A constrained noisy acquisition with 100-fold
+unequal force scales checks the independently known one-second optimum. An objective-gradient
+difference check exercises reoptimized PSD tensors. Actual triangle reactions, changed free motion,
+sewn per-piece assignment and the native/WASM/browser binding path use the identified selections.
+The new `synthetic-orthotropic-relaxation-search.json` fixture preserves all independently authored
+observations from the fixed-time fixture and changes only the declared time-search options.
+See `docs/relaxation-calibration.md` for request examples and numerical/physical limits.
+
+**Remaining consequential work.** Branch count and admissible time windows are still caller choices.
+Explicit model-order comparison, competing-spectrum ambiguity and meaningful parameter uncertainty
+remain part of `ftx-rc2`. Matched physical coupons and garment validation remain `ftx-rc1`,
+`ftx-tm2` and `ftx-tm8`; synthetic numerical success does not close those empirical gates.
+Missing mass, bending, friction, heat/moisture or machine-recipe evidence stays missing.
 
 ---
 

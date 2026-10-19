@@ -275,22 +275,36 @@ fn pattern() -> Pattern {
 
 #[test]
 fn source_selection_reaches_only_assigned_retained_triangles_in_real_sewn_scene() {
-    let input = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
-    ))
-    .unwrap();
-    let fitted = ftx_pattern::material_relaxation::calibration::calibrate(&input).unwrap();
-    let calibrated = Catalog::builtin()
-        .unwrap()
-        .resolve(&Selection {
-            id: fitted.material.id.clone(),
-            record: Some(fitted.material),
-            allow_estimates: true,
-            ..Selection::default()
-        })
-        .unwrap()
-        .frozen_selection();
-    for selected in [selection(), directional_selection(), calibrated] {
+    let mut input: ftx_pattern::material_relaxation::calibration::Input =
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
+        ))
+        .unwrap();
+    let mut selections = vec![selection(), directional_selection()];
+    for identify_times in [false, true] {
+        if identify_times {
+            input.orthotropic = Some(
+                serde_json::from_value(json!({
+                    "time_bounds_seconds": [[0.1,0.9],[1.,4.],[5.,24.]],
+                    "zero_threshold_n_m": 1e-7
+                }))
+                .unwrap(),
+            );
+        }
+        let fitted = ftx_pattern::material_relaxation::calibration::calibrate(&input).unwrap();
+        let calibrated = Catalog::builtin()
+            .unwrap()
+            .resolve(&Selection {
+                id: fitted.material.id.clone(),
+                record: Some(fitted.material),
+                allow_estimates: true,
+                ..Selection::default()
+            })
+            .unwrap()
+            .frozen_selection();
+        selections.push(calibrated);
+    }
+    for selected in selections {
         check_sewn_selection(selected);
     }
 }

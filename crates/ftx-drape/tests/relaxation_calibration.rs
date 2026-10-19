@@ -38,7 +38,7 @@ fn identified(time_scale: f64) -> Selection {
         .frozen_selection()
 }
 
-fn identified_directional(time_scale: f64) -> Selection {
+fn identified_directional(time_scale: f64, identify_times: bool) -> Selection {
     let mut input: Input = serde_json::from_str(include_str!(
         "../../../tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
     ))
@@ -48,8 +48,22 @@ fn identified_directional(time_scale: f64) -> Selection {
             sample.time_seconds *= time_scale;
         }
     }
-    for time in &mut input.orthotropic.as_mut().unwrap().times_seconds {
-        *time *= time_scale;
+    if identify_times {
+        input.orthotropic = Some(
+            serde_json::from_value(json!({
+                "time_bounds_seconds": [
+                    [0.1 * time_scale, 0.9 * time_scale],
+                    [1.0 * time_scale, 4.0 * time_scale],
+                    [5.0 * time_scale, 24.0 * time_scale]
+                ],
+                "zero_threshold_n_m": 1e-7
+            }))
+            .unwrap(),
+        );
+    } else {
+        for time in &mut input.orthotropic.as_mut().unwrap().times_seconds {
+            *time *= time_scale;
+        }
     }
     let report = calibrate(&input).unwrap();
     catalog()
@@ -178,8 +192,13 @@ fn solver_time_refinement_converges_to_the_independent_continuous_spectrum() {
 
 #[test]
 fn identified_directional_tensors_reproduce_independent_mixed_mode_triangle_forces() {
-    let selected = identified_directional(1.);
-    let mut s = solver(&selected, true);
+    for identify_times in [false, true] {
+        assert_directional_reactions(&identified_directional(1., identify_times));
+    }
+}
+
+fn assert_directional_reactions(selected: &Selection) {
+    let mut s = solver(selected, true);
     // Explicit F excites warp, weft, signed coupling and shear simultaneously. For the
     // 0.1 m right reference triangle, nodal forces are -0.05 times the columns of P=F*S.
     let (a, b, d) = (1.08_f64, 0.05_f64, 1.02_f64);
@@ -229,8 +248,15 @@ fn identified_directional_tensors_reproduce_independent_mixed_mode_triangle_forc
 
 #[test]
 fn independently_calibrated_recovery_times_change_actual_free_motion_only_through_materials() {
-    let fast_material = identified_directional(1.);
-    let slow_material = identified_directional(4.);
+    for identify_times in [false, true] {
+        assert_acquisition_times_drive_motion(
+            identified_directional(1., identify_times),
+            identified_directional(4., identify_times),
+        );
+    }
+}
+
+fn assert_acquisition_times_drive_motion(fast_material: Selection, slow_material: Selection) {
     assert_eq!(
         serde_json::to_value(&fast_material.record.as_ref().unwrap().properties).unwrap(),
         serde_json::to_value(&slow_material.record.as_ref().unwrap().properties).unwrap()

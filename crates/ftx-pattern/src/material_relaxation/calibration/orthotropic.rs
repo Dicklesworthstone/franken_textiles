@@ -1,4 +1,4 @@
-//! Fixed-time, convex identification of independent positive-semidefinite Maxwell tensors.
+//! Independent positive-semidefinite Maxwell tensors at fixed or bounded identified times.
 //! The continuous history weights and compiled physical response are shared with the existing law.
 
 use std::f64::consts::SQRT_2;
@@ -15,12 +15,21 @@ const MAX_PARAMETERS: usize = 32;
 type Vector = [f64; MAX_PARAMETERS];
 type Matrix = [Vector; MAX_PARAMETERS];
 
-/// Identify spring tensors at explicitly selected times; the times themselves are not optimized.
+mod search;
+pub use search::TimeSearchReport;
+
+/// Identify spring tensors at fixed times or jointly identify times inside explicit search windows.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrthotropicInput {
     /// One to eight finite, positive, strictly increasing candidate times in seconds.
+    /// Omit or leave empty when time_bounds_seconds supplies the directional time search instead.
+    #[serde(default)]
     pub times_seconds: Vec<f64>,
+    /// One to three ordered, nonoverlapping positive time windows. These are search limits, not
+    /// confidence intervals. Mutually exclusive with fixed times_seconds; omitted in fixed mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub time_bounds_seconds: Vec<[f64; 2]>,
     /// Explicit coefficient threshold in N/m for retaining inactive directions/candidates as zero.
     /// Defaults to no threshold. The resulting compiled law must still pass both residual budgets.
     #[serde(default)]
@@ -30,7 +39,7 @@ pub struct OrthotropicInput {
 /// Every supplied candidate remains visible even if its fitted tensor is inactive.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Candidate {
-    /// Caller-supplied time, retained exactly rather than identified from the force data.
+    /// Caller-supplied fixed time, or the identified time when time_search diagnostics are present.
     pub time_seconds: f64,
     /// Unconstrained least-squares [warp,weft,coupling,shear], N/m; may be physically inadmissible.
     pub unconstrained_stiffness_n_m: [f64; 4],
@@ -42,7 +51,7 @@ pub struct Candidate {
     pub active: bool,
 }
 
-/// Fixed-time identification diagnostics, not uncertainty or empirical material validation.
+/// Directional identification diagnostics, not uncertainty or empirical material validation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OrthotropicFitReport {
     /// All times and coefficient decisions in input order; no candidate disappears from the receipt.
@@ -53,6 +62,9 @@ pub struct OrthotropicFitReport {
     pub iterations: usize,
     /// Relative norm of x-project(x-gradient/L), in Frobenius tensor coordinates, before thresholding.
     pub projected_step_relative: f64,
+    /// Optional bounded time-search diagnostics. Omitted to preserve fixed-time report identities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_search: Option<TimeSearchReport>,
 }
 
 fn physical(x: &[f64]) -> [f64; 4] {
@@ -211,6 +223,22 @@ fn relative_step(x: &Vector, projected: &Vector, count: usize) -> f64 {
 }
 
 fn solve(rows: &[Vector], target: &[f64], count: usize) -> Result<Solution, Refusal> {
+    solve_budgeted(rows, target, count, None)
+}
+
+fn solve_budgeted(
+    rows: &[Vector],
+    target: &[f64],
+    count: usize,
+    mut remaining_steps: Option<&mut usize>,
+) -> Result<Solution, Refusal> {
+    // A profile-objective gradient needs a more accurate inner stationary point. Keep the original
+    // fixed-time arithmetic and tolerance exactly; only the bounded time search requests refinement.
+    let tolerance = if remaining_steps.is_some() {
+        1e-13
+    } else {
+        1e-11
+    };
     let scales: Vector = std::array::from_fn(|j| {
         if j < count {
             rows.iter().map(|r| r[j] * r[j]).sum::<f64>().sqrt()
@@ -281,7 +309,7 @@ fn solve(rows: &[Vector], target: &[f64], count: usize) -> Result<Solution, Refu
     loop {
         let projected_step = project(gradient_step(x, &gram, &rhs, lipschitz, count), count)?;
         relative = relative_step(&x, &projected_step, count);
-        if relative <= 1e-11 {
+        if relative <= tolerance {
             break;
         }
         if iterations == 8192 {
@@ -289,6 +317,15 @@ fn solve(rows: &[Vector], target: &[f64], count: usize) -> Result<Solution, Refu
                 RefusalCode::NotConverged,
                 "orthotropic PSD fit did not converge within 8192 projected-gradient steps",
             ));
+        }
+        if let Some(remaining) = remaining_steps.as_deref_mut() {
+            if *remaining == 0 {
+                return Err(Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "directional time search exhausted its total PSD iteration budget",
+                ));
+            }
+            *remaining -= 1;
         }
         let next = project(gradient_step(y, &gram, &rhs, lipschitz, count), count)?;
         // Restart oscillating momentum against the actual projected search direction. Without
@@ -347,10 +384,18 @@ fn threshold(mut q: [f64; 4], limit: f64) -> [f64; 4] {
 }
 
 fn law(input: &Input, candidates: &[Candidate], source: &str) -> Relaxation {
+    let searched = input
+        .orthotropic
+        .as_ref()
+        .is_some_and(|o| !o.time_bounds_seconds.is_empty());
     let quantity = |value, unit| {
         let mut q = datum(value, unit, source);
         q.conditions = input.conditions.clone();
-        q.method = "Fixed-candidate-time orthotropic PSD identification from complete nominal-force histories; candidate times are supplied, not optimized; all fitted coefficients remain estimates".into();
+        q.method = if searched {
+            "Bounded-time orthotropic PSD identification from complete nominal-force histories; tensors and times are fitted model estimates, not measured constants or confidence bounds"
+        } else {
+            "Fixed-candidate-time orthotropic PSD identification from complete nominal-force histories; candidate times are supplied, not optimized; all fitted coefficients remain estimates"
+        }.into();
         q
     };
     Relaxation {
@@ -377,10 +422,17 @@ fn law(input: &Input, candidates: &[Candidate], source: &str) -> Relaxation {
         initialization: input.initialization,
         strain_range: input.strain_range,
         source: input.domain_source.clone(),
-        method: format!(
-            "{}; fixed-time orthotropic Maxwell PSD fit; exact piecewise-linear Green-strain history integration",
-            input.method
-        ),
+        method: if searched {
+            format!(
+                "{}; bounded-time orthotropic Maxwell PSD identification; exact piecewise-linear Green-strain history integration",
+                input.method
+            )
+        } else {
+            format!(
+                "{}; fixed-time orthotropic Maxwell PSD fit; exact piecewise-linear Green-strain history integration",
+                input.method
+            )
+        },
         conditions: input.conditions.clone(),
     }
 }
@@ -428,24 +480,34 @@ fn replay(
 }
 
 pub(super) fn calibrate(input: &Input, options: &OrthotropicInput) -> Result<Report, Refusal> {
-    if !(1..=8).contains(&options.times_seconds.len())
-        || options
-            .times_seconds
-            .iter()
-            .any(|t| !t.is_finite() || *t <= 0.)
-        || options.times_seconds.windows(2).any(|t| t[0] >= t[1])
+    let searched = !options.time_bounds_seconds.is_empty();
+    if (!searched
+        && (!(1..=8).contains(&options.times_seconds.len())
+            || options
+                .times_seconds
+                .iter()
+                .any(|t| !t.is_finite() || *t <= 0.)
+            || options.times_seconds.windows(2).any(|t| t[0] >= t[1])))
+        || (searched && !options.times_seconds.is_empty())
         || !options.zero_threshold_n_m.is_finite()
         || options.zero_threshold_n_m < 0.
     {
         return Err(bad(
-            "orthotropic fitting needs 1..8 increasing positive candidate times and a nonnegative finite N/m zero threshold",
+            "orthotropic fitting needs fixed candidate times OR separate bounded time windows, and a nonnegative finite N/m zero threshold",
         ));
+    }
+    if searched {
+        search::bounds(&options.time_bounds_seconds)?;
     }
     let (histories, q) = super::prepare(input)?;
     // Invoke the existing directional source/condition validator before numerical work, even for
     // an eventual all-zero fit. This unit tensor is only a validation scaffold, never a material.
     let scaffold = Candidate {
-        time_seconds: options.times_seconds[0],
+        time_seconds: if searched {
+            options.time_bounds_seconds[0][0]
+        } else {
+            options.times_seconds[0]
+        },
         unconstrained_stiffness_n_m: [0.; 4],
         fitted_stiffness_n_m: [0.; 4],
         stiffness_n_m: [1., 1., 0., 1.],
@@ -464,10 +526,18 @@ pub(super) fn calibrate(input: &Input, options: &OrthotropicInput) -> Result<Rep
             "orthotropic histories and material name different specimens",
         ));
     }
-    let (rows, target) = design(&histories, &options.times_seconds)?;
-    let fit = solve(&rows, &target, 4 * options.times_seconds.len())?;
-    let candidates: Vec<_> = options
-        .times_seconds
+    let (times, fit, time_search) = if searched {
+        let result = search::solve(&histories, &options.time_bounds_seconds)?;
+        (result.times, result.fit, Some(result.report))
+    } else {
+        let (rows, target) = design(&histories, &options.times_seconds)?;
+        (
+            options.times_seconds.clone(),
+            solve(&rows, &target, 4 * options.times_seconds.len())?,
+            None,
+        )
+    };
+    let candidates: Vec<_> = times
         .iter()
         .enumerate()
         .map(|(i, &time_seconds)| {
@@ -482,6 +552,11 @@ pub(super) fn calibrate(input: &Input, options: &OrthotropicInput) -> Result<Rep
             }
         })
         .collect();
+    if searched && candidates.iter().any(|c| !c.active) {
+        return Err(bad(
+            "an optimized directional branch is inactive after the explicit threshold; its time is not identified",
+        ));
+    }
     let (mut material, source, digest) = super::receipt(input)?;
     let fitted = law(input, &candidates, &source);
     let compiled = if fitted.orthotropic_branches.is_empty() {
@@ -508,12 +583,13 @@ pub(super) fn calibrate(input: &Input, options: &OrthotropicInput) -> Result<Rep
         predictions,
         excitation_pivot: fit.pivot,
         parameter_sensitivity: fit.sensitivity,
-        starts_attempted: 1,
+        starts_attempted: time_search.as_ref().map_or(1, |s| s.starts_attempted),
         orthotropic_fit: Some(OrthotropicFitReport {
             candidates,
             psd_projection_applied: fit.projected,
             iterations: fit.iterations,
             projected_step_relative: fit.relative,
+            time_search,
         }),
         missing_mechanics,
     })

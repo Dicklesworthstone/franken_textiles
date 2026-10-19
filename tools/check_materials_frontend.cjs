@@ -385,6 +385,37 @@ test('calibration consent and response changes withdraw only the prepared result
   assert.equal(before.messages.length,0); assert.equal(JSON.parse(p.e.selection.value).id,'newer');
 });
 
+test('directional time search shows identified values inside declared windows with local convergence and excitation', async () => {
+  const p=await pageModule(); p.e.calibrationMode.value='relaxation'; p.e.calibrationEstimates.checked=true;
+  p.select('calibrationRequest'); await p.e.calibrate.onclick();
+  const report=calibrationReport('relaxation',true), c=report.calibration;
+  c.input.orthotropic={time_bounds_seconds:[[0.1,0.9],[1,4],[5,24]]};
+  c.orthotropic_fit.candidates=c.orthotropic_fit.candidates.slice(0,3);
+  c.starts_attempted=5;
+  c.orthotropic_fit.time_search={starts_attempted:5,starts_converged:2,iterations:11,objective_evaluations:73,
+    projected_iterations:135,gradient_scaled_max:0,time_sensitivity:[13,7,4],
+    joint_excitation_pivot:0.02,boundary_distance_fraction:[0.5,0.5,0.3]};
+  p.emit(report);
+  const s=section(p,'Identified material behavior'), rendered=visibleText(s);
+  const tables=descendants(s).filter(n=>n.tag==='table');
+  const windows=tables.find(n=>n.children[0].textContent==='Directional time search — declared windows and local sensitivity');
+  assert.deepEqual(plain(windows.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+    ['0.1','0.3','0.9','13','0.5'],['1','2','4','7','0.5'],['5','8','24','4','0.3']
+  ]);
+  const diagnostics=tables.find(n=>n.children[0].textContent==='Directional time search — local optimizer diagnostics');
+  assert.deepEqual(plain(diagnostics.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+    ['Converged starts / attempted','2 / 5'],['Iterations in selected solve','11'],
+    ['Objective evaluations across starts and trials','73'],['Projected tensor iterations across all solves','135'],
+    ['Maximum scaled gradient','0'],
+    ['Joint stiffness / time excitation pivot','0.02']
+  ]);
+  assert.match(rendered,/Directional recovery — published stiffness at identified times/);
+  assert.match(rendered,/do not establish a global optimum, a unique spectrum or confidence intervals/);
+  assert.match(rendered,/Every identified time must retain an observable recovery branch/);
+  assert.doesNotMatch(rendered,/at supplied times|not optimized from the histories|entirely inactive spectrum retains/);
+  assert.equal(p.e.selection.value,calibrationSelection(true));
+});
+
 test('a refused replacement calibration leaves no previous selection or report available for assignment', async () => {
   const p=await pageModule(); await p.load(); p.e.calibrationMode.value='nonlinear'; p.select('calibrationRequest');
   await p.e.calibrate.onclick(); p.emit(calibrationReport(),[{name:'material-calibration.json',text:'{}',mime:'application/json'}]);
@@ -731,7 +762,8 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
       assert.deepEqual(calibration.material, JSON.parse(ftx.material_inspect(calibration.material.selection_json)));
     }
     for (const [mode, filename] of [['nonlinear','synthetic-nonlinear-swatch.json'],
-      ['relaxation','synthetic-relaxation-history.json'], ['relaxation','synthetic-orthotropic-relaxation-history.json']]) {
+      ['relaxation','synthetic-relaxation-history.json'], ['relaxation','synthetic-orthotropic-relaxation-history.json'],
+      ['relaxation','synthetic-orthotropic-relaxation-search.json']]) {
       const calibrationRequest = fixture(filename);
       for (const allowEstimates of [false, true]) {
         const identified = await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest,allowEstimates});
@@ -743,6 +775,11 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
         assert.deepEqual(JSON.parse(ftx.material_inspect(identified.result.selection_json)),identified.result.material);
         assert.equal(identified.result.selection.allow_estimates,allowEstimates);
         assert.equal(identified.result.material.capabilities.mechanical_coefficients.ready,allowEstimates);
+        if (JSON.parse(calibrationRequest).orthotropic?.time_bounds_seconds?.length) {
+          const c=identified.result.calibration;
+          assert.ok(c.orthotropic_fit.time_search.starts_converged>0);
+          assert.equal(c.orthotropic_fit.time_search.starts_attempted,c.starts_attempted);
+        }
         const changes = `{"schema":"ftx-material-bindings/1","default":${identified.result.selection_json}}`;
         const binding = await w.send({type:'bind',pattern:fixture('synthetic-sewing-pattern.json'),changes});
         assert.equal(binding.type,'result',binding.message);

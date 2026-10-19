@@ -109,6 +109,18 @@ fn assert_tensors(actual: &[[f64; 4]], expected: &[[f64; 4]], tolerance: f64) {
 fn distinct_directional_spectra_signed_coupling_and_inactive_candidates_are_identified() {
     let input = input();
     let report = calibrate(&input).unwrap();
+    assert_eq!(
+        report.input_sha256,
+        "955c44f4e507d016a82d133fabebdbd9cb560c24cf309fc39aee246bcbfd6be1"
+    );
+    assert!(
+        report
+            .orthotropic_fit
+            .as_ref()
+            .unwrap()
+            .time_search
+            .is_none()
+    );
     assert_tensors(&tensors(&report), &TENSORS, 1e-7);
     assert_eq!(report.fit.components, 84);
     assert_eq!(report.check.as_ref().unwrap().components, 28);
@@ -425,5 +437,151 @@ fn source_qualified_nonlinear_equilibrium_is_preserved_during_directional_identi
     assert_eq!(
         serde_json::to_value(report.material.membrane_response).unwrap(),
         serde_json::to_value(input.material.membrane_response).unwrap()
+    );
+}
+
+fn automatic_input() -> Input {
+    let mut input = input();
+    let options = input.orthotropic.as_mut().unwrap();
+    options.times_seconds.clear();
+    options.time_bounds_seconds = vec![[0.1, 0.9], [1., 4.], [5., 24.]];
+    input
+}
+
+#[test]
+fn automatic_directional_times_and_tensors_recover_independent_three_branch_histories() {
+    let report = calibrate(&automatic_input()).unwrap();
+    assert_tensors(&tensors(&report), &TENSORS[..3], 1e-6);
+    let diagnostics = report.orthotropic_fit.as_ref().unwrap();
+    for (candidate, expected) in diagnostics.candidates.iter().zip([0.3, 2., 8.]) {
+        assert!((candidate.time_seconds / expected - 1.).abs() < 1e-7);
+        assert!(candidate.active);
+    }
+    let search = diagnostics.time_search.as_ref().unwrap();
+    assert_eq!(search.starts_attempted, 27);
+    assert!(search.starts_converged > 0);
+    assert!(search.objective_evaluations <= 1024);
+    assert!(search.projected_iterations <= 262_144);
+    assert!(search.gradient_scaled_max <= 1e-10);
+    assert!((search.joint_excitation_pivot - 0.0506243822453).abs() < 1e-6);
+    for (actual, expected) in
+        search
+            .time_sensitivity
+            .iter()
+            .zip([4.05625775340, 3.10283848192, 1.54307243742])
+    {
+        assert!((actual - expected).abs() < 1e-6);
+    }
+    assert!(search.boundary_distance_fraction.iter().all(|v| *v > 1e-5));
+    assert!(report.fit.rms_scaled < 1e-8);
+    assert!(report.check.unwrap().rms_scaled < 1e-8);
+}
+
+#[test]
+fn automatic_one_and_two_branch_directional_spectra_keep_inactive_axes() {
+    for (times, expected, windows) in [
+        (vec![0.6], vec![[300., 0., 0., 0.]], vec![[0.2, 1.8]]),
+        (
+            vec![0.3, 8.],
+            vec![TENSORS[0], [0., 120., 0., 90.]],
+            vec![[0.1, 0.9], [3., 20.]],
+        ),
+    ] {
+        let mut input = input();
+        input.orthotropic.as_mut().unwrap().times_seconds = times.clone();
+        observations(&mut input, &expected);
+        let options = input.orthotropic.as_mut().unwrap();
+        options.times_seconds.clear();
+        options.time_bounds_seconds = windows;
+        let report = calibrate(&input).unwrap();
+        assert_tensors(&tensors(&report), &expected, 1e-6);
+        for (candidate, expected) in report.orthotropic_fit.unwrap().candidates.iter().zip(times) {
+            assert!((candidate.time_seconds / expected - 1.).abs() < 1e-7);
+        }
+    }
+}
+
+#[test]
+fn automatic_psd_boundary_fit_finds_time_with_unequal_sensor_scales() {
+    let mut input = input();
+    let options = input.orthotropic.as_mut().unwrap();
+    options.times_seconds = vec![1.];
+    options.zero_threshold_n_m = 0.;
+    input.experiments.truncate(3);
+    // Independent constrained oracle: all three acquisitions share the exponential kernel, so
+    // Cauchy-Schwarz places the optimum at the generating time even though its tensor is indefinite.
+    observations(&mut input, &[[1., 1., 10., 2.]]);
+    for sample in &mut input.experiments[1].samples {
+        sample.scale_n_m = 100.;
+    }
+    let options = input.orthotropic.as_mut().unwrap();
+    options.times_seconds.clear();
+    options.time_bounds_seconds = vec![[0.1, 5.]];
+    input.max_rms_scaled = 0.01;
+    input.max_peak_scaled = 0.03;
+    let report = calibrate(&input).unwrap();
+    assert_tensors(
+        &tensors(&report),
+        &[[1.2628682, 78.0451699, 9.92777735, 2.]],
+        1e-4,
+    );
+    let diagnostics = report.orthotropic_fit.as_ref().unwrap();
+    assert!((diagnostics.candidates[0].time_seconds - 1.).abs() < 1e-6);
+    assert!(diagnostics.psd_projection_applied);
+    let objective = report.fit.components as f64 * report.fit.rms_scaled.powi(2);
+    assert!((objective - 0.001737491384).abs() < 1e-9);
+}
+
+#[test]
+fn automatic_time_selection_never_reads_held_out_forces_or_residual_budgets() {
+    let mut input = automatic_input();
+    let original = calibrate(&input).unwrap();
+    input.experiments[3].samples[1].nominal_n_m[0][0] = Some(10000.);
+    assert!(calibrate(&input).unwrap_err().message.contains("held-out"));
+    input.max_rms_scaled = 1e6;
+    input.max_peak_scaled = 1e6;
+    let report = calibrate(&input).unwrap();
+    assert_eq!(
+        serde_json::to_value(&report.orthotropic_fit).unwrap(),
+        serde_json::to_value(&original.orthotropic_fit).unwrap()
+    );
+    assert_ne!(report.input_sha256, original.input_sha256);
+}
+
+#[test]
+fn automatic_times_refuse_inactive_branches_and_conflicting_or_unresolved_windows() {
+    for change in [
+        (|i: &mut Input| i.orthotropic.as_mut().unwrap().times_seconds = vec![1.])
+            as fn(&mut Input),
+        |i| i.orthotropic.as_mut().unwrap().time_bounds_seconds = vec![[0.1, 1.], [0.5, 2.]],
+        |i| i.orthotropic.as_mut().unwrap().time_bounds_seconds = vec![[0., 1.]],
+        |i| i.orthotropic.as_mut().unwrap().time_bounds_seconds = vec![[1., 1.0000000001]],
+        |i| {
+            i.orthotropic.as_mut().unwrap().time_bounds_seconds =
+                vec![[0.1, 1.], [2., 3.], [4., 5.], [6., 7.]]
+        },
+    ] {
+        let mut input = automatic_input();
+        change(&mut input);
+        assert!(calibrate(&input).is_err());
+    }
+    let mut zero = input();
+    observations(&mut zero, &[[0.; 4]; 4]);
+    let options = zero.orthotropic.as_mut().unwrap();
+    options.times_seconds.clear();
+    options.time_bounds_seconds = vec![[0.1, 5.]];
+    assert!(
+        calibrate(&zero)
+            .unwrap_err()
+            .message
+            .contains("not observably")
+    );
+    let mut thresholded = automatic_input();
+    thresholded.orthotropic.as_mut().unwrap().zero_threshold_n_m = 1000.;
+    assert!(
+        calibrate(&thresholded)
+            .unwrap_err()
+            .message
+            .contains("inactive")
     );
 }
