@@ -302,7 +302,7 @@ conservation, receipt tampering and input-file preservation.
 This is a delivered slice of plan §25.6 / bead `ftx-tmb`, not closure of its broader
 geometric and empirical requirements. Local-normal overlap partitions are implemented;
 general folded/concave-body correspondence, physical air-gap construction, arbitrary
-cloth topology changes, in-plane conduction, radiation, moisture, wind,
+cloth topology changes, in-plane conduction, interlayer radiation, moisture, wind,
 compressed loft and tissue/metabolic thermoregulation are not implemented here.
 Native tests and wasm32 compilation do not establish browser execution parity,
 measured warmth, fire safety, PPE certification or machine-process permission.
@@ -311,3 +311,52 @@ For prescribed pose sequences, conservative material-temperature remapping and r
 heat histories, use `ftx-materials thermal-motion`; see [thermal-motion.md](thermal-motion.md).
 This path requires geometry-derived maps and an unchanged covered material domain, not
 arbitrary appearance/disappearance of cloth or automatic temperature initialization.
+
+## Exterior convection and radiation
+
+`CONDITIONS.json` accepts optional `exterior_exchange` and `bare_boundaries` arrays.
+Each accepts one entry to broadcast, or exactly one per `layout.body_triangles` entry.
+Environments follow **body-triangle order**, irrespective of region or material order.
+The following complete conditions use the synthetic boundary from
+[synthetic-transient-exterior.json](../tests/fixtures/materials/synthetic-transient-exterior.json);
+the coefficients are examples, not measurements or weather correlations:
+
+```json
+{
+  "schema": "ftx-thermal-coverage-conditions/1",
+  "boundaries": [{"inside_c":35,"outside_c":5,
+    "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0}],
+  "bare_boundaries": [{"inside_c":35,"outside_c":5,
+    "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}],
+  "exterior_exchange": [{
+    "air_c":5,"convection_w_m2_k":3,"surface_temperature_range_c":[-80,80],
+    "convection_source":{"reference":"test:prescribed-exterior-convection",
+      "accessed_on":"2026-10-18","note":"Synthetic example, not measured convection"},
+    "convection_evidence":"estimate","allow_estimates":true,
+    "convection_conditions":"Synthetic prescribed exterior coefficient; no wind inference",
+    "radiation":{"ambient_c":-10,"emissivity_property":"emissivity",
+      "exposed_face":"public","allow_opaque_gray_approximation":true}
+  }],
+  "transient":{"initial_temperature_c":10,"step_seconds":0.5,"steps":40,"record_every":10}
+}
+```
+
+Covered outside films must be zero and `outside_c` must equal that body's `air_c`.
+Any uncovered body fraction requires explicit bare films sharing its prescribed
+`inside_c`; these films remain separate from textile optics. Supplying bare films
+without exterior exchange refuses. Fully covered bodies may omit `bare_boundaries`.
+Radiation uses each region's **outermost frozen material** and its qualified face,
+specimen, spectral basis and temperature range. Missing data refuses; omit `radiation`
+for convection alone. Changing a finish requires a newly saved drape and matching map.
+
+`steady.exterior_exchange` and `final.exterior_exchange` retain each outer source
+triangle, layer, allocated current area, solved surface temperature and signed fluxes.
+Exterior flux uses current outer cloth area; storage retains allocated reference mass.
+Transient samples retain aggregate powers and cumulative energies without duplicating
+every region's face field. `transient.exterior_exchange` separates
+`convective_energy_j`, `radiative_energy_j` and `bare_energy_j`, with an exterior energy
+residual. Convection and radiation are positive outward and may oppose each other;
+their integrated sum plus bare energy equals total outgoing energy. Original conditions
+remain part of the result hash. Omitting exterior exchange retains the film-only output.
+Interlayer radiation, inferred wind coefficients and human thermoregulation remain outside
+this prescribed exterior model.

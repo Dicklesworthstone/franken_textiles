@@ -165,7 +165,25 @@ fn conserved(step: &CoverageStep, seconds: f64) {
         step.outside_heat_w,
         exterior.convective_heat_w + exterior.radiative_heat_w + step.bare_heat_w,
     );
-    near(exterior.balance_residual_w, 0.);
+    // The exterior solver qualifies the signed terms, including opposing convection/radiation.
+    // Convert its per-face tolerance to watts before accumulating different current sheet areas.
+    let tolerance = 1e-9
+        * exterior
+            .regions
+            .iter()
+            .zip(&step.regions)
+            .map(|(face, region)| {
+                face.outer_area_m2
+                    + region.outside_heat_w.abs()
+                    + face.convective_heat_w.abs()
+                    + face.radiative_heat_w.abs()
+            })
+            .sum::<f64>();
+    assert!(
+        exterior.balance_residual_w.abs() <= tolerance,
+        "exterior residual {} W exceeds {tolerance} W",
+        exterior.balance_residual_w
+    );
 }
 
 #[test]
@@ -340,10 +358,15 @@ fn manufactured_signed_radiation_matches_steady_and_transient_networks() {
         near(region.flux.surface_c, surface);
         near(region.flux.convective_flux_w_m2, convection);
         near(region.flux.radiative_flux_w_m2, radiation);
-        near(region.flux.balance_residual_w_m2, 0.);
+        let flux_scale = 1. + (outside_w / shell_area).abs() + convection.abs() + radiation.abs();
+        assert!(region.flux.balance_residual_w_m2.abs() <= 1e-9 * flux_scale);
         near(region.convective_heat_w, shell_area * convection);
         near(region.radiative_heat_w, shell_area * radiation);
-        near(region.balance_residual_w, 0.);
+        let power_scale = shell_area
+            + outside_w.abs()
+            + (shell_area * convection).abs()
+            + (shell_area * radiation).abs();
+        assert!(region.balance_residual_w.abs() <= 1e-9 * power_scale);
         assert!(region.flux.radiation_enabled);
         conserved(&step, seconds);
     }
@@ -462,11 +485,7 @@ fn partial_coverage_uses_body_indexed_environments_and_explicit_bare_films_once(
     back.body_triangle = 1;
     // Deliberately reverse the region order relative to body/environment indexing.
     mapping.regions = vec![back, front];
-    let model = Coverage::new(
-        source(None, None, "test:coverage-exterior"),
-        mapping,
-    )
-    .unwrap();
+    let model = Coverage::new(source(None, None, "test:coverage-exterior"), mapping).unwrap();
     let (cloth, mut body) = geometry(0.5, 0.5, 1.);
     body.extend([
         Vec3::new(0., 0., 0.5),
@@ -622,7 +641,8 @@ fn frozen_material_replay_accepts_new_boundary_conditions_but_refuses_conflicts(
     assert_eq!(advanced.outside_heat_w, replay.outside_heat_w);
     assert_eq!(advanced.stored_change_j, replay.stored_change_j);
     assert_eq!(
-        serde_json::to_value(&advanced.exterior_exchange.as_ref().unwrap().regions[0].flux).unwrap(),
+        serde_json::to_value(&advanced.exterior_exchange.as_ref().unwrap().regions[0].flux)
+            .unwrap(),
         serde_json::to_value(&replay.exterior_exchange.as_ref().unwrap().regions[0].flux).unwrap()
     );
     conserved(&advanced, 9.);

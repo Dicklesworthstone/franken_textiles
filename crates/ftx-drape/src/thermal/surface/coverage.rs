@@ -677,7 +677,10 @@ impl Coverage {
                 {
                     return Err(invalid("coverage exterior power balance failed"));
                 }
-                let exchange = result.exterior_exchange.as_mut().expect("exterior requested");
+                let exchange = result
+                    .exterior_exchange
+                    .as_mut()
+                    .expect("exterior requested");
                 exchange.convective_heat_w += convective;
                 exchange.radiative_heat_w += radiative;
                 exchange.balance_residual_w += error;
@@ -730,9 +733,13 @@ impl Coverage {
             result.balance_error_j = result.stored_change_j - seconds * result.net_heat_w;
         }
         if let Some(e) = &result.exterior_exchange
-            && [e.convective_heat_w, e.radiative_heat_w, e.balance_residual_w]
-                .iter()
-                .any(|v| !v.is_finite())
+            && [
+                e.convective_heat_w,
+                e.radiative_heat_w,
+                e.balance_residual_w,
+            ]
+            .iter()
+            .any(|v| !v.is_finite())
         {
             return Err(invalid("coverage exterior heat accumulation overflow"));
         }

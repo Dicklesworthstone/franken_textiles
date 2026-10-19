@@ -16,7 +16,9 @@ use ftx_pattern::material_thermal::ThermalLaw;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::{Boundary, Coverage, CoverageState, CoverageStep, ExteriorConditions, Surface, invalid};
+use super::{
+    Boundary, Coverage, CoverageState, CoverageStep, ExteriorConditions, Surface, invalid,
+};
 use crate::thermal::{
     exterior::ExteriorFlux,
     steady::exterior::Exterior,
@@ -196,8 +198,7 @@ impl Step {
         Some([
             covered.map_or(0., |e| e.convective_heat_w)
                 + exposed.map_or(0., |e| e.convective_heat_w),
-            covered.map_or(0., |e| e.radiative_heat_w)
-                + exposed.map_or(0., |e| e.radiative_heat_w),
+            covered.map_or(0., |e| e.radiative_heat_w) + exposed.map_or(0., |e| e.radiative_heat_w),
             covered.map_or(0., |e| e.balance_residual_w)
                 + exposed.map_or(0., |e| e.balance_residual_w),
         ])
@@ -679,13 +680,10 @@ impl Frame {
                 boundaries,
                 e,
             )?,
-            None => self.coverage.advance(
-                &state.inner,
-                &self.cloth,
-                &self.body,
-                seconds,
-                boundaries,
-            )?,
+            None => {
+                self.coverage
+                    .advance(&state.inner, &self.cloth, &self.body, seconds, boundaries)?
+            }
         };
         let Some(conditions) = exposed_conditions else {
             return Ok(Step {
@@ -801,7 +799,9 @@ impl Frame {
             .iter()
             .any(|v| !v.is_finite())
         {
-            return Err(invalid("combined covered/exposed heat accumulation overflow"));
+            return Err(invalid(
+                "combined covered/exposed heat accumulation overflow",
+            ));
         }
         Ok(step)
     }

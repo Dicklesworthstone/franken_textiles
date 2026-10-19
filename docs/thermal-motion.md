@@ -20,8 +20,8 @@ Use fresh output filenames to retain earlier runs. The referenced drape reports 
 complete thermal material selections. `projection.json` and each map use the schemas in
 [thermal-coverage.md](thermal-coverage.md). A pose may use a different projection request
 or depth discretization, but the source cloth topology, reference areas, material
-snapshots and physical layer identities must remain the same. The covered **spatial
-material domain** must also remain the same; equal aggregate areas are not sufficient.
+snapshots and physical layer identities must remain the same. The complete source-cloth
+material domain is conserved as portions enter or leave body coverage.
 
 Example `motion.json` (geometry paths relative to this file's directory):
 
@@ -76,6 +76,84 @@ and boundary fields apply throughout that interval (right-endpoint, frozen-pose
 approximation). Correspondence changes instantaneously before its heat steps, with no
 elapsed time during remapping. This does not interpolate mechanical motion. Simulation
 playback frame numbers or frame rates do not establish physical timestamps.
+
+## Covered and exposed exterior exchange
+
+Each destination interval can supply `exterior_exchange` for covered textile regions
+and `exposed_exterior_exchange` for cloth outside body coverage. These are independent
+opt-ins. The following replaces one `frames` entry; all numbers and the coefficient
+source are **synthetic examples**, not measured garment/environment data:
+
+```json
+{
+  "time_seconds": 2.0, "steps": 4,
+  "drape_report": "rest/sim_report.json", "coverage": "rest-map.json",
+  "boundaries": [{"inside_c": 35.0, "outside_c": 5.0,
+    "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.0}],
+  "bare_boundaries": [{"inside_c": 35.0, "outside_c": 5.0,
+    "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.2}],
+  "exposed_boundaries": [{"inside_c": 35.0, "outside_c": 5.0,
+    "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.0}],
+  "exterior_exchange": [{
+    "air_c": 5.0, "convection_w_m2_k": 3.0,
+    "surface_temperature_range_c": [-80.0, 80.0],
+    "convection_source": {"reference": "test:motion-exterior",
+      "accessed_on": "2026-10-19", "note": "Synthetic prescribed coefficient"},
+    "convection_evidence": "estimate", "allow_estimates": true,
+    "convection_conditions": "Synthetic constant h; no inferred wind",
+    "radiation": {"ambient_c": -10.0, "emissivity_property": "emissivity",
+      "exposed_face": "public", "allow_opaque_gray_approximation": true}
+  }],
+  "exposed_exterior_exchange": [{
+    "air_c": 5.0, "convection_w_m2_k": 3.0,
+    "surface_temperature_range_c": [-80.0, 80.0],
+    "convection_source": {"reference": "test:motion-exterior",
+      "accessed_on": "2026-10-19", "note": "Synthetic prescribed coefficient"},
+    "convection_evidence": "estimate", "allow_estimates": true,
+    "convection_conditions": "Synthetic constant h on canonical outside face"
+  }]
+}
+```
+
+Run the usual command: `ftx-materials thermal-motion motion.json > heat-exterior.new.json`.
+The example enables covered radiation and exposed convection only. To enable exposed
+radiation too, add a qualified `radiation` object to its environment. Omission means
+explicitly no radiative term; missing emissivity never becomes zero. See
+[exterior qualification](transient-exterior-heat.md#qualify-the-exterior-boundary) for
+material evidence, physical-face, spectral and temperature-domain requirements.
+
+One entry broadcasts in each array. Otherwise covered environments and bare films
+follow destination **body-triangle order**; exposed environments and their boundaries
+follow retained **source-cloth-triangle order**. Exterior exchange replaces its own
+outside film: that film's resistance must be zero and `outside_c` must equal `air_c`.
+The CLI requires `bare_boundaries` whenever covered exterior is requested, even in a
+currently fully covered pose. Bare films share the body's prescribed inside temperature
+and contribute no invented skin optics. Exposed exterior requires explicit
+`exposed_boundaries`. Its arrays may persist through a fully covered interval: active
+exposed area, heat and face arrays become zero/empty while material temperatures remain.
+
+Each covered region exposes only its **outermost material**. Boundary power uses its
+allocated **current outer cloth area**, not the sum of lining/fill/shell areas. Exposed
+power uses the current uncovered source-triangle fraction. Storage in both follows
+**reference material mass**, including when cloth stretches or coverage changes.
+Bare-body film power is already included in the normal boundary totals; do not add it
+again to reconstruct total outgoing heat.
+
+Physical face selection is the caller's responsibility. Arbitrary observation labels
+such as `public` are not bound automatically to vertex normals. A covered environment
+must name the actual outer physical face for every region assigned to it; an exposed
+environment names the canonical source outside face. Depth remapping preserves source
+orientation but does not choose a finish or certify an asymmetric-face assignment.
+
+Valid weather and reservoir changes apply in the next interval, including after a
+checkpoint restart, without resetting stored temperatures. A changed source material
+still requires a new state. The report retains interval conditions and reports signed
+`convective_energy_j`/`radiative_energy_j` separately under
+`energy.exterior_exchange` and `energy.exposed_exterior_exchange`. Corresponding trace
+entries retain interval energies and last powers/residuals; `final` retains local
+covered-region and active exposed-triangle face fields. Positive terms leave the cloth.
+These physical contributions remain separate from instantaneous remap error; numerical
+conservation is not measured garment warmth or a thermoregulation model.
 
 ## Resume without temperature reset
 
@@ -158,8 +236,8 @@ Uncovered cloth is **adiabatic by default**: stored heat is retained but no envi
 exchange is invented. An interval may add `exposed_boundaries`. One entry broadcasts to all
 source cloth triangles; otherwise provide one entry per retained source triangle. The two
 faces are the source material column's canonical inside/outside faces, not the nearest body
-normal. Supplying exposed boundaries when no cloth is uncovered refuses, catching stale
-conditions. This is a first-order state: it does not preserve in-plane gradients between
+normal. Supplying film-only exposed boundaries when no cloth is uncovered refuses, catching
+stale conditions. This is a first-order state: it does not preserve in-plane gradients between
 separate uncovered portions of one source triangle.
 
 ## Tests and no-claim boundaries

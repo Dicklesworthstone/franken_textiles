@@ -10,10 +10,13 @@ use super::{Budget, boundary, budget, hash, invalid};
 use crate::{
     run::DrapeRun,
     thermal::{
-        steady::request::Film,
+        steady::{exterior::Exterior, request::Film},
         surface::{
             Surface,
-            coverage::motion::{Frame, State, Step},
+            coverage::{
+                ExteriorConditions,
+                motion::{ExposedConditions, Frame, State, Step},
+            },
             projection,
         },
     },
@@ -35,9 +38,21 @@ pub struct Request {
     pub initial_temperature_c: f64,
     /// One spatially uniform pair of body-side/exterior films for each keyframe interval.
     pub boundaries: Vec<Film>,
+    /// Optional exact interval schedule; null retains that interval's outside film. Each active
+    /// environment replaces the outside film on the outermost covered material face only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exterior_exchange: Option<Vec<Option<Exterior>>>,
+    /// Explicit bare-body films for each exterior interval, independently of the covered shell.
+    /// Null is required in film-only intervals; skin emissivity is never inferred from cloth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bare_boundaries: Option<Vec<Option<Film>>>,
     /// One explicit choice per interval: null is adiabatic exposed cloth; a film pair applies to
     /// all currently exposed source sheets in their original material orientation. No ambient guess.
     pub exposed_boundaries: Vec<Option<Film>>,
+    /// Optional exact interval schedule for uncovered source cloth, independent of covered
+    /// exterior exchange. Every active entry also requires that interval's exposed boundaries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposed_exterior_exchange: Option<Vec<Option<Exterior>>>,
     /// Maximum physical thermal substep, seconds, independent of mechanical adaptive steps.
     pub max_step_s: f64,
     /// Maximum cell plus body-face advances, including all substeps, in 1..=10000000.
@@ -58,6 +73,18 @@ impl Request {
             || !(1..=16).contains(&intervals)
             || self.boundaries.len() != intervals
             || self.exposed_boundaries.len() != intervals
+            || self
+                .exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.len() != intervals)
+            || self
+                .bare_boundaries
+                .as_ref()
+                .is_some_and(|v| v.len() != intervals)
+            || self
+                .exposed_exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.len() != intervals)
             || !self.initial_temperature_c.is_finite()
             || self.initial_temperature_c < -273.15
             || !self.max_step_s.is_finite()
@@ -74,8 +101,31 @@ impl Request {
             .boundaries
             .iter()
             .chain(self.exposed_boundaries.iter().flatten())
+            .chain(self.bare_boundaries.iter().flatten().flatten())
         {
             boundary(film)?;
+        }
+        for i in 0..intervals {
+            let exterior = self.exterior_exchange.as_ref().and_then(|v| v[i].as_ref());
+            let bare = self.bare_boundaries.as_ref().and_then(|v| v[i]);
+            if exterior.is_some() != bare.is_some() {
+                return Err(invalid(
+                    "each covered exterior interval requires explicit bare-body films; film-only intervals must leave bare_boundaries null",
+                ));
+            }
+            if let Some(e) = exterior {
+                exterior_boundary(self.boundaries[i], e)?;
+            }
+            if let Some(e) = self
+                .exposed_exterior_exchange
+                .as_ref()
+                .and_then(|v| v[i].as_ref())
+            {
+                let film = self.exposed_boundaries[i].ok_or_else(|| {
+                    invalid("exposed exterior exchange requires explicit exposed boundaries")
+                })?;
+                exterior_boundary(film, e)?;
+            }
         }
         let mut seen = BTreeSet::new();
         if self.body_triangle_ids.is_empty()
@@ -145,6 +195,10 @@ impl Request {
             thermal_steps: 0,
             inside_j: 0.,
             outside_j: 0.,
+            covered_convective_j: 0.,
+            covered_radiative_j: 0.,
+            exposed_convective_j: 0.,
+            exposed_radiative_j: 0.,
             net_j: 0.,
             stored_j: 0.,
             bare_j: 0.,
@@ -155,6 +209,15 @@ impl Request {
             final_field: Value::Null,
         })
     }
+}
+
+fn exterior_boundary(film: Film, exterior: &Exterior) -> Result<(), Refusal> {
+    if film.outside_resistance_m2_k_w != 0. || film.outside_c != exterior.air_c {
+        return Err(invalid(
+            "motion coverage exterior exchange requires zero outside film and outside_c equal to air_c in every active interval",
+        ));
+    }
+    Ok(())
 }
 
 pub(in crate::study) struct History {
@@ -171,6 +234,10 @@ pub(in crate::study) struct History {
     thermal_steps: usize,
     inside_j: f64,
     outside_j: f64,
+    covered_convective_j: f64,
+    covered_radiative_j: f64,
+    exposed_convective_j: f64,
+    exposed_radiative_j: f64,
     net_j: f64,
     stored_j: f64,
     bare_j: f64,
@@ -216,6 +283,21 @@ impl History {
             .exposed_boundaries
             .get(interval)
             .ok_or_else(|| invalid("missing exposed-cloth interval"))?;
+        let exterior = self
+            .request
+            .exterior_exchange
+            .as_ref()
+            .and_then(|v| v[interval].clone());
+        let bare = self
+            .request
+            .bare_boundaries
+            .as_ref()
+            .and_then(|v| v[interval]);
+        let exposed_exterior = self
+            .request
+            .exposed_exterior_exchange
+            .as_ref()
+            .and_then(|v| v[interval].clone());
         let next = Frame::new(
             self.source.clone(),
             cloth.to_vec(),
@@ -251,12 +333,27 @@ impl History {
         };
         self.frame = next;
         let boundaries = vec![boundary(film)?; self.frame.body_triangle_count()];
+        let environments = exterior.map(|e| vec![e; self.frame.body_triangle_count()]);
+        let bare_boundaries = bare
+            .map(|b| boundary(b).map(|b| vec![b; self.frame.body_triangle_count()]))
+            .transpose()?;
+        let covered_exterior = environments.as_deref().map(|e| ExteriorConditions {
+            environments: e,
+            bare_boundaries: bare_boundaries.as_deref().expect("validated bare schedule"),
+        });
         // No exposed portion means this declared face condition has no active exchange area.
         // Do not force a refusal merely because a moving piece has just become fully covered.
         let exposed = exposed
             .filter(|_| self.frame.has_exposed_cloth())
             .map(|film| boundary(film).map(|b| vec![b; self.frame.cloth_triangle_count()]))
             .transpose()?;
+        let exposed_environments = exposed_exterior
+            .filter(|_| self.frame.has_exposed_cloth())
+            .map(|e| vec![e; self.frame.cloth_triangle_count()]);
+        let exposed_conditions = exposed.as_deref().map(|b| ExposedConditions {
+            boundaries: b,
+            environments: exposed_environments.as_deref(),
+        });
         // Move each state into the next step; only the last field is retained/formatted for output.
         let mut first = Some(self.state.clone());
         let mut last: Option<Step> = None;
@@ -265,14 +362,23 @@ impl History {
                 .take()
                 .or_else(|| last.take().map(Step::into_state))
                 .ok_or_else(|| invalid("missing transient coverage state"))?;
-            let step = match &exposed {
-                Some(e) => self
-                    .frame
-                    .advance_with_exposed(&current, dt, &boundaries, e)?,
-                None => self.frame.advance(&current, dt, &boundaries)?,
-            };
+            let step = self.frame.advance_with_exchange(
+                &current,
+                dt,
+                &boundaries,
+                covered_exterior,
+                exposed_conditions,
+            )?;
             self.inside_j += dt * step.inside_heat_w();
             self.outside_j += dt * step.outside_heat_w();
+            if let Some(e) = &step.heat().exterior_exchange {
+                self.covered_convective_j += dt * e.convective_heat_w;
+                self.covered_radiative_j += dt * e.radiative_heat_w;
+            }
+            if let Some(e) = step.exposed_exterior_exchange() {
+                self.exposed_convective_j += dt * e.convective_heat_w;
+                self.exposed_radiative_j += dt * e.radiative_heat_w;
+            }
             self.net_j += dt * step.net_heat_w();
             self.stored_j += step.stored_change_j();
             self.bare_j += dt * step.heat().bare_heat_w;
@@ -285,10 +391,21 @@ impl History {
             "bare_heat_w":heat.bare_heat_w,"body_inside_heat_w":heat.inside_heat_w,"body_outside_heat_w":heat.outside_heat_w,
             "exposed_inside_heat_w":last.exposed_inside_heat_w(),"exposed_outside_heat_w":last.exposed_outside_heat_w(),
             "body":heat.body,"regions":heat.regions});
+        if let Some(e) = &heat.exterior_exchange {
+            self.final_field["exterior_exchange"] = json!(e);
+        }
+        if let Some(e) = last.exposed_exterior_exchange() {
+            self.final_field["exposed_exterior_exchange"] = json!(e);
+            self.final_field["exposed_temperature_c"] = json!(last.exposed_temperature_c());
+        }
         self.state = last.into_state();
         if [
             self.inside_j,
             self.outside_j,
+            self.covered_convective_j,
+            self.covered_radiative_j,
+            self.exposed_convective_j,
+            self.exposed_radiative_j,
             self.net_j,
             self.stored_j,
             self.bare_j,
@@ -316,12 +433,31 @@ impl History {
             lo = lo.min(t);
             hi = hi.max(t);
         }
-        self.trace.push(json!({"sample_index":sample_index,"interval_index":interval,"time_s":time_s,
+        let mut sample = json!({"sample_index":sample_index,"interval_index":interval,"time_s":time_s,
             "frame_sha256":self.frame.sha256(),"positions_sha256":hash(&cloth)?,"body_positions_sha256":hash(&body)?,
             "thermal_substeps":count,"temperature_range_c":[lo,hi],"remap":remap,
             "covered_area_m2":self.final_field["covered_area_m2"],
             "bare_energy_j":self.bare_j,"net_boundary_energy_j":self.net_j,"physical_stored_change_j":self.stored_j,
-            "signed_remap_residual_j":self.signed_remap_j,"balance_error_j":self.stored_j-self.net_j}));
+            "signed_remap_residual_j":self.signed_remap_j,"balance_error_j":self.stored_j-self.net_j});
+        for (field, convective, radiative) in [
+            (
+                "exterior_exchange",
+                self.covered_convective_j,
+                self.covered_radiative_j,
+            ),
+            (
+                "exposed_exterior_exchange",
+                self.exposed_convective_j,
+                self.exposed_radiative_j,
+            ),
+        ] {
+            if let Some(e) = self.final_field.get(field) {
+                sample[field] = json!({"convective_heat_w":e["convective_heat_w"],
+                    "radiative_heat_w":e["radiative_heat_w"],"balance_residual_w":e["balance_residual_w"],
+                    "convective_energy_j":convective,"radiative_energy_j":radiative});
+            }
+        }
+        self.trace.push(sample);
         Ok(())
     }
 
@@ -336,8 +472,7 @@ impl History {
                 "coverage heat does not cover the complete mechanical path",
             ));
         }
-        Ok(
-            json!({"schema":"ftx-motion-coverage-heat-result/1","request":self.request,
+        let mut result = json!({"schema":"ftx-motion-coverage-heat-result/1","request":self.request,
             "path_sha256":path_hash,"initial_positions_sha256":initial_hash,
             "initial_frame_sha256":self.initial_frame_sha256,"duration_s":duration_s,
             "cell_steps":self.cell_steps,"thermal_steps":self.thermal_steps,"geometry_operations":self.geometry_operations,
@@ -347,7 +482,25 @@ impl History {
             "balance_error_j":self.stored_j-self.net_j,"absolute_step_balance_error_j":self.absolute_step_error_j,
             "trace":self.trace,"final_field":self.final_field,"checkpoint":self.frame.checkpoint(&self.state)?,
             "uncertainty_propagated":false,"physical_validation_claim":false,"comfort_claim":false,
-            "scope":"One-way transient heat on the explicit collision-body domain with first-order source-material enthalpy remap at each accepted cloth/body sample. Remap has no elapsed time; heat substeps use the sample's right-endpoint geometry. Reference mass and exposed-sheet storage persist. Bare parallel paths store no energy. No anatomical coverage certification, human thermoregulation, mechanical heating, moisture, two-way coupling or empirical warmth claim."}),
-        )
+            "scope":"One-way transient heat on the explicit collision-body domain with first-order source-material enthalpy remap at each accepted cloth/body sample. Remap has no elapsed time; heat substeps use the sample's right-endpoint geometry. Reference mass and exposed-sheet storage persist. Bare parallel paths store no energy. No anatomical coverage certification, human thermoregulation, mechanical heating, moisture, two-way coupling or empirical warmth claim."});
+        for (field, schedule, convective, radiative) in [
+            (
+                "exterior_exchange",
+                &self.request.exterior_exchange,
+                self.covered_convective_j,
+                self.covered_radiative_j,
+            ),
+            (
+                "exposed_exterior_exchange",
+                &self.request.exposed_exterior_exchange,
+                self.exposed_convective_j,
+                self.exposed_radiative_j,
+            ),
+        ] {
+            if schedule.as_ref().is_some_and(|v| v.iter().any(Option::is_some)) {
+                result[field] = json!({"convective_energy_j":convective,"radiative_energy_j":radiative});
+            }
+        }
+        Ok(result)
     }
 }

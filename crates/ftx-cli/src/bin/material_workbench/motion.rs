@@ -9,7 +9,11 @@ use std::{
 use ftx_core::{Refusal, receipt::sha256_hex};
 use ftx_drape::thermal::{
     Boundary,
-    surface::coverage::motion::{Frame, State},
+    steady::exterior::Exterior,
+    surface::coverage::{
+        ExteriorConditions,
+        motion::{ExposedConditions, Frame, State},
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -44,10 +48,22 @@ struct Interval {
     coverage: String,
     /// Right-endpoint fields used throughout this interval; no implicit pose interpolation.
     boundaries: Vec<Film>,
+    /// Optional qualified exchange on outermost covered faces, in destination body-triangle order.
+    /// One environment broadcasts; the covered outside film must be zero and match its air state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exterior_exchange: Option<Vec<Exterior>>,
+    /// Bare-body films are explicit whenever covered exterior exchange is selected. Cloth optics
+    /// cannot supply skin emissivity, and an unused bare film must not be silently ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bare_boundaries: Option<Vec<Film>>,
     /// Optional source-cloth face conditions for material currently outside body coverage.
     /// One broadcasts to every source cloth triangle; otherwise retain source-triangle order.
     #[serde(default)]
     exposed_boundaries: Vec<Film>,
+    /// Independent exterior replacement for explicitly conditioned uncovered cloth. One entry
+    /// broadcasts; otherwise keep source-triangle order, including inactive covered triangles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exposed_exterior_exchange: Option<Vec<Exterior>>,
     steps: usize,
 }
 #[derive(Deserialize, Serialize)]
@@ -149,6 +165,41 @@ fn restore(value: &Value) -> Result<(Frame, State, f64), Refusal> {
     Ok((frame, state, saved.time_seconds))
 }
 
+fn exterior_environments(
+    input: &[Exterior],
+    boundaries: &[Boundary],
+) -> Result<Vec<Exterior>, Refusal> {
+    let environments = if input.len() == 1 {
+        vec![input[0].clone(); boundaries.len()]
+    } else if input.len() == boundaries.len() {
+        input.to_vec()
+    } else {
+        return Err(invalid(
+            "motion needs one exterior environment or one per matching body/source triangle",
+        ));
+    };
+    for (b, e) in boundaries.iter().zip(&environments) {
+        if b.outside_resistance != 0. || b.outside_c != e.air_c {
+            return Err(invalid(
+                "motion exterior exchange requires zero outside film and outside_c equal to air_c",
+            ));
+        }
+    }
+    Ok(environments)
+}
+
+#[derive(Default, Serialize)]
+struct ExteriorEnergy {
+    convective_energy_j: f64,
+    radiative_energy_j: f64,
+}
+impl ExteriorEnergy {
+    fn add(&mut self, seconds: f64, convective_w: f64, radiative_w: f64) {
+        self.convective_energy_j += seconds * convective_w;
+        self.radiative_energy_j += seconds * radiative_w;
+    }
+}
+
 #[derive(Default, Serialize)]
 struct Totals {
     incoming_energy_j: f64,
@@ -158,6 +209,10 @@ struct Totals {
     signed_remap_residual_j: f64,
     absolute_remap_residual_j: f64,
     largest_step_balance_error_j: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exterior_exchange: Option<ExteriorEnergy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exposed_exterior_exchange: Option<ExteriorEnergy>,
 }
 impl Totals {
     fn check(&self) -> Result<(), Refusal> {
@@ -176,6 +231,20 @@ impl Totals {
         .any(|v| !v.is_finite())
         {
             return Err(invalid("motion energy accumulation overflow"));
+        }
+        for e in [
+            self.exterior_exchange.as_ref(),
+            self.exposed_exterior_exchange.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !e.convective_energy_j.is_finite()
+                || !e.radiative_energy_j.is_finite()
+                || !(e.convective_energy_j + e.radiative_energy_j).is_finite()
+            {
+                return Err(invalid("motion exterior energy accumulation overflow"));
+            }
         }
         Ok(())
     }
@@ -208,10 +277,32 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
             || f.boundaries.is_empty()
             || f.boundaries.len() > 65_536
             || f.exposed_boundaries.len() > 65_536
+            || f
+                .exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 65_536)
+            || f
+                .bare_boundaries
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 65_536)
+            || f
+                .exposed_exterior_exchange
+                .as_ref()
+                .is_some_and(|v| v.is_empty() || v.len() > 65_536)
             || last_time.is_some_and(|t| f.time_seconds <= t)
         {
             return Err(invalid(
                 "motion times must increase, with positive steps and at most 100000 total steps",
+            ));
+        }
+        if f.exterior_exchange.is_some() != f.bare_boundaries.is_some() {
+            return Err(invalid(
+                "covered exterior exchange requires explicit bare_boundaries; omit both for film-only intervals",
+            ));
+        }
+        if f.exposed_exterior_exchange.is_some() && f.exposed_boundaries.is_empty() {
+            return Err(invalid(
+                "exposed exterior exchange requires explicit exposed_boundaries",
             ));
         }
         last_time = Some(f.time_seconds);
@@ -274,9 +365,33 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                 "motion needs one boundary or one per destination body triangle",
             ));
         };
+        let bare_boundaries = f
+            .bare_boundaries
+            .as_ref()
+            .map(|films| {
+                if films.len() == 1 {
+                    Ok(vec![films[0].boundary(); next.body_triangle_count()])
+                } else if films.len() == next.body_triangle_count() {
+                    Ok(films.iter().map(Film::boundary).collect::<Vec<_>>())
+                } else {
+                    Err(invalid(
+                        "motion needs one bare boundary or one per destination body triangle",
+                    ))
+                }
+            })
+            .transpose()?;
+        let environments = f
+            .exterior_exchange
+            .as_deref()
+            .map(|e| exterior_environments(e, &boundaries))
+            .transpose()?;
+        let covered_exterior = environments.as_deref().map(|e| ExteriorConditions {
+            environments: e,
+            bare_boundaries: bare_boundaries.as_deref().expect("validated bare conditions"),
+        });
         let exposed_boundaries: Option<Vec<Boundary>> = if f.exposed_boundaries.is_empty() {
             None
-        } else if !next.has_exposed_cloth() {
+        } else if !next.has_exposed_cloth() && f.exposed_exterior_exchange.is_none() {
             return Err(invalid(
                 "exposed boundaries were supplied but the destination frame has no uncovered cloth",
             ));
@@ -292,6 +407,22 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                 "motion needs one exposed boundary or one per source cloth triangle",
             ));
         };
+        let exposed_environments = f
+            .exposed_exterior_exchange
+            .as_deref()
+            .map(|e| {
+                exterior_environments(
+                    e,
+                    exposed_boundaries
+                        .as_deref()
+                        .expect("validated exposed conditions"),
+                )
+            })
+            .transpose()?;
+        let exposed_conditions = exposed_boundaries.as_deref().map(|b| ExposedConditions {
+            boundaries: b,
+            environments: exposed_environments.as_deref(),
+        });
         let remap = if frame.sha256() == next.sha256() {
             None
         } else {
@@ -310,14 +441,33 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
         frame = next;
         let mut interval_stored = 0.;
         let mut interval_net = 0.;
+        let mut covered_energy = ExteriorEnergy::default();
+        let mut exposed_energy = ExteriorEnergy::default();
         for j in 0..f.steps {
-            let step = match &exposed_boundaries {
-                Some(exposed) => frame.advance_with_exposed(&state, dt, &boundaries, exposed)?,
-                None => frame.advance(&state, dt, &boundaries)?,
-            };
+            let step = frame.advance_with_exchange(
+                &state,
+                dt,
+                &boundaries,
+                covered_exterior,
+                exposed_conditions,
+            )?;
             let heat = step.heat();
             totals.incoming_energy_j += dt * step.inside_heat_w();
             totals.outgoing_energy_j += dt * step.outside_heat_w();
+            if let Some(e) = &heat.exterior_exchange {
+                totals
+                    .exterior_exchange
+                    .get_or_insert_default()
+                    .add(dt, e.convective_heat_w, e.radiative_heat_w);
+                covered_energy.add(dt, e.convective_heat_w, e.radiative_heat_w);
+            }
+            if let Some(e) = step.exposed_exterior_exchange() {
+                totals
+                    .exposed_exterior_exchange
+                    .get_or_insert_default()
+                    .add(dt, e.convective_heat_w, e.radiative_heat_w);
+                exposed_energy.add(dt, e.convective_heat_w, e.radiative_heat_w);
+            }
             // Accumulate storage heat before adding the cancelling bare-body path to each total.
             totals.net_boundary_energy_j += dt * step.net_heat_w();
             totals.physical_stored_change_j += step.stored_change_j();
@@ -327,11 +477,21 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
             interval_stored += step.stored_change_j();
             interval_net += dt * step.net_heat_w();
             totals.check()?;
-            if !interval_stored.is_finite() || !interval_net.is_finite() {
+            if [
+                interval_stored,
+                interval_net,
+                covered_energy.convective_energy_j,
+                covered_energy.radiative_energy_j,
+                exposed_energy.convective_energy_j,
+                exposed_energy.radiative_energy_j,
+            ]
+            .iter()
+            .any(|v| !v.is_finite())
+            {
                 return Err(invalid("motion interval energy overflow"));
             }
             if j + 1 == f.steps {
-                let entry = json!({"from_time_seconds":previous,"time_seconds":f.time_seconds,
+                let mut entry = json!({"from_time_seconds":previous,"time_seconds":f.time_seconds,
                     "step_seconds":dt,"steps":f.steps,"inputs":receipt,"remap":remap,
                     "geometry_operations":frame.projection().geometry_operations,
                     "partition_roundoff_m2":frame.projection().partition_roundoff_m2,
@@ -343,6 +503,18 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                     "exposed_outside_heat_w":step.exposed_outside_heat_w(),
                     "net_heat_w":step.net_heat_w(),"physical_stored_change_j":interval_stored,
                     "net_boundary_energy_j":interval_net,"heat_balance_error_j":interval_stored-interval_net});
+                if let Some(e) = &heat.exterior_exchange {
+                    entry["exterior_exchange"] = json!({"convective_heat_w":e.convective_heat_w,
+                        "radiative_heat_w":e.radiative_heat_w,"balance_residual_w":e.balance_residual_w,
+                        "convective_energy_j":covered_energy.convective_energy_j,
+                        "radiative_energy_j":covered_energy.radiative_energy_j});
+                }
+                if let Some(e) = step.exposed_exterior_exchange() {
+                    entry["exposed_exterior_exchange"] = json!({"convective_heat_w":e.convective_heat_w,
+                        "radiative_heat_w":e.radiative_heat_w,"balance_residual_w":e.balance_residual_w,
+                        "convective_energy_j":exposed_energy.convective_energy_j,
+                        "radiative_energy_j":exposed_energy.radiative_energy_j});
+                }
                 trace_bytes = trace_bytes
                     .checked_add(
                         serde_json::to_vec(&entry)
@@ -354,6 +526,12 @@ pub(super) fn run(path: &str) -> Result<Value, Refusal> {
                 trace.push(entry);
                 if i + 1 == input.frames.len() {
                     final_field = thermal_coverage::field(heat);
+                    if let Some(e) = &heat.exterior_exchange {
+                        final_field["exterior_exchange"] = json!(e);
+                    }
+                    if let Some(e) = step.exposed_exterior_exchange() {
+                        final_field["exposed_exterior_exchange"] = json!(e);
+                    }
                     final_field["exposed_temperature_c"] = json!(step.exposed_temperature_c());
                     final_field["exposed_inside_heat_w"] = json!(step.exposed_inside_heat_w());
                     final_field["exposed_outside_heat_w"] = json!(step.exposed_outside_heat_w());

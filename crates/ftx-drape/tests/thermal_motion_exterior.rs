@@ -216,9 +216,7 @@ fn covered_exposed_and_recovered_material_keeps_energy_and_checkpointed_weather(
     for (i, &t) in left.state.exposed_temperature_c()[0].iter().enumerate() {
         near(
             t,
-            (middle_state.temperature_c()[0][i]
-                + middle_state.exposed_temperature_c()[0][i])
-                / 2.,
+            (middle_state.temperature_c()[0][i] + middle_state.exposed_temperature_c()[0][i]) / 2.,
         );
     }
     near(left.balance.absolute_residual_j, 0.);
@@ -254,10 +252,7 @@ fn covered_exposed_and_recovered_material_keeps_energy_and_checkpointed_weather(
             &warm[0],
         )
         .unwrap();
-    assert_eq!(
-        next.exposed_temperature_c()[0],
-        direct.state.temperature_c
-    );
+    assert_eq!(next.exposed_temperature_c()[0], direct.state.temperature_c);
     assert!(next.exterior_radiative_heat_w().unwrap() < 0.);
     near(next.heat().bare_heat_w, 50.);
     account(&next, 0.75);
@@ -285,10 +280,7 @@ fn covered_exposed_and_recovered_material_keeps_energy_and_checkpointed_weather(
             .sum::<f64>();
     near(stored, net);
     near(
-        stored
-            + entered.balance.residual_j
-            + left.balance.residual_j
-            + returned.balance.residual_j,
+        stored + entered.balance.residual_j + left.balance.residual_j + returned.balance.residual_j,
         energy,
     );
     near(outgoing, exterior_energy + bare_energy);
@@ -363,11 +355,12 @@ fn ordinary_films_and_adiabatic_exposure_keep_their_existing_results() {
     let step = frame
         .advance_with_exposed(&initial, 0.5, &[film()], &[film()])
         .unwrap();
-    let direct = model(&selected, 2)
-        .advance(&[10.; 2], 0.5, film())
-        .unwrap();
+    let direct = model(&selected, 2).advance(&[10.; 2], 0.5, film()).unwrap();
     assert_eq!(step.exposed_temperature_c()[0], direct.temperature_c);
-    near(step.exposed_stored_change_j(), 0.5 * direct.stored_change_j_m2);
+    near(
+        step.exposed_stored_change_j(),
+        0.5 * direct.stored_change_j_m2,
+    );
     assert!(step.exposed_exterior_exchange().is_none());
     assert!(step.exterior_convective_heat_w().is_none());
     assert!(step.heat().exterior_exchange.is_none());
@@ -377,7 +370,12 @@ fn ordinary_films_and_adiabatic_exposure_keep_their_existing_results() {
 fn only_active_exposed_sources_require_optics_and_keep_source_triangle_indices() {
     let selected = selection();
     let mut hidden = selected.clone();
-    hidden.record.as_mut().unwrap().properties.remove("emissivity");
+    hidden
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .remove("emissivity");
     let source = Surface::new(
         vec![model(&hidden, 1), model(&selected, 1)],
         6,
@@ -398,7 +396,13 @@ fn only_active_exposed_sources_require_optics_and_keep_source_triangle_indices()
     let mut cloth = tri(0., 0.04);
     cloth.extend(tri(2., 0.04));
     let layers = vec!["lining".into(), "shell".into()];
-    let covered = mapped(source.clone(), cloth.clone(), tri(0., 0.), 2, layers.clone());
+    let covered = mapped(
+        source.clone(),
+        cloth.clone(),
+        tri(0., 0.),
+        2,
+        layers.clone(),
+    );
     let away = mapped(source, cloth, tri(4., 0.), 2, layers);
     let environment = [environment(), environment()];
     let boundaries = [
@@ -488,11 +492,8 @@ fn invalid_exterior_inputs_refuse_atomically_and_material_edits_require_new_stat
             1 => bad_boundary[0].outside_c = 6.,
             2 => bad_environment[0].allow_estimates = false,
             _ => {
-                bad_environment[0]
-                    .radiation
-                    .as_mut()
-                    .unwrap()
-                    .exposed_face = "unqualified-face".into();
+                bad_environment[0].radiation.as_mut().unwrap().exposed_face =
+                    "unqualified-face".into();
             }
         }
         assert!(

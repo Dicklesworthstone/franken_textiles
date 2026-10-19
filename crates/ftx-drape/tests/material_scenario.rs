@@ -880,3 +880,280 @@ fn exposed_heat_and_coverage_refusals_are_independent_of_motion_and_other_consum
         "available"
     );
 }
+
+fn coverage_exterior_pattern(emissivity: f64) -> Pattern {
+    let mut raw = heat_pattern().raw().clone();
+    raw["fabric"]["material"]["record"]["properties"]["emissivity"] = json!({
+        "value":emissivity,"unit":"1","source":"test","evidence":"estimate",
+        "method":"Synthetic optical coefficient for coverage-consumer checks",
+        "conditions":{"specimen":"synthetic-scenario-sheet","conditioning":"synthetic-dry",
+            "face":"public","spectral_basis":"total_hemispherical",
+            "temperature_min_c":"-80","temperature_max_c":"80"}});
+    Pattern::new(raw)
+}
+
+fn coverage_exterior_scenario() -> Scenario {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+    ))
+    .unwrap();
+    let mut cold = fixture["exterior_exchange"].clone();
+    cold["convection_conditions"] =
+        json!("Synthetic prescribed coefficient on the accepted moving geometry");
+    let mut warm = cold.clone();
+    warm["air_c"] = json!(40.);
+    warm["radiation"]["ambient_c"] = json!(55.);
+    let mut s = coverage_heat_scenario();
+    let policy = s
+        .motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap();
+    policy.bare_boundaries = Some(policy.boundaries.iter().copied().map(Some).collect());
+    for film in &mut policy.boundaries {
+        film.outside_resistance_m2_k_w = 0.;
+    }
+    policy.exposed_boundaries = policy.boundaries.iter().copied().map(Some).collect();
+    policy.exterior_exchange = Some(vec![
+        Some(serde_json::from_value(cold).unwrap()),
+        Some(serde_json::from_value(warm).unwrap()),
+    ]);
+    policy.exposed_exterior_exchange = policy.exterior_exchange.clone();
+    s
+}
+
+#[test]
+fn moving_coverage_exterior_consumes_frozen_weather_without_restarting_material_heat() {
+    use ftx_drape::thermal::{
+        Boundary,
+        surface::{
+            Surface,
+            coverage::{
+                ExteriorConditions,
+                motion::{ExposedConditions, Frame},
+            },
+            projection,
+        },
+    };
+    let s = coverage_exterior_scenario();
+    let p = coverage_exterior_pattern(0.8);
+    let result = moving(&s, &p);
+    let motion = &result["motion"]["result"];
+    let outcome = &motion["transient_coverage"];
+    assert_eq!(outcome["status"], "available", "{outcome:#}");
+    let h = &outcome["result"];
+    let policy = s
+        .motion
+        .as_ref()
+        .unwrap()
+        .transient_coverage
+        .as_ref()
+        .unwrap();
+    assert_eq!(h["request"], json!(policy));
+    let saved = &h["checkpoint"]["frame"];
+    let source = Surface::from_snapshot(&saved["source"]).unwrap();
+    let projection: projection::Request = serde_json::from_value(saved["request"].clone()).unwrap();
+    let triangles: Vec<[usize; 3]> =
+        serde_json::from_value(saved["projection"]["layout"]["body_triangles"].clone()).unwrap();
+    let mut frame = Frame::new(
+        source.clone(),
+        serde_json::from_value(result["positions_m"].clone()).unwrap(),
+        form().vertices,
+        &triangles,
+        projection.clone(),
+    )
+    .unwrap();
+    let mut state = frame.initial(15.).unwrap();
+    let mut time = 0.;
+    let mut energies = [0.; 4];
+    let film = |b: ftx_drape::thermal::steady::request::Film| Boundary {
+        inside_c: b.inside_c,
+        outside_c: b.outside_c,
+        inside_resistance: b.inside_resistance_m2_k_w,
+        outside_resistance: b.outside_resistance_m2_k_w,
+    };
+    let trace = h["trace"].as_array().unwrap();
+    for (sample, row) in motion["samples"].as_array().unwrap().iter().zip(trace) {
+        let next = Frame::new(
+            source.clone(),
+            serde_json::from_value(sample["positions_m"].clone()).unwrap(),
+            serde_json::from_value(sample["body_positions_m"].clone()).unwrap(),
+            &triangles,
+            projection.clone(),
+        )
+        .unwrap();
+        if next.sha256() != frame.sha256() {
+            state = next.remap(&frame, &state).unwrap().state;
+        }
+        frame = next;
+        assert!(frame.has_exposed_cloth());
+        let i = row["interval_index"].as_u64().unwrap() as usize;
+        let boundaries = vec![film(policy.boundaries[i]); frame.body_triangle_count()];
+        let bare = vec![
+            film(policy.bare_boundaries.as_ref().unwrap()[i].unwrap());
+            frame.body_triangle_count()
+        ];
+        let environments = vec![
+            policy.exterior_exchange.as_ref().unwrap()[i]
+                .clone()
+                .unwrap();
+            frame.body_triangle_count()
+        ];
+        let exposed_boundaries = vec![
+            film(policy.exposed_boundaries[i].unwrap());
+            frame.cloth_triangle_count()
+        ];
+        let exposed_environments = vec![
+            policy.exposed_exterior_exchange.as_ref().unwrap()[i]
+                .clone()
+                .unwrap();
+            frame.cloth_triangle_count()
+        ];
+        let end = sample["time_s"].as_f64().unwrap();
+        let count = row["thermal_substeps"].as_u64().unwrap();
+        let dt = (end - time) / count as f64;
+        for _ in 0..count {
+            let step = frame
+                .advance_with_exchange(
+                    &state,
+                    dt,
+                    &boundaries,
+                    Some(ExteriorConditions {
+                        environments: &environments,
+                        bare_boundaries: &bare,
+                    }),
+                    Some(ExposedConditions {
+                        boundaries: &exposed_boundaries,
+                        environments: Some(&exposed_environments),
+                    }),
+                )
+                .unwrap();
+            let covered = step.heat().exterior_exchange.as_ref().unwrap();
+            let exposed = step.exposed_exterior_exchange().unwrap();
+            for (total, power) in energies.iter_mut().zip([
+                covered.convective_heat_w,
+                covered.radiative_heat_w,
+                exposed.convective_heat_w,
+                exposed.radiative_heat_w,
+            ]) {
+                *total += dt * power;
+            }
+            state = step.into_state();
+        }
+        assert_eq!(row["exterior_exchange"]["convective_energy_j"], energies[0]);
+        assert_eq!(row["exterior_exchange"]["radiative_energy_j"], energies[1]);
+        assert_eq!(
+            row["exposed_exterior_exchange"]["convective_energy_j"],
+            energies[2]
+        );
+        assert_eq!(
+            row["exposed_exterior_exchange"]["radiative_energy_j"],
+            energies[3]
+        );
+        time = end;
+    }
+    assert_eq!(h["checkpoint"], frame.checkpoint(&state).unwrap());
+    let (restored, state) = Frame::from_checkpoint(&h["checkpoint"]).unwrap();
+    assert_eq!(restored.checkpoint(&state).unwrap(), h["checkpoint"]);
+    assert!(h["balance_error_j"].as_f64().unwrap().abs() < 1e-8);
+    assert!(h["absolute_remap_residual_j"].as_f64().unwrap() < 1e-8);
+    assert!(
+        trace[0]["exterior_exchange"]["convective_heat_w"]
+            .as_f64()
+            .unwrap()
+            > 0.
+    );
+    assert!(
+        trace.last().unwrap()["exposed_exterior_exchange"]["radiative_heat_w"]
+            .as_f64()
+            .unwrap()
+            < 0.
+    );
+    assert!(h["final_field"]["exterior_exchange"].is_object());
+    assert!(
+        !h["final_field"]["exposed_exterior_exchange"]["triangles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(result, moving(&s, &p));
+    let different_finish = moving(&s, &coverage_exterior_pattern(0.2));
+    assert_eq!(
+        different_finish["motion"]["result"]["samples"],
+        motion["samples"]
+    );
+    assert_ne!(
+        different_finish["motion"]["result"]["transient_coverage"]["result"]["checkpoint"]
+            ["exposed_temperature_c"],
+        h["checkpoint"]["exposed_temperature_c"]
+    );
+}
+
+#[test]
+fn coverage_exterior_schedule_and_optical_refusals_preserve_other_motion_consumers() {
+    let s = coverage_exterior_scenario();
+    let p = coverage_exterior_pattern(0.8);
+    let expected = moving(&s, &p);
+    for mode in 0..8 {
+        let mut bad = s.clone();
+        let policy = bad
+            .motion
+            .as_mut()
+            .unwrap()
+            .transient_coverage
+            .as_mut()
+            .unwrap();
+        match mode {
+            0 => policy.exterior_exchange.as_mut().unwrap().truncate(1),
+            1 => policy.bare_boundaries = None,
+            2 => policy.boundaries[1].outside_resistance_m2_k_w = 0.2,
+            3 => policy.exposed_boundaries[1] = None,
+            4 => policy.exposed_exterior_exchange.as_mut().unwrap().truncate(1),
+            5 => {
+                policy.exterior_exchange.as_mut().unwrap()[0]
+                    .as_mut()
+                    .unwrap()
+                    .air_c = 7.;
+            }
+            6 => policy.exterior_exchange.as_mut().unwrap()[0] = None,
+            _ => {
+                policy.exposed_exterior_exchange.as_mut().unwrap()[0]
+                    .as_mut()
+                    .unwrap()
+                    .radiation
+                    .as_mut()
+                    .unwrap()
+                    .exposed_face = "unqualified-face".into();
+            }
+        }
+        let result = moving(&bad, &p);
+        let motion = &result["motion"]["result"];
+        assert_eq!(result["motion"]["status"], "available", "mode {mode}");
+        assert_eq!(
+            motion["transient_coverage"]["status"], "refused",
+            "mode {mode}"
+        );
+        assert!(motion["transient_coverage"]["result"].is_null());
+        assert_eq!(motion["samples"], expected["motion"]["result"]["samples"]);
+        assert_eq!(motion["transient_surface"]["status"], "available");
+    }
+    let missing = moving(&s, &heat_pattern());
+    assert_eq!(missing["motion"]["status"], "available");
+    assert_eq!(
+        missing["motion"]["result"]["transient_coverage"]["status"],
+        "refused"
+    );
+    let legacy = moving(&coverage_heat_scenario(), &p);
+    let heat = &legacy["motion"]["result"]["transient_coverage"]["result"];
+    for field in [
+        "exterior_exchange",
+        "bare_boundaries",
+        "exposed_exterior_exchange",
+    ] {
+        assert!(heat["request"].get(field).is_none());
+        assert!(heat.get(field).is_none());
+        assert!(heat["final_field"].get(field).is_none());
+    }
+}

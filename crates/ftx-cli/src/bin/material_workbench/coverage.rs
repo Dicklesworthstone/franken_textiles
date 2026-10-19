@@ -2,9 +2,10 @@
 use ftx_core::{Refusal, Vec3, receipt::sha256_hex};
 use ftx_drape::thermal::{
     Boundary,
+    steady::exterior::Exterior,
     surface::{
         Surface,
-        coverage::{Coverage, CoverageStep, Layout, motion::Frame},
+        coverage::{Coverage, CoverageStep, ExteriorConditions, Layout, motion::Frame},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -56,16 +57,25 @@ struct Conditions {
     /// One broadcasts; otherwise use body-triangle order, NOT source material-column order.
     boundaries: Vec<Film>,
     #[serde(default)]
+    exterior_exchange: Option<Vec<Exterior>>,
+    /// Explicit skin films when exterior exchange is enabled; one broadcasts in body order.
+    #[serde(default)]
+    bare_boundaries: Vec<Film>,
+    #[serde(default)]
     transient: Option<Transient>,
 }
 
 pub(super) fn field(step: &CoverageStep) -> Value {
-    json!({"regions":step.regions,"body":step.body,"temperature_c":step.state.temperature_c(),
+    let mut field = json!({"regions":step.regions,"body":step.body,"temperature_c":step.state.temperature_c(),
         "body_area_m2":step.body_area_m2,"covered_area_m2":step.covered_area_m2,
         "bare_heat_w":step.bare_heat_w,"inside_heat_w":step.inside_heat_w,
         "outside_heat_w":step.outside_heat_w,"net_heat_w":step.net_heat_w,
         "stored_change_j":step.stored_change_j,"balance_error_j":step.balance_error_j,
-        "unassigned_cloth_reference_area_m2":step.unassigned_cloth_reference_area_m2})
+        "unassigned_cloth_reference_area_m2":step.unassigned_cloth_reference_area_m2});
+    if let Some(exterior) = &step.exterior_exchange {
+        field["exterior_exchange"] = json!(exterior);
+    }
+    field
 }
 
 /// Reuse saved-drape verification and the exact geometric-map replay for moving heat histories.
@@ -133,15 +143,61 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
         })
         .transpose()?;
     let assembly = Coverage::new(source, map.layout)?;
+    let count = assembly.body_triangle_count();
     let boundaries = if input.boundaries.len() == 1 {
-        vec![input.boundaries[0].boundary(); assembly.body_triangle_count()]
-    } else if input.boundaries.len() == assembly.body_triangle_count() {
+        vec![input.boundaries[0].boundary(); count]
+    } else if input.boundaries.len() == count {
         input.boundaries.iter().map(Film::boundary).collect()
     } else {
         return Err(invalid(
             "provide one uniform boundary or one per coverage body triangle",
         ));
     };
+    let environments = input
+        .exterior_exchange
+        .as_ref()
+        .map(|values| {
+            if values.len() == 1 {
+                Ok(vec![values[0].clone(); count])
+            } else if values.len() == count {
+                Ok(values.clone())
+            } else {
+                Err(invalid(
+                    "provide one exterior environment or one per coverage body triangle",
+                ))
+            }
+        })
+        .transpose()?;
+    if environments.is_none() && !input.bare_boundaries.is_empty() {
+        return Err(invalid("bare_boundaries requires exterior_exchange"));
+    }
+    let bare_boundaries = if input.bare_boundaries.is_empty() {
+        Vec::new()
+    } else if input.bare_boundaries.len() == 1 {
+        vec![input.bare_boundaries[0].boundary(); count]
+    } else if input.bare_boundaries.len() == count {
+        input.bare_boundaries.iter().map(Film::boundary).collect()
+    } else {
+        return Err(invalid(
+            "provide one bare-body film boundary or one per coverage body triangle",
+        ));
+    };
+    if let Some(values) = &environments
+        && boundaries
+            .iter()
+            .zip(values)
+            .any(|(b, e)| b.outside_resistance != 0.0 || b.outside_c != e.air_c)
+    {
+        return Err(invalid(
+            "covered exterior exchange needs zero outside film and outside_c equal to air_c",
+        ));
+    }
+    let exterior = environments
+        .as_deref()
+        .map(|environments| ExteriorConditions {
+            environments,
+            bare_boundaries: &bare_boundaries,
+        });
     if let Some(t) = &input.transient {
         // Bare-only scenes still scan triangles. Do not let zero thermal cells bypass the work cap.
         let work = assembly
@@ -163,7 +219,10 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
             ));
         }
     }
-    let steady = assembly.steady(&cloth, &map.body_positions_m, &boundaries)?;
+    let steady = match exterior {
+        Some(e) => assembly.steady_exterior(&cloth, &map.body_positions_m, &boundaries, e)?,
+        None => assembly.steady(&cloth, &map.body_positions_m, &boundaries)?,
+    };
     let mut out = json!({"schema":"ftx-thermal-coverage-report/1",
         "drape_thermal_frame_sha256":map.drape_thermal_frame_sha256,
         "mapping_sha256":sha256_hex(&serde_json::to_vec(mapping).map_err(|e| invalid(e.to_string()))?),
@@ -195,6 +254,18 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
             "human thermoregulation"
         ]);
     }
+    if let Some(environments) = &environments {
+        out["exterior_exchange"] = json!({
+            "conditions":environments,"bare_boundaries":input.bare_boundaries,
+            "area_basis":"current allocated outer cloth area for exterior flux; reference mass for storage",
+            "scope":"prescribed convection and optional qualified outer-material radiation; separate explicit bare-body films",
+            "positive_heat_direction":"outward from textile",
+            "inner_layer_radiation":false
+        });
+        out["not_simulated"].as_array_mut().unwrap().retain(|v| {
+            v != "radiative exchange" || !environments.iter().any(|e| e.radiation.is_some())
+        });
+    }
     if let Some(t) = input.transient {
         let mut state = assembly.initial(t.initial_temperature_c)?;
         let mut trace = vec![json!({"time_seconds":0.0,"stored_energy_change_j":0.0})];
@@ -202,33 +273,69 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
         let mut incoming = 0.0;
         let mut outgoing = 0.0;
         let mut net = 0.0;
+        let mut convective = 0.0;
+        let mut radiative = 0.0;
+        let mut bare_energy = 0.0;
         let mut largest_error = 0.0_f64;
         for i in 1..=t.steps {
-            let next = assembly.advance(
-                &state,
-                &cloth,
-                &map.body_positions_m,
-                t.step_seconds,
-                &boundaries,
-            )?;
+            let next = match exterior {
+                Some(e) => assembly.advance_exterior(
+                    &state,
+                    &cloth,
+                    &map.body_positions_m,
+                    t.step_seconds,
+                    &boundaries,
+                    e,
+                )?,
+                None => assembly.advance(
+                    &state,
+                    &cloth,
+                    &map.body_positions_m,
+                    t.step_seconds,
+                    &boundaries,
+                )?,
+            };
             stored += next.stored_change_j;
             incoming += t.step_seconds * next.inside_heat_w;
             outgoing += t.step_seconds * next.outside_heat_w;
             // Sum net covered heat BEFORE adding identical bare contributions to the two totals.
             net += t.step_seconds * next.net_heat_w;
+            if let Some(e) = &next.exterior_exchange {
+                convective += t.step_seconds * e.convective_heat_w;
+                radiative += t.step_seconds * e.radiative_heat_w;
+                bare_energy += t.step_seconds * next.bare_heat_w;
+            }
             largest_error = largest_error.max(next.balance_error_j.abs());
-            if [stored, incoming, outgoing, net, largest_error, stored - net]
-                .iter()
-                .any(|v| !v.is_finite())
+            if [
+                stored,
+                incoming,
+                outgoing,
+                net,
+                largest_error,
+                stored - net,
+                convective,
+                radiative,
+                bare_energy,
+                (outgoing - bare_energy) - convective - radiative,
+            ]
+            .iter()
+            .any(|v| !v.is_finite())
             {
                 return Err(invalid("coverage accumulated energy overflow"));
             }
             if i % t.record_every == 0 || i == t.steps {
-                trace.push(
+                let mut sample =
                     json!({"time_seconds":i as f64 * t.step_seconds,"stored_energy_change_j":stored,
                     "inside_heat_w":next.inside_heat_w,"outside_heat_w":next.outside_heat_w,
-                    "bare_heat_w":next.bare_heat_w,"net_heat_w":next.net_heat_w}),
-                );
+                    "bare_heat_w":next.bare_heat_w,"net_heat_w":next.net_heat_w});
+                if let Some(e) = &next.exterior_exchange {
+                    sample["exterior_exchange"] = json!({
+                        "convective_heat_w":e.convective_heat_w,"radiative_heat_w":e.radiative_heat_w,
+                        "balance_residual_w":e.balance_residual_w,
+                        "convective_energy_j":convective,"radiative_energy_j":radiative,
+                        "bare_energy_j":bare_energy});
+                }
+                trace.push(sample);
             }
             if i == t.steps {
                 out["final"] = field(&next);
@@ -239,6 +346,13 @@ fn evaluate(report: &Value, mapping: &Value, conditions: &Value) -> Result<Value
             "net_energy_into_storage_j":net,"stored_energy_change_j":stored,"balance_error_j":stored-net,
             "largest_step_balance_error_j":largest_error,
             "accuracy_note":"Refine time, cells and the declared coverage partition; conservation is not measured garment accuracy."});
+        if exterior.is_some() {
+            out["transient"]["exterior_exchange"] = json!({
+                "convective_energy_j":convective,"radiative_energy_j":radiative,
+                "bare_energy_j":bare_energy,
+                "outside_energy_balance_error_j":(outgoing-bare_energy)-convective-radiative
+            });
+        }
     }
     // Include conditions and actual geometries in the result identity, not just the material model.
     out["sha256"] = json!(sha256_hex(
