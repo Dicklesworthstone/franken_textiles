@@ -13,6 +13,7 @@ mod loaded_insulation;
 mod mit;
 mod neoprene;
 mod nist;
+mod wet_denim;
 
 /// A selection for `fabric.material`. A frozen record makes custom/edited patterns self-contained.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -189,6 +190,7 @@ impl Catalog {
         catalog.materials.extend(leather::records());
         catalog.materials.extend(loaded_insulation::records());
         catalog.materials.extend(neoprene::records());
+        catalog.materials.extend(wet_denim::records());
         let woven = Self::from_json(include_str!("material_catalog/woven-measurements.json"))?;
         catalog.materials.extend(woven.materials);
         let supplier = Self::from_json(include_str!("material_catalog/supplier-apparel.json"))?;

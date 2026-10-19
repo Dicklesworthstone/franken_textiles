@@ -1742,6 +1742,30 @@ garment acceptance remain open. See [piece-materials.md](docs/piece-materials.md
 
 ---
 
+### 25.20 Measured moisture states through the shared thermal material authority
+
+**Delivered wet-denim observations (`ftx-wd1`, supports `ftx-tm2`/`ftx-tmc`).** Six separately
+identified cotton-warp denim states cover cotton, spun-polypropylene and PET wefts at the first and
+last reported moisture observations in Mangat's 2012 Technical University of Liberec dissertation,
+Table 4-9. The combined built-in catalog now contains **154 records**. Each record retains the
+reported 1,000 Pa Alambeta setting, wet-basis water mass fraction, measured thickness and thermal
+resistance, plus separately rounded conductivity and absorptivity observations. The primary table
+values and units were independently reviewed; full dissertation text and images are not bundled.
+
+Selecting a state changes existing `ConductionLaw` and `ThermalStack` results without estimates or
+solver edits. Reported resistance remains the single transport authority. Cotton-weft observations,
+for example, retain measured resistance 0.0128 and 0.0032 m² K/W at water fractions 0.012 and 0.447.
+Moisture is water mass divided by total wet fabric mass, not dry-mass regain or relative humidity.
+Measured loaded thickness retains the existing pressure-state restriction on sewing clearance.
+
+These are discrete measurement states. Missing row-specific washing/lot IDs, uncertainty, plate
+temperatures, mass and heat capacity stay missing. No interpolation, evaporation, free-air drying,
+pressure recovery, transient storage or wet mechanical law follows from the scalar table. The
+next coupling still requires matched state-dependent transport, storage, geometry and loading
+observations with conservative continuation. See [wet-denim-measurements.md](docs/wet-denim-measurements.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
