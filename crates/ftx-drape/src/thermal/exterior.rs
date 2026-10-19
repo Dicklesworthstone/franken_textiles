@@ -23,7 +23,7 @@ pub struct ExteriorFlux {
     pub radiative_flux_w_m2: f64,
     /// Whether radiation was requested, rather than assumed to have zero emissivity.
     pub radiation_enabled: bool,
-    /// Conductive outgoing flux minus convection and radiation, in W/m².
+    /// Conductive outgoing flux minus convection and radiation, per current outer cloth m².
     pub balance_residual_w_m2: f64,
 }
 
@@ -52,14 +52,7 @@ impl DryThermalModel {
         boundary: Boundary,
         exterior: &Exterior,
     ) -> Result<ExteriorStep, Refusal> {
-        positive("thermal time step", seconds)?;
-        if old.len() != self.cells() {
-            return Err(invalid("thermal state has the wrong cell count"));
-        }
-        for &t in old {
-            self.check_temperature(t)?;
-        }
-        self.exterior_step(Some(old), seconds, boundary, exterior)
+        self.exterior_step(Some(old), seconds, boundary, exterior, 1.0)
     }
 
     /// Steady limit of the same discrete column, with its exposed-face balance solved explicitly.
@@ -73,16 +66,29 @@ impl DryThermalModel {
         boundary: Boundary,
         exterior: &Exterior,
     ) -> Result<ExteriorStep, Refusal> {
-        self.exterior_step(None, 1.0, boundary, exterior)
+        self.exterior_step(None, 1.0, boundary, exterior, 1.0)
     }
 
-    fn exterior_step(
+    // Coverage columns use body-area flux and storage units. Their actual outer cloth may have
+    // a different current area, while ExteriorFlux always reports per outer cloth area.
+    pub(in crate::thermal) fn exterior_step(
         &self,
         old: Option<&[f64]>,
         seconds: f64,
         boundary: Boundary,
         exterior: &Exterior,
+        outer_area_per_model_area: f64,
     ) -> Result<ExteriorStep, Refusal> {
+        positive("exterior outer/model area ratio", outer_area_per_model_area)?;
+        if let Some(old) = old {
+            positive("thermal time step", seconds)?;
+            if old.len() != self.cells() {
+                return Err(invalid("thermal state has the wrong cell count"));
+            }
+            for &t in old {
+                self.check_temperature(t)?;
+            }
+        }
         self.check_temperature(boundary.inside_c)?;
         nonnegative("inside film resistance", boundary.inside_resistance)?;
         if boundary.outside_resistance != 0.0 || boundary.outside_c != exterior.air_c {
@@ -98,11 +104,11 @@ impl DryThermalModel {
         let finish = |state: State, surface_c: f64| -> Result<Option<ExteriorStep>, Refusal> {
             self.check_temperature(surface_c)?;
             let [convective, radiative] = exchange.flux(surface_c)?;
-            let residual = state.outside_flux_w_m2 - (convective + radiative);
+            let outgoing = state.outside_flux_w_m2 / outer_area_per_model_area;
+            let residual = outgoing - (convective + radiative);
             // Keep boundary mismatch distinct from the finite-volume energy residual. Scaling
             // each signed term also covers near-cancelling radiation and convection.
-            let tolerance =
-                1e-10 * (1.0 + state.outside_flux_w_m2.abs() + convective.abs() + radiative.abs());
+            let tolerance = 1e-10 * (1.0 + outgoing.abs() + convective.abs() + radiative.abs());
             if !residual.is_finite() || !tolerance.is_finite() {
                 return Err(invalid("exterior transient balance overflow"));
             }
@@ -125,7 +131,7 @@ impl DryThermalModel {
             && exterior.convection_w_m2_k > 0.0
             && self.check_temperature(exterior.air_c).is_ok()
         {
-            let r = 1.0 / exterior.convection_w_m2_k;
+            let r = (1.0 / exterior.convection_w_m2_k) / outer_area_per_model_area;
             if r.is_finite() && r > 0.0 {
                 let state = solve(Boundary {
                     outside_resistance: r,
@@ -180,7 +186,8 @@ impl DryThermalModel {
                 ..boundary
             })?;
             let [convective, radiative] = exchange.flux(surface)?;
-            let residual = state.outside_flux_w_m2 - (convective + radiative);
+            let residual =
+                state.outside_flux_w_m2 / outer_area_per_model_area - (convective + radiative);
             if let Some(result) = finish(state, surface)? {
                 return Ok(result);
             }

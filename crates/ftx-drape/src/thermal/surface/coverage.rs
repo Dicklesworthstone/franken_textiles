@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{Boundary, DryThermalModel, Surface, invalid, positive};
-use crate::thermal::{nonnegative, temperature};
+use crate::thermal::{
+    exterior::ExteriorFlux, nonnegative, steady::exterior::Exterior, temperature,
+};
 
 pub mod motion;
 
@@ -121,6 +123,55 @@ pub struct BodyHeat {
     pub outside_heat_w: f64,
 }
 
+/// Explicit exterior policies in body-triangle order. Bare skin has its own declared film path;
+/// an outer textile's emissivity is never applied to the uncovered body fraction.
+#[derive(Clone, Copy, Debug)]
+pub struct ExteriorConditions<'a> {
+    /// One environment per body triangle, qualified against each active region's outermost sheet.
+    /// The caller identifies the physical exposed face; free-form observation labels do not infer
+    /// a public/reverse orientation from vertex normals.
+    pub environments: &'a [Exterior],
+    /// One film boundary per body triangle, or empty only when every body triangle is fully covered.
+    /// Active bare paths must share the covered path's prescribed inside/body temperature.
+    pub bare_boundaries: &'a [Boundary],
+}
+
+/// Exterior face and signed powers for one series-connected covered region.
+#[derive(Clone, Debug, Serialize)]
+pub struct RegionExteriorExchange {
+    /// Layout region identity; order matches [`CoverageStep::regions`].
+    pub id: String,
+    /// Owning body triangle, which also indexes the prescribed environment.
+    pub body_triangle: usize,
+    /// Retained source cloth triangle carrying the exposed material observation.
+    pub outer_cloth_triangle: usize,
+    /// Outermost physical layer identity; inner layers contribute storage and conduction only.
+    pub outer_layer: String,
+    /// Allocated CURRENT area of the outer cloth portion, m², distinct from covered body area.
+    pub outer_area_m2: f64,
+    /// Face temperature and signed fluxes per current outer cloth area.
+    pub flux: ExteriorFlux,
+    /// Signed convection from this outer cloth portion, W.
+    pub convective_heat_w: f64,
+    /// Signed radiation from this outer cloth portion, W.
+    pub radiative_heat_w: f64,
+    /// Covered outgoing conduction minus exterior exchange, W.
+    pub balance_residual_w: f64,
+}
+
+/// Textile exterior exchange only. Bare-body film heat remains separately reported in CoverageStep.
+#[derive(Clone, Debug, Serialize)]
+pub struct CoverageExteriorExchange {
+    /// One active outer face for every covered region, in the original region order.
+    pub regions: Vec<RegionExteriorExchange>,
+    /// Sum of signed covered-textile convection, W.
+    pub convective_heat_w: f64,
+    /// Sum of signed covered-textile radiation, W.
+    pub radiative_heat_w: f64,
+    /// Sum of covered exterior face-equation residuals, W; distinct from stored-heat residuals.
+    pub balance_residual_w: f64,
+}
+
 /// Atomic steady/transient result. Unmapped cloth is explicitly excluded, not quietly counted twice.
 #[derive(Clone, Debug)]
 pub struct CoverageStep {
@@ -148,6 +199,8 @@ pub struct CoverageStep {
     pub net_heat_w: f64,
     /// Unallocated reference cloth area. Its heat is NOT part of this result.
     pub unassigned_cloth_reference_area_m2: f64,
+    /// Present only when exterior exchange was explicitly requested for the covered textile paths.
+    pub exterior_exchange: Option<CoverageExteriorExchange>,
 }
 
 fn fraction(f: f64) -> Result<(), Refusal> {
@@ -414,7 +467,7 @@ impl Coverage {
         body: &[Vec3],
         boundaries: &[Boundary],
     ) -> Result<CoverageStep, Refusal> {
-        self.evaluate(None, cloth, body, 0.0, boundaries)
+        self.evaluate(None, cloth, body, 0.0, boundaries, None)
     }
 
     /// Advance source-following heat storage without replacing reference masses as the poses change.
@@ -429,13 +482,42 @@ impl Coverage {
         seconds: f64,
         boundaries: &[Boundary],
     ) -> Result<CoverageStep, Refusal> {
-        positive("coverage time step", seconds)?;
-        if old.sha256 != self.sha256 || old.temperatures.len() != self.models.len() {
-            return Err(invalid(
-                "coverage state belongs to a different material or layout",
-            ));
-        }
-        self.evaluate(Some(old), cloth, body, seconds, boundaries)
+        self.evaluate(Some(old), cloth, body, seconds, boundaries, None)
+    }
+
+    /// Steady temperatures with qualified convection/radiation on each region's outermost material.
+    /// Body films and interfaces use covered body area; exterior exchange uses allocated current
+    /// OUTER cloth area. The covered outside film must be zero and outside_c must equal air_c.
+    ///
+    /// # Errors
+    /// Existing coverage/thermal refusals, conflicting outside films, unqualified exterior data,
+    /// missing explicit bare-body conditions or failed exterior surface balance.
+    pub fn steady_exterior(
+        &self,
+        cloth: &[Vec3],
+        body: &[Vec3],
+        boundaries: &[Boundary],
+        exterior: ExteriorConditions<'_>,
+    ) -> Result<CoverageStep, Refusal> {
+        self.evaluate(None, cloth, body, 0.0, boundaries, Some(exterior))
+    }
+
+    /// Advance layered heat storage with source-qualified exterior exchange and explicit bare films.
+    /// A new interval may prescribe a different environment without resetting material temperatures.
+    /// Material/topology changes still require a new state; geometry repartition uses motion::Frame.
+    ///
+    /// # Errors
+    /// The same state/time/geometry refusals as advance, plus exterior evidence and balance refusals.
+    pub fn advance_exterior(
+        &self,
+        old: &CoverageState,
+        cloth: &[Vec3],
+        body: &[Vec3],
+        seconds: f64,
+        boundaries: &[Boundary],
+        exterior: ExteriorConditions<'_>,
+    ) -> Result<CoverageStep, Refusal> {
+        self.evaluate(Some(old), cloth, body, seconds, boundaries, Some(exterior))
     }
 
     fn evaluate(
@@ -445,11 +527,31 @@ impl Coverage {
         body: &[Vec3],
         seconds: f64,
         boundaries: &[Boundary],
+        exterior: Option<ExteriorConditions<'_>>,
     ) -> Result<CoverageStep, Refusal> {
+        if let Some(old) = old {
+            positive("coverage time step", seconds)?;
+            if old.sha256 != self.sha256 || old.temperatures.len() != self.models.len() {
+                return Err(invalid(
+                    "coverage state belongs to a different material or layout",
+                ));
+            }
+        }
         positions(cloth, self.source.vertex_count)?;
         positions(body, self.layout.body_vertex_count)?;
         if boundaries.len() != self.layout.body_triangles.len() {
             return Err(invalid("coverage needs one boundary per body triangle"));
+        }
+        if let Some(e) = exterior {
+            let count = self.layout.body_triangles.len();
+            if e.environments.len() != count
+                || (!e.bare_boundaries.is_empty() && e.bare_boundaries.len() != count)
+                || (e.bare_boundaries.is_empty() && self.covered.iter().any(|&f| f < 1.0))
+            {
+                return Err(invalid(
+                    "coverage exterior needs one environment per body triangle and explicit bare films for uncovered area",
+                ));
+            }
         }
         let cloth_areas = self
             .source
@@ -466,6 +568,21 @@ impl Coverage {
             nonnegative("inside film resistance", b.inside_resistance)?;
             nonnegative("outside film resistance", b.outside_resistance)?;
             let bare = if self.covered[i] < 1.0 {
+                let b = if let Some(e) = exterior {
+                    let explicit = e.bare_boundaries[i];
+                    temperature(explicit.inside_c)?;
+                    temperature(explicit.outside_c)?;
+                    nonnegative("bare inside film resistance", explicit.inside_resistance)?;
+                    nonnegative("bare outside film resistance", explicit.outside_resistance)?;
+                    if explicit.inside_c != b.inside_c {
+                        return Err(invalid(
+                            "covered and bare paths must share the prescribed body temperature",
+                        ));
+                    }
+                    explicit
+                } else {
+                    b
+                };
                 let r = positive(
                     "bare-body path needs a positive declared film resistance",
                     b.inside_resistance + b.outside_resistance,
@@ -504,6 +621,12 @@ impl Coverage {
                 .zip(&self.allocated)
                 .map(|(p, f)| p.reference_area_m2 * (1.0 - f))
                 .sum(),
+            exterior_exchange: exterior.map(|_| CoverageExteriorExchange {
+                regions: Vec::with_capacity(self.layout.regions.len()),
+                convective_heat_w: 0.0,
+                radiative_heat_w: 0.0,
+                balance_residual_w: 0.0,
+            }),
         };
         for (i, region) in self.layout.regions.iter().enumerate() {
             let a = positive(
@@ -526,9 +649,55 @@ impl Coverage {
             }
             let model = self.models[i].with_area_factors(&resistance, &capacity)?;
             let b = boundaries[region.body_triangle];
-            let state = match old {
-                None => model.steady(b)?,
-                Some(old) => model.advance(&old.temperatures[i], seconds, b)?,
+            let state = if let Some(e) = exterior {
+                let outer = region.layers.last().expect("nonempty region");
+                let outer_area = positive(
+                    "allocated outer cloth area",
+                    cloth_areas[outer.cloth_triangle] * outer.fraction,
+                )?;
+                let next = model.exterior_step(
+                    old.map(|o| o.temperatures[i].as_slice()),
+                    seconds,
+                    b,
+                    &e.environments[region.body_triangle],
+                    outer_area / a,
+                )?;
+                let convective = outer_area * next.exchange.convective_flux_w_m2;
+                let radiative = outer_area * next.exchange.radiative_flux_w_m2;
+                let error = (a * next.state.outside_flux_w_m2 - convective) - radiative;
+                let tolerance = 1e-9
+                    * (outer_area
+                        + (a * next.state.outside_flux_w_m2).abs()
+                        + convective.abs()
+                        + radiative.abs());
+                if [convective, radiative, error, tolerance]
+                    .iter()
+                    .any(|v| !v.is_finite())
+                    || error.abs() > tolerance
+                {
+                    return Err(invalid("coverage exterior power balance failed"));
+                }
+                let exchange = result.exterior_exchange.as_mut().expect("exterior requested");
+                exchange.convective_heat_w += convective;
+                exchange.radiative_heat_w += radiative;
+                exchange.balance_residual_w += error;
+                exchange.regions.push(RegionExteriorExchange {
+                    id: region.id.clone(),
+                    body_triangle: region.body_triangle,
+                    outer_cloth_triangle: outer.cloth_triangle,
+                    outer_layer: outer.layer.clone(),
+                    outer_area_m2: outer_area,
+                    flux: next.exchange,
+                    convective_heat_w: convective,
+                    radiative_heat_w: radiative,
+                    balance_residual_w: error,
+                });
+                next.state
+            } else {
+                match old {
+                    None => model.steady(b)?,
+                    Some(old) => model.advance(&old.temperatures[i], seconds, b)?,
+                }
             };
             let inside = a * state.inside_flux_w_m2;
             let outside = a * state.outside_flux_w_m2;
@@ -559,6 +728,13 @@ impl Coverage {
         }
         if old.is_some() {
             result.balance_error_j = result.stored_change_j - seconds * result.net_heat_w;
+        }
+        if let Some(e) = &result.exterior_exchange
+            && [e.convective_heat_w, e.radiative_heat_w, e.balance_residual_w]
+                .iter()
+                .any(|v| !v.is_finite())
+        {
+            return Err(invalid("coverage exterior heat accumulation overflow"));
         }
         if [
             result.body_area_m2,
