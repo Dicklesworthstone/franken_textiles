@@ -327,6 +327,9 @@ pub(super) fn evaluate(
         "continuous_contact_checked":true,"physical_validation_claim":false,"comfort_claim":false,
         "thermal_basis":"Independent steady endpoint snapshots, not transient temperatures or heat during motion.",
         "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."});
+    if let Some(history) = run.scene.solver.membrane_plasticity_report()? {
+        result["membrane_plasticity_history"] = history;
+    }
     if let Some(history) = surface_heat {
         result["transient_surface"] = outcome(
             history.and_then(|h| h.finish(&path.sha256, &initial_positions_sha256, previous_time)),

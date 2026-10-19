@@ -32,6 +32,7 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
     let readiness = (|| {
         material.mechanics()?;
         material.membrane_relaxation()?;
+        material.membrane_plasticity()?;
         material.bending_response()?;
         material.bending_plasticity()?;
         Ok::<(), Refusal>(())

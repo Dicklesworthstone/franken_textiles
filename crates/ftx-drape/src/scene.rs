@@ -424,6 +424,22 @@ pub(crate) fn build_scene_resolved(
         )?;
         scene.solver = scene.solver.with_relaxation(&laws)?;
     }
+    if material.membrane_plasticity.is_some()
+        || material
+            .piece_membrane_plasticities
+            .as_ref()
+            .is_some_and(|v| v.iter().any(Option::is_some))
+    {
+        let laws = material_triangle_field(
+            pattern,
+            &scene,
+            &material.membrane_plasticity,
+            material.piece_membrane_plasticities.as_deref(),
+        )?;
+        // The solver checks the actual retained grain/gather mapping. Never overwrite a caller's
+        // compression factor or a gathered zone to make a permanent-set law appear compatible.
+        scene.solver = scene.solver.with_membrane_plasticity(&laws)?;
+    }
     if material.plasticity.is_some()
         || material
             .piece_plasticities

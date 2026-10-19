@@ -390,6 +390,9 @@ impl Material {
                 self.id, self.form
             )));
         }
+        // Capability discovery must reject an invalid permanent-strain selector or unsupported
+        // joint history law before a consumer can silently fall back to elastic mechanics.
+        self.compiled_membrane_plasticity(allow_estimates)?;
         let mut v = [0.0; 9];
         v[0] = self.require("areal_density", "kg/m2", allow_estimates)?;
         if let Some(law) = self.compiled_membrane(allow_estimates)? {

@@ -1,0 +1,44 @@
+{
+  "id": "synthetic-permanent-stretch-sheet",
+  "allow_estimates": true,
+  "record": {
+    "id": "synthetic-permanent-stretch-sheet",
+    "name": "Synthetic permanent-stretch sheet; NOT measured textile data",
+    "form": "woven",
+    "structure": {
+      "membrane_plasticity_model": "orthotropic_green_return_map/1",
+      "scope": "Artificial software demonstration of bounded permanent Green strain, not measured yield, damage, fatigue, or a qualified textile forming process"
+    },
+    "properties": {
+      "areal_density": {"value": 0.2, "unit": "kg/m2", "source": "test", "evidence": "estimate", "method": "Synthetic reference mass per flat area"},
+      "width": {"value": 1.5, "unit": "m", "source": "test", "evidence": "estimate", "method": "Synthetic pristine stock width"},
+      "thickness": {"value": 0.0006, "unit": "m", "source": "test", "evidence": "estimate", "method": "Synthetic constant contact thickness"},
+      "warp_stiffness": {"value": 1000, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic elastic warp coefficient", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "weft_stiffness": {"value": 800, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic elastic weft coefficient", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "poisson_warp_weft": {"value": 0.2, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic elastic normal coupling", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "shear_stiffness": {"value": 300, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic elastic engineering-shear coefficient", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "bending_rigidity": {"value": 0.00003, "unit": "N*m", "source": "test", "evidence": "estimate", "method": "Synthetic unchanged recoverable bending"},
+      "friction_skin": {"value": 0.2, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic constant kinetic coefficient"},
+      "friction_self": {"value": 0.3, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic constant kinetic coefficient"},
+      "specific_heat": {"value": 1200, "unit": "J/(kg*K)", "source": "test", "evidence": "estimate", "method": "Synthetic constant storage; no plastic-to-heat coupling"},
+      "thermal_conductivity": {"value": 0.04, "unit": "W/(m*K)", "source": "test", "evidence": "estimate", "method": "Synthetic constant through-thickness conductivity"},
+      "membrane_yield_warp": {"value": 0.2, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic initial second-Piola sheet yield resultant, not tensile breaking force", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_yield_weft": {"value": 0.4, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic initial second-Piola sheet yield resultant", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_yield_shear": {"value": 0.1, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic yield conjugate to raw engineering Green shear 2*E12", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_hardening_warp": {"value": 20, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic directional isotropic hardening", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_hardening_weft": {"value": 10, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic directional isotropic hardening", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_hardening_shear": {"value": 5, "unit": "N/m", "source": "test", "evidence": "estimate", "method": "Synthetic directional isotropic hardening", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_strain_limit_warp": {"value": 2, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic symmetric raw Green-strain bound; positive metric also required", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_strain_limit_weft": {"value": 2, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic symmetric raw Green-strain bound; positive metric also required", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_strain_limit_shear": {"value": 2, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic symmetric raw Green-shear bound; positive metric also required", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_accumulation_limit_warp": {"value": 10, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated absolute plastic Green-strain bound, not a fatigue life", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_accumulation_limit_weft": {"value": 10, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated absolute plastic Green-strain bound, not a fatigue life", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}},
+      "membrane_accumulation_limit_shear": {"value": 10, "unit": "1", "source": "test", "evidence": "estimate", "method": "Synthetic accumulated absolute plastic Green-strain bound, not a fatigue life", "conditions": {"specimen_id": "artificial-stretch-A", "conditioning": "synthetic constant dry state"}}
+    },
+    "sources": {"test": {
+      "reference": "test:ftx-permanent-membrane-stretch",
+      "accessed_on": "2026-10-19",
+      "note": "Every number is invented for executable software tests. Nothing here is a measured textile, inferred linen/leather/knit law, damage threshold, thermal feedback model, real fit claim, or machine execution authorization."
+    }}
+  }
+}

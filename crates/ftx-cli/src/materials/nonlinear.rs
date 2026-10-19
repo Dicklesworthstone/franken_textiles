@@ -33,6 +33,7 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
     let mechanics = (|| {
         snapshot.mechanics()?;
         snapshot.membrane_relaxation()?;
+        snapshot.membrane_plasticity()?;
         snapshot.bending_response()?;
         snapshot.bending_plasticity()?;
         Ok::<(), Refusal>(())

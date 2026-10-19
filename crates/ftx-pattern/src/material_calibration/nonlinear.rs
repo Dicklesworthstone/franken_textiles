@@ -266,6 +266,15 @@ fn quality(errors: &[f64], input: &Input, partition: &str) -> Result<Quality, Re
 /// unapproved replacement/estimates or independently excessive fit/held-out residuals.
 pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     input.material.validate()?;
+    if input
+        .material
+        .structure
+        .contains_key("membrane_plasticity_model")
+    {
+        return Err(invalid(
+            "nonlinear elastic calibration does not identify permanent membrane history; recharacterize the cyclic law before replacing its elastic response",
+        ));
+    }
     if input.schema != SCHEMA
         || input.method.trim().is_empty()
         || input.method.len() > 1024

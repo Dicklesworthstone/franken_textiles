@@ -49,9 +49,13 @@ impl Bound {
 }
 
 impl Field {
+    pub(super) fn has(&self, triangle: usize) -> bool {
+        self.entries.get(triangle).is_some_and(Option::is_some)
+    }
+
     // Public model fields may have been edited by a low-level caller. A different rest frame,
     // compression map or equilibrium law must not silently reuse an old material's history.
-    fn check(&self, model: &ClothModel, x: &[Vec3]) -> Result<(), Refusal> {
+    pub(super) fn check(&self, model: &ClothModel, x: &[Vec3]) -> Result<(), Refusal> {
         if self.entries.len() != model.membranes.len()
             || model.compression.len() != model.membranes.len()
             || x.len() != model.rest.len()
@@ -151,6 +155,9 @@ impl Solver {
                 let Some(law) = law else {
                     return Ok(None);
                 };
+                if self.membrane_plasticity.as_ref().is_some_and(|field| field.has(i)) {
+                    return Err(bad("Maxwell memory and plastic membrane need a jointly characterized law on the same triangle"));
+                }
                 let material = self.model.material(i);
                 material.validate()?;
                 if material.q != law.origin_tangent() {
@@ -207,6 +214,9 @@ impl Solver {
         if let Some(field) = &self.plasticity {
             field.check(&self.model, &self.x)?;
         }
+        if let Some(field) = &self.membrane_plasticity {
+            field.check(&self.model, &self.x)?;
+        }
         let mut trial = self.clone();
         let report = trial.step_inner(h, body_start)?;
         if !report.converged {
@@ -225,6 +235,9 @@ impl Solver {
             field.advance(&trial.x, h)?;
         }
         if let Some(field) = &mut trial.plasticity {
+            field.advance(&trial.x)?;
+        }
+        if let Some(field) = &mut trial.membrane_plasticity {
             field.advance(&trial.x)?;
         }
         *self = trial;

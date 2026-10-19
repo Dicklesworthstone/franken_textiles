@@ -44,6 +44,7 @@ fn detail(m: &ResolvedMaterial) -> Result<Value, Refusal> {
     let mechanical = (|| {
         let mechanics = m.mechanics()?;
         m.membrane_relaxation()?;
+        m.membrane_plasticity()?;
         m.bending_response()?;
         m.bending_plasticity()?;
         Ok(mechanics)

@@ -60,7 +60,15 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         "areal_density" => "kg/m2",
         "thickness" | "width" | "fiber_diameter" | "staple_length" => "m",
         "bulk_density" => "kg/m3",
-        "warp_stiffness" | "weft_stiffness" | "shear_stiffness" => "N/m",
+        "warp_stiffness"
+        | "weft_stiffness"
+        | "shear_stiffness"
+        | "membrane_yield_warp"
+        | "membrane_yield_weft"
+        | "membrane_yield_shear"
+        | "membrane_hardening_warp"
+        | "membrane_hardening_weft"
+        | "membrane_hardening_shear" => "N/m",
         "bending_rigidity"
         | "bending_warp"
         | "bending_weft"
@@ -89,6 +97,12 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         | "shrinkage_weft"
         | "porosity"
         | "emissivity"
+        | "membrane_strain_limit_warp"
+        | "membrane_strain_limit_weft"
+        | "membrane_strain_limit_shear"
+        | "membrane_accumulation_limit_warp"
+        | "membrane_accumulation_limit_weft"
+        | "membrane_accumulation_limit_shear"
         | "limiting_oxygen_index" => "1",
         "thermal_conductivity" => "W/(m*K)",
         "thermal_resistance" => "m2*K/W",

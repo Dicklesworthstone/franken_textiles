@@ -243,6 +243,15 @@ fn quality(values: &[f64], input: &Input, partition: &str) -> Result<Quality, Re
 /// strain states, non-positive-definite stiffness, source-key conflicts, or excessive fit/check error.
 pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     input.material.validate()?;
+    if input
+        .material
+        .structure
+        .contains_key("membrane_plasticity_model")
+    {
+        return Err(invalid(
+            "elastic swatch calibration does not identify permanent membrane history; recharacterize the cyclic law before replacing its elastic tensor",
+        ));
+    }
     if input.schema != SCHEMA
         || input.method.trim().is_empty()
         || input.fitted_on.trim().is_empty()

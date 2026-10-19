@@ -418,6 +418,12 @@ pub fn drape(
             "Geometric settledness does not establish stress equilibrium or a stress-free shape; accepted history includes sewing and draping steps."
         );
     }
+    if let Some(history) = scene.solver.membrane_plasticity_report()? {
+        report["membrane_plasticity_history"] = history;
+        report["material_settledness_note"] = json!(
+            "Geometric settledness does not establish a stress-free material state; permanent membrane history includes accepted sewing and draping steps."
+        );
+    }
     // Missing thermal observations must not invalidate a supported mechanical drape. Legacy reports
     // stay byte-compatible; explicit materials carry a ready-to-evaluate exchange or a refusal.
     if report["material"]["basis"] != "legacy_uncertain" {

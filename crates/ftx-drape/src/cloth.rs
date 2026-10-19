@@ -23,6 +23,7 @@ type EdgeUses = std::collections::BTreeMap<(usize, usize), Vec<(usize, usize, us
 mod materials;
 pub use materials::SheetMaterial;
 mod bending;
+mod membrane_plasticity;
 mod plasticity;
 mod relaxation;
 
@@ -337,23 +338,29 @@ impl ClothModel {
     /// Elastic energy Ψ (membrane + bending + elastics) at positions `x`.
     #[must_use]
     pub fn elastic_energy(&self, x: &[Vec3]) -> f64 {
-        self.elastic_energy_with_panels(x, None)
+        self.elastic_energy_with_fields(x, None, None)
     }
 
-    // A history field supplies the WHOLE panel contribution, without subtracting large elastic
-    // energies or double-counting yielding panels. Memoryless summation stays bit-identical.
-    fn elastic_energy_with_panels(&self, x: &[Vec3], panels: Option<f64>) -> f64 {
-        let m: f64 = self
-            .membranes
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                self.membrane_response(i).map_or_else(
-                    || e.energy(x, &self.material(i)),
-                    |law| e.response_energy(x, law, &self.material(i)),
-                )
-            })
-            .sum();
+    // History fields supply WHOLE contributions, avoiding subtraction of large elastic energies
+    // or double-counting yielded material. Memoryless summation stays bit-identical.
+    fn elastic_energy_with_fields(
+        &self,
+        x: &[Vec3],
+        panels: Option<f64>,
+        membranes: Option<f64>,
+    ) -> f64 {
+        let m: f64 = membranes.unwrap_or_else(|| {
+            self.membranes
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    self.membrane_response(i).map_or_else(
+                        || e.energy(x, &self.material(i)),
+                        |law| e.response_energy(x, law, &self.material(i)),
+                    )
+                })
+                .sum()
+        });
         let mut b: f64 = self
             .hinges
             .iter()
@@ -452,6 +459,8 @@ pub struct Solver {
     relaxation: Option<relaxation::Field>,
     // Per-source-panel permanent curvature. Accepted together with all other material memory.
     plasticity: Option<plasticity::Field>,
+    // Permanent raw Green strain; replaces selected membrane energies and derivatives.
+    membrane_plasticity: Option<membrane_plasticity::Field>,
 }
 
 /// The relative residual an inexact Newton direction is solved to.
@@ -523,6 +532,7 @@ impl Solver {
             precond: None,
             relaxation: None,
             plasticity: None,
+            membrane_plasticity: None,
         }
     }
 
@@ -703,7 +713,12 @@ impl Solver {
             .as_ref()
             .map(|field| field.energy(&self.model, x, inertia.is_some()))
             .transpose()?;
-        let mut e = self.model.elastic_energy_with_panels(x, panels);
+        let membranes = self
+            .membrane_plasticity
+            .as_ref()
+            .map(|field| field.energy(&self.model, x, inertia.is_some()))
+            .transpose()?;
+        let mut e = self.model.elastic_energy_with_fields(x, panels, membranes);
         if let Some(field) = &self.relaxation {
             e += field.energy(x, inertia.map(|(_, h)| h))?;
         }
@@ -799,10 +814,16 @@ impl Solver {
             }
         };
         for (i, e) in self.model.membranes.iter().enumerate() {
-            let mut l = self.model.membrane_response(i).map_or_else(
-                || e.local(x, &self.model.material(i)),
-                |law| e.response_local(x, law, &self.model.material(i)),
-            );
+            let mut l = self
+                .membrane_plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, x, inertia.is_some()))
+                .unwrap_or_else(|| {
+                    self.model.membrane_response(i).map_or_else(
+                        || e.local(x, &self.model.material(i)),
+                        |law| e.response_local(x, law, &self.model.material(i)),
+                    )
+                });
             if let Some(extra) = self
                 .relaxation
                 .as_ref()
@@ -1119,7 +1140,10 @@ impl Solver {
         h: f64,
         body_start: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
-        if self.relaxation.is_some() || self.plasticity.is_some() {
+        if self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
             return self.relaxing_step(h, body_start);
         }
         self.step_inner(h, body_start)
@@ -1226,10 +1250,13 @@ impl Solver {
         quiet: usize,
         max_steps: usize,
     ) -> Result<SettleReport, Refusal> {
-        if self.relaxation.is_some() || self.plasticity.is_some() {
+        if self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
-                "speed-only settling cannot certify material history; use explicit time steps and inspect stress and irreversible curvature",
+                "speed-only settling cannot certify material history; use explicit time steps and inspect stress and irreversible strain/curvature",
             ));
         }
         let mut rep = SettleReport {
@@ -1261,7 +1288,10 @@ impl Solver {
     /// # Errors
     /// As [`Solver::step`].
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
-        if self.relaxation.is_some() || self.plasticity.is_some() {
+        if self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
                 "a static solve cannot choose a material-history duration or irreversible loading path; use explicit time steps",
@@ -1291,15 +1321,72 @@ impl Solver {
         Ok(rep)
     }
 
-    /// Internal elastic force on each vertex (−∂Ψ/∂x), e.g. reactions at constrained DOFs.
+    /// Internal force from accepted material storage (−∂Ψ/∂x), including history-dependent
+    /// reactions. Invalid or stale history returns non-finite forces; use the checked accessor
+    /// when the refusal reason is needed.
     #[must_use]
     pub fn elastic_forces(&self) -> Vec<Vec3> {
+        self.checked_elastic_forces()
+            .unwrap_or_else(|_| vec![Vec3::new(f64::NAN, f64::NAN, f64::NAN); self.x.len()])
+    }
+
+    /// Internal reactions from the frozen accepted material state, without advancing history.
+    ///
+    /// # Errors
+    /// Stale material/reference ownership, invalid geometry or a non-finite stored response.
+    pub fn checked_elastic_forces(&self) -> Result<Vec<Vec3>, Refusal> {
+        if self.x.len() != self.model.rest.len()
+            || self.model.compression.len() != self.model.membranes.len()
+            || self.x.iter().any(|p| !p.is_finite())
+            || self
+                .model
+                .membranes
+                .iter()
+                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+            || self
+                .model
+                .hinges
+                .iter()
+                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+            || self
+                .model
+                .panel_bending_patches()
+                .iter()
+                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+            || self
+                .model
+                .elastics
+                .iter()
+                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "material reactions require matching finite cloth geometry",
+            ));
+        }
+        self.model.check_membrane_domains(&self.x)?;
+        self.model.check_panel_bending_domains(&self.x)?;
+        if let Some(field) = &self.membrane_plasticity {
+            field.check(&self.model, &self.x)?;
+        }
+        if let Some(field) = &self.relaxation {
+            field.check(&self.model, &self.x)?;
+        }
+        if let Some(field) = &self.plasticity {
+            field.check(&self.model, &self.x)?;
+        }
         let mut f = vec![Vec3::ZERO; self.x.len()];
         for (i, e) in self.model.membranes.iter().enumerate() {
-            let mut l = self.model.membrane_response(i).map_or_else(
-                || e.local(&self.x, &self.model.material(i)),
-                |law| e.response_local(&self.x, law, &self.model.material(i)),
-            );
+            let mut l = self
+                .membrane_plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x, false))
+                .unwrap_or_else(|| {
+                    self.model.membrane_response(i).map_or_else(
+                        || e.local(&self.x, &self.model.material(i)),
+                        |law| e.response_local(&self.x, law, &self.model.material(i)),
+                    )
+                });
             if let Some(extra) = self
                 .relaxation
                 .as_ref()
@@ -1335,7 +1422,13 @@ impl Solver {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
         }
-        f
+        if f.iter().any(|force| !force.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "stored material reactions are non-finite",
+            ));
+        }
+        Ok(f)
     }
 }
 

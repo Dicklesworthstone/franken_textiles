@@ -229,6 +229,15 @@ fn law(input: &Input, ratios: &[f64], times: &[f64], source: &str) -> Relaxation
 
 fn prepare(input: &Input) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
     input.material.validate()?;
+    if input
+        .material
+        .structure
+        .contains_key("membrane_plasticity_model")
+    {
+        return Err(bad(
+            "Maxwell calibration does not identify permanent membrane history; a recoverable spectrum cannot silently retain the irreversible law",
+        ));
+    }
     if input.schema != SCHEMA
         || !input.equilibrium_is_long_time
         || matches!(input.material.form, Form::Fiber | Form::Yarn | Form::Fill)

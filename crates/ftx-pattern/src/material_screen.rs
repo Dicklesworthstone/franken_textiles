@@ -410,6 +410,7 @@ fn check_capability(m: &ResolvedMaterial, capability: Capability) -> Result<(), 
             m.mechanics()?;
             m.membrane_response()?;
             m.membrane_relaxation()?;
+            m.membrane_plasticity()?;
             m.bending_response()?;
             m.bending_plasticity()?;
         }

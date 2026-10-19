@@ -54,10 +54,11 @@ pub(super) fn resolve(
     let mut fabrics = Vec::with_capacity(pieces.len());
     let mut responses = Vec::with_capacity(pieces.len());
     let mut relaxations = Vec::with_capacity(pieces.len());
+    let mut membrane_plasticities = Vec::with_capacity(pieces.len());
     let mut plasticities = Vec::with_capacity(pieces.len());
     for (piece_index, p) in pieces.iter().enumerate() {
         let mut explicit_role: Option<String> = None;
-        let (fabric, response, relaxation, plasticity, hash, mechanical) =
+        let (fabric, response, relaxation, membrane_plasticity, plasticity, hash, mechanical) =
             if p.get("fabric").is_some() {
                 let f = piece_fabric(pattern, piece_index)?;
                 explicit_role = f
@@ -81,6 +82,7 @@ pub(super) fn resolve(
                     resolved.fabric,
                     resolved.response,
                     resolved.relaxation,
+                    resolved.membrane_plasticity,
                     resolved.plasticity,
                     hash,
                     resolved.mechanics,
@@ -90,6 +92,7 @@ pub(super) fn resolve(
                     base.fabric,
                     base.response.clone(),
                     base.relaxation.clone(),
+                    base.membrane_plasticity.clone(),
                     base.plasticity.clone(),
                     default_hash.clone(),
                     base.mechanics,
@@ -117,6 +120,7 @@ pub(super) fn resolve(
         fabrics.push(fabric);
         responses.push(response);
         relaxations.push(relaxation);
+        membrane_plasticities.push(membrane_plasticity);
         plasticities.push(plasticity);
     }
     let hashes: Vec<_> = hashes.into_iter().collect();
@@ -184,6 +188,21 @@ pub(super) fn resolve(
             "rate/temperature-dependent creasing"
         ]);
     }
+    if membrane_plasticities.iter().any(Option::is_some) {
+        report["membrane_plasticity_piece_count"] =
+            json!(membrane_plasticities.iter().filter(|p| p.is_some()).count());
+        let excluded = report["not_simulated"]
+            .as_array_mut()
+            .expect("authored list");
+        excluded.retain(|s| s != "plastic set/damage" && s != "membrane plasticity/damage");
+        excluded.extend([
+            json!("membrane damage/rupture"),
+            json!("plastic-work thermal feedback"),
+        ]);
+        if !plasticities.iter().any(Option::is_some) {
+            excluded.push(json!("bending plasticity"));
+        }
+    }
     report["assignment_sha256"] = json!(sha256_hex(
         &serde_json::to_vec(&report).map_err(|e| invalid(e.to_string()))?
     ));
@@ -192,6 +211,8 @@ pub(super) fn resolve(
     base.piece_responses = responses.iter().any(Option::is_some).then_some(responses);
     // Keep explicit None entries: an equilibrium-only cuff must not inherit a transient shell law.
     base.piece_relaxations = Some(relaxations);
+    // Explicitly elastic/Maxwell pieces never inherit another piece's permanent membrane state.
+    base.piece_membrane_plasticities = Some(membrane_plasticities);
     // An explicitly elastic lining/cuff must not inherit its shell's irreversible curvature law.
     base.piece_plasticities = Some(plasticities);
     // One identity keeps the original homogeneous start/ramp and numerical path exactly.

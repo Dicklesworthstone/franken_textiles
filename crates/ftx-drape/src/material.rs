@@ -4,6 +4,7 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec2};
 use ftx_pattern::material_bending::BendingTensor;
+use ftx_pattern::material_membrane_plasticity::PlasticMembrane;
 use ftx_pattern::material_plasticity::PlasticBending;
 use ftx_pattern::material_relaxation::CompiledRelaxation;
 use ftx_pattern::material_response::CompiledMembrane;
@@ -193,6 +194,8 @@ pub struct MaterialInputs {
     pub(crate) piece_responses: Option<Vec<Option<CompiledMembrane>>>,
     pub(crate) relaxation: Option<CompiledRelaxation>,
     pub(crate) piece_relaxations: Option<Vec<Option<CompiledRelaxation>>>,
+    pub(crate) membrane_plasticity: Option<PlasticMembrane>,
+    pub(crate) piece_membrane_plasticities: Option<Vec<Option<PlasticMembrane>>>,
     pub(crate) plasticity: Option<PlasticBending>,
     pub(crate) piece_plasticities: Option<Vec<Option<PlasticBending>>>,
     pub(crate) contact_materials: Option<ContactMaterials>,
@@ -234,6 +237,8 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             piece_responses: None,
             relaxation: None,
             piece_relaxations: None,
+            membrane_plasticity: None,
+            piece_membrane_plasticities: None,
             plasticity: None,
             piece_plasticities: None,
             contact_materials: None,
@@ -243,6 +248,7 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
     let mechanics = record.mechanics()?;
     let response = record.membrane_response()?;
     let relaxation = record.membrane_relaxation()?;
+    let membrane_plasticity = record.membrane_plasticity()?;
     let plasticity = record.bending_plasticity()?;
     let properties = &record.material().properties;
     let thermal = if properties.contains_key("thermal_resistance")
@@ -305,6 +311,13 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             "rate/temperature-dependent creasing",
         ]);
     }
+    if membrane_plasticity.is_some() {
+        not_simulated.retain(|s| *s != "plastic set/damage" && *s != "membrane plasticity/damage");
+        not_simulated.extend(["membrane damage/rupture", "plastic-work thermal feedback"]);
+        if plasticity.is_none() {
+            not_simulated.push("bending plasticity");
+        }
+    }
     let mut inputs = MaterialInputs {
         fabric,
         options: opts,
@@ -336,6 +349,8 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         piece_responses: None,
         relaxation,
         piece_relaxations: None,
+        membrane_plasticity,
+        piece_membrane_plasticities: None,
         plasticity,
         piece_plasticities: None,
         contact_materials: None,
@@ -345,6 +360,13 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         inputs.report["bending_plasticity_law_sha256"] = json!(law.fingerprint());
         inputs.report["bending_history_initialization"] =
             json!("pristine_relative_to_authored_preferred_curvature");
+    }
+    if let Some(law) = &inputs.membrane_plasticity {
+        inputs.report["membrane_plasticity_law_sha256"] = json!(law.fingerprint());
+        inputs.report["membrane_history_initialization"] = json!("pristine_material_frame");
+        inputs.report["membrane_stiffness_basis"] = json!(
+            "elastic source tensor with permanent Green-strain set and directional hardening"
+        );
     }
     Ok(inputs)
 }

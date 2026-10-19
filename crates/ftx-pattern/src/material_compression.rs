@@ -154,6 +154,8 @@ fn qualified(
 fn scalar_record(material: &Material, properties: BTreeMap<String, Quantity>) -> Material {
     let mut result = material.clone();
     result.properties = properties;
+    // Scalar pressure rows cannot carry an uncharacterized in-plane loading history.
+    result.structure.remove("membrane_plasticity_model");
     result.membrane_response = None;
     result.membrane_relaxation = None;
     result.thermal_response = None;
@@ -444,6 +446,17 @@ pub fn condition(input: &Input) -> Result<Report, Refusal> {
             "conditioned material requires one thermal transport authority, resistance or conductivity",
         ));
     }
+    // Even an individually pressure-qualified scalar does not characterize the coupled cyclic law.
+    for family in [
+        "membrane_yield",
+        "membrane_hardening",
+        "membrane_strain_limit",
+        "membrane_accumulation_limit",
+    ] {
+        for axis in ["warp", "weft", "shear"] {
+            properties.remove(&format!("{family}_{axis}"));
+        }
+    }
     let discarded_properties = input
         .material
         .properties
@@ -471,7 +484,8 @@ pub fn condition(input: &Input) -> Result<Report, Refusal> {
     .map(|(key, _)| key.into())
     .collect();
     let mut material = scalar_record(&input.material, properties);
-    let discarded_structure = material
+    let discarded_structure = input
+        .material
         .structure
         .keys()
         .filter(|key| key.ends_with("_model"))
