@@ -303,6 +303,14 @@ supporting signed heat, reported edge strain and simulated-cloth mass. See
 
 ## Budgets, tests and remaining gates
 
+Explicit variant `changes` can also include a complete `interfaces` replacement using the existing
+source-qualified pair contract. This allows a shell substitution and its new shell-to-lining evidence
+to reach the same bound alternative. Omitted/null retains the original table; `[]` clears it.
+`frozen_changes` preserves an explicit replacement for exact replay. Neither screening nor binding
+infers pair coefficients, rewrites stale hashes or grants estimate consent. The actual mechanical
+scenario still requires complete admitted contact evidence. See [piece-materials.md](piece-materials.md)
+for native and browser use.
+
 Native and browser boundaries limit combined input to 64 MiB. Screening permits 1024 candidates,
 64 constraints and 16 objectives. Studies permit 32 evaluated variants, 16,384 aggregate expanded
 cut instances across both roll and finite-stock consumers, 4096 aggregate sewing passes and 250,000

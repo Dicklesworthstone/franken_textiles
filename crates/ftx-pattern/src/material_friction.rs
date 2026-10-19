@@ -89,11 +89,12 @@ impl Interface {
             "sources":self.sources, "allow_estimates":self.allow_estimates})
     }
 
-    /// Validate observations and consumption consent; assembly separately checks assigned hashes.
+    /// Validate the observation without granting permission to consume an estimated coefficient.
+    /// Binding may retain valid evidence while a mechanical consumer separately checks admission.
     ///
     /// # Errors
-    /// Invalid units, values, bounds, metadata or unapproved estimated coefficient.
-    pub fn validate(&self) -> Result<(), Refusal> {
+    /// Invalid units, values, bounds or metadata. Assembly separately checks assigned hashes.
+    pub fn validate_observation(&self) -> Result<(), Refusal> {
         let q = &self.friction;
         if q.unit != "1"
             || !q.value.is_finite()
@@ -110,7 +111,16 @@ impl Interface {
                 "interface friction needs finite nonnegative dimensionless observations, valid bounds and complete source/method metadata",
             ));
         }
-        if q.evidence == Evidence::Estimate && !self.allow_estimates {
+        Ok(())
+    }
+
+    /// Validate observations and consumption consent; assembly separately checks assigned hashes.
+    ///
+    /// # Errors
+    /// Invalid units, values, bounds, metadata or unapproved estimated coefficient.
+    pub fn validate(&self) -> Result<(), Refusal> {
+        self.validate_observation()?;
+        if self.friction.evidence == Evidence::Estimate && !self.allow_estimates {
             return Err(invalid(
                 "interface friction estimate needs its own explicit consent",
             ));

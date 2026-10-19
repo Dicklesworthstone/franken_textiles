@@ -4,7 +4,7 @@ use ftx_drape::material::resolve;
 use ftx_drape::run::{DrapeBody, DrapeOptions, DrapeRun, drape};
 use ftx_drape::scene::{PartFrames, build_scene};
 use ftx_drape::{Body, PartFrame, build_garment};
-use ftx_pattern::Pattern;
+use ftx_pattern::{Pattern, material_binding::Changes};
 use serde_json::{Value, json};
 
 fn sheet(scale: f64) -> Value {
@@ -436,6 +436,162 @@ fn interface_pattern(raw: Value, mu: f64) -> Pattern {
         "allow_estimates":true
     }]);
     Pattern::new(raw)
+}
+
+fn interface_substitution() -> (Pattern, Changes) {
+    let source = interface_pattern(assigned(2.0).raw().clone(), 0.12);
+    let mut replacement = assigned(2.0).raw().clone();
+    replacement["fabric"]["material"] = sheet(3.0);
+    let replacement = interface_pattern(replacement, 0.18);
+    let changes = serde_json::from_value(json!({
+        "schema":"ftx-material-bindings/1", "default":sheet(3.0),
+        "interfaces":replacement.raw()["fabric"]["interfaces"]
+    }))
+    .unwrap();
+    (source, changes)
+}
+
+fn interface_scenario() -> ftx_drape::study::Scenario {
+    serde_json::from_value(json!({
+        "schema":"ftx-drape-scenario/1", "fit_spec":{},
+        "options":DrapeOptions { self_contact:Some(options().contact), ..options() },
+        "max_mesh_points":4096, "max_vertex_frames":1000000
+    }))
+    .unwrap()
+}
+
+#[test]
+fn atomic_material_and_pair_replacement_reaches_sewn_drape_and_scenario() {
+    let (source, changes) = interface_substitution();
+    let original = source.raw().clone();
+    let receipt = changes.apply(&source).unwrap();
+    let selected = Pattern::from_json(receipt["pattern_json"].as_str().unwrap()).unwrap();
+    assert_eq!(selected.raw(), &receipt["pattern"]);
+    assert_eq!(receipt["geometry_changed"], false);
+    assert_eq!(selected.raw()["seams"], original["seams"]);
+    for (before, after) in original["pieces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(selected.raw()["pieces"].as_array().unwrap())
+    {
+        for (key, value) in before.as_object().unwrap() {
+            if key != "fabric" {
+                assert_eq!(after[key], *value, "piece geometry/metadata {key}");
+            }
+        }
+    }
+
+    let scenario = interface_scenario();
+    let before = run(&source, scenario.options);
+    let after = run(&selected, scenario.options);
+    assert_eq!(before.scene.mesh.verts2d, after.scene.mesh.verts2d);
+    assert_eq!(before.scene.mesh.faces, after.scene.mesh.faces);
+    assert_eq!(before.scene.weld, after.scene.weld);
+    assert_eq!(before.scene.start.relaxed, after.scene.start.relaxed);
+    assert!(after.scene.weld.len() > after.scene.solver.model.mass.len());
+    let ratio = after.scene.solver.model.mass.iter().sum::<f64>()
+        / before.scene.solver.model.mass.iter().sum::<f64>();
+    assert!((ratio - 5.0 / 3.0).abs() < 1e-12);
+    assert_ne!(before.scene.solver.x, after.scene.solver.x);
+    let material = &after.report["material"];
+    assert_ne!(
+        before.report["material"]["pieces"][0]["record_sha256"],
+        material["pieces"][0]["record_sha256"]
+    );
+    assert_eq!(
+        before.report["material"]["pieces"][1]["record_sha256"],
+        material["pieces"][1]["record_sha256"]
+    );
+    let order = material["contact_material_order"].as_array().unwrap();
+    let ids: Vec<_> = material["pieces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| order.iter().position(|h| *h == p["record_sha256"]).unwrap())
+        .collect();
+    assert_eq!(material["self_friction_matrix"][ids[0]][ids[1]], 0.18);
+    assert_eq!(material["self_friction_matrix"][ids[1]][ids[0]], 0.18);
+    for field in ["friction", "sources", "allow_estimates"] {
+        assert_eq!(
+            material["interfaces"][0][field],
+            receipt["pattern"]["fabric"]["interfaces"][0][field]
+        );
+    }
+    assert!(
+        after
+            .scene
+            .solver
+            .contact
+            .as_ref()
+            .unwrap()
+            .has_surface_materials()
+    );
+
+    let form = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let result = ftx_drape::study::Session::new(&scenario, &body)
+        .unwrap()
+        .evaluate(&selected, |_| {})
+        .unwrap();
+    assert_eq!(result["drape"], after.report);
+    assert_eq!(result["positions_m"], json!(after.scene.solver.x));
+    assert_eq!(changes.apply(&source).unwrap(), receipt);
+    assert_eq!(source.raw(), &original);
+}
+
+#[test]
+fn material_substitution_never_reuses_stale_or_unadmitted_pair_friction() {
+    let (source, changes) = interface_substitution();
+    let original = source.raw().clone();
+    let scenario = interface_scenario();
+    let form = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    for (mode, expected) in [
+        (0, "unassigned or stale"),
+        (1, "pairwise friction"),
+        (2, "own explicit consent"),
+    ] {
+        let mut candidate = changes.clone();
+        match mode {
+            0 => candidate.interfaces = None,
+            1 => candidate.interfaces = Some(vec![]),
+            _ => candidate.interfaces.as_mut().unwrap()[0]["allow_estimates"] = json!(false),
+        }
+        // All three operations are useful for non-contact consumers and remain bindable.
+        let bound = candidate.apply(&source).unwrap();
+        if mode == 0 {
+            assert_eq!(
+                bound["pattern"]["fabric"]["interfaces"],
+                original["fabric"]["interfaces"]
+            );
+        }
+        let mut started = false;
+        let refusal = ftx_drape::study::Session::new(&scenario, &body)
+            .unwrap()
+            .evaluate(&Pattern::new(bound["pattern"].clone()), |_| started = true)
+            .unwrap_err();
+        assert_eq!(refusal.code, ftx_core::RefusalCode::InvalidDocument);
+        assert!(refusal.message.contains(expected), "{}", refusal.message);
+        assert!(
+            !started,
+            "invalid contact evidence must refuse before solver work"
+        );
+    }
+    let mut stale = changes;
+    stale.interfaces.as_mut().unwrap()[0]["materials"][0] = json!("0".repeat(64));
+    assert!(stale.apply(&source).is_err());
+    assert_eq!(source.raw(), &original);
 }
 
 #[test]

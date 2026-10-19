@@ -297,6 +297,47 @@ fn pressure_api_refuses_unqualified_or_out_of_domain_requests() {
 }
 
 #[test]
+fn interface_replacement_reaches_the_real_wasm_binding_and_contact_readiness() {
+    let mut raw: Value = serde_json::from_str(PATTERN).unwrap();
+    raw["fabric"]["material"] = selection(1.2, 0.4);
+    raw["pieces"][1]["fabric"] = json!({"material":selection(1.4,0.5),"role":"lining"});
+    let original = bind(&raw, &json!({"schema":"ftx-material-bindings/1"}));
+    let inspected: Value =
+        serde_json::from_str(&materials::inspect(&selection(1.6, 0.6).to_string()).unwrap())
+            .unwrap();
+    let source = json!({"reference":"test:atomic-interface","accessed_on":"2026-10-19",
+        "note":"Synthetic source used to test transport of pair evidence"});
+    let pair = json!({"materials":[inspected["selection"]["expected_sha256"],original["pieces"][1]["material_sha256"]],
+        "friction":{"value":1,"unit":"1","bounds":[-0.0,1],"source":"pair","evidence":"estimate",
+            "method":"Synthetic corrected steady sliding observation"},
+        "sources":{"pair":source},"allow_estimates":true});
+    let mut edits = changes(inspected["selection"].clone());
+    edits["interfaces"] = json!([pair]);
+    let result = bind(&raw, &edits);
+    assert_eq!(result["drape_materials_with_self_contact"]["ready"], true);
+    assert_eq!(
+        result["pattern"]["fabric"]["interfaces"],
+        edits["interfaces"]
+    );
+    assert_eq!(result["pattern"]["pieces"], original["pattern"]["pieces"]);
+    assert!(result["pattern_json"].as_str().unwrap().contains("-0.0"));
+    let replay = bind(
+        &result["pattern"],
+        &json!({"schema":"ftx-material-bindings/1"}),
+    );
+    assert_eq!(result["pattern_json"], replay["pattern_json"]);
+    edits["interfaces"][0]["allow_estimates"] = json!(false);
+    let unadmitted = bind(&raw, &edits);
+    assert_eq!(
+        unadmitted["drape_materials_with_self_contact"]["ready"],
+        false
+    );
+    assert!(manufacturing::cut_plan(unadmitted["pattern_json"].as_str().unwrap(), &cut()).is_ok());
+    edits["interfaces"][0]["materials"][0] = original["pieces"][0]["material_sha256"].clone();
+    assert!(materials::bind(&raw.to_string(), &edits.to_string()).is_err());
+}
+
+#[test]
 fn malformed_binding_and_stale_material_or_pair_evidence_do_not_publish_success() {
     let raw: Value = serde_json::from_str(PATTERN).unwrap();
     let mut c = changes(selection(0.1, 0.4));

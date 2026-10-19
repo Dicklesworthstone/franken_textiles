@@ -136,6 +136,9 @@ test('worker retains numerical JSON identities across binding, drape files and n
   const w=await workerModule(), pattern='{"pieces":[],"coordinate":-0.0,"coefficient":1.0}';
   const bind=await w.send({type:'bind',pattern,changes:'{}'});
   assert.equal(bind.files[0].text,pattern);
+  assert.equal(bind.files[2].name,'material-changes.json');
+  assert.equal(bind.files[2].text,'{}');
+  assert.equal(bind.files[3].text,pattern);
   const fold=await w.send({type:'fold',bytes:new ArrayBuffer(8)});
   assert.equal(fold.reportText,fold.files[0].text);assert.match(fold.reportText,/-0\.0/);
   await w.send({type:'coverage',report:fold.reportText,map:'{}',conditions:'{}'});
@@ -303,6 +306,46 @@ test('catalog changes cannot publish another material inspection or silently ena
   const d = deferred(); p.select('selectionFile'); p.e.selectionFile.files[0].text = () => d.promise;
   const reading = p.e.selectionFile.onchange(); p.e.catalog.value = 'latest'; p.e.catalog.onchange();
   d.resolve('{"id":"late"}'); await reading; assert.equal(JSON.parse(p.e.selection.value).id, 'latest');
+});
+test('interface replacements bind with exact material edits, retain numeric text and can explicitly clear pairs', async () => {
+  const p=await pageModule(); await p.load(); await p.inspect('replacement-shell');
+  p.e.assign.onclick();
+  const pairs='[{"materials":["shell-hash","lining-hash"],"friction":{"value":1.0,"bounds":[-0.0,1.0]},"allow_estimates":false}]';
+  p.select('interfacesFile',pairs); await p.e.interfacesFile.onchange();
+  assert.equal(p.e.bind.disabled,false);
+  await p.e.bind.onclick(); const request=p.current().messages.at(-1);
+  assert.ok(request.changes.includes(pairs));
+  assert.equal(JSON.parse(request.changes).default.id,'replacement-shell');
+  assert.equal(JSON.parse(request.changes).interfaces[0].allow_estimates,false);
+  p.emit({pattern_json:'{}',pieces:[]});
+  p.select('interfacesFile','[]'); await p.e.interfacesFile.onchange();
+  await p.e.bind.onclick(); assert.deepEqual(JSON.parse(p.current().messages.at(-1).changes).interfaces,[]);
+  p.emit({pattern_json:'{}',pieces:[]});
+  p.e.clearInterfaces.onclick(); await p.e.bind.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).changes),'interfaces'),false);
+});
+test('invalid and superseded interface reads cannot silently reuse the old table or attach to another pattern', async () => {
+  const p=await pageModule(); await p.load(); await p.bind();
+  p.select('interfacesFile','{"interfaces":[]}'); await p.e.interfacesFile.onchange();
+  assert.equal(p.e.bind.disabled,true); assert.equal(p.e.cut.disabled,true); assert.equal(p.live.size,0);
+  assert.match(p.e.error.textContent,/JSON list/);
+  const old=p.current().messages.length; await p.e.bind.onclick();
+  assert.equal(p.current().messages.length,old);
+  p.e.clearInterfaces.onclick(); assert.equal(p.e.bind.disabled,false);
+  const delay=deferred(); p.select('interfacesFile'); p.e.interfacesFile.files[0].text=()=>delay.promise;
+  const reading=p.e.interfacesFile.onchange(); assert.equal(p.e.bind.disabled,true);
+  await p.load(); delay.resolve('[{"materials":["stale","pair"]}]'); await reading;
+  await p.e.bind.onclick(); assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).changes),'interfaces'),false);
+});
+test('changing interface evidence withdraws bound consumers and rejects an in-flight old result', async () => {
+  const p=await pageModule(); await p.load(); await p.bind();
+  p.select('cutOptions'); await p.e.cut.onclick(); const old=p.current(), id=old.messages.at(-1).request;
+  p.select('interfacesFile','[]'); await p.e.interfacesFile.onchange();
+  assert.equal(old.dead,true); assert.equal(p.live.size,0); assert.equal(p.e.cut.disabled,true);
+  p.ready(); old.emit({type:'result',request:id,result:{rolls:[]},files:[{name:'stale.svg',text:'old',mime:'image/svg+xml'}]});
+  assert.equal(p.live.size,0); assert.equal(p.e.cut.disabled,true);
+  p.e.reset.onclick(); await p.e.bind.onclick();
+  assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).changes),'interfaces'),false);
 });
 test('pressure-conditioned selections enter ordinary piece bindings without a numeric JSON round trip', async () => {
   const p = await pageModule(); await p.load();
@@ -816,6 +859,29 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     assert.equal(pressureBinding.result.geometry_changed, false);
     assert.equal(pressureBinding.result.drape_materials_with_self_contact.ready, true);
     assert.equal(pressureBinding.result.pattern.fabric.material.expected_sha256, prepared.result.selection.expected_sha256);
+    // Different loaded-state selections require their own explicitly qualified interface.
+    const highInput=JSON.parse(compressionRequest); highInput.pressure_pa=500;
+    const high=JSON.parse(ftx.material_pressure_condition(JSON.stringify(highInput)));
+    const pair={materials:[prepared.result.selection.expected_sha256,high.selection.expected_sha256],
+      friction:{value:0.18,unit:'1',evidence:'estimate',source:'test',method:'Synthetic software pair observation'},
+      sources:{test:{reference:'test:compiled-interface',accessed_on:'2026-10-19',note:'Synthetic test only'}},allow_estimates:true};
+    const interfaceChanges=`{"schema":"ftx-material-bindings/1","default":${prepared.result.selection_json},"pieces":{"back":${high.selection_json}},"interfaces":${JSON.stringify([pair])}}`;
+    const paired=await w.send({type:'bind',pattern,changes:interfaceChanges});
+    assert.equal(paired.type,'result',paired.message);
+    assert.equal(paired.result.drape_materials_with_self_contact.ready,true);
+    assert.deepEqual(paired.result.pattern.fabric.interfaces,[pair]);
+    assert.equal(paired.files[2].text,interfaceChanges);
+    const pairedStudy=`{"schema":"ftx-material-study/1","variants":[{"key":"pair","changes":${interfaceChanges}}],"cutting":{"copies":1,"gap_mm":2,"edge_margin_mm":0,"end_margin_mm":0}}`;
+    const pairRow=JSON.parse(ftx.material_study(pattern,pairedStudy)).alternatives[0];
+    assert.deepEqual(pairRow.frozen_changes.interfaces,[pair]);
+    assert.equal(pairRow.binding.result.pattern_json,paired.result.pattern_json);
+    assert.equal(JSON.parse(ftx.material_bind(pattern,JSON.stringify(pairRow.frozen_changes))).pattern_json,paired.result.pattern_json);
+    pair.allow_estimates=false;
+    // Replace only the pair policy; each material keeps its independently authored consent.
+    const deniedChanges=`{"schema":"ftx-material-bindings/1","default":${prepared.result.selection_json},"pieces":{"back":${high.selection_json}},"interfaces":${JSON.stringify([pair])}}`;
+    const deniedInterface=await w.send({type:'bind',pattern,changes:deniedChanges});
+    assert.equal(deniedInterface.type,'result',deniedInterface.message);
+    assert.equal(deniedInterface.result.drape_materials_with_self_contact.ready,false);
     const variants = [['a-wide', 0.1, 0.4], ['b-narrow', 0.06, 2], ['c-unknown-width', null, 0.4]].map(([key, width, thickness]) => {
       const selection = JSON.parse(pattern).fabric.material;
       for (const [name, value, unit] of [['width', width, 'm'], ['thickness', thickness, 'mm'], ['areal_density', 0.2, 'kg/m2']]) {

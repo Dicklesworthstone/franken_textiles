@@ -10,6 +10,7 @@ let preparedBy = null;
 let sourceText = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
+let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
 const pieceChanges = new Map(), urls = new Map();
 const sections = new Map();
 for (const op of operations) {
@@ -26,9 +27,10 @@ const text = value => JSON.stringify(value, null, 2);
 const has = id => !!$(id).files.length;
 function controls() {
   for (const el of commands) el.disabled = !ready || !!pending;
-  $("bind").disabled ||= !source;
+  $("bind").disabled ||= !source || !interfaceReady;
   $("assign").disabled = !!pending || !source || !inspected;
   $("reset").disabled = !!pending || !source;
+  $("clearInterfaces").disabled = interfaceChange === null && interfaceReady;
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
   $("pressure").disabled ||= !has("compressionRequest");
@@ -446,9 +448,15 @@ async function read(id, binary = false) {
 }
 function changes() {
   const pieces = [...pieceChanges].map(([id, selection]) => `${JSON.stringify(id)}:${selection}`).join(",");
-  return `{"schema":"ftx-material-bindings/1","default":${defaultChange || "null"},"pieces":{${pieces}}}`;
+  const interfaces = interfaceChange === null ? "" : `,"interfaces":${interfaceChange}`;
+  return `{"schema":"ftx-material-bindings/1","default":${defaultChange || "null"},"pieces":{${pieces}}${interfaces}}`;
 }
 function edits() { $("edits").textContent = text(JSON.parse(changes())); }
+function resetInterfaces() {
+  ++interfaceRead; interfaceChange = null; interfaceReady = true;
+  $("interfacesFile").value = "";
+  $("interfacesSummary").textContent = "Keep the original pattern's interface evidence.";
+}
 async function execute(op) {
   if (!ready || pending) return;
   if (op === "bind") clear(["bind", ...boundOperations]);
@@ -461,7 +469,10 @@ async function execute(op) {
     const msg = { type: op, request: id };
     if (op === "catalog") msg.query = $("query").value;
     else if (op === "inspect") msg.selection = $("selection").value;
-    else if (op === "bind") { msg.pattern = sourceText; msg.changes = changes(); }
+    else if (op === "bind") {
+      if (!interfaceReady) throw Error("Load a valid replacement interface list or choose Keep original interfaces.");
+      msg.pattern = sourceText; msg.changes = changes();
+    }
     else if (op === "pressure") msg.compressionRequest = await read("compressionRequest");
     else if (op === "calibrate") {
       msg.calibrationMode = $("calibrationMode").value;
@@ -526,7 +537,7 @@ $("selectionFile").onchange = async () => {
   catch (e) { if (rev === selectionRead) error(String(e.message || e)); }
 };
 $("patternFile").onchange = async () => {
-  const rev = ++patternRead; source = null; sourceText = null; defaultChange = null; pieceChanges.clear(); edits();
+  const rev = ++patternRead; source = null; sourceText = null; defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
   invalidate(["bind", ...boundOperations, "study", "scenario"]); $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
   base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
@@ -542,7 +553,27 @@ $("assign").onclick = () => {
   if ($("target").value === "") defaultChange = inspected; else pieceChanges.set($("target").value, inspected);
   edits(); invalidate(["bind", ...boundOperations]);
 };
-$("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); edits(); invalidate(["bind", ...boundOperations]); };
+$("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits(); invalidate(["bind", ...boundOperations]); };
+$("clearInterfaces").onclick = () => { resetInterfaces(); edits(); invalidate(["bind", ...boundOperations]); };
+$("interfacesFile").onchange = async () => {
+  const rev = ++interfaceRead; interfaceChange = null; interfaceReady = false;
+  edits(); invalidate(["bind", ...boundOperations]);
+  $("interfacesSummary").textContent = "Reading replacement interface evidence…";
+  if (!has("interfacesFile")) { resetInterfaces(); controls(); return; }
+  try {
+    const raw = await read("interfacesFile"); if (rev !== interfaceRead) return;
+    const pairs = JSON.parse(raw);
+    if (!Array.isArray(pairs)) throw Error("Replacement interfaces must be a JSON list; [] explicitly removes all original pairs.");
+    // Keep the authored numerical JSON. Rust validates evidence and exact final material identities.
+    interfaceChange = raw; interfaceReady = true;
+    $("interfacesSummary").textContent = `Replace the complete interface table with ${pairs.length} supplied pair(s). Freeze checks their sources and assigned material identities.`;
+    edits(); controls();
+  } catch (e) {
+    if (rev !== interfaceRead) return;
+    $("interfacesSummary").textContent = "Replacement evidence is unavailable; binding is disabled until corrected or cleared.";
+    error(String(e.message || e)); controls();
+  }
+};
 for (const [id, operation] of [["compressionRequest", "pressure"], ["calibrationRequest", "calibrate"],
   ["calibrationMode", "calibrate"], ["calibrationEstimates", "calibrate"]]) {
   $(id).addEventListener("change", () => {

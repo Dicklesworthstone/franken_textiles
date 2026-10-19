@@ -98,3 +98,43 @@ This does not generate layers or add new textile constitutive laws, resolved sea
 cross-sections, empirical characterization or a real-wearer fit claim. Source-record
 hashes establish identity, not experimental validity. The existing contact, CCD,
 friction, sparse Newton and frankensim-derived BVH kernels remain the only solver.
+
+## Change a shell and its contact evidence together
+
+Replacing shell A with shell B can also require new B-to-lining observations. Existing A-to-lining
+hashes cannot be relabelled, and an unused B pair cannot be preloaded into a scene that only assigns
+A. The existing `ftx-material-bindings/1` request accepts an optional `interfaces` field to replace
+the complete `fabric.interfaces` list atomically with its default and named-piece selections.
+
+```sh
+ftx-materials bind-changes original-pattern.json changes.json new-pattern.json
+ftx materials bind-changes original-pattern.json changes.json new-pattern.json --json
+```
+
+`changes.json` uses the existing `schema`, optional `default` selection and `pieces` map. Add
+`interfaces: [ ... ]` using the exact pair contract above. Every supplied pair must name two distinct
+snapshots actually assigned by the final pattern; unknown or old hashes, duplicate unordered pairs,
+invalid units and incomplete observation metadata refuse before an output file is created. The
+command never overwrites an existing output path. Omitting `interfaces`, or supplying `null`, keeps
+the original table untouched. An explicit empty list `[]` clears it. There is no implicit coefficient,
+pair generation or hash substitution. Supplied raw observations retain their number representation,
+authored order and omitted defaults in the exact `pattern_json` output.
+
+The command returns the bound pattern and the actual material resolver's readiness with and without
+self-contact. A valid estimated pair can be retained with `allow_estimates: false`; the mechanical
+consumer then refuses that pair while independent supported consumers remain available. Material
+selection consent never grants pair consent. Missing pair coverage is likewise a consumer refusal,
+so a source-qualified material choice does not become unusable for cutting solely because contact
+evidence is incomplete.
+
+The browser workbench's assignment section accepts the same complete replacement list. It downloads
+the exact source pattern, binding request, bound pattern and resolver report. Material studies and
+scenario variants use this same `changes` contract; each alternative retains its explicitly replaced
+interfaces in `frozen_changes` for replay against the original pattern. Screened alternatives still
+require actual per-pair observations; screening does not invent interfaces.
+
+Direct production tests replace a synthetic shell while preserving the lining, pattern geometry,
+triangle mesh, rest areas and exact seam welds. The new snapshot changes the known mass and symmetric
+contact matrix through ordinary sewn drape and scenario evaluation. Native commands and compiled
+WASM exercise exact replay and separate evidence admission. These are software checks; they do not
+characterize a real shell/lining pair or establish garment fit.

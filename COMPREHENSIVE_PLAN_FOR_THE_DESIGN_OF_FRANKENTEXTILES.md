@@ -1716,6 +1716,32 @@ inputs; the new records do not close the linen/leather/knit or independent garme
 
 ---
 
+### 25.19 Atomic material and interface substitution
+
+**Delivered contact-data propagation (`ftx-if1`, supports `ftx-tm3`/`ftx-tm8`).** The existing
+material binding request accepts an optional complete interface replacement alongside default and
+named-piece material selections. A shell change can therefore supply its new shell-to-lining
+observations in one operation. Final assigned snapshot hashes, source metadata, units and unique
+unordered pairs are validated together; no old coefficient or hash is relabelled. Omitting the field
+preserves the original table, while `[]` explicitly clears it. Observation validity remains separate
+from the mechanical consumer's estimate admission and pair-coverage requirements.
+
+Both native commands expose `bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json`, writing a new
+exact pattern and reporting real drape-material readiness with and without self-contact. The browser
+assignment section accepts the same pair list and retains source, request, exact bound pattern and
+resolver report for download. Changed or invalid pending evidence withdraws dependent outputs.
+Manufacturing and scenario alternatives use the same operation and retain explicit replacements in
+their frozen replay changes. Existing requests that omit the new field preserve their semantics.
+
+Independent synthetic sewn tests keep geometry, mesh, rest areas, welds and lining identity fixed
+while the changed shell updates reference mass and the actual symmetric friction matrix. Stale or
+unadmitted pair evidence prevents simulation before its callback. Native commands, shared Rust WASM
+entry points and the compiled WASM worker exercise exact replay and independent consumer refusals.
+This closes a software substitution blocker; matched real material pairs and linen/leather/knit
+garment acceptance remain open. See [piece-materials.md](docs/piece-materials.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

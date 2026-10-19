@@ -18,9 +18,19 @@ Load an original `fabric-pattern/1` pattern and assign an inspected selection to
 source-piece ID. A source-piece assignment affects that piece's mirrored/cut instances. Freeze and bind
 creates a new in-memory pattern through `ftx_pattern::material_binding::Changes`; it never edits the
 uploaded file. It freezes all effective selections, including untouched explicit pieces. Changing the
-default preserves an already assigned lining or cuff. Grain, vertices, curves, seams, simulation roles,
-cut quantities and source-bound pair friction are not rewritten. Missing unlike-material interface
-evidence stays missing rather than being relabelled for the new material.
+default preserves an already assigned lining or cuff. Grain, vertices, curves, seams, simulation roles
+and cut quantities retain their original values. The optional **Replacement material-pair friction
+evidence** file replaces the complete interface list in the same operation. It uses exact final
+material hashes and independently sourced observations; the Rust binding validates those identities.
+Omitting the file preserves the original list, uploading `[]` explicitly clears it, and **Keep original
+interfaces** discards the pending replacement. See [piece-materials.md](piece-materials.md) for the
+pair schema and the equivalent native `bind-changes` command.
+
+Changing a pair file withdraws the current bound pattern and dependent outputs. Invalid or unfinished
+reads disable binding until corrected or explicitly cleared; delayed reads cannot attach to a newer
+pattern. Estimate admission belongs to each pair and remains separate from sheet-material consent.
+Binding downloads include `original-pattern.json` and the exact `material-changes.json` request for
+replay, alongside `pattern.json` and `material-bindings.json`.
 
 `material-bindings.json` contains original/bound pattern hashes, the selected identity per source piece
 and the production drape resolver's result with and without self-contact. These are material-input

@@ -208,6 +208,87 @@ fn inherited_materials_stay_distinct_and_optional_mass_is_complete_or_unknown() 
 }
 
 #[test]
+fn explicit_pair_evidence_reaches_manufacturing_and_frozen_variant_replay_without_rewriting_sources()
+ {
+    let original_shell = selection("original-shell", 0.1, 0.4);
+    let changed_shell = selection("changed-shell", 0.08, 0.6);
+    let lining = selection("lining", 0.1, 0.2);
+    let db = ftx_pattern::textile_import::catalog().unwrap();
+    let hash = |selection: &Value| {
+        db.resolve(&serde_json::from_value(selection.clone()).unwrap())
+            .unwrap()
+            .sha256()
+            .to_owned()
+    };
+    let pair = |shell: &Value| {
+        json!({"materials":[hash(&lining),hash(shell)],
+        "friction":{"value":0,"unit":"1","evidence":"estimate","source":"test",
+            "method":"Synthetic interface substitution; no empirical garment claim"},
+        "sources":{"test":{"reference":"test:study-pair","accessed_on":"2026-10-19",
+            "note":"Synthetic scalar pair evidence"}}})
+    };
+    let original_pair = pair(&original_shell);
+    let mut changed_pair = pair(&changed_shell);
+    changed_pair["friction"]["bounds"] = serde_json::from_str("[-0.0, 0]").unwrap();
+    let mut raw: Value = serde_json::from_str(PATTERN).unwrap();
+    raw["fabric"]["material"] = original_shell;
+    raw["fabric"]["interfaces"] = json!([original_pair]);
+    raw["pieces"][1]["fabric"] = json!({"material":lining,"role":"lining"});
+    let source = Pattern::new(raw.clone());
+    let mut request = request();
+    request.purchasing = None;
+    request.variants = serde_json::from_value(json!([
+        {"key":"inherited","changes":{"schema":"ftx-material-bindings/1"}},
+        {"key":"stale-retained","changes":{"schema":"ftx-material-bindings/1","default":changed_shell}},
+        {"key":"replaced","changes":{"schema":"ftx-material-bindings/1","default":changed_shell,"interfaces":[changed_pair]}},
+        {"key":"cleared","changes":{"schema":"ftx-material-bindings/1","default":changed_shell,"interfaces":[]}},
+        {"key":"wrong-pair","changes":{"schema":"ftx-material-bindings/1","default":changed_shell,"interfaces":[original_pair]}}
+    ])).unwrap();
+    let report = evaluate(&request, &source);
+    for key in ["inherited", "stale-retained", "replaced", "cleared"] {
+        let row = row(&report, key);
+        assert_eq!(row["binding"]["status"], "available");
+        assert_eq!(row["cutting"]["status"], "available");
+        assert_eq!(row["sewing"]["status"], "available");
+        let frozen: Changes = serde_json::from_value(row["frozen_changes"].clone()).unwrap();
+        assert_eq!(frozen.apply(&source).unwrap(), row["binding"]["result"]);
+        let bound = &row["binding"]["result"]["pattern"];
+        assert_eq!(bound["seams"], raw["seams"]);
+        assert_eq!(bound["pieces"][1]["fabric"]["role"], "lining");
+        if matches!(key, "inherited" | "stale-retained") {
+            assert!(row["frozen_changes"].get("interfaces").is_none());
+            assert_eq!(bound["fabric"]["interfaces"], raw["fabric"]["interfaces"]);
+        } else {
+            assert_eq!(
+                row["frozen_changes"]["interfaces"],
+                bound["fabric"]["interfaces"]
+            );
+        }
+    }
+    let replacement = row(&report, "replaced");
+    assert_eq!(
+        replacement["frozen_changes"]["interfaces"],
+        json!([changed_pair])
+    );
+    assert!(replacement["frozen_changes"]["interfaces"][0]["friction"]["value"].is_u64());
+    assert!(
+        replacement["frozen_changes"]["interfaces"][0]
+            .get("allow_estimates")
+            .is_none()
+    );
+    assert_eq!(
+        row(&report, "cleared")["frozen_changes"]["interfaces"],
+        json!([])
+    );
+    let refused = row(&report, "wrong-pair");
+    for consumer in ["binding", "cutting", "sewing"] {
+        assert_eq!(refused[consumer]["status"], "refused");
+    }
+    assert!(refused["frozen_changes"].is_null());
+    assert_eq!(source.raw(), &raw);
+}
+
+#[test]
 fn screening_bridge_does_not_prune_manufacturing_alternatives_without_consent() {
     let mut r = request();
     let a = selection("a", 0.06, 0.4);

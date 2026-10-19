@@ -75,7 +75,8 @@ self.onmessage = async ({ data: msg }) => {
       case "bind":
         raw = ftx.material_bind(msg.pattern, msg.changes); result = json(raw);
         if (typeof result.pattern_json !== "string") throw Error("Rebuild web/pkg: missing lossless material pattern bridge.");
-        files = [file("pattern.json", result.pattern_json), file("material-bindings.json", raw)];
+        files = [file("pattern.json", result.pattern_json), file("material-bindings.json", raw),
+          file("material-changes.json", msg.changes), file("original-pattern.json", msg.pattern)];
         break;
       case "fold": {
         const model = new ftx.WebBody(new Uint8Array(msg.bytes));

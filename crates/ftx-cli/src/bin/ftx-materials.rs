@@ -57,6 +57,7 @@ ftx-materials stock-svg PATTERN.json STOCK.json STOCK-INDEX NEW.svg
 ftx-materials show ID [--allow-estimates]
 ftx-materials resolve PATTERN.json
 ftx-materials bind PATTERN.json SELECTION.json NEW-PATTERN.json
+ftx-materials bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json
 ftx-materials price PATTERN.json QUOTES.json SCOPE.json
 ftx-materials thermal STACK.json
 ftx-materials thermal-at ID TEMPERATURE-C [--allow-estimates]
@@ -85,6 +86,7 @@ ftx-materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg
 JSON output. `show` includes a portable selection, missing-property coverage and separate steady/transient readiness.
 `resolve` invokes the actual drape resolver without meshing; missing mechanics refuse.
 `bind` preserves geometry and embeds a locked selection; its output path must not exist.
+`bind-changes` atomically replaces named/default selections and optional exact pair-friction evidence, with separate mechanical readiness; its output path must not exist.
 `price` is a dated offer sample, not a checkout or a worldwide market price.
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
@@ -365,6 +367,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             Ok(material::resolve(&pattern, &DrapeOptions::default())?.report)
         }
         ["bind", pattern, selection, out] => bind(read(pattern)?, &read(selection)?, out),
+        ["bind-changes", pattern, changes, out] => screening::bind_changes(pattern, changes, out),
         ["price", pattern, quotes, scope] => {
             let m = selected(&read(pattern)?)?;
             let result = read::<QuoteBook>(quotes)?.evaluate(&m, &read::<Scope>(scope)?)?;

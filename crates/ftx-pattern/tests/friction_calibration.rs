@@ -2,7 +2,8 @@
 use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::material_friction::{Binding, Input, Interface, Target, calibrate};
 use ftx_pattern::materials::{Catalog, Evidence, Source};
-use serde_json::json;
+use ftx_pattern::{Pattern, material_binding::Changes};
+use serde_json::{Value, json};
 
 fn catalog() -> Catalog {
     serde_json::from_value(json!({"schema":"ftx-textile-catalog/1","materials":[]})).unwrap()
@@ -89,6 +90,7 @@ fn consuming_an_estimate_is_separate_from_observation_and_sheet_permission() {
         panic!()
     };
     assert!(materials.iter().all(|s| s.allow_estimates));
+    interface.validate_observation().unwrap();
     assert!(
         interface
             .validate()
@@ -285,5 +287,173 @@ fn one_axis_instrument_keeps_unmeasured_force_components_unknown() {
             .unwrap_err()
             .message
             .contains("slip direction")
+    );
+}
+
+fn pair(a: &str, b: &str) -> Value {
+    let db = catalog();
+    json!({"materials":[db.resolve(&material(a)).unwrap().sha256(),
+        db.resolve(&material(b)).unwrap().sha256()],
+        "friction":{"value":0.4,"unit":"1","evidence":"estimate","source":"test",
+            "method":"Synthetic interface binding test"},
+        "sources":{"test":{"reference":"test:binding-pair","accessed_on":"2026-10-19",
+            "note":"Synthetic pair evidence, not measured textile data"}}})
+}
+
+fn paired_pattern() -> Pattern {
+    let mut raw: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+    ))
+    .unwrap();
+    raw["fabric"]["material"] = json!(material("a"));
+    raw["fabric"]["interfaces"] = json!([pair("a", "b")]);
+    raw["pieces"][1]["fabric"] = json!({"material":material("b"),"role":"lining"});
+    Pattern::new(raw)
+}
+
+#[test]
+fn explicit_binding_retains_authored_pair_numbers_order_and_unadmitted_estimates() {
+    let p = paired_pattern();
+    let original = p.raw().clone();
+    let mut authored = pair("b", "a");
+    authored["friction"]["value"] = json!(0);
+    authored["friction"]["bounds"] = serde_json::from_str("[-0.0, 0]").unwrap();
+    let changes: Changes = serde_json::from_value(json!({"schema":"ftx-material-bindings/1",
+        "interfaces":[authored]}))
+    .unwrap();
+    let bound = changes.apply(&p).unwrap();
+    let retained = &bound["pattern"]["fabric"]["interfaces"][0];
+    assert_eq!(
+        serde_json::to_string(retained).unwrap(),
+        serde_json::to_string(&authored).unwrap()
+    );
+    assert!(retained["friction"]["value"].is_u64());
+    assert!(retained.get("allow_estimates").is_none());
+    assert!(retained["friction"].get("conditions").is_none());
+    let parsed = Interface::parse(retained).unwrap();
+    parsed.validate_observation().unwrap();
+    assert!(!parsed.allow_estimates);
+    assert!(parsed.validate().is_err());
+    assert_eq!(bound["pattern"]["seams"], original["seams"]);
+    assert_eq!(bound["geometry_changed"], false);
+    assert_eq!(p.raw(), &original);
+    let parsed_pattern: Value =
+        serde_json::from_str(bound["pattern_json"].as_str().unwrap()).unwrap();
+    assert_eq!(parsed_pattern, bound["pattern"]);
+}
+
+#[test]
+fn omitted_or_null_interfaces_preserve_original_evidence_and_empty_explicit_list_clears() {
+    let p = paired_pattern();
+    let omitted: Changes =
+        serde_json::from_value(json!({"schema":"ftx-material-bindings/1"})).unwrap();
+    let null: Changes =
+        serde_json::from_value(json!({"schema":"ftx-material-bindings/1","interfaces":null}))
+            .unwrap();
+    for changes in [&omitted, &null] {
+        assert!(
+            serde_json::to_value(changes)
+                .unwrap()
+                .get("interfaces")
+                .is_none()
+        );
+        assert_eq!(
+            changes.apply(&p).unwrap()["pattern"]["fabric"]["interfaces"],
+            p.raw()["fabric"]["interfaces"]
+        );
+    }
+    assert_eq!(omitted.apply(&p).unwrap(), null.apply(&p).unwrap());
+    let cleared: Changes =
+        serde_json::from_value(json!({"schema":"ftx-material-bindings/1","interfaces":[]}))
+            .unwrap();
+    assert_eq!(
+        cleared.apply(&p).unwrap()["pattern"]["fabric"]["interfaces"],
+        json!([])
+    );
+    // Existing unsupported evidence remains a downstream consumer's refusal when not replaced.
+    let mut original = p.raw().clone();
+    original["fabric"]["interfaces"] = json!({"legacy_invalid_interface":"retained"});
+    let p = Pattern::new(original.clone());
+    assert_eq!(
+        omitted.apply(&p).unwrap()["pattern"]["fabric"]["interfaces"],
+        original["fabric"]["interfaces"]
+    );
+    assert_eq!(
+        cleared.apply(&p).unwrap()["pattern"]["fabric"]["interfaces"],
+        json!([])
+    );
+    assert_eq!(p.raw(), &original);
+}
+
+#[test]
+fn explicit_interfaces_bind_to_final_assignments_without_rewriting_counterface_hashes() {
+    let p = paired_pattern();
+    let original = p.raw().clone();
+    let mut changes: Changes = serde_json::from_value(json!({"schema":"ftx-material-bindings/1",
+        "default":material("c"),"interfaces":[pair("a","b")]}))
+    .unwrap();
+    assert!(
+        changes
+            .apply(&p)
+            .unwrap_err()
+            .message
+            .contains("unassigned or stale")
+    );
+    changes.interfaces = Some(vec![pair("c", "b")]);
+    let replaced = changes.apply(&p).unwrap();
+    assert_eq!(
+        replaced["pattern"]["fabric"]["interfaces"],
+        json!([pair("c", "b")])
+    );
+    assert_eq!(replaced["pieces"][0]["material_id"], "c");
+    assert_eq!(replaced["pieces"][1]["material_id"], "b");
+    assert_eq!(replaced["pattern"]["pieces"][1]["fabric"]["role"], "lining");
+    changes.interfaces = None;
+    let retained = changes.apply(&p).unwrap();
+    assert_eq!(
+        retained["pattern"]["fabric"]["interfaces"],
+        original["fabric"]["interfaces"]
+    );
+    assert_eq!(retained["pattern"]["pieces"], replaced["pattern"]["pieces"]);
+    assert_eq!(retained["pattern"]["seams"], replaced["pattern"]["seams"]);
+    assert_eq!(p.raw(), &original);
+}
+
+#[test]
+fn replacement_refuses_duplicate_asymmetric_stale_and_malformed_pair_evidence_atomically() {
+    let p = paired_pattern();
+    let original = p.raw().clone();
+    for mutate in [
+        (|v: &mut Value| v["materials"][0] = json!("0".repeat(64))) as fn(&mut Value),
+        |v| v["materials"][0] = v["materials"][1].clone(),
+        |v| v["friction"]["unit"] = json!("N/m"),
+        |v| v["friction"]["value"] = json!(-0.1),
+        |v| v["friction"]["source"] = json!("missing"),
+        |v| v["friction"]["bounds"] = json!([0.5, 0.9]),
+        |v| v["friction"]["conditions"] = json!({"":"undeclared"}),
+        |v| v["sources"]["test"]["reference"] = json!(""),
+        |v| v["allow_estimates"] = json!("true"),
+        |v| v["reverse_friction"] = json!(0.7),
+    ] {
+        let mut invalid = pair("a", "b");
+        mutate(&mut invalid);
+        let changes: Changes = serde_json::from_value(json!({"schema":"ftx-material-bindings/1",
+            "interfaces":[invalid]}))
+        .unwrap();
+        assert!(changes.apply(&p).is_err());
+        assert_eq!(p.raw(), &original);
+    }
+    let mut reverse = pair("b", "a");
+    reverse["friction"]["value"] = json!(0.8);
+    let mut changes: Changes = serde_json::from_value(json!({"schema":"ftx-material-bindings/1",
+        "interfaces":[pair("a","b"),reverse]}))
+    .unwrap();
+    assert!(changes.apply(&p).unwrap_err().message.contains("duplicate"));
+    changes.interfaces = Some(vec![pair("a", "b"); 2017]);
+    assert!(changes.apply(&p).unwrap_err().message.contains("budget"));
+    assert!(
+        serde_json::from_value::<Changes>(json!({"schema":"ftx-material-bindings/1",
+        "interfaces":{"unexpected":"object"}}))
+        .is_err()
     );
 }

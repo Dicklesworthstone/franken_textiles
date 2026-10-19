@@ -64,7 +64,15 @@ Download the complete report, original input and frozen selection for reuse. No 
 <label>Assign the inspected selection to <select id="target"><option value="">Pattern default (preserve explicit piece choices)</option></select></label>
 <button id="assign" disabled>Assign inspected material</button><button id="reset" disabled>Clear pending assignments</button>
 <pre id="edits">No pending substitutions.</pre>
-<p class="note">Source-piece assignments affect all mirrored/cut instances of that piece. Existing roles, grain, seams and pair-friction evidence remain unchanged. Unknown material interfaces must be characterized, not guessed.</p>
+<p class="note">Source-piece assignments affect all mirrored/cut instances of that piece. Roles, grain and seams stay fixed.
+When swapping contacting textiles, supply the matching measured or explicitly admitted fitted interface evidence below.</p>
+<label>Replacement material-pair friction evidence (optional JSON list)
+<input id="interfacesFile" type="file" accept=".json,application/json"></label>
+<p class="note">A supplied list replaces the complete interface table in the same operation as the material assignments.
+Each pair must identify the exact selected material snapshots and retain its sources and independent estimate consent.
+An empty list <code>[]</code> explicitly removes all pairs; omitting a replacement preserves the original evidence.</p>
+<button id="clearInterfaces" type="button" disabled>Keep original interfaces</button>
+<p id="interfacesSummary">Keep the original pattern's interface evidence.</p>
 <button id="bind" data-command="bind" disabled>Freeze selections &amp; bind</button>
 <div id="boundSummary"></div><div id="bindFiles" class="links"></div>
 </section></div>
