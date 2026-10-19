@@ -33,7 +33,7 @@ fn selection() -> Selection {
 #[test]
 fn factual_seed_does_not_invent_physics_or_midpoints() {
     let db = Catalog::builtin().unwrap();
-    assert_eq!(db.materials.len(), 106);
+    assert_eq!(db.materials.len(), 109);
     for id in [
         "fsri/hfm/cotton-sheet/dry/220330-r1",
         "fsri/hfm/cotton-sheet/wet/220318-r1",

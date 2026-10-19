@@ -1432,6 +1432,20 @@ from retained observations of the exact variant, never a static guessed manifest
 observation does not reserve inventory. Offer percentiles remain sample summaries, not worldwide
 quality/location distributions.
 
+**Source-backed mechanical catalog (`ftx-tm2`, `ftx-fj1`).** Three Fujii et al. (2026)
+cotton sheeting, Oxford and twill specimens bring the built-in catalog to **109 records**.
+Their 99 source-qualified numeric properties include published construction, measured thickness
+and low-angle shear, and the original fitted tensile, Poisson and shear coefficients. Converted
+shear and its source modulus represent the same observation; fitted coefficients remain estimates
+and unconsumed extensions. Missing weight units and inconsistent bending units remain explicit
+gaps, so these records cannot masquerade as complete garment materials. See
+`docs/fujii-mechanical-measurements.md` for methods, conditioning and the primary DOI.
+
+**Supplier refresh (`ftx-tm6`).** Commit `a95792d` carries reviewed material hashes through
+CSV, Shopify and JSON-LD receipts. Numeric stock is obtained from the exact selected CSV row;
+boolean availability from the other adapters does not imply a known order capacity. Existing
+selling-basis page guards and representation-specific retrieval remain enforced.
+
 **Next product and evidence gaps:**
 
 1. **Matched practical materials (`ftx-tm2`, `ftx-tm8`).** Acquire complete compatible

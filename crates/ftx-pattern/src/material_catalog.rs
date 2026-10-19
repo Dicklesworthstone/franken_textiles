@@ -189,6 +189,9 @@ impl Catalog {
         catalog.materials.extend(woven.materials);
         let supplier = Self::from_json(include_str!("material_catalog/supplier-apparel.json"))?;
         catalog.materials.extend(supplier.materials);
+        let mechanical =
+            Self::from_json(include_str!("material_catalog/mechanical-measurements.json"))?;
+        catalog.materials.extend(mechanical.materials);
         catalog.validate()?;
         Ok(catalog)
     }
