@@ -6,6 +6,14 @@ use ftx_core::{Refusal, RefusalCode, Vec2};
 use super::CutPlan;
 use crate::{fnum, xml_escape};
 
+fn reversal_attribute(reversed: bool) -> &'static str {
+    if reversed {
+        " data-grain-reversed=\"true\""
+    } else {
+        ""
+    }
+}
+
 fn path(points: &[Vec2], closed: bool) -> String {
     let mut d = String::new();
     for (i, p) in points.iter().enumerate() {
@@ -42,8 +50,13 @@ pub fn svg(plan: &CutPlan, roll_index: usize) -> Result<String, Refusal> {
         return Err(bad());
     }
     let (ws, hs) = (fnum(w, 6), fnum(h, 6));
+    let grain_policy = if roll.placements.iter().any(|p| p.grain_reversed) {
+        "grain-constrained (including explicitly permitted half-turns)"
+    } else {
+        "one-way-grain"
+    };
     let mut out = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{ws}mm\" height=\"{hs}mm\" viewBox=\"0 0 {ws} {hs}\">\n<title>{}</title>\n<desc>Single-ply one-way-grain planning preview. Not machine-qualified toolpaths.</desc>\n<metadata>pattern_sha256={}; material_sha256={}</metadata>\n<rect id=\"stock\" width=\"{ws}\" height=\"{hs}\" fill=\"white\" stroke=\"black\" stroke-width=\"0.2\"/>\n<defs><marker id=\"grain-arrow\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\"/></marker></defs>\n<g transform=\"translate(0 {hs}) scale(1 -1)\" fill=\"none\" stroke=\"black\" stroke-width=\"0.15\">\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{ws}mm\" height=\"{hs}mm\" viewBox=\"0 0 {ws} {hs}\">\n<title>{}</title>\n<desc>Single-ply {grain_policy} planning preview. Not machine-qualified toolpaths.</desc>\n<metadata>pattern_sha256={}; material_sha256={}</metadata>\n<rect id=\"stock\" width=\"{ws}\" height=\"{hs}\" fill=\"white\" stroke=\"black\" stroke-width=\"0.2\"/>\n<defs><marker id=\"grain-arrow\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\"/></marker></defs>\n<g transform=\"translate(0 {hs}) scale(1 -1)\" fill=\"none\" stroke=\"black\" stroke-width=\"0.15\">\n",
         xml_escape(&roll.material.material().name),
         xml_escape(&plan.pattern_sha256),
         xml_escape(roll.material.sha256())
@@ -62,8 +75,8 @@ pub fn svg(plan: &CutPlan, roll_index: usize) -> Result<String, Refusal> {
             return Err(bad());
         }
         out.push_str(&format!(
-            "<g id=\"piece-{index}\" data-instance=\"{}\" data-copy=\"{}\"><path class=\"cut-exterior\" d=\"{}\"/>\n",
-            xml_escape(&p.instance), p.copy, path(&p.cut_mm, true)
+            "<g id=\"piece-{index}\" data-instance=\"{}\" data-copy=\"{}\"{}><path class=\"cut-exterior\" d=\"{}\"/>\n",
+            xml_escape(&p.instance), p.copy, reversal_attribute(p.grain_reversed), path(&p.cut_mm, true)
         ));
         for (v, closed) in &p.internal_cut_mm {
             out.push_str(&format!(
@@ -128,8 +141,13 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
     }
     let b = super::bbox(&marker.outline_mm)?;
     let (w, h) = (fnum(b[2] - b[0], 6), fnum(b[3] - b[1], 6));
+    let grain_policy = if marker.placements.iter().any(|p| p.grain_reversed) {
+        "cutting axis +y with explicitly permitted -y half-turns"
+    } else {
+        "one-way cutting axis +y"
+    };
     let mut out = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}mm\" height=\"{h}mm\" viewBox=\"{} {} {w} {h}\">\n<title>{}</title>\n<desc>Finite single-ply stock review. Stock boundary and defects are NOT cut paths. No machine calibration or execution authorization. Coordinate units: mm; one-way cutting axis +y.</desc>\n<metadata>material_sha256={}; stock_index={index}</metadata>\n<defs><marker id=\"grain-arrow\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\"/></marker></defs>\n<g transform=\"scale(1 -1)\" stroke-width=\"0.15\">\n<path id=\"stock-boundary\" d=\"{}\" fill=\"white\" stroke=\"black\"/>\n<g id=\"stock-defects\" fill=\"#ddd\" stroke=\"#666\" stroke-dasharray=\"2 1\">\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}mm\" height=\"{h}mm\" viewBox=\"{} {} {w} {h}\">\n<title>{}</title>\n<desc>Finite single-ply stock review. Stock boundary and defects are NOT cut paths. No machine calibration or execution authorization. Coordinate units: mm; {grain_policy}.</desc>\n<metadata>material_sha256={}; stock_index={index}</metadata>\n<defs><marker id=\"grain-arrow\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\"/></marker></defs>\n<g transform=\"scale(1 -1)\" stroke-width=\"0.15\">\n<path id=\"stock-boundary\" d=\"{}\" fill=\"white\" stroke=\"black\"/>\n<g id=\"stock-defects\" fill=\"#ddd\" stroke=\"#666\" stroke-dasharray=\"2 1\">\n",
         fnum(b[0], 6),
         fnum(-b[3], 6),
         xml_escape(&format!(
@@ -152,8 +170,8 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
     out.push_str("</g>\n<g id=\"placements\" fill=\"none\" stroke=\"black\">\n");
     for (i, p) in marker.placements.iter().enumerate() {
         out.push_str(&format!(
-            "<g id=\"piece-{i}\" data-instance=\"{}\" data-copy=\"{}\"><path class=\"cut-exterior\" d=\"{}\"/>\n",
-            xml_escape(&p.instance), p.copy, path(&p.cut_mm, true)
+            "<g id=\"piece-{i}\" data-instance=\"{}\" data-copy=\"{}\"{}><path class=\"cut-exterior\" d=\"{}\"/>\n",
+            xml_escape(&p.instance), p.copy, reversal_attribute(p.grain_reversed), path(&p.cut_mm, true)
         ));
         for (v, closed) in &p.internal_cut_mm {
             out.push_str(&format!(

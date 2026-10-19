@@ -2,7 +2,7 @@
 //! Optional bounded polygon compaction improves a complete shelf marker without changing cut shapes.
 //! Source-piece selections are shared with draping; purchasing needs width, not a fictitious modulus.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, Vec2, det, polyline::signed_area, receipt::sha256_hex};
 use ftx_pattern::textile_import::{piece_fabric, resolve_fabric};
@@ -32,12 +32,12 @@ pub struct CutOptions {
     /// Optional export seam allowance override; otherwise the existing export hierarchy is used.
     #[serde(default)]
     pub seam_allowance_mm: Option<f64>,
-    /// Optional shape-aware translation search; omission retains the original shelf layout.
+    /// Optional shape-aware placement search; omission retains the original one-way shelf layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nesting: Option<nesting::NestingOptions>,
 }
 
-/// One physical cut piece in roll coordinates (mm, y along the roll, all directed grainlines +y).
+/// One physical cut piece in marker coordinates (mm, y along the stock's authored cutting axis).
 #[derive(Clone, Debug, Serialize)]
 pub struct CutPlacement {
     /// Source piece identity, not an inferred material name.
@@ -50,6 +50,9 @@ pub struct CutPlacement {
     pub cut_mm: Vec<Vec2>,
     /// Explicit transformed material axis; no generated default grain is accepted.
     pub grain_mm: [Vec2; 2],
+    /// True only after an explicitly permitted half-turn: directed grain then points toward -y.
+    #[serde(skip_serializing_if = "is_false")]
+    pub grain_reversed: bool,
     /// Existing internal cut paths and closure flags, transformed with the outer path.
     pub internal_cut_mm: Vec<(Vec<Vec2>, bool)>,
     /// Drill centres and diameters, in mm. Not a machine execution instruction.
@@ -103,6 +106,27 @@ pub struct CutPlan {
 
 fn bad(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
+}
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// A permission applies to the exact snapshot actually cut, never a fiber/product label.
+fn grain_reversal<'a>(
+    requested: &'a [String],
+    materials: &[ResolvedMaterial],
+) -> Result<BTreeSet<&'a str>, Refusal> {
+    if requested.len() > 4096 {
+        return Err(bad("too many grain-reversal material permissions"));
+    }
+    let used: BTreeSet<_> = materials.iter().map(ResolvedMaterial::sha256).collect();
+    let allowed: BTreeSet<_> = requested.iter().map(String::as_str).collect();
+    if allowed.len() != requested.len() || allowed.iter().any(|sha| !used.contains(sha)) {
+        return Err(bad(
+            "grain_reversal_materials needs unique exact SHA-256 identities of materials cut in this job; re-evaluate permissions after material changes",
+        ));
+    }
+    Ok(allowed)
 }
 fn positive(name: &str, x: f64) -> Result<f64, Refusal> {
     if !x.is_finite() || x <= 0.0 {
@@ -208,6 +232,7 @@ fn place(shape: &Shape, copy: usize, offset: Vec2) -> Result<CutPlacement, Refus
         copy,
         cut_mm: ring,
         grain_mm: [a, b],
+        grain_reversed: false,
         internal_cut_mm: translated.internal_cut,
         drills_mm: translated.drills,
         bounds_mm: bounds,
@@ -216,6 +241,64 @@ fn place(shape: &Shape, copy: usize, offset: Vec2) -> Result<CutPlacement, Refus
             [r.a[1][0], r.a[1][1], offset.y],
         ],
     })
+}
+
+/// Transform every manufacturing coordinate together; the caller checks this exact exterior ring.
+fn relocate(
+    source: &CutPlacement,
+    reverse: bool,
+    delta: Vec2,
+    ring: Vec<Vec2>,
+    bounds: [f64; 4],
+) -> Option<CutPlacement> {
+    let mut p = source.clone();
+    let map = |v: Vec2| if reverse { -v + delta } else { v + delta };
+    p.cut_mm = ring;
+    p.bounds_mm = bounds;
+    p.grain_reversed ^= reverse;
+    for v in &mut p.grain_mm {
+        *v = map(*v);
+    }
+    for (path, _) in &mut p.internal_cut_mm {
+        for v in path {
+            *v = map(*v);
+        }
+    }
+    for (v, _) in &mut p.drills_mm {
+        *v = map(*v);
+    }
+    if reverse {
+        for row in &mut p.transform {
+            for v in row {
+                *v = -*v;
+            }
+        }
+    }
+    p.transform[0][2] += delta.x;
+    p.transform[1][2] += delta.y;
+    if p.cut_mm
+        .iter()
+        .chain(&p.grain_mm)
+        .chain(p.internal_cut_mm.iter().flat_map(|(p, _)| p))
+        .chain(p.drills_mm.iter().map(|(p, _)| p))
+        .any(|v| !v.is_finite())
+        || p.transform.iter().flatten().any(|v| !v.is_finite())
+        || p.bounds_mm.iter().any(|v| !v.is_finite())
+    {
+        return None;
+    }
+    Some(p)
+}
+
+fn half_turn(p: &CutPlacement) -> Option<CutPlacement> {
+    let [x, y, x1, y1] = p.bounds_mm;
+    relocate(
+        p,
+        true,
+        Vec2::ZERO,
+        p.cut_mm.iter().map(|v| -*v).collect(),
+        [-x1, -y1, -x, -y],
+    )
 }
 struct Shelf {
     y: f64,
@@ -227,7 +310,7 @@ impl CutPlan {
     /// Derive real cut-instance requirements and a grain-constrained marker per selected material.
     /// Mirror pairs and on-fold unfolding use `Ctx::geom`, exactly as the cutter export does.
     /// `sim:false`, absent body placements and simulation-only scaling never remove/change cut parts.
-    /// Every grain points up the roll: no automatic flipping against nap or crossgrain substitution.
+    /// Grain points up the roll unless nesting explicitly permits its exact material's half-turn.
     ///
     /// # Errors
     /// Invalid/unscaled patterns, unsupported sheet forms, missing width/grain, partial assignments,
@@ -288,6 +371,9 @@ impl CutPlan {
             )?;
             materials.push(record);
         }
+        if let Some(search) = &options.nesting {
+            grain_reversal(&search.grain_reversal_materials, &materials)?;
+        }
         for instance in &pattern.instances {
             let shape = cut_shape(&ctx, instance)?;
             let record = &materials[instance.piece_index];
@@ -309,7 +395,7 @@ impl CutPlan {
             rolls,
             limitations: vec![
                 "Single-ply rectangular roll stock; on-fold pieces are physically unfolded.",
-                "One-way explicit grain; shelf baseline with optional bounded polygon compaction, never a global optimality claim.",
+                "One-way explicit grain unless its material snapshot permits a half-turn; shelf baseline with optional bounded polygon compaction, never a global optimality claim.",
                 "No defect maps, pattern-repeat matching, shrinkage, finish/machine qualification or automatic layer generation.",
                 "External cut area includes interior holes; offcuts are neither reused nor claimed recoverable.",
                 "Nominal source width/density and caller margins; source uncertainty is retained, not propagated into a fit or safety guarantee.",
@@ -409,6 +495,10 @@ fn pack(
                 options,
                 search,
                 baseline_length_m,
+                search
+                    .grain_reversal_materials
+                    .iter()
+                    .any(|sha| sha == material.sha256()),
             )
         })
         .transpose()?;

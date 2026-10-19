@@ -59,10 +59,11 @@ the command derives requirements from the actual cut plan.
 
 ## What is planned
 
-The planner uses the external cutter polygon, including seam allowances and outward notch tabs. It
-rotates all directed grainlines to +y along the roll, preserving one-way nap direction rather than
-silently choosing a 180-degree reversal or a crossgrain rotation to fit. Missing/generated/default grain
-is insufficient. All material-frame transforms, internal cut paths and drills are retained.
+The planner uses the external cutter polygon, including seam allowances and outward notch tabs. Its
+initial shelf layout rotates all directed grainlines to +y along the roll. Optional nesting permits
+180-degree reversal only for explicitly selected material snapshots, as described below; crossgrain
+rotation remains unsupported. Missing/generated/default grain is insufficient. All material-frame
+transforms, internal cut paths and drills are retained.
 
 Pieces are sorted by decreasing bounding-box height/width with deterministic identity tie-breaks, and
 placed in the first shelf with room. This is a bounded, non-overlapping rectangular-envelope layout,
@@ -83,9 +84,26 @@ Different snapshots, even sharing a product ID, are conservatively ordered separ
 Add `"nesting": {"passes": 3, "work_limit": 1000000}` to the same cut options to search for better
 placements using actual cutter outlines, including concavities and outward notch tabs. Omitting
 `nesting` retains the shelf algorithm. An empty nesting object requests the defaults shown above.
-This is a translation-only bottom-left compaction heuristic, not an optimal no-fit-polygon solver.
-It preserves each directed grainline, mirror identity, cut path, internal path, drill and transform.
+This is a bounded bottom-left compaction heuristic, not an optimal no-fit-polygon solver.
+By default it preserves each directed grainline. It always preserves mirror identity, cut path,
+internal path, drill diameters and the mapping from the original instance.
 Interior cut holes are still occupied: the planner does not put another piece inside a hole.
+
+For fabric whose nap and print direction permit a half-turn, add
+`"grain_reversal_materials": ["<exact resolved material SHA-256>"]` inside `nesting`.
+Use the canonical material resolver's `sha256` or the preceding plan's `rolls[].material.sha256`.
+Each listed snapshot must be unique and actually used by the job; stale permissions after a
+material or finish change refuse. Product/fiber names never grant reversal. Other materials retain
+one-way grain, and no reflection or crossgrain rotation is introduced. With permission, each move
+compares the original and 180-degree orientations and selects the lowest checked position, then
+the leftmost; ties keep the current direction. A half-turn must still improve the position.
+This bounded search may miss an arrangement requiring an initial move upward or an in-place turn.
+
+Reversed placements have `grain_reversed: true`, a grainline directed toward -y, and the complete
+half-turn in their affine transform. The SVG labels their groups with
+`data-grain-reversed="true"` and draws the transformed grain arrow. Full-resolution clearance
+checks apply to both directions. The reversal-enabled search identifies itself as
+`bounded_polygon_compaction/2`; the default translation search retains `/1`.
 
 The complete shelf marker is the initial feasible solution. Each proposed relocation lowers the
 piece's bottom edge, or moves it left at the same height, without increasing its top. Exact orientation

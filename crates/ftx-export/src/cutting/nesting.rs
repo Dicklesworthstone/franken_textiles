@@ -1,15 +1,15 @@
 //! Bounded, deterministic bottom-left polygon compaction of a complete shelf marker.
 //!
-//! Candidate anchors may be sampled; collision geometry never is. New moves preserve grain/nap and
-//! never raise a piece's bottom edge. Every move is checked against full exterior paths; holes remain
+//! Candidate anchors may be sampled; collision geometry never is. Grain reversal needs an explicit
+//! material permission. Moves never raise a piece's bottom edge and use full exterior paths; holes remain
 //! occupied. Work exhaustion retains the last COMPLETE feasible marker, not a partial purchase list.
 
 use super::geometry::{Work, clear};
-use super::{CutOptions, CutPlacement, bad, bbox, positive};
+use super::{CutOptions, CutPlacement, bad, bbox, half_turn, positive, relocate};
 use ftx_core::{Refusal, Vec2};
 use serde::{Deserialize, Serialize};
 
-/// Optional translation-only optimization. Defaults apply only when a nesting object is supplied.
+/// Optional grain-constrained optimization. Defaults apply only when a nesting object is supplied.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NestingOptions {
@@ -18,12 +18,17 @@ pub struct NestingOptions {
     /// Bound on anchor pairs, candidate vertices, broad-phase pairs and edge/containment tests.
     /// 1..20 million units per material roll, independent of wall-clock timing.
     pub work_limit: usize,
+    /// Exact material SHA-256 identities for which the job permits 180-degree grain reversal.
+    /// Empty by default: the material name or form never establishes nap/print symmetry.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub grain_reversal_materials: Vec<String>,
 }
 impl Default for NestingOptions {
     fn default() -> Self {
         Self {
             passes: 3,
             work_limit: 1_000_000,
+            grain_reversal_materials: Vec::new(),
         }
     }
 }
@@ -78,19 +83,20 @@ fn dedup(mut a: Vec<f64>, lo: f64, hi: f64) -> Vec<f64> {
 }
 fn anchors(
     index: usize,
+    moving: &CutPlacement,
     p: &[CutPlacement],
     width: f64,
     opts: &CutOptions,
     work: &mut Work,
 ) -> Option<(Vec<f64>, Vec<f64>)> {
-    let moving = &p[index];
     let [x, y, x1, _] = moving.bounds_mm;
+    let [old_x, old_y, _, _] = p[index].bounds_mm;
     let right = width - opts.edge_margin_mm - (x1 - x);
-    let mut xs = vec![opts.edge_margin_mm, right, x];
-    let mut ys = vec![opts.end_margin_mm, y];
+    let mut xs = vec![opts.edge_margin_mm, right, old_x];
+    let mut ys = vec![opts.end_margin_mm, old_y];
     // Slightly padded anchors avoid rounding a requested gap just below its required value.
     // This is candidate construction only; the full actual translated paths are tested below.
-    let guard = 128.0 * f64::EPSILON * (1.0 + width.abs() + y.abs());
+    let guard = 128.0 * f64::EPSILON * (1.0 + width.abs() + old_y.abs());
     let gap = opts.gap_mm + guard;
     for (j, other) in p.iter().enumerate() {
         if j == index {
@@ -109,41 +115,8 @@ fn anchors(
     }
     Some((
         dedup(xs, opts.edge_margin_mm, right),
-        dedup(ys, opts.end_margin_mm, y),
+        dedup(ys, opts.end_margin_mm, old_y),
     ))
-}
-fn translate(
-    p: &CutPlacement,
-    delta: Vec2,
-    ring: Vec<Vec2>,
-    bounds: [f64; 4],
-) -> Option<CutPlacement> {
-    let mut p = p.clone();
-    p.cut_mm = ring;
-    p.bounds_mm = bounds;
-    for v in &mut p.grain_mm {
-        *v += delta;
-    }
-    for (path, _) in &mut p.internal_cut_mm {
-        for v in path {
-            *v += delta;
-        }
-    }
-    for (v, _) in &mut p.drills_mm {
-        *v += delta;
-    }
-    p.transform[0][2] += delta.x;
-    p.transform[1][2] += delta.y;
-    if p.grain_mm
-        .iter()
-        .chain(p.internal_cut_mm.iter().flat_map(|(p, _)| p))
-        .chain(p.drills_mm.iter().map(|(p, _)| p))
-        .any(|v| !v.is_finite())
-        || p.transform.iter().flatten().any(|v| !v.is_finite())
-    {
-        return None;
-    }
-    Some(p)
 }
 
 pub(super) fn compact(
@@ -152,6 +125,7 @@ pub(super) fn compact(
     opts: &CutOptions,
     search: &NestingOptions,
     baseline: f64,
+    allow_grain_reversal: bool,
 ) -> Result<NestingReport, Refusal> {
     let mut work = Work {
         used: 0,
@@ -170,63 +144,77 @@ pub(super) fn compact(
                 .then(placements[a].copy.cmp(&placements[b].copy))
         });
         for index in order {
-            let Some((xs, ys)) = anchors(index, placements, width, opts, &mut work) else {
-                break 'search;
+            let turned = if allow_grain_reversal {
+                if work.spend(placements[index].cut_mm.len()).is_none() {
+                    break 'search;
+                }
+                Some(half_turn(&placements[index]).ok_or_else(|| bad("grain reversal overflows"))?)
+            } else {
+                None
             };
             let [old_x, old_y, _, old_top] = placements[index].bounds_mm;
-            'piece: for y in ys {
-                for &x in &xs {
-                    if y == old_y && x >= old_x {
-                        continue;
-                    }
-                    if work.tick().is_none() {
-                        break 'search;
-                    }
-                    work.candidates += 1;
-                    if work.spend(placements[index].cut_mm.len()).is_none() {
-                        break 'search;
-                    }
-                    let delta = Vec2::new(x - old_x, y - old_y);
-                    let ring: Vec<_> = placements[index]
-                        .cut_mm
-                        .iter()
-                        .map(|v| *v + delta)
-                        .collect();
-                    let Ok(b) = bbox(&ring) else {
-                        continue;
-                    };
-                    if b[0] < opts.edge_margin_mm
-                        || b[1] < opts.end_margin_mm
-                        || b[2] > width - opts.edge_margin_mm
-                        || b[3] > old_top
-                    {
-                        continue;
-                    }
-                    // The actual translated origin must decrease, not just the requested one.
-                    if !(b[1] < old_y || (b[1] == old_y && b[0] < old_x)) {
-                        continue;
-                    }
-                    let mut allowed = true;
-                    for (j, p) in placements.iter().enumerate() {
-                        if j == index {
+            let mut best: Option<CutPlacement> = None;
+            for moving in std::iter::once(&placements[index]).chain(turned.as_ref()) {
+                let Some((xs, ys)) = anchors(index, moving, placements, width, opts, &mut work)
+                else {
+                    break 'search;
+                };
+                'orientation: for y in ys {
+                    for &x in &xs {
+                        if y == old_y && x >= old_x {
                             continue;
                         }
-                        let Some(ok) =
-                            clear(&ring, b, &p.cut_mm, p.bounds_mm, opts.gap_mm, &mut work)
-                        else {
+                        if work.tick().is_none() {
                             break 'search;
+                        }
+                        work.candidates += 1;
+                        if work.spend(moving.cut_mm.len()).is_none() {
+                            break 'search;
+                        }
+                        let delta = Vec2::new(x - moving.bounds_mm[0], y - moving.bounds_mm[1]);
+                        let ring: Vec<_> = moving.cut_mm.iter().map(|v| *v + delta).collect();
+                        let Ok(b) = bbox(&ring) else {
+                            continue;
                         };
-                        if !ok {
-                            allowed = false;
-                            break;
+                        if b[0] < opts.edge_margin_mm
+                            || b[1] < opts.end_margin_mm
+                            || b[2] > width - opts.edge_margin_mm
+                            || b[3] > old_top
+                        {
+                            continue;
+                        }
+                        // Compare actual geometry; keep the current direction when positions tie.
+                        let [bx, by, _, _] = best
+                            .as_ref()
+                            .map_or(placements[index].bounds_mm, |p| p.bounds_mm);
+                        if !(b[1] < by || (b[1] == by && b[0] < bx)) {
+                            continue;
+                        }
+                        let mut allowed = true;
+                        for (j, p) in placements.iter().enumerate() {
+                            if j == index {
+                                continue;
+                            }
+                            let Some(ok) =
+                                clear(&ring, b, &p.cut_mm, p.bounds_mm, opts.gap_mm, &mut work)
+                            else {
+                                break 'search;
+                            };
+                            if !ok {
+                                allowed = false;
+                                break;
+                            }
+                        }
+                        if allowed && let Some(moved) = relocate(moving, false, delta, ring, b) {
+                            best = Some(moved);
+                            break 'orientation;
                         }
                     }
-                    if allowed && let Some(moved) = translate(&placements[index], delta, ring, b) {
-                        placements[index] = moved;
-                        moves += 1;
-                        break 'piece;
-                    }
                 }
+            }
+            if let Some(moved) = best {
+                placements[index] = moved;
+                moves += 1;
             }
         }
         if before == moves {
@@ -245,7 +233,11 @@ pub(super) fn compact(
         return Err(bad("nesting increased the shelf marker length"));
     }
     Ok(NestingReport {
-        algorithm: "bounded_polygon_compaction/1",
+        algorithm: if allow_grain_reversal {
+            "bounded_polygon_compaction/2"
+        } else {
+            "bounded_polygon_compaction/1"
+        },
         baseline_length_m: baseline,
         length_m: length,
         saved_length_m: (baseline - length).max(0.0),

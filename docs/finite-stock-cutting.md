@@ -50,7 +50,7 @@ an explicit `options` object. Each stock entry contains:
   units, exclusions and cutting axis. These are caller-supplied evidence, not verified metrology.
 
 `options` requires `copies`, `gap_mm`, `boundary_margin_mm`, `step_mm` and `work_limit`; it also
-accepts `seam_allowance_mm`. Use the executable fixture for complete syntax. Margins/gaps/allowances
+accepts `seam_allowance_mm` and `grain_reversal_materials`. Use the executable fixture for complete syntax. Margins/gaps/allowances
 must be finite and nonnegative; step must be positive. The stock boundary and every defect use
 `boundary_margin_mm`, while piece-to-piece spacing uses `gap_mm`. There is no guessed kerf,
 shrinkage, presser-foot compression, tolerance or quality-dependent clearance.
@@ -73,11 +73,28 @@ a generated display grain is not accepted as a manufacturing constraint.
 
 Each stock boundary is rigidly rotated to a +y cutting-axis frame; `source_to_marker` records the
 transform from its authored coordinates. Piece transforms map expanded instance coordinates into
-that same frame. Translation preserves handedness. No reflection, crossgrain rotation or 180-degree
-reversal is inferred. Preview coordinates may be negative; the SVG viewBox preserves their mm scale.
+that same frame. Translation and permitted half-turns preserve handedness. No reflection or crossgrain
+rotation is allowed. Preview coordinates may be negative; the SVG viewBox preserves their mm scale.
+
+One-way grain remains the default. To permit half-turns for a reviewed material, set
+`options.grain_reversal_materials` to an array of its exact resolved material SHA-256 identities.
+These are the `sha256` values in canonical material resolution or a plan's `markers[].material`,
+not material names, product IDs, source-document hashes, or the pattern hash. Every entry must be
+unique and match a material actually cut by the job. A material substitution or changed finish
+that invalidates the hash refuses until its reversal permission is deliberately reconsidered.
+This option declares that the job permits either direction for those materials; it does not
+measure nap, establish print symmetry or permit turning other materials. Unlisted materials stay
+one-way. The same option name is available under roll `nesting`.
+
+For each stock, the planner first searches the original orientation, then its permitted 180-degree
+orientation if the first cannot fit. Reversal preserves the public face, mirror identity, full
+outline, internal cuts and drill diameters. Accepted reversed pieces carry `grain_reversed: true`
+and a directed grainline toward -y; their affine transform includes the half-turn. SVG piece groups
+carry `data-grain-reversed="true"` and display the resulting grain arrow. Frozen and residual
+requests preserve the explicit permission, while prior cuts remain occupied in the authored stock frame.
 
 Search places the largest exterior areas first, then tries stocks in input order and candidate
-positions in bottom-left lattice order. `step_mm` sets that lattice spacing. Every accepted
+positions in bottom-left lattice order for each permitted orientation. `step_mm` sets that lattice spacing. Every accepted
 candidate is checked against the **entire** outside polygon and all defects and placed pieces.
 Exact orientation predicates decide crossings; distances enforce Euclidean margins. This catches
 edges crossing an outside concavity even when all their vertices lie inside, and defects completely

@@ -48,6 +48,124 @@ fn near(a: f64, b: f64) {
     assert!((a - b).abs() < 1e-10, "{a} != {b}");
 }
 
+fn reversible_triangle() -> (Pattern, Request) {
+    let mut panel = piece("triangle", 60., 60.);
+    panel["vertices"] = json!({"a":[0,0],"b":[60,0],"c":[0,60]});
+    panel["edges"] = json!([
+        {"id":"bottom","from":"a","to":"b"},
+        {"id":"diagonal","from":"b","to":"c"},
+        {"id":"left","from":"c","to":"a"}]);
+    panel["internal"] = json!([{"kind":"cut","pts":[[5,8],[10,8]]}]);
+    panel["drills"] = json!([{"p":[8,12],"d":2}]);
+    let p = pattern(vec![panel]);
+    let mut r = request(vec![stock(
+        "triangular-remnant",
+        material("hide", "hide"),
+        json!([[0, 70], [70, 0], [70, 70]]),
+    )]);
+    let m = ftx_pattern::textile_import::resolve_fabric(&p.raw()["fabric"])
+        .unwrap()
+        .unwrap();
+    r.options
+        .grain_reversal_materials
+        .push(m.sha256().to_owned());
+    (p, r)
+}
+
+#[test]
+fn explicit_half_turn_uses_an_otherwise_unusable_remnant_and_moves_every_cut_detail() {
+    let (p, r) = reversible_triangle();
+    let mut one_way = r.clone();
+    one_way.options.grain_reversal_materials.clear();
+    assert!(
+        one_way
+            .build(&p)
+            .unwrap_err()
+            .message
+            .contains("no checked")
+    );
+    let plan = r.build(&p).unwrap();
+    assert_eq!(v(&plan), v(&r.build(&p).unwrap()));
+    assert_eq!(v(&plan), v(&plan.request().build(&p).unwrap()));
+    let placed = &plan.markers()[0].placements[0];
+    assert!(placed.grain_reversed);
+    let d = placed.grain_mm[1] - placed.grain_mm[0];
+    near(d.x, 0.);
+    assert!(d.y < 0.);
+    let t = placed.transform;
+    near(t[0][0] * t[1][1] - t[0][1] * t[1][0], 1.); // Half-turn, never reflection.
+    let map = |v: Vec2| {
+        Vec2::new(
+            t[0][0] * v.x + t[0][1] * v.y + t[0][2],
+            t[1][0] * v.x + t[1][1] * v.y + t[1][2],
+        )
+    };
+    let ctx = Ctx::new(&p, ExportOptions::default()).unwrap();
+    let g = ctx.geom(Source::Instance(&p.instances[0]), 6.).unwrap();
+    for (source, actual) in cutter_ring(&g).unwrap().iter().zip(&placed.cut_mm) {
+        near((map(*source) - *actual).norm(), 0.);
+        assert!(actual.x <= 68. && actual.y <= 68.);
+        assert!(actual.x + actual.y >= 70. + 2. * 2.0_f64.sqrt());
+    }
+    for ((path, closed), (actual, actual_closed)) in
+        g.internal_cut.iter().zip(&placed.internal_cut_mm)
+    {
+        assert_eq!(closed, actual_closed);
+        for (a, b) in path.iter().zip(actual) {
+            near((map(*a) - *b).norm(), 0.);
+        }
+    }
+    for ((point, diameter), (actual, d)) in g.drills.iter().zip(&placed.drills_mm) {
+        near((map(*point) - *actual).norm(), 0.);
+        assert_eq!(diameter, d);
+    }
+    let residual = plan.residual_request().unwrap();
+    assert_eq!(
+        residual.options.grain_reversal_materials,
+        r.options.grain_reversal_materials
+    );
+    assert!(residual.build(&p).is_err()); // The half-turned cut cannot be consumed twice.
+    let preview = ftx_export::cutting::preview::stock_svg(&plan, 0).unwrap();
+    assert!(preview.contains("class=\"cut-interior\"") && preview.contains("class=\"drill\""));
+}
+
+#[test]
+fn half_turns_do_not_hide_defects_or_inherit_permission_after_material_substitution() {
+    let (p, mut r) = reversible_triangle();
+    r.stocks[0].defects_mm = vec![vec![
+        Vec2::new(48., 48.),
+        Vec2::new(52., 48.),
+        Vec2::new(52., 52.),
+        Vec2::new(48., 52.),
+    ]];
+    assert!(r.build(&p).is_err()); // Interior exclusion lies inside every fitting orientation.
+    r.stocks[0].defects_mm.clear();
+    let old = r.options.grain_reversal_materials[0].clone();
+    r.options.grain_reversal_materials.push(old);
+    assert!(r.build(&p).unwrap_err().message.contains("unique exact"));
+    r.options.grain_reversal_materials.pop();
+    let mut raw = p.raw().clone();
+    raw["fabric"]["material"]["record"]["name"] = json!("Different lot or directional finish");
+    r.stocks[0].material = serde_json::from_value(raw["fabric"]["material"].clone()).unwrap();
+    let changed = Pattern::new(raw);
+    assert!(
+        r.build(&changed)
+            .unwrap_err()
+            .message
+            .contains("grain_reversal_materials")
+    );
+    let m = ftx_pattern::textile_import::resolve_fabric(&changed.raw()["fabric"])
+        .unwrap()
+        .unwrap();
+    r.options.grain_reversal_materials = vec![m.sha256().to_owned()];
+    assert!(r.build(&changed).unwrap().markers()[0].placements[0].grain_reversed);
+    r.options.work_limit = 1;
+    assert_eq!(
+        r.build(&changed).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+}
+
 #[test]
 fn hides_without_roll_width_use_real_boundary_defects_and_source_evidence() {
     let p = pattern(vec![piece("front", 20., 20.), piece("pocket", 15., 20.)]);

@@ -1,4 +1,4 @@
-//! Finite irregular hides and sheet remnants, with authored defects and one-way cutting axes.
+//! Finite irregular hides and sheet remnants, with authored defects and explicit cutting axes.
 //!
 //! Physical stock is identified individually, not multiplied or replaced by a bounding rectangle.
 //! Placement is a bounded lattice heuristic, not an optimality or infeasibility proof. Accepted
@@ -16,9 +16,9 @@ use ftx_pattern::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CutPlacement, Shape, bad, bbox, cut_shape,
+    CutPlacement, bad, bbox, cut_shape,
     geometry::{Work, clear, enclosed, simple},
-    place, positive,
+    grain_reversal, half_turn, place, positive, relocate,
 };
 use crate::{Ctx, ExportOptions, layout::rotation};
 
@@ -65,6 +65,10 @@ pub struct Options {
     /// Existing export allowance hierarchy is used when absent.
     #[serde(default)]
     pub seam_allowance_mm: Option<f64>,
+    /// Exact material SHA-256 identities for which the job permits 180-degree grain reversal.
+    /// Empty by default. This is an explicit nap/print-direction decision, not a fiber-name inference.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grain_reversal_materials: Vec<String>,
 }
 
 /// Finite stock allocation. Stock order is an explicit first-fit preference.
@@ -362,6 +366,7 @@ impl Request {
             }
             materials.push(m);
         }
+        let reversible = grain_reversal(&o.grain_reversal_materials, &materials)?;
         let shapes = pattern
             .instances
             .iter()
@@ -406,12 +411,25 @@ impl Request {
         for (index, copy) in order {
             let s = &shapes[index];
             let m = &materials[pattern.instances[index].piece_index];
+            let cutter = place(s, copy, Vec2::ZERO)?;
+            let turned = if reversible.contains(m.sha256()) {
+                checked(work.spend(cutter.cut_mm.len()))?;
+                Some(half_turn(&cutter).ok_or_else(|| bad("grain reversal overflows"))?)
+            } else {
+                None
+            };
             let mut placed = false;
             for marker in &mut markers {
                 if !same_material(&marker.material, m) {
                     continue;
                 }
-                if let Some(p) = locate(s, copy, marker, o, &mut work)? {
+                let mut candidate = locate(&cutter, s.area, marker, o, &mut work)?;
+                if candidate.is_none()
+                    && let Some(turned) = &turned
+                {
+                    candidate = locate(turned, s.area, marker, o, &mut work)?;
+                }
+                if let Some(p) = candidate {
                     marker.external_cut_area_m2 += s.area;
                     marker.placements.push(p);
                     placed = true;
@@ -462,7 +480,7 @@ impl Request {
             hardware_execution_authorized: false,
             limitations: vec![
                 "Finite single-ply stock; authored defects/axis and frozen material identity, not a hide scan or measured property acquisition.",
-                "Largest-exterior-area-first pieces, stock input order, bottom-left lattice; one-way grain only, no reflection or crossgrain rotation. Not globally optimal.",
+                "Largest-exterior-area-first pieces, stock input order, forward then explicitly permitted half-turn, bottom-left lattice; no reflection or crossgrain rotation. Not globally optimal.",
                 "Full polygon checks on emitted geometry; no reuse of internal holes, no shrinkage, pattern-repeat matching, variable-quality zones or physical process qualification.",
                 "Residual requests preserve prior exterior cuts as occupied geometry; they do not reconstruct arbitrary free-space polygons, price offcuts, or authorize hardware.",
             ],
@@ -478,15 +496,15 @@ fn same_material(a: &ResolvedMaterial, b: &ResolvedMaterial) -> bool {
     a.sha256() == b.sha256() && a.allows_estimates() == b.allows_estimates()
 }
 fn locate(
-    shape: &Shape,
-    copy: usize,
+    shape: &CutPlacement,
+    area: f64,
     stock: &Marker,
     o: &Options,
     work: &mut Work,
 ) -> Result<Option<CutPlacement>, Refusal> {
     let b = bbox(&stock.outline_mm)?;
-    let w = shape.bounds[2] - shape.bounds[0];
-    let h = shape.bounds[3] - shape.bounds[1];
+    let w = shape.bounds_mm[2] - shape.bounds_mm[0];
+    let h = shape.bounds_mm[3] - shape.bounds_mm[1];
     // Padding affects candidate construction only; no geometry or requested clearance is clamped.
     let guard = 128.0 * f64::EPSILON * (1.0 + b.iter().map(|v| v.abs()).fold(0.0, f64::max));
     let margin = o.boundary_margin_mm + guard;
@@ -506,14 +524,14 @@ fn locate(
         for ix in 0..=nx {
             checked(work.tick())?;
             work.candidates += 1;
-            checked(work.spend(shape.ring.len()))?;
+            checked(work.spend(shape.cut_mm.len()))?;
             let x = if ix == nx {
                 hi.x
             } else {
                 lo.x + ix as f64 * o.step_mm
             };
-            let offset = Vec2::new(x - shape.bounds[0], y - shape.bounds[1]);
-            let ring: Vec<_> = shape.ring.iter().map(|p| *p + offset).collect();
+            let offset = Vec2::new(x - shape.bounds_mm[0], y - shape.bounds_mm[1]);
+            let ring: Vec<_> = shape.cut_mm.iter().map(|p| *p + offset).collect();
             let rb = bbox(&ring)?;
             if !checked(enclosed(
                 &ring,
@@ -556,12 +574,13 @@ fn locate(
                 }
             }
             if free {
-                let placed = place(shape, copy, offset)?;
+                let placed = relocate(shape, false, offset, ring, rb)
+                    .ok_or_else(|| bad("finite-stock placement overflows"))?;
                 let d = placed.grain_mm[1] - placed.grain_mm[0];
                 if !d.is_finite()
                     || d.norm2() == 0.0
                     || !d.norm2().is_finite()
-                    || (area_m2(&placed.cut_mm) - shape.area).abs() > shape.area * 1e-8
+                    || (area_m2(&placed.cut_mm) - area).abs() > area * 1e-8
                     || !checked(simple(&placed.cut_mm, work))?
                 {
                     return Err(bad(
