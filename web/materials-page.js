@@ -327,11 +327,24 @@ function calibrationResult(parent, r) {
   for (const [i, axis] of ["Warp / wale (E11)", "Weft / course (E22)", "Engineering shear (2 E12)"].entries()) {
     cells(domain, [axis, metric(range?.[i]?.[0]), metric(range?.[i]?.[1])]);
   }
+  if (c.orthotropic_fit) {
+    const recovery = table(parent, "Directional recovery — published stiffness at supplied times", ["Time (s)", "Retained branch",
+      "Warp / wale (N/m)", "Weft / course (N/m)", "Normal coupling (N/m)", "Shear (N/m)"]);
+    for (const row of c.orthotropic_fit.candidates) {
+      cells(recovery, [metric(row.time_seconds), row.active ? "Active" : "Inactive", ...row.stiffness_n_m.map(metric)]);
+    }
+    const fixed = document.createElement("p");
+    fixed.textContent = "Candidate times are supplied by the request, not optimized from the histories. The table shows the published tensors after any explicit zero threshold. " +
+      "Inactive candidates remain visible; an entirely inactive spectrum retains only the supplied equilibrium. The source-declared strain domain is not inferred from small residuals.";
+    parent.append(fixed);
+    detail(parent, "Unconstrained, physically constrained and published candidate tensors (display only)", c.orthotropic_fit);
+  }
   const note = document.createElement("p");
   note.textContent = "Scaled errors use the input's declared force scales; they are not confidence intervals. " +
     "An absent held-out partition is not a passed check. Fitted coefficients remain estimates, and coefficient availability does not establish a successful garment simulation or measured fit.";
   parent.append(note);
-  if (!nonlinear) detail(parent, "Identified recovery branches and initial-state declaration (display only)", c.material.membrane_relaxation);
+  if (!nonlinear) detail(parent, "Identified recovery branches and initial-state declaration (display only)",
+    c.material.membrane_relaxation || { response: "Supplied equilibrium only; no active recovery branches." });
   detail(parent, "Complete observations, predictions, residuals and identification diagnostics (display only)", c);
   return { response: method, material_id: r.selection.id, allow_estimates: r.selection.allow_estimates,
     mechanical_coefficients_available: r.material.capabilities.mechanical_coefficients?.ready === true,

@@ -38,6 +38,32 @@ fn identified(time_scale: f64) -> Selection {
         .frozen_selection()
 }
 
+fn identified_directional(time_scale: f64) -> Selection {
+    let mut input: Input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
+    ))
+    .unwrap();
+    for experiment in &mut input.experiments {
+        for sample in &mut experiment.samples {
+            sample.time_seconds *= time_scale;
+        }
+    }
+    for time in &mut input.orthotropic.as_mut().unwrap().times_seconds {
+        *time *= time_scale;
+    }
+    let report = calibrate(&input).unwrap();
+    catalog()
+        .unwrap()
+        .resolve(&Selection {
+            id: report.material.id.clone(),
+            record: Some(report.material),
+            allow_estimates: true,
+            ..Selection::default()
+        })
+        .unwrap()
+        .frozen_selection()
+}
+
 fn solver(select: &Selection, fixed: bool) -> Solver {
     let record = catalog().unwrap().resolve(select).unwrap();
     let pattern = Pattern::new(json!({"fabric":{"material":select}}));
@@ -148,4 +174,79 @@ fn solver_time_refinement_converges_to_the_independent_continuous_spectrum() {
     let fine = integrate(0.01, 60);
     assert!(coarse > 1e-6);
     assert!(fine < coarse / 8., "coarse {coarse}, fine {fine}");
+}
+
+#[test]
+fn identified_directional_tensors_reproduce_independent_mixed_mode_triangle_forces() {
+    let selected = identified_directional(1.);
+    let mut s = solver(&selected, true);
+    // Explicit F excites warp, weft, signed coupling and shear simultaneously. For the
+    // 0.1 m right reference triangle, nodal forces are -0.05 times the columns of P=F*S.
+    let (a, b, d) = (1.08_f64, 0.05_f64, 1.02_f64);
+    s.x[1] = Vec3::new(0.1 * a, 0., 0.);
+    s.x[2] = Vec3::new(0.1 * b, 0.1 * d, 0.);
+    let initial = s.x.clone();
+    let strain = [(a * a - 1.) / 2., (b * b + d * d - 1.) / 2., a * b];
+    for step in 1..=20 {
+        assert!(s.step(0.05).unwrap().converged);
+        let mut stress = [800. * strain[0], 500. * strain[1], 120. * strain[2]];
+        for (tau, [warp, weft, coupling, shear]) in [
+            (0.3_f64, [240., 60., -30., 0.]),
+            (2., [0., 0., 0., 90.]),
+            (8., [0., 120., 0., 0.]),
+        ] {
+            let decay = (tau / (tau + 0.05)).powi(step);
+            stress[0] += decay * (warp * strain[0] + coupling * strain[1]);
+            stress[1] += decay * (coupling * strain[0] + weft * strain[1]);
+            stress[2] += decay * shear * strain[2];
+        }
+        let first = Vec3::new(
+            -0.05 * (a * stress[0] + b * stress[2]),
+            -0.05 * d * stress[2],
+            0.,
+        );
+        let second = Vec3::new(
+            -0.05 * (a * stress[2] + b * stress[1]),
+            -0.05 * d * stress[1],
+            0.,
+        );
+        for (force, expected) in s
+            .elastic_forces()
+            .iter()
+            .zip([-(first + second), first, second])
+        {
+            assert!((force.x - expected.x).abs() < 1e-8);
+            assert!((force.y - expected.y).abs() < 1e-8);
+            assert!(force.z.abs() < 1e-12);
+        }
+        assert_eq!(s.x, initial);
+    }
+    assert_eq!(
+        s.relaxation_report().unwrap().unwrap()["accepted_steps"],
+        20
+    );
+}
+
+#[test]
+fn independently_calibrated_recovery_times_change_actual_free_motion_only_through_materials() {
+    let fast_material = identified_directional(1.);
+    let slow_material = identified_directional(4.);
+    assert_eq!(
+        serde_json::to_value(&fast_material.record.as_ref().unwrap().properties).unwrap(),
+        serde_json::to_value(&slow_material.record.as_ref().unwrap().properties).unwrap()
+    );
+    let mut fast = solver(&fast_material, false);
+    let mut slow = solver(&slow_material, false);
+    fast.gravity = Vec3::new(100., 0., 0.);
+    slow.gravity = fast.gravity;
+    assert_eq!(fast.x, slow.x);
+    assert_eq!(fast.model.mass, slow.model.mass);
+    assert_eq!(fast.model.membrane, slow.model.membrane);
+    assert_eq!(fast.model.bending, slow.model.bending);
+    for _ in 0..40 {
+        assert!(fast.step(0.01).unwrap().converged);
+        assert!(slow.step(0.01).unwrap().converged);
+    }
+    assert!((fast.x[1].x - slow.x[1].x).abs() > 1e-8);
+    assert_ne!(fast_material.expected_sha256, slow_material.expected_sha256);
 }

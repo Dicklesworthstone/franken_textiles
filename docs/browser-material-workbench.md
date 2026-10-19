@@ -59,8 +59,8 @@ inputs, not a real qualified textile or recommended machine configuration.
 Section 1 accepts `ftx-nonlinear-swatch-calibration/1` observations for nonlinear stretch and shear,
 or `ftx-relaxation-calibration/1` complete loading histories for relaxation, creep and recovery.
 Choose the matching response, load the source-bearing JSON and run **Identify material behavior**.
-Timed requests preserve their independent long-time equilibrium and declare proportional
-ratio/time search bounds. The shared Rust
+Timed requests preserve their independent long-time equilibrium and choose either proportional
+ratio/time search or an explicit `orthotropic` time grid for directional recovery. The shared Rust
 calibrators own the models, fitting, evidence admission, identifiability and residual gates; the page
 neither fits coefficients itself nor rewrites the supplied measurements.
 
@@ -75,6 +75,14 @@ and the applicable Green-strain domain. An absent held-out partition says **not 
 domain endpoints come from fitting observations; timed applicability is source-declared. Complete
 observations, predictions, residuals and fitted recovery branches remain inspectable. These quantities
 are not confidence intervals or independent garment validation.
+
+For directional recovery, the table reports each supplied time and its published warp, weft, normal
+coupling and shear tensor entries in N/m. Inactive candidates remain visible with their explicit zero
+coefficients; an entirely inactive spectrum retains the independently supplied equilibrium response.
+Candidate times are fixed inputs, not automatically optimized. The full report separately preserves
+unconstrained, physically constrained and explicitly thresholded values. Fit and held-out errors refer
+to the final published law, including threshold decisions. Small errors do not establish a unique
+spectrum or extend its source-qualified strain applicability.
 
 The generated selection is ready for the same default or source-piece assignment and binding steps.
 Its exact Rust `selection_json` is retained through assignment and download, preserving numeric source

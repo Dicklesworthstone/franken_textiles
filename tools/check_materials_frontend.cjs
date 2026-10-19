@@ -15,10 +15,15 @@ function calibrationReport(mode = 'nonlinear', admission = false, check = true) 
     material: { selection: JSON.parse(selection), selection_json: selection, snapshot: { id: 'identified' },
       capabilities: { mechanical_coefficients: admission ? {ready:true} : {ready:false,refusal:{message:'Fitted estimates need admission'}} } },
     calibration: { schema: mode === 'nonlinear' ? 'ftx-nonlinear-swatch-calibration-report/1' : 'ftx-relaxation-calibration-report/1',
-      input: { orthotropic: mode === 'relaxation' ? {times_seconds:[0.3,8]} : undefined,
+      input: { orthotropic: mode === 'relaxation' ? {times_seconds:[0.3,2,8,32]} : undefined,
         strain_range: [[-0.1,0.2],[-0.2,0.3],[-0.4,0.4]], max_rms_scaled:0.05, max_peak_scaled:0.1 },
       fitted_strain_range: [[-0.1,0.2],[-0.2,0.3],[-0.4,0.4]],
-      material: { membrane_relaxation: { orthotropic_branches: [{id:'warp'},{id:'shear'}] } },
+      material: { membrane_relaxation: { orthotropic_branches: [{id:'warp'},{id:'shear'},{id:'weft'}] } },
+      orthotropic_fit: mode === 'relaxation' ? {candidates:[
+        {time_seconds:0.3,stiffness_n_m:[240,60,-30,0],active:true},
+        {time_seconds:2,stiffness_n_m:[0,0,0,90],active:true},
+        {time_seconds:8,stiffness_n_m:[0,120,0,0],active:true},
+        {time_seconds:32,stiffness_n_m:[0,0,0,0],active:false}]} : undefined,
       fit: quality, check: check ? quality : null, input_sha256:'source-lock', missing_mechanics:[] } };
 }
 
@@ -362,6 +367,11 @@ test('calibration consent and response changes withdraw only the prepared result
   assert.equal(p.current().messages.at(-1).calibrationMode,'relaxation');
   p.emit(calibrationReport('relaxation',true),[{name:'calibrated-selection.json',text:calibrationSelection(true),mime:'application/json'}]);
   assert.match(visibleText(section(p,'Identified material behavior')),/Directional relaxation/);
+  const recovery=descendants(section(p,'Identified material behavior')).find(n=>n.tag==='table' &&
+    n.children[0].textContent==='Directional recovery — published stiffness at supplied times');
+  assert.deepEqual(plain(recovery.children[2].children.map(n=>n.textContent)),['0.3','Active','240','60','-30','0']);
+  assert.deepEqual(plain(recovery.children[5].children.map(n=>n.textContent)),['32','Inactive','0','0','0','0']);
+  assert.match(visibleText(section(p,'Identified material behavior')),/not optimized from the histories/);
   p.e.calibrationEstimates.checked=false; p.e.calibrationEstimates.handlers.change();
   assert.equal(p.live.size,0); assert.equal(p.e.assign.disabled,true);
   await p.e.calibrate.onclick(); const old=p.current(), id=old.messages.at(-1).request;
@@ -721,7 +731,7 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
       assert.deepEqual(calibration.material, JSON.parse(ftx.material_inspect(calibration.material.selection_json)));
     }
     for (const [mode, filename] of [['nonlinear','synthetic-nonlinear-swatch.json'],
-      ['relaxation','synthetic-relaxation-history.json']]) {
+      ['relaxation','synthetic-relaxation-history.json'], ['relaxation','synthetic-orthotropic-relaxation-history.json']]) {
       const calibrationRequest = fixture(filename);
       for (const allowEstimates of [false, true]) {
         const identified = await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest,allowEstimates});

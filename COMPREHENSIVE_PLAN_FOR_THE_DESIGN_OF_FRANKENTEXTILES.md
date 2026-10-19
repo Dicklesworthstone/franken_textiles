@@ -1419,8 +1419,8 @@ at different rates. Explicit inactive directions, stable signed normal coupling 
 specimen/conditioning are required; no material-name branch or separate solver is introduced.
 The existing proportional history and serialization remain compatible. Actual per-piece sewn
 triangles, clamped reactions, free dynamics and motion continuation use the same history path.
-The automatic timed fitter still identifies proportional spectra; independent directional
-identification and measured cyclic acceptance remain work to complete.
+At this increment the timed fitter identified proportional spectra. Section 25.16 adds
+independent directional identification at supplied times; measured cyclic acceptance remains open.
 
 **Quantity-aware procurement (`ftx-tm6`).** Commit `00a773b` binds optional quotes to exact
 resolved material hashes and checks the complete minimum/increment-rounded order against observed
@@ -1582,6 +1582,49 @@ finish. `ftx-ex3` tracks explicit source-face orientation and automatic property
 reversed pieces and layer changes. Measured ventilation, non-unit view factors, pressure-dependent
 loft, moisture/evaporation, full wearer thermoregulation and the fixed-jacket empirical gates in
 `ftx-tm2`/`ftx-tm8`/`ftx-tmf` are not established by these numerical results.
+
+---
+
+### 25.16 Measured-history identification reaches the material workbench
+
+**Calibration as a usable design workflow (`ftx-tm2`, `ftx-tm4`, `ftx-rc1`).** Commit
+`f4f3a28` adds local nonlinear-swatch and timed-recovery identification to the browser material
+workbench, with the same shared Rust engines used by both native commands. Imported observations
+produce separate fit/held-out residuals, applicable strain domains, source/evidence diagnostics and
+ordinary material capability reports. The generated frozen selection can be assigned to the pattern
+default or individual pieces and consumed by the existing drape and manufacturing paths. Exact
+selection, original acquisition and report text are retained for downloads and binding; evidence
+consent, failed replacement fits and newer edits cannot silently reuse a prior pending selection.
+
+**Independent directional recovery (`ftx-rc1`).** The timed fitter now accepts one to eight
+explicit candidate times and identifies independent warp/wale, weft/course, signed normal coupling
+and shear stiffnesses at each time. It uses complete deformation histories, nominal forces in N/m,
+independently characterized equilibrium and the existing exact acquisition-time integration.
+A convex positive-semidefinite fit supports inactive axes and an explicit caller-selected zero
+threshold. Every candidate retains its unconstrained, constrained and published coefficients,
+including inactive candidates. Deficient excitation, nonconvergence and failed residual budgets
+refuse; held-out histories never select coefficients or candidates. The original proportional
+ratio/time optimizer and serialized reports remain compatible when this mode is omitted.
+
+The result is the existing orthotropic Maxwell material law, not a new cloth solver. Final residuals
+are replayed through the compiled physical response. Independent synthetic checks cover mixed-mode
+forces, unequal acquisition scales, signed coupling, incomplete sensors, nonlinear equilibrium,
+loading/unloading, actual clamped reactions, changed free motion and per-piece sewn history.
+The browser displays the retained directional tensors and runs the same fixture through WASM and
+native identification, exact binding and capability checks. See `docs/relaxation-calibration.md`
+and `docs/browser-material-workbench.md`.
+
+**Next consequential identification work (`ftx-rc2`).** Directional candidate times are supplied
+by the caller; they are not automatically optimized or inferred durations. Add bounded, observable
+time identification and explicit model-order comparison without using held-out histories to select
+the model. Preserve inactive directions, physical tensor constraints, reproducible initialization
+and honest sensitivity/domain limits. Numerical convergence is not coefficient uncertainty.
+
+**Empirical and material-state priorities remain open.** Matched real linen, treated cowhide and
+performance-knit acquisitions and independent sewn-garment checks still gate `ftx-tm2`,
+`ftx-tm8` and `ftx-rc1`. Residual in-plane stretch and damage (`ftx-ps1`), contact-coupled
+compression/heat (`ftx-cp2`), moisture and qualified machine recipes remain separate work.
+A successful fit does not supply missing mass, bending, friction, transport or process evidence.
 
 ---
 

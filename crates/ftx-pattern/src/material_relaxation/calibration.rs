@@ -1,4 +1,4 @@
-//! Identify proportional Maxwell spectra from complete planar swatch loading histories.
+//! Identify Maxwell spectra from complete planar swatch loading histories.
 //!
 //! The equilibrium response is supplied independently, never fitted from an instantaneous modulus.
 //! Internal lag is integrated exactly for piecewise-linear Green strain, including finite ramps and
@@ -15,6 +15,9 @@ use crate::material_catalog::normalize;
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
 
 mod fit;
+mod orthotropic;
+
+pub use orthotropic::{Candidate, OrthotropicFitReport, OrthotropicInput};
 
 /// Portable measurement-to-material input schema.
 pub const SCHEMA: &str = "ftx-relaxation-calibration/1";
@@ -84,7 +87,13 @@ pub struct Input {
     /// Analysis date; caller supplied to keep replay deterministic.
     pub fitted_on: String,
     /// One to three ordered, non-overlapping search intervals in seconds. They are NOT error bars.
+    /// Omit or leave empty when fitting orthotropic tensors at explicit candidate times instead.
+    #[serde(default)]
     pub time_bounds_seconds: Vec<[f64; 2]>,
+    /// Optional independent directional tensors at fixed candidate times. Mutually exclusive with
+    /// time_bounds_seconds; omission preserves the original proportional identification path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orthotropic: Option<OrthotropicInput>,
     /// Fit and held-out acquisitions, at most 32 histories and 2048 states in total.
     pub experiments: Vec<Experiment>,
     /// Maximum RMS of scaled residuals in EACH partition, not a confidence threshold.
@@ -127,12 +136,18 @@ pub struct Report {
     pub check: Option<Quality>,
     /// Source-ordered force predictions and residuals for all acquisitions.
     pub predictions: Vec<Prediction>,
-    /// Smallest pivot of the column-normalized log-parameter Jacobian Gram matrix, not uncertainty.
+    /// Smallest pivot of the column-normalized force Jacobian Gram matrix, not uncertainty.
     pub excitation_pivot: f64,
-    /// Norms of scaled force sensitivity to each log ratio then each log time; not standard errors.
+    /// Proportional mode: scaled-force sensitivity to each log ratio then each log time. Orthotropic
+    /// mode: sensitivity to each N/m coefficient [warp,weft,coupling,shear] in candidate order.
+    /// These are numerical excitation diagnostics, not standard errors.
     pub parameter_sensitivity: Vec<f64>,
     /// Deterministic starts tried; multiple starts do not establish a unique global optimum.
     pub starts_attempted: usize,
+    /// Candidate tensors, explicit physical constraints and threshold decisions for directional
+    /// identification. Omitted for the original proportional estimator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orthotropic_fit: Option<OrthotropicFitReport>,
     /// Physical properties still absent; no bending, mass or contact values are invented.
     pub missing_mechanics: Vec<String>,
 }
@@ -219,7 +234,8 @@ fn prepare(input: &Input) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
         || matches!(input.material.form, Form::Fiber | Form::Yarn | Form::Fill)
         || input.method.trim().is_empty()
         || input.fitted_on.trim().is_empty()
-        || !(1..=3).contains(&input.time_bounds_seconds.len())
+        || (input.orthotropic.is_none() && !(1..=3).contains(&input.time_bounds_seconds.len()))
+        || (input.orthotropic.is_some() && !input.time_bounds_seconds.is_empty())
         || !(1..=32).contains(&input.experiments.len())
         || input
             .experiments
@@ -379,35 +395,21 @@ fn quality(residuals: &[f64], input: &Input, partition: &str) -> Result<Quality,
     })
 }
 
-/// Identify one to three positive Maxwell ratios and times, producing the existing material law.
-/// The supplied equilibrium is fixed, and all sample histories must use the same specimen conditions.
-/// This does not identify yarn structure, anisotropic time spectra, plastic set or strain uncertainty.
-///
-/// # Errors
-/// Invalid evidence/history/domain, missing equilibrium response, unexcited/ill-conditioned spectrum,
-/// boundary-limited or unconverged optimization, or excessive training/held-out force residuals.
-pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
-    let (histories, q) = prepare(input)?;
-    let fit = fit::solve(&histories, q, &input.time_bounds_seconds)?;
-    let n = input.time_bounds_seconds.len();
-    let ratios: Vec<_> = fit.parameters[..n]
-        .iter()
-        .map(|v| ftx_core::det::exp(*v))
-        .collect();
-    let times: Vec<_> = fit.parameters[3..3 + n]
-        .iter()
-        .map(|v| ftx_core::det::exp(*v))
-        .collect();
+fn residuals(
+    input: &Input,
+    histories: &[History],
+    mut predict: impl FnMut(&History) -> Result<Vec<[f64; 4]>, Refusal>,
+) -> Result<(Vec<Prediction>, Quality, Option<Quality>), Refusal> {
     let mut predictions = Vec::new();
     let mut fit_errors = Vec::new();
     let mut check_errors = Vec::new();
-    for (e, history) in input.experiments.iter().zip(&histories) {
-        let predicted = fit::predict(history, q, &ratios, &times)?;
+    for (e, history) in input.experiments.iter().zip(histories) {
+        let predicted = predict(history)?;
         for (point, values) in history.points.iter().zip(predicted) {
             let mut residual = [[None; 2]; 2];
             for j in 0..4 {
                 if let Some(observed) = point.observed[j] {
-                    let delta = values.force[j] - observed;
+                    let delta = values[j] - observed;
                     residual[j / 2][j % 2] = Some(delta);
                     let errors = if e.partition == Partition::Fit {
                         &mut fit_errors
@@ -422,10 +424,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
                 partition: e.partition,
                 time_seconds: point.time,
                 strain: point.strain,
-                nominal_n_m: [
-                    [values.force[0], values.force[1]],
-                    [values.force[2], values.force[3]],
-                ],
+                nominal_n_m: [[values[0], values[1]], [values[2], values[3]]],
                 residual_n_m: residual,
             });
         }
@@ -436,6 +435,10 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     } else {
         Some(quality(&check_errors, input, "held-out")?)
     };
+    Ok((predictions, fit_quality, check))
+}
+
+fn receipt(input: &Input) -> Result<(Material, String, String), Refusal> {
     let bytes = serde_json::to_vec(input).map_err(|e| bad(e.to_string()))?;
     let digest = sha256_hex(&bytes);
     let source = format!("relaxation-fit-{digest}");
@@ -447,6 +450,39 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         reference: format!("local:ftx-relaxation-calibration/{digest}"), accessed_on: input.fitted_on.clone(),
         note: "Fitted model estimates. Complete acquisitions and previous material evidence are retained in the calibration report; preserve that report with the selection.".into(),
     });
+    Ok((material, source, digest))
+}
+
+/// Identify positive proportional ratios/times or independent orthotropic tensors at fixed times,
+/// producing the existing material law. The supplied equilibrium is fixed, and all histories must
+/// use the same specimen conditions. This does not identify yarn structure, plastic set or strain
+/// uncertainty; directional candidate times are supplied, not optimized automatically.
+///
+/// # Errors
+/// Invalid evidence/history/domain, missing equilibrium response, unexcited/ill-conditioned spectrum,
+/// boundary-limited or unconverged optimization, or excessive training/held-out force residuals.
+pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
+    if let Some(options) = &input.orthotropic {
+        return orthotropic::calibrate(input, options);
+    }
+    let (histories, q) = prepare(input)?;
+    let fit = fit::solve(&histories, q, &input.time_bounds_seconds)?;
+    let n = input.time_bounds_seconds.len();
+    let ratios: Vec<_> = fit.parameters[..n]
+        .iter()
+        .map(|v| ftx_core::det::exp(*v))
+        .collect();
+    let times: Vec<_> = fit.parameters[3..3 + n]
+        .iter()
+        .map(|v| ftx_core::det::exp(*v))
+        .collect();
+    let (predictions, fit_quality, check) = residuals(input, &histories, |history| {
+        Ok(fit::predict(history, q, &ratios, &times)?
+            .into_iter()
+            .map(|p| p.force)
+            .collect())
+    })?;
+    let (mut material, source, digest) = receipt(input)?;
     let fitted = law(input, &ratios, &times, &source);
     fitted.compile(&material.sources, true, q)?;
     material.membrane_relaxation = Some(fitted);
@@ -467,6 +503,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         excitation_pivot: fit.pivot,
         parameter_sensitivity: fit.sensitivity,
         starts_attempted: fit.starts,
+        orthotropic_fit: None,
         missing_mechanics,
     })
 }

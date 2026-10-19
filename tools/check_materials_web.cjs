@@ -71,7 +71,7 @@ const server = http.createServer((req, res) => {
     await page.setInputFiles('#patternFile', fixture('synthetic-sewing-pattern.json'));
     await page.waitForFunction(() => !document.getElementById('assign').disabled);
     for (const [mode, filename] of [['nonlinear','synthetic-nonlinear-swatch.json'],
-      ['relaxation','synthetic-relaxation-history.json']]) {
+      ['relaxation','synthetic-relaxation-history.json'], ['relaxation','synthetic-orthotropic-relaxation-history.json']]) {
       await page.selectOption('#calibrationMode',mode);
       await page.setInputFiles('#calibrationRequest',fixture(filename));
       for (const admission of [false,true]) {
@@ -86,6 +86,10 @@ const server = http.createServer((req, res) => {
         assert.equal(await download('calibrated-selection.json'),report.selection_json);
         assert.equal(await page.inputValue('#selection'),report.selection_json);
         assert.match(await page.locator('#outputs').textContent(),/Observed force errors/);
+        if (report.calibration.orthotropic_fit) {
+          assert.match(await page.locator('#outputs').textContent(),/Directional recovery — published stiffness at supplied times/);
+          assert.match(await page.locator('#outputs').textContent(),/Inactive/);
+        }
         await page.click('#assign'); assert.equal(await run('bind'),'');
         const selected=JSON.parse(await download('pattern.json'));
         assert.equal(selected.fabric.material.expected_sha256,report.selection.expected_sha256);
@@ -148,7 +152,7 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => !document.getElementById('error').hidden);
     assert.equal(await page.locator('a[download="pattern.json"]').count(),0); assert.equal(await page.isDisabled('#bind'),true);
     assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
-    console.log('PASS: real browser nonlinear/proportional calibration and estimate admission, catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, invalidation and model refusal.');
+    console.log('PASS: real browser nonlinear/proportional/directional calibration and estimate admission, catalog, frozen binding, material substitution, cutting/SVG, sewing, cost, source-locked thermal worker/native equality, invalidation and model refusal.');
     console.log('No successful model-backed browser drape or real textile validation asserted. Artifacts:',work);
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(e => { console.error(e); server.close(); process.exitCode=1; });

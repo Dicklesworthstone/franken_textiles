@@ -37,6 +37,7 @@ fn input(modes: &[(f64, f64)], ramp: bool) -> Input {
         initialization: Initialization::StressFreeReference,
         fitted_on: "2026-10-14".into(),
         time_bounds_seconds: modes.iter().map(|&(_, t)| [t / 3., t * 3.]).collect(),
+        orthotropic: None,
         experiments: vec![],
         max_rms_scaled: 1e-6,
         max_peak_scaled: 1e-6,

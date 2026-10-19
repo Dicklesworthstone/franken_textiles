@@ -49,7 +49,8 @@ The prepared selection can be assigned below; it does not infer garment contact 
 <button id="calibrate" data-command="calibrate" disabled>Identify material behavior</button>
 <p class="note">The request owns the specimen, acquisition method, conditioning, fit/check partitions and error budgets.
 Nonlinear swatches use <code>ftx-nonlinear-swatch-calibration/1</code>; timed histories use <code>ftx-relaxation-calibration/1</code>.
-A timed request declares its independent equilibrium response and proportional relaxation search bounds.
+A timed request declares its independent equilibrium response and either proportional search bounds or an explicit
+<code>orthotropic</code> time grid for directional recovery. Directional times are supplied, not automatically optimized.
 Estimated input observations and replacement of an existing law
 require separate consent in the file. The checkbox only admits the fitted output estimates; missing mass, bending or contact data stay missing.</p>
 <p class="note">Review fit and held-out errors below, then assign the exact identified selection in section 2.

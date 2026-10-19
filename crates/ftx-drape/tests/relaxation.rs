@@ -275,7 +275,22 @@ fn pattern() -> Pattern {
 
 #[test]
 fn source_selection_reaches_only_assigned_retained_triangles_in_real_sewn_scene() {
-    for selected in [selection(), directional_selection()] {
+    let input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
+    ))
+    .unwrap();
+    let fitted = ftx_pattern::material_relaxation::calibration::calibrate(&input).unwrap();
+    let calibrated = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: fitted.material.id.clone(),
+            record: Some(fitted.material),
+            allow_estimates: true,
+            ..Selection::default()
+        })
+        .unwrap()
+        .frozen_selection();
+    for selected in [selection(), directional_selection(), calibrated] {
         check_sewn_selection(selected);
     }
 }
@@ -285,6 +300,7 @@ fn check_sewn_selection(selected: Selection) {
     p["fabric"]["material"] = json!(selected);
     let mut equilibrium = selected;
     equilibrium.record.as_mut().unwrap().membrane_relaxation = None;
+    equilibrium.expected_sha256 = None;
     p["pieces"][1]["fabric"] = json!({"material":equilibrium});
     let opts = DrapeOptions {
         spacing: 24.,

@@ -13,7 +13,7 @@ pub(super) struct Prediction {
 
 // a = exp(-h/tau), phi = (1-a)/(h/tau), and dphi/dlog(tau) = phi-a.
 // The small-argument branch avoids cancellation in the time sensitivity, not just in phi.
-fn weights(h: f64, tau: f64) -> (f64, f64, f64, f64) {
+pub(super) fn weights(h: f64, tau: f64) -> (f64, f64, f64, f64) {
     let r = h / tau;
     if !r.is_finite() {
         return (0., tau / h, tau / h, 0.);
