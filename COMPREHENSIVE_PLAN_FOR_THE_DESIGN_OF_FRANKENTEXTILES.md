@@ -1810,6 +1810,32 @@ No numerical success supplies missing linen/leather/knit parameters or closes `f
 
 ---
 
+### 25.22 Measured apparel specimens extend the shared material authority
+
+**Eight matched thermal fabric groups (`ftx-tm2`, `ftx-tma`).** The bundled catalog now
+includes De Mey et al. (2025), DOI `10.3390/textiles5040066`, Table 1: angora, polyester/Outlast,
+cotton/elastane and cotton single jerseys, two linen/cotton complex wovens, a wool/linen/cotton
+plain weave and a cotton/linen chenille. All eight retain the reported composition/construction,
+measured mass, gauge thickness and effective guarded-hotplate resistance, with immutable source
+identity and original units. Ordinary material discovery, freezing, screening and steady thermal
+comparison consume these same records. The total catalog grows from 154 to 162 records, preserving
+the recently added neoprene constructions and discrete wet-denim observations.
+
+The source's 0.5 kPa gauge thickness and 35/25 °C plate-to-plate thermal protocol are distinct.
+No conductivity is derived from unmatched pressure/contact conditions. Raw replicate values,
+uncertainty bounds, heat capacity, contact corrections, temperature validity intervals and Outlast
+phase-change properties are not supplied. Existing scalar resistance semantics support a declared
+constant-property steady calculation; this is not an experimentally validated field-temperature
+extrapolation or arbitrary multilayer contact law. Transient heat and complete mechanics remain
+unavailable for these records. Independent table transcription and actual canonical flux/screening
+tests check software propagation and exact-source replay. See `docs/measured-apparel-thermal.md`.
+
+**Remaining physical characterization.** Matched directional mechanics, conditioned thermal
+storage, contact-separated transport and held-out sewn-garment measurements remain open. These
+source-specific observations must not become universal values for a fiber, brand or construction.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
