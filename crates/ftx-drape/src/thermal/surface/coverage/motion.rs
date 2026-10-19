@@ -16,9 +16,56 @@ use ftx_pattern::material_thermal::ThermalLaw;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::{Boundary, Coverage, CoverageState, CoverageStep, Surface, invalid};
-use crate::thermal::surface::projection::{self, Projection, Request};
+use super::{Boundary, Coverage, CoverageState, CoverageStep, ExteriorConditions, Surface, invalid};
+use crate::thermal::{
+    exterior::ExteriorFlux,
+    steady::exterior::Exterior,
+    surface::projection::{self, Projection, Request},
+};
 use projection::clip::{Work, area, bounds_overlap, intersection};
+
+/// Canonical inside/outside faces of uncovered cloth, in retained source-triangle order.
+/// Optional environments replace the outside films only on currently exposed fractions.
+/// The caller identifies each canonical outside optical face explicitly; free-form material face
+/// names are not inferred from source normals or from whichever side is nearest a body surface.
+#[derive(Clone, Copy, Debug)]
+pub struct ExposedConditions<'a> {
+    /// Exactly one boundary per retained source cloth triangle; no implicit broadcast.
+    pub boundaries: &'a [Boundary],
+    /// Exactly one qualified environment per source triangle when present. Hidden fractions do
+    /// not acquire an exterior surface or require an unrelated lining's optical observations.
+    pub environments: Option<&'a [Exterior]>,
+}
+
+/// Exterior exchange on one active uncovered source-triangle fraction.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExposedTriangleExteriorExchange {
+    /// Retained source triangle index, independent of current body-region order.
+    pub cloth_triangle: usize,
+    /// Current area of this triangle's uncovered fraction, in m².
+    pub current_area_m2: f64,
+    /// Signed fluxes per current exposed cloth area and the solved canonical outside face.
+    pub flux: ExteriorFlux,
+    /// Signed convection leaving this exposed fraction, W.
+    pub convective_heat_w: f64,
+    /// Signed radiation leaving this exposed fraction, W.
+    pub radiative_heat_w: f64,
+    /// Conductive outward power minus convection and radiation, W.
+    pub balance_residual_w: f64,
+}
+
+/// Only uncovered-cloth exterior terms; covered regions remain in [CoverageStep].
+#[derive(Clone, Debug, Serialize)]
+pub struct ExposedExteriorExchange {
+    /// Active uncovered fractions in ascending retained source-triangle order.
+    pub triangles: Vec<ExposedTriangleExteriorExchange>,
+    /// Signed convection over the active uncovered material, W.
+    pub convective_heat_w: f64,
+    /// Signed radiation over the active uncovered material, W.
+    pub radiative_heat_w: f64,
+    /// Sum of local exterior equation residuals in W; separate from stored-energy error in J.
+    pub balance_residual_w: f64,
+}
 
 /// One derived geometric partition and its frozen poses. No mutable projection enters the remapper.
 #[derive(Clone, Debug)]
@@ -67,6 +114,7 @@ pub struct Step {
     exposed_outside_heat_w: f64,
     exposed_stored_change_j: f64,
     exposed_balance_error_j: f64,
+    exposed_exterior_exchange: Option<ExposedExteriorExchange>,
 }
 impl Step {
     /// Existing coverage fields, including boundary heat and reference-mass storage change.
@@ -84,7 +132,7 @@ impl Step {
         }
     }
 
-    /// Heat entering uncovered cloth faces only, W. Covered/body paths are in [`Self::heat`].
+    /// Heat entering uncovered cloth faces only, W. Covered/body paths are in [Self::heat].
     #[must_use]
     pub fn exposed_inside_heat_w(&self) -> f64 {
         self.exposed_inside_heat_w
@@ -109,7 +157,7 @@ impl Step {
     }
 
     /// Heat entering all modeled textile storage paths, W. Bare-body heat is retained in the
-    /// covered report's boundary totals but cancels from [`Self::net_heat_w`].
+    /// covered report's boundary totals but cancels from [Self::net_heat_w].
     #[must_use]
     pub fn inside_heat_w(&self) -> f64 {
         self.heat.inside_heat_w + self.exposed_inside_heat_w
@@ -131,6 +179,47 @@ impl Step {
     #[must_use]
     pub fn exposed_balance_error_j(&self) -> f64 {
         self.exposed_balance_error_j
+    }
+
+    /// Per-active-source-triangle exterior fields, absent for adiabatic or film-only exposed cloth.
+    #[must_use]
+    pub fn exposed_exterior_exchange(&self) -> Option<&ExposedExteriorExchange> {
+        self.exposed_exterior_exchange.as_ref()
+    }
+
+    fn exterior_totals(&self) -> Option<[f64; 3]> {
+        let covered = self.heat.exterior_exchange.as_ref();
+        let exposed = self.exposed_exterior_exchange.as_ref();
+        if covered.is_none() && exposed.is_none() {
+            return None;
+        }
+        Some([
+            covered.map_or(0., |e| e.convective_heat_w)
+                + exposed.map_or(0., |e| e.convective_heat_w),
+            covered.map_or(0., |e| e.radiative_heat_w)
+                + exposed.map_or(0., |e| e.radiative_heat_w),
+            covered.map_or(0., |e| e.balance_residual_w)
+                + exposed.map_or(0., |e| e.balance_residual_w),
+        ])
+    }
+
+    /// Signed convection over the covered and exposed textile paths that opted into exterior
+    /// exchange, W. Bare-body films and textile paths using ordinary films are not included.
+    #[must_use]
+    pub fn exterior_convective_heat_w(&self) -> Option<f64> {
+        self.exterior_totals().map(|values| values[0])
+    }
+
+    /// Signed radiation over all opted-in textile exterior paths, W; absent when none requested.
+    #[must_use]
+    pub fn exterior_radiative_heat_w(&self) -> Option<f64> {
+        self.exterior_totals().map(|values| values[1])
+    }
+
+    /// Sum of opted-in exterior equation residuals, W; separate from physical storage error in J.
+    #[must_use]
+    pub fn exterior_balance_residual_w(&self) -> Option<f64> {
+        self.exterior_totals().map(|values| values[2])
     }
 
     /// Covered plus uncovered material sensible-heat change, J.
@@ -505,6 +594,7 @@ impl Frame {
             exposed_outside_heat_w: 0.,
             exposed_stored_change_j: 0.,
             exposed_balance_error_j: 0.,
+            exposed_exterior_exchange: None,
         })
     }
 
@@ -518,28 +608,13 @@ impl Frame {
         seconds: f64,
         boundaries: &[Boundary],
     ) -> Result<Step, Refusal> {
-        self.check(state)?;
-        Ok(Step {
-            frame_sha256: self.sha256.clone(),
-            heat: self.coverage.advance(
-                &state.inner,
-                &self.cloth,
-                &self.body,
-                seconds,
-                boundaries,
-            )?,
-            exposed: state.exposed.clone(),
-            exposed_inside_heat_w: 0.,
-            exposed_outside_heat_w: 0.,
-            exposed_stored_change_j: 0.,
-            exposed_balance_error_j: 0.,
-        })
+        self.advance_with_exchange(state, seconds, boundaries, None, None)
     }
 
     /// Advance covered paths plus uncovered cloth faces under explicitly supplied face conditions.
-    /// Exposed-boundary order is retained source-cloth triangle order. A fully covered triangle's
-    /// boundary is validated but contributes no heat. Omitting these conditions via [`Self::advance`]
-    /// keeps uncovered cloth adiabatic rather than inventing an ambient reservoir.
+    /// Exposed-boundary order is retained source-cloth triangle order. Fully covered triangles
+    /// contribute no exposed heat. Omitting these conditions via [Self::advance] keeps uncovered
+    /// cloth adiabatic rather than inventing an ambient reservoir.
     ///
     /// # Errors
     /// Any covered solve error, wrong boundary count, invalid cloth geometry or exposed solve error.
@@ -550,17 +625,88 @@ impl Frame {
         boundaries: &[Boundary],
         exposed_boundaries: &[Boundary],
     ) -> Result<Step, Refusal> {
+        self.advance_with_exchange(
+            state,
+            seconds,
+            boundaries,
+            None,
+            Some(ExposedConditions {
+                boundaries: exposed_boundaries,
+                environments: None,
+            }),
+        )
+    }
+
+    /// Advance stored heat through covered regions and optional canonical exposed-cloth faces.
+    /// Covered environments use body-triangle order; exposed fields use source-triangle order.
+    /// Bare body exchange remains an explicitly prescribed film path, with no inferred skin optics.
+    /// Weather is a step input, not part of material-temperature identity: valid next-interval
+    /// conditions may change without remapping or resetting the old state.
+    ///
+    /// Optical face names have no automatic binding to a mesh normal. For covered regions the
+    /// caller must select the actual outer physical face on every region assigned an environment;
+    /// for uncovered cloth it must select the canonical source outside face. The existing depth
+    /// reversal in remapping preserves source orientation but does not choose a finish/property.
+    ///
+    /// # Errors
+    /// Wrong state, array counts or time; invalid active geometry/material/boundary observations;
+    /// incompatible exterior films or optical qualifications; failed solve or accumulated overflow.
+    /// All inputs remain unchanged and no partial field is returned on failure.
+    pub fn advance_with_exchange(
+        &self,
+        state: &State,
+        seconds: f64,
+        boundaries: &[Boundary],
+        covered_exterior: Option<ExteriorConditions<'_>>,
+        exposed_conditions: Option<ExposedConditions<'_>>,
+    ) -> Result<Step, Refusal> {
         self.check(state)?;
-        if exposed_boundaries.len() != self.coverage.source.patches.len() {
+        if exposed_conditions.is_some_and(|e| {
+            e.boundaries.len() != self.cloth_triangle_count()
+                || e.environments
+                    .is_some_and(|v| v.len() != self.cloth_triangle_count())
+        }) {
             return Err(invalid(
-                "exposed thermal motion needs one face boundary per source cloth triangle",
+                "exposed thermal motion needs one face boundary and, when enabled, one exterior environment per source cloth triangle",
             ));
         }
-        let heat =
-            self.coverage
-                .advance(&state.inner, &self.cloth, &self.body, seconds, boundaries)?;
+        let heat = match covered_exterior {
+            Some(e) => self.coverage.advance_exterior(
+                &state.inner,
+                &self.cloth,
+                &self.body,
+                seconds,
+                boundaries,
+                e,
+            )?,
+            None => self.coverage.advance(
+                &state.inner,
+                &self.cloth,
+                &self.body,
+                seconds,
+                boundaries,
+            )?,
+        };
+        let Some(conditions) = exposed_conditions else {
+            return Ok(Step {
+                frame_sha256: self.sha256.clone(),
+                heat,
+                exposed: state.exposed.clone(),
+                exposed_inside_heat_w: 0.,
+                exposed_outside_heat_w: 0.,
+                exposed_stored_change_j: 0.,
+                exposed_balance_error_j: 0.,
+                exposed_exterior_exchange: None,
+            });
+        };
         let fractions = self.exposed_fractions();
         let mut exposed = Vec::with_capacity(fractions.len());
+        let mut exchange = conditions.environments.map(|_| ExposedExteriorExchange {
+            triangles: Vec::new(),
+            convective_heat_w: 0.,
+            radiative_heat_w: 0.,
+            balance_residual_w: 0.,
+        });
         let mut inside = 0.;
         let mut outside = 0.;
         let mut stored = 0.;
@@ -569,7 +715,7 @@ impl Frame {
             .into_iter()
             .zip(&self.exposed_models)
             .zip(&state.exposed)
-            .zip(exposed_boundaries)
+            .zip(conditions.boundaries)
             .enumerate()
         {
             if fraction <= 0. {
@@ -588,13 +734,42 @@ impl Frame {
                     "exposed cloth current/reference area ratio is invalid",
                 ));
             }
-            let next = model.advance(old, seconds * ratio, *boundary)?;
+            let (next, exterior) = match conditions.environments {
+                Some(e) => {
+                    let next = model.advance_exterior(old, seconds * ratio, *boundary, &e[i])?;
+                    (next.state, Some(next.exchange))
+                }
+                None => (model.advance(old, seconds * ratio, *boundary)?, None),
+            };
             let current = current_area * fraction;
             let reference = patch.reference_area_m2 * fraction;
             inside += current * next.inside_flux_w_m2;
             outside += current * next.outside_flux_w_m2;
             stored += reference * next.stored_change_j_m2;
             error += reference * next.balance_error_j_m2;
+            if let Some(flux) = exterior {
+                let convective = current * flux.convective_flux_w_m2;
+                let radiative = current * flux.radiative_flux_w_m2;
+                let residual = current * flux.balance_residual_w_m2;
+                if [convective, radiative, residual]
+                    .iter()
+                    .any(|v| !v.is_finite())
+                {
+                    return Err(invalid("exposed exterior area-scaled heat overflow"));
+                }
+                let output = exchange.as_mut().expect("exterior branch enabled");
+                output.convective_heat_w += convective;
+                output.radiative_heat_w += radiative;
+                output.balance_residual_w += residual;
+                output.triangles.push(ExposedTriangleExteriorExchange {
+                    cloth_triangle: i,
+                    current_area_m2: current,
+                    flux,
+                    convective_heat_w: convective,
+                    radiative_heat_w: radiative,
+                    balance_residual_w: residual,
+                });
+            }
             exposed.push(next.temperature_c);
         }
         if [inside, outside, stored, error]
@@ -603,7 +778,7 @@ impl Frame {
         {
             return Err(invalid("exposed cloth heat accumulation overflow"));
         }
-        Ok(Step {
+        let step = Step {
             frame_sha256: self.sha256.clone(),
             heat,
             exposed,
@@ -611,7 +786,24 @@ impl Frame {
             exposed_outside_heat_w: outside,
             exposed_stored_change_j: stored,
             exposed_balance_error_j: error,
-        })
+            exposed_exterior_exchange: exchange,
+        };
+        if step
+            .exterior_totals()
+            .is_some_and(|values| values.iter().any(|v| !v.is_finite()))
+            || [
+                step.inside_heat_w(),
+                step.outside_heat_w(),
+                step.net_heat_w(),
+                step.stored_change_j(),
+                step.balance_error_j(),
+            ]
+            .iter()
+            .any(|v| !v.is_finite())
+        {
+            return Err(invalid("combined covered/exposed heat accumulation overflow"));
+        }
+        Ok(step)
     }
 
     fn exposed_fractions(&self) -> Vec<f64> {
