@@ -22,7 +22,7 @@ use super::{
 };
 use crate::{Ctx, ExportOptions, layout::rotation};
 
-mod search;
+pub mod search;
 /// Source-bearing finite-stock placement regions.
 pub mod zones;
 
@@ -88,6 +88,10 @@ pub struct Options {
     /// Omission preserves the original first-fit path and serialized request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backtrack_limit: Option<usize>,
+    /// Continue past the first complete layout to minimize the declared stock-use objective.
+    /// Requires `backtrack_limit`. A budget reached after a complete layout retains that incumbent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimize: Option<search::Objective>,
 }
 
 /// Finite stock allocation. Stock order is an explicit first-fit preference.
@@ -153,6 +157,8 @@ pub struct Plan {
     candidates: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     backtracks_used: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    optimization: Option<search::Optimization>,
     optimality_claim: bool,
     hardware_execution_authorized: bool,
     limitations: Vec<&'static str>,
@@ -313,6 +319,11 @@ impl Request {
         {
             return Err(bad("backtrack_limit must be in 1..100000 when supplied"));
         }
+        if o.optimize.is_some() && o.backtrack_limit.is_none() {
+            return Err(bad(
+                "finite-stock optimize requires an explicit backtrack_limit",
+            ));
+        }
         for v in [o.gap_mm, o.boundary_margin_mm, o.zone_margin_mm]
             .into_iter()
             .chain(o.seam_allowance_mm)
@@ -455,6 +466,7 @@ impl Request {
                 .then_with(|| shapes[a].geom.iid.cmp(&shapes[b].geom.iid))
                 .then(ac.cmp(&bc))
         });
+        let mut optimization = None;
         let backtracks_used = if let Some(limit) = o.backtrack_limit {
             let tasks = order
                 .iter()
@@ -470,7 +482,9 @@ impl Request {
                     }
                 })
                 .collect::<Vec<_>>();
-            Some(search::allocate(&tasks, &mut markers, o, limit, &mut work)?)
+            let result = search::allocate(&tasks, &mut markers, o, limit, &mut work)?;
+            optimization = result.optimization;
+            Some(result.undone)
         } else {
             for (index, copy) in order {
                 let s = &shapes[index];
@@ -545,11 +559,14 @@ impl Request {
             work_used: work.used,
             candidates: work.candidates,
             backtracks_used,
+            optimization,
             optimality_claim: false,
             hardware_execution_authorized: false,
             limitations: vec![
                 "Finite single-ply stock; authored defects/axis and frozen material identity, not a hide scan or measured property acquisition.",
-                if o.backtrack_limit.is_some() {
+                if o.optimize.is_some() {
+                    "Bounded stock-use minimization retains a complete incumbent; proof is conditional on the declared lattice and admitted orientations, not continuous-space optimality or purchase cost."
+                } else if o.backtrack_limit.is_some() {
                     "Bounded depth-first reconsideration of stock, lattice and explicitly permitted half-turn choices; first complete checked layout, not a minimum-waste or globally optimal solution."
                 } else if o.piece_zones.is_empty() {
                     "Largest-exterior-area-first pieces, stock input order, forward then explicitly permitted half-turn, bottom-left lattice; no reflection or crossgrain rotation. Not globally optimal."
