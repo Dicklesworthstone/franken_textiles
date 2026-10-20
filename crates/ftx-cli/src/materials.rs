@@ -12,11 +12,21 @@ mod nonlinear;
 mod relaxation;
 mod scenario;
 mod screen;
+mod sewing_selection;
 mod stock;
 mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if action == "sew-select" {
+        known_options(args, "materials", &[])?;
+        let [pattern, request] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials sew-select PATTERN.json REQUEST.json [--json]",
+            ));
+        };
+        return sewing_selection::run(pattern, request);
+    }
     if matches!(
         action,
         "calibrate-nonlinear" | "calibrate-relaxation" | "calibrate-membrane-plasticity"

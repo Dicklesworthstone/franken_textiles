@@ -26,9 +26,10 @@ and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform 
 explicit. Heat storage follows reference mass; changing coverage preserves covered/exposed material
 enthalpy, with remap residual separated from physical heat. Thermal failures never erase complete
 mechanics or another consumer. Complete histories retain time/geometry/source identities and final
-fields; coverage includes a restorable checkpoint. Per-history/session work is bounded. One-way
-prescribed-film coupling only: no inferred ambient state, moisture, mechanical heating, human
-thermoregulation, empirical warmth or motion-qualified optimization claim. Schemas, accounting and
+fields; coverage includes a restorable checkpoint. Per-history/session work is bounded. Prescribed
+films, qualified exterior exchange and independently opted-in plastic-work heating retain separate
+energy accounting. There is no inferred ambient state, moisture, thermal feedback, human
+thermoregulation or empirical warmth claim. Schemas, accounting and
 limits are in `docs/material-scenario-studies.md`; production regressions in `material_scenario.rs`
 compare every sample against direct solvers and independent reference-mass heat accounting.
 
@@ -379,3 +380,19 @@ area correction and leaves original projection snapshots unchanged. Genuine nonc
 and unmatched donors still refuse. Tests: `thermal_motion`, motion polygon unit cases,
 and actual saved-drape/production-CLI restart/exposure cases in `thermal_coverage_workflow`.
 See `docs/thermal-motion.md` for timing, checkpoint schemas, budgets and no-claim boundaries.
+
+`Frame::advance_with_exchange_and_heat` accepts nonnegative joules in retained source-triangle
+order and partitions them over covered/exposed reference area and depth. The same bounded enthalpy
+kernel preserves distinct layer capacities and heats adiabatic exposed cloth without heating bare
+body. Source allocation and inversion residuals remain in the physical balance; remap residuals
+stay separate. Invalid sources or temperatures leave input checkpoints unchanged. Production
+coverage reuses the independent-sheet material conversion authority and accepted-work capture,
+excluding initial drape work and rejected trials. Both histories may consume the same motion
+without duplicating retained work; their energy totals remain separate model domains. Tests in
+`thermal_motion` integrate enthalpy independently through coverage transitions, and the native
+accepted-body workflow compares conversion-only substitutions and coverage-only source capture.
+That supported workflow also exercises fully covered overlap roundoff: only a positive retained
+covered stencil within the existing allocation tolerance can avoid a nonexistent exposed donor.
+Weights are not inflated; area and material-local enthalpy residuals remain reported. A reduced
+real-geometry regression checks nonuniform variable-capacity heat and changed depth resolution;
+finite missing wedges and empty microscopic stencils still refuse.

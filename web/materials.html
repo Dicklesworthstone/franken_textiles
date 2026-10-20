@@ -38,11 +38,15 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <button id="inspect" data-command="inspect">Inspect sources &amp; capabilities</button>
 <div id="capabilities"></div><details><summary>Original observations, normalized units and sources</summary><pre id="detail"></pre></details>
 <h3>Prepare a compressed material state</h3>
-<label>Source-qualified pressure characterization JSON <input id="compressionRequest" type="file" accept=".json,application/json"></label>
-<button id="pressure" data-command="pressure" disabled>Prepare material at the requested pressure</button>
+<label>Source-qualified pressure or compression-stack JSON <input id="compressionRequest" type="file" accept=".json,application/json"></label>
+<label>Stack layer ID to inspect and assign (leave empty for a prescribed-pressure request) <input id="compressionLayer" type="text" maxlength="4096" placeholder="outer"></label>
+<button id="pressure" data-command="pressure" disabled>Prepare from pressure or stack clearance</button>
 <p class="note">The request supplies its exact specimen, loading branch, pressure observations and target pressure in pascals.
 Interpolation requires explicit consent. Properties without pressure qualification remain unavailable.
-The prepared selection can be assigned below; it does not infer garment contact pressure or presser-foot clearance.</p>
+Alternatively, <code>ftx-compression-stack/1</code> supplies layer branches, a known initial pressure, clearance and fixed reference area:
+it solves common normal pressure between rigid parallel faces and reports signed work, not generated heat.
+Enter the exact layer ID to select; every layer's frozen selection is available for download.
+Neither operation solves 3D garment contact or qualifies presser-foot clearance.</p>
 <h3>Identify behavior from swatch measurements</h3>
 <label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch and shear</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option></select></label>
 <label>Source-bearing swatch or complete history JSON <input id="calibrationRequest" type="file" accept=".json,application/json"></label>
@@ -177,11 +181,13 @@ Optional <code>motion.transient_surface</code> and <code>motion.transient_covera
 They require sourced heat capacity plus their own initial temperatures, interval films and budgets. Coverage also requires exact body/layer assignments
 and explicit exposed-cloth conditions. The results separately report physical stored heat, signed boundary energy and remap error;
 these histories are not interchangeable with each other or steady power snapshots. A heat refusal preserves successful mechanics.
+Either thermal history can request <code>plastic_dissipation_heat: "uniform_reference_thickness"</code> when its materials supply
+qualified conversion observations. Accepted work follows the material through covered and exposed regions; initial forming work and bare body are excluded.
 Motion heat objectives use <code>transient_surface_</code> or <code>transient_coverage_</code> with <code>inside_energy_j</code>,
 <code>net_boundary_energy_j</code>, <code>final_min_temperature_c</code> or <code>final_max_temperature_c</code>.
 Use <code>min_sample_temperature_c</code> or <code>max_sample_temperature_c</code> for extrema across the initial state and retained sample endpoints;
 these differ from the final endpoint temperature and are not continuous-time bounds.
-Select minimize or maximize explicitly: signed energy can reverse with the environment, and net energy is stored-heat change, not a warmth score.
+Select minimize or maximize explicitly: signed energy can reverse with the environment. Internal sources and boundary exchange contribute separately to stored heat.
 No two-way thermomechanical, body self-intersection, seated/squat or empirical ride-up claim is made.</p>
 <p class="note">Scenario comparisons require a settled initial drape with clear gating. Static heat, strain and simulated-cloth-mass objectives describe
 that initial frame. Motion objectives additionally require complete, converged continuation; the final moving state need not be at rest.

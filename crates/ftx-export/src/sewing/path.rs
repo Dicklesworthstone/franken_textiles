@@ -12,6 +12,10 @@ use super::{MAX_STATIONS, bad, positive};
 use crate::Ctx;
 use crate::outline::{cut_outline, edge_sa, ring_is_simple, segments_touch};
 
+#[path = "obstacles.rs"]
+pub(super) mod obstacles;
+use obstacles::Obstacles;
+
 const MAX_VERTICES: usize = 8192;
 const MAX_GEOMETRY_WORK: usize = 50_000_000;
 const EPS_MM: f64 = 1e-8;
@@ -24,7 +28,7 @@ pub struct OffsetPath {
     pub offset_mm: [f64; 2],
     /// Largest allowed mitre length divided by the absolute offset; refusal, never bevel/clamp.
     pub mitre_limit: f64,
-    /// Required clearance to the exported exterior cut outline (mm), strictly positive.
+    /// Required clearance to the exterior, internal cuts/slits and drill rims (mm), positive.
     pub minimum_cut_clearance_mm: f64,
 }
 
@@ -37,11 +41,11 @@ pub struct PathReceipt {
     pub source_lengths_mm: [f64; 2],
     /// Original arclength fractions at each output station, in paired canonical order.
     pub source_fractions: [Vec<f64>; 2],
-    /// Smallest exterior clearance of the full path AND the between-stitch chords, by side (mm).
+    /// Smallest cut/drill-rim clearance of the full path AND between-stitch chords, by side (mm).
     pub minimum_cut_clearance_mm: [f64; 2],
 }
 
-fn charge(work: &mut usize, amount: usize) -> Result<(), Refusal> {
+pub(super) fn charge(work: &mut usize, amount: usize) -> Result<(), Refusal> {
     *work = work.saturating_add(amount);
     if *work > MAX_GEOMETRY_WORK {
         return Err(Refusal::new(
@@ -158,7 +162,7 @@ impl Line {
 }
 
 /// Non-adjacent contact is invalid, including overlapping spans. Adjacent reversal is checked too.
-fn simple(points: &[Vec2], work: &mut usize) -> Result<(), Refusal> {
+pub(super) fn simple(points: &[Vec2], work: &mut usize) -> Result<(), Refusal> {
     let count = points.len().saturating_sub(1);
     charge(work, count.saturating_mul(count))?;
     let closed = points.first() == points.last();
@@ -188,7 +192,7 @@ fn point_distance(p: Vec2, a: Vec2, b: Vec2) -> f64 {
 }
 
 /// Entire segments, not just stations: otherwise a chord can jump outside a concave piece.
-fn clearance(
+pub(super) fn clearance(
     points: &[Vec2],
     ring: &[Vec2],
     required: f64,
@@ -251,6 +255,7 @@ impl OffsetPath {
             .ok_or_else(|| bad("missing seam side b"))?;
         let mut lines = Vec::with_capacity(2);
         let mut rings = Vec::with_capacity(2);
+        let mut obstacles = Vec::with_capacity(2);
         let mut junctions = Vec::with_capacity(2);
         let mut notches = Vec::with_capacity(2);
         for (side, reference) in [ra, rb].into_iter().enumerate() {
@@ -263,16 +268,6 @@ impl OffsetPath {
             }) {
                 return Err(bad(
                     "offset stitching needs finite nonnegative cut allowances",
-                ));
-            }
-            if piece
-                .internal
-                .as_ref()
-                .is_some_and(|marks| marks.iter().any(|m| m.kind.as_deref() == Some("cut")))
-                || piece.drills.as_ref().is_some_and(|holes| !holes.is_empty())
-            {
-                return Err(bad(
-                    "offset stitching with internal cuts/drills needs explicit obstacle geometry",
                 ));
             }
             // Bound both seam densification (200) and export contour densification (at most 800).
@@ -312,6 +307,7 @@ impl OffsetPath {
             {
                 return Err(bad("invalid/oversized offset stitching cut outline"));
             }
+            obstacles.push(Obstacles::load(pattern, instance, &ring, work)?);
             let (mut points, mut js) = pattern
                 .side_polyline(reference)
                 .map_err(|e| bad(e.to_string()))?;
@@ -411,6 +407,12 @@ impl OffsetPath {
             .min(clearance(
                 points,
                 &rings[i],
+                self.minimum_cut_clearance_mm,
+                work,
+            )?)
+            .min(obstacles[i].clearance(&lines[i].points, self.minimum_cut_clearance_mm, work)?)
+            .min(obstacles[i].clearance(
+                points,
                 self.minimum_cut_clearance_mm,
                 work,
             )?);

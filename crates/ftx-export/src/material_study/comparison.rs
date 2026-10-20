@@ -787,10 +787,16 @@ impl Policy {
         if transient {
             keys.extend(["areal_density", "specific_heat", "thickness"]);
         }
-        if consumers.contains(&Consumer::TransientSurface)
-            && descriptor["scenario"]["motion"]["transient_surface"]["plastic_dissipation_heat"]
-                == "uniform_reference_thickness"
-        {
+        if [
+            (Consumer::TransientSurface, "transient_surface"),
+            (Consumer::TransientCoverage, "transient_coverage"),
+        ]
+        .into_iter()
+        .any(|(consumer, name)| {
+            consumers.contains(&consumer)
+                && descriptor["scenario"]["motion"][name]["plastic_dissipation_heat"]
+                    == "uniform_reference_thickness"
+        }) {
             keys.insert("membrane_plastic_heat_fraction");
         }
         let pieces = bound["pattern"]["pieces"]
@@ -1193,8 +1199,8 @@ fn admit_heat<'a>(
         .get("plastic_dissipation_heat")
         .filter(|v| !v.is_null())
     {
-        Some(policy) if !coverage && policy.as_str() == Some("uniform_reference_thickness") => {
-            admit_plastic_heat(alternative, motion, h)?;
+        Some(policy) if policy.as_str() == Some("uniform_reference_thickness") => {
+            admit_plastic_heat(alternative, motion, h, consumer, stored)?;
         }
         Some(_) => {
             return Err(fail(
@@ -1226,12 +1232,14 @@ fn admit_plastic_heat(
     alternative: &Alternative,
     motion: &Value,
     heat: &Value,
+    consumer: Consumer,
+    stored_field: &str,
 ) -> Result<(), Refusal> {
     use ftx_pattern::materials::{CATALOG_SCHEMA, Catalog};
     let fail = || {
-        invalid(
-            "TransientSurface: plastic heat needs source-matched accepted work and complete supplied-energy accounting",
-        )
+        invalid(format!(
+            "{consumer:?}: plastic heat needs source-matched accepted work and complete supplied-energy accounting"
+        ))
     };
     let frozen = alternative.frozen_changes.as_ref().ok_or_else(fail)?;
     let receipts = heat["plastic_dissipation_heat"]["material_fractions"]
@@ -1339,7 +1347,7 @@ fn admit_plastic_heat(
         let inside = finite(&row["inside_energy_j"]).ok_or_else(fail)?;
         let outside = finite(&row["outside_energy_j"]).ok_or_else(fail)?;
         let net = finite(&row["net_boundary_energy_j"]).ok_or_else(fail)?;
-        let stored = finite(&row["stored_change_j"]).ok_or_else(fail)?;
+        let stored = finite(&row[stored_field]).ok_or_else(fail)?;
         let residual = finite(&row["balance_error_j"]).ok_or_else(fail)?;
         if !near(net, inside - outside) || !near(residual, stored - net - supplied) {
             return Err(fail());

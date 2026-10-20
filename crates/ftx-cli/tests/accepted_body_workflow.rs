@@ -981,7 +981,7 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     save(&dir.join("motion-report.json"), &compared);
 
     // Retain a separate model-backed replay: changing only conversion of accepted plastic work
-    // changes independent-sheet heat, while every accepted mechanical trajectory stays identical.
+    // changes independent-sheet and covered/exposed heat, while every accepted trajectory stays identical.
     // The generated native output is an adapter parity input, not an empirical physics oracle.
     let plastic_dir = dir.join("plastic-heat");
     std::fs::create_dir(&plastic_dir).unwrap();
@@ -999,14 +999,15 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         "conditions":{"specimen_id":"artificial-stretch-A","conditioning":"synthetic constant dry state",
             "work_basis":"irreversible_membrane_plastic_dissipation",
             "temperature_min_c":"-20","temperature_max_c":"80"}});
-    // Low yield retains work after forming; sufficient synthetic hardening lets the stretched
-    // band support its weight through cylinder friction instead of slipping indefinitely.
-    // These are declared test materials, not inferred properties of a real garment.
-    for (kind, factor) in [("yield", 0.01), ("hardening", 10.0)] {
+    // Low yield retains accepted irreversible work, while strong hardening keeps the sewn
+    // band's permanent circumference below the supporting cylinder. Softening both instead
+    // leaves a loose band in free fall; the ordinary gravity/quiet-step gate must still pass.
+    // These synthetic coefficients do not describe a measured textile or real garment fit.
+    for (kind, scale) in [("yield", 0.01), ("hardening", 1000.)] {
         for axis in ["warp", "weft", "shear"] {
             let value = &mut unconverted["record"]["properties"][format!("membrane_{kind}_{axis}")]
                 ["value"];
-            *value = json!(value.as_f64().unwrap() * factor);
+            *value = json!(value.as_f64().unwrap() * scale);
         }
     }
     let mut converted = unconverted.clone();
@@ -1024,7 +1025,8 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
             {"key":"unconverted","changes":{"schema":"ftx-material-bindings/1","default":unconverted}},
             {"key":"converted","changes":{"schema":"ftx-material-bindings/1","default":converted}}],
         "comparison":{"basis":"nominal","objectives":[
-            {"metric":"transient_surface_final_max_temperature_c","direction":"minimize"}]}}),
+            {"metric":"transient_surface_final_max_temperature_c","direction":"minimize"},
+            {"metric":"transient_coverage_final_max_temperature_c","direction":"minimize"}]}}),
     );
     let mut plastic_scenario = scenario.clone();
     plastic_scenario["motion"]["keyframes"] = json!([
@@ -1032,16 +1034,18 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         {"time_s":0.04,"arm_abduction_deg":36.0}]);
     // The longer explicit path needs forty 1 ms steps; this is a work cap, not a solve tolerance.
     plastic_scenario["motion"]["max_trials"] = json!(64);
-    plastic_scenario["motion"]
-        .as_object_mut()
-        .unwrap()
-        .remove("transient_coverage");
     let equilibrium = json!({"inside_c":20.,"outside_c":20.,
         "inside_resistance_m2_k_w":1.,"outside_resistance_m2_k_w":1.});
     plastic_scenario["motion"]["transient_surface"] = json!({
         "schema":"ftx-motion-surface-heat/1","initial_temperature_c":20.,"cells_per_layer":2,
         "boundaries":[equilibrium,equilibrium],"max_step_s":0.0005,"max_cell_steps":5000000,
         "plastic_dissipation_heat":"uniform_reference_thickness"});
+    let covered = &mut plastic_scenario["motion"]["transient_coverage"];
+    covered["initial_temperature_c"] = json!(20.);
+    covered["boundaries"] = json!([equilibrium, equilibrium]);
+    covered["exposed_boundaries"] = json!([null, null]);
+    covered["max_cell_steps"] = json!(5000000);
+    covered["plastic_dissipation_heat"] = json!("uniform_reference_thickness");
     save(&plastic_dir.join("scenario.json"), &plastic_scenario);
     let heated = run_in(
         &plastic_dir,
@@ -1072,6 +1076,7 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         assert_eq!(row["evaluation"]["status"], "available", "{row}");
         let result = &row["evaluation"]["result"];
         assert_eq!(result["drape"]["settled"], true);
+        assert_eq!(result["drape"]["numerical"]["settled"], true);
         assert_eq!(result["drape"]["gating"], json!([]));
         assert_eq!(result["metrics"]["simulation_gating_clear"], true);
         let motion = &result["motion"];
@@ -1081,6 +1086,10 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         assert_eq!(heat["status"], "available", "{heat}");
         let heat = &heat["result"];
         let work = &heat["plastic_dissipation_heat"];
+        let coverage = &motion["transient_coverage"];
+        assert_eq!(coverage["status"], "available", "{coverage}");
+        let coverage = &coverage["result"];
+        assert_eq!(coverage["plastic_dissipation_heat"], *work);
         assert_eq!(work["distribution"], "uniform_reference_thickness");
         assert_eq!(
             work["temporal_distribution"],
@@ -1122,6 +1131,23 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
             - supplied;
         assert!(balance.abs() < 1e-9, "{heat}");
         assert!((balance - heat["balance_error_j"].as_f64().unwrap()).abs() < 1e-12);
+        let coverage_balance = coverage["physical_stored_change_j"].as_f64().unwrap()
+            - coverage["net_boundary_energy_j"].as_f64().unwrap()
+            - supplied;
+        assert!(coverage_balance.abs() < 1e-9, "{coverage}");
+        assert!((coverage_balance - coverage["balance_error_j"].as_f64().unwrap()).abs() < 1e-12);
+        for sample in coverage["trace"].as_array().unwrap() {
+            let supplied = sample["plastic_dissipation_heat"]["supplied_heat_j"]
+                .as_f64()
+                .unwrap();
+            let boundary = sample["inside_energy_j"].as_f64().unwrap()
+                - sample["outside_energy_j"].as_f64().unwrap();
+            assert!((boundary - sample["net_boundary_energy_j"].as_f64().unwrap()).abs() < 1e-12);
+            assert!(
+                (sample["physical_stored_change_j"].as_f64().unwrap() - boundary - supplied).abs()
+                    < 1e-9
+            );
+        }
         if fraction == 0. {
             assert_eq!(supplied, 0.);
             assert!(
@@ -1154,6 +1180,81 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         cold["motion"]["result"]["transient_surface"]["result"]["final"]["temperature_c"],
         warm["motion"]["result"]["transient_surface"]["result"]["final"]["temperature_c"]
     );
+    assert_ne!(
+        cold["motion"]["result"]["transient_coverage"]["result"]["checkpoint"]["exposed_temperature_c"],
+        warm["motion"]["result"]["transient_coverage"]["result"]["checkpoint"]["exposed_temperature_c"]
+    );
     save(&plastic_dir.join("motion-report.json"), &heated);
     eprintln!("plastic heat replay fixture: {}", plastic_dir.display());
+
+    // Coverage alone must request the accepted mechanical work; it cannot depend on the
+    // independent-sheet consumer having enabled capture as a side effect.
+    let only_dir = plastic_dir.join("coverage-only");
+    std::fs::create_dir(&only_dir).unwrap();
+    std::fs::write(only_dir.join("model.ftxbody"), &bytes).unwrap();
+    save(&only_dir.join("body-input.json"), &body_request);
+    save(&only_dir.join("pattern.json"), &plastic_pattern);
+    let mut only_scenario = plastic_scenario.clone();
+    only_scenario["motion"]
+        .as_object_mut()
+        .unwrap()
+        .remove("transient_surface");
+    save(&only_dir.join("scenario.json"), &only_scenario);
+    let mut only_study: Value =
+        serde_json::from_slice(&std::fs::read(plastic_dir.join("study.json")).unwrap()).unwrap();
+    only_study["comparison"]["objectives"] = json!([
+        {"metric":"transient_coverage_final_max_temperature_c","direction":"minimize"}]);
+    let mut unknown = plastic_pattern["fabric"]["material"].clone();
+    unknown["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("membrane_plastic_heat_fraction");
+    only_study["variants"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"key":"unqualified",
+        "changes":{"schema":"ftx-material-bindings/1","default":unknown}}));
+    save(&only_dir.join("study.json"), &only_study);
+    let only = run_in(
+        &only_dir,
+        env!("CARGO_BIN_EXE_ftx-materials"),
+        &["scenario-study"],
+    );
+    assert_eq!(only["comparison"]["frontier"], json!(["unconverted"]));
+    for row in only["simulations"].as_array().unwrap() {
+        let result = &row["evaluation"]["result"];
+        assert_eq!(row["evaluation"]["status"], "available", "{row}");
+        assert_eq!(result["motion"]["status"], "available", "{result}");
+        let motion = &result["motion"]["result"];
+        if row["key"] == "unqualified" {
+            assert_eq!(
+                motion["transient_coverage"]["status"], "refused",
+                "{motion}"
+            );
+            assert!(
+                motion["samples"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|s| s["solve"]["converged"] == true)
+            );
+        } else {
+            let reference = &by_key[row["key"].as_str().unwrap()]["motion"]["result"];
+            assert_eq!(motion["samples"], reference["samples"]);
+            let heat = &motion["transient_coverage"];
+            assert_eq!(heat["status"], "available", "{heat}");
+            for key in [
+                "plastic_dissipation_heat",
+                "physical_stored_change_j",
+                "net_boundary_energy_j",
+                "balance_error_j",
+                "checkpoint",
+            ] {
+                assert_eq!(
+                    heat["result"][key],
+                    reference["transient_coverage"]["result"][key]
+                );
+            }
+        }
+    }
 }

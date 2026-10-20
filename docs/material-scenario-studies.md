@@ -250,14 +250,14 @@ coverage totals are alternative model domains and must not be added together.
 
 Each thermal policy permits 1..64 cells per layer, maximum substeps in 1e-9..1 seconds and up to
 10000000 cell-step units (coverage additionally counts body-face steps; opted-in plastic heating
-charges 129 units per sheet cell/substep). Whole-session reservations
+charges 129 units per cloth cell/substep in either domain). Whole-session reservations
 across both thermal consumers and all attempted material alternatives are capped at 20000000
 cell steps and 40000000 coverage geometry operations. Reservations persist after a later refusal;
 use realistic declared limits rather than maximum values for every candidate. Projection/remap work
 is checked after each existing bounded kernel; limit exhaustion refuses rather than truncating.
 
 These are **one-way** motion-to-heat calculations with prescribed films or explicit exterior
-exchange. Mechanical heating requires the separate qualified sheet option below. They do not
+exchange. Mechanical heating requires the separate qualified material option below. They do not
 include temperature feedback to mechanics, moisture, thermoregulation or empirical comfort prediction.
 First-order remapping can mix unresolved gradients. Time/space refinement and held-out measurements
 remain necessary; a small energy residual alone proves neither physical accuracy nor a warmth rating.
@@ -267,7 +267,9 @@ motion metrics below compare signed cumulative energy and final cloth-cell tempe
 ### Qualified irreversible membrane heating
 
 Add `"plastic_dissipation_heat": "uniform_reference_thickness"` inside the existing
-`motion.transient_surface` object to convert accepted plastic membrane work into sheet heat.
+`motion.transient_surface` or `motion.transient_coverage` object to convert accepted plastic membrane
+work into material heat. Each history independently opts in; requesting both does not sum their
+energies or capture the mechanical work twice.
 Each active plastic material must supply the source-qualified `membrane_plastic_heat_fraction`
 observation documented in [permanent membrane stretch](material-membrane-plasticity.md#convert-accepted-irreversible-work-to-sheet-heat).
 It needs admitted evidence, matching specimen/conditioning, the irreversible membrane work basis
@@ -278,7 +280,9 @@ The consumer subtracts the accepted cumulative work at motion time zero, after i
 Only subsequent accepted increments become heat; rejected trials, initial forming work, and
 elastic/hardening storage are excluded. Work stays with its exact retained material triangle and
 is distributed uniformly through reference thickness and over each accepted mechanical interval.
-The thermal solver still uses each sample's right-endpoint geometry. Its energy balance is:
+The thermal solver still uses each sample's right-endpoint geometry. Independent sheets use
+`stored_change_j`; covered/exposed material uses `physical_stored_change_j`. The balance in either
+domain subtracts its separately supplied source energy:
 
 ```text
 balance_error_j = stored_change_j - net_boundary_energy_j
@@ -290,18 +294,29 @@ dissipation, supplied heat, unconverted work and excluded initial dissipation. T
 also preserves conversion observations and material/law identities. Mechanical `initial_sample`
 and `samples` retain `membrane_plastic_dissipation_j` arrays in triangle order; their cumulative
 values include the excluded initial work. `retained_dissipation_scalars` reports the extra output.
-Each scalar counts as one vertex-equivalent under `max_sample_vertices` and session admission.
+Each scalar counts as one vertex-equivalent under `max_sample_vertices` and session admission,
+once even when both histories consume it.
 
-With heating enabled, all sheet cells cost 129 work units per thermal substep, even for zero
-conversion or an elastic triangle. Size `max_cell_steps` accordingly. Source deposition integrates
+With heating enabled, all cloth cells cost 129 work units per thermal substep, even for zero
+conversion or an elastic triangle. Coverage additionally charges one unit per selected body face.
+Size `max_cell_steps` accordingly. Source deposition integrates
 sensible enthalpy, including temperature-dependent heat capacity. Its equivalent adiabatic preload
 must remain inside the characterized thermal domain; large sources can require smaller thermal
 substeps. Initial and accepted cell temperatures also stay within each conversion observation's
 temperature range. No domain is silently extended.
 
-This option applies only to independent-sheet `transient_surface`, including qualified exterior
-exchange. `transient_coverage` receives no plastic source. There is no temperature feedback,
-automatic layer heat sharing, or bending/Maxwell/friction heating. The synthetic workflow checks
+For `transient_coverage`, each retained triangle's joules are partitioned by reference material
+area into the current covered series layers and exposed cloth. Each layer keeps its own mass,
+heat capacity and material identity. Even adiabatic exposed cloth receives its share; bare body
+receives none. Remapping transfers the resulting enthalpy when cloth becomes covered or exposed
+again without another source deposition. `signed_remap_residual_j` stays separate from physical
+storage and source energy. The last field retains covered/exposed source allocation and its
+rounding residual. The shared comparator reconciles each accepted source increment, its material
+receipt and the domain's energy balance before admitting thermal objectives; a failed coverage
+history does not erase an independent sheet result or successful mechanics.
+
+Both domains support the existing qualified exterior exchange. There is no temperature feedback,
+inferred layer topology, or bending/Maxwell/friction heating. The synthetic workflow checks
 exercise accepted work transfer and conservation; measured conversion laws and independent
 temperature measurements remain necessary for a physical garment claim.
 

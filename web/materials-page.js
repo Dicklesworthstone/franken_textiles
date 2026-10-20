@@ -233,19 +233,21 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       metric(h?.physical_stored_change_j ?? h?.stored_change_j), metric(h?.balance_error_j),
       name === "transient_surface" ? "Not applicable" : metric(h?.signed_remap_residual_j)]);
     detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
-    const plastic = name === "transient_surface" ? h?.plastic_dissipation_heat : null;
+    const plastic = h?.plastic_dissipation_heat;
     if (plastic) {
-      const work = table(parent, `${key}: plastic work supplied to independent-sheet heat`, ["Plastic work since motion start (J)",
-        "Supplied sheet heat (J)", "Unconverted work (J)", "Initial plastic work excluded (J)"]);
+      const domain = name === "transient_surface" ? "independent-sheet heat" : "coverage and exposed-cloth heat";
+      const work = table(parent, `${key}: plastic work supplied to ${domain}`, ["Plastic work since motion start (J)",
+        "Supplied material heat (J)", "Unconverted work (J)", "Initial plastic work excluded (J)"]);
       cells(work, [metric(plastic.plastic_dissipation_j), metric(plastic.supplied_heat_j),
         metric(plastic.unconverted_dissipation_j), metric(plastic.initial_plastic_dissipation_j)]);
       const scope = document.createElement("p");
-      scope.textContent = "The sheet energy residual is stored change minus net boundary energy minus supplied plastic heat. " +
+      scope.textContent = "The energy residual is physical stored change minus net boundary energy minus supplied plastic heat. " +
         "Work already accumulated in the initial drape is excluded. " +
         (plastic.distribution === "uniform_reference_thickness" && plastic.temporal_distribution === "uniform_over_accepted_interval" ?
           "Converted heat is distributed uniformly through each sheet's reference thickness and over its accepted motion interval. " :
           "Inspect the retained report for the declared heat distribution. ") +
-        "This coupling supplies independent sheets only; coverage keeps its separate heat model, and temperatures do not feed back into mechanics. " +
+        (name === "transient_coverage" ? "Source heat follows covered and exposed reference material; bare body receives none. " : "") +
+        "Temperatures do not feed back into mechanics. " +
         "The temperature-history report retains the material fractions and their source evidence.";
       parent.append(scope);
     }
@@ -671,6 +673,16 @@ function show(op, msg) {
           stock_mass_kg: m.stock_mass_kg, mass_unavailable: m.mass_unavailable })), limitations: r.limitations } :
       op === "sew" ? sewingResult(s.comparison, r) :
       op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } :
+      op === "pressure" && r.schema === "ftx-compression-stack-report/1" ? {
+        selected_layer: r.chosen_layer_id, pressure_pa: r.pressure_pa,
+        common_pressure_range_pa: r.common_pressure_range_pa, requested_gap_m: r.input.gap_m,
+        thickness_m: r.thickness_m, closure_residual_m: r.closure_residual_m,
+        normal_force_n: r.normal_force_n, external_work_j: r.external_work_j,
+        reference_mass_kg: r.reference_mass_kg, material_resistance_m2_k_w: r.material_resistance_m2_k_w,
+        layers: r.layers.map(l => ({ id: l.id, thickness_m: l.thickness_m, closure_m: l.closure_m,
+          external_work_j_m2: l.external_work_j_m2, unavailable: l.unavailable,
+          discarded_properties: l.conditioned.discarded_properties })),
+        no_claim: r.no_claim, next: "Assign the explicitly selected layer above. Change the layer ID and prepare again to select another layer." } :
       op === "pressure" ? { material_id: r.selection.id, pressure_pa: r.input.pressure_pa,
         pressure_range_pa: r.pressure_range_pa, bracket_pa: r.bracket_pa, interpolated: r.interpolated,
         discarded_properties: r.discarded_properties, discarded_responses: r.discarded_responses,
@@ -724,7 +736,10 @@ async function execute(op) {
       if (!interfaceReady) throw Error("Load a valid replacement interface list or choose Keep original interfaces.");
       msg.pattern = sourceText; msg.changes = changes();
     }
-    else if (op === "pressure") msg.compressionRequest = await read("compressionRequest");
+    else if (op === "pressure") {
+      msg.compressionLayer = $("compressionLayer").value;
+      msg.compressionRequest = await read("compressionRequest");
+    }
     else if (op === "calibrate") {
       msg.calibrationMode = $("calibrationMode").value;
       msg.allowEstimates = $("calibrationEstimates").checked;
@@ -825,9 +840,9 @@ $("interfacesFile").onchange = async () => {
     error(String(e.message || e)); controls();
   }
 };
-for (const [id, operation] of [["compressionRequest", "pressure"], ["calibrationRequest", "calibrate"],
+for (const [id, operation] of [["compressionRequest", "pressure"], ["compressionLayer", "pressure"], ["calibrationRequest", "calibrate"],
   ["calibrationMode", "calibrate"], ["calibrationEstimates", "calibrate"]]) {
-  $(id).addEventListener("change", () => {
+  $(id).addEventListener(id === "compressionLayer" ? "input" : "change", () => {
     if (preparedBy === operation) {
       ++selectionRead; preparedBy = null; inspected = null;
       $("detail").textContent = ""; $("capabilities").replaceChildren();

@@ -62,6 +62,136 @@ fn straight_offsets_use_inward_instance_normals_before_seam_reversal() {
 }
 
 #[test]
+fn internal_openings_slits_and_explicit_drills_constrain_the_same_offset_paths() {
+    let plain = build(pattern(), offset(3.0, 4.0)).unwrap();
+    let mut p = pattern();
+    p["pieces"][0]["internal"] = json!([
+        {"kind":"cut","closed":true,"pts":[[5,40],[9,40],[9,60],[5,60]]},
+        {"kind":"cut","closed":false,"pts":[[13,20],[13,30]]}
+    ]);
+    p["pieces"][0]["drills"] = json!([{"p":[12,75],"d":2}]);
+    let with_holes = build(p.clone(), offset(3.0, 4.0)).unwrap();
+    assert_eq!(with_holes.seams[0].stations, plain.seams[0].stations);
+    assert_ne!(with_holes.pattern_sha256, plain.pattern_sha256);
+    assert_eq!(
+        with_holes.seams[0]
+            .path
+            .as_ref()
+            .unwrap()
+            .minimum_cut_clearance_mm,
+        [4., 10.]
+    );
+    assert_eq!(
+        serde_json::to_value(&with_holes).unwrap(),
+        serde_json::to_value(build(p, offset(3., 4.)).unwrap()).unwrap()
+    );
+    assert!(!with_holes.hardware_execution_authorized);
+}
+
+#[test]
+fn obstacles_between_valid_needle_stations_cannot_be_skipped() {
+    for feature in [
+        json!({"internal":[{"kind":"cut","closed":false,"pts":[[16,1.25],[18,1.25]]}]}),
+        json!({"internal":[{"kind":"cut","closed":true,"pts":[[16.9,1.1],[17.1,1.1],[17.1,1.4],[16.9,1.4]]}]}),
+        json!({"drills":[{"p":[17,1.25],"d":0.2}]}),
+    ] {
+        let mut p = pattern();
+        for (key, value) in feature.as_object().unwrap() {
+            p["pieces"][0][key] = value.clone();
+        }
+        let refusal = build(p, offset(3., 4.)).unwrap_err();
+        assert!(refusal.message.contains("clearance"), "{refusal:?}");
+    }
+}
+
+#[test]
+fn an_entire_stitch_line_inside_a_cutout_is_not_material() {
+    let mut p = pattern();
+    p["pieces"][0]["internal"] = json!([
+        {"kind":"cut","closed":true,"pts":[[14,-4],[19,-4],[19,104],[14,104]]}
+    ]);
+    assert!(
+        build(p, offset(3., 4.))
+            .unwrap_err()
+            .message
+            .contains("inside an internal cutout")
+    );
+}
+
+#[test]
+fn drill_clearance_uses_the_radius_not_the_centre_and_checks_exact_thresholds() {
+    let mut p = pattern();
+    p["pieces"][0]["drills"] = json!([{"p":[15,50],"d":2}]);
+    let mut o = offset(3., 4.);
+    near(
+        build(p.clone(), o.clone()).unwrap().seams[0]
+            .path
+            .as_ref()
+            .unwrap()
+            .minimum_cut_clearance_mm[0],
+        1.,
+    );
+    o["passes"][0]["stitch_path"]["minimum_cut_clearance_mm"] = json!(1.0001);
+    assert!(build(p, o).unwrap_err().message.contains("drill-rim"));
+}
+
+#[test]
+fn ambiguous_malformed_or_outside_obstacles_refuse_instead_of_using_export_defaults() {
+    for cut in [
+        json!({"kind":"cut","pts":[[2,2],[3,3]]}),
+        json!({"kind":"cut","closed":"false","pts":[[2,2],[3,3]]}),
+        json!({"kind":"cut","closed":true,"pts":[[2,2],[3,3]]}),
+        json!({"kind":"cut","closed":false,"pts":[]}),
+        json!({"kind":"cut","closed":false,"pts":[[2,2],[2,2],[4,4]]}),
+        json!({"kind":"cut","closed":true,"pts":[[2,2],[6,6],[2,6],[6,2]]}),
+        json!({"kind":"cut","closed":false,"pts":[[-11,50],[3,50]]}),
+    ] {
+        let mut p = pattern();
+        p["pieces"][0]["internal"] = json!([cut]);
+        assert!(build(p, offset(3., 4.)).is_err());
+    }
+    for drill in [
+        json!({"p":[5,5]}),
+        json!({"p":[5,5],"d":null}),
+        json!({"p":[5,5],"d":"2"}),
+        json!({"p":[5,5],"d":0}),
+        json!({"p":[5,5],"d":-1}),
+        json!({"p":[-9,50],"d":4}),
+        json!({"p":[5,5],"d":1e308}),
+    ] {
+        let mut p = pattern();
+        p["pieces"][0]["drills"] = json!([drill]);
+        assert!(build(p, offset(3., 4.)).is_err());
+    }
+    let mut p = pattern();
+    p["pieces"][0]["drills"] = json!([{"p":[5,5],"d":1},{"p":[5,5],"d":2}]);
+    assert!(
+        build(p, offset(3., 4.))
+            .unwrap_err()
+            .message
+            .contains("conflicting diameters")
+    );
+}
+
+#[test]
+fn obstacle_count_and_expanded_point_work_are_bounded_before_quadratic_checks() {
+    let mut p = pattern();
+    p["pieces"][0]["drills"] = json!(vec![json!({"p":[5,5],"d":1}); 257]);
+    assert_eq!(
+        build(p, offset(3., 4.)).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    let mut p = pattern();
+    p["pieces"][0]["internal"] = json!([
+        {"kind":"cut","closed":false,"pts":vec![[5,5];8193]}
+    ]);
+    assert_eq!(
+        build(p, offset(3., 4.)).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
 fn mitred_paths_change_lengths_feed_and_counts_not_just_coordinates() {
     let baseline = build(composite(), options()).unwrap();
     let a = build(composite(), offset(5.0, 3.0)).unwrap();
