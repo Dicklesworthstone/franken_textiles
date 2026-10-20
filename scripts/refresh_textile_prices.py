@@ -719,12 +719,35 @@ def main() -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--out", required=True, type=Path, help="NEW quotes snapshot; existing files are never overwritten")
     parser.add_argument("--evidence", required=True, type=Path)
+    parser.add_argument("--specifications-out", type=Path,
+                        help="NEW snapshot of the selected supplier's non-price declarations")
+    parser.add_argument("--compare-specifications", type=Path,
+                        help="replay a retained specification snapshot and gate quote publication on changes")
+    parser.add_argument("--previous-evidence", type=Path,
+                        help="original source evidence for comparison (defaults to --evidence)")
+    parser.add_argument("--review-out", type=Path,
+                        help="NEW detailed revision report; required with --compare-specifications")
     args = parser.parse_args()
     try:
-        if args.out.exists():
-            raise ValueError("output exists; use a new timestamped snapshot path")
+        outputs = [p for p in (args.out, args.specifications_out, args.review_out) if p is not None]
+        if len({p.resolve() for p in outputs}) != len(outputs):
+            raise ValueError("quote, specification and review outputs must be distinct new paths")
+        if any(p.exists() for p in outputs):
+            raise ValueError("output exists; use new timestamped snapshot paths")
+        if args.compare_specifications and (not args.specifications_out or not args.review_out):
+            raise ValueError("comparison requires --specifications-out and --review-out")
+        if (args.review_out or args.previous_evidence) and not args.compare_specifications:
+            raise ValueError("review outputs and previous evidence require --compare-specifications")
+        previous = None
+        if args.specifications_out:
+            import textile_specifications as specifications
+            if args.compare_specifications:
+                previous = specifications.replay(load(args.compare_specifications.read_bytes()),
+                                                 args.previous_evidence or args.evidence)
         manifest = load(args.manifest.read_bytes())
         book, evidence = refresh(manifest, PublicSession().get)
+        current = specifications.capture(book, evidence) if args.specifications_out else None
+        review = specifications.compare(previous, current) if previous is not None else None
         for name, raw in evidence.items():
             target = args.evidence / name
             try:
@@ -732,6 +755,12 @@ def main() -> int:
             except FileExistsError:
                 if target.read_bytes() != raw:
                     raise ValueError("existing evidence does not match its digest")
+        if current is not None:
+            create_snapshot(args.specifications_out, specifications.encoded(current))
+        if review is not None:
+            create_snapshot(args.review_out, specifications.encoded(review))
+            if not review["quote_publication_allowed"]:
+                parser.exit(2, f"supplier revision needs review: {args.review_out}; no new quotes published\n")
         create_snapshot(args.out, (json.dumps(book, indent=2, allow_nan=False) + "\n").encode())
         print(f"wrote {len(book['quotes'])} exact offers to {args.out}; evidence: {args.evidence}")
         return 0

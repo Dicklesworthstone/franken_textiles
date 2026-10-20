@@ -216,6 +216,61 @@ Offline regressions cover graph/variant selection, conflicting prices, explicit 
 conditional offers, source/quote expiry, broken JSON-LD, bounded traversal, and complete CLI evidence
 publication. They do not establish live supplier qualification or worldwide price coverage.
 
+## Review supplier specification revisions
+
+The refresh command can retain and compare the selected supplier's declarations before a new
+quote is published for an existing material revision. Add `--specifications-out` to a successful
+refresh to save a new `ftx-supplier-specifications/1` snapshot alongside its original source bytes
+and receipts:
+
+```sh
+python3 scripts/refresh_textile_prices.py manifest.json \
+  --out quotes-initial.json --evidence supplier-evidence \
+  --specifications-out specifications-initial.json
+```
+
+For subsequent observations, replay that exact baseline and request a detailed comparison:
+
+```sh
+python3 scripts/refresh_textile_prices.py manifest.json \
+  --out quotes-next.json --evidence supplier-evidence \
+  --compare-specifications specifications-initial.json \
+  --specifications-out specifications-next.json --review-out revision-review.json
+```
+
+Every output path must be new. `--previous-evidence DIRECTORY` can locate the baseline's evidence
+when it differs from the new evidence directory. The replay verifies source and receipt SHA-256s,
+reselects the exact product/variant, and reconstructs the retained declarations; editing a baseline's
+facts or changing its material hash without matching original evidence refuses before retrieval.
+
+The comparison preserves original text, numbers and units. It covers the selected Shopify product
+and variant, selected schema.org Product/Offer and locally referenced property nodes, or the complete
+matched CSV row. Composition, construction, finish, nominal dimensions, variant options and supplier
+lot declarations are retained wherever that representation actually supplies them. Selected source
+and selling-basis/material bindings are compared too. Added, removed and changed offers receive
+field paths with old/new values, observation dates and source/receipt hashes. Missing and null facts
+remain distinct. A source's product-level minimum price or another variant cannot replace the exact
+selected offer. Media, external references and prose are not interpreted as measurements.
+
+Ordinary price and availability changes remain price observations. An unchanged declaration can
+publish a newly unavailable quote, preserving the existing latest-observation semantics. Publication
+through comparison additionally requires the same explicit `material_sha256` in both reviewed
+manifests. An absent hash is unresolved; an ID alone does not qualify the material revision.
+
+When a specification, selection or material binding changes, the command saves the new source
+evidence, specification snapshot and `ftx-supplier-revision-review/1` report, exits with code **2**,
+and leaves the requested quote output absent. Previous quotes, material selections and completed
+studies remain intact. Existing adapter refusals, such as a missing SKU, unsupported quantity basis
+or invalid price, still stop collection before a new snapshot; the comparison does not guess a
+replacement offer or relax those checks.
+
+Review the actual changed declarations before creating a new canonical material revision and
+freezing its selection. Record that new selection's hash in the reviewed manifest and start a new
+baseline. The comparison never transfers an older lot's mechanical, thermal or process observations
+to a replacement SKU. Reports explicitly leave measured-specimen binding unresolved: a supplier
+declaration, even unchanged, cannot establish that two manufactured lots are physically identical.
+Broader real-supplier qualification and source-to-measured-lot binding remain open under `ftx-sr2`.
+
 ## Exact material snapshots and finite source quantities
 
 An offer can now include two optional fields in the existing quote format:
