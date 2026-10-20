@@ -1721,6 +1721,38 @@ mod self_contact_tests {
     }
 
     #[test]
+    fn failed_line_search_preserves_the_characterized_state() {
+        let rest = vec![Vec2::ZERO, Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)];
+        let x: Vec<_> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let mut model = ClothModel::new(
+            rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(1000.0, 1000.0, 0.0, 100.0, 0.05),
+            0.0,
+            0.2,
+        )
+        .unwrap();
+        // Zero shear is the upper characterized boundary. Gravity pulls the sole free x DOF
+        // into positive shear: every shortened line-search trial still leaves that domain.
+        model
+            .set_membrane_domains(&[Some(
+                StrainDomain::new([[-0.1, 0.1], [-0.1, 0.1], [-0.1, 0.0]]).unwrap(),
+            )])
+            .unwrap();
+        let mut s = Solver::new(
+            model,
+            x,
+            &[[true; 3], [true; 3], [false, true, true]],
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        let before = format!("{s:?}");
+        let error = s.static_solve().unwrap_err();
+        assert_eq!(error.code, RefusalCode::NotConverged);
+        assert!(error.message.contains("1 failed line searches"), "{error:?}");
+        assert_eq!(format!("{s:?}"), before);
+    }
+
+    #[test]
     fn unconverged_step_preserves_contact_and_caches_then_replays() {
         let mut s = layers(false);
         for (i, v) in s.v.iter_mut().enumerate() {
