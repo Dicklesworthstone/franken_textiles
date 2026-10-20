@@ -84,6 +84,55 @@ fn inverse_active(d: [[f64; 3]; 3], h: [f64; 3], active: [bool; 3]) -> Option<[[
         .then_some(inverse)
 }
 
+// Trial-scaled cancellation bounds alone can accept zero residual stress at nonzero yield.
+// This additional relative cap concerns representability, not a fitted material coefficient.
+fn resolved_yield(stress: [f64; 3], limit: [f64; 3], delta: [f64; 3]) -> bool {
+    (0..3).all(|i| {
+        let tolerance = f64::EPSILON.sqrt() * stress[i].abs().max(limit[i]);
+        stress[i].is_finite()
+            && limit[i].is_finite()
+            && limit[i] > 0.
+            && tolerance.is_finite()
+            && if delta[i] != 0. {
+                (stress[i] - delta[i].signum() * limit[i]).abs() <= tolerance
+            } else {
+                stress[i].abs() <= limit[i] + tolerance
+            }
+    })
+}
+
+// Active stationarity requires K_A: = diag(H_A) * d(delta_A)/dE. Check this independent
+// identity before accepting a subtractive Schur complement that may erase positive hardening.
+fn resolved_tangent(
+    d: [[f64; 3]; 3],
+    h: [f64; 3],
+    active: [bool; 3],
+    inverse: [[f64; 3]; 3],
+    tangent: [[f64; 3]; 3],
+) -> bool {
+    (0..3).all(|i| {
+        let expected: [f64; 3] =
+            std::array::from_fn(|j| h[i] * (0..3).map(|a| inverse[i][a] * d[a][j]).sum::<f64>());
+        let scale = expected
+            .iter()
+            .chain(&tangent[i])
+            .map(|v| v.abs())
+            .fold(0., f64::max);
+        !active[i]
+            || (0..3).all(|j| {
+                let tolerance = if h[i] > 0. {
+                    f64::EPSILON.sqrt() * scale
+                } else {
+                    // Preserve the existing forward-roundoff allowance for a perfect-plastic row.
+                    256. * f64::EPSILON * d[i][i].sqrt() * d[j][j].sqrt()
+                };
+                expected[j].is_finite()
+                    && tolerance.is_finite()
+                    && (tangent[i][j] - expected[j]).abs() <= tolerance
+            })
+    })
+}
+
 pub(crate) fn evaluate(
     parameters: Parameters,
     coordinate: [f64; 3],
@@ -104,6 +153,7 @@ pub(crate) fn evaluate(
     let mut tangent = d;
     if incremental && (0..3).any(|i| trial[i].abs() > limit[i]) {
         let mut found = false;
+        let mut factorized = false;
         // Zero/inactive is ordered first: at an exact yield boundary prefer the elastic side.
         for code in 1..27 {
             let mut q = code;
@@ -117,7 +167,11 @@ pub(crate) fn evaluate(
                 }
             });
             let active = sign.map(|s| s != 0.);
-            let inv = inverse_active(d, h, active).ok_or(Failure::SingularActiveTensor)?;
+            // Failure belongs to this candidate; a later, smaller active set may still resolve.
+            let Some(inv) = inverse_active(d, h, active) else {
+                continue;
+            };
+            factorized = true;
             let rhs = std::array::from_fn(|i| {
                 if active[i] {
                     trial[i] - sign[i] * limit[i]
@@ -130,6 +184,7 @@ pub(crate) fn evaluate(
                 continue;
             }
             let stress = product(d, std::array::from_fn(|i| e[i] - candidate[i]));
+            let after = std::array::from_fn(|i| limit[i] + h[i] * candidate[i].abs());
             // Check the ORIGINAL KKT equations in work-conjugate stress/moment units.
             let tolerance: [f64; 3] = std::array::from_fn(|i| {
                 256. * f64::EPSILON
@@ -137,20 +192,19 @@ pub(crate) fn evaluate(
                         + limit[i]
                         + (0..3).map(|j| (d[i][j] * candidate[j]).abs()).sum::<f64>())
             });
-            if (0..3).any(|i| {
-                !candidate[i].is_finite()
-                    || !stress[i].is_finite()
-                    || !tolerance[i].is_finite()
-                    || if active[i] {
-                        (stress[i] - sign[i] * (limit[i] + h[i] * candidate[i].abs())).abs()
-                            > tolerance[i]
-                    } else {
-                        stress[i].abs() > limit[i] + tolerance[i]
-                    }
-            }) {
+            if !resolved_yield(stress, after, candidate)
+                || (0..3).any(|i| {
+                    !candidate[i].is_finite()
+                        || !tolerance[i].is_finite()
+                        || if active[i] {
+                            (stress[i] - sign[i] * after[i]).abs() > tolerance[i]
+                        } else {
+                            stress[i].abs() > limit[i] + tolerance[i]
+                        }
+                })
+            {
                 continue;
             }
-            delta = candidate;
             // D - D_:A (D_AA+H)^-1 D_A:; copy the lower half for exact symmetry.
             for i in 0..3 {
                 for j in 0..=i {
@@ -164,15 +218,36 @@ pub(crate) fn evaluate(
                     tangent[j][i] = tangent[i][j];
                 }
             }
+            if !resolved_tangent(d, h, active, inv, tangent) {
+                continue;
+            }
+            delta = candidate;
             found = true;
             break;
         }
         if !found {
-            return Err(Failure::NoReturnMap);
+            return Err(if factorized {
+                Failure::NoReturnMap
+            } else {
+                Failure::SingularActiveTensor
+            });
         }
     }
     if (0..3).any(|i| accumulated[i] + delta[i].abs() > parameters.accumulation_limit[i]) {
         return Err(Failure::Accumulation);
+    }
+    if incremental {
+        // Check the actual rounded state advance() will store, not only (coordinate-plastic)-delta.
+        let stored_stress = product(
+            d,
+            std::array::from_fn(|i| coordinate[i] - (plastic[i] + delta[i])),
+        );
+        let stored_limit = std::array::from_fn(|i| {
+            parameters.yield_value[i] + h[i] * (accumulated[i] + delta[i].abs())
+        });
+        if !resolved_yield(stored_stress, stored_limit, delta) {
+            return Err(Failure::NoReturnMap);
+        }
     }
     let elastic = std::array::from_fn(|i| e[i] - delta[i]);
     let stress = product(d, elastic);

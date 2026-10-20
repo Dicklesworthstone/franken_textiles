@@ -216,7 +216,17 @@ pub fn resolve(pattern: &Pattern, options: &DrapeOptions) -> Result<MaterialInpu
     {
         return Err(invalid("fabric must be an object"));
     }
-    pieces::resolve(pattern, resolve_uniform(pattern, options)?)
+    let inputs = pieces::resolve(pattern, resolve_uniform(pattern, options)?)?;
+    let permanent = inputs.piece_membrane_plasticities.as_ref().map_or_else(
+        || inputs.membrane_plasticity.is_some(),
+        |pieces| pieces.iter().any(Option::is_some),
+    );
+    if permanent && inputs.options.compression != 1.0 {
+        return Err(invalid(
+            "permanent in-plane set requires compression factor 1; softened Green-strain plasticity is not characterized",
+        ));
+    }
+    Ok(inputs)
 }
 
 // This helper does not resolve piece selectors: each explicitly selected sheet uses this same

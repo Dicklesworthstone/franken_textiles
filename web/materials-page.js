@@ -230,6 +230,7 @@ function motionComparison(parent, rows, simulations, requested) {
       initial_body_collision_sha256: result.initial_body_collision_sha256, initial_drape_gating: result.initial_drape_gating,
       retained_vertex_samples: result.retained_vertex_samples, pairs_tested: result.pairs_tested,
       membrane_history: result.membrane_history, bending_history: result.bending_history,
+      membrane_plasticity_history: result.membrane_plasticity_history,
       endpoints: result.keyframes.map(e => ({ time_s: e.time_s, positions_sha256: e.positions_sha256,
         body_collision_sha256: e.body_collision_sha256, surface_refusal: e.surface?.refusal, coverage_refusal: e.coverage?.refusal })),
       scope: result.scope, thermal_basis: result.thermal_basis });

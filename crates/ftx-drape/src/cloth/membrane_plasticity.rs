@@ -174,7 +174,14 @@ impl Solver {
             if self.relaxation.as_ref().is_some_and(|field| field.has(i)) {
                 return Err(bad("plastic membrane and Maxwell memory need a jointly characterized law on the same triangle"));
             }
-            Ok(Some(Bound { element: self.model.membranes[i], material, law: law.clone(), memory: law.pristine() }))
+            let element = self.model.membranes[i];
+            if !element.area.is_finite()
+                || element.area <= 0.0
+                || element.g.iter().flatten().any(|v| !v.is_finite())
+            {
+                return Err(bad("invalid permanent-stretch reference triangle"));
+            }
+            Ok(Some(Bound { element, material, law: law.clone(), memory: law.pristine() }))
         }).collect::<Result<Vec<_>, Refusal>>()?;
         let field = Field {
             entries,
