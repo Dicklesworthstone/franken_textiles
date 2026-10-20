@@ -160,6 +160,41 @@ fn the_real_drape_changes_when_only_material_observations_change() {
     );
     assert_eq!(a.report["mass_kg"], ma);
     assert_eq!(a.report["material"]["fit_claim"], false);
+    for run in [&a, &b] {
+        assert_eq!(run.sew.samples.len(), opts.sew_steps);
+        assert_eq!(run.drape.samples.len(), opts.drape_steps);
+        for sample in run.sew.samples.iter().chain(&run.drape.samples) {
+            assert!(sample.solve.converged);
+            assert!(sample.solve.residual.is_finite());
+            assert!(sample.solve.last_step / opts.step < opts.tol);
+        }
+        let speed = run
+            .scene
+            .solver
+            .v
+            .iter()
+            .map(|v| v.norm())
+            .fold(0.0, f64::max);
+        assert_eq!(run.drape.samples.last().unwrap().max_speed_m_s, speed);
+        assert_eq!(run.report["numerical"]["drape"]["max_speed"], speed);
+        assert_eq!(run.report["numerical"]["settled"], false);
+        assert!(
+            run.gating()
+                .iter()
+                .any(|s| s.starts_with("not numerically settled"))
+        );
+    }
+
+    let mut scene = a.scene;
+    scene.solver.max_newton = 0;
+    scene.solver.contact.as_mut().unwrap().params.thickness = 0.0;
+    let accepted = format!("{:?}", scene.solver);
+    let mut frames = 0;
+    let failure = ftx_drape::scene::run_phase(&mut scene, 1, opts.step, 9.81, |_, _| frames += 1)
+        .unwrap_err();
+    assert_eq!(failure.code, ftx_core::RefusalCode::NotConverged);
+    assert_eq!(frames, 0);
+    assert_eq!(format!("{:?}", scene.solver), accepted);
 }
 
 #[test]

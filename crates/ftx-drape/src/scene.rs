@@ -858,7 +858,8 @@ pub struct PhaseReport {
 /// each with the step index and the mesh-vertex positions.
 ///
 /// # Errors
-/// A refusal from the solver (a non-finite state).
+/// A refusal from the solver, including a stalled Newton solve. Accepted earlier steps remain;
+/// the failed step emits no frame and does not advance the contact-offset ramp.
 pub fn run_phase(
     scene: &mut Scene,
     steps: usize,
@@ -869,8 +870,17 @@ pub fn run_phase(
     scene.solver.gravity = Vec3::new(0.0, 0.0, -gravity);
     let mut rep = PhaseReport::default();
     for k in 0..steps {
+        let thickness = scene.solver.contact.as_ref().map(|c| c.params.thickness);
         ramp_thickness(scene);
-        let r: SolveReport = scene.solver.step(h)?;
+        let r: SolveReport = match scene.solver.step(h) {
+            Ok(r) => r,
+            Err(e) => {
+                if let (Some(c), Some(thickness)) = (&mut scene.solver.contact, thickness) {
+                    c.params.thickness = thickness;
+                }
+                return Err(e);
+            }
+        };
         rep.steps += 1;
         rep.iterations += r.iterations;
         rep.unconverged += usize::from(!r.converged);
