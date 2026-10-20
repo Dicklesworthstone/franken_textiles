@@ -3,6 +3,7 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec3};
 use ftx_pattern::material_membrane_plasticity::{MODEL, Memory, PlasticMembrane};
+use ftx_pattern::material_response::StrainDomain;
 use serde_json::{Value, json};
 
 use super::{ClothModel, Solver};
@@ -16,6 +17,7 @@ fn bad(message: impl Into<String>) -> Refusal {
 struct Bound {
     element: MembraneElement,
     material: Membrane,
+    domain: Option<StrainDomain>,
     law: PlasticMembrane,
     memory: Memory,
     dissipated_j: f64,
@@ -64,6 +66,7 @@ impl Field {
                 if model.membranes[i] != b.element
                     || model.material(i) != b.material
                     || model.membrane_response(i).is_some()
+                    || model.membrane_domain(i) != b.domain
                     || !b.dissipated_j.is_finite()
                     || b.dissipated_j < 0.
                 {
@@ -174,6 +177,7 @@ impl Solver {
                 "one compression mapping per material triangle is required",
             ));
         }
+        self.model.check_membrane_domains(&self.x)?;
         let entries = laws.iter().enumerate().map(|(i, law)| {
             let Some(law) = law else { return Ok(None); };
             let material = self.model.material(i);
@@ -194,7 +198,7 @@ impl Solver {
             {
                 return Err(bad("invalid permanent-stretch reference triangle"));
             }
-            Ok(Some(Bound { element, material, law: law.clone(), memory: law.pristine(), dissipated_j: 0. }))
+            Ok(Some(Bound { element, material, domain: self.model.membrane_domain(i), law: law.clone(), memory: law.pristine(), dissipated_j: 0. }))
         }).collect::<Result<Vec<_>, Refusal>>()?;
         let field = Field {
             entries,

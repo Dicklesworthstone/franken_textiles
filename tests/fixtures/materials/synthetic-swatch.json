@@ -162,6 +162,42 @@
       "source": "synthetic",
       "evidence": "estimate",
       "partition": "check"
+    },
+    {
+      "id": "warp-compression",
+      "deformation": [[0.8, 0.0], [0.0, 1.0]],
+      "nominal_n_m": [[-1295.9999999999998, 0.0], [0.0, -107.99999999999996]],
+      "scale_n_m": 1.0,
+      "source": "synthetic",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "weft-compression",
+      "deformation": [[1.0, 0.0], [0.0, 0.8]],
+      "nominal_n_m": [[-107.99999999999996, 0.0], [0.0, -575.9999999999999]],
+      "scale_n_m": 1.0,
+      "source": "synthetic",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "positive-shear",
+      "deformation": [[1.0, 0.3], [0.0, 1.0]],
+      "nominal_n_m": [[90.00000000000003, 264.00000000000006], [210.0, 180.00000000000017]],
+      "scale_n_m": 1.0,
+      "source": "synthetic",
+      "evidence": "estimate",
+      "partition": "fit"
+    },
+    {
+      "id": "negative-shear",
+      "deformation": [[1.0, -0.3], [0.0, 1.0]],
+      "nominal_n_m": [[90.00000000000003, -264.00000000000006], [-210.0, 180.00000000000017]],
+      "scale_n_m": 1.0,
+      "source": "synthetic",
+      "evidence": "estimate",
+      "partition": "fit"
     }
   ],
   "allow_estimated_observations": true,

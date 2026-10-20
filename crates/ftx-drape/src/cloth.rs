@@ -9,7 +9,7 @@
 //! solve minimises `Ψ − Σ mᵢ g·xᵢ` the same way. Units: metres, kilograms, seconds.
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
-use ftx_pattern::material_response::CompiledMembrane;
+use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
 use serde::Serialize;
 
 use crate::contact::{Body, Contact, ContactParams, Intersection};
@@ -54,6 +54,8 @@ pub struct ClothModel {
     // Nonlinear laws are immutable source-bound constitutive responses; None entries use the
     // corresponding linear/reference-tangent material above.
     element_responses: Option<Vec<Option<CompiledMembrane>>>,
+    // Scalar calibration bounds survive source resolution and grain-frame scene assembly.
+    element_domains: Option<Vec<Option<StrainDomain>>>,
     hinge_bending: Option<Vec<f64>>,
     // Each hinge's adjacent triangles and their shares of the existing bending integration area.
     hinge_support: Vec<[(usize, f64); 2]>,
@@ -218,6 +220,7 @@ impl ClothModel {
             elastics: Vec::new(),
             element_materials: None,
             element_responses: None,
+            element_domains: None,
             hinge_bending: None,
             hinge_support,
             panel_bending: None,
@@ -313,13 +316,56 @@ impl ClothModel {
             .and_then(Option::as_ref)
     }
 
-    /// Refuse a physical state outside any source-declared nonlinear strain domain.
+    /// Bind the optional physical domain of each fitted scalar membrane.
+    ///
+    /// # Errors
+    /// Unless there is exactly one domain slot per membrane triangle.
+    pub fn set_membrane_domains(
+        &mut self,
+        domains: &[Option<StrainDomain>],
+    ) -> Result<(), Refusal> {
+        if domains.len() != self.membranes.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "one fitted domain slot per membrane triangle is required",
+            ));
+        }
+        self.element_domains = domains
+            .iter()
+            .any(Option::is_some)
+            .then(|| domains.to_vec());
+        Ok(())
+    }
+
+    /// Optional source-fitted scalar domain of one membrane element.
+    #[must_use]
+    pub fn membrane_domain(&self, e: usize) -> Option<StrainDomain> {
+        self.element_domains
+            .as_ref()
+            .and_then(|domains| domains.get(e))
+            .copied()
+            .flatten()
+    }
+
+    /// Refuse a physical state outside any fitted scalar or nonlinear strain domain.
     /// Numerical compression/gather softening never widens this domain.
     ///
     /// # Errors
     /// First element whose raw material-frame Green strain leaves its characterized box.
     pub fn check_membrane_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
         for (i, e) in self.membranes.iter().enumerate() {
+            if let Some(domain) = self.membrane_domain(i) {
+                let strain = e.strain(x);
+                if !domain.contains(strain) {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!(
+                            "membrane element {i}: physical Green strain {strain:?} is outside fitted ranges {:?}",
+                            domain.ranges()
+                        ),
+                    ));
+                }
+            }
             if let Some(law) = self.membrane_response(i) {
                 let strain = e.strain(x);
                 if !law.contains(strain) {
@@ -339,6 +385,9 @@ impl ClothModel {
     /// Elastic energy Ψ (membrane + bending + elastics) at positions `x`.
     #[must_use]
     pub fn elastic_energy(&self, x: &[Vec3]) -> f64 {
+        if self.check_membrane_domains(x).is_err() {
+            return f64::NAN;
+        }
         self.elastic_energy_with_fields(x, None, None)
     }
 

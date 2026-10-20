@@ -7,7 +7,7 @@ use ftx_pattern::material_bending::BendingTensor;
 use ftx_pattern::material_membrane_plasticity::PlasticMembrane;
 use ftx_pattern::material_plasticity::PlasticBending;
 use ftx_pattern::material_relaxation::CompiledRelaxation;
-use ftx_pattern::material_response::CompiledMembrane;
+use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
 use ftx_pattern::materials::Mechanics;
 use ftx_pattern::textile_import::resolve_fabric;
 use ftx_pattern::{Grain, Pattern, truthy};
@@ -38,6 +38,7 @@ pub struct Fabric {
     /// Weft stiffness, engineering shear stiffness and major Poisson ratio, when characterized.
     directional: Option<[f64; 3]>,
     panel_bending: Option<BendingTensor>,
+    fitted_domain: Option<StrainDomain>,
 }
 
 impl Default for Fabric {
@@ -48,6 +49,7 @@ impl Default for Fabric {
             bending_nm: 3e-5,
             directional: None,
             panel_bending: None,
+            fitted_domain: None,
         }
     }
 }
@@ -82,6 +84,7 @@ impl Fabric {
             bending_nm: m.bending_nm,
             directional: Some([m.weft_n_m, m.shear_n_m, m.poisson]),
             panel_bending: None,
+            fitted_domain: None,
         }
     }
 
@@ -116,6 +119,7 @@ impl Fabric {
             bending_nm: number("bending_Nm", d.bending_nm)?,
             directional: None,
             panel_bending: None,
+            fitted_domain: None,
         };
         fabric.validate()?;
         Ok(fabric)
@@ -133,6 +137,12 @@ impl Fabric {
     #[must_use]
     pub fn bending_response(&self) -> Option<BendingTensor> {
         self.panel_bending
+    }
+
+    /// Physical Green-strain bounds of an identified scalar law, when present.
+    #[must_use]
+    pub fn strain_domain(&self) -> Option<StrainDomain> {
+        self.fitted_domain
     }
 }
 
@@ -274,6 +284,7 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
     let thermal_failure = thermal.as_ref().and_then(|r| r.as_ref().err());
     let mut fabric = Fabric::from_mechanics(mechanics);
     fabric.panel_bending = record.bending_response()?;
+    fabric.fitted_domain = ftx_pattern::material_calibration::fitted_domain(record.material())?;
     fabric.validate()?;
     check_grains(pattern, &fabric)?;
     opts.contact.thickness = 0.5 * mechanics.thickness_m;
@@ -344,6 +355,7 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
             "panel_bending_matrix_nm":fabric.panel_bending.map(|p| p.matrix()),
             "bending_scope":"explicit tensor replaces interior source-panel hinges; scalar bending_rigidity remains the separate seam approximation",
             "nonlinear_strain_range": response.as_ref().map(CompiledMembrane::strain_range),
+            "fitted_strain_range": fabric.fitted_domain.map(StrainDomain::ranges),
             "relaxation_law_sha256": relaxation.as_ref().map(CompiledRelaxation::fingerprint),
             "membrane_stiffness_basis": "equilibrium; optional Maxwell branches add transient response",
             "contact_policy":"material owns thickness and friction; caller owns numerical tolerances and self-contact enablement",

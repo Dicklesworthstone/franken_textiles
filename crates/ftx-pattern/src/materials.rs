@@ -285,6 +285,7 @@ impl Material {
                 return Err(invalid(format!("{}: invalid bounds for {name}", self.id)));
             }
         }
+        crate::material_calibration::fitted_domain(self)?;
         if let Some(response) = &self.thermal_response {
             response.validate(self)?;
         }
