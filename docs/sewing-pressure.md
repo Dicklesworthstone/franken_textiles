@@ -93,16 +93,95 @@ The existing file-free browser functions `sew_plan(patternJson, optionsJson)`,
 `sew_stitches(patternJson, optionsJson)` and `sew_svg(patternJson, optionsJson, operation)` use the same
 implementation after rebuilding the bindings. No separate JavaScript pressure calculation is needed.
 
+## Clearance-controlled closure: infer the required pressure and force
+
+An operation may instead prescribe a **final gap** between rigid parallel faces and a common reference
+area. `ftx-sewing-plan/8` then uses the existing `material_compression::stack::close` inverse on every
+actual physical ply, including repeated folded regions. Pressure is an output, never a guessed input.
+The original pattern, material inventory, unloaded-entry test and generated stitches remain unchanged.
+
+```sh
+cargo run -p ftx-cli --bin ftx-materials -- sew-plan \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  tests/fixtures/materials/synthetic-sewing-clearance-options.json
+
+cargo run -p ftx-cli --bin ftx-materials -- sew-svg \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  tests/fixtures/materials/synthetic-sewing-clearance-options.json \
+  side clearance-review.svg
+```
+
+This separate **synthetic** fixture starts two 0.4-mm plies at a known 0 Pa and requests a 0.6-mm final
+gap over 200 mm². Its independently declared linear branches give **250 Pa**, **0.05 N** final normal
+force and **0.000005 J** signed external loading work. The central loaded stack is 0.6 mm; the checked
+stack remains 0.66 mm from the supplied upper bounds. A material-only change in compressibility can
+require more pressure and force for the same gap, changing machine admission without changing stitches.
+None of these numbers is a measured textile result or recommended machine setting.
+
+Select `model: "independent_ply_clearance/1"`, omit the operation's `pressure_pa`, and supply:
+
+```json
+"clearance": {
+  "gap_mm": 0.6,
+  "reference_area_mm2": 200.0,
+  "direction": "loading",
+  "allow_estimates": true
+}
+```
+
+The per-material compression requests now use `pressure_pa` for the **known initial pressure**; it must
+be identical across all plies. Acquisition `conditioning` and `loading_branch` still must match the
+operation. `direction` restricts the traverse of those supplied branches; it does not select or invent
+an unloading curve from its name. A characterized unloading traverse can give negative external work.
+The shared inverse refuses nonunique pressure, unsupported gaps, extrapolation and invalid evidence.
+Supplying both a prescribed operation pressure and clearance is an error.
+
+The machine must additionally declare a positive ordered `presser_foot.normal_force_n` interval.
+Both the inferred final pressure and final force must lie inside the machine's separate envelopes.
+This force limit applies to clearance mode; prescribed-pressure mode has no reference area and does not
+claim a computed force. The final **checked** loaded thickness must still pass `max_loaded_stack_mm`;
+neither a small central gap nor estimated compression bypasses unloaded entry or reported upper bounds.
+
+A required process qualification needs a matching `presser_foot.clearance` object with `gap_mm`,
+`reference_area_mm2` and `normal_force_n` intervals and the exact `direction`. Its ordinary pressure,
+loaded thickness, conditioning, loading branch and uncompressed stack limits also apply. A pressure-only
+recipe does not qualify clearance control, nor does a clearance qualification silently qualify a
+pressure-controlled operation. Model-estimate permission is independent of all material and process
+evidence policies.
+
+`seams[i].presser_foot.closure` retains the full shared inverse receipt, including input gap/area,
+initial/final pressures, pressure bracket, normal force, signed external branch work, numerical closure
+residual and every physical ply's conditioning result. In this mode `presser_foot.materials` is empty:
+the per-ply results live in `closure.layers`, and `presser_foot.layers` links each original material hash
+to its final conditioned hash. Repeated plies are distinct closure participants. SVG metadata carries
+the inverse/input and per-ply acquisition hashes; the visible review distinguishes inferred pressure
+from prescribed pressure and explicitly does not identify external work as heat.
+
+The inverse supports at most **32 actual plies**, and repeated plies count repeatedly toward the shared
+65,536-observation job limit. The same ordinary commands and file-free browser adapters use this path;
+they return no partial output on a force, source, geometry or qualification refusal. There is no
+separate browser calculation or new hardware command.
+
+**Central observations determine the inverse.** Thickness bounds are evaluated at that inferred
+pressure but are not propagated to pressure, force or work uncertainty. The checked thickness may
+therefore exceed the requested central gap; it is retained for the loaded-stack envelope, not claimed
+as a second compatible physical configuration. Final force/pressure ranges are final-state checks,
+not limits for every point of the traverse. The area is supplied, not inferred from a foot shape or
+needle path. These fixed-area, independent-ply, quasi-static assumptions do not model local pressure
+fields, lateral expansion, buckling, dwell, rate-dependent recovery or branch switching. Signed
+external work is neither a stored-energy nor a dissipation/heat split. No contact solution, uncertainty
+qualification, seam-quality validation or machine authorization follows from successful closure.
+
 ## Limits and remaining acceptance
 
-This is static, fixed-reference-area, independent-ply **prescribed-pressure planning**. It does not solve
+This is static, fixed-reference-area, independent-ply **prescribed-pressure or clearance planning**. It does not solve
 presser-foot contact, predict local force distributions, thickness recovery or speed/dwell effects,
 lateral bulging, needle penetration, frictional feeding, thread tension, pucker or seam strength. The
 original uncompressed observation must itself be appropriate for the intended entry condition. A
 compression table alone does not qualify a sewing process; process evidence remains independent.
 
-Work is bounded across the whole job: at most 128 physical plies per pressure stack and 65,536 supplied
-scalar compression observations across all operations, in addition to existing sewing/geometry budgets.
+Work is bounded across the whole job: at most 128 physical plies per prescribed-pressure stack (32 for
+clearance closure) and 65,536 supplied scalar observations, in addition to existing sewing/geometry budgets.
 Failures publish no partial program or SVG. `hardware_execution_authorized` and
 `physical_seam_quality_validated` remain **false**, including for source-matched recipes.
 
