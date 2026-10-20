@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::material_catalog::{Selection, normalize, property_unit};
 use crate::materials::{CATALOG_SCHEMA, Catalog, Evidence, Form, Material, Quantity, Source};
 
+/// Invert qualified layer thicknesses to a common pressure at a prescribed stack clearance.
+pub mod stack;
+
 /// Portable acquisition and conditioning request.
 pub const SCHEMA: &str = "ftx-material-compression/1";
 /// Marker for the operation that produced the ordinary material record.
