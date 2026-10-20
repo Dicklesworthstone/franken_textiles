@@ -508,6 +508,204 @@ fn sewn_membrane_set_stays_piece_local_and_body_motion_keeps_accepted_history() 
 }
 
 #[test]
+fn accepted_membrane_work_heats_only_qualified_sheets_and_excludes_initial_drape() {
+    use ftx_drape::study::{Scenario, Session, motion};
+    let selected = |fraction: f64| {
+        let mut selection = membrane_selection();
+        selection["record"]["properties"]["membrane_plastic_heat_fraction"] = json!({
+            "value":fraction,"unit":"1","source":"test","evidence":"estimate",
+            "method":"Synthetic irreversible-yield heat conversion, not measured textile data",
+            "conditions":{"specimen_id":"artificial-stretch-A","conditioning":"synthetic constant dry state",
+                "work_basis":"irreversible_membrane_plastic_dissipation",
+                "temperature_min_c":"-20","temperature_max_c":"80"}});
+        selection
+    };
+    let w = Workspace::new();
+    let mut raw = garment();
+    raw["pieces"][1]["fabric"] = json!({"material":selected(0.),"role":"lining"});
+    w.write("pattern.json", &raw);
+    w.write(
+        "changes.json",
+        &json!({"schema":"ftx-material-bindings/1","default":selected(0.8)}),
+    );
+    w.ok(&["bind-changes", "pattern.json", "changes.json", "bound.json"]);
+    let pattern = Pattern::new(w.read("bound.json"));
+    let (vertices, triangles) = cylinder();
+    let body = DrapeBody {
+        frames: &Frames,
+        collision: (&vertices, &triangles),
+        display: (&vertices, &triangles),
+        arm_deg: 35.,
+    };
+    let target: Vec<_> = vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0., 0., 0.00005))
+        .collect();
+    let scenario: Scenario = serde_json::from_value(json!({
+        "schema":"ftx-drape-scenario/1","options":{"spacing":10.,"sew_steps":3,
+            "drape_steps":3,"step":0.0005},"fit_spec":{},"max_mesh_points":4096,
+        "max_vertex_frames":4000000,
+        "motion":{"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.001,"arm_abduction_deg":35.}],
+            "max_step_s":0.0005,"max_trials":16,"max_pairs":100000,"max_sample_vertices":200000,
+            "transient_surface":{"schema":"ftx-motion-surface-heat/1","initial_temperature_c":20.,
+                "cells_per_layer":2,"max_step_s":0.00025,"max_cell_steps":5000000,
+                "plastic_dissipation_heat":"uniform_reference_thickness",
+                "boundaries":[{"inside_c":20.,"outside_c":20.,
+                    "inside_resistance_m2_k_w":1.,"outside_resistance_m2_k_w":1.}]}}}))
+    .unwrap();
+    let evaluate = |s: &Scenario, p: &Pattern| {
+        let mut session = Session::new(s, &body).unwrap();
+        session
+            .set_motion_path(motion::Path::new(
+                s.motion.as_ref().unwrap(),
+                body.collision,
+                vec![target.clone()],
+            ))
+            .unwrap();
+        session.evaluate(p, |_| {}).unwrap()
+    };
+    let result = evaluate(&scenario, &pattern);
+    let moved = &result["motion"]["result"];
+    assert_eq!(
+        result["motion"]["status"], "available",
+        "{}",
+        result["motion"]
+    );
+    let thermal = &moved["transient_surface"];
+    assert_eq!(thermal["status"], "available", "{thermal}");
+    let thermal = &thermal["result"];
+    let heating = &thermal["plastic_dissipation_heat"];
+    assert!(heating["initial_plastic_dissipation_j"].as_f64().unwrap() > 0.);
+    assert!(heating["supplied_heat_j"].as_f64().unwrap() > 0.);
+    let initial = &moved["initial_sample"]["membrane_plastic_dissipation_j"];
+    let last =
+        &moved["samples"].as_array().unwrap().last().unwrap()["membrane_plastic_dissipation_j"];
+    let ids = result["drape"]["material"]["triangle_instance"]
+        .as_array()
+        .unwrap();
+    let instances = result["drape"]["material"]["instances"].as_array().unwrap();
+    let mut expected_heat = 0.;
+    let mut expected_work = 0.;
+    for (i, owner) in ids.iter().enumerate() {
+        let delta = last[i].as_f64().unwrap() - initial[i].as_f64().unwrap();
+        expected_work += delta;
+        let piece = instances[owner.as_u64().unwrap() as usize]["piece_index"]
+            .as_u64()
+            .unwrap();
+        if piece == 0 {
+            expected_heat += 0.8 * delta;
+        } else {
+            assert!(
+                thermal["final"]["temperature_c"][i]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|t| (t.as_f64().unwrap() - 20.).abs() < 1e-10)
+            );
+        }
+    }
+    assert!((heating["supplied_heat_j"].as_f64().unwrap() - expected_heat).abs() < 1e-12);
+    assert!((heating["plastic_dissipation_j"].as_f64().unwrap() - expected_work).abs() < 1e-12);
+    assert!(
+        (thermal["stored_change_j"].as_f64().unwrap()
+            - thermal["net_boundary_energy_j"].as_f64().unwrap()
+            - expected_heat)
+            .abs()
+            < 1e-10
+    );
+    assert!(thermal["balance_error_j"].as_f64().unwrap().abs() < 1e-10);
+    assert_eq!(evaluate(&scenario, &pattern), result);
+    let mut control = scenario.clone();
+    control
+        .motion
+        .as_mut()
+        .unwrap()
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .plastic_dissipation_heat = None;
+    let cold = evaluate(&control, &pattern);
+    for (a, b) in moved["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(cold["motion"]["result"]["samples"].as_array().unwrap())
+    {
+        assert_eq!(a["positions_m"], b["positions_m"]);
+        assert_eq!(a["solve"], b["solve"]);
+    }
+    assert_eq!(result["drape"], cold["drape"]);
+    assert!(
+        cold["motion"]["result"]["transient_surface"]["result"]["plastic_dissipation_heat"]
+            .is_null()
+    );
+    // Permit exactly the first accepted sample's heat work, then refuse the next sample.
+    // This exercises disposal of an already advanced private history, not an initial refusal.
+    let trace = thermal["trace"].as_array().unwrap();
+    assert!(trace.len() > 1);
+    assert_eq!(trace.len(), moved["samples"].as_array().unwrap().len());
+    let thermal_steps = thermal["thermal_steps"].as_u64().unwrap();
+    let charged_steps = thermal["cell_steps"].as_u64().unwrap();
+    let first_substeps = trace[0]["thermal_substeps"].as_u64().unwrap();
+    assert!(first_substeps > 0 && first_substeps < thermal_steps);
+    assert_eq!(charged_steps % thermal_steps, 0);
+    let first_budget = first_substeps * (charged_steps / thermal_steps);
+    assert!(first_budget < charged_steps);
+    let mut limited = scenario.clone();
+    limited
+        .motion
+        .as_mut()
+        .unwrap()
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .max_cell_steps = usize::try_from(first_budget).unwrap();
+    let exhausted = evaluate(&limited, &pattern);
+    assert_eq!(exhausted["motion"]["status"], "available");
+    assert_eq!(exhausted["drape"], result["drape"]);
+    let completed = &exhausted["motion"]["result"];
+    for key in [
+        "samples",
+        "final_positions_sha256",
+        "final_velocities_m_s",
+        "membrane_plasticity_history",
+    ] {
+        assert_eq!(completed[key], moved[key], "heat refusal changed {key}");
+    }
+    let refused = &completed["transient_surface"];
+    assert_eq!(refused["status"], "refused");
+    assert_eq!(refused["refusal"]["code"], "budget_exceeded");
+    assert!(refused.get("result").is_none());
+    assert!(refused.get("trace").is_none());
+    // A stale conversion qualifier is local to heat; valid permanent deformation still completes.
+    let mut incomplete = selected(0.8);
+    incomplete["record"]["properties"]["membrane_plastic_heat_fraction"]["conditions"]["specimen_id"] =
+        json!("other-specimen");
+    w.write(
+        "incomplete.json",
+        &json!({"schema":"ftx-material-bindings/1","default":incomplete}),
+    );
+    w.ok(&[
+        "bind-changes",
+        "pattern.json",
+        "incomplete.json",
+        "incomplete-bound.json",
+    ]);
+    let failed_heat = evaluate(&scenario, &Pattern::new(w.read("incomplete-bound.json")));
+    assert_eq!(failed_heat["motion"]["status"], "available");
+    assert_eq!(
+        failed_heat["motion"]["result"]["transient_surface"]["status"],
+        "refused"
+    );
+    assert!(failed_heat["motion"]["result"]["transient_surface"]["result"].is_null());
+    assert_eq!(
+        failed_heat["motion"]["result"]["final_positions_sha256"],
+        moved["final_positions_sha256"]
+    );
+}
+
+#[test]
 fn reversible_calibration_refuses_an_existing_permanent_membrane_law() {
     for (command, text) in [
         (

@@ -263,7 +263,11 @@ impl<'a, 'body> Session<'a, 'body> {
         // Motion cannot spend the allowance needed by a later alternative's independent static
         // drape. Reserve its samples, endpoint geometry and trials separately before continuation.
         let motion_admission = self.scenario.motion.as_ref().map(|request| {
-            let count = self.body.collision.0.len().saturating_add(points);
+            // A planar material mesh has fewer than twice its expanded mesh points in triangles.
+            // Optional per-triangle dissipation samples are charged as vertex equivalents too.
+            let history_points = if request.transient_surface.as_ref()
+                .is_some_and(|h| h.plastic_dissipation_heat.is_some()) { points.saturating_mul(2) } else { 0 };
+            let count = self.body.collision.0.len().saturating_add(points).saturating_add(history_points);
             if count > request.max_sample_vertices {
                 return Err(budget("motion cannot retain its initial body and cloth sample"));
             }

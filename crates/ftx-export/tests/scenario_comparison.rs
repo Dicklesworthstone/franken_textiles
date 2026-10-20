@@ -865,3 +865,280 @@ fn final_temperature_objectives_use_the_last_sample_without_changing_initial_inc
         json!(["b"])
     );
 }
+
+fn plastic_heat_request() -> Request {
+    let mut r = heat_request();
+    r.comparison.as_mut().unwrap().constraints.clear();
+    r.comparison.as_mut().unwrap().objectives = serde_json::from_value(json!([
+        {"metric":"transient_surface_final_max_temperature_c","direction":"minimize"},
+        {"metric":"transient_coverage_inside_energy_j","direction":"minimize"}]))
+    .unwrap();
+    for (i, variant) in r.variants.iter_mut().enumerate() {
+        let mut selection: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-membrane-plasticity.json"
+        ))
+        .unwrap();
+        selection["record"]["properties"]["membrane_plastic_heat_fraction"] = json!({
+            "value":if i == 0 {0.} else {0.8},"unit":"1","source":"test","evidence":"estimate",
+            "method":"Synthetic irreversible-yield conversion, not measured textile data",
+            "conditions":{"specimen_id":"artificial-stretch-A","conditioning":"synthetic constant dry state",
+                "work_basis":"irreversible_membrane_plastic_dissipation",
+                "temperature_min_c":"-20","temperature_max_c":"80"}});
+        variant.changes.default = Some(serde_json::from_value(selection).unwrap());
+    }
+    r
+}
+
+fn plastic_heat_descriptor() -> Value {
+    let mut d = heat_descriptor();
+    d["scenario"]["motion"]["transient_surface"]["plastic_dissipation_heat"] =
+        json!("uniform_reference_thickness");
+    d["scenario"]["motion"]["transient_surface"]["max_cell_steps"] = json!(5_000_000);
+    d
+}
+
+// Source-qualified synthetic callback accounting. This deliberately does not claim a solver result;
+// the real body-model/native/WASM scenario exercises the actual conversion independently.
+fn synthetic_plastic_heat(p: &Pattern, d: &Value) -> Value {
+    use ftx_pattern::materials::{CATALOG_SCHEMA, Catalog};
+    let selection = serde_json::from_value(p.raw()["fabric"]["material"].clone()).unwrap();
+    let material = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    }
+    .resolve(&selection)
+    .unwrap();
+    let fraction = material.membrane_plastic_heat_fraction().unwrap().unwrap();
+    let law = material
+        .membrane_plasticity()
+        .unwrap()
+        .unwrap()
+        .fingerprint();
+    let mut s = synthetic_heat(p, -8., 0.);
+    let m = &mut s["motion"]["result"];
+    m["triangles"] = json!([[0, 1, 2]]);
+    m["initial_sample"] = json!({"time_s":0.,"membrane_plastic_dissipation_j":[2.]});
+    m["initial_membrane_plasticity_history"] = json!({"plastic_dissipation_j":2.,
+        "elements":[{"triangle":0,"vertices":[0,1,2],"law_sha256":law,"plastic_dissipation_j":2.}]});
+    m["membrane_plasticity_history"] = json!({"plastic_dissipation_j":5.});
+    let snapshot = |work: f64| {
+        json!({"distribution":"uniform_reference_thickness",
+        "temporal_distribution":"uniform_over_accepted_interval","plastic_dissipation_j":work,
+        "supplied_heat_j":fraction.fraction*work,"unconverted_dissipation_j":(1.-fraction.fraction)*work,
+        "initial_plastic_dissipation_j":2.})
+    };
+    for (i, work) in [1., 3.].into_iter().enumerate() {
+        m["samples"][i]["membrane_plastic_dissipation_j"] = json!([2. + work]);
+        let h = &mut m["transient_surface"]["result"]["trace"][i];
+        h["plastic_dissipation_heat"] = snapshot(work);
+        h["inside_energy_j"] = json!(-4. * (i + 1) as f64);
+        h["outside_energy_j"] = h["inside_energy_j"].clone();
+        h["net_boundary_energy_j"] = json!(0.);
+        h["stored_change_j"] = json!(fraction.fraction * work);
+        h["balance_error_j"] = json!(0.);
+        h["temperature_range_c"] = json!([-8., -2. + fraction.fraction * work]);
+    }
+    let h = &mut m["transient_surface"]["result"];
+    h["request"] = d["scenario"]["motion"]["transient_surface"].clone();
+    h["cell_steps"] = json!(1032);
+    h["stored_change_j"] = json!(fraction.fraction * 3.);
+    h["plastic_dissipation_heat"] = snapshot(3.);
+    h["plastic_dissipation_heat"]["material_fractions"] = json!([{
+        "material_sha256":material.sha256(),"law_sha256":law,"fraction":fraction.fraction,
+        "temperature_range_c":fraction.temperature_range_c,
+        "observation":material.authored().properties["membrane_plastic_heat_fraction"]}]);
+    s
+}
+
+#[test]
+fn plastic_heat_protocols_compare_fractions_only_under_the_consumed_policy() {
+    let mut r = plastic_heat_request();
+    let d = plastic_heat_descriptor();
+    let evaluate = |r: &Request| {
+        serde_json::to_value(
+            r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |_, p| {
+                Ok(synthetic_plastic_heat(p, &d))
+            })
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let result = evaluate(&r);
+    assert_eq!(result["comparison"]["frontier"], json!(["a"]));
+    assert_eq!(result["comparison"]["incomparable"], json!([]));
+    for qualifier in ["method", "conditions"] {
+        let mut different = plastic_heat_request();
+        let property = different.variants[1]
+            .changes
+            .default
+            .as_mut()
+            .unwrap()
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("membrane_plastic_heat_fraction")
+            .unwrap();
+        if qualifier == "method" {
+            property.method = "A different characterization procedure".into();
+        } else {
+            property
+                .conditions
+                .insert("temperature_max_c".into(), "85".into());
+        }
+        let result = evaluate(&different);
+        assert_eq!(
+            result["comparison"]["frontier"],
+            json!(["a", "b"]),
+            "{qualifier}"
+        );
+        assert_eq!(
+            result["comparison"]["incomparable"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        different.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+        assert_eq!(evaluate(&different)["comparison"]["frontier"], json!(["a"]));
+        r = different;
+        r.comparison.as_mut().unwrap().allow_mixed_protocols = false;
+    }
+    // An unconsumed fraction observation must not change ordinary uncoupled thermal ordering.
+    r.comparison.as_mut().unwrap().objectives = serde_json::from_value(json!([
+        {"metric":"transient_surface_inside_energy_j","direction":"minimize"}]))
+    .unwrap();
+    let uncoupled = run_heat(&r, |key, p| {
+        Ok(synthetic_heat(p, if key == "a" { -8. } else { -4. }, 0.))
+    });
+    assert_eq!(uncoupled["comparison"]["frontier"], json!(["a"]));
+    assert_eq!(uncoupled["comparison"]["incomparable"], json!([]));
+    // The scenario may request heat while the actual comparison consumes only motion.
+    r.comparison = motion_request().comparison;
+    let motion_only = serde_json::to_value(
+        r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |key, p| {
+            Ok(synthetic_motion(p, if key == "a" { 3. } else { 6. }))
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(motion_only["comparison"]["frontier"], json!(["a"]));
+}
+
+#[test]
+fn inconsistent_plastic_heat_cannot_enter_a_frontier_or_erase_independent_coverage() {
+    let mut r = plastic_heat_request();
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    let d = plastic_heat_descriptor();
+    for fault in [
+        "receipt",
+        "material",
+        "law",
+        "fraction",
+        "observation",
+        "duplicate",
+        "initial_time",
+        "initial_total",
+        "initial_element",
+        "sample",
+        "regression",
+        "shape",
+        "trace",
+        "trace_work",
+        "trace_heat",
+        "distribution",
+        "summary",
+        "stored",
+        "boundary",
+        "final_total",
+    ] {
+        let result = serde_json::to_value(r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d,
+            |key,p| {
+                let mut s = synthetic_plastic_heat(p, &d);
+                if key == "a" {
+                    let m = &mut s["motion"]["result"];
+                    match fault {
+                        "initial_time" => m["initial_sample"]["time_s"] = json!(0.5),
+                        "initial_total" => m["initial_membrane_plasticity_history"]["plastic_dissipation_j"] = json!(1.),
+                        "initial_element" => m["initial_membrane_plasticity_history"]["elements"][0]["law_sha256"] = json!("stale"),
+                        "sample" => m["samples"][0]["membrane_plastic_dissipation_j"] = Value::Null,
+                        "regression" => m["samples"][1]["membrane_plastic_dissipation_j"] = json!([2.5]),
+                        "shape" => m["samples"][0]["membrane_plastic_dissipation_j"] = json!([3.,0.]),
+                        "final_total" => m["membrane_plasticity_history"]["plastic_dissipation_j"] = json!(6.),
+                        _ => {
+                            let h = &mut m["transient_surface"]["result"];
+                            match fault {
+                                "receipt" => h["plastic_dissipation_heat"]["material_fractions"] = Value::Null,
+                                "material" => h["plastic_dissipation_heat"]["material_fractions"][0]["material_sha256"] = json!("unbound"),
+                                "law" => h["plastic_dissipation_heat"]["material_fractions"][0]["law_sha256"] = json!("stale"),
+                                "fraction" => h["plastic_dissipation_heat"]["material_fractions"][0]["fraction"] = json!(0.5),
+                                "observation" => h["plastic_dissipation_heat"]["material_fractions"][0]["observation"]["method"] = json!("unrelated source"),
+                                "duplicate" => { let receipt = h["plastic_dissipation_heat"]["material_fractions"][0].clone();
+                                    h["plastic_dissipation_heat"]["material_fractions"].as_array_mut().unwrap().push(receipt); }
+                                "trace" => h["trace"][0]["plastic_dissipation_heat"] = Value::Null,
+                                "trace_work" => h["trace"][0]["plastic_dissipation_heat"]["plastic_dissipation_j"] = json!(3.),
+                                "trace_heat" => h["trace"][0]["plastic_dissipation_heat"]["supplied_heat_j"] = json!(0.5),
+                                "distribution" => h["plastic_dissipation_heat"]["temporal_distribution"] = json!("instantaneous"),
+                                "summary" => h["plastic_dissipation_heat"]["initial_plastic_dissipation_j"] = json!(0.),
+                                "stored" => h["stored_change_j"] = json!(1.),
+                                "boundary" => h["trace"][0]["outside_energy_j"] = json!(0.),
+                                _ => unreachable!(),
+                            }
+                        }
+                    }
+                }
+                Ok(s)
+            }).unwrap()).unwrap();
+        assert_eq!(result["comparison"]["frontier"], json!(["b"]), "{fault}");
+        assert!(result["comparison"]["alternatives"][0]["readings"]
+            ["transient_surface_final_max_temperature_c"].is_null(), "{fault}");
+        assert!(result["comparison"]["alternatives"][0]["readings"]
+            ["transient_coverage_inside_energy_j"].is_object(), "{fault}");
+        assert_eq!(
+            result["simulations"][0]["evaluation"]["result"]["motion"]["status"],
+            "available"
+        );
+        assert_eq!(
+            result["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
+        );
+    }
+}
+
+#[test]
+fn plastic_heat_requires_an_explicit_supported_policy_in_the_consumed_domain() {
+    let r = plastic_heat_request();
+    for policy in ["unknown", "unrequested", "coverage"] {
+        let mut d = plastic_heat_descriptor();
+        let affected = if policy == "coverage" {
+            "transient_coverage"
+        } else {
+            "transient_surface"
+        };
+        d["scenario"]["motion"][affected]["plastic_dissipation_heat"] = match policy {
+            "unknown" => json!("unsupported_distribution"),
+            "unrequested" => Value::Null,
+            _ => json!("uniform_reference_thickness"),
+        };
+        let result = serde_json::to_value(
+            r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |_, p| {
+                let mut s = synthetic_plastic_heat(p, &d);
+                s["motion"]["result"][affected]["result"]["request"] =
+                    d["scenario"]["motion"][affected].clone();
+                Ok(s)
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["comparison"]["frontier"], json!([]), "{policy}");
+        let independent = if policy == "coverage" {
+            "transient_surface_final_max_temperature_c"
+        } else {
+            "transient_coverage_inside_energy_j"
+        };
+        assert!(
+            result["comparison"]["alternatives"][0]["readings"][independent].is_object(),
+            "{policy}"
+        );
+    }
+}

@@ -625,9 +625,9 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     // No unsupported anatomical interpretation of the cylinder fixture's body patch index.
     scenario.as_object_mut().unwrap().remove("coverage");
     save(&dir.join("scenario.json"), &scenario);
-    let run = |binary: &str, prefix: &[&str]| {
+    let run_in = |directory: &Path, binary: &str, prefix: &[&str]| {
         let out = Command::new(binary)
-            .current_dir(&dir)
+            .current_dir(directory)
             .args(prefix)
             .args([
                 "pattern.json",
@@ -647,6 +647,7 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         let raw: Value = serde_json::from_slice(&out.stdout).unwrap();
         raw.get("result").unwrap_or(&raw).clone()
     };
+    let run = |binary: &str, prefix: &[&str]| run_in(&dir, binary, prefix);
     let a = run(
         env!("CARGO_BIN_EXE_ftx"),
         &["--json", "materials", "scenario-study"],
@@ -937,4 +938,167 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         );
     }
     save(&dir.join("motion-report.json"), &compared);
+
+    // Retain a separate model-backed replay: changing only conversion of accepted plastic work
+    // changes independent-sheet heat, while every accepted mechanical trajectory stays identical.
+    // The generated native output is an adapter parity input, not an empirical physics oracle.
+    let plastic_dir = dir.join("plastic-heat");
+    std::fs::create_dir(&plastic_dir).unwrap();
+    std::fs::write(plastic_dir.join("model.ftxbody"), &bytes).unwrap();
+    save(&plastic_dir.join("body-input.json"), &body_request);
+    let mut unconverted: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-membrane-plasticity.json"
+    ))
+    .unwrap();
+    unconverted["record"]["properties"]["specific_heat"]["method"] =
+        json!("Synthetic constant storage with separately requested irreversible-yield heating");
+    unconverted["record"]["properties"]["membrane_plastic_heat_fraction"] = json!({
+        "value":0.,"unit":"1","source":"test","evidence":"estimate",
+        "method":"Synthetic irreversible-yield heat conversion; not measured textile data",
+        "conditions":{"specimen_id":"artificial-stretch-A","conditioning":"synthetic constant dry state",
+            "work_basis":"irreversible_membrane_plastic_dissipation",
+            "temperature_min_c":"-20","temperature_max_c":"80"}});
+    // This explicitly synthetic low-yield continuation retains new accepted work after forming.
+    // It does not claim that the small prescribed shoulder motion loads a real garment.
+    for kind in ["yield", "hardening"] {
+        for axis in ["warp", "weft", "shear"] {
+            let value = &mut unconverted["record"]["properties"][format!("membrane_{kind}_{axis}")]
+                ["value"];
+            *value = json!(value.as_f64().unwrap() * 0.01);
+        }
+    }
+    let mut converted = unconverted.clone();
+    converted["record"]["properties"]["membrane_plastic_heat_fraction"]["value"] = json!(0.8);
+    let mut plastic_pattern = pattern.clone();
+    plastic_pattern["fabric"]["material"] = unconverted.clone();
+    save(&plastic_dir.join("pattern.json"), &plastic_pattern);
+    save(
+        &plastic_dir.join("study.json"),
+        &json!({
+        "schema":"ftx-material-study/1","variants":[
+            {"key":"unconverted","changes":{"schema":"ftx-material-bindings/1","default":unconverted}},
+            {"key":"converted","changes":{"schema":"ftx-material-bindings/1","default":converted}}],
+        "comparison":{"basis":"nominal","objectives":[
+            {"metric":"transient_surface_final_max_temperature_c","direction":"minimize"}]}}),
+    );
+    let mut plastic_scenario = scenario.clone();
+    plastic_scenario["motion"]
+        .as_object_mut()
+        .unwrap()
+        .remove("transient_coverage");
+    let equilibrium = json!({"inside_c":20.,"outside_c":20.,
+        "inside_resistance_m2_k_w":1.,"outside_resistance_m2_k_w":1.});
+    plastic_scenario["motion"]["transient_surface"] = json!({
+        "schema":"ftx-motion-surface-heat/1","initial_temperature_c":20.,"cells_per_layer":2,
+        "boundaries":[equilibrium,equilibrium],"max_step_s":0.0005,"max_cell_steps":5000000,
+        "plastic_dissipation_heat":"uniform_reference_thickness"});
+    save(&plastic_dir.join("scenario.json"), &plastic_scenario);
+    let heated = run_in(
+        &plastic_dir,
+        env!("CARGO_BIN_EXE_ftx-materials"),
+        &["scenario-study"],
+    );
+    assert_eq!(
+        heated,
+        run_in(
+            &plastic_dir,
+            env!("CARGO_BIN_EXE_ftx"),
+            &["--json", "materials", "scenario-study"]
+        )
+    );
+    assert_eq!(heated["comparison"]["frontier"], json!(["unconverted"]));
+    assert_eq!(heated["comparison"]["incomparable"], json!([]));
+    for candidate in heated["comparison"]["alternatives"].as_array().unwrap() {
+        assert_eq!(candidate["eligible"], true, "{candidate}");
+    }
+    let simulations = heated["simulations"].as_array().unwrap();
+    assert_eq!(simulations.len(), 2);
+    for row in simulations {
+        assert_eq!(row["evaluation"]["status"], "available", "{row}");
+        let result = &row["evaluation"]["result"];
+        assert_eq!(result["drape"]["settled"], true);
+        assert_eq!(result["drape"]["gating"], json!([]));
+        assert_eq!(result["metrics"]["simulation_gating_clear"], true);
+        let motion = &result["motion"];
+        assert_eq!(motion["status"], "available", "{motion}");
+        let motion = &motion["result"];
+        let heat = &motion["transient_surface"];
+        assert_eq!(heat["status"], "available", "{heat}");
+        let heat = &heat["result"];
+        let work = &heat["plastic_dissipation_heat"];
+        assert_eq!(work["distribution"], "uniform_reference_thickness");
+        assert_eq!(
+            work["temporal_distribution"],
+            "uniform_over_accepted_interval"
+        );
+        let initial = work["initial_plastic_dissipation_j"].as_f64().unwrap();
+        let dissipated = work["plastic_dissipation_j"].as_f64().unwrap();
+        let supplied = work["supplied_heat_j"].as_f64().unwrap();
+        assert!(initial > 0. && dissipated > 0., "{work}");
+        assert!(
+            (initial
+                - result["drape"]["membrane_plasticity_history"]["plastic_dissipation_j"]
+                    .as_f64()
+                    .unwrap())
+            .abs()
+                < 1e-12
+        );
+        assert!(
+            (initial + dissipated
+                - motion["membrane_plasticity_history"]["plastic_dissipation_j"]
+                    .as_f64()
+                    .unwrap())
+            .abs()
+                < 1e-12
+        );
+        let fraction = match row["key"].as_str() {
+            Some("unconverted") => 0.,
+            Some("converted") => 0.8,
+            other => panic!("unexpected plastic heat alternative {other:?}"),
+        };
+        assert!((supplied - fraction * dissipated).abs() < 1e-12);
+        assert_eq!(work["material_fractions"][0]["fraction"], fraction);
+        assert!(
+            (supplied + work["unconverted_dissipation_j"].as_f64().unwrap() - dissipated).abs()
+                < 1e-12
+        );
+        let balance = heat["stored_change_j"].as_f64().unwrap()
+            - heat["net_boundary_energy_j"].as_f64().unwrap()
+            - supplied;
+        assert!(balance.abs() < 1e-9, "{heat}");
+        assert!((balance - heat["balance_error_j"].as_f64().unwrap()).abs() < 1e-12);
+        if fraction == 0. {
+            assert_eq!(supplied, 0.);
+            assert!(
+                heat["final"]["temperature_c"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| row
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|t| (t.as_f64().unwrap() - 20.).abs() < 1e-10))
+            );
+        } else {
+            assert!(supplied > 0.);
+        }
+    }
+    let by_key: BTreeMap<_, _> = simulations
+        .iter()
+        .map(|row| (row["key"].as_str().unwrap(), &row["evaluation"]["result"]))
+        .collect();
+    let cold = by_key["unconverted"];
+    let warm = by_key["converted"];
+    assert_eq!(cold["positions_m"], warm["positions_m"]);
+    assert_eq!(
+        cold["motion"]["result"]["samples"],
+        warm["motion"]["result"]["samples"]
+    );
+    assert_ne!(
+        cold["motion"]["result"]["transient_surface"]["result"]["final"]["temperature_c"],
+        warm["motion"]["result"]["transient_surface"]["result"]["final"]["temperature_c"]
+    );
+    save(&plastic_dir.join("motion-report.json"), &heated);
+    eprintln!("plastic heat replay fixture: {}", plastic_dir.display());
 }

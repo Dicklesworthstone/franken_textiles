@@ -17,6 +17,15 @@ use crate::{
 };
 
 pub mod coverage;
+mod plastic;
+
+/// Explicit closure for converting qualified irreversible membrane work into sheet heat.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum PlasticHeatDistribution {
+    /// Uniform energy per reference-thickness cell, released uniformly over each accepted interval.
+    #[serde(rename = "uniform_reference_thickness")]
+    UniformReferenceThickness,
+}
 
 /// Explicit transient policy for independent cloth sheets during prescribed motion.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -36,11 +45,16 @@ pub struct SurfaceRequest {
     /// environment per keyframe interval; each sheet supplies its own exposed-face emissivity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exterior_exchange: Option<Vec<Exterior>>,
+    /// Opt-in irreversible membrane heating. Each active plastic material must independently
+    /// qualify its conversion fraction and temperature domain; initial drape work is excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plastic_dissipation_heat: Option<PlasticHeatDistribution>,
     /// Maximum thermal substep in seconds, in 1e-9..=1. Geometry stays at the accepted mechanical
     /// sample's right endpoint during these thermal substeps; no unseen cloth motion is invented.
     pub max_step_s: f64,
     /// Maximum temperature-cell advances for this whole history, in 1..=10000000. Also caps initial
-    /// state size. Each attempted history reserves this amount against a 20000000 session budget.
+    /// state size. Heated steps conservatively charge 129 cell operations for bounded enthalpy
+    /// inversion and transport. Each attempted history reserves against a 20000000 session budget.
     pub max_cell_steps: usize,
 }
 
@@ -106,7 +120,12 @@ impl SurfaceRequest {
     ) -> Result<SurfaceHistory, Refusal> {
         self.validate(keyframes.len())?;
         work.reserve(self.max_cell_steps)?;
-        SurfaceHistory::new(self.clone(), run.thermal_surface(self.cells_per_layer)?)
+        let mut history =
+            SurfaceHistory::new(self.clone(), run.thermal_surface(self.cells_per_layer)?)?;
+        if self.plastic_dissipation_heat.is_some() {
+            history.plastic = Some(plastic::Heating::new(run, self.initial_temperature_c)?);
+        }
+        Ok(history)
     }
 
     fn validate(&self, intervals: usize) -> Result<(), Refusal> {
@@ -160,6 +179,7 @@ pub(super) struct SurfaceHistory {
     absolute_error_j: f64,
     trace: Vec<Value>,
     final_field: Option<SurfaceField>,
+    plastic: Option<plastic::Heating>,
 }
 
 struct SurfaceField {
@@ -196,7 +216,18 @@ impl SurfaceHistory {
             absolute_error_j: 0.,
             trace: Vec::new(),
             final_field: None,
+            plastic: None,
         })
+    }
+
+    pub(super) fn needs_dissipation(&self) -> bool {
+        self.plastic.is_some()
+    }
+
+    fn supplied_heat_j(&self) -> f64 {
+        self.plastic
+            .as_ref()
+            .map_or(0., plastic::Heating::supplied_j)
     }
 
     pub(super) fn advance(
@@ -205,6 +236,7 @@ impl SurfaceHistory {
         time_s: f64,
         interval: usize,
         sample_index: usize,
+        plastic_dissipation_j: Option<&[f64]>,
     ) -> Result<(), Refusal> {
         let seconds = time_s - self.time_s;
         if !time_s.is_finite() || seconds <= 0. || self.trace.len() >= 512 {
@@ -231,7 +263,9 @@ impl SurfaceHistory {
             })
             .transpose()?;
         let count = (seconds / self.request.max_step_s).ceil();
-        let available = (self.request.max_cell_steps - self.cell_steps) / self.model.cells();
+        let cell_cost = if self.plastic.is_some() { 129 } else { 1 };
+        let available =
+            (self.request.max_cell_steps - self.cell_steps) / (self.model.cells() * cell_cost);
         if !count.is_finite() || count < 1. || count > available as f64 {
             return Err(budget(
                 "motion heat cell-step budget exhausted; no partial history published",
@@ -239,16 +273,57 @@ impl SurfaceHistory {
         }
         let count = count as usize;
         let dt = seconds / count as f64;
-        for _ in 0..count {
-            let next = match &exteriors {
-                Some(e) => {
+        let source = self
+            .plastic
+            .as_mut()
+            .map(|heating| {
+                heating.check_temperatures(self.state.temperature_c())?;
+                heating.increment(plastic_dissipation_j, self.request.cells_per_layer)
+            })
+            .transpose()?;
+        for substep in 0..count {
+            let heat = source.as_ref().map(|patches| {
+                patches
+                    .iter()
+                    .map(|cells| {
+                        cells
+                            .iter()
+                            .map(|q| {
+                                let part = q / count as f64;
+                                if substep + 1 == count {
+                                    q - part * (count - 1) as f64
+                                } else {
+                                    part
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let next = match (&exteriors, &heat) {
+                (Some(e), Some(q)) => self.model.advance_exterior_with_heat(
+                    &self.state,
+                    positions,
+                    dt,
+                    &boundaries,
+                    e,
+                    q,
+                )?,
+                (None, Some(q)) => {
+                    self.model
+                        .advance_with_heat(&self.state, positions, dt, &boundaries, q)?
+                }
+                (Some(e), None) => {
                     self.model
                         .advance_exterior(&self.state, positions, dt, &boundaries, e)?
                 }
-                None => self
+                (None, None) => self
                     .model
                     .advance(&self.state, positions, dt, &boundaries)?,
             };
+            if let Some(heating) = &self.plastic {
+                heating.check_temperatures(next.state.temperature_c())?;
+            }
             self.inside_j += dt * next.inside_heat_w;
             self.outside_j += dt * next.outside_heat_w;
             if let Some(e) = &next.exterior_exchange {
@@ -283,7 +358,7 @@ impl SurfaceHistory {
         {
             return Err(invalid("motion heat energy accumulation overflow"));
         }
-        self.cell_steps += count * self.model.cells();
+        self.cell_steps += count * self.model.cells() * cell_cost;
         self.thermal_steps += count;
         self.time_s = time_s;
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
@@ -301,7 +376,10 @@ impl SurfaceHistory {
             "outside_heat_w":field.outside_heat_w,
             "inside_energy_j":self.inside_j,"outside_energy_j":self.outside_j,
             "net_boundary_energy_j":self.net_j,"stored_change_j":self.stored_j,
-            "balance_error_j":self.stored_j-self.net_j});
+            "balance_error_j":self.stored_j-self.net_j-self.supplied_heat_j()});
+        if let Some(heating) = &self.plastic {
+            sample["plastic_dissipation_heat"] = heating.snapshot(false);
+        }
         if let Some(e) = &field.exterior_exchange {
             sample["exterior_exchange"] = json!({"convective_heat_w":e.convective_heat_w,
                 "radiative_heat_w":e.radiative_heat_w,"balance_residual_w":e.balance_residual_w,
@@ -322,6 +400,7 @@ impl SurfaceHistory {
                 "motion heat history does not cover the complete mechanical path",
             ));
         }
+        let supplied_heat_j = self.supplied_heat_j();
         let f = self
             .final_field
             .ok_or_else(|| invalid("missing final heat field"))?;
@@ -341,7 +420,7 @@ impl SurfaceHistory {
             "cell_steps":self.cell_steps,"thermal_steps":self.thermal_steps,
             "inside_energy_j":self.inside_j,"outside_energy_j":self.outside_j,
             "net_boundary_energy_j":self.net_j,"stored_change_j":self.stored_j,
-            "balance_error_j":self.stored_j-self.net_j,
+            "balance_error_j":self.stored_j-self.net_j-supplied_heat_j,
             "absolute_step_balance_error_j":self.absolute_error_j,
             "trace":self.trace,"final":final_field,
             "uncertainty_propagated":false,"physical_validation_claim":false,"comfort_claim":false,
@@ -349,6 +428,12 @@ impl SurfaceHistory {
         if self.request.exterior_exchange.is_some() {
             result["exterior_exchange"] = json!({"convective_energy_j":self.convective_j,
                 "radiative_energy_j":self.radiative_j});
+        }
+        if let Some(heating) = &self.plastic {
+            result["plastic_dissipation_heat"] = heating.snapshot(true);
+            result["scope"] = json!(
+                "One-way independent-sheet backward Euler on accepted mechanical geometry with explicitly qualified irreversible membrane dissipation converted to heat. Storage and heat deposition follow reference mass. Work is distributed uniformly through reference thickness and over each accepted interval. No inferred overlap, body heat loss, temperature feedback to mechanics, bending/Maxwell/friction heating, moisture, comfort or empirical garment claim."
+            );
         }
         Ok(result)
     }
@@ -432,7 +517,7 @@ mod tests {
                 temperature = (100. / 0.5 * temperature + area * 30. / 0.3)
                     / (100. / 0.5 + area * (1. / 0.3 + 1. / 0.4));
             }
-            history.advance(&x, (i + 1) as f64, 0, i).unwrap();
+            history.advance(&x, (i + 1) as f64, 0, i, None).unwrap();
             assert!((history.state.temperature_c()[0][0] - temperature).abs() < 1e-12);
         }
         let h = history.finish("path", "initial", 4.).unwrap();
@@ -505,7 +590,7 @@ mod tests {
                 old = next.state;
             }
             history
-                .advance(&x, (interval + 1) as f64, interval, interval)
+                .advance(&x, (interval + 1) as f64, interval, interval, None)
                 .unwrap();
             assert_eq!(history.state.temperature_c(), old.temperature_c());
             let trace = &history.trace[interval]["exterior_exchange"];
@@ -540,7 +625,7 @@ mod tests {
                 Vec3::new(0., 1., 0.),
             ];
             changed
-                .advance(&x, (interval + 1) as f64, interval, interval)
+                .advance(&x, (interval + 1) as f64, interval, interval, None)
                 .unwrap();
         }
         let changed = changed.finish("path", "initial", 2.).unwrap();
@@ -574,7 +659,7 @@ mod tests {
         assert!(bad.validate(1).is_err());
         let x = [Vec3::ZERO, Vec3::new(1., 0., 0.), Vec3::new(0., 1., 0.)];
         let mut unqualified = SurfaceHistory::new(request, model()).unwrap();
-        assert!(unqualified.advance(&x, 1., 0, 0).is_err());
+        assert!(unqualified.advance(&x, 1., 0, 0, None).is_err());
         assert!(unqualified.finish("path", "initial", 1.).is_err());
     }
 }

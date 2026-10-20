@@ -1203,6 +1203,60 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
         }
       });
     }
+    // Separate native fixture keeps the original uncoupled motion replay intact. All material
+    // observations and body geometry here are synthetic software inputs, not measured textiles.
+    if (process.env.FTX_PLASTIC_HEAT_REPLAY) {
+      const dir = process.env.FTX_PLASTIC_HEAT_REPLAY;
+      const input = name => fs.readFileSync(path.join(dir, name), 'utf8');
+      const bytes = fs.readFileSync(path.join(dir, 'model.ftxbody'));
+      const msg = { type: 'scenario', request: 95, pattern: input('pattern.json'), studyRequest: input('study.json'),
+        scenarioRequest: input('scenario.json'), measurements: input('body-input.json'),
+        bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+      const replay = await w.send(msg);
+      assert.equal(replay.type, 'result', replay.message);
+      assert.deepEqual(replay.result, JSON.parse(input('motion-report.json')));
+      assert.equal(replay.files.find(f => f.name === 'scenario-request.json').text, msg.scenarioRequest);
+      assert.equal(replay.files.find(f => f.name === 'body-input.json').text, msg.measurements);
+      assert.equal(replay.result.simulations.length, 2);
+      assert.deepEqual(replay.result.comparison.frontier, ['unconverted']);
+      assert.deepEqual(replay.result.comparison.incomparable, []);
+      assert.ok(replay.result.comparison.alternatives.every(row => row.eligible));
+      const motions = new Map(replay.result.simulations.map(row => {
+        assert.equal(row.evaluation.status, 'available');
+        const result = row.evaluation.result;
+        assert.equal(result.drape.settled, true); assert.deepEqual(result.drape.gating, []);
+        assert.equal(result.metrics.simulation_gating_clear, true);
+        assert.equal(result.motion.status, 'available');
+        const motion = result.motion.result;
+        assert.equal(motion.transient_surface.status, 'available');
+        const heat = motion.transient_surface.result, work = heat.plastic_dissipation_heat;
+        assert.equal(work.distribution, 'uniform_reference_thickness');
+        assert.equal(work.temporal_distribution, 'uniform_over_accepted_interval');
+        assert.ok(work.initial_plastic_dissipation_j > 0 && work.plastic_dissipation_j > 0);
+        assert.ok(Math.abs(work.initial_plastic_dissipation_j -
+          result.drape.membrane_plasticity_history.plastic_dissipation_j) < 1e-12);
+        assert.ok(Math.abs(work.initial_plastic_dissipation_j + work.plastic_dissipation_j -
+          motion.membrane_plasticity_history.plastic_dissipation_j) < 1e-12);
+        assert.ok(['unconverted', 'converted'].includes(row.key));
+        const fraction = row.key === 'unconverted' ? 0 : 0.8;
+        assert.equal(work.material_fractions[0].fraction, fraction);
+        assert.ok(Math.abs(work.supplied_heat_j - fraction * work.plastic_dissipation_j) < 1e-12);
+        assert.ok(Math.abs(work.supplied_heat_j + work.unconverted_dissipation_j - work.plastic_dissipation_j) < 1e-12);
+        const balance = heat.stored_change_j - heat.net_boundary_energy_j - work.supplied_heat_j;
+        assert.ok(Math.abs(balance) < 1e-9);
+        assert.ok(Math.abs(balance - heat.balance_error_j) < 1e-12);
+        if (fraction === 0) {
+          assert.equal(work.supplied_heat_j, 0);
+          assert.ok(heat.final.temperature_c.flat().every(t => Math.abs(t - 20) < 1e-10));
+        } else assert.ok(work.supplied_heat_j > 0);
+        assert.equal(heat.trace.length, motion.samples.length);
+        return [row.key, motion];
+      }));
+      const cold = motions.get('unconverted'), warm = motions.get('converted');
+      assert.deepEqual(cold.samples, warm.samples);
+      assert.notDeepEqual(cold.transient_surface.result.final.temperature_c,
+        warm.transient_surface.result.final.temperature_c);
+    }
   });
 
 test('explicit body sources replace only scenario evidence and retain exact replay text', async () => {
@@ -1274,4 +1328,38 @@ test('transient heat displays signed energy and remap separately, preserving ref
   assert.match(visibleText(s), /Refused: missing heat capacity/);
   assert.match(visibleText(s), /Independent sheets/);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('plastic heat displays accepted motion work and excluded initial work without changing other thermal domains', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const report = scenarioReport(); report.scenario.scenario = { motion: { transient_surface: {}, transient_coverage: {} } };
+  const surface = { duration_s: 1, thermal_steps: 2, trace: [{temperature_range_c:[20,22]}],
+    net_boundary_energy_j: -3, stored_change_j: 6, balance_error_j: 0 };
+  const motion = { samples: [{}], keyframes: [], transient_surface: outcome(surface),
+    transient_coverage: outcome({ net_boundary_energy_j: 4, physical_stored_change_j: 4, balance_error_j: 0 }) };
+  report.simulations.find(row => row.key === 'A').evaluation.result.motion = outcome(motion);
+  const s = section(p, 'Fresh drape and heat alternatives');
+  const work = () => descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'A: plastic work supplied to independent-sheet heat');
+  await p.e.scenario.onclick(); p.emit(report); assert.equal(work(), undefined);
+  surface.plastic_dissipation_heat = { distribution: 'uniform_reference_thickness', temporal_distribution: 'uniform_over_accepted_interval',
+    plastic_dissipation_j: 12, supplied_heat_j: 9, unconverted_dissipation_j: 3, initial_plastic_dissipation_j: 5,
+    material_fractions: [{ source: '<qualified material fraction>', fraction: 0.75 }] };
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.deepEqual(plain(work().children[2].children.map(n => n.textContent)), ['12','9','3','5']);
+  const heat = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent.startsWith('A: transient heat'));
+  assert.deepEqual(plain(heat.children[2].children.slice(5,8).map(n => n.textContent)), ['-3','6','0']);
+  assert.deepEqual(plain(heat.children[3].children.slice(5,8).map(n => n.textContent)), ['4','4','0']);
+  assert.match(visibleText(s), /stored change minus net boundary energy minus supplied plastic heat/);
+  assert.match(visibleText(s), /initial drape is excluded/);
+  assert.match(visibleText(s), /coverage keeps its separate heat model/);
+  const source = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('A: Independent sheets temperature'));
+  source.open = true; source.handlers.toggle(); assert.match(visibleText(source), /<qualified material fraction>/);
+  assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+  surface.plastic_dissipation_heat.unconverted_dissipation_j = null;
+  await p.e.scenario.onclick(); p.emit(report); assert.equal(work().children[2].children[2].textContent, 'Unknown');
+  motion.transient_surface = refused('missing source-qualified plastic heat fraction');
+  await p.e.scenario.onclick(); p.emit(report); assert.equal(work(), undefined);
+  assert.match(visibleText(s), /Refused: missing source-qualified plastic heat fraction/);
+  assert.match(visibleText(s), /Body coverage \+ exposed cloth/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
 });

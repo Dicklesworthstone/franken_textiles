@@ -158,14 +158,15 @@ implicit substeps establish viscoelastic equilibrium or empirical garment accura
 
 Admission permits 1..16 endpoints through 60 seconds, 0..180-degree angles, maximum substeps in
 1e-9..1 seconds, 1..512 attempted substeps for the **entire** trajectory, up to one million pairs
-per continuous-collision query and up to two million retained body/cloth vertex samples. Initial
-positions count against that sample budget. Endpoint body meshes have an additional two-million-
+per continuous-collision query and up to two million retained sample units. Body/cloth vertex
+positions and each optional captured plastic-work scalar consume one unit, including the initial
+sample. Endpoint body meshes have an additional two-million-
 vertex allocation cap. Omitted `max_sample_vertices` defaults to 500,000. The scenario's optional
 `max_motion_trials` caps reserved trials across alternatives (default 4,096; range 1..32,768).
 Static draping and motion have separate aggregate working-frame counters, each bounded by
 `max_vertex_frames`: an earlier trajectory cannot spend a later alternative's static allowance.
 Motion admission also reserves at most 2,000,000 retained vertex equivalents across the session,
-conservatively accounting for samples, endpoint heat receipt geometry and final velocities. The
+conservatively accounting for samples, captured work, endpoint heat receipt geometry and final velocities. The
 reservation uses conservative mesh counts and the requested trial/sample limits; a smaller actual
 output does not retroactively release it. Admitted attempts remain charged after a refusal.
 The existing transient thermal work limits remain independent. Limits produce an independent
@@ -248,18 +249,61 @@ final frame identities tie the thermal geometry to the retained motion. Independ
 coverage totals are alternative model domains and must not be added together.
 
 Each thermal policy permits 1..64 cells per layer, maximum substeps in 1e-9..1 seconds and up to
-10000000 cell steps (coverage additionally counts body-face steps). Whole-session reservations
+10000000 cell-step units (coverage additionally counts body-face steps; opted-in plastic heating
+charges 129 units per sheet cell/substep). Whole-session reservations
 across both thermal consumers and all attempted material alternatives are capped at 20000000
 cell steps and 40000000 coverage geometry operations. Reservations persist after a later refusal;
 use realistic declared limits rather than maximum values for every candidate. Projection/remap work
 is checked after each existing bounded kernel; limit exhaustion refuses rather than truncating.
 
-These are **one-way** motion-to-heat calculations with prescribed films, not two-way temperature
-feedback, mechanical/frictional heating, moisture, thermoregulation or empirical comfort prediction.
+These are **one-way** motion-to-heat calculations with prescribed films or explicit exterior
+exchange. Mechanical heating requires the separate qualified sheet option below. They do not
+include temperature feedback to mechanics, moisture, thermoregulation or empirical comfort prediction.
 First-order remapping can mix unresolved gradients. Time/space refinement and held-out measurements
 remain necessary; a small energy residual alone proves neither physical accuracy nor a warmth rating.
 The comparator's existing metric names still describe the initial static result. The separate
 motion metrics below compare signed cumulative energy and final cloth-cell temperatures.
+
+### Qualified irreversible membrane heating
+
+Add `"plastic_dissipation_heat": "uniform_reference_thickness"` inside the existing
+`motion.transient_surface` object to convert accepted plastic membrane work into sheet heat.
+Each active plastic material must supply the source-qualified `membrane_plastic_heat_fraction`
+observation documented in [permanent membrane stretch](material-membrane-plasticity.md#convert-accepted-irreversible-work-to-sheet-heat).
+It needs admitted evidence, matching specimen/conditioning, the irreversible membrane work basis
+and a temperature domain. Missing conversion evidence refuses this thermal consumer; it supplies
+no default fraction and does not disable otherwise valid mechanics. Explicit zero is allowed.
+
+The consumer subtracts the accepted cumulative work at motion time zero, after initial drape.
+Only subsequent accepted increments become heat; rejected trials, initial forming work, and
+elastic/hardening storage are excluded. Work stays with its exact retained material triangle and
+is distributed uniformly through reference thickness and over each accepted mechanical interval.
+The thermal solver still uses each sample's right-endpoint geometry. Its energy balance is:
+
+```text
+balance_error_j = stored_change_j - net_boundary_energy_j
+                  - plastic_dissipation_heat.supplied_heat_j
+```
+
+Both trace entries and the final thermal result expose `plastic_dissipation_heat` with motion-only
+dissipation, supplied heat, unconverted work and excluded initial dissipation. The final receipt
+also preserves conversion observations and material/law identities. Mechanical `initial_sample`
+and `samples` retain `membrane_plastic_dissipation_j` arrays in triangle order; their cumulative
+values include the excluded initial work. `retained_dissipation_scalars` reports the extra output.
+Each scalar counts as one vertex-equivalent under `max_sample_vertices` and session admission.
+
+With heating enabled, all sheet cells cost 129 work units per thermal substep, even for zero
+conversion or an elastic triangle. Size `max_cell_steps` accordingly. Source deposition integrates
+sensible enthalpy, including temperature-dependent heat capacity. Its equivalent adiabatic preload
+must remain inside the characterized thermal domain; large sources can require smaller thermal
+substeps. Initial and accepted cell temperatures also stay within each conversion observation's
+temperature range. No domain is silently extended.
+
+This option applies only to independent-sheet `transient_surface`, including qualified exterior
+exchange. `transient_coverage` receives no plastic source. There is no temperature feedback,
+automatic layer heat sharing, or bending/Maxwell/friction heating. The synthetic workflow checks
+exercise accepted work transfer and conservation; measured conversion laws and independent
+temperature measurements remain necessary for a physical garment claim.
 
 ## Independent thermal consumers
 

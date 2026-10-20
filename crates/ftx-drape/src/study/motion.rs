@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::{Scenario, budget, coverage_at, hash, heat, invalid, omitted, outcome};
 use crate::{
-    motion::{MotionOptions, advance_body},
+    motion::{MotionOptions, advance_body, advance_body_with_dissipation},
     run::{DrapeBody, DrapeRun},
     start::{edge_strain, face_edges},
 };
@@ -41,7 +41,8 @@ pub struct Request {
     pub max_trials: usize,
     /// Maximum candidate pairs in each continuous-collision query, 1..=1000000.
     pub max_pairs: usize,
-    /// Total retained body plus cloth vertex samples, including the initial state, 1..=2000000.
+    /// Retained body/cloth vertices plus optional plastic-dissipation scalars, including the
+    /// initial state, 1..=2000000. A retained scalar conservatively costs one vertex equivalent.
     /// Defaults to 500000; endpoint receipts also consume the session's geometry allowance.
     #[serde(default = "default_sample_vertices")]
     pub max_sample_vertices: usize,
@@ -211,20 +212,15 @@ fn evaluate_path(
             "finish the initial drape's physical thickness ramp before motion",
         ));
     }
-    let count = body
+    let geometry_count = body
         .collision
         .0
         .len()
         .checked_add(run.scene.solver.x.len())
         .ok_or_else(|| budget("motion sample count overflow"))?;
-    let mut remaining_vertices = request
-        .max_sample_vertices
-        .checked_sub(count)
-        .filter(|n| *n >= count)
-        .ok_or_else(|| budget("motion sample budget cannot retain initial and final body/cloth"))?;
     let mut remaining_trials = request.max_trials;
     let initial_positions_sha256 = hash(&run.scene.solver.x)?;
-    let initial_sample = json!({"time_s":0.0,"positions_m":run.scene.solver.x,
+    let mut initial_sample = json!({"time_s":0.0,"positions_m":run.scene.solver.x,
         "body_positions_m":body.collision.0});
     let initial_membrane_history = run.scene.solver.relaxation_report()?;
     let initial_bending_history = run.scene.solver.bending_plasticity_report()?;
@@ -235,6 +231,28 @@ fn evaluate_path(
         .transient_surface
         .as_ref()
         .map(|policy| policy.start(run, &request.keyframes, heat_budget));
+    let capture_dissipation = surface_heat
+        .as_ref()
+        .is_some_and(|h| h.as_ref().is_ok_and(|h| h.needs_dissipation()));
+    let history_scalars = if capture_dissipation {
+        run.scene.solver.model.membranes.len()
+    } else {
+        0
+    };
+    let count = geometry_count
+        .checked_add(history_scalars)
+        .ok_or_else(|| budget("motion history count overflow"))?;
+    let mut remaining_vertices = request
+        .max_sample_vertices
+        .checked_sub(count)
+        .filter(|n| *n >= count)
+        .ok_or_else(|| {
+            budget("motion sample budget cannot retain initial and final body/cloth/history")
+        })?;
+    if capture_dissipation {
+        initial_sample["membrane_plastic_dissipation_j"] =
+            json!(run.scene.solver.membrane_plastic_dissipation_j()?);
+    }
     let mut coverage_heat = request
         .transient_coverage
         .as_ref()
@@ -279,7 +297,12 @@ fn evaluate_path(
             i + 1,
             request.keyframes.len()
         ));
-        let report = advance_body(
+        let advance = if capture_dissipation {
+            advance_body_with_dissipation
+        } else {
+            advance_body
+        };
+        let report = advance(
             &mut run.scene.solver,
             &path.vertices[i],
             frame.time_s - previous_time,
@@ -307,7 +330,13 @@ fn evaluate_path(
             }
             accepted_time = time;
             if let Some(Ok(history)) = &mut surface_heat
-                && let Err(refusal) = history.advance(&sample.cloth, time, i, samples.len())
+                && let Err(refusal) = history.advance(
+                    &sample.cloth,
+                    time,
+                    i,
+                    samples.len(),
+                    sample.membrane_plastic_dissipation_j.as_deref(),
+                )
             {
                 surface_heat = Some(Err(refusal));
             }
@@ -317,12 +346,16 @@ fn evaluate_path(
             {
                 coverage_heat = Some(Err(refusal));
             }
-            samples.push(json!({"time_s":time,
+            let mut retained = json!({"time_s":time,
                 "positions_m":sample.cloth,"body_positions_m":sample.body,
                 "solve":{"converged":sample.solve.converged,"iterations":sample.solve.iterations,
                     "residual_n":sample.solve.residual,"last_step_m":sample.solve.last_step,
                     "energy_start_j":sample.solve.energy_start,"energy_end_j":sample.solve.energy_end,
-                    "factorizations":sample.solve.factorizations,"ccd_limited":sample.solve.ccd_limited}}));
+                    "factorizations":sample.solve.factorizations,"ccd_limited":sample.solve.ccd_limited}});
+            if let Some(dissipation) = sample.membrane_plastic_dissipation_j {
+                retained["membrane_plastic_dissipation_j"] = json!(dissipation);
+            }
+            samples.push(retained);
         }
         // Rebuild source-locked heat input from the NEW solver geometry; never patch an old receipt.
         let snapshot = json!({"material":run.report["material"],
@@ -355,7 +388,7 @@ fn evaluate_path(
             .expect("motion retains collider").body.vertices,body.collision.1))?,
         "initial_drape_settled":run.report["settled"],"initial_drape_gating":run.report["gating"],
         "duration_s":previous_time,"trials":request.max_trials-remaining_trials,"pairs_tested":pairs_tested,
-        "retained_vertex_samples":request.max_sample_vertices-remaining_vertices,
+        "retained_vertex_samples":(samples.len()+1)*geometry_count,
         "samples":samples,"keyframes":endpoints,"triangles":faces,"body_triangles":body.collision.1,
         "final_velocities_m_s":run.scene.solver.v,
         "metrics":{"max_absolute_edge_strain_pct":peak_strain},
@@ -367,6 +400,16 @@ fn evaluate_path(
         "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."});
     if let Some(history) = initial_permanent_history {
         result["initial_membrane_plasticity_history"] = history;
+    }
+    if capture_dissipation {
+        result["retained_dissipation_scalars"] = json!(
+            (result["samples"]
+                .as_array()
+                .expect("retained samples")
+                .len()
+                + 1)
+                * history_scalars
+        );
     }
     if let Some(history) = run.scene.solver.membrane_plasticity_report()? {
         result["membrane_plasticity_history"] = history;

@@ -136,9 +136,90 @@ separate `plastic_dissipation_j`. `empirical_validation_claim` and `restart_impo
 For library inspection, `Solver::membrane_plasticity_report()` returns that optional history;
 `Solver::membrane_energy()` returns actual membrane storage, including Maxwell branches on other
 triangles but excluding bending, contact, inertia and dissipated work.
+`Solver::membrane_plastic_dissipation_j()` returns cumulative accepted joules in retained triangle
+order, with zero for unselected triangles and `None` when no permanent membrane law is bound.
+Each selected history element also exposes its own `plastic_dissipation_j`. These cumulative
+values include initial drape work; a later heat history must subtract its time-zero baseline.
 `Solver::checked_elastic_forces()` returns internal reactions from frozen accepted material storage
 without evolving history, and reports invalid or stale state as a refusal. Source changes, invalid
 strain and nonfinite responses must not be interpreted as usable reactions.
+
+## Convert accepted irreversible work to sheet heat
+
+An optional motion consumer can convert a qualified fraction of new irreversible membrane work
+into the same sheet's transient sensible heat. It requires an active permanent membrane law and
+the normal thermal transport, reference mass and heat-capacity observations. It does not infer a
+conversion fraction from the yield law. Add `membrane_plastic_heat_fraction` to each active plastic
+material's `properties`; an explicit zero is permitted. This **synthetic example** matches the
+fixture above and refers to its existing `sources.test`:
+
+```json
+{
+  "membrane_plastic_heat_fraction": {
+    "value": 0.8,
+    "unit": "1",
+    "source": "test",
+    "evidence": "estimate",
+    "method": "Synthetic irreversible-yield heat conversion; not measured textile data",
+    "conditions": {
+      "specimen_id": "artificial-stretch-A",
+      "conditioning": "synthetic constant dry state",
+      "work_basis": "irreversible_membrane_plastic_dissipation",
+      "temperature_min_c": "-20",
+      "temperature_max_c": "80"
+    }
+  }
+}
+```
+
+The normalized fraction and any supplied bounds must lie in `[0,1]`; dimensionless `%` values
+normalize to unit `1` without rewriting the authored observation. Source and method must be
+present, and estimated evidence requires the selection's `allow_estimates: true`. Specimen and
+conditioning must match all elastic/plastic observations. The exact `work_basis` above excludes
+recoverable elastic and hardening storage. Temperature conditions are decimal strings in degrees
+Celsius, finite and ordered, with neither bound below -273.15. Initial and accepted thermal cell
+temperatures must remain within that inclusive interval.
+
+`ResolvedMaterial::membrane_plastic_heat_fraction()` performs this additional qualification only
+when requested. A missing or semantically invalid heat observation does not make an otherwise
+valid mechanical law unavailable. The ordinary material's structural/source/unit checks still
+apply. The heat consumer checks each retained mechanical law against the exact selected material
+fingerprint, so a material substitution cannot inherit another specimen's conversion.
+
+Enable the consumer by adding this field to an otherwise complete `motion.transient_surface`
+policy, described in [material scenarios](material-scenario-studies.md):
+
+```json
+{"plastic_dissipation_heat": "uniform_reference_thickness"}
+```
+
+For each accepted mechanical interval, the source is the fraction times the increase in that
+triangle's cumulative dissipation. The time-zero baseline is taken **after initial drape**;
+previous forming work and rejected trials are excluded. Energy is distributed uniformly through
+the sheet's reference-thickness cells and over that accepted interval's thermal substeps. Reference
+area converts joules to the material column's units; stretching cannot create or multiply heat.
+The result's `plastic_dissipation_heat` reports motion-only `plastic_dissipation_j`,
+`supplied_heat_j`, `unconverted_dissipation_j`, excluded `initial_plastic_dissipation_j`, and the
+material/law identities and authored conversion observations. Unconverted work has no inferred
+destination. The energy residual is `stored_change_j - net_boundary_energy_j - supplied_heat_j`.
+
+The existing backward-Euler solver includes the source by an equivalent adiabatic enthalpy preload.
+Temperature-dependent heat capacity is integrated and inverted, not approximated as endpoint
+heat capacity times temperature rise. The preload must itself fit inside the characterized thermal
+domain; excessive source energy refuses even if subsequent cooling might lower the final
+temperature. Smaller thermal substeps may resolve that conservative admission limit.
+
+This consumer heats independent sheets only, including their requested film or exterior exchange.
+It does not heat `transient_coverage`, infer layer sharing, feed temperature back into mechanics,
+or convert bending, Maxwell or contact-friction losses. A thermal refusal publishes no partial
+heat history and preserves completed mechanics and other independent consumers.
+
+For direct library capture, `motion::advance_body_with_dissipation` records per-triangle cumulative
+work on every accepted `MotionSample`; ordinary `advance_body` omits those arrays. Scenario results
+retain them in `initial_sample` and `samples` when qualified heating initializes successfully.
+Each captured scalar costs one vertex-equivalent against the motion sample budget. With heating
+enabled, every thermal cell/substep conservatively costs **129** `max_cell_steps` units, covering
+bounded enthalpy inversion and transport, including steps with zero newly dissipated work.
 
 ## Verification and remaining material evidence
 
@@ -148,24 +229,24 @@ cargo test --locked -p ftx-drape --test membrane_plasticity
 cargo test --locked -p ftx-cli --test plastic_bending_workflow
 ```
 
-The focused checks cover independent return/work answers, derivatives, unloading and reversal,
+The checks cover independent return/work answers, derivatives, unloading and reversal,
 physical metrics, source qualification, nodal reactions, objectivity, welded grain frames and
-accepted-state rollback. All **76 focused Rust tests** pass: 23 material-law/pressure tests,
-25 solver/history tests, 10 native command/workflow tests and 18 shared WASM API tests. The new law
-has 7 material tests, 9 solver integration tests and 1 solver unit test; existing bending and Maxwell
-checks remain included. The sewn workflow exercises real `bind-changes`, a plastic front with an
+accepted-state rollback. The sewn workflow exercises real `bind-changes`, a plastic front with an
 elastic back, reference area/mass accounting, and exact shared-study/direct motion-history equality.
 
-Pinned `cargo fmt --check`, strict workspace all-target Clippy and the
-`wasm32-unknown-unknown` build pass. The compiled WASM and actual worker match the native executable
-for permanent-law selection and source identity, including material-only yield changes and independent
-readiness refusals, through `tools/check_materials_wasm.cjs`.
+Heat checks cover conversion qualification, accepted local work capture, source-inclusive
+conservation and a sewn/motion workflow with initial work excluded. A late thermal-budget refusal
+discards the entire heat history while preserving the complete mechanical trajectory. Analytic
+constant-capacity and nonlinear-enthalpy cases independently check the thermal source equation.
 
-The complete workspace test run did not finish: `rustc` was killed with SIGKILL in the 8 GiB test
-environment, including a retry with `-j1` and single-threaded tests. The separate Chromium check
-also did not finish; its page crashed before the first catalog query. Neither complete-workspace
-success nor browser navigation/model-backed browser draping is asserted. These checks establish
-synthetic software behavior, not measured textile or garment agreement.
+The existing model-backed native fixture also generates two otherwise identical synthetic
+alternatives with different conversion fractions. It checks positive new dissipation, identical
+mechanical samples, different temperatures and source-qualified thermal comparison. Set
+`FTX_PLASTIC_HEAT_REPLAY` to its printed fixture directory when running
+`FTX_REAL_WASM=1 node --experimental-vm-modules tools/check_materials_frontend.cjs` to compare the
+complete saved native report with the compiled WASM worker. This checks actual numerical adapters;
+it is not browser navigation or an empirical garment experiment. Synthetic values do not measure
+a textile's conversion fraction or establish temperature agreement with a real specimen.
 
 `ftx-ps1` and `ftx-tm4` remain open for matched cyclic warp/weft/shear acquisitions and independent
 loading, unloading and reloading checks, plus stiffness degradation, damage and rupture. Joint

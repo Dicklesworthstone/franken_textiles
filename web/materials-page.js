@@ -233,6 +233,22 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       metric(h?.physical_stored_change_j ?? h?.stored_change_j), metric(h?.balance_error_j),
       name === "transient_surface" ? "Not applicable" : metric(h?.signed_remap_residual_j)]);
     detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
+    const plastic = name === "transient_surface" ? h?.plastic_dissipation_heat : null;
+    if (plastic) {
+      const work = table(parent, `${key}: plastic work supplied to independent-sheet heat`, ["Plastic work since motion start (J)",
+        "Supplied sheet heat (J)", "Unconverted work (J)", "Initial plastic work excluded (J)"]);
+      cells(work, [metric(plastic.plastic_dissipation_j), metric(plastic.supplied_heat_j),
+        metric(plastic.unconverted_dissipation_j), metric(plastic.initial_plastic_dissipation_j)]);
+      const scope = document.createElement("p");
+      scope.textContent = "The sheet energy residual is stored change minus net boundary energy minus supplied plastic heat. " +
+        "Work already accumulated in the initial drape is excluded. " +
+        (plastic.distribution === "uniform_reference_thickness" && plastic.temporal_distribution === "uniform_over_accepted_interval" ?
+          "Converted heat is distributed uniformly through each sheet's reference thickness and over its accepted motion interval. " :
+          "Inspect the retained report for the declared heat distribution. ") +
+        "This coupling supplies independent sheets only; coverage keeps its separate heat model, and temperatures do not feed back into mechanics. " +
+        "The temperature-history report retains the material fractions and their source evidence.";
+      parent.append(scope);
+    }
   }
   const note = document.createElement("p");
   note.textContent = "These are separate one-way thermal models with declared initial temperatures and interval films. Do not add their energy totals. " +

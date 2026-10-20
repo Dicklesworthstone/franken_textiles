@@ -1792,20 +1792,30 @@ contact and material memories together. Trials and failed steps cannot advance p
 cloning and motion continuation preserve it. Static/speed-only settling refuses an unspecified
 irreversible loading path.
 
+**Qualified irreversible-work heat.** Optional `motion.transient_surface.plastic_dissipation_heat`
+now transfers accepted per-triangle membrane dissipation after motion time zero into the existing
+reference-mass thermal columns. Each active plastic material must qualify its own conversion
+fraction, specimen/conditioning, irreversible-work basis and temperature interval. Uniform
+reference-thickness/interval deposition preserves separate boundary, supplied and stored energy;
+initial drape work and failed trials are excluded. Source/law identity, bounded capture and enthalpy
+inversion, thermal-domain refusals and rollback remain enforced. This is independent-sheet,
+one-way coupling; it supplies no measured conversion data, friction/coverage heating or temperature
+feedback. See the material and scenario documentation for requests, budgets and scope.
+
 The ordinary synthetic selection and executable commands are documented in
 [material-membrane-plasticity.md](docs/material-membrane-plasticity.md). Drape and motion reports
 retain `membrane_plasticity_history`, law hashes, accepted strain, storage and dissipation.
 Checked library reactions expose the frozen accepted state and refuse stale or invalid history.
-The 17 new material/solver checks pass within 76 focused Rust tests, including existing bending
-and Maxwell checks and actual native sewn/motion workflows. Formatting, strict workspace all-target
-Clippy, the wasm32 build and compiled-WASM/actual-worker/native equality pass. Complete workspace
-testing and Chromium navigation remain unverified in this session after compiler SIGKILL and page
-crashes in the constrained test environment; numerical tests do not establish empirical agreement.
+Known-answer material/solver checks cover return-map work, derivatives, unloading and accepted-state
+rollback. Native sewn/motion workflows exercise piece-local history, heat conservation and late
+thermal refusal. A model-backed synthetic replay compares complete native and compiled-WASM worker
+results, including unchanged mechanics and changed temperatures under conversion-only substitution.
+These numerical and adapter checks do not establish empirical textile or garment agreement.
 
 **Remaining consequential work.** `ftx-ps1` and `ftx-tm4` remain open for measured matched cyclic
 warp/weft/shear data, independent loading/unloading/reloading acceptance, stiffness degradation,
 damage and rupture. A same-triangle Maxwell/nonlinear plastic law, gather softening, conditioning,
-remeshing/restart transfer and plastic-work heat coupling require their own qualified models.
+remeshing/restart transfer and two-way thermomechanical response require their own qualified models.
 No numerical success supplies missing linen/leather/knit parameters or closes `ftx-tm2`/`ftx-tm8`.
 
 ---

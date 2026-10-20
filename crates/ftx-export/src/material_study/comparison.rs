@@ -633,7 +633,7 @@ impl Policy {
                 ),
             ] {
                 if self.consumers().contains(&consumer) {
-                    match admit_heat(descriptor, admitted.motion, consumer) {
+                    match admit_heat(row, descriptor, admitted.motion, consumer) {
                         Ok(heat) => *target = Some(heat),
                         Err(e) => result.exclusions.push(e),
                     }
@@ -705,7 +705,7 @@ impl Policy {
                 ))),
             }
         }
-        match self.protocol(row) {
+        match self.protocol(row, descriptor) {
             Ok(protocol) => result.input_protocol_sha256 = Some(protocol),
             Err(e) => result.exclusions.push(e),
         }
@@ -743,7 +743,7 @@ impl Policy {
         strictly
     }
 
-    fn protocol(&self, row: &Alternative) -> Result<String, Refusal> {
+    fn protocol(&self, row: &Alternative, descriptor: &Value) -> Result<String, Refusal> {
         let bound = row
             .binding
             .value()
@@ -786,6 +786,12 @@ impl Policy {
         }
         if transient {
             keys.extend(["areal_density", "specific_heat", "thickness"]);
+        }
+        if consumers.contains(&Consumer::TransientSurface)
+            && descriptor["scenario"]["motion"]["transient_surface"]["plastic_dissipation_heat"]
+                == "uniform_reference_thickness"
+        {
+            keys.insert("membrane_plastic_heat_fraction");
         }
         let pieces = bound["pattern"]["pieces"]
             .as_array()
@@ -1029,6 +1035,7 @@ fn finite(value: &Value) -> Option<f64> {
 }
 
 fn admit_heat<'a>(
+    alternative: &Alternative,
     descriptor: &Value,
     motion: &'a Value,
     consumer: Consumer,
@@ -1182,10 +1189,190 @@ fn admit_heat<'a>(
             }
         }
     }
+    match request
+        .get("plastic_dissipation_heat")
+        .filter(|v| !v.is_null())
+    {
+        Some(policy) if !coverage && policy.as_str() == Some("uniform_reference_thickness") => {
+            admit_plastic_heat(alternative, motion, h)?;
+        }
+        Some(_) => {
+            return Err(fail(
+                "unsupported plastic heat policy for this thermal domain",
+            ));
+        }
+        None if !h["plastic_dissipation_heat"].is_null()
+            || trace
+                .iter()
+                .any(|r| !r["plastic_dissipation_heat"].is_null()) =>
+        {
+            return Err(fail(
+                "plastic heating was not requested for this thermal domain",
+            ));
+        }
+        None => {}
+    }
     Ok(Heat {
         result: h,
         range_c: range,
         final_range_c: final_range
             .ok_or_else(|| fail("missing final sampled temperature range"))?,
     })
+}
+
+// Reconcile the published source terms with accepted work. This does not solve mechanics or heat
+// again, nor certify an imported report: the existing consumer owns constitutive qualification.
+fn admit_plastic_heat(
+    alternative: &Alternative,
+    motion: &Value,
+    heat: &Value,
+) -> Result<(), Refusal> {
+    use ftx_pattern::materials::{CATALOG_SCHEMA, Catalog};
+    let fail = || {
+        invalid(
+            "TransientSurface: plastic heat needs source-matched accepted work and complete supplied-energy accounting",
+        )
+    };
+    let frozen = alternative.frozen_changes.as_ref().ok_or_else(fail)?;
+    let receipts = heat["plastic_dissipation_heat"]["material_fractions"]
+        .as_array()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(fail)?;
+    let catalog = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    };
+    let mut laws = BTreeMap::new();
+    for receipt in receipts {
+        let identity = receipt["material_sha256"].as_str().ok_or_else(fail)?;
+        let selection = frozen
+            .pieces
+            .values()
+            .chain(frozen.default.iter())
+            .find(|s| s.expected_sha256.as_deref() == Some(identity))
+            .ok_or_else(fail)?;
+        let material = catalog.resolve(selection)?;
+        let fraction = material
+            .membrane_plastic_heat_fraction()?
+            .ok_or_else(fail)?;
+        let law = material
+            .membrane_plasticity()?
+            .ok_or_else(fail)?
+            .fingerprint();
+        let expected = json!({"material_sha256":material.sha256(),"law_sha256":law,
+            "fraction":fraction.fraction,"temperature_range_c":fraction.temperature_range_c,
+            "observation":material.authored().properties["membrane_plastic_heat_fraction"]});
+        if receipt != &expected || laws.insert(law, fraction.fraction).is_some() {
+            return Err(fail());
+        }
+    }
+    let triangles = motion["triangles"]
+        .as_array()
+        .filter(|v| !v.is_empty() && v.len() <= 65_536)
+        .ok_or_else(fail)?;
+    let values = |sample: &Value| -> Result<Vec<f64>, Refusal> {
+        sample["membrane_plastic_dissipation_j"]
+            .as_array()
+            .filter(|v| v.len() == triangles.len())
+            .ok_or_else(fail)?
+            .iter()
+            .map(|v| finite(v).filter(|&v| v >= 0.).ok_or_else(fail))
+            .collect()
+    };
+    let mut previous = values(&motion["initial_sample"])?;
+    let initial: f64 = previous.iter().sum();
+    let near = |a: f64, b: f64| {
+        a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.)
+    };
+    if finite(&motion["initial_sample"]["time_s"]) != Some(0.)
+        || !finite(&motion["initial_membrane_plasticity_history"]["plastic_dissipation_j"])
+            .is_some_and(|v| near(v, initial))
+    {
+        return Err(fail());
+    }
+    let mut fractions = vec![None; triangles.len()];
+    let mut used = BTreeSet::new();
+    for element in motion["initial_membrane_plasticity_history"]["elements"]
+        .as_array()
+        .ok_or_else(fail)?
+    {
+        let index = element["triangle"]
+            .as_u64()
+            .and_then(|i| usize::try_from(i).ok())
+            .filter(|&i| i < triangles.len())
+            .ok_or_else(fail)?;
+        let law = element["law_sha256"].as_str().ok_or_else(fail)?;
+        let fraction = *laws.get(law).ok_or_else(fail)?;
+        if fractions[index].replace(fraction).is_some()
+            || element["vertices"] != triangles[index]
+            || !finite(&element["plastic_dissipation_j"]).is_some_and(|v| near(v, previous[index]))
+        {
+            return Err(fail());
+        }
+        used.insert(law);
+    }
+    if used.len() != laws.len()
+        || fractions
+            .iter()
+            .zip(&previous)
+            .any(|(f, &j)| f.is_none() && j != 0.)
+    {
+        return Err(fail());
+    }
+    let check = |row: &Value, dissipated: f64, supplied: f64| -> Result<(), Refusal> {
+        let work = &row["plastic_dissipation_heat"];
+        if work["distribution"] != "uniform_reference_thickness"
+            || work["temporal_distribution"] != "uniform_over_accepted_interval"
+        {
+            return Err(fail());
+        }
+        for (name, expected) in [
+            ("plastic_dissipation_j", dissipated),
+            ("supplied_heat_j", supplied),
+            ("unconverted_dissipation_j", dissipated - supplied),
+            ("initial_plastic_dissipation_j", initial),
+        ] {
+            if !finite(&work[name]).is_some_and(|v| v >= 0. && near(v, expected)) {
+                return Err(fail());
+            }
+        }
+        let inside = finite(&row["inside_energy_j"]).ok_or_else(fail)?;
+        let outside = finite(&row["outside_energy_j"]).ok_or_else(fail)?;
+        let net = finite(&row["net_boundary_energy_j"]).ok_or_else(fail)?;
+        let stored = finite(&row["stored_change_j"]).ok_or_else(fail)?;
+        let residual = finite(&row["balance_error_j"]).ok_or_else(fail)?;
+        if !near(net, inside - outside) || !near(residual, stored - net - supplied) {
+            return Err(fail());
+        }
+        Ok(())
+    };
+    let mut dissipated = 0.;
+    let mut supplied = 0.;
+    for (sample, row) in motion["samples"]
+        .as_array()
+        .ok_or_else(fail)?
+        .iter()
+        .zip(heat["trace"].as_array().ok_or_else(fail)?)
+    {
+        let current = values(sample)?;
+        let mut step_work = 0.;
+        let mut step_heat = 0.;
+        for ((&value, &old), fraction) in current.iter().zip(&previous).zip(&fractions) {
+            if value < old || (fraction.is_none() && value != 0.) {
+                return Err(fail());
+            }
+            step_work += value - old;
+            step_heat += fraction.unwrap_or(0.) * (value - old);
+        }
+        dissipated += step_work;
+        supplied += step_heat;
+        check(row, dissipated, supplied)?;
+        previous = current;
+    }
+    if !finite(&motion["membrane_plasticity_history"]["plastic_dissipation_j"])
+        .is_some_and(|v| near(v, initial + dissipated))
+    {
+        return Err(fail());
+    }
+    check(heat, dissipated, supplied)
 }
