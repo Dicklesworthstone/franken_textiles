@@ -355,6 +355,120 @@ def decimal_number(text: str, *, allow_zero=False) -> Decimal:
     return value
 
 
+def validate_public_product(entry: dict) -> None:
+    """A reviewed public-product currency source, without requiring a cart endpoint."""
+    required = set(FIELDS) | {"adapter", "product_url", "public_url", "product_id", "variant_id",
+        "variant_title", "basis_source", "basis_note", "basis_reviewed_on",
+        "required_description_text", "inventory_mode", "reviewed_valid_through"}
+    if set(entry) - OPTIONAL_FIELDS != required or entry["adapter"] != "shopify_public_product_v1":
+        raise ValueError("public product manifest fields differ from shopify_public_product_v1")
+    validate_basis(entry)
+    product = entry["product_url"]
+    if (not re.fullmatch(r"/(?:[a-zA-Z-]+/)?products/[a-zA-Z0-9_-]+\.js",
+                         urllib.parse.urlsplit(product).path)
+            or entry["public_url"] != product[:-3] + ".json"
+            or origin(product) != origin(entry["basis_source"])):
+        raise ValueError("public JSON and Ajax must identify the same reviewed supplier product")
+    for key in ("product_id", "variant_id"):
+        if type(entry[key]) is not int or not 0 < entry[key] <= 2**53 - 1:
+            raise ValueError(f"{key} must be an exact positive integer")
+    if not isinstance(entry["variant_title"], str) or not entry["variant_title"].strip():
+        raise ValueError("exact reviewed variant title is required")
+    fragments = entry["required_description_text"]
+    if not isinstance(fragments, list) or not fragments or any(not isinstance(s, str) or not s.strip() for s in fragments):
+        raise ValueError("reviewed description fragments are required")
+    if entry["inventory_mode"] not in {"tracked_deny", "unreported"}:
+        raise ValueError("inventory_mode must explicitly select tracked_deny or unreported")
+    if entry["reviewed_valid_through"] is not None:
+        dt.date.fromisoformat(entry["reviewed_valid_through"])
+
+
+def public_variant(product: dict, entry: dict) -> dict:
+    if type(product.get("id")) is not int or product["id"] != entry["product_id"]:
+        raise ValueError("reviewed product identity changed")
+    variants = product.get("variants")
+    if not isinstance(variants, list) or any(not isinstance(v, dict) for v in variants):
+        raise ValueError("product variants missing or malformed")
+    selected = [v for v in variants if type(v.get("id")) is int and v["id"] == entry["variant_id"]]
+    if len(selected) != 1:
+        raise ValueError("exact variant absent or ambiguous")
+    variant = selected[0]
+    if variant.get("sku") != entry["sku"] or variant.get("title") != entry["variant_title"]:
+        raise ValueError("variant SKU or reviewed title changed")
+    return variant
+
+
+def extract_public_product(entry: dict, product_raw: bytes, before_raw: bytes, after_raw: bytes,
+                           observed: dt.datetime, *, intraday=False) -> tuple[dict, dict]:
+    """Cross-check exact public observations; numeric stock is never inferred from availability."""
+    validate_public_product(entry)
+    observed = observation_time(entry, observed)
+    product = load(product_raw)
+    before, after = (load(raw).get("product") for raw in (before_raw, after_raw))
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise ValueError("public JSON needs a product object")
+    variants = [public_variant(p, entry) for p in (before, product, after)]
+    b, variant, a = variants
+    descriptions = [before.get("body_html"), product.get("description"), after.get("body_html")]
+    if (any(not isinstance(d, str) or not all(s in d for s in entry["required_description_text"])
+            for d in descriptions) or len(set(descriptions)) != 1):
+        raise ValueError("reviewed description changed or differs between source representations")
+    amount = variant.get("price")
+    if type(amount) is not int or not 0 < amount <= 2**53 - 1:
+        raise ValueError("Ajax price must be positive integer hundredths")
+    for public in (b, a):
+        if (public.get("product_id") != entry["product_id"]
+                or public.get("price_currency") != entry["currency"]
+                or decimal_number(public.get("price")) != Decimal(amount) / 100):
+            raise ValueError("public currency or price changed; no presentment or FX inference")
+    for v in variants:
+        rule = v.get("quantity_rule")
+        if (not isinstance(rule, dict) or set(rule) != {"min", "max", "increment"}
+                or rule["max"] is not None
+                or any(type(rule[k]) is not int or rule[k] <= 0 for k in ("min", "increment"))
+                or Decimal(rule["min"]) * Decimal(str(entry["quantity"])) != Decimal(str(entry["minimum_quantity"]))
+                or Decimal(rule["increment"]) * Decimal(str(entry["quantity"])) != Decimal(str(entry["order_increment"]))
+                or v.get("quantity_price_breaks") != []):
+            raise ValueError("quantity rules changed, are bounded, or contain conditional prices")
+    if product.get("requires_selling_plan") or variant.get("requires_selling_plan"):
+        raise ValueError("selling-plan prices require separate qualification")
+    if type(variant.get("available")) is not bool:
+        raise ValueError("exact variant availability must be explicit")
+    capacity = None
+    if entry["inventory_mode"] == "tracked_deny":
+        quantities = [v.get("inventory_quantity") for v in variants]
+        if (any(v.get("inventory_management") != "shopify" or v.get("inventory_policy") != "deny" for v in variants)
+                or any(type(q) is not int or not 0 <= q <= 2**53 - 1 for q in quantities)
+                or len(set(quantities)) != 1 or (quantities[0] == 0 and variant["available"])):
+            raise ValueError("tracked finite stock missing, conflicting, changing, or permits overselling")
+        capacity = float(Decimal(quantities[0]) * Decimal(str(entry["quantity"])))
+        if not math.isfinite(capacity) or (quantities[0] > 0 and capacity == 0):
+            raise ValueError("observed stock is not representable in the reviewed sale unit")
+    elif any("inventory_quantity" in v for v in variants):
+        raise ValueError("numeric stock appeared; review the inventory mapping before publication")
+    expiry = entry["reviewed_valid_through"]
+    if expiry is not None and observed.date() > dt.date.fromisoformat(expiry):
+        raise ValueError("independently reviewed source expiry has passed; review it again")
+    digest = hashlib.sha256(product_raw).hexdigest()
+    quote = quote_basis(entry)
+    quote.update(price=amount / 100.0, observed_on=observed.date().isoformat(),
+                 available=variant["available"], source=entry["product_url"], source_sha256=digest)
+    if capacity is not None:
+        quote["available_quantity"] = capacity
+    if expiry is not None:
+        quote["valid_through"] = expiry
+    receipt = {"schema": "ftx-source-refresh/1", "adapter": entry["adapter"],
+               "observed_at": observed.isoformat(), "manifest_entry": entry, "product_sha256": digest,
+               "public_before_sha256": hashlib.sha256(before_raw).hexdigest(),
+               "public_after_sha256": hashlib.sha256(after_raw).hexdigest(),
+               "quantity_basis": "reviewed_manifest_cross_checked_against_quantity_rule",
+               "limits": ["Public source declarations do not reserve inventory or establish delivery/checkout terms.",
+                          "Source expiry outside the product APIs is separately reviewed, never extended by refresh.",
+                          "No textile mechanics, usable width, continuous cut length or market population is inferred."]}
+    stamp_intraday(quote, receipt, observed, intraday)
+    return quote, receipt
+
+
 def validate_csv(entry: dict) -> None:
     required = set(FIELDS) | {"adapter", "source_url", "basis_source", "basis_note",
                               "basis_reviewed_on", "columns", "match", "availability", "delimiter"}
@@ -696,6 +810,8 @@ def refresh(manifest: dict, get, now=None, *, intraday=False) -> tuple[dict, dic
             validate_csv(entry)
         elif entry.get("adapter") == "jsonld_v1":
             validate_jsonld(entry)
+        elif entry.get("adapter") == "shopify_public_product_v1":
+            validate_public_product(entry)
         else:
             raise ValueError("unknown source adapter")
         if entry["offer_id"] in ids:
@@ -719,6 +835,15 @@ def refresh(manifest: dict, get, now=None, *, intraday=False) -> tuple[dict, dic
             else:
                 quote, receipt = extract_jsonld(entry, product, observed, intraday=intraday)
                 extension = ".html" if entry["source_format"] == "html" else ".json"
+        elif entry.get("adapter") == "shopify_public_product_v1":
+            # Bracket the Ajax price/availability with the explicit public currency and stock.
+            before = get(entry["public_url"], accept="application/json")
+            product = get(entry["product_url"], accept="application/json")
+            after = get(entry["public_url"], accept="application/json")
+            quote, receipt = extract_public_product(entry, product, before, after, clock(), intraday=intraday)
+            for source in (before, after):
+                evidence[hashlib.sha256(source).hexdigest() + ".json"] = source
+            extension = ".json"
         else:
             before = get(entry["cart_url"], accept="application/json")
             product = get(entry["product_url"], accept="application/json")

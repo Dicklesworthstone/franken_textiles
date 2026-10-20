@@ -38,6 +38,26 @@ def raw(value):
     return json.dumps(value).encode()
 
 
+def public_entry():
+    e = entry()
+    del e["cart_url"]
+    e.update(adapter="shopify_public_product_v1", public_url="https://example.invalid/products/sheet.json",
+             product_id=7, variant_title="Black / half yard", inventory_mode="tracked_deny",
+             reviewed_valid_through="2026-10-20")
+    return e
+
+
+def public_product():
+    p = product()
+    p["id"] = 7
+    p["variants"][1].update(title="Black / half yard", quantity_rule={"min": 2, "max": None, "increment": 1},
+                            quantity_price_breaks=[], inventory_quantity=20,
+                            inventory_management="shopify", inventory_policy="deny")
+    v = copy.deepcopy(p["variants"][1])
+    v.update(price="12.99", price_currency="USD", product_id=7)
+    return p, {"product": {"id": 7, "body_html": p["description"], "variants": [v]}}
+
+
 CART = raw(dict(currency="USD", items=[], item_count=0, token="anonymous-do-not-persist"))
 
 
@@ -60,6 +80,83 @@ def csv_raw(rows=None, delimiter=","):
     writer = csv.DictWriter(output, fieldnames=list(rows[0]), delimiter=delimiter)
     writer.writeheader(); writer.writerows(rows)
     return output.getvalue().encode()
+
+
+class PublicProductTests(unittest.TestCase):
+    def test_exact_offer_retains_capacity_sale_units_expiry_and_source_bytes(self):
+        p, public = public_product()
+        q, receipt = r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW,
+                                               intraday=True)
+        self.assertEqual((q["price"], q["available_quantity"], q["quantity"]), (12.99, 10.0, 0.5))
+        self.assertEqual(q["valid_through"], "2026-10-20")
+        self.assertEqual(q["observed_at"], "2026-10-13T12:00:00.000000Z")
+        self.assertEqual(receipt["public_before_sha256"], hashlib.sha256(raw(public)).hexdigest())
+        self.assertEqual(receipt["public_after_sha256"], receipt["public_before_sha256"])
+        p["variants"][1].update(available=False, inventory_quantity=0)
+        public["product"]["variants"][0]["inventory_quantity"] = 0
+        q, _ = r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW)
+        self.assertFalse(q["available"])
+        self.assertEqual(q["available_quantity"], 0.0)
+
+    def test_unreported_capacity_is_unknown_and_cannot_hide_new_numeric_evidence(self):
+        p, public = public_product()
+        e = public_entry(); e["inventory_mode"] = "unreported"
+        with self.assertRaises(ValueError):
+            r.extract_public_product(e, raw(p), raw(public), raw(public), NOW)
+        del p["variants"][1]["inventory_quantity"]
+        del public["product"]["variants"][0]["inventory_quantity"]
+        q, _ = r.extract_public_product(e, raw(p), raw(public), raw(public), NOW)
+        self.assertNotIn("available_quantity", q)
+
+    def test_currency_variant_quantity_and_stock_drift_refuse_the_entire_observation(self):
+        changes = {"price_currency": "CAD", "price": "13.00", "sku": "OTHER", "title": "sample",
+                   "product_id": 8, "quantity_price_breaks": [{"minimum_quantity": 5, "price": "9.00"}],
+                   "quantity_rule": {"min": 2, "max": 5, "increment": 1}, "inventory_quantity": 19,
+                   "inventory_policy": "continue", "inventory_management": None}
+        for key, value in changes.items():
+            for which in ("before", "after"):
+                p, public = public_product(); changed = copy.deepcopy(public)
+                changed["product"]["variants"][0][key] = value
+                before, after = (changed, public) if which == "before" else (public, changed)
+                with self.subTest(key=key, which=which), self.assertRaises(ValueError):
+                    r.extract_public_product(public_entry(), raw(p), raw(before), raw(after), NOW)
+        for bad in (-1, True, 0.5, "20", 2**53):
+            p, public = public_product()
+            p["variants"][1]["inventory_quantity"] = bad
+            public["product"]["variants"][0]["inventory_quantity"] = bad
+            with self.subTest(stock=bad), self.assertRaises(ValueError):
+                r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW)
+
+    def test_expiry_identity_and_unconditional_source_contracts_are_required(self):
+        for field, value in (("reviewed_valid_through", "2026-10-12"), ("product_id", 8),
+                             ("variant_id", True), ("public_url", "https://other.invalid/products/sheet.json"),
+                             ("order_increment", 1), ("minimum_quantity", 0.5)):
+            p, public = public_product(); e = public_entry(); e[field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                r.extract_public_product(e, raw(p), raw(public), raw(public), NOW)
+        for field, value in (("requires_selling_plan", True), ("available", None), ("price", True),
+                             ("quantity_price_breaks", None)):
+            p, public = public_product(); p["variants"][1][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW)
+        p, public = public_product()
+        public["product"]["body_html"] += " Changed finish."
+        with self.assertRaises(ValueError):
+            r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW)
+
+    def test_refresh_never_reads_cart_and_retains_both_public_observations(self):
+        p, public = public_product(); calls = []
+        def get(url, *, accept):
+            calls.append((url, accept))
+            self.assertNotIn("cart", url)
+            return raw(public) if url.endswith(".json") else raw(p)
+        book, evidence = r.refresh({"schema": "ftx-textile-refresh/1", "offers": [public_entry()]},
+                                   get, lambda: NOW, intraday=True)
+        self.assertEqual([u.rsplit(".", 1)[1] for u, _ in calls], ["json", "js", "json"])
+        self.assertTrue(all(a == "application/json" for _, a in calls))
+        self.assertEqual(book["schema"], r.INTRADAY_SCHEMA)
+        self.assertEqual(evidence[hashlib.sha256(raw(public)).hexdigest() + ".json"], raw(public))
+        self.assertEqual(evidence[book["quotes"][0]["source_sha256"] + ".json"], raw(p))
 
 
 class RefreshTests(unittest.TestCase):

@@ -23,7 +23,8 @@ LIMITS = [
 ]
 # Price/stock changes are admitted by the existing quote validator. Everything else
 # in a selected CSV row or variant remains a potential specification/order change.
-SHOPIFY_MARKET = {"price", "unit_price", "compare_at_price", "available", "inventory_quantity"}
+SHOPIFY_MARKET = {"price", "unit_price", "compare_at_price", "available", "inventory_quantity",
+                  "old_inventory_quantity", "price_currency", "compare_at_price_currency"}
 PRODUCT_MEDIA = {"images", "image", "featured_image", "media", "created_at", "updated_at",
                  "published_at", "aggregateRating", "review", "interactionStatistic"}
 OFFER_MARKET = {"price", "priceCurrency", "availability", "priceValidUntil", "validFrom",
@@ -46,7 +47,7 @@ def _extension(entry):
     return ".html" if entry.get("source_format") == "html" else ".json"
 
 
-def _facts(entry, source, receipt):
+def _facts(entry, source, receipt, public_sources=()):
     """Preserve original quantities/text; do not infer composition, width, or units."""
     observed = dt.datetime.fromisoformat(receipt["observed_at"])
     adapter = receipt["adapter"]
@@ -105,12 +106,16 @@ def _facts(entry, source, receipt):
             offer["priceSpecification"] = {k: v for k, v in offer["priceSpecification"].items()
                                            if k not in {"price", "priceCurrency"}}
         selected = {"product": expand(product), "offer": offer}
-    elif adapter == "shopify_ajax_product_v1":
-        prices.validate_entry(entry)
-        prices.observation_time(entry, observed)
-        # The retained receipt attests currency without retaining anonymous cart tokens.
-        if any(receipt[k] != entry["currency"] for k in ("currency_before", "currency_after")):
-            raise ValueError("receipt currency differs from its reviewed material mapping")
+    elif adapter in {"shopify_ajax_product_v1", "shopify_public_product_v1"}:
+        if adapter == "shopify_public_product_v1":
+            prices.extract_public_product(entry, source, *public_sources, observed,
+                                           intraday=receipt.get("quote_schema") == prices.INTRADAY_SCHEMA)
+        else:
+            prices.validate_entry(entry)
+            prices.observation_time(entry, observed)
+            # The retained receipt attests currency without retaining anonymous cart tokens.
+            if any(receipt[k] != entry["currency"] for k in ("currency_before", "currency_after")):
+                raise ValueError("receipt currency differs from its reviewed material mapping")
         product = prices.load(source)
         variants = [v for v in product["variants"] if type(v.get("id")) is int
                     and v["id"] == entry["variant_id"]]
@@ -124,6 +129,12 @@ def _facts(entry, source, receipt):
             "variant": {k: v for k, v in variants[0].items()
                         if k not in SHOPIFY_MARKET | PRODUCT_MEDIA},
         }
+        if adapter == "shopify_public_product_v1":
+            public = prices.load(public_sources[1])["product"]
+            selected["public_product"] = {k: v for k, v in public.items()
+                                           if k not in PRODUCT_MEDIA | {"variants"}}
+            selected["public_variant"] = {k: v for k, v in prices.public_variant(public, entry).items()
+                                           if k not in SHOPIFY_MARKET | PRODUCT_MEDIA}
     else:
         raise ValueError("unknown retained source adapter")
     return {"adapter": adapter, "source": entry.get("source_url", entry.get("product_url")),
@@ -131,7 +142,7 @@ def _facts(entry, source, receipt):
             "selected": selected}
 
 
-def _record(receipt_raw, source):
+def _record(receipt_raw, source, read_evidence):
     receipt = prices.load(receipt_raw)
     if receipt.get("schema") != "ftx-source-refresh/1":
         raise ValueError("unsupported source receipt")
@@ -141,9 +152,17 @@ def _record(receipt_raw, source):
     if len(source) > prices.LIMIT:
         raise ValueError("retained source exceeds 4 MiB")
     entry = receipt["manifest_entry"]
+    public_sources = []
+    if receipt["adapter"] == "shopify_public_product_v1":
+        for field in ("public_before_sha256", "public_after_sha256"):
+            key = digest(receipt[field])
+            raw = read_evidence(key + ".json")
+            if len(raw) > prices.LIMIT or hashlib.sha256(raw).hexdigest() != key:
+                raise ValueError("retained public-product corroboration differs from its source digest")
+            public_sources.append(raw)
     return {"offer_id": entry["offer_id"], "observed_at": receipt["observed_at"],
             "source_sha256": source_hash, "receipt_sha256": hashlib.sha256(receipt_raw).hexdigest(),
-            "facts": _facts(entry, source, receipt)}
+            "facts": _facts(entry, source, receipt, public_sources)}
 
 
 def capture(book, evidence):
@@ -159,7 +178,7 @@ def capture(book, evidence):
         receipt = prices.load(receipt_raw)
         source_hash = digest(receipt.get("source_sha256", receipt.get("product_sha256")))
         entry = receipt["manifest_entry"]
-        record = _record(receipt_raw, evidence[source_hash + _extension(entry)])
+        record = _record(receipt_raw, evidence[source_hash + _extension(entry)], evidence.__getitem__)
         offer = record["offer_id"]
         if offer in observations or offer not in quotes or quotes[offer]["source_sha256"] != source_hash:
             raise ValueError("source receipt does not uniquely reproduce the quote book")
@@ -181,6 +200,11 @@ def replay(document, evidence_dir: Path):
     if not isinstance(observations, list) or not 1 <= len(observations) <= 100 or document["limits"] != LIMITS:
         raise ValueError("invalid supplier specification snapshot")
     ids = set()
+    def read_evidence(name):
+        path = evidence_dir / name
+        if path.stat().st_size > prices.LIMIT:
+            raise ValueError("retained source exceeds 4 MiB")
+        return path.read_bytes()
     for record in observations:
         receipt_path = evidence_dir / (digest(record["receipt_sha256"]) + ".receipt.json")
         if receipt_path.stat().st_size > prices.LIMIT:
@@ -192,7 +216,7 @@ def replay(document, evidence_dir: Path):
         source_path = evidence_dir / (digest(record["source_sha256"]) + _extension(receipt["manifest_entry"]))
         if source_path.stat().st_size > prices.LIMIT:
             raise ValueError("retained source exceeds 4 MiB")
-        rebuilt = _record(receipt_raw, source_path.read_bytes())
+        rebuilt = _record(receipt_raw, source_path.read_bytes(), read_evidence)
         if encoded(rebuilt) != encoded(record) or record["offer_id"] in ids:
             raise ValueError("specification baseline differs from its original source evidence")
         ids.add(record["offer_id"])
