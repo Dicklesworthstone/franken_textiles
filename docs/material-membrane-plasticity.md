@@ -231,6 +231,13 @@ optimizer is not a material validity interval or a confidence bound. Total strai
 limits must come from independent characterization; the calibration never derives them from the
 largest observed load or replaces them with a search result.
 
+If the supplied elastic observations retain a scalar swatch fit's `fitted_green_strain_range`,
+that existing operating box also applies to every raw Green-strain node, including nodes with
+unobserved loads. Yield/hardening identification cannot widen it or refit the equilibrium tensor.
+An unsupported FIT node refuses acquisition admission. An unsupported CHECK node remains a refused
+replay of the already selected FIT candidate: its parameters and FIT diagnostics stay available,
+but no material is published. This matches the ordinary drape consumer's combined domain checks.
+
 The complete executable example is
 [`synthetic-membrane-plasticity-calibration.json`](../tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json).
 It is entirely artificial, with independently computed directional loading, unloading, reversed
