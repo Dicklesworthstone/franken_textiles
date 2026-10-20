@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import refresh_textile_prices as r
 import textile_specifications as s
-from test_refresh_textile_prices import CART, NOW, csv_entry, csv_raw, entry, product, raw
+from test_refresh_textile_prices import CART, NOW, csv_entry, csv_raw, entry, product, raw, public_entry, public_product
 
 
 def locked(e=None):
@@ -44,6 +44,38 @@ def jsonld_fixture():
 
 
 class SpecificationTests(unittest.TestCase):
+    def test_public_product_replays_corroborating_sources_and_separates_stock_from_specification(self):
+        p, public = public_product()
+        e = locked(public_entry())
+        def capture():
+            def get(url, *, accept):
+                return raw(public) if url.endswith(".json") else raw(p)
+            book, evidence = r.refresh({"schema": "ftx-textile-refresh/1", "offers": [e]}, get,
+                                       lambda: NOW, intraday=True)
+            return s.capture(book, evidence), evidence
+        old, original = capture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, data in original.items():
+                (root / name).write_bytes(data)
+            self.assertEqual(s.replay(old, root), old)
+            key = next(name for name, data in original.items() if data == raw(public))
+            (root / key).write_bytes(b'{"product": {}}')
+            with self.assertRaises(ValueError):
+                s.replay(old, root)
+        p["variants"][1].update(price=1550, inventory_quantity=0, available=False)
+        public["product"]["variants"][0].update(price="15.50", inventory_quantity=0)
+        refreshed, _ = capture()
+        self.assertTrue(s.compare(old, refreshed)["quote_publication_allowed"])
+        p["description"] += " Revised weave."
+        public["product"]["body_html"] = p["description"]
+        revised, _ = capture()
+        self.assertFalse(s.compare(old, revised)["quote_publication_allowed"])
+        missing = dict(original)
+        missing.pop(key)
+        with self.assertRaises(KeyError):
+            s.capture({"quotes": [{"offer_id": e["offer_id"], "source_sha256": old["observations"][0]["source_sha256"]}]}, missing)
+
     def test_price_stock_and_unselected_variants_do_not_change_specification(self):
         p = product()
         p["variants"][1].update(unit_price=2598,

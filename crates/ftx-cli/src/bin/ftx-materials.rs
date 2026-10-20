@@ -64,6 +64,7 @@ ftx-materials price PATTERN.json QUOTES.json SCOPE.json
 ftx-materials thermal STACK.json
 ftx-materials thermal-at ID TEMPERATURE-C [--allow-estimates]
 ftx-materials pressure-condition REQUEST.json
+ftx-materials compression-stack REQUEST.json
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-nonlinear SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
@@ -94,6 +95,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `pressure-condition` prepares a frozen material at a declared normal pressure from qualified observations; it does not infer contact pressure.
+`compression-stack` infers common pressure from a rigid-face stack clearance and qualified branches, returning one frozen selection per layer; it is not a garment-contact or recovery simulation.
 `thermal-steady` solves source-qualified conduction without requiring mass or heat capacity; its frozen request replays offline.
 `thermal-steady-surface` evaluates source-locked drape triangles without requiring heat storage; no inferred body coverage.
 `thermal-steady-coverage` recomputes layered body coverage and heat directly from retained drape materials, without invented storage.
@@ -256,6 +258,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["calibrate-friction", path, "--allow-estimates"] => friction_calibration::run(path, true),
         ["screen", path] => screening::run(path),
         ["pressure-condition", path] => screening::pressure_condition(path),
+        ["compression-stack", path] => screening::compression_stack(path),
         ["study", pattern, request] => screening::study(pattern, request),
         [
             "scenario-study",

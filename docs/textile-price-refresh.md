@@ -106,6 +106,66 @@ Primary interface references (checked 2026-10-13):
 - Shopify Ajax Cart API: https://shopify.dev/docs/api/ajax/reference/cart
 - Shopify variant monetary representation: https://shopify.dev/docs/api/liquid/objects/variant
 
+### Public product sources with finite inventory, without a cart endpoint
+
+`adapter: "shopify_public_product_v1"` supports suppliers whose permitted public product JSON
+explicitly declares currency and quantity rules. It fetches `/products/HANDLE.json`, the matching
+`/products/HANDLE.js`, then the JSON endpoint again. The exact product ID, variant ID, SKU and reviewed
+variant title must match. The public decimal prices and currencies must agree with the Ajax price;
+descriptions must agree, contain the reviewed fragments, and remain unchanged during acquisition.
+Quantity minimums/increments must match the reviewed sale unit, maximums must be unbounded, and all
+three observations must explicitly contain no quantity price breaks. Subscription prices refuse.
+The existing Ajax/cart adapter remains available for its separately qualified sources.
+
+The `inventory_mode` is explicit. `tracked_deny` requires all three observations to agree on a finite,
+nonnegative inventory quantity, Shopify inventory tracking and a policy that refuses overselling.
+The collector converts that observed count into the manifest's physical sale unit and publishes
+`available_quantity`. Zero remains zero. `unreported` preserves unknown capacity; newly appearing
+numeric stock requires review instead of silently discarding it. Source quantity is a dated
+observation, never a reservation, a continuous roll length or a guarantee of future availability.
+
+Any expiry reviewed outside those APIs is retained in `reviewed_valid_through` and copied to the
+quote. A refresh cannot extend this date; collection refuses after it and requires another page
+review. This is relevant to Discovery Fabrics, whose exact Offer expiry appears in HTML JSON-LD.
+Specification metadata published outside the selected API representation likewise requires separate
+page review; the collector does not interpret unrequested HTML, images or remote files.
+
+All three original responses are retained by hash. Existing `--specifications-out`,
+`--compare-specifications`, `--previous-evidence` and `--review-out` workflows replay both corroborating
+public sources before accepting a baseline. Price/stock changes remain market history; changes in
+the selected non-price declarations still require specification review. Missing or altered evidence
+refuses. Both the date-only quote schema and opt-in intraday histories use the same adapter.
+
+The reviewed manifest [textile-public-product-refresh.json](examples/textile-public-product-refresh.json)
+was successfully fetched on **2026-10-20**. Its
+[six-offer intraday snapshot](examples/textile-public-product-quotes-2026-10-20.json) binds each
+offer to the exact resolved built-in material hash and records:
+
+| Exact material offer | Currency / price per linear yard | Observed available quantity |
+| --- | --- | --- |
+| RBTR 1.1 oz Black / Uncalendered ripstop nylon | USD 8.00 | 593 yards |
+| RBTR 1.1 oz Black / Calendered ripstop nylon | USD 9.25 | 700 yards |
+| RBTR Climashield APEX 2.5 | USD 11.00 | 776 yards |
+| Discovery Power Stretch 94010 Olive Mesh | CAD 23.00 | Unknown |
+| Discovery Power Stretch 94016 Grey | CAD 23.00 | Unknown |
+| Discovery Power Stretch 94021 A-Maze | CAD 29.00 | Unknown |
+
+Discovery's three independently reviewed expiries are **2026-10-30**, inclusive. APEX has a
+supplier-stated standard maximum continuous cut of **five yards**; 776 available yards do not imply
+one continuous piece. Nominal widths support area-rate estimates but do not establish defect-free
+cutting envelopes. The three CAD quotes and three USD quotes retain separate regional and terms
+scopes. These are six different material offers, not six comparable samples for a market percentile.
+No taxes, shipping, FX, safety rating, stretch-to-stiffness conversion or warmth estimate is invented.
+
+The catalog adds the two finish-specific RBTR nylon constructions and the Grey and A-Maze Discovery
+knit constructions: four new cards and 14 numerical source observations, bringing the built-in catalog
+to 166 records. The established Olive Mesh and APEX source records retain their identities and evidence.
+The new knit cards retain distinct composition, weight, width and uninterpreted supplier stretch
+percentages. Missing mechanics and measured thermal properties remain unavailable to those consumers.
+Primary pages: [RBTR nylon](https://ripstopbytheroll.com/products/1-1-oz-ripstop-nylon),
+[RBTR APEX](https://ripstopbytheroll.com/products/climashield-apex-2-5-oz-sq-yd),
+[Discovery Power Stretch](https://discoveryfabrics.com/products/polartec-power-stretch-jersey).
+
 The source tests cover exact variant selection, price-field distinction, currency drift, the Shopify
 hundredths representation, unavailable offers, changed/old quantity evidence, malformed JSON and
 non-finite numbers, locale/origin conflicts, anonymous-only reads, batch failure and immutable publication.

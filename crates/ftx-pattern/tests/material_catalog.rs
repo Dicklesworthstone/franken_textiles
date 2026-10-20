@@ -33,7 +33,7 @@ fn selection() -> Selection {
 #[test]
 fn factual_seed_does_not_invent_physics_or_midpoints() {
     let db = Catalog::builtin().unwrap();
-    assert_eq!(db.materials.len(), 162);
+    assert_eq!(db.materials.len(), 166);
     for id in [
         "fsri/hfm/cotton-sheet/dry/220330-r1",
         "fsri/hfm/cotton-sheet/wet/220318-r1",
@@ -207,4 +207,156 @@ fn unknown_extensions_are_preserved_without_defaulting_missing_required_fields()
     assert!(r.mechanics().is_err());
     let v: Value = serde_json::to_value(&r).unwrap();
     assert!(v["sha256"].is_string());
+}
+
+#[test]
+fn supplier_variants_preserve_distinct_construction_without_inventing_stiffness() {
+    let catalog = Catalog::builtin().unwrap();
+    for (id, width_in, gsm) in [
+        (
+            "rbtr/1.1-black-uncalendered",
+            60.,
+            1.1 * 33.905_747_474_882_3,
+        ),
+        ("rbtr/1.1-black-calendered", 58., 1.1 * 33.905_747_474_882_3),
+        ("discovery/power-stretch-94010-olive-mesh", 66., 203.),
+        ("discovery/power-stretch-94016-grey", 54., 203.),
+        ("discovery/power-stretch-94021-a-maze", 60., 237.),
+    ] {
+        let resolved = catalog
+            .resolve(&Selection {
+                id: id.into(),
+                ..Selection::default()
+            })
+            .unwrap();
+        let material = resolved.material();
+        assert!((material.require("width", "m", false).unwrap() - width_in * 0.0254).abs() < 1e-14);
+        assert!(
+            (material.require("areal_density", "kg/m2", false).unwrap() - gsm / 1000.).abs()
+                < 1e-14
+        );
+        assert!(resolved.mechanics().is_err());
+        assert!(!material.properties.contains_key("thickness"));
+        assert!(!material.properties.contains_key("bending_rigidity"));
+        assert!(!material.properties.contains_key("thermal_resistance"));
+        if id.starts_with("rbtr/") {
+            assert!(
+                (material
+                    .require("yarn_linear_density", "kg/m", false)
+                    .unwrap()
+                    - 20. / 9_000_000.)
+                    .abs()
+                    < 1e-18
+            );
+        } else {
+            assert!(material.composition_complete);
+            if id != "discovery/power-stretch-94010-olive-mesh" {
+                assert!(
+                    material
+                        .properties
+                        .contains_key("supplier_stretch_lengthwise")
+                );
+            }
+            assert!(!material.properties.contains_key("elongation_break_warp"));
+        }
+    }
+    let olive = catalog
+        .get("discovery/power-stretch-94010-olive-mesh")
+        .unwrap();
+    let grey = catalog.get("discovery/power-stretch-94016-grey").unwrap();
+    let maze = catalog.get("discovery/power-stretch-94021-a-maze").unwrap();
+    assert_eq!(olive.composition.len(), 2);
+    assert_eq!(olive.structure["record_revision"], "2026-10-18");
+    assert_eq!(grey.composition.len(), 3);
+    assert_eq!(maze.composition[1].fraction, 0.25);
+}
+
+#[test]
+fn observed_supplier_offers_reach_shared_price_capacity_and_revision_consumers() {
+    use ftx_pattern::material_cost::{Basis, ExclusionReason, QuoteBook, Scope};
+    let catalog = Catalog::builtin().unwrap();
+    let book: QuoteBook = serde_json::from_str(include_str!(
+        "../../../docs/examples/textile-public-product-quotes-2026-10-20.json"
+    ))
+    .unwrap();
+    assert_eq!(book.schema, "ftx-textile-quotes/2");
+    assert_eq!(book.quotes.len(), 6);
+    for quote in &book.quotes {
+        let selection = Selection {
+            id: quote.material_id.clone(),
+            ..Selection::default()
+        };
+        let resolved = catalog.resolve(&selection).unwrap();
+        assert_eq!(quote.material_sha256.as_deref(), Some(resolved.sha256()));
+        let mut scope = Scope {
+            currency: quote.currency.clone(),
+            region: quote.region.clone(),
+            quality: quote.quality.clone(),
+            terms: quote.terms.clone(),
+            as_of: "2026-10-20".into(),
+            as_of_at: Some("2026-10-20T23:59:59.999999999Z".into()),
+            max_age_days: 30,
+            requirement: 1.0,
+            basis: Basis::Area,
+            require_observed_quantity: false,
+        };
+        let sample = book.evaluate(&resolved, &scope).unwrap();
+        assert_eq!(sample.offers.len(), 1);
+        assert!(!sample.population_claim);
+        let offer = &sample.offers[0];
+        let width = resolved.material().require("width", "m", false).unwrap();
+        assert!((offer.rate - quote.price / (0.9144 * width)).abs() < 1e-12);
+        assert_eq!(offer.order_quantity, 1.0);
+        assert_eq!(offer.order_cost, quote.price);
+        scope.require_observed_quantity = true;
+        let strict = book.evaluate(&resolved, &scope).unwrap();
+        if let Some(capacity) = quote.available_quantity {
+            assert!(strict.offers[0].quantity_sufficiency_observed);
+            scope.requirement = (capacity + 0.1) * 0.9144 * width;
+            let depleted = book.evaluate(&resolved, &scope).unwrap();
+            assert!(depleted.offers.is_empty());
+            assert_eq!(
+                depleted.excluded_offers[0].reason,
+                ExclusionReason::InsufficientQuantity
+            );
+            assert_eq!(
+                depleted.excluded_offers[0].required_order_quantity,
+                Some(capacity + 1.0)
+            );
+        } else {
+            assert!(strict.offers.is_empty());
+            assert_eq!(
+                strict.excluded_offers[0].reason,
+                ExclusionReason::UnknownQuantity
+            );
+        }
+        scope.requirement = 1.0;
+        scope.require_observed_quantity = false;
+        let mut changed = selection;
+        let mut width = resolved.authored().properties["width"].clone();
+        width.value += 0.25;
+        changed.overrides.insert("width".into(), width);
+        let changed = catalog.resolve(&changed).unwrap();
+        let rebound = book.evaluate(&changed, &scope).unwrap();
+        assert!(rebound.offers.is_empty());
+        assert_eq!(
+            rebound.excluded_offers[0].reason,
+            ExclusionReason::MaterialSnapshotMismatch
+        );
+        scope.currency = if quote.currency == "USD" {
+            "CAD"
+        } else {
+            "USD"
+        }
+        .into();
+        assert!(book.evaluate(&resolved, &scope).unwrap().offers.is_empty());
+        scope.currency = quote.currency.clone();
+        scope.as_of = "2026-10-31".into();
+        scope.as_of_at = Some("2026-10-31T12:00:00Z".into());
+        if quote.valid_through.is_some() {
+            let expired = book.evaluate(&resolved, &scope).unwrap();
+            assert!(expired.offers.is_empty());
+            assert_eq!(expired.excluded_offers[0].reason, ExclusionReason::Expired);
+        }
+    }
 }

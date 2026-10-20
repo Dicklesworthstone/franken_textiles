@@ -1991,6 +1991,34 @@ conversion laws, and independent sewn-garment/process acceptance remain the larg
 
 ---
 
+### 25.29 Public supplier observations bound to actual textile revisions
+
+**Reviewed offers and finite capacity (`ftx-sr3`, supports `ftx-pq1`/`ftx-tm6`).** The existing
+refresh and specification-review path now accepts an explicitly reviewed public Shopify product
+adapter. Public JSON observations bracket the Ajax response, checking exact product/variant/SKU,
+currency, price, description and ordering rules. Numeric inventory is admitted only when all three
+observations agree on Shopify-tracked stock with overselling disabled. Unreported capacity stays
+unknown; a newly reported quantity requires review. Separately reviewed source expiry is never
+extended by refreshing a product. All three source digests and actual retrieval times are retained.
+
+The October 20 tranche contains six exact offers: two Ripstop by the Roll nylon constructions,
+Climashield APEX 2.5 and three Discovery Fabrics Power Stretch variants. Four new material cards
+and 14 numerical observations bring the built-in catalog to 166 records; existing APEX and Olive
+Mesh evidence is preserved. Canonical material hashes bind every offer through the normal pricing
+and whole-order capacity evaluator. USD and CAD stay separate. Nominal width does not establish
+usable cutting width, and total inventory does not establish one continuous cut (APEX's reviewed
+standard maximum is five yards). Missing mechanics and heat properties remain unavailable.
+
+The dated snapshot, refresh manifest and replay instructions are in
+[textile-price-refresh.md](docs/textile-price-refresh.md). Native integration checks exercise all
+six identities, rounded-order capacity, unknown stock, expiry and changed-material refusals;
+offline adapter tests additionally cover source drift and malformed observations. Broader supplier
+coverage, observed stock-depletion/replenishment histories, matched material characterization and
+empirical garment/process acceptance remain open. Quotes neither reserve inventory nor establish
+delivery, landed cost or worldwide price distributions.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

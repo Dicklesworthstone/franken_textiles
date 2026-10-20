@@ -37,6 +37,13 @@ pub(super) fn pressure_condition(path: &str) -> Result<Value, Refusal> {
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
 }
 
+pub(super) fn compression_stack(path: &str) -> Result<Value, Refusal> {
+    let request: ftx_pattern::material_compression::stack::Input =
+        read(path, &mut (64 * 1024 * 1024))?;
+    serde_json::to_value(ftx_pattern::material_compression::stack::close(&request)?)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
+}
+
 pub(super) fn bind_changes(pattern: &str, changes: &str, out: &str) -> Result<Value, Refusal> {
     let mut remaining = 64 * 1024 * 1024;
     let pattern = Pattern::new(read(pattern, &mut remaining)?);
