@@ -20,6 +20,8 @@ struct Bound {
     domain: Option<StrainDomain>,
     law: CompiledRelaxation,
     memory: Memory,
+    // Cumulative accepted physical dashpot work; independent of elastic/numerical energy loss.
+    dissipated_j: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -104,8 +106,13 @@ impl Field {
         for (i, b) in self.entries.iter().enumerate() {
             if let Some(b) = b {
                 let u = b.memory.advance(b.effective_strain(x)?, h)?;
-                dissipated += b.element.area * u.dissipated_j_m2;
-                updates.push((i, u.memory));
+                let work = b.element.area * u.dissipated_j_m2;
+                let local_total = b.dissipated_j + work;
+                if !local_total.is_finite() || work < 0. {
+                    return Err(bad("Maxwell triangle dissipation overflow"));
+                }
+                dissipated += work;
+                updates.push((i, u.memory, local_total));
             }
         }
         let time = self.time_seconds + h;
@@ -116,11 +123,12 @@ impl Field {
         if !time.is_finite() || time <= self.time_seconds || !dissipated.is_finite() {
             return Err(bad("Maxwell elapsed time or dissipation overflow"));
         }
-        for (i, memory) in updates {
-            self.entries[i]
+        for (i, memory, dissipated_j) in updates {
+            let bound = self.entries[i]
                 .as_mut()
-                .expect("an update has a bound element")
-                .memory = memory;
+                .expect("an update has a bound element");
+            bound.memory = memory;
+            bound.dissipated_j = dissipated_j;
         }
         self.time_seconds = time;
         self.steps = steps;
@@ -181,6 +189,7 @@ impl Solver {
                     element,
                     material,
                     memory,
+                    dissipated_j: 0.,
                     law: law.clone(),
                     equilibrium: self.model.membrane_response(i).cloned(),
                     domain: self.model.membrane_domain(i),
@@ -246,6 +255,28 @@ impl Solver {
         }
         *self = trial;
         Ok(report)
+    }
+
+    /// Cumulative accepted Maxwell viscous work in joules, in retained triangle order.
+    /// Unselected triangles contribute zero. None means no Maxwell field is bound. This read does
+    /// not evolve memory. Values include prior drape work: heat consumers must subtract their own
+    /// accepted baseline and qualify conversion separately. Spring storage, backward-Euler
+    /// numerical dissipation and contact/friction work are not included.
+    ///
+    /// # Errors
+    /// Changed material/topology or invalid current strain.
+    pub fn membrane_relaxation_dissipation_j(&self) -> Result<Option<Vec<f64>>, Refusal> {
+        let Some(field) = &self.relaxation else {
+            return Ok(None);
+        };
+        field.check(&self.model, &self.x)?;
+        Ok(Some(
+            field
+                .entries
+                .iter()
+                .map(|entry| entry.as_ref().map_or(0., |bound| bound.dissipated_j))
+                .collect(),
+        ))
     }
 
     /// Source-law identities and accepted internal strains, storage and viscous step-work in SI units.

@@ -14,6 +14,7 @@ use crate::materials::{Evidence, Quantity, Source};
 
 mod binding;
 pub mod calibration;
+pub mod heating;
 
 /// Stress-free reference strain or a pre-relaxed start; neither is inferred from a garment pose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

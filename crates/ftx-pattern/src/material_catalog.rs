@@ -105,6 +105,7 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         | "membrane_accumulation_limit_weft"
         | "membrane_accumulation_limit_shear"
         | "membrane_plastic_heat_fraction"
+        | "membrane_relaxation_heat_fraction"
         | "limiting_oxygen_index" => "1",
         "thermal_conductivity" => "W/(m*K)",
         "thermal_resistance" => "m2*K/W",

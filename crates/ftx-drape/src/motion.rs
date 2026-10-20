@@ -50,6 +50,20 @@ pub struct MotionSample {
     /// Present only when explicitly captured and a permanent membrane law is bound. This includes
     /// work before the motion request; heat consumers must subtract their initial accepted baseline.
     pub membrane_plastic_dissipation_j: Option<Vec<f64>>,
+    /// Cumulative accepted physical Maxwell dashpot work, joules in retained triangle order.
+    /// Only explicitly requested captures allocate this array. Initial drape work is included;
+    /// consumers must subtract their own baseline. Numerical integration loss is excluded.
+    pub membrane_relaxation_dissipation_j: Option<Vec<f64>>,
+}
+
+/// Independently requested physical-work samples. Each retained scalar counts against the existing
+/// motion sample budget; inactive laws allocate no array. No thermal conversion is inferred.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DissipationCapture {
+    /// Capture accepted irreversible permanent membrane work.
+    pub plastic: bool,
+    /// Capture accepted physical Maxwell viscous work, excluding numerical dissipation.
+    pub relaxation: bool,
 }
 
 /// Returned only after the ENTIRE target motion succeeds.
@@ -110,7 +124,13 @@ pub fn advance_body(
     duration_s: f64,
     options: MotionOptions,
 ) -> Result<MotionReport, Refusal> {
-    advance_body_impl(solver, target, duration_s, options, false)
+    advance_body_impl(
+        solver,
+        target,
+        duration_s,
+        options,
+        DissipationCapture::default(),
+    )
 }
 
 /// Advance the same checked body motion while retaining cumulative accepted irreversible membrane
@@ -128,7 +148,33 @@ pub fn advance_body_with_dissipation(
     duration_s: f64,
     options: MotionOptions,
 ) -> Result<MotionReport, Refusal> {
-    advance_body_impl(solver, target, duration_s, options, true)
+    advance_body_impl(
+        solver,
+        target,
+        duration_s,
+        options,
+        DissipationCapture {
+            plastic: true,
+            relaxation: false,
+        },
+    )
+}
+
+/// Advance the ordinary checked motion while capturing only the requested material-work channels.
+/// Both histories are read after accepted substeps; no work from failed trials is retained. The
+/// geometry-only and existing plastic-only APIs preserve their original output allocation policy.
+///
+/// # Errors
+/// As `advance_body`, including stale history or exhaustion of the combined geometry/work budget.
+/// Every error leaves the entire input solver unchanged.
+pub fn advance_body_with_work(
+    solver: &mut Solver,
+    target: &[Vec3],
+    duration_s: f64,
+    options: MotionOptions,
+    capture: DissipationCapture,
+) -> Result<MotionReport, Refusal> {
+    advance_body_impl(solver, target, duration_s, options, capture)
 }
 
 fn advance_body_impl(
@@ -136,7 +182,7 @@ fn advance_body_impl(
     target: &[Vec3],
     duration_s: f64,
     options: MotionOptions,
-    capture_dissipation: bool,
+    capture: DissipationCapture,
 ) -> Result<MotionReport, Refusal> {
     if !duration_s.is_finite()
         || !(1e-9..=60.0).contains(&duration_s)
@@ -194,9 +240,16 @@ fn advance_body_impl(
     let start_body = original.body.vertices.clone();
     let triangles = original.body.triangles.clone();
     let min_cell = original.params.dhat;
-    let dissipation_count = if capture_dissipation {
+    let plastic_count = if capture.plastic {
         solver
             .membrane_plastic_dissipation_j()?
+            .map_or(0, |values| values.len())
+    } else {
+        0
+    };
+    let relaxation_count = if capture.relaxation {
+        solver
+            .membrane_relaxation_dissipation_j()?
             .map_or(0, |values| values.len())
     } else {
         0
@@ -204,7 +257,8 @@ fn advance_body_impl(
     let count = target
         .len()
         .checked_add(solver.x.len())
-        .and_then(|n| n.checked_add(dissipation_count))
+        .and_then(|n| n.checked_add(plastic_count))
+        .and_then(|n| n.checked_add(relaxation_count))
         .ok_or_else(|| invalid("sample size overflow"))?;
     let mut work = solver.clone();
     let mut report = MotionReport {
@@ -328,8 +382,13 @@ fn advance_body_impl(
             cloth: trial.x.clone(),
             body: new_c.body.vertices.clone(),
             solve,
-            membrane_plastic_dissipation_j: if capture_dissipation {
+            membrane_plastic_dissipation_j: if capture.plastic {
                 trial.membrane_plastic_dissipation_j()?
+            } else {
+                None
+            },
+            membrane_relaxation_dissipation_j: if capture.relaxation {
+                trial.membrane_relaxation_dissipation_j()?
             } else {
                 None
             },

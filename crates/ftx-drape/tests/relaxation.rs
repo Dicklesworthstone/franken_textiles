@@ -529,3 +529,125 @@ fn no_history_preserves_existing_snapshot_locks_and_estimated_history_requires_c
     );
     assert!(denied.membrane_relaxation().is_err());
 }
+
+#[test]
+fn captured_viscous_work_matches_independent_dashpot_quadrature_not_spring_energy_loss() {
+    let mut s = solver(true, true);
+    let initial = s.relaxation_report().unwrap().unwrap();
+    let stored0 = initial["stored_branch_energy_j"].as_f64().unwrap();
+    let e = s.model.membranes[0].strain(&s.x);
+    let q = s.model.material(0).q;
+    let reference_area = s.model.membranes[0].area;
+    let work0 = reference_area
+        * (0..3)
+            .map(|i| e[i] * (0..3).map(|j| 2. * q[i][j] * e[j]).sum::<f64>())
+            .sum::<f64>();
+    let (tau, dt) = (0.05_f64, 0.01_f64);
+    let a = tau / (tau + dt);
+    let mut remaining = 1.;
+    let mut expected = 0.;
+    for _ in 0..20 {
+        remaining *= a;
+        expected += (dt / tau) * remaining * remaining * work0;
+        s.step(dt).unwrap();
+        let captured = s.membrane_relaxation_dissipation_j().unwrap().unwrap();
+        assert_eq!(captured.len(), 1);
+        near(captured[0], expected, 1e-13);
+        let report = s.relaxation_report().unwrap().unwrap();
+        assert_eq!(captured[0], report["viscous_step_work_j"].as_f64().unwrap());
+        let stored = report["stored_branch_energy_j"].as_f64().unwrap();
+        assert!(
+            stored0 - stored > captured[0],
+            "backward Euler numerical loss must not be converted"
+        );
+    }
+    let before = s.membrane_relaxation_dissipation_j().unwrap();
+    let state = format!("{s:?}");
+    assert!(s.step(f64::NAN).is_err());
+    assert_eq!(format!("{s:?}"), state);
+    assert_eq!(s.membrane_relaxation_dissipation_j().unwrap(), before);
+    s.model.compression[0] = [0.5; 2];
+    assert!(s.membrane_relaxation_dissipation_j().is_err());
+}
+
+#[test]
+fn relaxation_work_capture_preserves_motion_and_charges_every_retained_scalar() {
+    use ftx_drape::motion::{
+        DissipationCapture, advance_body_with_dissipation, advance_body_with_work,
+    };
+    let body = Body::new(
+        vec![
+            Vec3::new(-1., -1., -0.1),
+            Vec3::new(1., -1., -0.1),
+            Vec3::new(0., 1., -0.1),
+        ],
+        vec![[0, 1, 2]],
+        0.1,
+    )
+    .unwrap();
+    let p = ContactParams {
+        thickness: 0.,
+        mu: 0.,
+        ..DrapeOptions::default().contact
+    };
+    let original = solver(true, true).with_contact(body, p).unwrap();
+    let target: Vec<_> = original
+        .contact
+        .as_ref()
+        .unwrap()
+        .body
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0., 0., 0.0001))
+        .collect();
+    let opts = MotionOptions {
+        max_step_s: 0.01,
+        max_sample_vertices: 21,
+        ..Default::default()
+    };
+    let capture = DissipationCapture {
+        plastic: false,
+        relaxation: true,
+    };
+    let mut captured = original.clone();
+    let result = advance_body_with_work(&mut captured, &target, 0.03, opts, capture).unwrap();
+    assert_eq!(result.samples.len(), 3);
+    let mut previous = 0.;
+    for sample in &result.samples {
+        let values = sample.membrane_relaxation_dissipation_j.as_ref().unwrap();
+        assert_eq!(values.len(), 1);
+        assert!(values[0] > previous);
+        previous = values[0];
+        assert!(sample.membrane_plastic_dissipation_j.is_none());
+    }
+    let mut ordinary = original.clone();
+    let geometry_budget = MotionOptions {
+        max_sample_vertices: 18,
+        ..opts
+    };
+    let old = advance_body(&mut ordinary, &target, 0.03, geometry_budget).unwrap();
+    assert_eq!(format!("{ordinary:?}"), format!("{captured:?}"));
+    for (a, b) in old.samples.iter().zip(&result.samples) {
+        assert!(a.membrane_relaxation_dissipation_j.is_none());
+        assert_eq!(a.cloth, b.cloth);
+        assert_eq!(a.body, b.body);
+        assert_eq!(a.solve, b.solve);
+    }
+    let mut limited = original.clone();
+    assert_eq!(
+        advance_body_with_work(&mut limited, &target, 0.03, geometry_budget, capture)
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+    assert_eq!(format!("{limited:?}"), format!("{original:?}"));
+    // Old plastic-only capture must not acquire a Maxwell allocation or a stricter budget.
+    let plastic =
+        advance_body_with_dissipation(&mut limited, &target, 0.03, geometry_budget).unwrap();
+    assert!(
+        plastic
+            .samples
+            .iter()
+            .all(|p| p.membrane_relaxation_dissipation_j.is_none())
+    );
+}
