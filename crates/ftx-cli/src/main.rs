@@ -835,6 +835,11 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     for f in &advisory {
         text.push_str(&format!("  advisory {f}\n"));
     }
+    text.push_str(match report["numerical"]["settled"].as_bool() {
+        Some(true) => "numerical: Newton converged; instantaneous-speed quiet window passed\n",
+        Some(false) => "numerical: Newton converged; instantaneous-speed quiet window failed\n",
+        None => "numerical: Newton converged; gravity settling not evaluated\n",
+    });
     text.push_str(if opts.self_contact.is_some() {
         "self-contact: enabled; solver-state audits passed\n"
     } else {
@@ -851,6 +856,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "gating": gating,
         "advisory": advisory,
         "settled": report["settled"],
+        "numerical": report["numerical"],
         "self_contact": report["self_contact"],
         "files": ["sim_report.json", "fold.pc2", "mesh_map.json", "fold_viewer.html",
                   "garment.obj", "garment_strain.obj", "body.obj"],
