@@ -14,6 +14,7 @@ use crate::{Ctx, ExportOptions, edge_sa};
 
 pub mod assembly;
 pub mod ordering;
+pub mod pressure;
 pub mod preview;
 pub mod program;
 use assembly::{AssemblyReceipt, FlatAssembly};
@@ -41,6 +42,9 @@ pub struct SewingMachine {
     /// Explicit reverse-feed envelope; omission refuses every reverse movement, including locks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reverse: Option<ReverseFeed>,
+    /// Separate loaded-stack and prescribed-pressure envelope; never replaces unloaded clearance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presser_foot: Option<pressure::FootLimits>,
 }
 
 /// One declared pass over an existing seam. Every seam needs at least one pass.
@@ -77,6 +81,9 @@ pub struct SewingPass {
     /// Optional paired offset stitch lines. Omission preserves the original seam station table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stitch_path: Option<OffsetPath>,
+    /// Optional measured compression evaluation of every ply at the same prescribed foot pressure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presser_foot: Option<pressure::Request>,
     /// Operation IDs which must finish first. Omission adds no physical-accessibility claim.
     #[serde(default)]
     pub after: Vec<String>,
@@ -132,6 +139,9 @@ pub struct SewingQualification {
     /// Whether reverse travel, including backtacks, was included in this qualification.
     #[serde(default)]
     pub allow_reverse: bool,
+    /// A pressure-bearing operation needs a pressure-bearing qualification; omission is not consent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presser_foot: Option<pressure::Qualification>,
     /// Evidence class of this qualification record.
     pub evidence: Evidence,
     /// Exact external source or retained local measurement identity.
@@ -180,6 +190,9 @@ pub struct PlannedSeam {
     pub feed_b_over_a: Vec<f64>,
     /// Declared or geometrically derived uncompressed stack thickness (mm).
     pub stack_mm: f64,
+    /// Loaded ply stack and source receipts, separate from the original stack/assembly geometry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presser_foot: Option<pressure::Receipt>,
     /// Ordered directed runs indexing `stations`; present for version-2 jobs, including lock travel.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<StitchRun>,
@@ -195,7 +208,8 @@ pub struct PlannedSeam {
 /// Deterministic, source-locked manufacturing review plan. Never hardware execution permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
-    /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering.
+    /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering,
+    /// `/7` prescribed-pressure stacks. Composed capabilities are retained, not mutually exclusive.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
     pub pattern_sha256: String,
@@ -250,6 +264,9 @@ fn within(x: f64, limits: [f64; 2]) -> bool {
 
 impl SewingQualification {
     fn validate(&self) -> Result<(), Refusal> {
+        if let Some(foot) = &self.presser_foot {
+            foot.validate()?;
+        }
         if !qualified_text(&self.id)
             || self.materials.is_empty()
             || self.materials.len() > 128
@@ -301,6 +318,7 @@ impl SewingQualification {
         advances: &[[f64; 2]],
         feeds: &[f64],
         has_reverse: bool,
+        foot: Option<&pressure::Receipt>,
     ) -> bool {
         within(stack_mm, self.stack_mm)
             && within(pass.stitches_per_minute, self.stitches_per_minute)
@@ -310,6 +328,11 @@ impl SewingQualification {
                 .flatten()
                 .all(|&advance| within(advance, self.stitch_mm))
             && feeds.iter().all(|&feed| within(feed, self.feed_b_over_a))
+            && match (&self.presser_foot, foot) {
+                (None, None) => true,
+                (Some(envelope), Some(receipt)) => envelope.admits(receipt),
+                _ => false,
+            }
     }
 }
 
@@ -356,6 +379,9 @@ impl SewPlan {
         }
         if let Some(reverse) = &machine.reverse {
             reverse.validate()?;
+        }
+        if let Some(foot) = &machine.presser_foot {
+            foot.validate()?;
         }
         if options.qualifications.len() > MAX_OPERATIONS {
             return Err(Refusal::new(
@@ -424,6 +450,9 @@ impl SewPlan {
             if let Some(path) = &pass.stitch_path {
                 path.validate()?;
             }
+            if let Some(foot) = &pass.presser_foot {
+                foot.validate(machine.presser_foot.as_ref())?;
+            }
         }
         let mut source_seams = BTreeMap::new();
         for seam in pattern.seams() {
@@ -458,7 +487,15 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if options.ordering.is_some() {
+            schema: if machine.presser_foot.is_some()
+                || options.passes.iter().any(|p| p.presser_foot.is_some())
+                || options
+                    .qualifications
+                    .iter()
+                    .any(|q| q.presser_foot.is_some())
+            {
+                "ftx-sewing-plan/7"
+            } else if options.ordering.is_some() {
                 "ftx-sewing-plan/6"
             } else if !options.qualifications.is_empty() || options.require_qualification {
                 "ftx-sewing-plan/5"
@@ -487,6 +524,7 @@ impl SewPlan {
         let mut budget = 0usize;
         let mut geometry_work = 0usize;
         let mut assembly_slots = 0usize;
+        let mut pressure_work = pressure::Budget::default();
         while !remaining.is_empty() {
             let id = remaining
                 .iter()
@@ -628,6 +666,18 @@ impl SewPlan {
                 ))
                 .collect()
             };
+            let presser_foot = pass
+                .presser_foot
+                .as_ref()
+                .map(|request| {
+                    request.evaluate(
+                        machine.presser_foot.as_ref(),
+                        &stack_materials,
+                        &out.materials,
+                        &mut pressure_work,
+                    )
+                })
+                .transpose()?;
             let identity: Vec<_> = options
                 .qualifications
                 .iter()
@@ -636,7 +686,16 @@ impl SewPlan {
             let qualified: Vec<_> = identity
                 .iter()
                 .copied()
-                .filter(|q| q.envelope_matches(pass, stack, &advances, &feeds, has_reverse))
+                .filter(|q| {
+                    q.envelope_matches(
+                        pass,
+                        stack,
+                        &advances,
+                        &feeds,
+                        has_reverse,
+                        presser_foot.as_ref(),
+                    )
+                })
                 .collect();
             let qualification_id = match qualified.as_slice() {
                 [q] => Some(q.id.clone()),
@@ -670,6 +729,7 @@ impl SewPlan {
                 assembly,
                 feed_b_over_a: feeds,
                 stack_mm: stack,
+                presser_foot,
                 runs: if out.schema != "ftx-sewing-plan/1" {
                     runs
                 } else {

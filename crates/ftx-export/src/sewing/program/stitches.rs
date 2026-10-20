@@ -62,18 +62,11 @@ impl SewProgram {
             ));
         }
         // Legacy jobs get an explicit forward run here, but `SewPlan::build` keeps their v1 output.
-        let ordered = plan.ordering.is_some();
-        let offset = if ordered {
-            plan.seams.iter().any(|seam| seam.path.is_some())
-        } else {
-            plan.schema == "ftx-sewing-plan/3"
-        };
-        let assembly = if ordered {
-            plan.seams.iter().any(|seam| seam.assembly.is_some())
-        } else {
-            plan.schema == "ftx-sewing-plan/4"
-        };
-        if !ordered && !offset && !assembly {
+        // Geometry is a capability, not an exclusive version number. Qualification/ordering/foot
+        // pressure may coexist with offsets and folded stacks; never erase their plan schema.
+        let offset = plan.seams.iter().any(|seam| seam.path.is_some());
+        let assembly = plan.seams.iter().any(|seam| seam.assembly.is_some());
+        if plan.schema == "ftx-sewing-plan/1" {
             plan.schema = "ftx-sewing-plan/2";
         }
         let mut stitches = Vec::with_capacity(plan.stitch_intervals);
