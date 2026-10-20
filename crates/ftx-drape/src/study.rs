@@ -54,9 +54,15 @@ pub struct Scenario {
     pub fit_spec: Value,
     /// Conservative mesh-point/lattice bound per alternative, in 3..32768.
     pub max_mesh_points: usize,
-    /// Aggregate point × recorded-frame budget, in 1..64000000. Charged before each run, including
-    /// refused attempts. This is an allocation/work bound, not a wall-clock performance promise.
+    /// Aggregate point × recorded-frame budget, in 1..64000000, applied independently to static
+    /// draping and motion. Admitted attempts stay charged after refusal; no wall-time promise.
     pub max_vertex_frames: usize,
+    /// Reserved motion trials across alternatives, in 1..32768; defaults to 4096.
+    #[serde(
+        default = "default_motion_trials",
+        skip_serializing_if = "is_default_motion_trials"
+    )]
+    pub max_motion_trials: usize,
     /// Independent sheet-column heat exchange. Missing storage does not block steady transport.
     #[serde(default)]
     pub surface: Option<SurfaceConditions>,
@@ -66,6 +72,13 @@ pub struct Scenario {
     /// Optional source-model motion, continuing the same sewn cloth and material history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<motion::Request>,
+}
+
+fn default_motion_trials() -> usize {
+    4096
+}
+fn is_default_motion_trials(value: &usize) -> bool {
+    *value == default_motion_trials()
 }
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -105,6 +118,7 @@ impl Scenario {
         }
         if !(3..=32_768).contains(&self.max_mesh_points)
             || !(1..=64_000_000).contains(&self.max_vertex_frames)
+            || !(1..=32_768).contains(&self.max_motion_trials)
             || self
                 .options
                 .sew_steps
@@ -126,6 +140,9 @@ pub struct Session<'a, 'body> {
     body_sha256: String,
     scenario_sha256: String,
     charged_vertex_frames: usize,
+    charged_motion_frames: usize,
+    charged_motion_trials: usize,
+    charged_motion_vertices: usize,
     motion_path: Option<Result<motion::Path, Refusal>>,
     heat_budget: heat::Budget,
 }
@@ -156,6 +173,9 @@ impl<'a, 'body> Session<'a, 'body> {
             body_sha256,
             scenario_sha256,
             charged_vertex_frames: 0,
+            charged_motion_frames: 0,
+            charged_motion_trials: 0,
+            charged_motion_vertices: 0,
             motion_path: None,
             heat_budget: heat::Budget::default(),
         })
@@ -233,16 +253,6 @@ impl<'a, 'body> Session<'a, 'body> {
             + 4;
         let charge = points
             .checked_mul(frames)
-            // Reserve endpoint heat receipts as well as all accepted body/cloth samples. This
-            // conservative allowance is charged even if a later attempted motion refuses.
-            .and_then(|n| {
-                n.checked_add(
-                    self.scenario
-                        .motion
-                        .as_ref()
-                        .map_or(0, |m| 8 * m.max_sample_vertices),
-                )
-            })
             .ok_or_else(|| budget("scenario work overflow"))?;
         self.charged_vertex_frames = self.charged_vertex_frames.saturating_add(charge);
         if self.charged_vertex_frames > self.scenario.max_vertex_frames {
@@ -250,6 +260,37 @@ impl<'a, 'body> Session<'a, 'body> {
                 "aggregate scenario vertex-frame budget exhausted; no drape started",
             ));
         }
+        // Motion cannot spend the allowance needed by a later alternative's independent static
+        // drape. Reserve its samples, endpoint geometry and trials separately before continuation.
+        let motion_admission = self.scenario.motion.as_ref().map(|request| {
+            let count = self.body.collision.0.len().saturating_add(points);
+            if count > request.max_sample_vertices {
+                return Err(budget("motion cannot retain its initial body and cloth sample"));
+            }
+            let samples = count.saturating_mul(request.max_trials + 1)
+                .min(request.max_sample_vertices);
+            let endpoint_copies = if self.scenario.surface.is_some() || self.scenario.coverage.is_some() {
+                7 * request.keyframes.len()
+            } else {
+                0
+            };
+            // Endpoint heat receipts duplicate geometry; final velocities retain one more array.
+            let retained = samples.saturating_add(count.saturating_mul(endpoint_copies + 1));
+            let work = samples.saturating_mul(8).max(retained);
+            let total_work = self.charged_motion_frames.saturating_add(work);
+            let total_trials = self.charged_motion_trials.saturating_add(request.max_trials);
+            let total_retained = self.charged_motion_vertices.saturating_add(retained);
+            if total_work > self.scenario.max_vertex_frames
+                || total_trials > self.scenario.max_motion_trials
+                || total_retained > motion::MAX_RETAINED_VERTICES
+            {
+                return Err(budget("aggregate motion trial, work or retained-geometry budget exhausted; no motion started"));
+            }
+            self.charged_motion_frames = total_work;
+            self.charged_motion_trials = total_trials;
+            self.charged_motion_vertices = total_retained;
+            Ok((work, retained))
+        });
         let mut run = drape(
             pattern,
             &self.scenario.fit_spec,
@@ -291,21 +332,28 @@ impl<'a, 'body> Session<'a, 'body> {
             "comfort_claim":false,"hardware_execution_authorized":false,
             "note":"Heat is evaluated on this final computed frame even when drape flags require review. No scalar ranking or empirical fit/whole-wearer claim is made."});
         if let Some(request) = &self.scenario.motion {
-            result["motion"] = outcome(match &self.motion_path {
-                Some(Ok(path)) => motion::evaluate(
-                    request,
-                    path,
-                    self.scenario,
-                    self.body,
-                    &mut run,
-                    &mut self.heat_budget,
-                    progress,
-                ),
-                Some(Err(refusal)) => Err(refusal.clone()),
-                None => Err(invalid(
-                    "motion needs prepared endpoint meshes from the same body shape",
-                )),
-            });
+            result["motion"] = outcome((|| {
+                let (work, retained) = motion_admission.expect("requested motion has admission")?;
+                let mut moved = match &self.motion_path {
+                    Some(Ok(path)) => motion::evaluate(
+                        request,
+                        path,
+                        self.scenario,
+                        self.body,
+                        &mut run,
+                        &mut self.heat_budget,
+                        progress,
+                    ),
+                    Some(Err(refusal)) => Err(refusal.clone()),
+                    None => Err(invalid(
+                        "motion needs prepared endpoint meshes from the same body shape",
+                    )),
+                }?;
+                moved["reserved_vertex_frames"] = json!(work);
+                moved["reserved_retained_vertices"] = json!(retained);
+                moved["reserved_trials"] = json!(request.max_trials);
+                Ok(moved)
+            })());
         }
         Ok(result)
     }

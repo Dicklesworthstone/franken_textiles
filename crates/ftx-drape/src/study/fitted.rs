@@ -258,9 +258,11 @@ impl FittedBody {
                 &posed.vertices,
                 &["wrist.R", "wrist.L", "foot.R", "foot.L"],
             )?;
-            if skin.triangles != self.collision.triangles {
+            if skin.triangles != self.collision.triangles
+                || skin.source_vertex != self.collision.source_vertex
+            {
                 return Err(invalid(
-                    "motion endpoints must preserve the selected collision topology",
+                    "motion endpoints must preserve the selected collision source mapping and topology",
                 ));
             }
             endpoints.push(skin.vertices);

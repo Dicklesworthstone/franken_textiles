@@ -10,6 +10,12 @@ use crate::{
     start::{edge_strain, face_edges},
 };
 
+pub(super) const MAX_RETAINED_VERTICES: usize = 2_000_000;
+
+fn default_sample_vertices() -> usize {
+    500_000
+}
+
 /// A source-model endpoint. Between endpoints the checked solver follows linear vertex chords,
 /// not an inferred anatomical joint trajectory. Use short pose increments to approximate a turn.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -36,6 +42,8 @@ pub struct Request {
     /// Maximum candidate pairs in each continuous-collision query, 1..=1000000.
     pub max_pairs: usize,
     /// Total retained body plus cloth vertex samples, including the initial state, 1..=2000000.
+    /// Defaults to 500000; endpoint receipts also consume the session's geometry allowance.
+    #[serde(default = "default_sample_vertices")]
     pub max_sample_vertices: usize,
     /// Optional independent-sheet transient temperatures on every accepted mechanical sample.
     /// Its explicit initial temperature applies at motion time zero, not during initial draping.
@@ -163,9 +171,26 @@ impl Path {
     }
 }
 
-// This mutates only a private run after its static result was retained. On ANY late failure the
-// composing consumer returns a refusal, never a partial trajectory or a changed static result.
+// Extend the kernel's per-segment transaction across the entire authored path, including velocity,
+// contact caches and material memories. Reserved thermal work stays charged after a refusal.
 pub(super) fn evaluate(
+    request: &Request,
+    path: &Path,
+    scenario: &Scenario,
+    body: &DrapeBody<'_>,
+    run: &mut DrapeRun,
+    heat_budget: &mut heat::Budget,
+    progress: impl FnMut(&str),
+) -> Result<Value, Refusal> {
+    let initial = run.scene.solver.clone();
+    let result = evaluate_path(request, path, scenario, body, run, heat_budget, progress);
+    if result.is_err() {
+        run.scene.solver = initial;
+    }
+    result
+}
+
+fn evaluate_path(
     request: &Request,
     path: &Path,
     scenario: &Scenario,
@@ -199,6 +224,11 @@ pub(super) fn evaluate(
         .ok_or_else(|| budget("motion sample budget cannot retain initial and final body/cloth"))?;
     let mut remaining_trials = request.max_trials;
     let initial_positions_sha256 = hash(&run.scene.solver.x)?;
+    let initial_sample = json!({"time_s":0.0,"positions_m":run.scene.solver.x,
+        "body_positions_m":body.collision.0});
+    let initial_membrane_history = run.scene.solver.relaxation_report()?;
+    let initial_bending_history = run.scene.solver.bending_plasticity_report()?;
+    let initial_permanent_history = run.scene.solver.membrane_plasticity_report()?;
     // The thermal state is private to this material run. Its failure never aborts mechanics;
     // conversely a mechanical failure publishes neither a partial path nor its partial heat.
     let mut surface_heat = request
@@ -237,6 +267,7 @@ pub(super) fn evaluate(
     let mut endpoints = Vec::new();
     let mut pairs_tested = 0u64;
     let mut previous_time = 0.0;
+    let mut accepted_time = 0.0;
     for (i, frame) in request.keyframes.iter().enumerate() {
         if remaining_trials == 0 || remaining_vertices < count {
             return Err(budget(
@@ -264,28 +295,29 @@ pub(super) fn evaluate(
         pairs_tested += report.pairs_tested;
         for sample in report.samples {
             peak_strain = peak_strain.max(strain(&sample.cloth)?);
+            let time = if sample.time_s == frame.time_s - previous_time {
+                frame.time_s
+            } else {
+                previous_time + sample.time_s
+            };
+            if !time.is_finite() || time <= accepted_time {
+                return Err(invalid(
+                    "motion timestamps lose physical ordering; no partial motion published",
+                ));
+            }
+            accepted_time = time;
             if let Some(Ok(history)) = &mut surface_heat
-                && let Err(refusal) = history.advance(
-                    &sample.cloth,
-                    previous_time + sample.time_s,
-                    i,
-                    samples.len(),
-                )
+                && let Err(refusal) = history.advance(&sample.cloth, time, i, samples.len())
             {
                 surface_heat = Some(Err(refusal));
             }
             if let Some(Ok(history)) = &mut coverage_heat
-                && let Err(refusal) = history.advance(
-                    &sample.cloth,
-                    &sample.body,
-                    previous_time + sample.time_s,
-                    i,
-                    samples.len(),
-                )
+                && let Err(refusal) =
+                    history.advance(&sample.cloth, &sample.body, time, i, samples.len())
             {
                 coverage_heat = Some(Err(refusal));
             }
-            samples.push(json!({"time_s":previous_time + sample.time_s,
+            samples.push(json!({"time_s":time,
                 "positions_m":sample.cloth,"body_positions_m":sample.body,
                 "solve":{"converged":sample.solve.converged,"iterations":sample.solve.iterations,
                     "residual_n":sample.solve.residual,"last_step_m":sample.solve.last_step,
@@ -316,6 +348,11 @@ pub(super) fn evaluate(
     }
     let mut result = json!({"schema":"ftx-drape-motion-result/1","path_sha256":path.sha256,
         "initial_positions_sha256":initial_positions_sha256,"initial_body_collision_sha256":path.initial_sha256,
+        "initial_sample":initial_sample,
+        "initial_membrane_history":initial_membrane_history,"initial_bending_history":initial_bending_history,
+        "final_positions_sha256":hash(&run.scene.solver.x)?,
+        "final_body_collision_sha256":hash(&(&run.scene.solver.contact.as_ref()
+            .expect("motion retains collider").body.vertices,body.collision.1))?,
         "initial_drape_settled":run.report["settled"],"initial_drape_gating":run.report["gating"],
         "duration_s":previous_time,"trials":request.max_trials-remaining_trials,"pairs_tested":pairs_tested,
         "retained_vertex_samples":request.max_sample_vertices-remaining_vertices,
@@ -325,8 +362,12 @@ pub(super) fn evaluate(
         "membrane_history":run.scene.solver.relaxation_report()?,
         "bending_history":run.scene.solver.bending_plasticity_report()?,
         "continuous_contact_checked":true,"physical_validation_claim":false,"comfort_claim":false,
+        "fit_claim":false,"settledness_claim":false,
         "thermal_basis":"Independent steady endpoint snapshots, not transient temperatures or heat during motion.",
         "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."});
+    if let Some(history) = initial_permanent_history {
+        result["initial_membrane_plasticity_history"] = history;
+    }
     if let Some(history) = run.scene.solver.membrane_plasticity_report()? {
         result["membrane_plasticity_history"] = history;
     }
@@ -347,4 +388,125 @@ pub(super) fn evaluate(
         );
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{PartFrame, scene::PartFrames};
+
+    struct Form;
+    impl PartFrames for Form {
+        fn frame(&self, _: &str) -> Option<PartFrame> {
+            Some(PartFrame {
+                origin: Vec3::ZERO,
+                up: Vec3::new(0., 0., 1.),
+                front: Vec3::new(0., -1., 0.),
+                lat: Vec3::new(1., 0., 0.),
+            })
+        }
+        fn landmark_h(&self, _: &str, _: &str) -> Option<f64> {
+            Some(20.)
+        }
+        fn section_radius(&self, _: &str, _: f64) -> f64 {
+            30.
+        }
+    }
+
+    #[test]
+    fn late_path_failure_restores_the_whole_solver_and_replays_the_same_first_step() {
+        let pattern = ftx_pattern::Pattern::from_json(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+        ))
+        .unwrap();
+        let scenario: Scenario = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-scenario.json"
+        ))
+        .unwrap();
+        let mut vertices = Vec::new();
+        for z in [-0.02, 0.12] {
+            for i in 0..16 {
+                let (s, c) = ftx_core::det::sin_cos(i as f64 * std::f64::consts::TAU / 16.);
+                vertices.push(Vec3::new(0.03 * c, 0.03 * s, z));
+            }
+        }
+        let triangles: Vec<_> = (0..16)
+            .flat_map(|i| {
+                let j = (i + 1) % 16;
+                [[i, j, j + 16], [i, j + 16, i + 16]]
+            })
+            .collect();
+        let body = DrapeBody {
+            frames: &Form,
+            collision: (&vertices, &triangles),
+            display: (&vertices, &triangles),
+            arm_deg: 35.,
+        };
+        let mut run = crate::run::drape(
+            &pattern,
+            &scenario.fit_spec,
+            &body,
+            &scenario.options,
+            |_| {},
+        )
+        .unwrap();
+        let original = run.scene.solver.clone();
+        let count = vertices.len() + original.x.len();
+        let request: Request = serde_json::from_value(json!({"schema":"ftx-drape-motion/1",
+            "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.0},
+                {"time_s":0.004,"arm_abduction_deg":36.0}],
+            "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":3 * count}))
+        .unwrap();
+        let endpoints: Vec<Vec<_>> = [0.0001, 0.0002]
+            .into_iter()
+            .map(|z| vertices.iter().map(|p| *p + Vec3::new(0., 0., z)).collect())
+            .collect();
+        let path = Path::new(&request, body.collision, endpoints).unwrap();
+        let options = MotionOptions {
+            max_step_s: 0.001,
+            max_trials: 16,
+            max_pairs: 100000,
+            max_sample_vertices: 2 * count,
+        };
+        let mut expected = original.clone();
+        let first = advance_body(&mut expected, &path.vertices[0], 0.002, options).unwrap();
+        assert_eq!(first.samples.len(), 2);
+        assert_ne!(expected.x, original.x);
+        let refusal = evaluate(
+            &request,
+            &path,
+            &scenario,
+            &body,
+            &mut run,
+            &mut heat::Budget::default(),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(
+            refusal
+                .message
+                .contains("whole-trajectory motion budget exhausted")
+        );
+        assert_eq!(run.scene.solver.x, original.x);
+        assert_eq!(run.scene.solver.v, original.v);
+        assert_eq!(
+            run.scene.solver.contact.as_ref().unwrap().body.vertices,
+            original.contact.as_ref().unwrap().body.vertices
+        );
+        assert_eq!(
+            run.scene.solver.relaxation_report().unwrap(),
+            original.relaxation_report().unwrap()
+        );
+        assert_eq!(
+            run.scene.solver.bending_plasticity_report().unwrap(),
+            original.bending_plasticity_report().unwrap()
+        );
+        assert_eq!(
+            run.scene.solver.membrane_plasticity_report().unwrap(),
+            original.membrane_plasticity_report().unwrap()
+        );
+        let replay =
+            advance_body(&mut run.scene.solver, &path.vertices[0], 0.002, options).unwrap();
+        assert_eq!(format!("{replay:?}"), format!("{first:?}"));
+    }
 }

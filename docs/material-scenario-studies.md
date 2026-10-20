@@ -135,7 +135,12 @@ The optional per-simulation `motion` outcome is **all-or-refused**. Even a late 
 no partial trajectory; the complete initial static drape/heat and independent manufacturing remain
 unchanged. A successful `ftx-drape-motion-result/1` retains every accepted adaptive sample, physical
 time, cloth/body positions, topology, solve diagnostics, endpoint identities, final velocities and
-material-history reports. Its initial-position identity links back to the retained static result.
+material-history reports. A separate `initial_sample` retains the actual body and cloth at time zero;
+`samples` remains the accepted continuation sequence, so `keyframes[].sample_index` is unchanged.
+Initial material histories and final cloth/body identities permit direct continuation checks.
+Its initial-position identity links back to the retained static result. A late mechanical failure
+restores the complete solver, including velocities, contact caches and material memories; admitted
+work stays charged even when the path refuses.
 Peak absolute panel-edge strain includes the initial state and all accepted samples, using each
 original flat panel chart across welded seams. It is not principal strain, a rupture criterion or fit.
 Use the accepted sample sequence rather than inventing a long interpolation over omitted substeps.
@@ -155,9 +160,16 @@ Admission permits 1..16 endpoints through 60 seconds, 0..180-degree angles, maxi
 1e-9..1 seconds, 1..512 attempted substeps for the **entire** trajectory, up to one million pairs
 per continuous-collision query and up to two million retained body/cloth vertex samples. Initial
 positions count against that sample budget. Endpoint body meshes have an additional two-million-
-vertex allocation cap. Each attempted material run reserves eight times `max_sample_vertices`
-against the shared scenario vertex-frame budget for motion samples and endpoint thermal receipts,
-on top of static work. Limits refuse instead of truncating an alternative's trajectory.
+vertex allocation cap. Omitted `max_sample_vertices` defaults to 500,000. The scenario's optional
+`max_motion_trials` caps reserved trials across alternatives (default 4,096; range 1..32,768).
+Static draping and motion have separate aggregate working-frame counters, each bounded by
+`max_vertex_frames`: an earlier trajectory cannot spend a later alternative's static allowance.
+Motion admission also reserves at most 2,000,000 retained vertex equivalents across the session,
+conservatively accounting for samples, endpoint heat receipt geometry and final velocities. The
+reservation uses conservative mesh counts and the requested trial/sample limits; a smaller actual
+output does not retroactively release it. Admitted attempts remain charged after a refusal.
+The existing transient thermal work limits remain independent. Limits produce an independent
+motion refusal instead of truncating a trajectory or erasing available static/manufacturing results.
 
 Library callers with explicit meshes can construct `study::motion::Path` and attach it once with
 `Session::set_motion_path` before evaluation. `FittedBody::motion_path` generates source-model

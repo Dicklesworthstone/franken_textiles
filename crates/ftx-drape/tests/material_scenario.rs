@@ -322,6 +322,23 @@ fn motion_continues_the_same_sewn_solver_and_recomputes_endpoint_heat() {
     let mut direct = drape(&p, &s.fit_spec, &body, &s.options, |_| {}).unwrap();
     assert_eq!(result["drape"], direct.report); // static report is still the INITIAL drape
     assert_eq!(result["positions_m"], json!(direct.scene.solver.x));
+    assert_eq!(motion["initial_sample"]["time_s"], 0.0);
+    assert_eq!(
+        motion["initial_sample"]["positions_m"],
+        result["positions_m"]
+    );
+    assert_eq!(
+        motion["initial_sample"]["body_positions_m"],
+        json!(form.vertices)
+    );
+    assert_eq!(
+        motion["initial_membrane_history"],
+        json!(direct.scene.solver.relaxation_report().unwrap())
+    );
+    assert_eq!(
+        motion["initial_bending_history"],
+        json!(direct.scene.solver.bending_plasticity_report().unwrap())
+    );
     let original = direct.scene.solver.x.clone();
     let mut samples = Vec::new();
     let edges = face_edges(&direct.scene.mesh.faces);
@@ -394,6 +411,18 @@ fn motion_continues_the_same_sewn_solver_and_recomputes_endpoint_heat() {
     }
     assert_eq!(motion["final_velocities_m_s"], json!(direct.scene.solver.v));
     assert_eq!(
+        motion["final_positions_sha256"],
+        motion["keyframes"][1]["positions_sha256"]
+    );
+    assert_eq!(
+        motion["final_body_collision_sha256"],
+        motion["keyframes"][1]["body_collision_sha256"]
+    );
+    assert_eq!(
+        motion["retained_vertex_samples"],
+        json!((samples.len() + 1) * (form.vertices.len() + direct.scene.solver.x.len()))
+    );
+    assert_eq!(
         motion["metrics"]["max_absolute_edge_strain_pct"],
         json!(peak)
     );
@@ -406,6 +435,67 @@ fn motion_continues_the_same_sewn_solver_and_recomputes_endpoint_heat() {
         session.descriptor()["motion_path"]["sha256"]
     );
     assert_eq!(result, session.evaluate(&p, |_| {}).unwrap());
+}
+
+#[test]
+fn motion_limits_do_not_preempt_later_independent_static_drapes() {
+    let form = form();
+    let body = body(&form);
+    let p = pattern();
+    let mut s = motion_scenario();
+    let mut reference = Session::new(&s, &body).unwrap();
+    reference.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let expected = reference.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(expected["motion"]["status"], "available");
+    let work = expected["motion"]["result"]["reserved_vertex_frames"]
+        .as_u64()
+        .unwrap() as usize;
+    let static_work = expected["charged_vertex_frames"].as_u64().unwrap() as usize;
+    s.max_vertex_frames = work.max(3 * static_work);
+    s.max_motion_trials = s.motion.as_ref().unwrap().max_trials;
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path(&s, &body))).unwrap();
+    for i in 0..3 {
+        let actual = session.evaluate(&p, |_| {}).unwrap();
+        for field in [
+            "drape",
+            "surface",
+            "coverage",
+            "positions_m",
+            "triangles",
+            "metrics",
+            "charged_vertex_frames",
+        ] {
+            assert_eq!(actual[field], expected[field], "alternative {i}, {field}");
+        }
+        assert_eq!(
+            actual["motion"]["status"],
+            if i == 0 { "available" } else { "refused" }
+        );
+        if i > 0 {
+            assert!(actual["motion"]["result"].is_null());
+        }
+    }
+    // Omitted/default trial limits preserve canonical identities for pre-existing requests.
+    let original = motion_scenario();
+    let mut explicit = serde_json::to_value(&original).unwrap();
+    assert!(explicit.get("max_motion_trials").is_none());
+    explicit["max_motion_trials"] = json!(4096);
+    let explicit: Scenario = serde_json::from_value(explicit).unwrap();
+    assert_eq!(
+        Session::new(&original, &body).unwrap().descriptor(),
+        Session::new(&explicit, &body).unwrap().descriptor()
+    );
+    let mut invalid = original.clone();
+    invalid.max_motion_trials = 0;
+    assert!(invalid.validate().is_err());
+    let mut default_sample = serde_json::to_value(&original).unwrap();
+    default_sample["motion"]
+        .as_object_mut()
+        .unwrap()
+        .remove("max_sample_vertices");
+    let default_sample: Scenario = serde_json::from_value(default_sample).unwrap();
+    assert_eq!(default_sample.motion.unwrap().max_sample_vertices, 500_000);
 }
 
 #[test]

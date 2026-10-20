@@ -1161,6 +1161,20 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
         b.result.transient_coverage.result.checkpoint.exposed_temperature_c);
       assert.equal((await w.send(msg)).files[0].text, result.files[0].text);
       assert.ok(w.sent.some(m => m.type === 'progress' && m.request === 93 && m.text.includes('motion endpoint')));
+      // Exhaust only the aggregate motion allowance; every independent static result survives.
+      const limited = JSON.parse(msg.scenarioRequest); limited.max_motion_trials = 1;
+      const exhausted = await w.send({ ...msg, request: 94, scenarioRequest: JSON.stringify(limited) });
+      assert.equal(exhausted.type, 'result', exhausted.message); assert.equal(exhausted.request, 94);
+      assert.deepEqual(exhausted.result.manufacturing, result.result.manufacturing);
+      assert.equal(exhausted.result.simulations.length, result.result.simulations.length);
+      exhausted.result.simulations.forEach((row, i) => {
+        assert.equal(row.evaluation.status, 'available');
+        const actual = row.evaluation.result, original = result.result.simulations[i].evaluation.result;
+        assert.equal(actual.motion.status, 'refused'); assert.equal(actual.motion.result, undefined);
+        for (const key of ['drape', 'surface', 'coverage', 'positions_m', 'positions_sha256', 'metrics']) {
+          assert.deepEqual(actual[key], original[key], `Motion allowance changed independent ${key}`);
+        }
+      });
     }
   });
 

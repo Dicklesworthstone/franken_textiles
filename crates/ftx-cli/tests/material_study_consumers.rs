@@ -1,0 +1,128 @@
+//! Both native study commands reach independent real roll and finite-inventory consumers.
+use ftx_export::{
+    cutting::{CutPlan, stock},
+    material_study::Request,
+};
+use ftx_pattern::Pattern;
+use serde_json::{Value, json};
+use std::{fs, path::Path, process::Command};
+
+const PATTERN: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-stock-pattern.json");
+const STOCK: &str = include_str!("../../../tests/fixtures/materials/synthetic-stock-request.json");
+
+fn request() -> Value {
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let hide = pattern["fabric"]["material"].clone();
+    let mut roll = hide.clone();
+    roll["record"]["form"] = json!("woven");
+    roll["record"]["properties"]["width"] = json!({"value":0.1,"unit":"m",
+        "evidence":"estimate","source":"test","method":"Synthetic roll width"});
+    json!({"schema":"ftx-material-study/1","variants":[
+        {"key":"hide","changes":{"schema":"ftx-material-bindings/1","default":hide}},
+        {"key":"roll","changes":{"schema":"ftx-material-bindings/1","default":roll}}],
+        "finite_stock":serde_json::from_str::<Value>(STOCK).unwrap(),
+        "cutting":{"copies":1,"gap_mm":2.0,"edge_margin_mm":2.0,"end_margin_mm":2.0},
+        "comparison":{"basis":"nominal","required_consumers":["finite_stock"],
+            "objectives":[{"metric":"used_stock_mass_kg","direction":"minimize"}]}})
+}
+
+fn run(main: bool, dir: &Path) -> Value {
+    let mut command = Command::new(if main {
+        env!("CARGO_BIN_EXE_ftx")
+    } else {
+        env!("CARGO_BIN_EXE_ftx-materials")
+    });
+    command.current_dir(dir);
+    if main {
+        command.args(["--json", "materials"]);
+    }
+    let out = command
+        .args(["study", "pattern.json", "study.json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    report.get("result").unwrap_or(&report).clone()
+}
+
+#[test]
+fn both_study_binaries_compare_real_stock_without_losing_independent_roll_results() {
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-stock-study-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), PATTERN).unwrap();
+    let input = request();
+    fs::write(dir.join("study.json"), input.to_string()).unwrap();
+    let typed: Request = serde_json::from_value(input.clone()).unwrap();
+    let expected = serde_json::to_value(
+        typed
+            .evaluate(&Pattern::from_json(PATTERN).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let hide = &expected["alternatives"][0];
+    let roll = &expected["alternatives"][1];
+    let hide_pattern =
+        Pattern::from_json(hide["binding"]["result"]["pattern_json"].as_str().unwrap()).unwrap();
+    let roll_pattern =
+        Pattern::from_json(roll["binding"]["result"]["pattern_json"].as_str().unwrap()).unwrap();
+    let inventory: stock::Request = serde_json::from_str(STOCK).unwrap();
+    assert_eq!(hide["finite_stock"]["status"], "available", "{hide}");
+    assert_eq!(
+        hide["finite_stock"]["result"],
+        serde_json::to_value(inventory.build(&hide_pattern).unwrap()).unwrap()
+    );
+    assert_eq!(hide["cutting"]["status"], "refused");
+    assert_eq!(roll["finite_stock"]["status"], "refused");
+    assert_eq!(roll["cutting"]["status"], "available", "{roll}");
+    assert_eq!(
+        roll["cutting"]["result"],
+        serde_json::to_value(
+            CutPlan::build(&roll_pattern, typed.cutting.as_ref().unwrap()).unwrap()
+        )
+        .unwrap()
+    );
+    assert_eq!(expected["comparison"]["frontier"], json!(["hide"]));
+    assert_eq!(expected["comparison"]["alternatives"][1]["eligible"], false);
+    assert_eq!(
+        hide["metrics"]["used_stock_mass_kg"],
+        hide["finite_stock"]["result"]["markers"][0]["stock_mass_kg"]
+    );
+    assert_eq!(expected["hardware_execution_authorized"], false);
+    for main in [false, true] {
+        assert_eq!(run(main, &dir), expected);
+    }
+    // Replay source locks while retaining the same physical inventory, without consuming it.
+    let mut replay = input;
+    replay["finite_stock"] = hide["finite_stock"]["result"]["request"].clone();
+    for (variant, row) in replay["variants"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(expected["alternatives"].as_array().unwrap())
+    {
+        variant["changes"] = row["frozen_changes"].clone();
+    }
+    fs::write(dir.join("study.json"), replay.to_string()).unwrap();
+    for main in [false, true] {
+        let actual = run(main, &dir);
+        assert_eq!(actual["alternatives"], expected["alternatives"]);
+        assert_eq!(actual["comparison"]["frontier"], json!(["hide"]));
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("pattern.json")).unwrap(),
+        PATTERN
+    );
+}
