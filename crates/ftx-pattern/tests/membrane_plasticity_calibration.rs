@@ -24,6 +24,100 @@ fn near(a: f64, b: f64, tolerance: f64) {
     );
 }
 
+fn fitted_equilibrium(input: &mut Input) {
+    // Synthetic source-qualified scalar domain, narrower than the independent plastic limits.
+    let bounds = "[[-0.1,0.1],[-0.1,0.1],[-0.1,0.1]]";
+    input
+        .conditions
+        .insert("fitted_green_strain_range".into(), bounds.into());
+    for key in [
+        "warp_stiffness",
+        "weft_stiffness",
+        "poisson_warp_weft",
+        "shear_stiffness",
+    ] {
+        input
+            .material
+            .properties
+            .get_mut(key)
+            .unwrap()
+            .conditions
+            .insert("fitted_green_strain_range".into(), bounds.into());
+    }
+}
+
+#[test]
+fn fixed_scalar_fit_bounds_reject_observed_and_unobserved_plastic_fit_nodes() {
+    let mut source = input();
+    fitted_equilibrium(&mut source);
+    let accepted = calibrate(&source).unwrap();
+    assert_eq!(accepted.status, Status::Accepted);
+    for key in [
+        "warp_stiffness",
+        "weft_stiffness",
+        "poisson_warp_weft",
+        "shear_stiffness",
+    ] {
+        assert_eq!(
+            serde_json::to_value(&accepted.material.as_ref().unwrap().properties[key]).unwrap(),
+            serde_json::to_value(&source.material.properties[key]).unwrap()
+        );
+    }
+    for index in [1, 4] {
+        let mut outside = source.clone();
+        outside.experiments[0].samples[index].green_strain[0] = 0.11;
+        if index == 4 {
+            assert_eq!(
+                outside.experiments[0].samples[index].second_piola_n_m,
+                [None; 3]
+            );
+        }
+        let refusal = calibrate(&outside).unwrap_err();
+        assert!(refusal.message.contains("warp-cycle"));
+        assert!(
+            refusal
+                .message
+                .contains("outside fitted equilibrium strain domain")
+        );
+    }
+}
+
+#[test]
+fn held_out_scalar_domain_refusal_keeps_the_same_plastic_fit_candidate() {
+    let mut source = input();
+    fitted_equilibrium(&mut source);
+    let original = calibrate(&source).unwrap();
+    let node = &mut source.experiments.last_mut().unwrap().samples[1];
+    node.green_strain[0] = 0.11;
+    node.second_piola_n_m = [None; 3];
+    let refused = calibrate(&source).unwrap();
+    assert_eq!(refused.status, Status::Rejected);
+    assert!(refused.material.is_none());
+    assert_eq!(refused.parameters, original.parameters);
+    assert_eq!(
+        serde_json::to_value(&refused.fit).unwrap(),
+        serde_json::to_value(&original.fit).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&refused.diagnostics.starts).unwrap(),
+        serde_json::to_value(&original.diagnostics.starts).unwrap()
+    );
+    assert_eq!(
+        refused.diagnostics.evaluations,
+        original.diagnostics.evaluations
+    );
+    assert_eq!(refused.check_status, "REFUSED");
+    let refusal = refused.check_refusal.unwrap();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::OutOfRange);
+    assert!(refusal.message.contains("held-out-combined"));
+    assert!(
+        refusal
+            .message
+            .contains("outside fitted equilibrium strain domain")
+    );
+    assert_eq!(refused.predictions.len(), 25);
+}
+
 #[test]
 fn identifies_signed_cycles_and_replays_missing_load_nodes_without_resetting_memory() {
     let source = input();

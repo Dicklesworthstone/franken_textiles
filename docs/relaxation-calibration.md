@@ -71,6 +71,12 @@ branches were relaxed at that initial pose. The input's top-level `initializatio
 garment initialization, not a reset of the acquisitions. Unknown prehistory is not fitted or inferred.
 The supplied `strain_range` and its `domain_source` qualify applicability. Every measured strain must
 lie inside it; a low residual does not extend the domain or prove its physical validity.
+Any preexisting scalar-fit `fitted_green_strain_range` and nonlinear equilibrium curve limits also
+apply at every recorded node, including unobserved-force ramp or unloading nodes. A wider Maxwell
+box cannot authorize equilibrium extrapolation. These checks are shared by proportional, fixed-time
+directional and automatically searched directional fits; supplied equilibrium quantities stay intact.
+During directional model comparison, CHECK constitutive states are evaluated after FIT selection,
+so a held-out domain refusal rejects the same candidate without changing the chosen model or its fit.
 
 ## Identification and independent checks
 

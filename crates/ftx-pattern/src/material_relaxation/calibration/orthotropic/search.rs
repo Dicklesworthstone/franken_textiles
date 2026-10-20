@@ -500,7 +500,7 @@ mod tests {
         let input: crate::material_relaxation::calibration::Input = serde_json::from_str(include_str!(
             "../../../../../../tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
         )).unwrap();
-        let (histories, _) = super::super::super::prepare(&input).unwrap();
+        let (histories, _) = super::super::super::prepare(&input, true).unwrap();
         let mut budget = Budget::new(MAX_EVALUATIONS, MAX_PSD_STEPS).unwrap();
         let p = [det::ln(0.4), det::ln(1.5), det::ln(10.)];
         let baseline = evaluate(&histories, p, 3, &mut budget).unwrap();

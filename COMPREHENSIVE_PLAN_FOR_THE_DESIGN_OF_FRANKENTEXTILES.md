@@ -1982,6 +1982,12 @@ replacement clears old domains; Maxwell and permanent-set histories refuse chang
 Held-out samples never widen the acquisition range. The independent synthetic tests demonstrate
 software propagation and refusal, not experimental accuracy throughout the box or measured garment fit.
 
+The same retained equilibrium box now constrains cyclic permanent-set and proportional/directional
+Maxwell identification at every recorded strain node, including nodes without a measured force.
+An invalid FIT history refuses before identification. A held-out CHECK-domain failure retains the
+same FIT candidate and diagnostics, publishes no material, and cannot change model selection or
+consume its FIT-only work allowance. Fixed and searched directional spectra use this same rule.
+
 The next concrete integration increments use the same authorities: qualify actual finite supplier
 capacity against complete rounded cut orders (`ftx-pq1`/`ftx-tm6`), and carry admitted plastic-work heat
 through changing covered/exposed cloth partitions (`ftx-ps1`/`ftx-tmb`) without counting source energy

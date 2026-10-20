@@ -222,6 +222,46 @@ fn unobserved_force_nodes_still_advance_the_loading_history() {
 }
 
 #[test]
+fn relaxation_preserves_scalar_fit_bounds_and_checks_every_history_node() {
+    let modes = [(1.2, 1.)];
+    let mut raw = input(&modes, true);
+    for key in [
+        "warp_stiffness",
+        "weft_stiffness",
+        "poisson_warp_weft",
+        "shear_stiffness",
+    ] {
+        raw.material
+            .properties
+            .get_mut(key)
+            .unwrap()
+            .conditions
+            .insert(
+                "fitted_green_strain_range".into(),
+                "[[-0.08,0.08],[-0.05,0.05],[-0.05,0.05]]".into(),
+            );
+    }
+    assert_modes(&raw, &modes); // Includes exact preservation of the supplied equilibrium quantities.
+    for history in 0..2 {
+        for observed in [true, false] {
+            let mut outside = raw.clone();
+            let node = &mut outside.experiments[history].samples[6];
+            node.deformation = [[1.2_f64.sqrt(), 0.], [0., 1.]]; // E11=0.1, inside only Maxwell's wider box.
+            if !observed {
+                node.nominal_n_m = [[None; 2]; 2];
+            }
+            let refusal = calibrate(&outside).unwrap_err();
+            assert!(refusal.message.contains(&outside.experiments[history].id));
+            assert!(
+                refusal
+                    .message
+                    .contains("outside fitted equilibrium strain domain")
+            );
+        }
+    }
+}
+
+#[test]
 fn held_out_forces_never_influence_parameter_identification() {
     let mut raw = input(&[(2., 0.7)], true);
     let baseline = calibrate(&raw).unwrap();

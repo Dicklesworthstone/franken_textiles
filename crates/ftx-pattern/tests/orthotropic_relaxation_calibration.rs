@@ -616,6 +616,99 @@ fn comparison_input() -> ftx_pattern::material_relaxation::calibration::comparis
     }
 }
 
+fn fitted_equilibrium(input: &mut Input) {
+    let bounds = "[[-0.08,0.08],[-0.08,0.08],[-0.08,0.08]]";
+    input
+        .conditions
+        .insert("fitted_green_strain_range".into(), bounds.into());
+    for key in [
+        "warp_stiffness",
+        "weft_stiffness",
+        "poisson_warp_weft",
+        "shear_stiffness",
+    ] {
+        input
+            .material
+            .properties
+            .get_mut(key)
+            .unwrap()
+            .conditions
+            .insert("fitted_green_strain_range".into(), bounds.into());
+    }
+}
+
+#[test]
+fn directional_relaxation_checks_scalar_equilibrium_bounds_in_fixed_and_searched_modes() {
+    for searched in [false, true] {
+        let mut raw = input();
+        fitted_equilibrium(&mut raw);
+        if searched {
+            let options = raw.orthotropic.as_mut().unwrap();
+            options.times_seconds.clear();
+            options.time_bounds_seconds = vec![[0.1, 0.6], [1., 3.], [5., 12.]];
+        }
+        let node = &mut raw.experiments[0].samples[1];
+        node.deformation = [[1.2_f64.sqrt(), 0.], [0., 1.]];
+        node.nominal_n_m = [[None; 2]; 2];
+        assert!(
+            calibrate(&raw)
+                .unwrap_err()
+                .message
+                .contains("outside fitted equilibrium strain domain")
+        );
+    }
+}
+
+#[test]
+fn check_equilibrium_domain_refusal_cannot_change_directional_model_selection() {
+    use ftx_pattern::material_relaxation::calibration::comparison::{CheckStatus, Status, compare};
+    let mut request = comparison_input();
+    fitted_equilibrium(&mut request.calibration);
+    let original = compare(&request).unwrap();
+    assert_eq!(original.status, Status::Accepted);
+    let node = &mut request.calibration.experiments.last_mut().unwrap().samples[1];
+    node.deformation = [[1.2_f64.sqrt(), 0.], [0., 1.]];
+    node.nominal_n_m = [[None; 2]; 2];
+    // CHECK may appear before FIT in the authored order; no zip/index correspondence may be lost.
+    request.calibration.experiments.rotate_right(1);
+    let refused = compare(&request).unwrap();
+    assert_eq!(refused.status, Status::ChosenCandidateRejected);
+    assert_eq!(
+        serde_json::to_value(&refused.fit_decision).unwrap(),
+        serde_json::to_value(&original.fit_decision).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&refused.prediction_differences).unwrap(),
+        serde_json::to_value(&original.prediction_differences).unwrap()
+    );
+    assert_eq!(
+        refused.objective_evaluations,
+        original.objective_evaluations
+    );
+    assert_eq!(refused.projected_iterations, original.projected_iterations);
+    assert_eq!(refused.candidates[0].check_status, CheckStatus::Rejected);
+    assert!(
+        refused.candidates[0]
+            .check_refusal
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("outside fitted equilibrium strain domain")
+    );
+    assert!(refused.selected_calibration().is_none());
+    for (a, b) in refused.candidates.iter().zip(&original.candidates) {
+        let (a, b) = (
+            a.calibration.as_ref().unwrap(),
+            b.calibration.as_ref().unwrap(),
+        );
+        assert_eq!(
+            serde_json::to_value(&a.fit).unwrap(),
+            serde_json::to_value(&b.fit).unwrap()
+        );
+        assert_tensors(&tensors(a), &tensors(b), 0.);
+    }
+}
+
 #[test]
 fn comparison_selects_a_supported_order_and_retains_underfit_forces_and_real_material() {
     use ftx_pattern::material_relaxation::calibration::comparison::{

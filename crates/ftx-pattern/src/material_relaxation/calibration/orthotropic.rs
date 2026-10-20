@@ -519,7 +519,7 @@ fn calibrate_with_policy(
     if searched {
         search::bounds(&options.time_bounds_seconds)?;
     }
-    let (histories, q) = super::prepare(input)?;
+    let (histories, q) = super::prepare(input, !comparing)?;
     // Invoke the existing directional source/condition validator before numerical work, even for
     // an eventual all-zero fit. This unit tensor is only a validation scaffold, never a material.
     let scaffold = Candidate {
@@ -628,7 +628,7 @@ fn calibrate_with_policy(
 }
 
 pub(super) fn replay_checks(report: &mut Report) -> Result<(), Refusal> {
-    let (histories, q) = super::prepare(&report.input)?;
+    let (histories, q) = super::prepare(&report.input, true)?;
     let compiled = report
         .material
         .membrane_relaxation

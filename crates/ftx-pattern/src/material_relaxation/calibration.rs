@@ -10,7 +10,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 
 use super::{Initialization, MaxwellBranch, Relaxation};
-use crate::material_calibration::{Partition, Quality};
+use crate::material_calibration::{Partition, Quality, fitted_domain};
 use crate::material_catalog::normalize;
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
 
@@ -228,7 +228,7 @@ fn law(input: &Input, ratios: &[f64], times: &[f64], source: &str) -> Relaxation
     }
 }
 
-fn prepare(input: &Input) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
+fn prepare(input: &Input, include_check: bool) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
     input.material.validate()?;
     if input
         .material
@@ -278,6 +278,7 @@ fn prepare(input: &Input) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
     }
     // Resolve only the equilibrium consumer: absent mass, bending and friction do not block fitting.
     let material = normalize(&input.material)?;
+    let equilibrium_domain = fitted_domain(&material)?;
     let nonlinear = material.compiled_membrane(input.allow_estimated_equilibrium)?;
     let q = if let Some(curve) = &nonlinear {
         let [a, b, c, g] = curve.origin_stiffness();
@@ -322,6 +323,11 @@ fn prepare(input: &Input) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
                 "invalid experiment identity, source, admitted evidence or history length",
             ));
         }
+        // Model comparison fixes every FIT decision before evaluating held-out constitutive
+        // states. A CHECK domain refusal must reject that candidate, not alter the FIT frontier.
+        if !include_check && e.partition == Partition::Check {
+            continue;
+        }
         let mut points = Vec::new();
         let mut last = -1.;
         let mut components = 0;
@@ -344,6 +350,12 @@ fn prepare(input: &Input) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
             }
             last = s.time_seconds;
             let strain = green(s.deformation)?;
+            if equilibrium_domain.is_some_and(|domain| !domain.contains(strain)) {
+                return Err(bad(format!(
+                    "{}: history node {i} outside fitted equilibrium strain domain",
+                    e.id
+                )));
+            }
             if !domain.contains(strain) {
                 return Err(bad("observed strain outside declared domain"));
             }
@@ -429,10 +441,16 @@ fn evaluate_residuals(
     let mut predictions = Vec::new();
     let mut fit_errors = Vec::new();
     let mut check_errors = Vec::new();
-    for (e, history) in input.experiments.iter().zip(histories) {
-        if !include_check && e.partition == Partition::Check {
-            continue;
-        }
+    for (e, history) in input
+        .experiments
+        .iter()
+        .filter(|e| include_check || e.partition == Partition::Fit)
+        .zip(
+            histories
+                .iter()
+                .filter(|h| include_check || h.partition == Partition::Fit),
+        )
+    {
         let predicted = predict(history)?;
         for (point, values) in history.points.iter().zip(predicted) {
             let mut residual = [[None; 2]; 2];
@@ -494,7 +512,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     if let Some(options) = &input.orthotropic {
         return orthotropic::calibrate(input, options);
     }
-    let (histories, q) = prepare(input)?;
+    let (histories, q) = prepare(input, true)?;
     let fit = fit::solve(&histories, q, &input.time_bounds_seconds)?;
     let n = input.time_bounds_seconds.len();
     let ratios: Vec<_> = fit.parameters[..n]

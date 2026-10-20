@@ -8,8 +8,9 @@ use ftx_core::{Refusal, RefusalCode, linalg::lstsq, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 
 use super::{AXES, ELASTIC, MODEL, PlasticMembrane};
-use crate::material_calibration::{Partition, Quality};
+use crate::material_calibration::{Partition, Quality, fitted_domain};
 use crate::material_catalog::normalize;
+use crate::material_response::StrainDomain;
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
 
 /// Portable acquisition and identification request.
@@ -230,6 +231,7 @@ fn text_ok(s: &str) -> bool {
 
 struct Prepared {
     tensor: [[f64; 3]; 3],
+    equilibrium_domain: Option<StrainDomain>,
     strain_limit: [f64; 3],
     accumulation_limit: [f64; 3],
     bounds: [[f64; 2]; 6],
@@ -358,6 +360,7 @@ fn prepare(input: &Input) -> Result<Prepared, Refusal> {
             [poisson * weft / d, weft / d, 0.0],
             [0.0, 0.0, shear],
         ],
+        equilibrium_domain: fitted_domain(&material)?,
         strain_limit: domains[0],
         accumulation_limit: domains[1],
         bounds,
@@ -385,6 +388,16 @@ fn prepare(input: &Input) -> Result<Prepared, Refusal> {
             ));
         }
         for (i, sample) in experiment.samples.iter().enumerate() {
+            if experiment.partition == Partition::Fit
+                && prepared
+                    .equilibrium_domain
+                    .is_some_and(|domain| !domain.contains(sample.green_strain))
+            {
+                return Err(bad(format!(
+                    "{}: history node {i} outside fitted equilibrium strain domain",
+                    experiment.id
+                )));
+            }
             if !sample.time_seconds.is_finite()
                 || (i == 0 && (sample.time_seconds != 0.0 || sample.green_strain != [0.0; 3]))
                 || (i > 0 && sample.time_seconds <= experiment.samples[i - 1].time_seconds)
@@ -477,7 +490,20 @@ impl Work<'_> {
         {
             let mut memory = law.pristine();
             let mut dissipated = 0.0;
-            for sample in &experiment.samples {
+            for (i, sample) in experiment.samples.iter().enumerate() {
+                if self
+                    .prepared
+                    .equilibrium_domain
+                    .is_some_and(|domain| !domain.contains(sample.green_strain))
+                {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!(
+                            "{}: history node {i} outside fitted equilibrium strain domain",
+                            experiment.id
+                        ),
+                    ));
+                }
                 let update = memory.advance(sample.green_strain).map_err(|mut e| {
                     e.message = format!("{}: {}", experiment.id, e.message);
                     e
