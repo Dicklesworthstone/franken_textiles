@@ -34,3 +34,11 @@ failed nine array hashes, including faces. Selected vertices across all sixteen 
 differed by at most 8.89e-16 m; that limited diagnostic does not admit different arrays or topology.
 Pinning Anny alone is therefore insufficient to reproduce the byte-exact converted asset on every
 host. This is not permission to widen hashes, skip checks or move the oracle pin.
+
+The topology difference is twelve triangle rows from six quad diagonals. Upstream
+`anny/utils/mesh_utils.py::_split_quad` chooses the smaller diagonal using a strict floating-point
+comparison. The two template arrays differ by at most 5.56e-17 m. Evaluating both arrays on the
+same Torch 2.14.1 runtime changes all six choices: the admitted template's diagonal differences
+are -6.94e-18 to -1.22e-17 m, whereas the Linux template gives ties and selects the other diagonal.
+Thus small coordinate differences can change topology; selected forward-vertex agreement alone
+cannot justify admitting that conversion. Use the reproduced environment and full hash checks.
