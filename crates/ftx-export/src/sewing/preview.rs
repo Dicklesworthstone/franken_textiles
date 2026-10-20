@@ -141,11 +141,23 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
         .iter()
         .map(|(lo, hi)| hi.y - lo.y)
         .fold(0.0, f64::max);
-    let height = body_height + 68.0 + 5.0 * seam.runs.len() as f64;
+    let foot_height = if seam.presser_foot.is_some() {
+        10.0
+    } else {
+        0.0
+    };
+    let height = body_height + 68.0 + 5.0 * seam.runs.len() as f64 + foot_height;
     let (ws, hs) = (fnum(width, 6), fnum(height, 6));
-    let metadata = json!({"schema":"ftx-sewing-preview/1","pattern_sha256":plan.pattern_sha256,
+    let mut metadata = json!({"schema":"ftx-sewing-preview/1","pattern_sha256":plan.pattern_sha256,
         "operation":seam.pass,"material_sha256":[seam.sides[0].material_sha256,seam.sides[1].material_sha256],
         "plan_schema":plan.schema,"hardware_execution_authorized":false,"physical_seam_quality_validated":false});
+    if let Some(foot) = &seam.presser_foot {
+        metadata["presser_foot"] = json!({"model":foot.model,"pressure_pa":foot.pressure_pa,
+            "uncompressed_stack_mm":seam.stack_mm,"nominal_loaded_stack_mm":foot.nominal_stack_mm,
+            "checked_loaded_stack_mm":foot.stack_mm,"layers":foot.layers,
+            "acquisition_sha256":foot.materials.iter().map(|(h,r)| (h,&r.input_sha256))
+                .collect::<std::collections::BTreeMap<_,_>>()});
+    }
     let mut out = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{ws}mm\" height=\"{hs}mm\" viewBox=\"0 0 {ws} {hs}\">\n<title>Sewing operation: {}</title>\n<desc>Independent pattern frames. Planning review only, not a cutter file or robot trajectory. No physical seam qualification. Exterior clearance excludes notch incisions.</desc>\n<metadata>{}</metadata>\n<rect width=\"{ws}\" height=\"{hs}\" fill=\"white\"/>\n<defs><marker id=\"travel\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\" fill=\"#087f8c\"/></marker></defs>\n<g font-family=\"sans-serif\" font-size=\"3\" fill=\"black\">\n<text x=\"5\" y=\"6\">Planning review only - NOT machine instructions</text>\n<text x=\"5\" y=\"12\">Black: exterior cut. Gray dash: original seam. Teal: stitch path; arrow: main pass.</text>\n<text x=\"5\" y=\"18\">Red dots: needle stations; red dash: between-stitch chords. Views are separate local frames.</text>\n",
         xml_escape(operation),
@@ -186,6 +198,12 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
     for (i, run) in seam.runs.iter().enumerate() {
         out.push_str(&format!("<text x=\"5\" y=\"{}\">Run {}: stations {} to {}, {} intervals (both material sides)</text>\n",
             fnum(y+5.0*(i+1) as f64,6),i,run.from_station,run.to_station,run.stitch_intervals));
+    }
+    if let Some(foot) = &seam.presser_foot {
+        let fy = y + 5.0 * (seam.runs.len().max(1) + 1) as f64;
+        out.push_str(&format!("<text class=\"loaded-stack\" x=\"5\" y=\"{}\">Foot pressure {} Pa | loaded nominal {} mm | checked stack {} mm (upper bounds where supplied)</text>\n<text x=\"5\" y=\"{}\">Prescribed independent-ply pressure; no contact/recovery model or machine setting.</text>\n",
+            fnum(fy,6), fnum(foot.pressure_pa,6), fnum(foot.nominal_stack_mm,6),
+            fnum(foot.stack_mm,6), fnum(fy+5.0,6)));
     }
     out.push_str("</g>\n</svg>\n");
     Ok(out)
