@@ -1,11 +1,12 @@
-//! Prescribed-pressure needle stacks through the shared material-compression authority. Each ply
-//! sees the same declared pressure; this is not inferred foot contact, compression history or a
-//! machine command. Original material identities and unloaded assembly geometry stay unchanged.
+//! Needle stacks through the shared material-compression authority. Pressure is either prescribed
+//! or inferred from a declared rigid-face gap. Both modes keep original material identities and
+//! unloaded assembly geometry; neither is a spatial foot-contact solve or a machine command.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_catalog::Selection;
+use ftx_pattern::material_compression::stack::{self, Direction};
 use ftx_pattern::material_compression::{Input, Report, condition};
 use ftx_pattern::materials::{CATALOG_SCHEMA, Catalog};
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,8 @@ use super::{bad, positive, qualified_text, range, within};
 
 /// Explicit independent-ply, uniform-pressure closure. It does not model ply interaction or recovery.
 pub const MODEL: &str = "independent_ply_equal_pressure/1";
+/// Inverse fixed-area, parallel-face closure using the shared compression-stack implementation.
+pub const CLEARANCE_MODEL: &str = "independent_ply_clearance/1";
 const MAX_LAYERS: usize = 128;
 const MAX_OBSERVATIONS: usize = 65_536;
 
@@ -25,11 +28,17 @@ pub struct FootLimits {
     pub pressure_pa: [f64; 2],
     /// Maximum loaded stack in mm; does not replace SewingMachine.max_stack_mm.
     pub max_loaded_stack_mm: f64,
+    /// Final normal-force envelope in N, mandatory in clearance mode; not inferred from pressure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal_force_n: Option<[f64; 2]>,
 }
 
 impl FootLimits {
     pub(super) fn validate(&self) -> Result<(), Refusal> {
-        if !range(self.pressure_pa) || !positive(self.max_loaded_stack_mm) {
+        if !range(self.pressure_pa)
+            || !positive(self.max_loaded_stack_mm)
+            || self.normal_force_n.is_some_and(|r| !range(r))
+        {
             return Err(bad("invalid presser-foot pressure or loaded-stack limits"));
         }
         Ok(())
@@ -40,10 +49,14 @@ impl FootLimits {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// Must equal [`MODEL`]; independent-ply additivity is an explicit approximation.
+    /// [`MODEL`] for prescribed pressure or [`CLEARANCE_MODEL`] for a prescribed gap.
     pub model: String,
-    /// Common pressure applied to every ply, Pa, also selected in each retained acquisition.
-    pub pressure_pa: f64,
+    /// Prescribed common pressure, Pa. Must be absent when clearance is supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure_pa: Option<f64>,
+    /// Prescribed final gap and reference area; input material pressures are the known initial state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Clearance>,
     /// Exact shared acquisition conditioning, not inferred from fabric family or a machine ID.
     pub conditioning: String,
     /// Exact characterized loading branch; no loading/unloading cycle is synthesized.
@@ -51,6 +64,34 @@ pub struct Request {
     /// Complete existing compression requests keyed by the ORIGINAL resolved material hash.
     /// Every distinct ply needs one entry, with no unused entries or unchanged-property fallback.
     pub materials: BTreeMap<String, Input>,
+}
+
+/// Geometry-controlled static closure of the ACTUAL operation stack, not a guessed pressure.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Clearance {
+    /// Positive final parallel-face gap in millimetres; central source thicknesses determine closure.
+    pub gap_mm: f64,
+    /// Fixed common reference/contact area in mm², explicitly supplied, not derived from stitch paths.
+    pub reference_area_mm2: f64,
+    /// Traverse the supplied source branches from their common known initial pressure.
+    pub direction: Direction,
+    /// Separate permission for model-inferred pressure/work; never relaxes sheet evidence policy.
+    pub allow_estimates: bool,
+}
+
+/// Independent process evidence for geometry-controlled closure. Pressure-only recipes do not match.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClearanceQualification {
+    /// Qualified prescribed-gap range, mm.
+    pub gap_mm: [f64; 2],
+    /// Qualified common reference-area range, mm².
+    pub reference_area_mm2: [f64; 2],
+    /// Qualified final normal-force range, N.
+    pub normal_force_n: [f64; 2],
+    /// Qualified branch-traverse direction; no loading/unloading equivalence is inferred.
+    pub direction: Direction,
 }
 
 /// Additional process-qualification envelope for an operation that explicitly uses foot pressure.
@@ -65,6 +106,9 @@ pub struct Qualification {
     pub conditioning: String,
     /// Exact loading branch admitted by the process source.
     pub loading_branch: String,
+    /// Must be present exactly when the operation requests clearance-controlled closure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<ClearanceQualification>,
 }
 
 impl Qualification {
@@ -73,6 +117,9 @@ impl Qualification {
             || !range(self.loaded_stack_mm)
             || !qualified_text(&self.conditioning)
             || !qualified_text(&self.loading_branch)
+            || self.clearance.as_ref().is_some_and(|q| {
+                !range(q.gap_mm) || !range(q.reference_area_mm2) || !range(q.normal_force_n)
+            })
         {
             return Err(bad("invalid pressure-qualified sewing envelope"));
         }
@@ -84,6 +131,16 @@ impl Qualification {
             && within(receipt.stack_mm, self.loaded_stack_mm)
             && self.conditioning == receipt.conditioning
             && self.loading_branch == receipt.loading_branch
+            && match (&self.clearance, &receipt.closure) {
+                (None, None) => true,
+                (Some(q), Some(r)) => {
+                    within(r.input.gap_m * 1000.0, q.gap_mm)
+                        && within(r.input.reference_area_m2 * 1e6, q.reference_area_mm2)
+                        && within(r.normal_force_n, q.normal_force_n)
+                        && r.input.direction == q.direction
+                }
+                _ => false,
+            }
     }
 }
 
@@ -107,7 +164,7 @@ pub struct Layer {
 /// Source-complete loaded stack alongside, not in place of, the original sewing assembly.
 #[derive(Clone, Debug, Serialize)]
 pub struct Receipt {
-    /// [`MODEL`].
+    /// [`MODEL`] or [`CLEARANCE_MODEL`]; the pressure's origin is never implicit.
     pub model: &'static str,
     /// Common applied pressure, Pa.
     pub pressure_pa: f64,
@@ -123,6 +180,10 @@ pub struct Receipt {
     pub layers: Vec<Layer>,
     /// Existing compression receipts, once per distinct original material rather than once per ply.
     pub materials: BTreeMap<String, Report>,
+    /// Complete inverse/path receipt in clearance mode, with a source record for EVERY physical ply.
+    /// In that mode `materials` is empty; repeated plies have distinct closure source identities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closure: Option<Box<stack::Report>>,
 }
 
 /// Shared across the whole sewing job, including repeated operation-local acquisitions.
@@ -134,8 +195,17 @@ impl Request {
         let limits =
             limits.ok_or_else(|| bad("foot pressure needs explicit loaded machine limits"))?;
         limits.validate()?;
-        if self.model != MODEL
-            || !within(self.pressure_pa, limits.pressure_pa)
+        let mode_valid = match (self.model.as_str(), self.pressure_pa, &self.clearance) {
+            (MODEL, Some(p), None) => within(p, limits.pressure_pa),
+            (CLEARANCE_MODEL, None, Some(c)) => {
+                positive(c.gap_mm / 1000.0)
+                    && positive(c.reference_area_mm2 / 1e6)
+                    && c.allow_estimates
+                    && limits.normal_force_n.is_some()
+            }
+            _ => false,
+        };
+        if !mode_valid
             || !qualified_text(&self.conditioning)
             || !qualified_text(&self.loading_branch)
             || self.materials.is_empty()
@@ -175,7 +245,14 @@ impl Request {
                 .samples
                 .iter()
                 .try_fold(0usize, |sum, row| sum.checked_add(row.properties.len()));
+            // Inverse closure visits every physical ply, including repeated folds of one source.
+            let copies = if self.clearance.is_some() {
+                stack.iter().filter(|h| *h == hash).count()
+            } else {
+                1
+            };
             budget.0 = cells
+                .and_then(|n| n.checked_mul(copies))
                 .and_then(|n| budget.0.checked_add(n))
                 .filter(|&n| n <= MAX_OBSERVATIONS)
                 .ok_or_else(|| {
@@ -199,13 +276,16 @@ impl Request {
                     "compression acquisition does not match the exact original material snapshot",
                 ));
             }
-            if input.pressure_pa != self.pressure_pa
+            if self.pressure_pa.is_some_and(|p| input.pressure_pa != p)
                 || input.conditioning != self.conditioning
                 || input.loading_branch != self.loading_branch
             {
                 return Err(bad(
                     "all plies must use the declared pressure, conditioning and loading branch",
                 ));
+            }
+            if self.clearance.is_some() {
+                continue; // the shared inverse conditions the known initial and solved final states
             }
             let report = condition(input)?;
             let conditioned = db.resolve(&report.selection)?;
@@ -231,15 +311,25 @@ impl Request {
             );
             materials.insert(hash.clone(), report);
         }
+        if let Some(clearance) = &self.clearance {
+            return self.close(
+                clearance,
+                limits.expect("validated limits"),
+                stack,
+                originals,
+                &db,
+            );
+        }
         let mut receipt = Receipt {
             model: MODEL,
-            pressure_pa: self.pressure_pa,
+            pressure_pa: self.pressure_pa.expect("validated prescribed pressure"),
             conditioning: self.conditioning.clone(),
             loading_branch: self.loading_branch.clone(),
             nominal_stack_mm: 0.0,
             stack_mm: 0.0,
             layers: Vec::with_capacity(stack.len()),
             materials,
+            closure: None,
         };
         for hash in stack {
             let (nominal, admitted, upper, conditioned) = &thicknesses[hash];
@@ -263,6 +353,94 @@ impl Request {
                 "pressure-conditioned stack exceeds the loaded machine limit",
             ));
         }
+        Ok(receipt)
+    }
+
+    fn close(
+        &self,
+        clearance: &Clearance,
+        limits: &FootLimits,
+        stack: &[String],
+        originals: &BTreeMap<String, Selection>,
+        db: &Catalog,
+    ) -> Result<Receipt, Refusal> {
+        // The inverse authority supports at most 32 plies; refuse BEFORE cloning acquisitions.
+        if stack.len() > 32 {
+            return Err(bad("clearance closure supports at most 32 actual plies"));
+        }
+        let closed = stack::close(&stack::Input {
+            schema: stack::SCHEMA.into(),
+            gap_m: clearance.gap_mm / 1000.0,
+            reference_area_m2: clearance.reference_area_mm2 / 1e6,
+            direction: clearance.direction,
+            allow_estimates: clearance.allow_estimates,
+            layers: stack
+                .iter()
+                .enumerate()
+                .map(|(i, hash)| stack::Layer {
+                    id: format!("ply-{i}"),
+                    preparation: self.materials[hash].clone(),
+                })
+                .collect(),
+        })?;
+        if !within(closed.pressure_pa, limits.pressure_pa)
+            || !within(
+                closed.normal_force_n,
+                limits.normal_force_n.expect("validated force limits"),
+            )
+        {
+            return Err(bad(
+                "inferred foot pressure or normal force exceeds the machine envelope",
+            ));
+        }
+        let mut receipt = Receipt {
+            model: CLEARANCE_MODEL,
+            pressure_pa: closed.pressure_pa,
+            conditioning: self.conditioning.clone(),
+            loading_branch: self.loading_branch.clone(),
+            nominal_stack_mm: 0.0,
+            stack_mm: 0.0,
+            layers: Vec::with_capacity(stack.len()),
+            materials: BTreeMap::new(),
+            closure: None,
+        };
+        for (hash, layer) in stack.iter().zip(&closed.layers) {
+            let original = db.resolve(&originals[hash])?;
+            let conditioned = db.resolve(&layer.conditioned.selection)?;
+            let nominal =
+                conditioned
+                    .material()
+                    .require("thickness", "m", original.allows_estimates())?
+                    * 1000.0;
+            let bounds = conditioned.material().properties["thickness"].bounds;
+            let admitted = bounds.map_or(nominal, |b| b[1] * 1000.0);
+            let bottom = receipt.stack_mm;
+            receipt.nominal_stack_mm += nominal;
+            receipt.stack_mm += admitted;
+            if !positive(nominal)
+                || !positive(admitted)
+                || !receipt.stack_mm.is_finite()
+                || !receipt.nominal_stack_mm.is_finite()
+            {
+                return Err(bad(
+                    "nonrepresentable clearance-conditioned stack thickness",
+                ));
+            }
+            receipt.layers.push(Layer {
+                material_sha256: hash.clone(),
+                conditioned_material_sha256: conditioned.sha256().to_owned(),
+                nominal_thickness_mm: nominal,
+                thickness_mm: admitted,
+                uses_thickness_upper_bound: bounds.is_some(),
+                z_bounds_mm: [bottom, receipt.stack_mm],
+            });
+        }
+        if receipt.stack_mm > limits.max_loaded_stack_mm {
+            return Err(bad(
+                "clearance-conditioned stack exceeds the loaded machine limit",
+            ));
+        }
+        receipt.closure = Some(Box::new(closed));
         Ok(receipt)
     }
 }

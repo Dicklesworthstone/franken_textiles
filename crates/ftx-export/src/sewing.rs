@@ -209,7 +209,7 @@ pub struct PlannedSeam {
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
     /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering,
-    /// `/7` prescribed-pressure stacks. Composed capabilities are retained, not mutually exclusive.
+    /// `/7` pressure stacks, `/8` clearance closure. Capabilities compose rather than replace others.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
     pub pattern_sha256: String,
@@ -487,7 +487,22 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if machine.presser_foot.is_some()
+            schema: if machine
+                .presser_foot
+                .as_ref()
+                .is_some_and(|f| f.normal_force_n.is_some())
+                || options.passes.iter().any(|p| {
+                    p.presser_foot
+                        .as_ref()
+                        .is_some_and(|f| f.clearance.is_some())
+                })
+                || options.qualifications.iter().any(|q| {
+                    q.presser_foot
+                        .as_ref()
+                        .is_some_and(|f| f.clearance.is_some())
+                }) {
+                "ftx-sewing-plan/8"
+            } else if machine.presser_foot.is_some()
                 || options.passes.iter().any(|p| p.presser_foot.is_some())
                 || options
                     .qualifications
