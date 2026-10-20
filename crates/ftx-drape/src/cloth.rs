@@ -484,7 +484,7 @@ pub struct Solver {
     pub gravity: Vec3,
     /// Newton tolerance on the step: ‖p‖∞/h for a time step, ‖p‖∞ for a static solve (m).
     pub tol: f64,
-    /// Newton iteration cap per solve.
+    /// Newton iteration cap per solve (300 by default for linearly converging contact modes).
     pub max_newton: usize,
     /// Contact with a static body and/or other cloth surfaces, if enabled.
     pub contact: Option<Contact>,
@@ -569,7 +569,7 @@ impl Solver {
             x,
             gravity,
             tol: 1e-6,
-            max_newton: 100,
+            max_newton: 300,
             contact: None,
             friction_rounds: 1,
             pcg_iters: 0,

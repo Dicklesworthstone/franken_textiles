@@ -337,7 +337,7 @@ The original assessment above describes `6410556`, not the repaired tree.
 - [x] R1: reconcile the three staged material-study issues additively, preserving five dependencies;
   verify canonical sync and successful flush. `br doctor` reports healthy data with warnings about
   its stale merge anchor and missing optional WAL-index ignore pattern; it is not an all-green result.
-- [x] Register `ftx-6en` (P0, in progress), and `ftx-dzf` (P1, now closed), with existing parent gates.
+- [x] Register and complete `ftx-6en` (P0) and `ftx-dzf` (P1), with existing parent gates retained.
 - [x] R7 / `ftx-dzf`: explicitly reject source-clock overflow before Python datetime normalization;
   retain valid offsets, expiry, source precision and source data. Implemented in `b23c281`.
 - [x] R7: fresh solo rerun of `python3.12`, `python3.13`, `python3.14`, and `python3.15`, each with
@@ -350,16 +350,43 @@ The original assessment above describes `6410556`, not the repaired tree.
   `numerical` output; gate gravity drapes lacking three consecutive steps at at most 1 mm/s.
 - [x] R2: preserve reference metric values/texts; mark sewing-only gravity settling unavailable;
   validate the existing adaptive `Solver::settle` limits rather than admitting an empty quiet window.
-- [x] R2: direct exhaustion/rollback/replay, valid quiet window, oscillatory cancellation and
-  qualification tests: **112 drape library tests passed remotely** on `vmi1227854`.
-- [ ] R2: verify the actual material-to-drape diagnostic/gating path and failed-phase frame/ramp
-  rollback regression; expose numerical status in the direct CLI JSON and human summary.
-- [ ] R2/R3: complete workspace tests, all-target clippy and wasm compilation remotely, and fresh
-  review against the original acceptance conditions. Keep `ftx-6en` open until the evidence suffices.
+- [x] R2: direct exhaustion/rollback/replay, line-search failure, valid quiet window, oscillatory
+  cancellation and qualification tests: **113 drape library tests passed remotely** on `vmi1227854`.
+- [x] R2: actual material-to-drape diagnostic/gating and failed-phase frame/ramp rollback:
+  **10 material integration tests passed remotely**. Direct CLI JSON and human output expose numerical status.
+- [x] R2/R3: strict remote all-target clippy with `-D warnings`, and `ftx-wasm` compilation passed.
+  Compiled Node/WASM admitted the full pinned model and refused malformed bytes. The synthetic
+  articulated plastic-heating report matches the complete native JSON; a short loose-band run
+  is numerically gated and excluded from the frontier in actual WASM. This is not browser navigation
+  or G4. Final all-target clippy also passes on fixed base `4bb1129` with the four explicit Rust overlays.
+- [x] R2: corrected full native CLI integration passes (1 test, 8 filtered; 236.94 s), retaining
+  plastic work, heat balance, both-CLI equality, frontier and coverage-only assertions. Actual direct
+  `ftx drape` and immutable `round --sim` also return exit 2 with the numerical gating flag saved.
+- [x] R2/R3: execute the full debug workspace: 1,536 passed, 2 failed, 28 ignored on its older
+  snapshot. Both failed targets have passing current focused reruns: CLI (1 test, 8 filtered) and
+  WASM scenario (3 tests). This is not a claim that a full current-snapshot command returned zero.
+- [x] R2/R3: final frozen release run passes 114 library tests and all 4 contact KATs. Static-ring
+  gauge constraints and 4 mm mesh converge in 13 iterations with ~5.5 µm clearance error, within
+  the unchanged 20 µm limit. Pinned contact digest and cone/cylinder friction inequalities pass.
+- [x] R2/R3: verify the kernel's increased 300-iteration work budget against the full production
+  elastic ladder: all eight garments at friction 0.3/0.5 finish with no gating flags; original grip,
+  waistband and monotonicity assertions pass. Final frozen release total: 119 passed, zero ignored.
+  Complete fresh solo review and close `ftx-6en`; performance, empirical fit and release remain separate.
 - [x] R8: correct the 21-tape description, frozen `outfit --sim` command, and numerical/parity
   boundaries in README and touched contracts (`60ae9b4`). Full scope/budget review remains open.
-- [ ] R3: run production-Anny fitting and fitted garment gates with the converted pinned asset;
-  ordinary synthetic/debug tests cannot substitute for these or the release-only contact tests.
+- [x] R3 / `ftx-eju`: reproduce the pinned converted asset with unchanged integrity checks; record
+  supported environment and SHA-256 in `tools/body-model/PIN.md`. Linux conversion drift remains
+  refused. Install the hash-checked model at the local documented default cache path outside Git.
+  No oracle, pin, array hash or comparison tolerance changed.
+- [x] R3: run all normally ignored production-Anny body tests against that admitted asset:
+  **33 passed, zero ignored** (25 unit, 3 forward parity, 1 pose, 4 fitting). Sixteen forward cases
+  differ by at most 1.049e-14 m; ten pose cases by at most 8.82e-16 m. Synthetic tape recovery passes
+  its existing 1.5 mm bound. Public-prior wearer residuals remain reported, not real-person fit proof.
+- [x] R3: five non-contact KATs, all four production fitted-bolero tests and all four final contact
+  KATs pass on the admitted asset where required; physical assertions and pinned digests are intact.
+- [x] R3: finish the production elastic-trouser ladder. Its earlier 100-iteration refusal is retained;
+  the 300-iteration candidate passes both friction values. G2's current-hardware budget proof remains
+  separate (R9); oversubscribed remote test elapsed time is not an M4 benchmark.
 - [ ] R4: complete production-model capture-to-body acceptance, then private photo/tape comparisons.
 - [ ] R5: acquire matched specimens/raw observations and execute held-out coupons and fixed-jacket
   swaps (`ftx-tm2`, `ftx-md1`, restored `ftx-ms3`, `ftx-tm8`, `ftx-tmf`).
@@ -367,13 +394,35 @@ The original assessment above describes `6410556`, not the repaired tree.
   restored `ftx-ms2` remains open. No new coefficients or physical acceptance are inferred here.
 - [ ] R9/R10: current hardware/input-bound benchmarks, native/wasm/browser comparisons, private
   muslin evidence and the existing `ftx-onn` release gate remain required.
-- [ ] Finalize fresh self-review, Beads evidence/flush and reservation release; report any failed or
-  unavailable checks separately from passed checks.
+- [x] Finalize fresh self-review, Beads evidence/flush and handoff notes; report failed/unavailable
+  checks separately. Reservation release follows the final commit.
 
 Raw command output for this block is retained outside the repository at
 `/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-followthrough-20261020T214254Z/`.
 Remote checks use `RCH_REQUIRE_REMOTE=1`; the laptop's `sbh check --need 20G` failed its free-space-ratio
 gate, so no heavy local compilation was substituted. This is not a current garment benchmark or G2 pass.
+
+At handoff the live backlog has 83 issues, 127 dependencies and 82 comments; the original 74 rows,
+114 dependencies and 65 comments were preserved. New
+`ftx-eju` is closed after admitted-asset reproduction, source-backed diagonal-drift diagnosis and
+successful body/fitted-bolero execution; `ftx-6en` is also closed after the completed release run.
+The corrected articulated
+collar (`y0 = -600 mm`, because placement subtracts the offset) directly replays with no gates,
+zero final speed, positive post-settle plastic work and the expected cooler unconverted frontier;
+the compiled integration assertion run passes. The final staged four-Rust-file UBS scan exits 1
+with one critical match
+at `Command::new(binary)` in the existing helper: every caller supplies a Cargo `env!` binary path,
+not user input. This is a reviewed false positive; 739 inventory warnings remain, not a clean scan.
+Changed-line findings were reviewed; no scanner suppression or test weakening was added.
+
+Final checks use RCH's existing clean-overlay mode: fixed base `4bb1129` plus the literal touched
+Rust files, with no branch or worktree. Concurrent commits invalidated an earlier content-mode
+receipt; its runtime output is diagnostic, not a confirmed gate. The frozen WASM build passes,
+remote/local artifact SHA-256 matches, and its complete synthetic plastic report equals native
+JSON; the short loose-band negative is also gated in that artifact. Browser navigation and G4
+remain unclaimed. Final all-target clippy passes with the same four-file overlay fingerprint
+`41fb42b9…`; release library/contact/elastic tests all pass. The broad
+workspace failures and their passing focused reruns are listed separately above.
 
 ### Fresh self-review of this implementation block
 
@@ -437,4 +486,20 @@ Older-session inventory is unavailable: CASS reported a healthy index, but the b
 search timed out. This block does not claim an audit of older sessions. Disposition: no test weakening,
 oracle regeneration or false closure found in this bounded review; observed invalid positive fixtures
 are being corrected with explicit negative coverage and original positive acceptance retained (RH-1,
-RH-2). Final command outcomes below must supersede the intermediate status in this inventory.
+RH-2). Final command outcomes below supersede the intermediate status in this inventory.
+
+### Completed follow-through disposition
+
+Closed `ftx-dzf`, `ftx-eju` and `ftx-6en`; the larger source acquisition, capture acceptance,
+performance, browser and private-muslin Beads remain open. Fresh solo review, not independent
+verification: original physical inequalities, heat balances, parity tolerances and oracle bytes are
+retained. Synthetic inputs and the static-ring constraints/mesh were corrected openly; no failed
+physical cell was reclassified as excluded or accepted by relaxing accuracy.
+
+Confirmed remote results: 33 production-body tests; five non-contact KATs; four fitted-bolero tests;
+119 final release library/contact/elastic tests; final all-target clippy with `-D warnings`; WASM
+build and actual compiled-WASM positive/negative replay. The full older-snapshot workspace command
+returned 101 (1,536 passed, 2 failed, 28 ignored); both failed targets have passing current focused
+reruns. No full current-snapshot zero-exit workspace run, browser navigation, hardware-bound
+performance result, empirical material qualification, real-person fit or complete G2/G4/G5 pass
+is claimed. The pinned model is now installed in the documented local cache outside Git.

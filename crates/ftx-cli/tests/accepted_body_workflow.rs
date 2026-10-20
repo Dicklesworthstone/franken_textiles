@@ -1014,9 +1014,9 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     converted["record"]["properties"]["membrane_plastic_heat_fraction"]["value"] = json!(0.8);
     let mut plastic_pattern = pattern.clone();
     plastic_pattern["fabric"]["material"] = unconverted.clone();
-    // Put the collar in the articulated upper ring's contact region. A waist band on the rigid
-    // root cannot be loaded by shoulder motion once its gravity transient has actually settled.
-    plastic_pattern["pieces"][0]["placement"]["y0"] = json!(600.0);
+    // Placement subtracts y0 from waist height: -600 mm seats the collar at z = 1.12 m,
+    // in the articulated upper ring's contact region. The rigid waist cannot load it in motion.
+    plastic_pattern["pieces"][0]["placement"]["y0"] = json!(-600.0);
     save(&plastic_dir.join("pattern.json"), &plastic_pattern);
     save(
         &plastic_dir.join("study.json"),
