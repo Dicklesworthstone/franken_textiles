@@ -437,6 +437,61 @@ fn transient_convection_is_exactly_the_existing_film_step() {
 }
 
 #[test]
+fn internal_heat_reaches_convection_and_radiation_with_original_state_energy_balance() {
+    let model = storage(&[storage_record(0.4, 0.8)], vec![], 1);
+    let old = [20.0];
+    let b = boundary(20.0, 20.0, 0.1);
+    for radiant in [None, Some(20.0)] {
+        // Manufacture a face hotter than both reservoirs, then derive the required cell energy.
+        let face = 25.0;
+        let radiation =
+            radiant.map_or(0.0, |t| 0.8 * STEFAN_BOLTZMANN * (fourth(face) - fourth(t)));
+        let outgoing = 4.0 * (face - 20.0) + radiation;
+        let next = face + 0.2 * outgoing;
+        let incoming = (20.0 - next) / 0.3;
+        let supplied = 200.0 * (next - old[0]) - 2.0 * (incoming - outgoing);
+        let environment = environment(4.0, 20.0, radiant);
+        let result = model
+            .advance_exterior_with_heat(&old, 2.0, b, &environment, &[supplied])
+            .unwrap();
+        near(result.state.temperature_c[0], next);
+        near(result.exchange.surface_c, face);
+        near(result.state.inside_flux_w_m2, incoming);
+        near(result.state.outside_flux_w_m2, outgoing);
+        near(result.exchange.radiative_flux_w_m2, radiation);
+        near(result.state.stored_change_j_m2, 200.0 * (next - 20.0));
+        near(
+            result.state.stored_change_j_m2,
+            2.0 * (result.state.inside_flux_w_m2 - result.state.outside_flux_w_m2) + supplied,
+        );
+        near(result.state.balance_error_j_m2, 0.0);
+        exterior_balance(&result.exchange, result.state.outside_flux_w_m2);
+        if radiant.is_none() {
+            let film = model
+                .advance_with_heat(
+                    &old,
+                    2.0,
+                    Boundary {
+                        outside_resistance: 0.25,
+                        ..b
+                    },
+                    &[supplied],
+                )
+                .unwrap();
+            assert_eq!(result.state.temperature_c, film.temperature_c);
+        }
+        let mut outside_domain = environment;
+        outside_domain.surface_temperature_range_c = [-200.0, 20.0];
+        assert!(
+            model
+                .advance_exterior_with_heat(&old, 2.0, b, &outside_domain, &[supplied])
+                .is_err()
+        );
+    }
+    assert_eq!(old, [20.0]);
+}
+
+#[test]
 fn manufactured_transient_radiation_preserves_signed_fluxes_and_storage() {
     // Manufacture Ts and independent q_in, then recover the old temperature from the single-cell
     // backward-Euler energy equation. Radiation is evaluated independently using fourth powers.

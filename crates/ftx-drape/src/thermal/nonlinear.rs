@@ -70,7 +70,7 @@ impl Variable {
         Ok(())
     }
 
-    fn capacity(&self, i: usize, t: f64) -> Result<f64, Refusal> {
+    pub(super) fn capacity(&self, i: usize, t: f64) -> Result<f64, Refusal> {
         positive(
             "cell heat capacity",
             self.laws[i / self.per_layer].capacity_at(t)? / self.per_layer as f64
@@ -78,7 +78,7 @@ impl Variable {
         )
     }
 
-    fn heat(&self, i: usize, old: f64, new: f64) -> Result<f64, Refusal> {
+    pub(super) fn heat(&self, i: usize, old: f64, new: f64) -> Result<f64, Refusal> {
         Ok(
             self.laws[i / self.per_layer].sensible_change(old, new)? / self.per_layer as f64
                 * self.capacity_factors[i / self.per_layer],

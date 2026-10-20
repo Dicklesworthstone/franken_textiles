@@ -124,7 +124,9 @@ pub struct SurfaceStep {
     pub outside_heat_w: f64,
     /// Sum of reference-mass sensible heat changes in J.
     pub stored_change_j: f64,
-    /// Stored change minus time-integrated net boundary heat in J; zero for a steady evaluation.
+    /// Requested internal cell energies summed in J; zero for the original source-free APIs.
+    pub supplied_heat_j: f64,
+    /// Stored change minus net boundary energy and supplied internal heat in J; zero at steady state.
     pub balance_error_j: f64,
     /// Present only when qualified convection/radiation replaces the outside film. The full
     /// per-patch field is suitable for the final display, not unbounded duplication in every trace.
@@ -239,7 +241,7 @@ impl Surface {
         positions_m: &[Vec3],
         boundaries: &[Boundary],
     ) -> Result<SurfaceStep, Refusal> {
-        self.evaluate(None, positions_m, 0.0, boundaries, None)
+        self.evaluate(None, positions_m, 0.0, boundaries, None, None)
     }
 
     /// Advance material temperatures on the supplied CURRENT geometry. This is backward Euler on
@@ -261,7 +263,38 @@ impl Surface {
                 "thermal state belongs to a different material or reference mesh",
             ));
         }
-        self.evaluate(Some(old), positions_m, seconds, boundaries, None)
+        self.evaluate(Some(old), positions_m, seconds, boundaries, None, None)
+    }
+
+    /// Advance with one explicitly supplied energy in J per retained patch/cell. Energies belong
+    /// to reference material mass: a current-area change never scales or duplicates a heat source.
+    /// The source's physical origin and through-thickness distribution belong to the caller.
+    ///
+    /// # Errors
+    /// As [`Self::advance`], plus mismatched cell arrays, negative/nonfinite energy, unavailable
+    /// adiabatic enthalpy inside the material domain, or a failed source-inclusive energy balance.
+    pub fn advance_with_heat(
+        &self,
+        old: &SurfaceState,
+        positions_m: &[Vec3],
+        seconds: f64,
+        boundaries: &[Boundary],
+        heat_j: &[Vec<f64>],
+    ) -> Result<SurfaceStep, Refusal> {
+        positive("surface thermal time step", seconds)?;
+        if old.sha256 != self.sha256 || old.temperature_c.len() != self.patches.len() {
+            return Err(invalid(
+                "thermal state belongs to a different material or reference mesh",
+            ));
+        }
+        self.evaluate(
+            Some(old),
+            positions_m,
+            seconds,
+            boundaries,
+            None,
+            Some(heat_j),
+        )
     }
 
     /// Steady limit with an explicit qualified exterior environment per material column.
@@ -276,7 +309,7 @@ impl Surface {
         boundaries: &[Boundary],
         exteriors: &[Exterior],
     ) -> Result<SurfaceStep, Refusal> {
-        self.evaluate(None, positions_m, 0.0, boundaries, Some(exteriors))
+        self.evaluate(None, positions_m, 0.0, boundaries, Some(exteriors), None)
     }
 
     /// Advance with source-qualified exterior exchange on CURRENT triangle areas while keeping
@@ -300,7 +333,44 @@ impl Surface {
                 "thermal state belongs to a different material or reference mesh",
             ));
         }
-        self.evaluate(Some(old), positions_m, seconds, boundaries, Some(exteriors))
+        self.evaluate(
+            Some(old),
+            positions_m,
+            seconds,
+            boundaries,
+            Some(exteriors),
+            None,
+        )
+    }
+
+    /// Advance with internal cell energies in J and qualified exterior convection/radiation.
+    /// Reference mass and source energy stay fixed while exposure uses current patch geometry.
+    ///
+    /// # Errors
+    /// As [`Self::advance_with_heat`] and [`Self::advance_exterior`].
+    pub fn advance_exterior_with_heat(
+        &self,
+        old: &SurfaceState,
+        positions_m: &[Vec3],
+        seconds: f64,
+        boundaries: &[Boundary],
+        exteriors: &[Exterior],
+        heat_j: &[Vec<f64>],
+    ) -> Result<SurfaceStep, Refusal> {
+        positive("surface thermal time step", seconds)?;
+        if old.sha256 != self.sha256 || old.temperature_c.len() != self.patches.len() {
+            return Err(invalid(
+                "thermal state belongs to a different material or reference mesh",
+            ));
+        }
+        self.evaluate(
+            Some(old),
+            positions_m,
+            seconds,
+            boundaries,
+            Some(exteriors),
+            Some(heat_j),
+        )
     }
 
     fn evaluate(
@@ -310,6 +380,7 @@ impl Surface {
         seconds: f64,
         boundaries: &[Boundary],
         exteriors: Option<&[Exterior]>,
+        heat_j: Option<&[Vec<f64>]>,
     ) -> Result<SurfaceStep, Refusal> {
         if positions.len() != self.vertex_count
             || positions.iter().any(|v| !v.is_finite())
@@ -318,6 +389,17 @@ impl Surface {
         {
             return Err(invalid(
                 "thermal surface needs every vertex and one boundary/environment per column",
+            ));
+        }
+        if heat_j.is_some_and(|heat| {
+            heat.len() != self.patches.len()
+                || heat.iter().zip(&self.patches).any(|(cells, patch)| {
+                    cells.len() != self.columns[patch.column].cells()
+                        || cells.iter().any(|q| !q.is_finite() || *q < 0.0)
+                })
+        }) {
+            return Err(invalid(
+                "surface internal heat needs one finite nonnegative energy per patch cell",
             ));
         }
         let mut result = SurfaceStep {
@@ -330,6 +412,7 @@ impl Surface {
             inside_heat_w: 0.0,
             outside_heat_w: 0.0,
             stored_change_j: 0.0,
+            supplied_heat_j: 0.0,
             balance_error_j: 0.0,
             exterior_exchange: exteriors.map(|_| SurfaceExteriorExchange {
                 patches: Vec::with_capacity(self.patches.len()),
@@ -344,18 +427,32 @@ impl Surface {
             let ratio = positive("deformed/reference area ratio", area / p.reference_area_m2)?;
             let column = &self.columns[p.column];
             let boundary = boundaries[p.column];
+            let heat = heat_j.map(|source| {
+                result.supplied_heat_j += source[i].iter().sum::<f64>();
+                source[i]
+                    .iter()
+                    .map(|energy| energy / p.reference_area_m2)
+                    .collect::<Vec<_>>()
+            });
             // Delta H_ref/(J*dt) = L(T) is exactly the column equation with dt' = J*dt.
             // R(T) remains per current area. Integrating Cp(T) against reference mass, NOT current
             // area, keeps material mass and stored heat invariant as a sheet stretches or changes pose.
             let state = if let Some(exteriors) = exteriors {
-                let step = match old {
-                    Some(old) => column.advance_exterior(
+                let step = match (old, heat.as_deref()) {
+                    (Some(old), Some(heat)) => column.advance_exterior_with_heat(
+                        &old.temperature_c[i],
+                        positive("geometry-scaled thermal time step", seconds * ratio)?,
+                        boundary,
+                        &exteriors[p.column],
+                        heat,
+                    )?,
+                    (Some(old), None) => column.advance_exterior(
                         &old.temperature_c[i],
                         positive("geometry-scaled thermal time step", seconds * ratio)?,
                         boundary,
                         &exteriors[p.column],
                     )?,
-                    None => column.steady_exterior(boundary, &exteriors[p.column])?,
+                    (None, _) => column.steady_exterior(boundary, &exteriors[p.column])?,
                 };
                 let total = result
                     .exterior_exchange
@@ -367,13 +464,19 @@ impl Surface {
                 total.patches.push(step.exchange);
                 step.state
             } else {
-                match old {
-                    Some(old) => column.advance(
+                match (old, heat.as_deref()) {
+                    (Some(old), Some(heat)) => column.advance_with_heat(
+                        &old.temperature_c[i],
+                        positive("geometry-scaled thermal time step", seconds * ratio)?,
+                        boundary,
+                        heat,
+                    )?,
+                    (Some(old), None) => column.advance(
                         &old.temperature_c[i],
                         positive("geometry-scaled thermal time step", seconds * ratio)?,
                         boundary,
                     )?,
-                    None => column.steady(boundary)?,
+                    (None, _) => column.steady(boundary)?,
                 }
             };
             let stored = state.stored_change_j_m2 * p.reference_area_m2;
@@ -390,14 +493,16 @@ impl Surface {
             result.state.temperature_c.push(state.temperature_c);
         }
         if old.is_some() {
-            result.balance_error_j =
-                result.stored_change_j - seconds * (result.inside_heat_w - result.outside_heat_w);
+            result.balance_error_j = result.stored_change_j
+                - seconds * (result.inside_heat_w - result.outside_heat_w)
+                - result.supplied_heat_j;
         }
         if [
             result.area_m2,
             result.inside_heat_w,
             result.outside_heat_w,
             result.stored_change_j,
+            result.supplied_heat_j,
             result.balance_error_j,
         ]
         .iter()

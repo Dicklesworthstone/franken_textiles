@@ -10,6 +10,7 @@ use ftx_pattern::materials::Form;
 use serde_json::{Value, json};
 
 pub mod exterior;
+mod heating;
 mod nonlinear;
 pub mod steady;
 pub mod surface;

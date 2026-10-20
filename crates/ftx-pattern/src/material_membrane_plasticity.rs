@@ -33,6 +33,16 @@ const ELASTIC: [(&str, &str); 4] = [
     ("shear_stiffness", "N/m"),
 ];
 
+/// Source-qualified fraction of irreversible membrane dissipation deposited as sensible heat.
+/// The complete observation remains in the selected material snapshot; no default fraction exists.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct PlasticHeatFraction {
+    /// Dimensionless fraction in [0,1], excluding elastic and hardening storage.
+    pub fraction: f64,
+    /// Inclusive characterized material-temperature interval in degrees Celsius.
+    pub temperature_range_c: [f64; 2],
+}
+
 fn bad(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }
@@ -357,5 +367,73 @@ impl ResolvedMaterial {
             law.source_sha256 = Some(self.sha256().to_owned());
         }
         Ok(law)
+    }
+
+    /// Resolve heat conversion only when explicitly requested by a thermal consumer. Mechanical
+    /// readiness never calls this optional compiler. No active permanent membrane law returns None;
+    /// an active law needs its own qualified conversion observation, including explicit zero.
+    /// The law and this observation share the full frozen material identity, specimen and conditions.
+    ///
+    /// # Errors
+    /// Invalid permanent law, missing/unapproved conversion evidence, mismatched specimen or
+    /// conditioning, wrong work basis, fraction/bounds outside [0,1], or invalid temperature range.
+    pub fn membrane_plastic_heat_fraction(&self) -> Result<Option<PlasticHeatFraction>, Refusal> {
+        if self.membrane_plasticity()?.is_none() {
+            return Ok(None);
+        }
+        let material = self.material();
+        let key = "membrane_plastic_heat_fraction";
+        let fraction = material.require(key, "1", self.allows_estimates())?;
+        let observation = &material.properties[key];
+        if !(0.0..=1.0).contains(&fraction)
+            || observation
+                .bounds
+                .is_some_and(|[lo, hi]| lo < 0. || hi > 1.)
+        {
+            return Err(bad(
+                "membrane plastic heat fraction and bounds must lie in [0,1]",
+            ));
+        }
+        // Compiling the active law above checked this identity across every elastic/history datum.
+        let conditions = &material.properties[ELASTIC[0].0].conditions;
+        for identity in ["specimen_id", "conditioning"] {
+            if observation.conditions.get(identity) != conditions.get(identity) {
+                return Err(bad(format!(
+                    "membrane plastic heat fraction must match the law's {identity}"
+                )));
+            }
+        }
+        if observation.conditions.get("work_basis").map(String::as_str)
+            != Some("irreversible_membrane_plastic_dissipation")
+        {
+            return Err(bad(
+                "membrane plastic heat fraction requires irreversible_membrane_plastic_dissipation work basis",
+            ));
+        }
+        let mut temperature_range_c = [0.; 2];
+        for (i, name) in ["temperature_min_c", "temperature_max_c"]
+            .iter()
+            .enumerate()
+        {
+            temperature_range_c[i] = observation
+                .conditions
+                .get(*name)
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value >= -273.15)
+                .ok_or_else(|| {
+                    bad(format!(
+                        "membrane plastic heat fraction needs finite {name} >= -273.15"
+                    ))
+                })?;
+        }
+        if temperature_range_c[0] > temperature_range_c[1] {
+            return Err(bad(
+                "membrane plastic heat temperature range must be ordered",
+            ));
+        }
+        Ok(Some(PlasticHeatFraction {
+            fraction,
+            temperature_range_c,
+        }))
     }
 }

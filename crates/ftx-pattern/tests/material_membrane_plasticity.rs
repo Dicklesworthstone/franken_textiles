@@ -2,7 +2,7 @@
 use ftx_pattern::{
     material_catalog::Selection,
     material_membrane_plasticity::{AXES, MODEL, PROPERTY_FAMILIES, PlasticMembrane},
-    materials::{Catalog, Material},
+    materials::{Catalog, Evidence, Material},
 };
 use serde_json::json;
 
@@ -451,6 +451,163 @@ fn incomplete_mixed_and_unsupported_history_cannot_silently_fall_back_to_elastic
             .resolve(&absent)
             .unwrap()
             .membrane_plasticity()
+            .unwrap()
+            .is_none()
+    );
+}
+
+fn heat_selection() -> Selection {
+    let mut selected = selection();
+    selected.record.as_mut().unwrap().properties.insert(
+        "membrane_plastic_heat_fraction".into(),
+        serde_json::from_value(json!({
+            "value":0.75,"unit":"1","evidence":"estimate","source":"test",
+            "method":"Synthetic irreversible-work conversion; not measured textile data",
+            "conditions":{"specimen_id":"synthetic-green-A","conditioning":"synthetic fixed state",
+                "work_basis":"irreversible_membrane_plastic_dissipation",
+                "temperature_min_c":"0","temperature_max_c":"80"}
+        }))
+        .unwrap(),
+    );
+    selected
+}
+
+#[test]
+fn plastic_heat_fraction_retains_source_units_and_full_material_identity() {
+    let catalog = Catalog::builtin().unwrap();
+    let mut selected = heat_selection();
+    let observation = selected
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("membrane_plastic_heat_fraction")
+        .unwrap();
+    observation.value = 75.;
+    observation.unit = "%".into();
+    let resolved = catalog.resolve(&selected).unwrap();
+    let heat = resolved.membrane_plastic_heat_fraction().unwrap().unwrap();
+    assert_eq!(heat.fraction, 0.75);
+    assert_eq!(heat.temperature_range_c, [0., 80.]);
+    assert_eq!(
+        resolved.authored().properties["membrane_plastic_heat_fraction"].value,
+        75.
+    );
+    assert_eq!(
+        catalog
+            .resolve(&resolved.frozen_selection())
+            .unwrap()
+            .membrane_plastic_heat_fraction()
+            .unwrap(),
+        Some(heat)
+    );
+    let mut changed = selected.clone();
+    changed
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("membrane_plastic_heat_fraction")
+        .unwrap()
+        .value = 50.;
+    let changed = catalog.resolve(&changed).unwrap();
+    assert_ne!(resolved.sha256(), changed.sha256());
+    assert_ne!(
+        resolved
+            .membrane_plasticity()
+            .unwrap()
+            .unwrap()
+            .fingerprint(),
+        changed
+            .membrane_plasticity()
+            .unwrap()
+            .unwrap()
+            .fingerprint()
+    );
+    assert_eq!(
+        resolved.mechanics().unwrap().origin_tangent(),
+        changed.mechanics().unwrap().origin_tangent()
+    );
+}
+
+#[test]
+fn heat_conversion_requires_its_own_qualified_evidence_without_changing_mechanics() {
+    let catalog = Catalog::builtin().unwrap();
+    let missing = catalog.resolve(&selection()).unwrap();
+    assert!(missing.mechanics().is_ok());
+    assert!(missing.membrane_plastic_heat_fraction().is_err());
+    for (key, value) in [
+        ("specimen_id", "other coupon"),
+        ("conditioning", "other state"),
+        ("work_basis", "total_mechanical_energy"),
+        ("temperature_min_c", "NaN"),
+        ("temperature_max_c", "inf"),
+        ("temperature_min_c", "-274"),
+        ("temperature_min_c", "81"),
+        ("temperature_max_c", ""),
+    ] {
+        let mut selected = heat_selection();
+        selected
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("membrane_plastic_heat_fraction")
+            .unwrap()
+            .conditions
+            .insert(key.into(), value.into());
+        let resolved = catalog.resolve(&selected).unwrap();
+        assert!(resolved.mechanics().is_ok());
+        assert!(
+            resolved.membrane_plastic_heat_fraction().is_err(),
+            "{key}={value}"
+        );
+    }
+    for value in [-0.1, 1.1] {
+        let mut selected = heat_selection();
+        selected
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("membrane_plastic_heat_fraction")
+            .unwrap()
+            .value = value;
+        let resolved = catalog.resolve(&selected).unwrap();
+        assert!(resolved.mechanics().is_ok());
+        assert!(resolved.membrane_plastic_heat_fraction().is_err());
+    }
+    let mut selected = heat_selection();
+    // Mark only the pre-existing fixture observations published to isolate conversion consent.
+    // This tests the evidence gate; the fixture remains explicitly synthetic.
+    for (key, quantity) in &mut selected.record.as_mut().unwrap().properties {
+        if key != "membrane_plastic_heat_fraction" {
+            quantity.evidence = Evidence::Published;
+        }
+    }
+    selected.allow_estimates = false;
+    let denied = catalog.resolve(&selected).unwrap();
+    assert!(denied.mechanics().is_ok());
+    assert!(denied.membrane_plastic_heat_fraction().is_err());
+    selected.allow_estimates = true;
+    assert!(
+        catalog
+            .resolve(&selected)
+            .unwrap()
+            .membrane_plastic_heat_fraction()
+            .is_ok()
+    );
+    selected
+        .record
+        .as_mut()
+        .unwrap()
+        .structure
+        .remove("membrane_plasticity_model");
+    assert!(
+        catalog
+            .resolve(&selected)
+            .unwrap()
+            .membrane_plastic_heat_fraction()
             .unwrap()
             .is_none()
     );

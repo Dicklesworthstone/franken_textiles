@@ -1,7 +1,8 @@
 //! Independent permanent-set answers through physical triangle kinematics and accepted Newton steps.
 //! All coefficients, domains and applied loads are synthetic software qualification fixtures.
 use ftx_core::{RefusalCode, Vec2, Vec3};
-use ftx_drape::{ClothModel, Membrane, Solver};
+use ftx_drape::motion::{MotionOptions, advance_body, advance_body_with_dissipation};
+use ftx_drape::{Body, ClothModel, ContactParams, Membrane, Solver};
 use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::material_membrane_plasticity::PlasticMembrane;
 use ftx_pattern::materials::{Catalog, Material};
@@ -108,6 +109,15 @@ fn check_uniaxial(solver: &Solver, strain: f64, permanent: f64, accumulated: f64
         AREA * YIELD * accumulated,
         1e-12,
     );
+    near(
+        element["plastic_dissipation_j"].as_f64().unwrap(),
+        AREA * YIELD * accumulated,
+        1e-12,
+    );
+    assert_eq!(
+        solver.membrane_plastic_dissipation_j().unwrap().unwrap(),
+        vec![element["plastic_dissipation_j"].as_f64().unwrap()]
+    );
     // Nominal reaction is F*S integrated over the reference triangle; S alone is not force.
     let reaction = AREA / LENGTH * (1. + 2. * strain).sqrt() * stress;
     let forces = solver.elastic_forces();
@@ -197,6 +207,7 @@ fn unloading_actual_free_dynamics_retains_extension_while_the_elastic_control_re
         1e-10,
     );
     assert!(elastic.membrane_plasticity_report().unwrap().is_none());
+    assert!(elastic.membrane_plastic_dissipation_j().unwrap().is_none());
 }
 
 #[test]
@@ -317,6 +328,14 @@ fn welded_vertices_keep_independent_directional_permanent_strain_in_each_grain_f
             );
         }
     }
+    let dissipation = solver.membrane_plastic_dissipation_j().unwrap().unwrap();
+    near(dissipation[0], AREA * YIELD * expected[0][0], 1e-12);
+    near(dissipation[1], AREA * 30. * expected[1][1], 1e-12);
+    near(
+        dissipation.iter().sum(),
+        report["plastic_dissipation_j"].as_f64().unwrap(),
+        1e-12,
+    );
     let forces = solver.elastic_forces();
     let stored = solver.membrane_energy().unwrap();
     let rotate = |p: Vec3| Vec3::new(p.z, p.x, p.y);
@@ -385,6 +404,7 @@ fn changed_material_rest_frame_and_source_domain_cannot_reuse_accepted_history()
         change(&mut changed);
         let (x, v) = (changed.x.clone(), changed.v.clone());
         assert!(changed.membrane_plasticity_report().is_err());
+        assert!(changed.membrane_plastic_dissipation_j().is_err());
         assert!(changed.membrane_energy().is_err());
         assert!(changed.step(0.001).is_err());
         assert_eq!(changed.x, x);
@@ -579,4 +599,95 @@ fn other_triangle_maxwell_history_coexists_without_losing_or_double_counting_sto
     near(a.membrane_energy().unwrap(), stored, 1e-13);
     assert!(plastic_report["plastic_dissipation_j"].as_f64().unwrap() > 0.);
     assert!(maxwell_report["viscous_step_work_j"].as_f64().unwrap() > 0.);
+    assert_eq!(
+        a.membrane_plastic_dissipation_j().unwrap().unwrap(),
+        vec![
+            plastic_report["plastic_dissipation_j"].as_f64().unwrap(),
+            0.
+        ]
+    );
+}
+
+#[test]
+fn captured_motion_work_is_local_accepted_and_budgeted_without_changing_ordinary_motion() {
+    let body = Body::new(
+        vec![
+            Vec3::new(-1., -1., -1.),
+            Vec3::new(1., -1., -1.),
+            Vec3::new(0., 1., -1.),
+        ],
+        vec![[0, 1, 2]],
+        0.1,
+    )
+    .unwrap();
+    let target: Vec<_> = body
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0.001, 0., 0.))
+        .collect();
+    let mut original = plastic(false)
+        .with_contact(
+            body,
+            ContactParams {
+                dhat: 0.001,
+                thickness: 0.0005,
+                kappa: 100.,
+                mu: 0.,
+                eps_v: 0.001,
+            },
+        )
+        .unwrap();
+    // A synthetic dead load progressively yields the free warp coordinate; the distant body's
+    // translation exercises accepted motion capture without adding unqualified contact heating.
+    original.gravity = Vec3::new(2. / original.model.mass[1], 0., 0.);
+    let before = format!("{original:?}");
+    let options = MotionOptions {
+        max_step_s: 0.0001,
+        max_sample_vertices: 21, // 3 samples * (3 body + 3 cloth + 1 work scalar)
+        ..MotionOptions::default()
+    };
+    let mut captured = original.clone();
+    let report = advance_body_with_dissipation(&mut captured, &target, 0.0003, options).unwrap();
+    assert_eq!(report.samples.len(), 3);
+    let work: Vec<_> = report
+        .samples
+        .iter()
+        .map(|sample| {
+            let values = sample.membrane_plastic_dissipation_j.as_ref().unwrap();
+            assert_eq!(values.len(), 1);
+            values[0]
+        })
+        .collect();
+    assert!(work[0] > 0.);
+    assert!(work.windows(2).all(|pair| pair[1] > pair[0]));
+    assert_eq!(
+        captured.membrane_plastic_dissipation_j().unwrap().unwrap(),
+        vec![work[2]]
+    );
+    let ordinary_options = MotionOptions {
+        max_sample_vertices: 18, // unchanged geometry-only path fits exactly
+        ..options
+    };
+    let mut ordinary = original.clone();
+    let plain = advance_body(&mut ordinary, &target, 0.0003, ordinary_options).unwrap();
+    assert!(
+        plain
+            .samples
+            .iter()
+            .all(|sample| sample.membrane_plastic_dissipation_j.is_none())
+    );
+    assert_eq!(format!("{ordinary:?}"), format!("{captured:?}"));
+    // Capture exhausts this budget only after two physically accepted steps. No accepted local
+    // work, geometry, velocity, collider or solver cache may leak from the refused whole request.
+    assert_eq!(
+        advance_body_with_dissipation(&mut original, &target, 0.0003, ordinary_options)
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+    assert_eq!(format!("{original:?}"), before);
+    assert_eq!(
+        original.membrane_plastic_dissipation_j().unwrap(),
+        Some(vec![0.])
+    );
 }

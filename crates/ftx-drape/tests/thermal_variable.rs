@@ -50,6 +50,43 @@ fn variable_heat_capacity_matches_independent_quadratic_not_endpoint_capacity() 
 }
 
 #[test]
+fn internal_heat_uses_integrated_variable_enthalpy_and_refuses_domain_extrapolation() {
+    let model = model(&selection(), 1);
+    let old = [10.0];
+    let b = Boundary {
+        inside_c: 10.0,
+        outside_c: 10.0,
+        ..boundary()
+    };
+    let supplied = 2000.0;
+    let state = model.advance_with_heat(&old, 5.0, b, &[supplied]).unwrap();
+    // H(10+d)-H(10) = 240*d + 2*d²; both reservoirs remove 5*(1/.3+1/.4)*d.
+    let linear: f64 = 240.0 + 5.0 * (1.0 / 0.3 + 1.0 / 0.4);
+    let delta = 2.0 * supplied / (linear + (linear * linear + 8.0 * supplied).sqrt());
+    let expected = 10.0 + delta;
+    let enthalpy = 240.0 * delta + 2.0 * delta * delta;
+    near(state.temperature_c[0], expected, 1e-9);
+    near(state.stored_change_j_m2, enthalpy, 1e-7);
+    near(
+        state.stored_change_j_m2,
+        5.0 * (state.inside_flux_w_m2 - state.outside_flux_w_m2) + supplied,
+        1e-7,
+    );
+    near(state.balance_error_j_m2, 0.0, 1e-7);
+    assert!((enthalpy - (200.0 + 4.0 * expected) * delta).abs() > 1.0);
+    assert!(model.advance_with_heat(&old, 5.0, b, &[1e9]).is_err());
+    assert!(model.advance_with_heat(&[59.0], 5.0, b, &[1000.0]).is_err());
+    assert_eq!(old, [10.0]);
+    assert_eq!(
+        model
+            .advance_with_heat(&old, 5.0, b, &[supplied])
+            .unwrap()
+            .temperature_c,
+        state.temperature_c
+    );
+}
+
+#[test]
 fn conductivity_refinement_converges_to_integrated_fourier_flux() {
     let mut s = selection();
     s.record

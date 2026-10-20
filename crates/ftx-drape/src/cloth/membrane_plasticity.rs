@@ -18,6 +18,7 @@ struct Bound {
     material: Membrane,
     law: PlasticMembrane,
     memory: Memory,
+    dissipated_j: f64,
 }
 
 impl Bound {
@@ -51,6 +52,8 @@ impl Field {
         if self.entries.len() != model.membranes.len()
             || model.compression.len() != model.membranes.len()
             || x.len() != model.rest.len()
+            || !self.dissipated_j.is_finite()
+            || self.dissipated_j < 0.
         {
             return Err(bad(
                 "plastic membrane history no longer matches the cloth topology",
@@ -61,6 +64,8 @@ impl Field {
                 if model.membranes[i] != b.element
                     || model.material(i) != b.material
                     || model.membrane_response(i).is_some()
+                    || !b.dissipated_j.is_finite()
+                    || b.dissipated_j < 0.
                 {
                     return Err(bad(
                         "changed material, grain or rest triangle cannot reuse plastic membrane history",
@@ -112,8 +117,17 @@ impl Field {
         for (i, b) in self.entries.iter().enumerate() {
             if let Some(b) = b {
                 let update = b.memory.advance(b.strain(x)?)?;
-                dissipated += b.element.area * update.dissipated_j_m2;
-                updates.push((i, update.memory));
+                let increment = b.element.area * update.dissipated_j_m2;
+                let local = b.dissipated_j + increment;
+                if !increment.is_finite()
+                    || increment < 0.
+                    || !local.is_finite()
+                    || local < b.dissipated_j
+                {
+                    return Err(bad("plastic membrane triangle dissipation overflows"));
+                }
+                dissipated += increment;
+                updates.push((i, update.memory, local));
             }
         }
         let steps = self
@@ -123,11 +137,10 @@ impl Field {
         if !dissipated.is_finite() || dissipated < self.dissipated_j {
             return Err(bad("plastic membrane dissipation overflows"));
         }
-        for (i, memory) in updates {
-            self.entries[i]
-                .as_mut()
-                .expect("bound material update")
-                .memory = memory;
+        for (i, memory, dissipated_j) in updates {
+            let bound = self.entries[i].as_mut().expect("bound material update");
+            bound.memory = memory;
+            bound.dissipated_j = dissipated_j;
         }
         self.steps = steps;
         self.dissipated_j = dissipated;
@@ -181,7 +194,7 @@ impl Solver {
             {
                 return Err(bad("invalid permanent-stretch reference triangle"));
             }
-            Ok(Some(Bound { element, material, law: law.clone(), memory: law.pristine() }))
+            Ok(Some(Bound { element, material, law: law.clone(), memory: law.pristine(), dissipated_j: 0. }))
         }).collect::<Result<Vec<_>, Refusal>>()?;
         let field = Field {
             entries,
@@ -227,6 +240,28 @@ impl Solver {
         Ok(energy)
     }
 
+    /// Cumulative accepted irreversible membrane work in joules, in retained triangle order.
+    /// Unselected triangles contribute zero; absence means no permanent membrane law is bound.
+    /// Values include initial forming/drape history. A later heat consumer must retain its own
+    /// initial baseline and consume only new accepted work, with explicit conversion qualification.
+    /// This read never advances memory or changes the caller's state.
+    ///
+    /// # Errors
+    /// Stale material/topology, invalid current strain, or non-finite accepted dissipation.
+    pub fn membrane_plastic_dissipation_j(&self) -> Result<Option<Vec<f64>>, Refusal> {
+        let Some(field) = &self.membrane_plasticity else {
+            return Ok(None);
+        };
+        field.check(&self.model, &self.x)?;
+        Ok(Some(
+            field
+                .entries
+                .iter()
+                .map(|bound| bound.as_ref().map_or(0., |b| b.dissipated_j))
+                .collect(),
+        ))
+    }
+
     /// Report accepted permanent Green strain, directional accumulation and plastic dissipation
     /// for selected triangles. This does not import a restart state or supply a thermal heat source.
     ///
@@ -250,6 +285,7 @@ impl Solver {
                     "plastic_green_strain":b.memory.plastic_strain(),
                     "accumulated_plastic_green_strain":b.memory.accumulated_strain(),
                     "current_green_strain":strain,"elastic_stress_n_m":response.stress,
+                    "plastic_dissipation_j":b.dissipated_j,
                     "stored_elastic_and_hardening_energy_j":energy}));
             }
         }
