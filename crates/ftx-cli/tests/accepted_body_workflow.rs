@@ -999,13 +999,14 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         "conditions":{"specimen_id":"artificial-stretch-A","conditioning":"synthetic constant dry state",
             "work_basis":"irreversible_membrane_plastic_dissipation",
             "temperature_min_c":"-20","temperature_max_c":"80"}});
-    // This explicitly synthetic low-yield continuation retains new accepted work after forming.
-    // It does not claim that the small prescribed shoulder motion loads a real garment.
-    for kind in ["yield", "hardening"] {
+    // Low yield retains work after forming; sufficient synthetic hardening lets the stretched
+    // band support its weight through cylinder friction instead of slipping indefinitely.
+    // These are declared test materials, not inferred properties of a real garment.
+    for (kind, factor) in [("yield", 0.01), ("hardening", 10.0)] {
         for axis in ["warp", "weft", "shear"] {
             let value = &mut unconverted["record"]["properties"][format!("membrane_{kind}_{axis}")]
                 ["value"];
-            *value = json!(value.as_f64().unwrap() * 0.01);
+            *value = json!(value.as_f64().unwrap() * factor);
         }
     }
     let mut converted = unconverted.clone();
@@ -1047,7 +1048,12 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
             &["--json", "materials", "scenario-study"]
         )
     );
-    assert_eq!(heated["comparison"]["frontier"], json!(["unconverted"]));
+    assert_eq!(
+        heated["comparison"]["frontier"],
+        json!(["unconverted"]),
+        "{}",
+        heated["comparison"]["alternatives"]
+    );
     assert_eq!(heated["comparison"]["incomparable"], json!([]));
     for candidate in heated["comparison"]["alternatives"].as_array().unwrap() {
         assert_eq!(candidate["eligible"], true, "{candidate}");
