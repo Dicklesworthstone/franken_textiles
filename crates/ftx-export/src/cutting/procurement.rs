@@ -22,6 +22,9 @@ pub struct Market {
     pub terms: String,
     /// Reproducible as-of date, YYYY-MM-DD, not the wall clock.
     pub as_of: String,
+    /// Required for version-2 quotes: UTC evaluation instant, with the same date as `as_of`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of_at: Option<String>,
     /// Maximum permissible observation age in calendar days.
     pub max_age_days: u32,
     /// Require source-observed capacity for each complete minimum/increment-rounded order.
@@ -53,6 +56,7 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             quality: market.quality.clone(),
             terms: market.terms.clone(),
             as_of: market.as_of.clone(),
+            as_of_at: market.as_of_at.clone(),
             max_age_days: market.max_age_days,
             requirement: roll.stock_area_m2,
             basis: Basis::Area,

@@ -80,6 +80,38 @@ class RefreshTests(unittest.TestCase):
         p = product(); p["price_min"] = 1; p["variants"][1]["compare_at_price"] = 50000
         self.assertEqual(self.extract(p=p)[0]["price"], 12.99)
 
+    def test_intraday_retains_actual_utc_retrieval_precision_without_changing_legacy_output(self):
+        local = dt.datetime(2026, 10, 12, 22, 30, 1, 123456,
+                            tzinfo=dt.timezone(dt.timedelta(hours=-4)))
+        old, old_receipt = self.extract(now=local)
+        q, receipt = r.extract(entry(), raw(product()), CART, CART, local, intraday=True)
+        self.assertEqual(q["observed_at"], "2026-10-13T02:30:01.123456Z")
+        self.assertEqual(q["observed_on"], "2026-10-13")
+        self.assertEqual(receipt["quote_schema"], r.INTRADAY_SCHEMA)
+        self.assertEqual(r.utc_instant(dt.datetime.fromisoformat(receipt["observed_at"])), q["observed_at"])
+        self.assertEqual({k: v for k, v in q.items() if k != "observed_at"}, old)
+        self.assertEqual({k: v for k, v in receipt.items() if k != "quote_schema"}, old_receipt)
+        with self.assertRaises(ValueError):
+            r.extract(entry(), raw(product()), CART, CART, local.replace(tzinfo=None), intraday=True)
+
+    def test_intraday_refresh_stamps_each_exact_supplier_response_in_shared_receipts(self):
+        feed = csv_entry(); feed["offer_id"] = "synthetic/csv"
+        ticks = iter([NOW.replace(microsecond=1), NOW.replace(microsecond=2)])
+        def get(url, *, accept):
+            return csv_raw() if url.endswith(".csv") else CART if url.endswith("cart.js") else raw(product())
+        book, evidence = r.refresh(dict(schema="ftx-textile-refresh/1", offers=[feed, entry()]),
+                                   get, lambda: next(ticks), intraday=True)
+        self.assertEqual(book["schema"], "ftx-textile-quotes/2")
+        observed = {q["offer_id"]: q["observed_at"] for q in book["quotes"]}
+        self.assertEqual(observed, {"synthetic/csv": "2026-10-13T12:00:00.000001Z",
+                                    "synthetic/42": "2026-10-13T12:00:00.000002Z"})
+        for name, data in evidence.items():
+            if name.endswith(".receipt.json"):
+                receipt = r.load(data)
+                self.assertEqual(receipt["quote_schema"], book["schema"])
+                self.assertEqual(r.utc_instant(dt.datetime.fromisoformat(receipt["observed_at"])),
+                                 observed[receipt["manifest_entry"]["offer_id"]])
+
     def test_reviewed_material_lock_is_optional_and_not_a_source_inventory_number(self):
         e = entry(); e["material_sha256"] = "a1" * 32
         q, receipt = self.extract(e=e)

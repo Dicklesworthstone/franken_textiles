@@ -121,6 +121,33 @@ function detail(parent, title, value) {
   let shown = false;
   d.addEventListener("toggle", () => { if (d.open && !shown) { pre.textContent = text(value); shown = true; } });
 }
+function procurementResult(parent, r) {
+  for (const row of r.roll_prices || []) {
+    const sample = row.sample, scope = sample.scope;
+    const note = document.createElement("p");
+    note.textContent = `Roll ${row.roll_index + 1}: ${metric(row.required_stock_area_m2)} m² of stock. ` +
+      `Evaluated at ${scope.as_of_at || `${scope.as_of} (date only)`} UTC. ` +
+      `Market: ${scope.currency}; ${scope.region}; ${scope.quality}; ${scope.terms}. ` +
+      "The report retains the latest observed offer and its exclusion; an older price is not substituted.";
+    parent.append(note);
+    const t = table(parent, `Roll ${row.roll_index + 1} — latest supplier observations`,
+      ["Offer", "Observed (UTC)", "Valid through (UTC)", "Admission", "Order quantity", `Merchandise cost (${scope.currency})`]);
+    const entries = [...sample.offers.map(offer => ({ offer, quote: offer.quote })),
+      ...(sample.excluded_offers || []).map(excluded => ({ excluded, quote: excluded.quote }))];
+    for (const { quote: q, offer, excluded } of entries) {
+      const expiry = [q.valid_through_at, q.valid_through ? `${q.valid_through} (date limit)` : null].filter(Boolean).join("; ");
+      const quantity = offer?.order_quantity ?? excluded?.required_order_quantity;
+      cells(t, [q.offer_id, q.observed_at || `${q.observed_on} (date only)`, expiry || "Not reported",
+        excluded ? `Excluded: ${excluded.reason.replaceAll("_", " ")}` : "Eligible",
+        typeof quantity === "number" ? `${metric(quantity)} ${q.unit}` : "Unknown", metric(offer?.order_cost)]);
+    }
+    if (!entries.length) cells(t, ["No observation in the requested market at this time", "Unknown", "Unknown", "No eligible offer", "Unknown", "Unknown"]);
+    detail(parent, `Roll ${row.roll_index + 1}: selected order, source evidence and stock exclusions`, row);
+  }
+  return { complete_offer_coverage: r.complete_offer_coverage,
+    complete_observed_quantity_coverage: r.complete_observed_quantity_coverage, currency: r.currency,
+    least_observed_independent_order_total: r.least_observed_independent_order_total, limits: r.limits };
+}
 function screening(parent, r) {
   const properties = [...new Set(r.alternatives.flatMap(row => Object.keys(row.readings)))].sort();
   const t = table(parent, "Scalar-property screening only — not garment-level ranking", ["Alternative", "Admission", "Dominated by", ...properties]);
@@ -457,7 +484,7 @@ function show(op, msg) {
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, rolls: r.rolls.map(x => ({ material: x.material?.authored?.id,
         width_m: x.width_m, length_m: x.length_m, stock_mass_kg: x.stock_mass_kg, utilization: x.utilization })), limitations: r.limitations } :
-      op === "price" ? { complete_offer_coverage: r.complete_offer_coverage, currency: r.currency, least_observed_independent_order_total: r.least_observed_independent_order_total, limits: r.limits } :
+      op === "price" ? procurementResult(s.comparison, r) :
       op === "stock" ? { used_stock_count: r.used_stock_count, used_gross_area_m2: r.used_gross_area_m2,
         external_cut_area_m2: r.external_cut_area_m2, markers: r.markers.map(m => ({ id: m.id, pieces: m.placements.length,
           gross_area_m2: m.gross_area_m2, defect_free_area_m2: m.defect_free_area_m2, utilization: m.utilization,

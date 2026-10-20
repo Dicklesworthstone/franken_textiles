@@ -293,6 +293,110 @@ fn locked_finite_supplier_stock_gates_real_marker_orders_and_material_edits() {
 }
 
 #[test]
+fn intraday_marker_orders_use_exact_instants_and_never_revive_older_stock() {
+    let w = setup();
+    let mut old = quote("shell", 10.0);
+    old["observed_at"] = json!("2026-10-14T09:00:00Z");
+    let mut later = quote("shell", 20.0);
+    later["observed_at"] = json!("2026-10-14T12:00:00.123456789Z");
+    later["source_sha256"] = json!("1".repeat(64));
+    let mut knit = quote("knit", 16.0);
+    knit["observed_at"] = old["observed_at"].clone();
+    let publish = |later: &Value| {
+        w.write(
+            "quotes.json",
+            &json!({"schema":"ftx-textile-quotes/2","quotes":[later,knit,old]}),
+        );
+    };
+    let mut market = json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-14","max_age_days":3});
+    publish(&later);
+    for (instant, expected_cost, expected_observation) in [
+        ("2026-10-14T12:00:00.123456788Z", 6.2, &old),
+        ("2026-10-14T12:00:00.123456789Z", 9.2, &later),
+    ] {
+        market["as_of_at"] = json!(instant);
+        w.write("market.json", &market);
+        let result = w.ok(PRICE);
+        assert_eq!(result["complete_offer_coverage"], true);
+        assert!(
+            (result["least_observed_independent_order_total"]
+                .as_f64()
+                .unwrap()
+                - expected_cost)
+                .abs()
+                < 1e-10
+        );
+        for row in result["roll_prices"].as_array().unwrap() {
+            assert_eq!(row["sample"]["scope"]["as_of_at"], instant);
+            if row["least_observed_order"]["quote"]["material_id"] == "shell" {
+                assert_eq!(row["least_observed_order"]["quote"], *expected_observation);
+            }
+        }
+    }
+    market["as_of_at"] = json!("2026-10-14T13:00:00Z");
+    w.write("market.json", &market);
+    for (field, value, reason) in [
+        ("available", json!(false), "unavailable"),
+        ("valid_through_at", json!("2026-10-14T12:30:00Z"), "expired"),
+        ("available_quantity", json!(0.125), "insufficient_quantity"),
+    ] {
+        let mut unusable = later.clone();
+        unusable[field] = value;
+        publish(&unusable);
+        let result = w.ok(PRICE);
+        assert_eq!(result["complete_offer_coverage"], false);
+        assert!(result["least_observed_independent_order_total"].is_null());
+        let excluded = result["roll_prices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|row| row["sample"]["excluded_offers"].as_array())
+            .unwrap();
+        assert_eq!(excluded.len(), 1);
+        assert_eq!(excluded[0]["reason"], reason);
+        assert_eq!(excluded[0]["quote"], unusable);
+    }
+}
+
+#[test]
+fn intraday_history_requires_explicit_scope_and_rejects_conflicting_instants() {
+    let w = setup();
+    let mut shell = quote("shell", 10.0);
+    shell["observed_at"] = json!("2026-10-14T09:00:00Z");
+    let mut knit = quote("knit", 16.0);
+    knit["observed_at"] = shell["observed_at"].clone();
+    let book = json!({"schema":"ftx-textile-quotes/2","quotes":[shell,knit]});
+    w.write("quotes.json", &book);
+    assert!(!w.run(PRICE).status.success()); // Calendar date alone cannot choose intraday stock.
+    let market = json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-14","max_age_days":3,
+        "as_of_at":"2026-10-14T10:00:00Z"});
+    w.write("market.json", &market);
+    assert_eq!(w.ok(PRICE)["complete_offer_coverage"], true);
+
+    let mut conflicting = book.clone();
+    let mut duplicate = conflicting["quotes"][0].clone();
+    duplicate["price"] = json!(99.0);
+    conflicting["quotes"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    w.write("quotes.json", &conflicting);
+    assert!(!w.run(PRICE).status.success());
+
+    let mut legacy = book.clone();
+    legacy["schema"] = json!("ftx-textile-quotes/1");
+    w.write("quotes.json", &legacy);
+    assert!(!w.run(PRICE).status.success());
+    w.write("quotes.json", &book);
+    let mut mismatched = market;
+    mismatched["as_of"] = json!("2026-10-15");
+    w.write("market.json", &mismatched);
+    assert!(!w.run(PRICE).status.success());
+}
+
+#[test]
 fn preview_is_source_locked_script_free_and_cannot_overwrite_an_existing_file() {
     let w = setup();
     let plan = w.ok(PLAN);

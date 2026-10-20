@@ -96,6 +96,10 @@ An empty list <code>[]</code> explicitly removes all pairs; omitting a replaceme
 <label>Dated quote book JSON <input id="quotes" type="file" accept=".json,application/json"></label>
 <label>Comparable market scope JSON <input id="market" type="file" accept=".json,application/json"></label>
 <button id="price" data-command="price" disabled>Compare whole-order costs</button>
+<p class="note">For observations within a day, use <code>ftx-textile-quotes/2</code> with source <code>observed_at</code> instants
+and supply an explicit <code>as_of_at</code> in the market scope. Times use UTC with up to nine fractional-second digits;
+the retained <code>observed_on</code> and <code>as_of</code> dates must match them. Version-1 books keep date-only behavior.
+The latest observation at the requested time controls availability and expiry; an older offer cannot fill a gap.</p>
 <label>Sewing recipe and machine limits JSON <input id="sewOptions" type="file" accept=".json,application/json"></label>
 <button id="sew" data-command="sew" disabled>Evaluate sewing &amp; stitch paths</button>
 </div></div>
@@ -133,7 +137,9 @@ not stock waste, a simulated subset or a weighed finished garment. Mass and ever
 <p class="note">Add an optional <code>comparison</code> to the study request with explicit <code>basis: "nominal"</code>,
 <code>objectives</code>, inclusive <code>constraints</code> and <code>required_consumers</code>. The shared Rust engine reports
 the computed Pareto alternatives, exclusions and protocol-incomparable pairs separately from scalar screening.
-No missing output is scored as zero, and source ranges are not presented as propagated result uncertainty.</p>
+For <code>assembly_mass_kg</code>, <code>basis: "reported_bounds"</code> uses complete reported mass endpoints at fixed authored
+geometry and inventory. Limits must contain the whole range, and overlapping or touching ranges remain unresolved.
+Missing bounds exclude an alternative while its nominal mass remains visible. Other computed metrics currently require the nominal basis.</p>
 </div><div>
 <h3>Fresh body, drape and heat study</h3>
 <label>Scenario request JSON (<code>ftx-drape-scenario/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>

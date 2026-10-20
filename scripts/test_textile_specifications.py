@@ -191,7 +191,7 @@ class SpecificationTests(unittest.TestCase):
 
 
 class SpecificationCliTests(unittest.TestCase):
-    def run_cli(self, root, source, suffix, comparison=False):
+    def run_cli(self, root, source, suffix, comparison=False, intraday=False):
         manifest = root / "manifest.json"
         if not manifest.exists():
             manifest.write_bytes(raw({"schema": "ftx-textile-refresh/1", "offers": [locked()]}))
@@ -200,10 +200,12 @@ class SpecificationCliTests(unittest.TestCase):
         if comparison:
             args.extend(["--compare-specifications", str(root / "old-spec.json"),
                          "--review-out", str(root / (suffix + "-review.json"))])
+        if intraday:
+            args.append("--intraday")
         original = r.refresh
         with patch("sys.argv", args), patch.object(r.PublicSession, "get", side_effect=lambda url, **_:
                 CART if url.endswith("cart.js") else source), patch.object(r, "refresh",
-                side_effect=lambda manifest, get: original(manifest, get, lambda: NOW)):
+                side_effect=lambda manifest, get, **kwargs: original(manifest, get, lambda: NOW, **kwargs)):
             return r.main()
 
     def test_changed_spec_saves_review_and_evidence_without_publishing_quotes(self):
@@ -237,6 +239,29 @@ class SpecificationCliTests(unittest.TestCase):
             self.assertFalse(new["available"])
             self.assertEqual((root / "old-quotes.json").read_bytes(), before)
             self.assertTrue(r.load((root / "new-review.json").read_bytes())["quote_publication_allowed"])
+
+    def test_intraday_source_expiry_replays_without_becoming_material_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            e, source = jsonld_fixture()
+            (root / "manifest.json").write_bytes(raw({"schema": "ftx-textile-refresh/1", "offers": [e]}))
+            self.assertEqual(self.run_cli(root, raw(source), "old"), 0)
+            previous = (root / "old-quotes.json").read_bytes()
+            source["@graph"][1].update(validThrough="2026-10-13T16:00:00.123456Z", price="16.00",
+                                        availability="https://schema.org/OutOfStock")
+            self.assertEqual(self.run_cli(root, raw(source), "new", comparison=True, intraday=True), 0)
+            book = r.load((root / "new-quotes.json").read_bytes())
+            self.assertEqual(book["schema"], r.INTRADAY_SCHEMA)
+            q = book["quotes"][0]
+            self.assertEqual(q["observed_at"], "2026-10-13T12:00:00.000000Z")
+            self.assertEqual(q["valid_through_at"], "2026-10-13T16:00:00.123456Z")
+            self.assertFalse(q["available"])
+            self.assertEqual(q["material_sha256"], e["material_sha256"])
+            review = r.load((root / "new-review.json").read_bytes())
+            self.assertTrue(review["quote_publication_allowed"])
+            self.assertEqual(review["offers"][0]["status"], "unchanged")
+            s.replay(r.load((root / "new-spec.json").read_bytes()), root / "evidence")
+            self.assertEqual((root / "old-quotes.json").read_bytes(), previous)
 
 
 if __name__ == "__main__":

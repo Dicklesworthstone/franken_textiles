@@ -1,7 +1,7 @@
 # Source refresh into the existing material-price workbench
 
 `scripts/refresh_textile_prices.py` reads public Shopify Ajax, reviewed CSV and schema.org Product/Offer data and emits the existing
-`ftx-textile-quotes/1` format consumed by `ftx-materials price`. This is an external data-ingestion
+`ftx-textile-quotes/1` format, or explicit intraday `/2` with `--intraday`, consumed by `ftx-materials price`. This is an external data-ingestion
 adapter, not a second catalog, pricing model, physics module, scheduler or checkout client.
 It requires only Python 3's standard library; the solver remains offline and deterministic.
 
@@ -89,8 +89,9 @@ consumer infers hide area, fabric density, thermal resistance, elasticity or saf
 price data. Quote currency does not prove delivery-region eligibility. Market/quality/tax/shipping labels
 are reviewed declarations, not properties established by the Ajax response.
 
-The current Rust quote schema records calendar dates. Keep intraday refreshes as separate snapshots:
-merging conflicting same-day rows into a single historical book is deliberately rejected by that schema.
+The version-1 Rust quote schema records calendar dates and rejects conflicting same-day rows.
+Use the opt-in version-2 path below when a historical book needs multiple observations on one date;
+both versions retain immutable source snapshots.
 A successful fetch is not a purchase guarantee or a statistically representative world-market survey.
 No automatic recurring refresh is configured. A reviewed four-offer live manifest is now available in
 `docs/examples/textile-supplier-refresh.json`; its full public-source refresh succeeded on 2026-10-18.
@@ -98,7 +99,7 @@ The dated factual snapshot is `docs/examples/textile-quotes-2026-10-18.json`. Th
 consumer resolved the corresponding built-in material widths, converted metre/yard prices to area
 rates, rounded actual sale increments and excluded the out-of-stock variant. See
 `docs/supplier-apparel-catalog.md` for exact source scope and remaining supplier coverage. Policy-aware
-scheduling, broader supplier qualification and intraday history semantics remain follow-up work.
+scheduling and broader supplier qualification remain follow-up work.
 
 Primary interface references (checked 2026-10-13):
 - Shopify Ajax Product API: https://shopify.dev/docs/api/ajax/reference/product
@@ -202,9 +203,9 @@ statement: the reviewed manifest still declares the sale unit and quantity, and 
 The quote model accepts optional `valid_through: "YYYY-MM-DD"` (last eligible UTC date, inclusive).
 Existing quotes omit it and round-trip unchanged; absence means no known expiry, not guaranteed
 future validity. JSON-LD retains the earliest dated price/offer/availability end boundary in this
-field. It rejects already-expired or not-yet-valid observations. Intraday end timestamps refuse because
-the current purchasing scope evaluates calendar dates, not instants; they are not rounded into a
-longer-lived offer. A new build is required to consume this optional field with expiry semantics.
+field. It rejects already-expired or not-yet-valid observations. Intraday end timestamps still refuse
+in version 1; version 2 retains them as precise instants rather than rounding them into longer-lived
+offers. A compatible build is required to consume the declared schema with its expiry semantics.
 
 The Rust evaluator first chooses the latest observation per exact offer/scope and **then** filters
 expiry and staleness. Consequently an expired or unavailable latest offer cannot resurrect an older,
@@ -215,6 +216,65 @@ Primary structured-data interface reference, checked 2026-10-14: https://schema.
 Offline regressions cover graph/variant selection, conflicting prices, explicit stock and tax,
 conditional offers, source/quote expiry, broken JSON-LD, bounded traversal, and complete CLI evidence
 publication. They do not establish live supplier qualification or worldwide price coverage.
+
+### Intraday histories through the existing procurement and study consumers
+
+Use `--intraday` to publish `ftx-textile-quotes/2`. The reviewed manifest and source adapters remain
+the same; each quote adds its actual source-observation `observed_at`, taken from the same clock as
+its retained receipt, and keeps `observed_on` as the matching UTC calendar date. CSV responses shared
+by several selected rows retain one fetch time. Shopify, CSV and JSON-LD all use this path:
+
+```sh
+python3 scripts/refresh_textile_prices.py docs/examples/textile-supplier-refresh.json \
+  --intraday --out quotes-next.json --evidence supplier-evidence
+```
+
+Each version-2 quote requires `observed_at` in UTC
+`YYYY-MM-DDTHH:MM:SSZ` or `YYYY-MM-DDTHH:MM:SS.fractionZ` form. Rust accepts one to nine fractional
+digits and compares integer seconds/nanoseconds without floating-point rounding. Offsets, local
+times, named zones, leap-second spellings, `24:00` and more than nine fractional digits refuse at
+this boundary. The Python adapter normalizes its timezone-aware retrieval clock to UTC and preserves
+its six-digit microsecond resolution. No time is invented for an older calendar-only observation.
+
+Keep full source observations when combining version-2 snapshots into a history. The same offer ID
+must continue to identify the same material/product/SKU and comparable market. Distinct instants may
+contain changed price, availability or quantified capacity. Exact duplicate records are harmless;
+different records at the same parsed instant refuse, including different fractional spellings of
+that instant. This conservatively leaves conflicting source evidence for review rather than choosing
+one by input order. Version 1 keeps its original date-only conflict and serialization behavior;
+timestamp fields cannot silently change a version-1 book's semantics.
+
+For pricing, supply `as_of_at` as well as the existing matching `as_of` date in `Scope` or the cutting
+procurement `Market`. For example, these are explicit illustrative evaluation choices:
+
+```json
+{
+  "as_of": "2026-10-20",
+  "as_of_at": "2026-10-20T14:30:00.123456Z"
+}
+```
+
+Include the ordinary currency, region, quality, terms, age and requirement/market fields as before.
+The evaluator selects the newest observation **at or before that instant**, then applies expiry,
+availability, material hash, age and whole-order stock checks. A latest expired, unavailable or
+insufficient-stock observation excludes the offer; it never promotes an earlier cheaper or available
+one. Future observations cannot leak into historical evaluations. `max_age_days` continues to count
+UTC calendar-day boundaries, not elapsed 24-hour intervals. Missing or inconsistent evaluation time
+refuses a version-2 request; version-1 requests omit `as_of_at`.
+
+JSON-LD can retain the earliest timed source end boundary as inclusive `valid_through_at`, alongside
+the earliest calendar-date `valid_through` when both kinds are present. Both limits apply, and expiry
+before observation refuses. A source DateTime must include seconds, an explicit `Z` or numeric
+`+/-HH:MM` offset, and no more than six fractional digits, so Python does not silently truncate a
+more precise source. Unknown `-00:00` offsets refuse. Original timezone spelling remains in the
+retained source bytes; emitted quotes use UTC. A time-only offer change remains a purchasing change,
+not a material specification change, when using `--compare-specifications`.
+
+The native price/cut-price commands, shared WASM procurement entry point and manufacturing/scenario
+studies use the same `QuoteBook` evaluator. Marker-derived whole-order quantities and market comparisons
+therefore use the requested instant without another pricing formula. Reports retain the exact chosen
+or excluded observation and complete evaluation scope. These are source observations, not reserved
+inventory, checkout guarantees, intraday market population statistics or automatic refresh scheduling.
 
 ## Review supplier specification revisions
 

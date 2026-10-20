@@ -72,7 +72,10 @@ fn lost_positive_hardening_tangent_refuses_both_material_histories() {
         // but the unguarded subtraction returns 0 or 1.000122... and must not be accepted.
         assert!(membrane.response(coordinate, false).is_ok());
         assert!(bending.response(coordinate, false).is_ok());
-        assert!(membrane.response(coordinate, true).is_err(), "Q={stiffness}");
+        assert!(
+            membrane.response(coordinate, true).is_err(),
+            "Q={stiffness}"
+        );
         assert!(bending.response(coordinate, true).is_err(), "Q={stiffness}");
         assert!(membrane.advance(coordinate).is_err());
         assert!(bending.advance(coordinate).is_err());

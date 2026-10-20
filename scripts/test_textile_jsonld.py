@@ -1,5 +1,6 @@
 """Synthetic schema.org supplier responses, not live textile measurements or market quotes."""
 import copy
+import datetime as dt
 import hashlib
 import json
 from pathlib import Path
@@ -123,6 +124,30 @@ class JsonLdTests(unittest.TestCase):
         p = product(); p["offers"]["validFrom"] = "2026-10-13T07:59:59-04:00"
         self.assertEqual(self.extract(p)[0]["price"], 12.99)
 
+    def test_intraday_expiry_preserves_earliest_instant_and_separate_calendar_limit(self):
+        p = product(); p["offers"].update(priceValidUntil="2026-10-14",
+            validThrough="2026-10-13T20:30:00+08:00", availabilityEnds="2026-10-13T08:10:00.123456-04:00")
+        q, receipt = r.extract_jsonld(manifest_entry(), html(p), NOW, intraday=True)
+        self.assertEqual(q["valid_through"], "2026-10-14")
+        self.assertEqual(q["valid_through_at"], "2026-10-13T12:10:00.123456Z")
+        self.assertEqual(q["observed_at"], "2026-10-13T12:00:00.000000Z")
+        self.assertEqual(receipt["quote_schema"], r.INTRADAY_SCHEMA)
+        end = dt.datetime(2026, 10, 13, 12, 10, 0, 123456, tzinfo=dt.timezone.utc)
+        self.assertEqual(r.extract_jsonld(manifest_entry(), html(p), end, intraday=True)[0]["valid_through_at"], q["valid_through_at"])
+        with self.assertRaises(ValueError):
+            r.extract_jsonld(manifest_entry(), html(p), end + dt.timedelta(microseconds=1), intraday=True)
+
+    def test_intraday_source_time_refuses_unknown_offsets_and_precision_loss(self):
+        for value in ("2026-10-13T13:00:00", "2026-10-13T13:00:00-00:00",
+                      "2026-10-13T13:00:00.1234567Z", "2026-10-13T13:00:60Z",
+                      "2026-10-13T24:00:00Z", "2026-10-13T13:00:00+25:00",
+                      "2026-10-13T13:00:00+24:00", "2026-10-13T13:00:00+01:60",
+                      "2026-10-13T13:00:00+00:99", "2026-10-13T13:00:00-01:60",
+                      "2026-10-13 13:00:00Z", "2026-10-13T13:00Z"):
+            p = product(); p["offers"]["validThrough"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                r.extract_jsonld(manifest_entry(), html(p), NOW, intraday=True)
+
     def test_stock_is_explicit_not_inferred_from_the_page(self):
         for stock, expected in [("InStock", True), ("LimitedAvailability", True), ("OutOfStock", False),
                                 ("SoldOut", False), ("Discontinued", False)]:
@@ -214,7 +239,7 @@ class JsonLdTests(unittest.TestCase):
             manifest.write_text(json.dumps(dict(schema="ftx-textile-refresh/1", offers=[e])))
             argv = ["refresh", str(manifest), "--out", str(out), "--evidence", str(root / "evidence")]
             real_refresh = r.refresh
-            def fixed_clock(m, get): return real_refresh(m, get, lambda: NOW)
+            def fixed_clock(m, get, **kwargs): return real_refresh(m, get, lambda: NOW, **kwargs)
             with patch("sys.argv", argv), patch.object(r.PublicSession, "get", return_value=html(p)) as get, \
                     patch.object(r, "refresh", side_effect=fixed_clock):
                 self.assertEqual(r.main(), 0)

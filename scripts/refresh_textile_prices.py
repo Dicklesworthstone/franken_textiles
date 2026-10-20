@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read reviewed public supplier offers into the ftx-textile-quotes/1 workbench format.
+"""Read reviewed public supplier offers into the existing textile quote workbench.
 
 No shopping/cart mutation, credentials, browser automation, guessed units or material-law inference.
 Each successful run creates a NEW immutable quote snapshot and source-byte evidence files.
@@ -30,6 +30,7 @@ AGENT = "OpenAI File Downloader, XaiImageApiFetch/1.0"
 ROBOTS_AGENT = "XaiImageApiFetch"
 LIMIT = 4 * 1024 * 1024
 SCHEMA = "ftx-textile-quotes/1"
+INTRADAY_SCHEMA = "ftx-textile-quotes/2"
 FIELDS = ("offer_id", "material_id", "supplier", "sku", "quantity", "unit",
           "minimum_quantity", "order_increment", "currency", "region", "quality", "terms")
 OPTIONAL_FIELDS = {"material_sha256"}
@@ -256,6 +257,19 @@ def observation_time(entry: dict, observed: dt.datetime) -> dt.datetime:
     return observed
 
 
+def utc_instant(value: dt.datetime) -> str:
+    """Preserve Python's exact microsecond clock resolution, normalized to explicit UTC."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("quote instant needs an explicit timezone")
+    return value.astimezone(dt.timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def stamp_intraday(quote: dict, receipt: dict, observed: dt.datetime, intraday: bool) -> None:
+    if intraday:
+        quote["observed_at"] = utc_instant(observed)
+        receipt["quote_schema"] = INTRADAY_SCHEMA
+
+
 def validate_entry(entry: dict) -> None:
     required = set(FIELDS) | {"product_url", "cart_url", "variant_id", "basis_source",
                               "basis_note", "basis_reviewed_on", "required_description_text"}
@@ -279,7 +293,7 @@ def validate_entry(entry: dict) -> None:
 
 
 def extract(entry: dict, product_raw: bytes, cart_before_raw: bytes, cart_after_raw: bytes,
-            observed: dt.datetime) -> tuple[dict, dict]:
+            observed: dt.datetime, *, intraday=False) -> tuple[dict, dict]:
     """Pure adapter. Presence of an offer is not permission to substitute a different material/SKU."""
     validate_entry(entry)
     observed = observation_time(entry, observed)
@@ -319,6 +333,7 @@ def extract(entry: dict, product_raw: bytes, cart_before_raw: bytes, cart_after_
                "adapter": "shopify_ajax_product_v1", "quantity_basis": "reviewed_manifest_not_inferred",
                "limits": ["No checkout, tax, delivery, geographic availability or textile-physics claim.",
                           "Width comes from the resolved material, not this price response."]}
+    stamp_intraday(quote, receipt, observed, intraday)
     return quote, receipt
 
 
@@ -373,7 +388,7 @@ def validate_csv(entry: dict) -> None:
         raise ValueError("CSV delimiter must explicitly be comma, semicolon or tab")
 
 
-def extract_csv(entry: dict, source_raw: bytes, observed: dt.datetime) -> tuple[dict, dict]:
+def extract_csv(entry: dict, source_raw: bytes, observed: dt.datetime, *, intraday=False) -> tuple[dict, dict]:
     """Select one row, checking the source quantity and unit against the reviewed material mapping."""
     validate_csv(entry)
     observed = observation_time(entry, observed)
@@ -425,6 +440,7 @@ def extract_csv(entry: dict, source_raw: bytes, observed: dt.datetime) -> tuple[
                "quantity_basis": "source_columns_checked_against_reviewed_manifest",
                "limits": ["No FX, tax/shipping, delivery, market-survey or textile-physics claim.",
                           "Variant, region, quality and terms require reviewed exact row selectors."]}
+    stamp_intraday(quote, receipt, observed, intraday)
     return quote, receipt
 
 
@@ -531,8 +547,8 @@ def validate_jsonld(entry: dict) -> None:
             raise ValueError("required_page_text needs nonempty exact text fragments and an HTML source")
 
 
-def valid_period(node: dict, observed: dt.datetime) -> str | None:
-    expiries = []
+def valid_period(node: dict, observed: dt.datetime, *, intraday=False) -> tuple[str | None, str | None]:
+    expiries, instant_expiries = [], []
     for key, before in (("priceValidUntil", False), ("validFrom", True), ("validThrough", False),
                         ("availabilityStarts", True), ("availabilityEnds", False)):
         if key not in node:
@@ -546,18 +562,29 @@ def valid_period(node: dict, observed: dt.datetime) -> str | None:
             if not before:
                 expiries.append(value)
         else:
-            if not before:
+            if not before and not intraday:
                 raise ValueError("intraday expiry cannot be represented by the calendar-date quote schema")
+            if intraday and (not re.fullmatch(
+                    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})", value)
+                    or value.endswith("-00:00")):
+                raise ValueError("intraday source validity needs explicit ISO timezone and at most six fractional digits")
+            # datetime.fromisoformat normalizes offset minutes such as +01:60. Reject those
+            # spellings before conversion; a supplier's malformed clock is not a new instant.
+            if intraday and not value.endswith("Z") and (int(value[-5:-3]) > 23 or int(value[-2:]) > 59):
+                raise ValueError("intraday source timezone hours/minutes are out of range")
             instant = dt.datetime.fromisoformat(value)
             if instant.tzinfo is None or instant.utcoffset() is None:
                 raise ValueError("JSON-LD validity datetime needs an explicit timezone")
             valid = observed >= instant if before else observed <= instant
+            if not before:
+                instant_expiries.append(instant.astimezone(dt.timezone.utc))
         if not valid:
             raise ValueError(f"offer is not currently valid: {key}")
-    return min(expiries, default=None)
+    expiry_at = min(instant_expiries, default=None)
+    return min(expiries, default=None), utc_instant(expiry_at) if expiry_at is not None else None
 
 
-def extract_jsonld(entry: dict, source_raw: bytes, observed: dt.datetime) -> tuple[dict, dict]:
+def extract_jsonld(entry: dict, source_raw: bytes, observed: dt.datetime, *, intraday=False) -> tuple[dict, dict]:
     validate_jsonld(entry)
     observed = observation_time(entry, observed)
     nodes, identifiers = jsonld_nodes(source_raw, entry["source_format"])
@@ -603,7 +630,7 @@ def extract_jsonld(entry: dict, source_raw: bytes, observed: dt.datetime) -> tup
             matches = entry["region"] in regions
             if matches != (key == "eligibleRegion"):
                 raise ValueError("JSON-LD offer excludes the reviewed market")
-    expiry = valid_period(offer, observed)
+    expiry, expiry_at = valid_period(offer, observed, intraday=intraday)
     amounts = []
     specifications = [offer]
     if "priceSpecification" in offer:
@@ -638,15 +665,18 @@ def extract_jsonld(entry: dict, source_raw: bytes, observed: dt.datetime) -> tup
                  source=entry["source_url"], source_sha256=digest)
     if expiry is not None:
         quote["valid_through"] = expiry
+    if expiry_at is not None:
+        quote["valid_through_at"] = expiry_at
     receipt = {"schema": "ftx-source-refresh/1", "adapter": "jsonld_v1", "observed_at": observed.isoformat(),
                "manifest_entry": entry, "source_sha256": digest, "product_ref": product.get("@id"),
                "offer_ref": offer.get("@id"), "quantity_basis": "reviewed_manifest_not_inferred",
                "limits": ["No execution, remote context expansion, checkout, FX or textile-physics inference.",
                           "Declared structured data is not independent supplier/stock/terms verification."]}
+    stamp_intraday(quote, receipt, observed, intraday)
     return quote, receipt
 
 
-def refresh(manifest: dict, get, now=None) -> tuple[dict, dict[str, bytes]]:
+def refresh(manifest: dict, get, now=None, *, intraday=False) -> tuple[dict, dict[str, bytes]]:
     if (set(manifest) != {"schema", "offers"}
             or manifest["schema"] not in {"ftx-shopify-refresh/1", "ftx-textile-refresh/1"}):
         raise ValueError("unsupported refresh manifest")
@@ -681,23 +711,23 @@ def refresh(manifest: dict, get, now=None) -> tuple[dict, dict[str, bytes]]:
                 sources[source_key] = (get(url, accept=accept), clock())
             product, observed = sources[source_key]
             if entry["adapter"] == "csv_v1":
-                quote, receipt = extract_csv(entry, product, observed)
+                quote, receipt = extract_csv(entry, product, observed, intraday=intraday)
                 extension = ".csv"
             else:
-                quote, receipt = extract_jsonld(entry, product, observed)
+                quote, receipt = extract_jsonld(entry, product, observed, intraday=intraday)
                 extension = ".html" if entry["source_format"] == "html" else ".json"
         else:
             before = get(entry["cart_url"], accept="application/json")
             product = get(entry["product_url"], accept="application/json")
             after = get(entry["cart_url"], accept="application/json")
-            quote, receipt = extract(entry, product, before, after, clock())
+            quote, receipt = extract(entry, product, before, after, clock(), intraday=intraday)
             extension = ".json"
         quotes.append(quote)
         evidence[quote["source_sha256"] + extension] = product
         raw = (json.dumps(receipt, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
         evidence[hashlib.sha256(raw).hexdigest() + ".receipt.json"] = raw
     quotes.sort(key=lambda q: q["offer_id"])
-    return {"schema": SCHEMA, "quotes": quotes}, evidence
+    return {"schema": INTRADAY_SCHEMA if intraday else SCHEMA, "quotes": quotes}, evidence
 
 
 def create_snapshot(path: Path, raw: bytes) -> None:
@@ -719,6 +749,8 @@ def main() -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--out", required=True, type=Path, help="NEW quotes snapshot; existing files are never overwritten")
     parser.add_argument("--evidence", required=True, type=Path)
+    parser.add_argument("--intraday", action="store_true",
+                        help="emit version-2 quotes with exact UTC retrieval instants and timed source expiry")
     parser.add_argument("--specifications-out", type=Path,
                         help="NEW snapshot of the selected supplier's non-price declarations")
     parser.add_argument("--compare-specifications", type=Path,
@@ -745,7 +777,7 @@ def main() -> int:
                 previous = specifications.replay(load(args.compare_specifications.read_bytes()),
                                                  args.previous_evidence or args.evidence)
         manifest = load(args.manifest.read_bytes())
-        book, evidence = refresh(manifest, PublicSession().get)
+        book, evidence = refresh(manifest, PublicSession().get, intraday=args.intraday)
         current = specifications.capture(book, evidence) if args.specifications_out else None
         review = specifications.compare(previous, current) if previous is not None else None
         for name, raw in evidence.items():

@@ -592,6 +592,46 @@ function scenarioInputs(p) {
   p.e.body.files[0].arrayBuffer = async () => new ArrayBuffer(8); p.e.body.handlers.change();
 }
 
+test('purchasing displays exact intraday evidence, excluded latest offers and date-only history without repricing', async () => {
+  const p = await pageModule(); await p.load(); await p.bind();
+  const quotes = '{"schema":"ftx-textile-quotes/2","price":1.0}';
+  const market = '{"as_of":"2026-10-20","as_of_at":"2026-10-20T12:00:00.000000001Z"}';
+  p.select('cutOptions'); p.select('quotes', quotes); p.select('market', market);
+  p.e.market.handlers.change(); await p.e.price.onclick();
+  const sent = p.current().messages.at(-1);
+  assert.equal(sent.quotes, quotes); assert.equal(sent.market, market);
+  const scope = { currency: 'USD', region: 'US', quality: 'reviewed', terms: 'merchandise only',
+    as_of: '2026-10-20', as_of_at: '2026-10-20T12:00:00.000000001Z' };
+  const quote = { offer_id: '<literal supplier>', observed_on: '2026-10-20',
+    observed_at: '2026-10-20T12:00:00Z', valid_through_at: '2026-10-20T12:00:00.000000001Z', unit: 'linear_meter' };
+  const report = { complete_offer_coverage: false, complete_observed_quantity_coverage: false,
+    currency: 'USD', least_observed_independent_order_total: null, limits: ['Observed prices only'], roll_prices: [
+      { roll_index: 0, required_stock_area_m2: 0.5, sample: { scope,
+        offers: [{ quote, order_quantity: 0.5, order_cost: 7.25 }],
+        excluded_offers: [{ quote: { ...quote, offer_id: 'expired', valid_through_at: '2026-10-20T12:00:00Z' }, reason: 'expired' },
+          { quote: { ...quote, offer_id: 'limited' }, reason: 'insufficient_quantity', required_order_quantity: 1.5 }] } },
+      { roll_index: 1, required_stock_area_m2: 1, sample: { scope: { ...scope, as_of_at: undefined }, offers: [],
+        excluded_offers: [{ quote: { offer_id: 'daily', observed_on: '2026-10-20', valid_through: '2026-10-20' }, reason: 'unavailable' }] } }
+    ] };
+  p.emit(report, [{ name: 'quotes.json', text: quotes, mime: 'application/json' }]);
+  const s = section(p, 'price'), tables = descendants(s).filter(n => n.tag === 'table');
+  assert.deepEqual(plain(tables[0].children[2].children.map(n => n.textContent)),
+    ['<literal supplier>', '2026-10-20T12:00:00Z', '2026-10-20T12:00:00.000000001Z', 'Eligible', '0.5 linear_meter', '7.25']);
+  assert.equal(tables[0].children[3].children[3].textContent, 'Excluded: expired');
+  assert.equal(tables[0].children[3].children[5].textContent, 'Unknown');
+  assert.equal(tables[0].children[4].children[4].textContent, '1.5 linear_meter');
+  assert.equal(tables[1].children[2].children[1].textContent, '2026-10-20 (date only)');
+  assert.match(visibleText(s), /Evaluated at 2026-10-20T12:00:00\.000000001Z UTC/);
+  assert.match(visibleText(s), /Evaluated at 2026-10-20 \(date only\) UTC/);
+  assert.equal(JSON.parse(s.children[1].textContent).least_observed_independent_order_total, null);
+  assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+  const link = descendants(s).find(n => n.download === 'quotes.json');
+  assert.equal(await p.blobs.get(link.href).text(), quotes);
+  p.select('market', market.replace('000000001', '000000002')); p.e.market.handlers.change();
+  assert.equal(s.hidden, true); assert.equal(s.children[2].children.length, 0);
+  assert.equal(p.live.has(link.href), false);
+});
+
 test('screening is available without a pattern and retains excluded source evidence for inspection', async () => {
   const p = await pageModule(); assert.equal(p.e.screen.disabled, true);
   p.select('screenRequest', '{"threshold":1.0}'); p.e.screenRequest.handlers.change();

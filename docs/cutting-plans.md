@@ -51,7 +51,12 @@ stock. `sim:false`, simulation-only scaling and missing body placements never di
 }
 ```
 
-`quotes.json` is the existing `ftx-textile-quotes/1` observation book. It can come from the source adapter
+`quotes.json` is a `ftx-textile-quotes/1` calendar-date observation book or a `/2` intraday book. For
+version 2 add `as_of_at: "2026-10-14T12:00:00Z"` to the market above, with the same UTC date as `as_of`.
+Every version-2 quote must retain its actual `observed_at`; date-only records are not assigned midnight.
+The newest eligible-time observation controls the whole rounded order, including later stock loss or
+expiry. See [textile-price-refresh.md](textile-price-refresh.md#intraday-histories-through-the-existing-procurement-and-study-consumers)
+for timestamp precision and inclusive expiry. The book can come from the source adapter
 in `textile-price-refresh.md`. Dates, availability, exact material/SKU, currency, region, quality, terms,
 minimum quantities, sale quantities and order increments retain that evaluator's checks. No synthetic
 or stale quote becomes a live supplier observation. A `requirement` field in this market file is rejected:

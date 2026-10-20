@@ -498,6 +498,95 @@ fn procurement_uses_marker_requirements_and_missing_offers_stay_unknown() {
 }
 
 #[test]
+fn intraday_procurement_and_studies_share_native_expiry_and_complete_order_semantics() {
+    let raw: Value = serde_json::from_str(PATTERN).unwrap();
+    let bound = bind(&raw, &changes(selection(0.1, 0.4)));
+    let pattern = bound["pattern_json"].as_str().unwrap();
+    let native = CutPlan::build(
+        &Pattern::from_json(pattern).unwrap(),
+        &serde_json::from_str(&cut()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(native.rolls.len(), 1);
+    let mut old = json!({"offer_id":"synthetic/roll","material_id":"synthetic-sewing-sheet",
+        "material_sha256":native.rolls[0].material.sha256(),"supplier":"Synthetic supplier",
+        "sku":"test-roll","price":10.0,"quantity":1.0,"unit":"linear_meter",
+        "minimum_quantity":0.1,"order_increment":0.1,"currency":"USD","region":"US",
+        "quality":"test","terms":"test","observed_on":"2026-10-14",
+        "observed_at":"2026-10-14T09:00:00Z","available":true,"available_quantity":1.0,
+        "source":"test:intraday","source_sha256":"0".repeat(64)});
+    let mut later = old.clone();
+    later["price"] = json!(25.0);
+    later["observed_at"] = json!("2026-10-14T10:00:00Z");
+    later["valid_through_at"] = json!("2026-10-14T11:00:00Z");
+    later["source_sha256"] = json!("1".repeat(64));
+    let book = json!({"schema":"ftx-textile-quotes/2","quotes":[later,old]}).to_string();
+    let mut market = json!({"currency":"USD","region":"US","quality":"test","terms":"test",
+        "as_of":"2026-10-14","max_age_days":0,"require_observed_quantity":true});
+    let mut identities = std::collections::BTreeSet::new();
+    for (instant, price, expired) in [
+        ("2026-10-14T09:59:59.999999999Z", 10.0, false),
+        ("2026-10-14T10:00:00Z", 25.0, false),
+        ("2026-10-14T11:00:00Z", 25.0, false),
+        ("2026-10-14T11:00:00.000000001Z", 25.0, true),
+    ] {
+        market["as_of_at"] = json!(instant);
+        let portable: Value = serde_json::from_str(
+            &manufacturing::cut_price(pattern, &cut(), &book, &market.to_string()).unwrap(),
+        )
+        .unwrap();
+        let expected = procurement::evaluate(
+            &native,
+            &serde_json::from_str(&book).unwrap(),
+            &serde_json::from_value(market.clone()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(portable, expected);
+        assert_eq!(portable["complete_offer_coverage"], !expired);
+        let sample = &portable["roll_prices"][0]["sample"];
+        assert_eq!(sample["scope"]["as_of_at"], instant);
+        if expired {
+            assert!(portable["least_observed_independent_order_total"].is_null());
+            assert_eq!(sample["excluded_offers"][0]["reason"], "expired");
+            assert_eq!(sample["excluded_offers"][0]["quote"], later);
+            assert_eq!(sample["offers"], json!([]));
+        } else {
+            assert_eq!(sample["offers"][0]["quote"]["price"], price);
+            assert_eq!(sample["offers"][0]["quantity_sufficiency_observed"], true);
+        }
+        let input = json!({"schema":"ftx-material-study/1","variants":[
+            {"key":"unchanged","changes":{"schema":"ftx-material-bindings/1"}}],
+            "cutting":serde_json::from_str::<Value>(&cut()).unwrap(),
+            "purchasing":{"quotes":serde_json::from_str::<Value>(&book).unwrap(),"market":market}});
+        let request: ftx_export::material_study::Request =
+            serde_json::from_value(input.clone()).unwrap();
+        let native_study = request
+            .evaluate(&Pattern::from_json(pattern).unwrap())
+            .unwrap();
+        let study: Value =
+            serde_json::from_str(&materials::study(pattern, &input.to_string()).unwrap()).unwrap();
+        assert_eq!(study, serde_json::to_value(native_study).unwrap());
+        assert_eq!(
+            study["alternatives"][0]["purchasing"]["status"],
+            "available"
+        );
+        assert_eq!(
+            study["alternatives"][0]["purchasing"]["result"]["roll_prices"],
+            portable["roll_prices"]
+        );
+        assert_eq!(
+            study["alternatives"][0]["metrics"]["least_observed_independent_order_total"],
+            portable["least_observed_independent_order_total"]
+        );
+        assert!(identities.insert(study["request_sha256"].as_str().unwrap().to_owned()));
+    }
+    // A time field cannot silently extend a legacy calendar-date book.
+    old.as_object_mut().unwrap().remove("observed_at");
+    let legacy = json!({"schema":"ftx-textile-quotes/1","quotes":[old]}).to_string();
+    assert!(manufacturing::cut_price(pattern, &cut(), &legacy, &market.to_string()).is_err());
+}
+
+#[test]
 fn combined_input_budget_precedes_json_parsing() {
     let huge = " ".repeat(64 * 1024 * 1024);
     assert_eq!(

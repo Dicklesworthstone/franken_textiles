@@ -1887,6 +1887,28 @@ finishing allowances or an empirical garment guarantee. See
 
 ---
 
+### 25.25 Intraday supplier history in the existing purchasing consumers
+
+**Explicit observation instants (`ftx-tm6`).** The existing quote book accepts a version-2
+extension with source `observed_at` instants and an explicit evaluation `as_of_at`. UTC instants
+use integer nanosecond ordering, retain matching calendar dates and never use an implicit clock.
+Version-1 date-only histories keep their original behavior. The latest observation at or before
+the requested instant controls admission; expiry, unavailability, material mismatch or insufficient
+stock cannot revive an older offer. Inclusive source expiry and existing calendar-age policies
+both apply, with exact source observations retained in exclusions.
+
+The reviewed Shopify, CSV and JSON-LD adapters can opt into version 2 with `--intraday`, preserving
+the actual retrieval instant and source bytes. JSON-LD timed validity is checked and normalized
+without rounding away supported source precision. Supplier-specification review replays these
+receipts without turning expiry changes into material revisions. The existing native price,
+marker procurement, manufacturing/scenario studies and WASM consumers share this same evaluator;
+the browser displays observation times, whole-order costs and exclusions from its results.
+See [textile-price-refresh.md](docs/textile-price-refresh.md). These are dated supplier observations,
+not reserved stock, executable purchases, worldwide market coverage or inferred landed costs.
+Primary supplier qualification and broader source coverage remain open.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

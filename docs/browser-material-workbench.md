@@ -64,6 +64,17 @@ The UI deliberately asks for the existing JSON contracts rather than inventing c
 constants. The synthetic sewing pattern/options under `tests/fixtures/materials/` illustrate process
 inputs, not a real qualified textile or recommended machine configuration.
 
+Purchasing also accepts `ftx-textile-quotes/2` histories with exact UTC `observed_at` instants and an
+explicit market `as_of_at`. Retain the matching `observed_on` and `as_of` dates. The result displays
+the Rust evaluator's latest eligible and excluded observations for each roll, their exact times,
+source expiry, rounded order quantities and merchandise costs. The source detail retains the
+selected order and stock evidence. An unavailable, expired or insufficient latest observation
+cannot revive an older offer. Version-1 books remain date-only and display that limitation;
+the browser never supplies a clock value, chooses a different offer or recomputes a price.
+Changing the quote book or market withdraws the old result. Input JSON and downloaded reports
+retain their original numeric text. See [source refresh](textile-price-refresh.md) for creating
+version-2 snapshots with `--intraday` and the supported timestamp precision.
+
 Optional material `optical_faces` assignments survive inspection, freezing, piece binding and the
 retained drape receipt. In the existing heat-condition JSON, set
 `radiation.automatic_material_face: true` and omit explicit face/property strings. Independent

@@ -61,7 +61,8 @@ def _facts(entry, source, receipt):
                    if k in entry["columns"]}
         selected = {"row": {k: v for k, v in row.items() if k not in omitted}}
     elif adapter == "jsonld_v1":
-        prices.extract_jsonld(entry, source, observed)
+        prices.extract_jsonld(entry, source, observed,
+                              intraday=receipt.get("quote_schema") == prices.INTRADAY_SCHEMA)
         nodes, identifiers = prices.jsonld_nodes(source, entry["source_format"])
         product = next(n for n in nodes if prices.schema_type(n, "Product")
                        and n.get("sku") == entry["sku"])

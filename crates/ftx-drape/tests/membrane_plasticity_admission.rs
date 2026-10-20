@@ -1,7 +1,8 @@
 //! Permanent history admission follows valid reference geometry and effective piece selection.
 //! All geometry and material observations here are synthetic software fixtures.
 use ftx_core::{Vec2, Vec3};
-use ftx_drape::{ClothModel, DrapeOptions, Membrane, Solver, material};
+use ftx_drape::run::DrapeOptions;
+use ftx_drape::{ClothModel, Membrane, Solver, material};
 use ftx_pattern::Pattern;
 use ftx_pattern::material_membrane_plasticity::{AXES, PROPERTY_FAMILIES, PlasticMembrane};
 use serde_json::{Value, json};
@@ -50,8 +51,7 @@ fn invalid_reference_area_or_gradient_cannot_acquire_permanent_history() {
         invalid.model.membranes[0].area = area;
         let refusal = invalid
             .with_membrane_plasticity(&laws)
-            .err()
-            .expect("invalid reference area must refuse before binding");
+            .expect_err("invalid reference area must refuse before binding");
         assert!(refusal.message.contains("reference triangle"));
     }
     for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -60,8 +60,7 @@ fn invalid_reference_area_or_gradient_cannot_acquire_permanent_history() {
             invalid.model.membranes[0].g[vertex][axis] = value;
             let refusal = invalid
                 .with_membrane_plasticity(&laws)
-                .err()
-                .expect("invalid reference gradient must refuse before binding");
+                .expect_err("invalid reference gradient must refuse before binding");
             assert!(refusal.message.contains("reference triangle"));
         }
     }

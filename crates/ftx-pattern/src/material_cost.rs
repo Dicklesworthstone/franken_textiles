@@ -37,7 +37,7 @@ pub enum Basis {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Quote {
-    /// Stable supplier/variant/tier identity. A later date supersedes this same offer.
+    /// Stable supplier/variant/tier identity. A later observation supersedes this same offer.
     pub offer_id: String,
     /// Exact material identity; finished garments cannot stand in for raw fabric.
     pub material_id: String,
@@ -68,10 +68,18 @@ pub struct Quote {
     pub terms: String,
     /// UTC calendar date on which the response was actually retrieved (YYYY-MM-DD).
     pub observed_on: String,
+    /// Version-2 source retrieval instant, UTC `YYYY-MM-DDTHH:MM:SS[.fraction]Z`.
+    /// One to nine fractional digits are accepted; the UTC date must equal `observed_on`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<String>,
     /// Last eligible UTC calendar date, inclusive, when explicitly bounded by the source.
     /// Absence means no known expiry, not a guarantee of future availability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid_through: Option<String>,
+    /// Version-2 inclusive source expiry instant in the same UTC form as `observed_at`.
+    /// If both expiry fields are supplied, both limits apply; neither relaxes the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_through_at: Option<String>,
     /// Whether that exact offer was available then; latest unavailable does not revive an old price.
     pub available: bool,
     /// Observed finite capacity in this quote's `unit`, NOT packages or pattern-piece area.
@@ -88,9 +96,9 @@ pub struct Quote {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuoteBook {
-    /// `ftx-textile-quotes/1`.
+    /// `ftx-textile-quotes/1` for calendar dates or `/2` for explicit source instants.
     pub schema: String,
-    /// Source observations; multiple dates for an offer are allowed.
+    /// Source observations; distinct dates (v1) or instants (v2) for an offer are allowed.
     pub quotes: Vec<Quote>,
 }
 
@@ -108,6 +116,10 @@ pub struct Scope {
     pub terms: String,
     /// Reproducible evaluation date; future observations are excluded.
     pub as_of: String,
+    /// Required with a version-2 book: explicit UTC instant whose date must equal `as_of`.
+    /// Omit for version 1; an unknown observation time is never invented from its date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of_at: Option<String>,
     /// Maximum observation age in calendar days; stale offers are excluded.
     pub max_age_days: u32,
     /// Requested square metres or kilograms.
@@ -248,6 +260,65 @@ fn day(s: &str) -> Result<i64, Refusal> {
         + d)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Instant {
+    day: i64,
+    second: u32,
+    nanosecond: u32,
+}
+
+// A bounded UTC spelling avoids platform clocks, timezone databases and precision loss. Integer
+// components compare instants exactly across native/WASM, including fractional-second boundaries.
+fn instant(s: &str) -> Result<Instant, Refusal> {
+    let b = s.as_bytes();
+    if !s.is_ascii()
+        || !(20..=30).contains(&b.len())
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+        || b[b.len() - 1] != b'Z'
+        || ![&b[11..13], &b[14..16], &b[17..19]]
+            .into_iter()
+            .all(|part| part.iter().all(u8::is_ascii_digit))
+    {
+        return Err(invalid(
+            "quote instants must be YYYY-MM-DDTHH:MM:SS[.1..9 digits]Z",
+        ));
+    }
+    let hour: u32 = s[11..13].parse().map_err(|_| invalid("invalid UTC hour"))?;
+    let minute: u32 = s[14..16]
+        .parse()
+        .map_err(|_| invalid("invalid UTC minute"))?;
+    let second: u32 = s[17..19]
+        .parse()
+        .map_err(|_| invalid("invalid UTC second"))?;
+    if hour > 23 || minute > 59 || second > 59 {
+        return Err(invalid(
+            "invalid UTC clock; leap-second and 24:00 spellings are unsupported",
+        ));
+    }
+    let nanosecond = if b.len() == 20 {
+        0
+    } else {
+        let fraction = &b[20..b.len() - 1];
+        if b[19] != b'.'
+            || !(1..=9).contains(&fraction.len())
+            || !fraction.iter().all(u8::is_ascii_digit)
+        {
+            return Err(invalid("UTC fraction needs one to nine decimal digits"));
+        }
+        let digits: u32 = s[20..s.len() - 1]
+            .parse()
+            .map_err(|_| invalid("invalid UTC fraction"))?;
+        digits * 10_u32.pow(9 - fraction.len() as u32)
+    };
+    Ok(Instant {
+        day: day(&s[..10])?,
+        second: hour * 3600 + minute * 60 + second,
+        nanosecond,
+    })
+}
+
 impl Quote {
     /// Validate one source observation without fetching it or asserting it is still offered.
     ///
@@ -289,6 +360,17 @@ impl Quote {
             ));
         }
         let observed = day(&self.observed_on)?;
+        let observed_at = self.observed_at.as_deref().map(instant).transpose()?;
+        if observed_at.is_some_and(|t| t.day != observed) {
+            return Err(invalid("observed_at UTC date must equal observed_on"));
+        }
+        if let Some(expiry) = self.valid_through_at.as_deref() {
+            let at = observed_at
+                .ok_or_else(|| invalid("instant expiry requires an observation instant"))?;
+            if instant(expiry)? < at {
+                return Err(invalid("quote expired before its observation instant"));
+            }
+        }
         if let Some(expiry) = &self.valid_through
             && day(expiry)? < observed
         {
@@ -303,6 +385,24 @@ impl Quote {
             positive(name, v)?;
         }
         Ok(())
+    }
+
+    fn observation(&self, intraday: bool) -> Result<Instant, Refusal> {
+        if intraday {
+            instant(
+                self.observed_at
+                    .as_deref()
+                    .ok_or_else(|| invalid("version-2 quotes require observed_at"))?,
+            )
+        } else if self.observed_at.is_some() || self.valid_through_at.is_some() {
+            Err(invalid("quote instant fields require ftx-textile-quotes/2"))
+        } else {
+            Ok(Instant {
+                day: day(&self.observed_on)?,
+                second: 0,
+                nanosecond: 0,
+            })
+        }
     }
 
     fn offer(&self, material: &ResolvedMaterial, scope: &Scope) -> Result<Option<Offer>, Refusal> {
@@ -345,14 +445,13 @@ impl Quote {
 }
 
 impl QuoteBook {
-    /// Validate the entire history, including stale observations; duplicate day/offer conflicts refuse.
+    /// Validate the entire history, including stale observations; conflicting observations refuse.
     ///
     /// # Errors
-    /// Unsupported schema, invalid record, or conflicting observation for one offer on the same day.
+    /// Unsupported schema, invalid record, or conflicting observation for one offer at the same
+    /// date (v1) or instant (v2). No timestamp is inferred for a calendar-only observation.
     pub fn validate(&self) -> Result<(), Refusal> {
-        if self.schema != "ftx-textile-quotes/1" {
-            return Err(invalid("unsupported quote schema"));
-        }
+        let intraday = self.intraday()?;
         let mut seen = BTreeMap::new();
         let mut identities = BTreeMap::new();
         for q in &self.quotes {
@@ -371,17 +470,27 @@ impl QuoteBook {
                 &q.region,
                 &q.quality,
                 &q.terms,
-                &q.observed_on,
+                q.observation(intraday)?,
             );
             if let Some(old) = seen.insert(key, q)
                 && old != q
             {
-                return Err(invalid(
-                    "conflicting observations of one offer on the same day",
-                ));
+                return Err(invalid(if intraday {
+                    "conflicting observations of one offer at the same instant"
+                } else {
+                    "conflicting observations of one offer on the same day"
+                }));
             }
         }
         Ok(())
+    }
+
+    fn intraday(&self) -> Result<bool, Refusal> {
+        match self.schema.as_str() {
+            "ftx-textile-quotes/1" => Ok(false),
+            "ftx-textile-quotes/2" => Ok(true),
+            _ => Err(invalid("unsupported quote schema")),
+        }
     }
 
     /// Filter to a reproducible, like-for-like sample, then use material width for area pricing.
@@ -396,7 +505,29 @@ impl QuoteBook {
     ) -> Result<PriceSample, Refusal> {
         self.validate()?;
         positive("purchase requirement", scope.requirement)?;
-        let as_of = day(&scope.as_of)?;
+        let as_of_day = day(&scope.as_of)?;
+        let intraday = self.intraday()?;
+        let as_of = if intraday {
+            let at = instant(
+                scope
+                    .as_of_at
+                    .as_deref()
+                    .ok_or_else(|| invalid("version-2 prices require as_of_at"))?,
+            )?;
+            if at.day != as_of_day {
+                return Err(invalid("as_of_at UTC date must equal as_of"));
+            }
+            at
+        } else {
+            if scope.as_of_at.is_some() {
+                return Err(invalid("as_of_at requires a version-2 quote book"));
+            }
+            Instant {
+                day: as_of_day,
+                second: 0,
+                nanosecond: 0,
+            }
+        };
         if scope.currency.len() != 3
             || !scope.currency.bytes().all(|b| b.is_ascii_uppercase())
             || [&scope.region, &scope.quality, &scope.terms]
@@ -405,27 +536,28 @@ impl QuoteBook {
         {
             return Err(invalid("invalid price sample scope"));
         }
-        let mut latest = BTreeMap::<&str, &Quote>::new();
+        let mut latest = BTreeMap::<&str, (&Quote, Instant)>::new();
         for q in &self.quotes {
+            let observed = q.observation(intraday)?;
             if q.material_id != material.authored().id
                 || q.currency != scope.currency
                 || q.region != scope.region
                 || q.quality != scope.quality
                 || q.terms != scope.terms
-                || day(&q.observed_on)? > as_of
+                || observed > as_of
             {
                 continue;
             }
             if latest
                 .get(q.offer_id.as_str())
-                .is_none_or(|old| old.observed_on < q.observed_on)
+                .is_none_or(|(_, old)| *old < observed)
             {
-                latest.insert(&q.offer_id, q);
+                latest.insert(&q.offer_id, (q, observed));
             }
         }
         let mut offers = Vec::new();
         let mut excluded_offers = Vec::new();
-        for q in latest.values() {
+        for &(q, observed) in latest.values() {
             // Apply expiry AFTER selecting the latest observation: expired prices must not revive
             // an older unbounded quote. Do this before width/order arithmetic for ineligible data.
             let reason = if q
@@ -433,12 +565,17 @@ impl QuoteBook {
                 .as_ref()
                 .map(|expiry| day(expiry))
                 .transpose()?
-                .is_some_and(|expiry| expiry < as_of)
+                .is_some_and(|expiry| expiry < as_of.day)
+                || q.valid_through_at
+                    .as_deref()
+                    .map(instant)
+                    .transpose()?
+                    .is_some_and(|expiry| expiry < as_of)
             {
                 Some(ExclusionReason::Expired)
             } else if !q.available {
                 Some(ExclusionReason::Unavailable)
-            } else if as_of - day(&q.observed_on)? > i64::from(scope.max_age_days) {
+            } else if as_of.day - observed.day > i64::from(scope.max_age_days) {
                 Some(ExclusionReason::Stale)
             } else if q
                 .material_sha256
@@ -453,7 +590,7 @@ impl QuoteBook {
             };
             if let Some(reason) = reason {
                 excluded_offers.push(ExcludedOffer {
-                    quote: (*q).clone(),
+                    quote: q.clone(),
                     reason,
                     required_order_quantity: None,
                 });
@@ -467,7 +604,7 @@ impl QuoteBook {
                     offers.push(offer);
                 }
                 offer => excluded_offers.push(ExcludedOffer {
-                    quote: (*q).clone(),
+                    quote: q.clone(),
                     reason: if offer.is_some() {
                         ExclusionReason::InsufficientQuantity
                     } else {
@@ -522,7 +659,9 @@ mod tests {
             quality: "first-quality".into(),
             terms: "merchandise-ex-tax-shipping".into(),
             observed_on: "2026-10-13".into(),
+            observed_at: None,
             valid_through: None,
+            valid_through_at: None,
             available: true,
             available_quantity: None,
             source: "https://example.org/synthetic".into(),
@@ -536,6 +675,7 @@ mod tests {
             quality: "first-quality".into(),
             terms: "merchandise-ex-tax-shipping".into(),
             as_of: "2026-10-13".into(),
+            as_of_at: None,
             max_age_days: 7,
             requirement: 2.,
             basis: Basis::Area,
@@ -547,6 +687,180 @@ mod tests {
             schema: "ftx-textile-quotes/1".into(),
             quotes,
         }
+    }
+
+    fn timed_quote(at: &str) -> Quote {
+        let mut q = quote();
+        q.observed_on = at[..10].into();
+        q.observed_at = Some(at.into());
+        q
+    }
+
+    fn timed_scope(at: &str) -> Scope {
+        let mut s = scope();
+        s.as_of = at[..10].into();
+        s.as_of_at = Some(at.into());
+        s
+    }
+
+    fn timed_book(quotes: Vec<Quote>) -> QuoteBook {
+        QuoteBook {
+            schema: "ftx-textile-quotes/2".into(),
+            quotes,
+        }
+    }
+
+    #[test]
+    fn intraday_history_obeys_the_exact_as_of_instant_and_latest_failure() {
+        let old = timed_quote("2026-10-13T08:00:00Z");
+        let mut now = timed_quote("2026-10-13T08:00:00.000000001Z");
+        now.price = 21.;
+        now.available = false;
+        now.source_sha256 = "1".repeat(64);
+        let mut later = timed_quote("2026-10-13T16:00:00Z");
+        later.price = 30.;
+        let mut history = timed_book(vec![later, old.clone(), now.clone()]);
+        let out = history
+            .evaluate(&material(), &timed_scope("2026-10-13T08:00:00Z"))
+            .unwrap();
+        assert_eq!(out.offers[0].quote, old);
+        let out = history
+            .evaluate(&material(), &timed_scope("2026-10-13T08:00:00.000000001Z"))
+            .unwrap();
+        assert!(out.offers.is_empty());
+        assert_eq!(out.excluded_offers[0].reason, ExclusionReason::Unavailable);
+        assert_eq!(out.excluded_offers[0].quote, now);
+        assert!(out.rate_p10_p50_p90.is_none());
+        let at = timed_scope("2026-10-13T16:00:00Z");
+        let forward = serde_json::to_value(history.evaluate(&material(), &at).unwrap()).unwrap();
+        history.quotes.reverse();
+        assert_eq!(
+            forward,
+            serde_json::to_value(history.evaluate(&material(), &at).unwrap()).unwrap()
+        );
+        assert_eq!(forward["offers"][0]["quote"]["price"], 30.);
+    }
+
+    #[test]
+    fn intraday_expiry_is_inclusive_and_keeps_the_latest_observation_excluded() {
+        let old = timed_quote("2026-10-13T08:00:00Z");
+        let mut latest = timed_quote("2026-10-13T09:00:00Z");
+        latest.valid_through_at = Some("2026-10-13T12:00:00.123456789Z".into());
+        latest.valid_through = Some("2026-10-14".into());
+        let history = timed_book(vec![old, latest.clone()]);
+        assert_eq!(
+            history
+                .evaluate(&material(), &timed_scope("2026-10-13T12:00:00.123456789Z"))
+                .unwrap()
+                .offers
+                .len(),
+            1
+        );
+        let out = history
+            .evaluate(&material(), &timed_scope("2026-10-13T12:00:00.123456790Z"))
+            .unwrap();
+        assert!(out.offers.is_empty());
+        assert_eq!(out.excluded_offers[0].reason, ExclusionReason::Expired);
+        assert_eq!(out.excluded_offers[0].quote, latest);
+        let mut date_limited = timed_quote("2026-10-13T09:00:00Z");
+        date_limited.valid_through = Some("2026-10-13".into());
+        date_limited.valid_through_at = Some("2026-10-15T00:00:00Z".into());
+        let history = timed_book(vec![date_limited]);
+        assert_eq!(
+            history
+                .evaluate(&material(), &timed_scope("2026-10-14T00:00:00Z"))
+                .unwrap()
+                .excluded_offers[0]
+                .reason,
+            ExclusionReason::Expired
+        );
+    }
+
+    #[test]
+    fn intraday_age_remains_declared_utc_calendar_days_and_future_is_excluded() {
+        let q = timed_quote("2024-02-28T23:59:59.999999999Z");
+        let history = timed_book(vec![q]);
+        let mut at = timed_scope("2024-02-29T00:00:00Z");
+        at.max_age_days = 0;
+        assert_eq!(
+            history.evaluate(&material(), &at).unwrap().excluded_offers[0].reason,
+            ExclusionReason::Stale
+        );
+        at.max_age_days = 1;
+        assert_eq!(history.evaluate(&material(), &at).unwrap().offers.len(), 1);
+        let before = timed_scope("2024-02-28T23:59:59.999999998Z");
+        let out = history.evaluate(&material(), &before).unwrap();
+        assert!(out.offers.is_empty() && out.excluded_offers.is_empty());
+    }
+
+    #[test]
+    fn timestamp_schema_never_assigns_midnight_to_legacy_calendar_observations() {
+        assert!(timed_book(vec![quote()]).validate().is_err());
+        assert!(
+            book(vec![timed_quote("2026-10-13T12:00:00Z")])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            timed_book(vec![timed_quote("2026-10-13T12:00:00Z")])
+                .evaluate(&material(), &scope())
+                .is_err()
+        );
+        assert!(
+            book(vec![quote()])
+                .evaluate(&material(), &timed_scope("2026-10-13T12:00:00Z"))
+                .is_err()
+        );
+        let q = serde_json::to_value(quote()).unwrap();
+        let s = serde_json::to_value(scope()).unwrap();
+        assert!(q.get("observed_at").is_none() && q.get("valid_through_at").is_none());
+        assert!(s.get("as_of_at").is_none());
+        let mut mismatch = timed_quote("2026-10-13T12:00:00Z");
+        mismatch.observed_on = "2026-10-14".into();
+        assert!(timed_book(vec![mismatch]).validate().is_err());
+        let mut at = timed_scope("2026-10-13T12:00:00Z");
+        at.as_of = "2026-10-14".into();
+        assert!(timed_book(vec![]).evaluate(&material(), &at).is_err());
+    }
+
+    #[test]
+    fn utc_instants_reject_ambiguous_or_unrepresentable_clocks_and_conflicts() {
+        for at in [
+            "",
+            "2026-10-13",
+            "2026-10-13T12:00:00",
+            "2026-10-13T12:00:00+00:00",
+            "2026-10-13t12:00:00Z",
+            "2026-10-13T12:00:00z",
+            "2026-10-13T24:00:00Z",
+            "2026-10-13T12:60:00Z",
+            "2026-10-13T12:00:60Z",
+            "2026-10-13T12:00:00.Z",
+            "2026-10-13T12:00:00.1234567890Z",
+            "2026-10-13T12:00:00.1234x6Z",
+            "2026-02-29T12:00:00Z",
+            "0000-10-13T12:00:00Z",
+            "٢٠٢٦-10-13T12:00:00Z",
+        ] {
+            assert!(instant(at).is_err(), "{at}");
+        }
+        assert!(
+            instant("0001-01-01T00:00:00Z").unwrap()
+                < instant("9999-12-31T23:59:59.999999999Z").unwrap()
+        );
+        assert_eq!(
+            instant("2026-10-13T12:00:00.1Z").unwrap(),
+            instant("2026-10-13T12:00:00.100000000Z").unwrap()
+        );
+        let q = timed_quote("2026-10-13T12:00:00.1Z");
+        assert!(timed_book(vec![q.clone(), q.clone()]).validate().is_ok());
+        let mut conflict = q.clone();
+        conflict.observed_at = Some("2026-10-13T12:00:00.100000000Z".into());
+        conflict.price = 11.;
+        assert!(timed_book(vec![q.clone(), conflict]).validate().is_err());
+        let mut expired = q;
+        expired.valid_through_at = Some("2026-10-13T12:00:00.099999999Z".into());
+        assert!(timed_book(vec![expired]).validate().is_err());
     }
 
     #[test]

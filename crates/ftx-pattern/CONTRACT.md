@@ -101,3 +101,14 @@ Local Simpson integration is algebraically exact through cubic degree and avoids
 absolute enthalpies near equilibrium. Existing tabulated arithmetic and serialization are unchanged.
 The same law reaches dry thermal stepping and source-locked surface replay; evidence qualification
 is independent from physical specimen validation, uncertainty propagation and garment safety.
+
+**Purchasing instants** (`material_cost`). `ftx-textile-quotes/1` retains its calendar-only observation,
+scope and conflict semantics. Explicit `/2` books require UTC source timestamps and an explicit
+matching-date evaluation instant. Bounded Gregorian/clock parsing and integer nanoseconds establish
+ordering without platform timezones or floating-point truncation; unsupported clocks refuse. Choose
+the latest observation at or before evaluation before checking inclusive source expiry, availability,
+exact material lock and complete minimum/increment-rounded stock. A failed latest observation never
+revives an older price. Distinct records at the same instant conflict. Quote fields retain original
+source identity and estimates are not made into purchases or reserved inventory. The same evaluator
+feeds ordinary price commands, marker procurement and native/WASM studies; see
+`docs/textile-price-refresh.md` and the `material_cost` unit tests.
