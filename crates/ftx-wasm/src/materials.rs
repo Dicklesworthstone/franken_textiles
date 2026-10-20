@@ -134,6 +134,29 @@ pub fn material_pressure_condition(request: &str) -> Result<String, wasm_bindgen
     pressure_condition(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Infer common normal pressure from qualified layer thicknesses and rigid-face stack clearance.
+/// Each layer returns its ordinary frozen selection, without guessing missing mass or transport.
+///
+/// # Errors
+/// Input over 64 MiB or any refusal from the shared inverse compression/conditioning operation.
+pub fn compression_stack(request: &str) -> Result<String, Refusal> {
+    budget(&[request])?;
+    let input: ftx_pattern::material_compression::stack::Input =
+        serde_json::from_str(request).map_err(invalid)?;
+    serde_json::to_string(&ftx_pattern::material_compression::stack::close(&input)?)
+        .map_err(invalid)
+}
+
+/// Browser stack closure through the identical operation used by both native material commands.
+///
+/// # Errors
+/// Same refusals as [`compression_stack`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_compression_stack(request: &str) -> Result<String, wasm_bindgen::JsError> {
+    compression_stack(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Identify the production nonlinear material law from source-bearing nominal swatch forces.
 /// Observation consent in the input and admission of the fitted estimates are independent.
 ///

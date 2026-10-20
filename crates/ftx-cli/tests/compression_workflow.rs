@@ -209,3 +209,117 @@ fn both_commands_refuse_unknown_out_of_range_and_unapproved_requests_without_suc
         );
     }
 }
+
+fn stack_request() -> ftx_pattern::material_compression::stack::Input {
+    use ftx_pattern::material_compression::stack::{Direction, Input as Stack, Layer, SCHEMA};
+    let mut preparation: Input = serde_json::from_str(FIXTURE).unwrap();
+    preparation.pressure_pa = 0.0;
+    Stack {
+        schema: SCHEMA.into(),
+        gap_m: 0.030,
+        reference_area_m2: 0.25,
+        direction: Direction::Loading,
+        layers: ["outer", "inner"]
+            .map(|id| Layer {
+                id: id.into(),
+                preparation: preparation.clone(),
+            })
+            .to_vec(),
+        allow_estimates: true,
+    }
+}
+
+#[test]
+fn both_stack_commands_match_core_and_each_selection_binds_to_actual_contact() {
+    let dir = workspace();
+    let input = stack_request();
+    let original = serde_json::to_vec(&input).unwrap();
+    write(&dir, "stack.json", &original);
+    let core = ftx_pattern::material_compression::stack::close(&input).unwrap();
+    for unified in [false, true] {
+        let report = success(
+            &run(&dir, unified, &["compression-stack", "stack.json"]),
+            unified,
+        );
+        assert_eq!(report, serde_json::to_value(&core).unwrap());
+        assert!((report["pressure_pa"].as_f64().unwrap() - 250.0).abs() < 1e-10);
+    }
+    let pattern = json!({"schema":"fabric-pattern/1","units":"mm","seams":[],"fabric":{},
+        "pieces":[{"id":"coupon","cut":{"qty":1},"vertices":{"a":[0,0],"b":[100,0],"c":[0,100]},
+            "edges":[{"id":"ab","from":"a","to":"b"},{"id":"bc","from":"b","to":"c"},{"id":"ca","from":"c","to":"a"}],"grain":[[0,0],[0,100]]}]});
+    write(&dir, "pattern.json", &serde_json::to_vec(&pattern).unwrap());
+    for (index, layer) in core.layers.iter().enumerate() {
+        let selection = format!("layer-{index}.json");
+        let bound = format!("bound-{index}.json");
+        write(
+            &dir,
+            &selection,
+            layer.conditioned.selection_json.as_bytes(),
+        );
+        let binding = success(
+            &run(&dir, false, &["bind", "pattern.json", &selection, &bound]),
+            false,
+        );
+        assert_eq!(binding["geometry_changed"], false);
+        let actual = success(&run(&dir, false, &["resolve", &bound]), false);
+        assert!((actual["body_offset_m"].as_f64().unwrap() - 0.0075).abs() < 1e-15);
+        assert!((actual["mechanics"]["areal_kg_m2"].as_f64().unwrap() - 0.1).abs() < 1e-15);
+        assert_eq!(
+            actual["record_sha256"],
+            layer.conditioned.selection.expected_sha256.clone().unwrap()
+        );
+        assert!(
+            !run(
+                &dir,
+                false,
+                &["bind", "pattern.json", &selection, "stack.json"]
+            )
+            .status
+            .success()
+        );
+        assert!(
+            !run(&dir, false, &["bind", "pattern.json", &selection, &bound])
+                .status
+                .success()
+        );
+    }
+    assert_eq!(fs::read(dir.join("stack.json")).unwrap(), original);
+}
+
+#[test]
+fn stack_command_refusals_never_publish_partial_layer_selections() {
+    let dir = workspace();
+    for (index, key, value, code) in [
+        (0, "gap_m", json!(0.050), "out_of_range"),
+        (1, "allow_estimates", json!(false), "invalid_document"),
+        (2, "initial_force_n", json!(5), "invalid_document"),
+    ] {
+        let mut request = serde_json::to_value(stack_request()).unwrap();
+        request[key] = value;
+        let name = format!("refused-{index}.json");
+        write(&dir, &name, &serde_json::to_vec(&request).unwrap());
+        for unified in [false, true] {
+            refused(
+                &run(&dir, unified, &["compression-stack", &name]),
+                unified,
+                code,
+            );
+        }
+    }
+    write(
+        &dir,
+        "stack.json",
+        &serde_json::to_vec(&stack_request()).unwrap(),
+    );
+    for unified in [false, true] {
+        refused(
+            &run(
+                &dir,
+                unified,
+                &["compression-stack", "stack.json", "--force"],
+            ),
+            unified,
+            "invalid_document",
+        );
+    }
+}

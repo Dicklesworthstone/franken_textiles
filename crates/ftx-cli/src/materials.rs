@@ -66,19 +66,20 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     if matches!(
         action,
-        "screen" | "study" | "pressure-condition" | "bind-changes"
+        "screen" | "study" | "pressure-condition" | "compression-stack" | "bind-changes"
     ) {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
             ("screen", [path]) => screen::run(path)?,
             ("pressure-condition", [path]) => screen::pressure_condition(path)?,
+            ("compression-stack", [path]) => screen::compression_stack(path)?,
             ("bind-changes", [pattern, changes, out]) => {
                 screen::bind_changes(pattern, changes, out)?
             }
             ("study", [pattern, request]) => screen::study(pattern, request)?,
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials screen REQUEST.json | study PATTERN.json REQUEST.json | pressure-condition REQUEST.json | bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json",
+                    "usage: ftx materials screen REQUEST.json | study PATTERN.json REQUEST.json | pressure-condition REQUEST.json | compression-stack REQUEST.json | bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json",
                 ));
             }
         };
