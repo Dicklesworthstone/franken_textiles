@@ -252,8 +252,8 @@ impl Affine {
     #[must_use]
     pub fn direction(&self, d: Vec2) -> Vec2 {
         unit(Vec2::new(
-            self.a[0][0] * d.x + self.a[0][1] * d.y,
-            self.a[1][0] * d.x + self.a[1][1] * d.y,
+            d.x * self.a[0][0] + d.y * self.a[0][1],
+            d.x * self.a[1][0] + d.y * self.a[1][1],
         ))
     }
 }
@@ -328,7 +328,7 @@ fn grain_points(piece: &Value) -> Option<(Vec2, Vec2)> {
 /// Affine maps from drafted piece coordinates to the geometry's frame: the identity, plus for an instance
 /// of a piece cut on the fold the reflection across the fold edge; all pre-composed with `x → −x` for a
 /// mirrored instance.
-fn feature_maps(piece: &Value, inst: Option<&Instance>) -> Vec<Affine> {
+pub(crate) fn feature_maps(piece: &Value, inst: Option<&Instance>) -> Vec<Affine> {
     let Some(inst) = inst else {
         return vec![Affine::IDENTITY];
     };
