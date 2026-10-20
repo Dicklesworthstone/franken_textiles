@@ -112,7 +112,7 @@ impl ClothModel {
     /// Reassembles mass and every constitutive coefficient atomically, leaving rest geometry,
     /// topology, seam welds and elastic segments unchanged. Call before creating a new solver for
     /// a material substitution. Resets compression to the supplied factors and clears any previous
-    /// nonlinear membrane responses; reapply gathered zones and the new material's response field
+    /// nonlinear membrane responses and fitted domains; reapply gathered zones and the new response field
     /// afterward. No factor or old material coefficient is silently reused.
     ///
     /// # Errors
@@ -166,6 +166,7 @@ impl ClothModel {
         self.element_materials =
             heterogeneous.then(|| materials.iter().map(|m| m.membrane).collect());
         self.element_responses = None;
+        self.element_domains = None;
         self.hinge_bending = heterogeneous.then_some(bending);
         Ok(())
     }

@@ -14,6 +14,44 @@ use crate::materials::{Evidence, Quantity, Source};
 /// Fixes work conjugacy: [E11, E22, 2 E12] versus second-Piola sheet resultants in N/m.
 pub const MODEL: &str = "tabulated_green_strain/1";
 
+/// A validated material-frame Green-strain box, independent of a constitutive interpolation.
+/// Bounds constrain physical `[E11, E22, 2 E12]` before numerical compression softening.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StrainDomain([[f64; 2]; 3]);
+
+impl StrainDomain {
+    /// Preserve the authored finite, ordered bounds exactly; never widen them to include zero.
+    ///
+    /// # Errors
+    /// Nonfinite or reversed intervals.
+    pub fn new(ranges: [[f64; 2]; 3]) -> Result<Self, Refusal> {
+        if ranges
+            .iter()
+            .any(|[lo, hi]| !lo.is_finite() || !hi.is_finite() || lo > hi)
+        {
+            return Err(invalid(
+                "Green-strain domain needs three finite ordered intervals",
+            ));
+        }
+        Ok(Self(ranges))
+    }
+
+    /// The original closed intervals in warp, weft and engineering-shear order.
+    #[must_use]
+    pub fn ranges(self) -> [[f64; 2]; 3] {
+        self.0
+    }
+
+    /// Whether the entire physical strain is characterized; no clamping or tolerance expansion.
+    #[must_use]
+    pub fn contains(self, strain: [f64; 3]) -> bool {
+        strain
+            .iter()
+            .zip(self.0)
+            .all(|(&e, [lo, hi])| e.is_finite() && e >= lo && e <= hi)
+    }
+}
+
 /// Explicit interpolation authority; omitting it preserves the original cubic response.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -1971,6 +1971,26 @@ acceptance remain open. See [material-membrane-plasticity.md](docs/material-memb
 
 ---
 
+### 25.28 Enforced acquisition domains and the next material-coupling gaps
+
+**Scalar calibration reaches physical-domain admission (`ftx-sd1`, supports `ftx-tm4`).**
+The four identified orthotropic scalar coefficients must retain one source and the same FIT-only
+raw-Green strain box. Normal material resolution carries that box through each piece's grain frame
+into the retained sewn triangles. Scene placement, untangling, accepted states and Newton trials
+cannot extrapolate outside it, including when numerical compression softening is enabled. Material
+replacement clears old domains; Maxwell and permanent-set histories refuse changed domain identity.
+Held-out samples never widen the acquisition range. The independent synthetic tests demonstrate
+software propagation and refusal, not experimental accuracy throughout the box or measured garment fit.
+
+The next concrete integration increments use the same authorities: qualify actual finite supplier
+capacity against complete rounded cut orders (`ftx-pq1`/`ftx-tm6`), and carry admitted plastic-work heat
+through changing covered/exposed cloth partitions (`ftx-ps1`/`ftx-tmb`) without counting source energy
+twice or turning remap residual into heat. Neither requires a brand-specific physics branch.
+Matched conditioned linen, treated cowhide, performance-knit and fill characterization, measured
+conversion laws, and independent sewn-garment/process acceptance remain the larger open gates.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

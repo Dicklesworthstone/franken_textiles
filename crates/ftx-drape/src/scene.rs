@@ -566,6 +566,7 @@ fn build_scene_inner(
     let mut tri_compression = Vec::new();
     let mut tri_materials = Vec::new();
     let mut tri_responses = Vec::new();
+    let mut tri_domains = Vec::new();
     let mut triangle_owner = Vec::new();
     let mut source_triangles = Vec::new();
     let mut tri_bending = Vec::new();
@@ -588,6 +589,7 @@ fn build_scene_inner(
             None => &fabric,
         };
         tri_bending.push(sheet.bending_response());
+        tri_domains.push(sheet.strain_domain());
         if let Some(field) = &instance_fabrics {
             if f.iter().any(|&v| mesh.owner[v] != owner) {
                 return Err(bad(
@@ -634,13 +636,14 @@ fn build_scene_inner(
         )?
     };
     model.set_compression(&tri_compression)?;
+    model.set_membrane_domains(&tri_domains)?;
     if tri_bending.iter().any(Option::is_some) {
         model.set_panel_bending(&rest, &source_triangles, &weld, &tri_bending)?;
     }
     if !tri_responses.is_empty() {
         model.set_membrane_responses(&tri_responses)?;
-        model.check_membrane_domains(&x)?;
     }
+    model.check_membrane_domains(&x)?;
     let mut elastic_rings = Vec::new();
     if let Some(e) = elastic {
         for ring in elastic_rings_of(&mesh, &weld, e)? {
@@ -651,6 +654,7 @@ fn build_scene_inner(
     }
     let body = Body::new(skin_vertices.to_vec(), skin_triangles.to_vec(), 5e-3)?;
     let untangled = untangle(&mut x, &tris, &body, &tree)?;
+    model.check_membrane_domains(&x)?;
     // The relaxed start keeps every vertex 4.8 mm out, but an edge between two of them can pass close to
     // a sharp body feature (a thumb by a sleeve hem). Start the barrier at half the smallest distance
     // when that is less than the cloth offset; `run_phase` raises it back as the cloth moves out.

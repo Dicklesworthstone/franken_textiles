@@ -3,7 +3,7 @@ use ftx_core::{Vec2, Vec3};
 use ftx_drape::cloth::SheetMaterial;
 use ftx_drape::{ClothModel, Membrane, Solver};
 use ftx_pattern::material_catalog::Selection;
-use ftx_pattern::material_response::CompiledMembrane;
+use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
 use ftx_pattern::materials::{Catalog, Material};
 
 fn sheet(scale: f64) -> SheetMaterial {
@@ -208,6 +208,71 @@ fn failed_material_replacement_keeps_nonlinear_response_and_coefficients_atomic(
         assert_eq!(format!("{m:?}"), before);
         assert_eq!(m.elastic_energy(&x), energy);
     }
+}
+
+#[test]
+fn fitted_scalar_domains_check_raw_strain_and_replace_atomically_with_materials() {
+    let mut m = model(&[sheet(1.0), sheet(4.0)]);
+    let domain = StrainDomain::new([[-0.05, 0.05]; 3]).unwrap();
+    m.set_membrane_domains(&[Some(domain), None]).unwrap();
+    m.set_compression(&[0.01, 0.01]).unwrap();
+    let (_, _, mut x) = geometry();
+    x[1].x = 0.9; // E11=-0.095: softening must not hide the raw-domain violation.
+    assert!(m.check_membrane_domains(&x).is_err());
+    assert!(m.elastic_energy(&x).is_nan());
+    let before = format!("{m:?}");
+    assert!(m.set_membrane_domains(&[None]).is_err());
+    assert!(m.set_materials(&[sheet(2.0)]).is_err());
+    assert_eq!(format!("{m:?}"), before);
+    let mut solver = Solver::new(m, x.clone(), &[[true; 3]; 4], Vec3::ZERO);
+    assert!(solver.step(0.001).is_err());
+    assert_eq!(solver.x, x);
+    assert_eq!(solver.v, vec![Vec3::ZERO; 4]);
+    solver.model.set_materials(&[sheet(2.0); 2]).unwrap();
+    assert_eq!(solver.model.membrane_domain(0), None);
+    assert_eq!(solver.model.membrane_domain(1), None);
+    assert_eq!(
+        solver.model.elastic_energy(&x),
+        model(&[sheet(2.0); 2]).elastic_energy(&x)
+    );
+    solver.step(0.001).unwrap();
+}
+
+#[test]
+fn changed_scalar_fit_domain_cannot_reuse_accepted_maxwell_history() {
+    let selection: Selection = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-relaxation.json"
+    ))
+    .unwrap();
+    let resolved = Catalog::builtin().unwrap().resolve(&selection).unwrap();
+    let mechanics = resolved.mechanics().unwrap();
+    let sheet = SheetMaterial {
+        membrane: Membrane::orthotropic(
+            mechanics.warp_n_m,
+            mechanics.weft_n_m,
+            mechanics.poisson,
+            mechanics.shear_n_m,
+            1.,
+        ),
+        areal_kg_m2: mechanics.areal_kg_m2,
+        bending_nm: mechanics.bending_nm,
+    };
+    let mut m = model(&[sheet; 2]);
+    m.set_membrane_domains(&[Some(StrainDomain::new([[-0.1, 0.1]; 3]).unwrap()); 2])
+        .unwrap();
+    let (_, _, x) = geometry();
+    let mut solver = Solver::new(m, x.clone(), &[[true; 3]; 4], Vec3::ZERO)
+        .with_relaxation(&vec![resolved.membrane_relaxation().unwrap(); 2])
+        .unwrap();
+    solver.step(0.01).unwrap();
+    solver
+        .model
+        .set_membrane_domains(&[Some(StrainDomain::new([[-0.2, 0.2]; 3]).unwrap()); 2])
+        .unwrap();
+    assert!(solver.relaxation_report().is_err());
+    assert!(solver.step(0.01).is_err());
+    assert_eq!(solver.x, x);
+    assert_eq!(solver.v, vec![Vec3::ZERO; 4]);
 }
 
 #[test]

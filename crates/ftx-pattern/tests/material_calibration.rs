@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use ftx_pattern::material_calibration::{Input, Partition, SCHEMA, Sample, calibrate};
+use ftx_pattern::material_calibration::{
+    Input, Partition, SCHEMA, Sample, calibrate, fitted_domain,
+};
+use ftx_pattern::material_response::StrainDomain;
 use ftx_pattern::materials::{Evidence, Form, Material, Quantity, Source};
 
 fn sample(id: &str, f: [[f64; 2]; 2], partition: Partition, q: [f64; 4]) -> Sample {
@@ -262,4 +265,69 @@ fn provenance_is_replayable_and_replacement_requires_explicit_consent() {
         replaced.input.material.properties["warp_stiffness"].value,
         coefficient.value
     );
+}
+
+#[test]
+fn fitted_domain_is_exact_and_held_out_states_never_widen_it() {
+    let original = calibrate(&input()).unwrap();
+    let domain = fitted_domain(&original.material).unwrap().unwrap();
+    assert_eq!(domain.ranges(), original.fitted_strain_range);
+    assert!(domain.contains([0.; 3]));
+    assert!(!domain.contains([0., 0., -0.001]));
+    let mut raw = input();
+    raw.samples.push(sample(
+        "remote-check",
+        [[1.8, -0.3], [0.2, 1.6]],
+        Partition::Check,
+        [9000., 4000., 600., 700.],
+    ));
+    let checked = calibrate(&raw).unwrap();
+    assert_eq!(checked.fitted_strain_range, domain.ranges());
+    assert_eq!(fitted_domain(&checked.material).unwrap(), Some(domain));
+    for bad in [
+        [[0.1, 0.]; 3],
+        [[f64::NAN, 1.]; 3],
+        [[-1., f64::INFINITY]; 3],
+    ] {
+        assert!(StrainDomain::new(bad).is_err());
+    }
+    let positive = StrainDomain::new([[0.1, 0.2]; 3]).unwrap();
+    assert!(!positive.contains([0.; 3]));
+    assert!(!positive.contains([f64::NAN; 3]));
+}
+
+#[test]
+fn partial_or_mixed_fitted_domains_cannot_become_unrestricted_mechanics() {
+    let material = calibrate(&input()).unwrap().material;
+    for mutation in 0..5 {
+        let mut bad = material.clone();
+        let coefficient = bad.properties.get_mut("shear_stiffness").unwrap();
+        match mutation {
+            0 => {
+                coefficient.conditions.remove("fitted_green_strain_range");
+            }
+            1 => {
+                coefficient
+                    .conditions
+                    .insert("fitted_green_strain_range".into(), "[]".into());
+            }
+            2 => {
+                coefficient.conditions.insert(
+                    "fitted_green_strain_range".into(),
+                    "[[-1,1],[-1,1],[-1,1]]".into(),
+                );
+            }
+            3 => {
+                coefficient.source = "synthetic".into();
+            }
+            _ => {
+                for coefficient in bad.properties.values_mut() {
+                    coefficient.conditions.remove("fitted_green_strain_range");
+                }
+            }
+        }
+        assert!(bad.validate().is_err(), "mutation {mutation}");
+        assert!(bad.mechanics(true).is_err(), "mutation {mutation}");
+    }
+    assert!(fitted_domain(&input().material).unwrap().is_none());
 }

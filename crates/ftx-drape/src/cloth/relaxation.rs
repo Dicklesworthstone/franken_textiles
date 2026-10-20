@@ -3,7 +3,7 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec3};
 use ftx_pattern::material_relaxation::{CompiledRelaxation, Memory};
-use ftx_pattern::material_response::CompiledMembrane;
+use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
 use serde_json::{Value, json};
 
 use super::{ClothModel, SolveReport, Solver};
@@ -17,6 +17,7 @@ struct Bound {
     element: MembraneElement,
     material: Membrane,
     equilibrium: Option<CompiledMembrane>,
+    domain: Option<StrainDomain>,
     law: CompiledRelaxation,
     memory: Memory,
 }
@@ -67,6 +68,7 @@ impl Field {
                 if model.membranes[i] != b.element
                     || model.material(i) != b.material
                     || model.membrane_response(i) != b.equilibrium.as_ref()
+                    || model.membrane_domain(i) != b.domain
                 {
                     return Err(bad(
                         "changed material/rest triangle cannot reuse Maxwell history; build a new solver",
@@ -148,6 +150,7 @@ impl Solver {
                 "one compression mapping per material triangle is required",
             ));
         }
+        self.model.check_membrane_domains(&self.x)?;
         let entries = laws
             .iter()
             .enumerate()
@@ -180,6 +183,7 @@ impl Solver {
                     memory,
                     law: law.clone(),
                     equilibrium: self.model.membrane_response(i).cloned(),
+                    domain: self.model.membrane_domain(i),
                 }))
             })
             .collect::<Result<Vec<_>, Refusal>>()?;

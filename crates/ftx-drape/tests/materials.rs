@@ -300,6 +300,19 @@ fn swatch_identification_reaches_real_sewn_band_dynamics_without_pattern_edits()
             .unwrap();
         let pattern = band(json!({"material":selected.frozen_selection()}));
         let run = drape(&pattern, &json!({}), &body, &opts, |_| {}).unwrap();
+        let domain = resolve(&pattern, &opts)
+            .unwrap()
+            .fabric
+            .strain_domain()
+            .unwrap();
+        assert_eq!(
+            run.report["material"]["fitted_strain_range"],
+            json!(domain.ranges())
+        );
+        for (i, element) in run.scene.solver.model.membranes.iter().enumerate() {
+            assert_eq!(run.scene.solver.model.membrane_domain(i), Some(domain));
+            assert!(domain.contains(element.strain(&run.scene.solver.x)));
+        }
         (pattern, run)
     };
     let (pa, a) = solve(1.0);
@@ -326,6 +339,44 @@ fn swatch_identification_reaches_real_sewn_band_dynamics_without_pattern_edits()
     assert_ne!(
         a.report["material"]["record_sha256"],
         b.report["material"]["record_sha256"]
+    );
+}
+
+#[test]
+fn narrow_swatch_cannot_silently_extrapolate_during_sewn_scene_construction() {
+    use ftx_pattern::material_calibration::{Input, calibrate};
+    let mut input: Input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-swatch.json"
+    ))
+    .unwrap();
+    // Preserve the original acquisition's three FIT states: no negative shear was observed.
+    input.samples.truncate(4);
+    let identified = calibrate(&input).unwrap();
+    assert_eq!(identified.fitted_strain_range[2][0], 0.);
+    let pattern = band(json!({"material":{
+        "id":identified.material.id,"record":identified.material,"allow_estimates":true
+    }}));
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    let options = DrapeOptions {
+        spacing: 24.,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 1e-3,
+        ..DrapeOptions::default()
+    };
+    let refusal = drape(&pattern, &json!({}), &body, &options, |_| {})
+        .err()
+        .unwrap();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::OutOfRange);
+    assert!(
+        refusal.message.contains("outside fitted ranges"),
+        "{refusal}"
     );
 }
 
