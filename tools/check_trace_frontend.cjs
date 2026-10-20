@@ -3,6 +3,7 @@
 // node --experimental-vm-modules --test tools/check_trace_frontend.cjs
 require('./check_materials_frontend.cjs');
 require('./check_stock_job_frontend.cjs');
+require('./check_compression_frontend.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
