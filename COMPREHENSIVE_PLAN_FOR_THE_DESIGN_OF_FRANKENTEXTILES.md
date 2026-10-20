@@ -1836,6 +1836,36 @@ source-specific observations must not become universal values for a fiber, brand
 
 ---
 
+### 25.23 Supplier revision review and explicit recovery-model comparison
+
+**Supplier specification revisions (`ftx-sr2`).** Existing source adapters can retain a
+specification snapshot and compare a later exact product/variant observation with it. Replay of
+source bytes and receipts establishes which declarations changed; composition, construction,
+finish, dimensions, variant and selling basis remain original source facts with dates and hashes.
+Price/stock-only updates preserve the existing material binding. Specification or material-binding
+changes produce a review report and withhold new quotes while preserving previous snapshots.
+The source review does not infer a measured specimen/lot link or change a frozen material.
+See [textile-price-refresh.md](docs/textile-price-refresh.md). Broader primary supplier acquisition
+and matched conditioned lot evidence remain open.
+
+**Competing directional recovery models (`ftx-rc2`).** The existing calibration commands and
+browser entry accept two to four named fixed-time or bounded-time orthotropic alternatives on one
+acquisition. All candidates share the 1,024-objective and 262,144-projected-iteration limits,
+including unsuccessful work. Reports retain each spectrum, residuals, prediction differences,
+declared parameter count, failure and actual work. FIT equivalence, parsimony and candidate choice
+are fixed before CHECK replay. Ambiguous or incomplete automatic comparisons cannot publish a
+selection; an explicit reviewed choice still must pass its supplied acceptance gates. A failed
+CHECK rejects the same chosen candidate and never promotes another model. Unresolved browser
+results clear the previous assignable material while keeping the report and request downloadable.
+See [relaxation-calibration.md](docs/relaxation-calibration.md).
+
+These comparisons apply only to the declared alternatives, acquisition and tolerance. They do not
+discover unlimited model orders, establish global spectrum uniqueness, infer a noise model or
+produce parameter confidence intervals. Fitted quantities remain estimates; matched measured
+coupon and garment acceptance stay open under `ftx-rc1`, `ftx-tm2` and `ftx-tm8`.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

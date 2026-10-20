@@ -42,6 +42,11 @@ self.onmessage = async ({ data: msg }) => {
         if (typeof identify !== "function") throw Error("Rebuild web/pkg: missing material calibration engine.");
         if (typeof msg.allowEstimates !== "boolean") throw Error("Declare admission of fitted estimates explicitly.");
         raw = identify(msg.calibrationRequest, msg.allowEstimates); result = json(raw);
+        if (result.comparison?.schema === "ftx-relaxation-model-comparison-report/1" && result.comparison.status !== "ACCEPTED") {
+          if (result.selection_json !== null || result.calibration !== null) throw Error("Unresolved model comparison cannot publish a selection.");
+          files = [file("material-calibration.json", raw), file("calibration-input.json", msg.calibrationRequest)];
+          break;
+        }
         if (typeof result.selection_json !== "string" || !result.material?.capabilities) {
           throw Error("Rebuild web/pkg: missing calibrated selection and capability bridge.");
         }

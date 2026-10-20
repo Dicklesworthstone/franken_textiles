@@ -16,6 +16,7 @@ type Vector = [f64; MAX_PARAMETERS];
 type Matrix = [Vector; MAX_PARAMETERS];
 
 mod search;
+pub(super) use search::Budget as ComparisonBudget;
 pub use search::TimeSearchReport;
 
 /// Identify spring tensors at fixed times or jointly identify times inside explicit search windows.
@@ -233,7 +234,7 @@ fn solve_budgeted(
     mut remaining_steps: Option<&mut usize>,
 ) -> Result<Solution, Refusal> {
     // A profile-objective gradient needs a more accurate inner stationary point. Keep the original
-    // fixed-time arithmetic and tolerance exactly; only the bounded time search requests refinement.
+    // standalone fixed-time arithmetic; compared fixed and searched models use the same refinement.
     let tolerance = if remaining_steps.is_some() {
         1e-13
     } else {
@@ -480,6 +481,25 @@ fn replay(
 }
 
 pub(super) fn calibrate(input: &Input, options: &OrthotropicInput) -> Result<Report, Refusal> {
+    calibrate_with_policy(input, options, None)
+}
+
+pub(super) fn calibrate_candidate(
+    input: &Input,
+    options: &OrthotropicInput,
+    budget: &mut ComparisonBudget,
+) -> Result<Report, Refusal> {
+    calibrate_with_policy(input, options, Some(budget))
+}
+
+// The original single-model API enforces both residual gates. Comparison candidates defer CHECK
+// replay until every FIT-only choice has been fixed, and share one numerical work allowance.
+fn calibrate_with_policy(
+    input: &Input,
+    options: &OrthotropicInput,
+    mut budget: Option<&mut ComparisonBudget>,
+) -> Result<Report, Refusal> {
+    let comparing = budget.is_some();
     let searched = !options.time_bounds_seconds.is_empty();
     if (!searched
         && (!(1..=8).contains(&options.times_seconds.len())
@@ -527,15 +547,22 @@ pub(super) fn calibrate(input: &Input, options: &OrthotropicInput) -> Result<Rep
         ));
     }
     let (times, fit, time_search) = if searched {
-        let result = search::solve(&histories, &options.time_bounds_seconds)?;
+        let result = match budget.as_deref_mut() {
+            Some(budget) => {
+                search::solve_budgeted(&histories, &options.time_bounds_seconds, budget)?
+            }
+            None => search::solve(&histories, &options.time_bounds_seconds)?,
+        };
         (result.times, result.fit, Some(result.report))
     } else {
-        let (rows, target) = design(&histories, &options.times_seconds)?;
-        (
-            options.times_seconds.clone(),
-            solve(&rows, &target, 4 * options.times_seconds.len())?,
-            None,
-        )
+        let fit = match budget {
+            Some(budget) => budget.fixed(&histories, &options.times_seconds)?,
+            None => {
+                let (rows, target) = design(&histories, &options.times_seconds)?;
+                solve(&rows, &target, 4 * options.times_seconds.len())?
+            }
+        };
+        (options.times_seconds.clone(), fit, None)
     };
     let candidates: Vec<_> = times
         .iter()
@@ -564,8 +591,13 @@ pub(super) fn calibrate(input: &Input, options: &OrthotropicInput) -> Result<Rep
     } else {
         Some(fitted.compile(&material.sources, true, q)?)
     };
-    let (predictions, fit_quality, check) =
-        super::residuals(input, &histories, |h| replay(h, compiled.as_ref()))?;
+    let (predictions, fit_quality, check) = if comparing {
+        super::evaluate_residuals(input, &histories, false, false, |h| {
+            replay(h, compiled.as_ref())
+        })?
+    } else {
+        super::residuals(input, &histories, |h| replay(h, compiled.as_ref()))?
+    };
     material.membrane_relaxation = compiled.map(|_| fitted);
     material.validate()?;
     let missing_mechanics = material
@@ -593,4 +625,22 @@ pub(super) fn calibrate(input: &Input, options: &OrthotropicInput) -> Result<Rep
         }),
         missing_mechanics,
     })
+}
+
+pub(super) fn replay_checks(report: &mut Report) -> Result<(), Refusal> {
+    let (histories, q) = super::prepare(&report.input)?;
+    let compiled = report
+        .material
+        .membrane_relaxation
+        .as_ref()
+        .map(|law| law.compile(&report.material.sources, true, q))
+        .transpose()?;
+    let (predictions, fit, check) =
+        super::evaluate_residuals(&report.input, &histories, true, false, |history| {
+            replay(history, compiled.as_ref())
+        })?;
+    report.predictions = predictions;
+    report.fit = fit;
+    report.check = check;
+    Ok(())
 }

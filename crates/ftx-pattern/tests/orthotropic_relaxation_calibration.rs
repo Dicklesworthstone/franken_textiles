@@ -585,3 +585,347 @@ fn automatic_times_refuse_inactive_branches_and_conflicting_or_unresolved_window
             .contains("inactive")
     );
 }
+
+fn comparison_input() -> ftx_pattern::material_relaxation::calibration::comparison::ComparisonInput
+{
+    use ftx_pattern::material_relaxation::calibration::comparison::{
+        ComparisonInput, Model, SCHEMA,
+    };
+    let mut calibration = input();
+    let mut complete = calibration.orthotropic.take().unwrap();
+    complete.times_seconds = vec![0.3, 2., 8.];
+    let mut underspecified = complete.clone();
+    underspecified.times_seconds = vec![0.3, 2.];
+    ComparisonInput {
+        schema: SCHEMA.into(),
+        calibration,
+        candidates: vec![
+            Model {
+                id: "complete".into(),
+                orthotropic: complete,
+            },
+            Model {
+                id: "underspecified".into(),
+                orthotropic: underspecified,
+            },
+        ],
+        fit_rms_equivalence_scaled: 1e-7,
+        select_candidate_id: None,
+        max_objective_evaluations: 1024,
+        max_projected_iterations: 262_144,
+    }
+}
+
+#[test]
+fn comparison_selects_a_supported_order_and_retains_underfit_forces_and_real_material() {
+    use ftx_pattern::material_relaxation::calibration::comparison::{
+        CheckStatus, FitStatus, Status, compare,
+    };
+    let request = comparison_input();
+    let report = compare(&request).unwrap();
+    assert_eq!(report.status, Status::Accepted);
+    assert!(report.fit_decision.comparison_complete);
+    assert_eq!(
+        report.fit_decision.chosen_candidate_id.as_deref(),
+        Some("complete")
+    );
+    assert!(!report.fit_decision.ambiguous);
+    assert_eq!(report.candidates[0].fit_status, FitStatus::Accepted);
+    assert_eq!(
+        report.candidates[1].fit_status,
+        FitStatus::ResidualsExceeded
+    );
+    let rejected = report.candidates[1].calibration.as_ref().unwrap();
+    assert!(rejected.fit.rms_scaled > request.calibration.max_rms_scaled);
+    assert_eq!(rejected.predictions.len(), 28);
+    assert_eq!(report.candidates[0].check_status, CheckStatus::Accepted);
+    let selected = report.selected_calibration().unwrap();
+    assert_tensors(&tensors(selected), &TENSORS[..3], 1e-7);
+    assert_eq!(
+        serde_json::to_value(&selected.material.properties).unwrap(),
+        serde_json::to_value(&request.calibration.material.properties).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&selected.input.experiments).unwrap(),
+        serde_json::to_value(&request.calibration.experiments).unwrap()
+    );
+    let db = Catalog::builtin().unwrap();
+    let material = db
+        .resolve(&Selection {
+            id: selected.material.id.clone(),
+            record: Some(selected.material.clone()),
+            allow_estimates: true,
+            ..Selection::default()
+        })
+        .unwrap();
+    let frozen = material.frozen_selection();
+    let material = db.resolve(&frozen).unwrap();
+    material.mechanics().unwrap();
+    let recovery = material.membrane_relaxation().unwrap().unwrap();
+    assert!(recovery.has_orthotropic_branches());
+    assert_eq!(
+        recovery
+            .initialize([0.; 3])
+            .unwrap()
+            .viscous_strains()
+            .len(),
+        3
+    );
+    let mut reordered = request;
+    reordered.candidates.reverse();
+    let repeated = compare(&reordered).unwrap();
+    assert_eq!(
+        serde_json::to_value(&report.fit_decision).unwrap(),
+        serde_json::to_value(&repeated.fit_decision).unwrap()
+    );
+    assert_eq!(report.objective_evaluations, repeated.objective_evaluations);
+    assert_eq!(report.projected_iterations, repeated.projected_iterations);
+}
+
+#[test]
+fn comparison_never_reselects_on_held_out_forces_even_when_another_model_passes_them() {
+    use ftx_pattern::material_relaxation::calibration::comparison::{CheckStatus, Status, compare};
+    let mut request = comparison_input();
+    let original = compare(&request).unwrap();
+    let alternate = original.candidates[1].calibration.as_ref().unwrap();
+    for experiment in request
+        .calibration
+        .experiments
+        .iter_mut()
+        .filter(|e| e.partition == Partition::Check)
+    {
+        for sample in &mut experiment.samples {
+            let prediction = alternate
+                .predictions
+                .iter()
+                .find(|p| p.experiment == experiment.id && p.time_seconds == sample.time_seconds)
+                .unwrap();
+            for i in 0..2 {
+                for j in 0..2 {
+                    if sample.nominal_n_m[i][j].is_some() {
+                        sample.nominal_n_m[i][j] = Some(prediction.nominal_n_m[i][j]);
+                    }
+                }
+            }
+        }
+    }
+    let rejected = compare(&request).unwrap();
+    assert_eq!(rejected.status, Status::ChosenCandidateRejected);
+    assert_eq!(
+        serde_json::to_value(&original.fit_decision).unwrap(),
+        serde_json::to_value(&rejected.fit_decision).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&original.prediction_differences).unwrap(),
+        serde_json::to_value(&rejected.prediction_differences).unwrap()
+    );
+    assert_eq!(
+        original.objective_evaluations,
+        rejected.objective_evaluations
+    );
+    assert_eq!(original.projected_iterations, rejected.projected_iterations);
+    assert_eq!(rejected.candidates[0].check_status, CheckStatus::Rejected);
+    assert_eq!(rejected.candidates[1].check_status, CheckStatus::Accepted);
+    assert!(rejected.selected_calibration().is_none());
+}
+
+#[test]
+fn equivalent_spectra_report_ambiguity_and_parsimony_without_silent_selection() {
+    use ftx_pattern::material_relaxation::calibration::comparison::{Status, compare};
+    let mut request = comparison_input();
+    request.candidates[1].id = "extra".into();
+    request.candidates[1].orthotropic.times_seconds = vec![0.3, 2., 8., 32.];
+    let report = compare(&request).unwrap();
+    assert_eq!(report.status, Status::Ambiguous);
+    assert!(report.fit_decision.ambiguous);
+    assert_eq!(
+        report.fit_decision.equivalent_candidate_ids,
+        ["complete", "extra"]
+    );
+    assert_eq!(
+        report.fit_decision.parsimonious_candidate_id.as_deref(),
+        Some("complete")
+    );
+    assert!(report.fit_decision.chosen_candidate_id.is_none());
+    assert!(report.selected_calibration().is_none());
+    assert!(
+        report.prediction_differences[0]
+            .fit_prediction_difference
+            .rms_scaled
+            < 1e-7
+    );
+    assert_eq!(report.candidates[0].declared_parameters, 12);
+    assert_eq!(report.candidates[1].declared_parameters, 16);
+    request.select_candidate_id = Some("complete".into());
+    let chosen = compare(&request).unwrap();
+    assert_eq!(chosen.status, Status::Accepted);
+    assert!(chosen.fit_decision.ambiguous);
+    assert_eq!(chosen.fit_decision.basis, "explicit_candidate");
+    assert!(chosen.selected_calibration().is_some());
+}
+
+#[test]
+fn failed_comparison_candidates_consume_shared_work_and_no_partial_selection_escapes() {
+    use ftx_pattern::material_relaxation::calibration::comparison::{
+        CheckStatus, FitStatus, Status, compare,
+    };
+    let mut request = comparison_input();
+    request.max_objective_evaluations = 1;
+    let stopped = compare(&request).unwrap();
+    assert_eq!(stopped.status, Status::BudgetStop);
+    assert_eq!(stopped.objective_evaluations, 1);
+    assert!(stopped.candidates[0].calibration.is_some());
+    assert_eq!(stopped.candidates[0].check_status, CheckStatus::NotRun);
+    assert!(stopped.selected_calibration().is_none());
+    // A rank-deficient force design still consumes its attempted objective evaluation.
+    request.candidates[0].orthotropic.times_seconds = vec![0.3, 0.3000000001];
+    let failed = compare(&request).unwrap();
+    assert_eq!(failed.status, Status::BudgetStop);
+    assert_eq!(failed.candidates[0].fit_status, FitStatus::Refused);
+    assert_eq!(failed.candidates[0].objective_evaluations, 1);
+    assert!(
+        failed.candidates[0]
+            .refusal
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("rank-deficient")
+    );
+    assert_eq!(failed.objective_evaluations, 1);
+    assert!(failed.selected_calibration().is_none());
+}
+
+#[test]
+fn fixed_and_optimized_orders_share_the_same_total_comparison_budget() {
+    use ftx_pattern::material_relaxation::calibration::comparison::{Status, compare};
+    let mut acquisition = input();
+    acquisition.orthotropic.as_mut().unwrap().times_seconds = vec![0.6];
+    observations(&mut acquisition, &[[300., 120., -30., 90.]]);
+    let mut request = comparison_input();
+    acquisition.orthotropic = None;
+    request.calibration = acquisition;
+    request.candidates[0].orthotropic.times_seconds = vec![0.6, 8.];
+    request.candidates[1].orthotropic.times_seconds.clear();
+    request.candidates[1].orthotropic.time_bounds_seconds = vec![[0.2, 1.8]];
+    let report = compare(&request).unwrap();
+    assert_eq!(report.status, Status::Ambiguous);
+    let searched = report.candidates[1]
+        .calibration
+        .as_ref()
+        .unwrap()
+        .orthotropic_fit
+        .as_ref()
+        .unwrap()
+        .time_search
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        report.candidates[1].objective_evaluations,
+        searched.objective_evaluations
+    );
+    assert_eq!(
+        report.objective_evaluations,
+        1 + searched.objective_evaluations
+    );
+    assert_eq!(
+        report.projected_iterations,
+        report
+            .candidates
+            .iter()
+            .map(|c| c.projected_iterations)
+            .sum::<usize>()
+    );
+    request.max_objective_evaluations = report.objective_evaluations - 1;
+    let stopped = compare(&request).unwrap();
+    assert_eq!(stopped.status, Status::BudgetStop);
+    assert_eq!(
+        stopped.objective_evaluations,
+        request.max_objective_evaluations
+    );
+    assert!(stopped.selected_calibration().is_none());
+}
+
+#[test]
+fn constrained_candidates_cannot_restart_the_shared_projected_iteration_allowance() {
+    use ftx_pattern::material_relaxation::calibration::comparison::{CheckStatus, Status, compare};
+    let mut acquisition = input();
+    let mut perturbed = TENSORS;
+    perturbed[0][2] = -125.;
+    perturbed[0][3] = -2.;
+    observations(&mut acquisition, &perturbed);
+    acquisition.orthotropic = None;
+    acquisition.max_rms_scaled = 1.;
+    acquisition.max_peak_scaled = 2.;
+    let mut request = comparison_input();
+    request.calibration = acquisition;
+    request.candidates[1].orthotropic.times_seconds = vec![0.3, 2., 8., 32.];
+    let complete = compare(&request).unwrap();
+    assert!(complete.fit_decision.comparison_complete);
+    assert!(
+        complete
+            .candidates
+            .iter()
+            .all(|c| c.projected_iterations > 0)
+    );
+    assert_eq!(
+        complete.projected_iterations,
+        complete
+            .candidates
+            .iter()
+            .map(|c| c.projected_iterations)
+            .sum::<usize>()
+    );
+    request.max_projected_iterations = complete.projected_iterations - 1;
+    let stopped = compare(&request).unwrap();
+    assert_eq!(stopped.status, Status::BudgetStop);
+    assert_eq!(
+        stopped.projected_iterations,
+        request.max_projected_iterations
+    );
+    assert_eq!(
+        stopped.candidates[0].projected_iterations,
+        complete.candidates[0].projected_iterations
+    );
+    assert_eq!(stopped.candidates[0].check_status, CheckStatus::NotRun);
+    assert!(
+        stopped.candidates[1]
+            .refusal
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("PSD iteration budget")
+    );
+    assert!(stopped.selected_calibration().is_none());
+}
+
+#[test]
+fn distinct_recovery_times_can_remain_ambiguous_at_the_declared_force_resolution() {
+    use ftx_pattern::material_relaxation::calibration::comparison::{Status, compare};
+    let mut acquisition = input();
+    acquisition.orthotropic.as_mut().unwrap().times_seconds = vec![0.6];
+    observations(&mut acquisition, &[[300., 120., -30., 90.]]);
+    acquisition.orthotropic = None;
+    acquisition.max_rms_scaled = 1.;
+    acquisition.max_peak_scaled = 2.;
+    let mut request = comparison_input();
+    request.calibration = acquisition;
+    request.candidates[0].orthotropic.times_seconds = vec![0.6];
+    request.candidates[1].orthotropic.times_seconds = vec![0.7];
+    request.fit_rms_equivalence_scaled = 1.;
+    let report = compare(&request).unwrap();
+    assert_eq!(report.status, Status::Ambiguous);
+    assert!(
+        report.prediction_differences[0]
+            .fit_prediction_difference
+            .rms_scaled
+            > 1e-4
+    );
+    assert!(report.fit_decision.chosen_candidate_id.is_none());
+    request.fit_rms_equivalence_scaled = 1e-8;
+    let resolved = compare(&request).unwrap();
+    assert_eq!(resolved.status, Status::Accepted);
+    assert_eq!(
+        resolved.fit_decision.chosen_candidate_id.as_deref(),
+        Some("complete")
+    );
+}

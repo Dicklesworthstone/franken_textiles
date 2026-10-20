@@ -110,6 +110,56 @@ fn timed_history_api_identifies_and_binds_the_native_recovery_spectrum() {
 }
 
 #[test]
+fn recovery_comparison_preserves_ambiguity_and_binds_only_a_native_accepted_choice() {
+    let mut calibration: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
+    ))
+    .unwrap();
+    calibration.as_object_mut().unwrap().remove("orthotropic");
+    let mut request = json!({"schema":"ftx-relaxation-model-comparison/1", "calibration":calibration,
+    "fit_rms_equivalence_scaled":1e-7,"candidates":[
+        {"id":"complete","orthotropic":{"times_seconds":[0.3,2,8],"zero_threshold_n_m":1e-7}},
+        {"id":"extra","orthotropic":{"times_seconds":[0.3,2,8,32],"zero_threshold_n_m":1e-7}}
+    ]});
+    let unresolved: Value =
+        serde_json::from_str(&materials::calibrate_relaxation(&request.to_string(), true).unwrap())
+            .unwrap();
+    assert_eq!(unresolved["comparison"]["status"], "AMBIGUOUS");
+    for key in ["calibration", "material", "selection", "selection_json"] {
+        assert!(unresolved[key].is_null());
+    }
+    request["select_candidate_id"] = json!("complete");
+    let input = request.to_string();
+    let native = ftx_pattern::material_relaxation::calibration::comparison::compare(
+        &serde_json::from_str(&input).unwrap(),
+    )
+    .unwrap();
+    for admission in [false, true] {
+        let selected: Value =
+            serde_json::from_str(&materials::calibrate_relaxation(&input, admission).unwrap())
+                .unwrap();
+        assert_eq!(
+            selected["comparison"],
+            serde_json::to_value(&native).unwrap()
+        );
+        assert_eq!(selected["comparison"]["status"], "ACCEPTED");
+        assert_eq!(selected["comparison"]["fit_decision"]["ambiguous"], true);
+        let selection = selected["selection_json"].as_str().unwrap();
+        let inspected: Value =
+            serde_json::from_str(&materials::inspect(selection).unwrap()).unwrap();
+        assert_eq!(inspected, selected["material"]);
+        let changes = format!(r#"{{"schema":"ftx-material-bindings/1","default":{selection}}}"#);
+        let bound: Value =
+            serde_json::from_str(&materials::bind(PATTERN, &changes).unwrap()).unwrap();
+        assert_eq!(bound["geometry_changed"], false);
+        assert_eq!(
+            bound["drape_materials_without_self_contact"]["ready"],
+            admission
+        );
+    }
+}
+
+#[test]
 fn calibration_selection_text_preserves_signed_zero_through_actual_binding() {
     for (fixture, fit) in [
         (

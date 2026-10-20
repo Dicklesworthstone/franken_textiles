@@ -229,3 +229,84 @@ fn binding_checks_transient_estimates_even_when_equilibrium_evidence_is_admitted
     assert_eq!(admitted["simulation_ready"], true);
     assert_eq!(out["calibration"], admitted["calibration"]);
 }
+
+#[test]
+fn competing_recovery_models_require_a_reviewed_choice_before_actual_binding() {
+    let w = Workspace::new();
+    let mut calibration: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
+    ))
+    .unwrap();
+    calibration.as_object_mut().unwrap().remove("orthotropic");
+    let mut request = json!({"schema":"ftx-relaxation-model-comparison/1", "calibration":calibration,
+    "fit_rms_equivalence_scaled":1e-7,"candidates":[
+        {"id":"complete","orthotropic":{"times_seconds":[0.3,2,8],"zero_threshold_n_m":1e-7}},
+        {"id":"extra","orthotropic":{"times_seconds":[0.3,2,8,32],"zero_threshold_n_m":1e-7}}
+    ]});
+    w.write("histories.json", &request);
+    let unresolved = w.ok(FIT);
+    assert_eq!(unresolved["comparison"]["status"], "AMBIGUOUS");
+    assert!(unresolved["calibration"].is_null());
+    assert!(unresolved["selection_json"].is_null());
+    assert_eq!(unresolved["simulation_ready"], false);
+    assert_eq!(
+        unresolved["comparison"]["candidates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    request["select_candidate_id"] = json!("complete");
+    w.write("histories.json", &request);
+    let selected = w.ok(FIT);
+    assert_eq!(selected["comparison"]["status"], "ACCEPTED");
+    assert_eq!(selected["comparison"]["fit_decision"]["ambiguous"], true);
+    assert_eq!(selected["simulation_ready"], true);
+    let primary = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&w.0)
+        .arg("materials")
+        .args(FIT)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        primary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&primary.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&primary.stdout).unwrap()["result"],
+        selected
+    );
+    fs::write(
+        w.0.join("selection.json"),
+        selected["selection_json"].as_str().unwrap(),
+    )
+    .unwrap();
+    let original = pattern();
+    w.write("pattern.json", &original);
+    let bound = w.ok(&["bind", "pattern.json", "selection.json", "bound.json"]);
+    assert_eq!(bound["geometry_changed"], false);
+    let saved: Value = serde_json::from_slice(&fs::read(w.0.join("bound.json")).unwrap()).unwrap();
+    assert_eq!(saved["pieces"], original["pieces"]);
+    let resolved = w.ok(&["resolve", "bound.json"]);
+    assert_eq!(
+        resolved["record_sha256"],
+        selected["selection"]["expected_sha256"]
+    );
+
+    request["calibration"]["experiments"][3]["samples"][1]["nominal_n_m"][0][0] = json!(50000.);
+    w.write("histories.json", &request);
+    let rejected = w.ok(FIT);
+    assert_eq!(
+        rejected["comparison"]["status"],
+        "CHOSEN_CANDIDATE_REJECTED"
+    );
+    assert_eq!(
+        rejected["comparison"]["fit_decision"],
+        selected["comparison"]["fit_decision"]
+    );
+    assert!(rejected["calibration"].is_null());
+    assert!(rejected["selection_json"].is_null());
+}

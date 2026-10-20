@@ -3,6 +3,7 @@ use std::{fs::File, io::Read};
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_catalog::Selection;
+use ftx_pattern::material_relaxation::calibration::comparison::{self, ComparisonInput};
 use ftx_pattern::material_relaxation::calibration::{Input, calibrate};
 use ftx_pattern::textile_import::catalog;
 use serde_json::{Value, json};
@@ -19,9 +20,27 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
             "relaxation history input exceeds 64 MiB",
         ));
     }
-    let input: Input = serde_json::from_slice(&bytes)
+    let document: Value = serde_json::from_slice(&bytes)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))?;
-    let report = calibrate(&input)?;
+    let comparison = if document["schema"] == comparison::SCHEMA {
+        let input: ComparisonInput = serde_json::from_slice(&bytes)
+            .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))?;
+        Some(comparison::compare(&input)?)
+    } else {
+        None
+    };
+    let report = if let Some(comparison) = &comparison {
+        let Some(report) = comparison.selected_calibration() else {
+            return Ok(json!({"comparison":comparison,"calibration":null,
+                "selection":null,"selection_json":null,"simulation_ready":false,
+                "empirical_validation_claim":false,"fit_claim":false}));
+        };
+        report.clone()
+    } else {
+        let input: Input = serde_json::from_slice(&bytes)
+            .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, format!("{path}: {e}")))?;
+        calibrate(&input)?
+    };
     let material = catalog()?.resolve(&Selection {
         id: report.material.id.clone(),
         record: Some(report.material.clone()),
@@ -40,11 +59,13 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
     let selection = material.frozen_selection();
     let selection_json = serde_json::to_string(&selection)
         .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
-    Ok(
-        json!({"calibration":report,"selection":selection,"selection_json":selection_json,
+    let mut output = json!({"calibration":report,"selection":selection,"selection_json":selection_json,
         "simulation_ready":readiness.is_ok(),"mechanics_refusal":readiness.err(),
         "empirical_validation_claim":false,"fit_claim":false,
         "time_integration":"Calibration analytically integrates piecewise-linear Green strain; the drape solver uses backward Euler and requires time-step refinement.",
-        "uncertainty_note":"Fixed equilibrium and strain history; sensitivity and search bounds are not parameter confidence intervals."}),
-    )
+        "uncertainty_note":"Fixed equilibrium and strain history; sensitivity and search bounds are not parameter confidence intervals."});
+    if let Some(comparison) = comparison {
+        output["comparison"] = json!(comparison);
+    }
+    Ok(output)
 }

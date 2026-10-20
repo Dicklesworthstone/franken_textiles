@@ -14,6 +14,7 @@ use crate::material_calibration::{Partition, Quality};
 use crate::material_catalog::normalize;
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
 
+pub mod comparison;
 mod fit;
 mod orthotropic;
 
@@ -385,13 +386,17 @@ fn prepare(input: &Input) -> Result<(Vec<History>, [[f64; 3]; 3]), Refusal> {
     Ok((histories, q))
 }
 
-fn quality(residuals: &[f64], input: &Input, partition: &str) -> Result<Quality, Refusal> {
+fn quality(
+    residuals: &[f64],
+    input: &Input,
+    partition: &str,
+    enforce_budget: bool,
+) -> Result<Quality, Refusal> {
     let rms = (residuals.iter().map(|r| r * r).sum::<f64>() / residuals.len() as f64).sqrt();
     let peak = residuals.iter().map(|r| r.abs()).fold(0., f64::max);
     if !rms.is_finite()
         || !peak.is_finite()
-        || rms > input.max_rms_scaled
-        || peak > input.max_peak_scaled
+        || (enforce_budget && (rms > input.max_rms_scaled || peak > input.max_peak_scaled))
     {
         return Err(bad(format!(
             "{partition} relaxation residual budget exceeded: RMS {rms}, peak {peak}"
@@ -407,12 +412,27 @@ fn quality(residuals: &[f64], input: &Input, partition: &str) -> Result<Quality,
 fn residuals(
     input: &Input,
     histories: &[History],
+    predict: impl FnMut(&History) -> Result<Vec<[f64; 4]>, Refusal>,
+) -> Result<(Vec<Prediction>, Quality, Option<Quality>), Refusal> {
+    evaluate_residuals(input, histories, true, true, predict)
+}
+
+// Comparison separates FIT decisions from CHECK replay. Unenforced budgets retain finite residuals
+// for an explicit rejected candidate; they never qualify that candidate for a material selection.
+fn evaluate_residuals(
+    input: &Input,
+    histories: &[History],
+    include_check: bool,
+    enforce_budget: bool,
     mut predict: impl FnMut(&History) -> Result<Vec<[f64; 4]>, Refusal>,
 ) -> Result<(Vec<Prediction>, Quality, Option<Quality>), Refusal> {
     let mut predictions = Vec::new();
     let mut fit_errors = Vec::new();
     let mut check_errors = Vec::new();
     for (e, history) in input.experiments.iter().zip(histories) {
+        if !include_check && e.partition == Partition::Check {
+            continue;
+        }
         let predicted = predict(history)?;
         for (point, values) in history.points.iter().zip(predicted) {
             let mut residual = [[None; 2]; 2];
@@ -438,11 +458,11 @@ fn residuals(
             });
         }
     }
-    let fit_quality = quality(&fit_errors, input, "fit")?;
+    let fit_quality = quality(&fit_errors, input, "fit", enforce_budget)?;
     let check = if check_errors.is_empty() {
         None
     } else {
-        Some(quality(&check_errors, input, "held-out")?)
+        Some(quality(&check_errors, input, "held-out", enforce_budget)?)
     };
     Ok((predictions, fit_quality, check))
 }

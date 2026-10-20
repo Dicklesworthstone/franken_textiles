@@ -26,6 +26,17 @@ function calibrationReport(mode = 'nonlinear', admission = false, check = true) 
         {time_seconds:32,stiffness_n_m:[0,0,0,0],active:false}]} : undefined,
       fit: quality, check: check ? quality : null, input_sha256:'source-lock', missing_mechanics:[] } };
 }
+function recoveryComparison(status = 'AMBIGUOUS') {
+  const selected = calibrationReport('relaxation', true);
+  const comparison = { schema:'ftx-relaxation-model-comparison-report/1', status,
+    objective_evaluations:2, projected_iterations:0,
+    fit_decision:{equivalent_candidate_ids:['complete','extra'],ambiguous:true,
+      parsimonious_candidate_id:'complete',chosen_candidate_id:status === 'AMBIGUOUS' ? null : 'complete'},
+    candidates:['complete','extra'].map((id, i) => ({id,declared_parameters:12+4*i,
+      fit_status:'ACCEPTED',calibration:selected.calibration,check_status:'ACCEPTED'})) };
+  return status === 'ACCEPTED' ? {...selected,comparison} :
+    {comparison,calibration:null,material:null,selection:null,selection_json:null,fit_claim:false};
+}
 
 async function workerModule({ failFold = false, failExport = false, trap = false, rejectLoad = false,
   failScenario = false, trapScenario = false, bindings = null } = {}) {
@@ -197,6 +208,22 @@ test('calibration worker routes both shared engines with explicit consent and lo
   }
   const incomplete=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_nonlinear:()=>'{"selection":{"id":"old"}}'}});
   assert.match((await incomplete.send({type:'calibrate',calibrationMode:'nonlinear',allowEstimates:false,calibrationRequest:input})).message,/selection and capability bridge/);
+});
+
+test('unresolved recovery comparisons preserve reports and source without publishing a selection artifact', async () => {
+  const input='{"schema":"ftx-relaxation-model-comparison/1","origin":-0.0}';
+  for (const status of ['AMBIGUOUS','CHOSEN_CANDIDATE_REJECTED','BUDGET_STOP','ACCEPTED']) {
+    const report=recoveryComparison(status), raw=JSON.stringify(report);
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_relaxation:()=>raw}});
+    const result=await w.send({type:'calibrate',calibrationMode:'relaxation',calibrationRequest:input,allowEstimates:true});
+    assert.equal(result.type,'result',result.message);
+    assert.equal(result.files[0].text,raw); assert.equal(result.files.at(-1).text,input);
+    assert.equal(result.files.some(f=>f.name === 'calibrated-selection.json'),status === 'ACCEPTED');
+  }
+  const invalid={...recoveryComparison(),selection_json:calibrationSelection(true)};
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_relaxation:()=>JSON.stringify(invalid)}});
+  const result=await w.send({type:'calibrate',calibrationMode:'relaxation',calibrationRequest:input,allowEstimates:true});
+  assert.equal(result.type,'error'); assert.match(result.message,/cannot publish a selection/);
 });
 
 test('scenario studies retain partial failures and free the fresh model on success, refusal and trap', async () => {
@@ -467,6 +494,21 @@ test('a refused replacement calibration leaves no previous selection or report a
   p.current().emit({type:'error',request,message:'held-out peak exceeds declared budget'});
   assert.match(p.e.error.textContent,/held-out peak/); assert.equal(p.live.size,0);
   assert.equal(p.e.assign.disabled,true); assert.equal(section(p,'Identified material behavior').hidden,true);
+});
+
+test('recovery ambiguity displays competing models and withdraws the previous assignable material', async () => {
+  const p=await pageModule(); await p.load(); p.e.calibrationMode.value='relaxation'; p.select('calibrationRequest');
+  await p.e.calibrate.onclick(); p.emit(recoveryComparison('ACCEPTED'));
+  assert.equal(p.e.assign.disabled,false); assert.equal(p.e.selection.value,calibrationSelection(true));
+  await p.e.calibrate.onclick(); p.emit(recoveryComparison(),[
+    {name:'material-calibration.json',text:'{}',mime:'application/json'},
+    {name:'calibration-input.json',text:'{}',mime:'application/json'}]);
+  const s=section(p,'Identified material behavior'), t=descendants(s).find(n=>n.tag==='table');
+  assert.match(visibleText(s),/Comparison outcome: AMBIGUOUS/);
+  assert.match(visibleText(s),/Choice before held-out replay: unresolved/);
+  assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
+    ['complete','12','ACCEPTED','0.02','0.04','Yes','ACCEPTED']);
+  assert.equal(p.e.selection.value,''); assert.equal(p.e.assign.disabled,true); assert.equal(p.live.size,2);
 });
 
 test('material changes withdraw drape and thermal outputs while environment edits preserve mechanics', async () => {

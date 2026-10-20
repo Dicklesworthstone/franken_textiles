@@ -316,6 +316,31 @@ function inspectResult(r, selectionJson) {
   $("capabilities").append(table);
 }
 function calibrationResult(parent, r) {
+  if (r.comparison) {
+    const comparison = r.comparison, decision = comparison.fit_decision;
+    const models = table(parent, "Recovery model comparison — FIT choice before held-out checks",
+      ["Model", "Declared parameters", "FIT outcome", "FIT RMS", "FIT peak", "FIT equivalent", "Held-out outcome"]);
+    for (const candidate of comparison.candidates) {
+      const quality = candidate.calibration?.fit;
+      cells(models, [candidate.id, metric(candidate.declared_parameters), candidate.fit_status,
+        metric(quality?.rms_scaled), metric(quality?.peak_scaled),
+        decision.equivalent_candidate_ids.includes(candidate.id) ? "Yes" : "No", candidate.check_status]);
+    }
+    const explanation = document.createElement("p");
+    explanation.textContent = `Comparison outcome: ${comparison.status}. ` +
+      `FIT-equivalent alternatives: ${decision.equivalent_candidate_ids.join(", ") || "none"}. ` +
+      `Choice before held-out replay: ${decision.chosen_candidate_id || "unresolved"}. ` +
+      "Fewer declared parameters is a reported preference and does not resolve equivalent spectra automatically. " +
+      "A failed held-out check rejects the same chosen candidate; it never chooses another model. " +
+      "Force scales and the RMS equivalence tolerance are not confidence intervals.";
+    parent.append(explanation);
+    detail(parent, "Alternative spectra, prediction differences, source observations and shared numerical work", comparison);
+    if (!r.calibration) return { response: "Directional recovery model comparison", status: comparison.status,
+      fit_decision: decision, objective_evaluations: comparison.objective_evaluations,
+      projected_iterations: comparison.projected_iterations,
+      next: decision.ambiguous ? "Review the retained alternatives and supply select_candidate_id in a new comparison request to choose one explicitly. It must still pass held-out checks." :
+        "Review the candidate refusals and acquisition errors. This comparison has no material selection to assign." };
+  }
   const c = r.calibration, nonlinear = c.schema === "ftx-nonlinear-swatch-calibration-report/1";
   const timeSearch = c.orthotropic_fit?.time_search;
   const method = nonlinear ? "Nonlinear stretch and shear" : c.input.orthotropic ?
@@ -404,8 +429,15 @@ function show(op, msg) {
   } else {
     if (op === "pressure" || op === "calibrate") {
       ++selectionRead; preparedBy = op;
-      $("selection").value = r.selection_json;
-      inspectResult(op === "pressure" ? r.inspection : r.material, r.selection_json);
+      if (typeof r.selection_json === "string") {
+        $("selection").value = r.selection_json;
+        inspectResult(op === "pressure" ? r.inspection : r.material, r.selection_json);
+      } else {
+        $("selection").value = "";
+        inspected = null;
+        $("detail").textContent = "";
+        $("capabilities").replaceChildren();
+      }
     }
     const s = sections.get(op); s.section.hidden = false;
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :

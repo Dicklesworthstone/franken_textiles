@@ -181,8 +181,26 @@ pub fn material_calibrate_nonlinear(
 /// budgets. An identified spectrum does not supply missing mass, bending, friction or transport.
 pub fn calibrate_relaxation(input: &str, allow_estimates: bool) -> Result<String, Refusal> {
     budget(&[input])?;
-    let input = serde_json::from_str(input).map_err(invalid)?;
-    let report = ftx_pattern::material_relaxation::calibration::calibrate(&input)?;
+    use ftx_pattern::material_relaxation::calibration::{self, comparison};
+    let document: Value = serde_json::from_str(input).map_err(invalid)?;
+    let comparison = if document["schema"] == comparison::SCHEMA {
+        let input = serde_json::from_str(input).map_err(invalid)?;
+        Some(comparison::compare(&input)?)
+    } else {
+        None
+    };
+    let report = if let Some(comparison) = &comparison {
+        let Some(report) = comparison.selected_calibration() else {
+            return serde_json::to_string(&json!({"comparison":comparison,"calibration":null,
+                "selection":null,"selection_json":null,"material":null,
+                "fit_claim":false,"empirical_validation_claim":false}))
+            .map_err(invalid);
+        };
+        report.clone()
+    } else {
+        let input = serde_json::from_str(input).map_err(invalid)?;
+        calibration::calibrate(&input)?
+    };
     let snapshot = textile_import::catalog()?.resolve(&Selection {
         id: report.material.id.clone(),
         record: Some(report.material.clone()),
@@ -191,12 +209,13 @@ pub fn calibrate_relaxation(input: &str, allow_estimates: bool) -> Result<String
     })?;
     let selection = snapshot.frozen_selection();
     let selection_json = serde_json::to_string(&selection).map_err(invalid)?;
-    serde_json::to_string(
-        &json!({"calibration":report,"selection":selection,"selection_json":selection_json,
+    let mut output = json!({"calibration":report,"selection":selection,"selection_json":selection_json,
         "material":detail(&snapshot)?,"fit_claim":false,"empirical_validation_claim":false,
-        "time_integration":"Calibration analytically integrates piecewise-linear Green strain; the drape solver uses backward Euler and requires time-step refinement."}),
-    )
-    .map_err(invalid)
+        "time_integration":"Calibration analytically integrates piecewise-linear Green strain; the drape solver uses backward Euler and requires time-step refinement."});
+    if let Some(comparison) = comparison {
+        output["comparison"] = json!(comparison);
+    }
+    serde_json::to_string(&output).map_err(invalid)
 }
 
 /// Browser recovery identification through the same material authority and timed-history fitter.

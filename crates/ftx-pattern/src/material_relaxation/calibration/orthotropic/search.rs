@@ -122,9 +122,65 @@ struct Evaluation {
     gradient_scaled_max: f64,
 }
 
-struct Budget {
+pub(in crate::material_relaxation::calibration) struct Budget {
     evaluations: usize,
+    evaluation_limit: usize,
     remaining_psd: usize,
+    psd_limit: usize,
+}
+
+impl Budget {
+    pub(in crate::material_relaxation::calibration) fn new(
+        evaluations: usize,
+        projected_iterations: usize,
+    ) -> Result<Self, Refusal> {
+        if !(1..=MAX_EVALUATIONS).contains(&evaluations)
+            || !(1..=MAX_PSD_STEPS).contains(&projected_iterations)
+        {
+            return Err(bad(
+                "directional comparison work limits must be within 1..=1024 objective evaluations and 1..=262144 projected iterations",
+            ));
+        }
+        Ok(Self {
+            evaluations: 0,
+            evaluation_limit: evaluations,
+            remaining_psd: projected_iterations,
+            psd_limit: projected_iterations,
+        })
+    }
+
+    pub(in crate::material_relaxation::calibration) fn used(&self) -> [usize; 2] {
+        [self.evaluations, self.psd_limit - self.remaining_psd]
+    }
+
+    fn charge(&mut self) -> Result<(), Refusal> {
+        if self.evaluations >= self.evaluation_limit {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                format!(
+                    "directional time search exhausted {} total objective evaluations",
+                    self.evaluation_limit
+                ),
+            ));
+        }
+        self.evaluations += 1;
+        Ok(())
+    }
+
+    pub(super) fn fixed(
+        &mut self,
+        histories: &[History],
+        times: &[f64],
+    ) -> Result<Solution, Refusal> {
+        self.charge()?;
+        let (rows, target) = super::design(histories, times)?;
+        super::solve_budgeted(
+            &rows,
+            &target,
+            4 * times.len(),
+            Some(&mut self.remaining_psd),
+        )
+    }
 }
 
 fn evaluate(
@@ -133,13 +189,7 @@ fn evaluate(
     n: usize,
     budget: &mut Budget,
 ) -> Result<Evaluation, Refusal> {
-    if budget.evaluations == MAX_EVALUATIONS {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "directional time search exhausted 1024 total objective evaluations",
-        ));
-    }
-    budget.evaluations += 1;
+    budget.charge()?;
     let times: Vec<_> = p[..n].iter().map(|&v| det::exp(v)).collect();
     if times.iter().any(|v| !v.is_finite() || *v <= 0.) {
         return Err(bad("unrepresentable directional relaxation time"));
@@ -379,13 +429,19 @@ pub(super) fn solve(
     histories: &[History],
     windows: &[[f64; 2]],
 ) -> Result<SearchSolution, Refusal> {
+    let mut budget = Budget::new(MAX_EVALUATIONS, MAX_PSD_STEPS)?;
+    solve_budgeted(histories, windows, &mut budget)
+}
+
+pub(super) fn solve_budgeted(
+    histories: &[History],
+    windows: &[[f64; 2]],
+    budget: &mut Budget,
+) -> Result<SearchSolution, Refusal> {
+    let before = budget.used();
     let bounds = bounds(windows)?;
     let n = bounds.len();
     let starts = 3usize.pow(n as u32);
-    let mut budget = Budget {
-        evaluations: 0,
-        remaining_psd: MAX_PSD_STEPS,
-    };
     let mut best: Option<Minimum> = None;
     let mut converged = 0;
     for start in 0..starts {
@@ -395,7 +451,7 @@ pub(super) fn solve(
             p[j] = lo + (0.2 + 0.3 * (code % 3) as f64) * (hi - lo);
             code /= 3;
         }
-        if let Some(candidate) = optimize(histories, &bounds, p, &mut budget)? {
+        if let Some(candidate) = optimize(histories, &bounds, p, budget)? {
             converged += 1;
             if best
                 .as_ref()
@@ -422,8 +478,8 @@ pub(super) fn solve(
         starts_attempted: starts,
         starts_converged: converged,
         iterations: best.iterations,
-        objective_evaluations: budget.evaluations,
-        projected_iterations: MAX_PSD_STEPS - budget.remaining_psd,
+        objective_evaluations: budget.used()[0] - before[0],
+        projected_iterations: budget.used()[1] - before[1],
         gradient_scaled_max: best.evaluation.gradient_scaled_max,
         time_sensitivity: best.evaluation.sensitivity[..n].to_vec(),
         joint_excitation_pivot,
@@ -445,10 +501,7 @@ mod tests {
             "../../../../../../tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
         )).unwrap();
         let (histories, _) = super::super::super::prepare(&input).unwrap();
-        let mut budget = Budget {
-            evaluations: 0,
-            remaining_psd: MAX_PSD_STEPS,
-        };
+        let mut budget = Budget::new(MAX_EVALUATIONS, MAX_PSD_STEPS).unwrap();
         let p = [det::ln(0.4), det::ln(1.5), det::ln(10.)];
         let baseline = evaluate(&histories, p, 3, &mut budget).unwrap();
         assert!(baseline.fit.projected);

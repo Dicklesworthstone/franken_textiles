@@ -234,6 +234,88 @@ the inactive 32-second candidate. The independent truth is 0.3, 2 and 8 seconds 
 tensors in the table. Run it through the same native command, WASM export or browser history upload;
 retain the report and use its exact `selection_json` for the ordinary material-binding workflow.
 
+## Comparing model order and competing recovery spectra
+
+The same command and WASM export accept `ftx-relaxation-model-comparison/1`. This is a bounded
+comparison of two to four explicitly declared orthotropic models on one acquisition. A model can
+use one to eight fixed candidate times, or one to three bounded time-search windows. The estimator
+does not invent a noise distribution from the force weighting scales or search an unbounded set
+of model orders.
+
+| Field | Meaning |
+|---|---|
+| `calibration` | Complete `ftx-relaxation-calibration/1` acquisition, without `orthotropic` and with empty/omitted `time_bounds_seconds`; each alternative supplies its own time policy. |
+| `candidates` | Two to four objects with unique `id` and the ordinary `orthotropic` options. Evaluation order is canonical ID order. |
+| `fit_rms_equivalence_scaled` | Required finite, nonnegative RMS excess above the best FIT-admissible model still considered equivalent, in the acquisition's scaled-force units. |
+| `select_candidate_id` | Optional reviewed, explicit choice. The named model must still pass FIT and independent CHECK acceptance. |
+| `max_objective_evaluations` | Shared fixed-fit/time-search allowance, including failed trials; default and maximum 1024. |
+| `max_projected_iterations` | Shared constrained tensor-iteration allowance; default and maximum 262144. |
+
+For example, compare the three-branch independent synthetic truth against a four-time basis that
+also admits a 32-second branch. Use new output filenames:
+
+```sh
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+calibration = json.loads(Path(
+    "tests/fixtures/materials/synthetic-orthotropic-relaxation-history.json"
+).read_text())
+options = calibration.pop("orthotropic")
+request = {
+    "schema": "ftx-relaxation-model-comparison/1",
+    "calibration": calibration,
+    "fit_rms_equivalence_scaled": 1e-7,
+    "candidates": [
+        {"id": "complete", "orthotropic": {
+            **options, "times_seconds": [0.3, 2, 8]}},
+        {"id": "extra", "orthotropic": {
+            **options, "times_seconds": [0.3, 2, 8, 32]}},
+    ],
+}
+with open("recovery-comparison.json", "x") as output:
+    json.dump(request, output, indent=2)
+PY
+cargo run -p ftx-cli --bin ftx-materials -- calibrate-relaxation \
+  recovery-comparison.json --allow-estimates > recovery-comparison-report.json
+```
+
+Both alternatives explain these synthetic FIT forces, so the result is `AMBIGUOUS` and has no
+`selection_json`. Review `comparison.candidates`, `prediction_differences` and `fit_decision`.
+Adding `"select_candidate_id":"complete"` to a new request explicitly chooses that model;
+ambiguity remains reported, and the chosen model must still pass its held-out checks. An accepted
+result contains the ordinary `calibration`, `selection` and exact `selection_json` used by `bind`
+and the actual drape resolver. Observation consent and simulation admission remain separate.
+
+All candidates are numerically fitted using **FIT forces only**, with a common equilibrium,
+acquisition, residual scales and FIT acceptance policy. Every finite fitted residual is retained,
+including alternatives that exceed the RMS or peak gate. The report lists declared parameters
+(four tensor coefficients per fixed time, five per optimized time); this is not effective degrees
+of freedom of a constrained estimator. Among FIT-equivalent models it reports a parsimonious
+preference, but this never silently resolves an ambiguity into a frozen material.
+
+The complete `fit_decision`, including any choice, is fixed before CHECK replay. CHECK outcomes
+can reject the same chosen candidate; they never rank alternatives or select a fallback. No CHECK
+acquisition is explicitly `NOT_PROVIDED`, not a passed check. A numerical refusal leaves that
+alternative unresolved and prevents automatic selection from an incomplete comparison. A user
+can explicitly name a separately reviewed FIT-admissible candidate, but a global `BUDGET_STOP`
+always suppresses publication, including an earlier successful or explicitly chosen candidate.
+
+The work limits apply to **the entire comparison**, not separately to each candidate or search
+start. Failed objective evaluations and failed constrained fits consume the same allowance.
+Every candidate retains its outcome, refusal and consumed work; later candidates are `NOT_RUN`
+when the shared allowance stops the request. A successful command may therefore return a useful
+comparison report with no material selection. Check `comparison.status` and `selection_json`
+before binding. The browser displays the model table and downloads the report and original input
+for unresolved outcomes; it clears the previous assignable selection.
+
+FIT equivalence only describes these supplied alternatives at this declared numerical tolerance.
+Pairwise prediction differences use observed FIT force channels, not unobserved directions or
+behavior outside the acquisition. Close force predictions do not establish unique recovery times,
+parameter confidence intervals, fixed-equilibrium accuracy, empirical textile validity or garment
+fit. Independent real specimens and garment checks remain necessary.
+
 ## Solver agreement and remaining work
 
 Calibration uses continuous-time analytic history integration. The actual cloth solver uses backward
@@ -252,7 +334,7 @@ partial sensors, nonlinear equilibrium, source/conditioning conflicts and actual
 Additional automatic-time checks recover the independent three-branch truth, one/two-branch spectra
 with inactive axes, and a constrained noisy spectrum with differently scaled force sensors. The exact
 profile-objective gradient is checked against finite differences that re-fit the PSD tensors.
-Automatic model-order comparison, fixed-equilibrium error, strain uncertainty, temperature/wet
+Unbounded model-order discovery, fixed-equilibrium error, strain uncertainty, temperature/wet
 dependence, plastic set and damage remain outside this estimator. Broader measurements and independent
 garment checks are required.
 
