@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Ctx, ExportOptions, edge_sa};
 
 pub mod assembly;
+pub mod ordering;
 pub mod preview;
 pub mod program;
 use assembly::{AssemblyReceipt, FlatAssembly};
@@ -89,6 +90,10 @@ pub struct SewOptions {
     pub machine: SewingMachine,
     /// Explicit passes covering every seam, including seams omitted from a simulation.
     pub passes: Vec<SewingPass>,
+    /// Optional bounded ordering of the complete admitted job by needle/thread changes.
+    /// Omission preserves the existing lexicographic topological order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordering: Option<ordering::Policy>,
     /// Source-bearing process envelopes tied to exact resolved material stacks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub qualifications: Vec<SewingQualification>,
@@ -190,7 +195,7 @@ pub struct PlannedSeam {
 /// Deterministic, source-locked manufacturing review plan. Never hardware execution permission.
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
-    /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` source qualifications.
+    /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
     pub pattern_sha256: String,
@@ -198,8 +203,11 @@ pub struct SewPlan {
     pub options: SewOptions,
     /// Portable selections, indexed by resolved digest; no dependence on a future live catalog.
     pub materials: BTreeMap<String, Selection>,
-    /// Stable topological order, operation-ID order to break ties; may repeat a source seam.
+    /// Admitted operation order; optional optimization preserves every declared predecessor.
     pub seams: Vec<PlannedSeam>,
+    /// Counted setup changes and bounded-search result; absent without an ordering policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ordering: Option<ordering::Report>,
     /// Total traversed stitch intervals, including locks; not thread consumption.
     pub stitch_intervals: usize,
     /// Sum of the continuous feed times, never a complete manufacturing cycle-time estimate.
@@ -373,6 +381,9 @@ impl SewPlan {
                 "sewing needs 1..4096 passes",
             ));
         }
+        if let Some(ordering) = &options.ordering {
+            ordering.validate(options.passes.len())?;
+        }
         let ctx = Ctx::new(
             pattern,
             ExportOptions {
@@ -447,7 +458,9 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if !options.qualifications.is_empty() || options.require_qualification {
+            schema: if options.ordering.is_some() {
+                "ftx-sewing-plan/6"
+            } else if !options.qualifications.is_empty() || options.require_qualification {
                 "ftx-sewing-plan/5"
             } else if options.passes.iter().any(|p| p.assembly.is_some()) {
                 "ftx-sewing-plan/4"
@@ -464,6 +477,7 @@ impl SewPlan {
             options: options.clone(),
             materials: BTreeMap::new(),
             seams: Vec::new(),
+            ordering: None,
             stitch_intervals: 0,
             feed_seconds: 0.0,
             hardware_execution_authorized: false,
@@ -675,6 +689,20 @@ impl SewPlan {
                     row.message.as_deref().unwrap_or(&row.status)
                 )));
             }
+        }
+        // All original geometric, material and recipe gates apply before a schedule is considered.
+        // Reordering moves complete admitted operations; no physical assembly state is inferred.
+        if let Some(policy) = &options.ordering {
+            let report = ordering::optimize(policy, &out.seams);
+            let ranks: BTreeMap<_, _> = report
+                .selected_order
+                .iter()
+                .enumerate()
+                .map(|(rank, id)| (id.as_str(), rank))
+                .collect();
+            out.seams
+                .sort_by_key(|seam| ranks[seam.pass.operation_id()]);
+            out.ordering = Some(report);
         }
         Ok(out)
     }

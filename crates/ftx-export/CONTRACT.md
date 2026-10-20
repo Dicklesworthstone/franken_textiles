@@ -8,6 +8,23 @@ orchestration of both (`export_all`, `check_files`). The `ftx export` / `ftx che
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
+**Sewing setup order** (`sewing::ordering`, plan §25.4 / `ftx-tm7`). Optional
+`SewOptions.ordering` minimizes the explicit sum of exact needle and thread identity
+changes across an already fully admitted job, preserving every declared predecessor
+and every complete operation's geometry, recipe, source qualification and feed time.
+An optional initial setup is counted; absent initial installation and a final reset
+are outside the objective. At most 20 passes and 200000 examined feasible prefix
+extensions are admitted; iterative search holds at most 20 bounded frames. The normal
+lexicographic topological schedule is the incumbent, equal counts retain it, and
+trials are ordered by immediate count then operation ID. A limit returns a complete
+feasible incumbent with explicit budget/proof status, never a partial schedule or an
+unearned optimum claim. Count bounds ignore prerequisites only to underestimate the
+remaining changes. Completed proof is conditional on declared identities/prerequisites,
+not physical handling, seam accessibility, elapsed production time or hardware safety.
+Omitted policy preserves legacy wire output; requested policy uses `ftx-sewing-plan/6`
+through ordinary plan, stitch-program and study consumers. Tests: `sewing` and
+`sewing_program`, including independent exhaustive schedule comparisons.
+
 **Declared assembly mass** (`assembly_mass`, plan §25.10 / `ftx-ms2`). Every expanded physical
 cut instance uses the same exporter outline, fold/mirror semantics, allowances and outward tabs.
 Strictly contained disjoint closed cutouts are subtracted with the existing budgeted cutting

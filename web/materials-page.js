@@ -439,6 +439,36 @@ function inspectResult(r, selectionJson) {
   }
   $("capabilities").append(table);
 }
+function sewingResult(parent, r) {
+  const plan = r.plan, order = plan?.ordering;
+  if (order) {
+    const counts = table(parent, "Sewing setup changes — declared needle and thread identities",
+      ["Schedule", "Needle changes", "Thread changes", "Total changes"]);
+    for (const [label, changes] of [["Original dependency order", order.baseline_changes],
+      ["Selected order", order.selected_changes]]) {
+      cells(counts, [label, metric(changes.needle_changes), metric(changes.thread_changes), metric(changes.total_changes)]);
+    }
+    const operations = table(parent, "Selected sewing operation order",
+      ["Position", "Operation", "Source seam", "Needle", "Thread", "Required predecessors"]);
+    for (const [i, row] of plan.seams.entries()) {
+      const pass = row.pass;
+      cells(operations, [metric(i + 1), pass.id || pass.seam, pass.seam, pass.needle, pass.thread, pass.after.join(", ") || "None declared"]);
+    }
+    const note = document.createElement("p");
+    note.textContent = (order.optimality_proven ?
+      "Minimum setup-change count proven for the declared operations, dependencies and initial setup. " :
+      "Best complete feasible schedule found; minimum setup-change count has not been proven. ") +
+      (order.budget_exhausted ? "The search reached its declared work limit. " : "") +
+      "Needle and thread changes each count once. Handling, rethreading duration, assembly access and total manufacturing time are not inferred. " +
+      (plan.options.ordering.initial_setup ? "The supplied initial setup is included in the counts." :
+        "No initial setup was supplied, so installing the first setup is not counted.");
+    parent.append(note);
+    detail(parent, "Baseline order, selected order and bounded search result", order);
+  }
+  return { schema: r.schema, stitches: r.stitches?.length, feed_seconds: plan?.feed_seconds,
+    setup_changes: order?.selected_changes, minimum_setup_changes_proven: order?.optimality_proven,
+    search_nodes: order?.search_nodes, hardware_execution_authorized: plan?.hardware_execution_authorized };
+}
 function calibrationResult(parent, r) {
   if (r.comparison) {
     const comparison = r.comparison, decision = comparison.fit_decision;
@@ -574,7 +604,7 @@ function show(op, msg) {
         external_cut_area_m2: r.external_cut_area_m2, markers: r.markers.map(m => ({ id: m.id, pieces: m.placements.length,
           gross_area_m2: m.gross_area_m2, defect_free_area_m2: m.defect_free_area_m2, utilization: m.utilization,
           stock_mass_kg: m.stock_mass_kg, mass_unavailable: m.mass_unavailable })), limitations: r.limitations } :
-      op === "sew" ? { schema: r.schema, stitches: r.stitches?.length, hardware_execution_authorized: r.plan?.hardware_execution_authorized } :
+      op === "sew" ? sewingResult(s.comparison, r) :
       op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } :
       op === "pressure" ? { material_id: r.selection.id, pressure_pa: r.input.pressure_pa,
         pressure_range_pa: r.pressure_range_pa, bracket_pa: r.bracket_pa, interpolated: r.interpolated,

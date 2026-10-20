@@ -1909,6 +1909,31 @@ Primary supplier qualification and broader source coverage remain open.
 
 ---
 
+### 25.26 Sewing order with fewer declared setup changes
+
+**Bounded assembly-order planning (`ftx-tm7`).** Existing `SewOptions` can request
+`ordering.objective: "minimize_setup_changes"` with an explicit search-node limit. Every complete
+operation first passes the ordinary geometry, material, layer-stack, machine and optional source
+qualification checks. The planner then minimizes the sum of needle and thread identity changes
+while preserving declared operation dependencies. An optional exact initial setup contributes its
+first transition; omission does not assume an installed needle or thread. No final reset is added.
+
+The result retains the baseline and selected schedules, separate component counts, actual search
+work and a proved lower bound. Bounded search preserves a complete feasible incumbent. Optimality
+is stated only after all improvements are excluded or the incumbent attains the lower bound.
+The selected operations keep their exact stations, directions, backtacks, folds, sources and material
+identities through normal stitch expansion, native/WASM manufacturing and material studies. Browser
+results expose the same schedule and proof status, with stale outputs withdrawn after recipe edits.
+Omitting the policy preserves legacy planning behavior and serialization.
+
+This objective counts declared setup changes. It does not infer handling/rethreading durations,
+physical assembly accessibility, seam quality or machine execution permission. Up to 20 operations
+and 200,000 search nodes are supported in this opt-in mode; larger ordinary plans remain available
+without it. Measured recipes, broader quality/time objectives and hardware qualification remain open.
+See [material-sewing-plans.md](docs/material-sewing-plans.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

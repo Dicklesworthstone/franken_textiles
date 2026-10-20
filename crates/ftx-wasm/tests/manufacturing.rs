@@ -85,3 +85,44 @@ fn offset_paths_and_svg_share_the_exact_native_planner() {
     bad["passes"][1]["stitch_path"]["offset_mm"] = json!([-11.0, 0.0]);
     assert!(manufacturing::sew_svg(PATTERN, &bad.to_string(), "join").is_err());
 }
+
+#[test]
+fn setup_ordering_survives_native_wasm_boundary_and_stitch_expansion() {
+    let mut options: Value = serde_json::from_str(OPTIONS).unwrap();
+    let first = options["passes"][0].clone();
+    let mut second = first.clone();
+    second["id"] = json!("middle");
+    second["needle"] = json!("another-needle");
+    second["thread"] = json!("another-thread");
+    let last = options["passes"][1].clone();
+    options["passes"] = json!([first, second, last]);
+    options["ordering"] = json!({"objective":"minimize_setup_changes","max_search_nodes":1000,
+        "initial_setup":{"needle":"operator-selected-needle","thread":"operator-selected-thread"}});
+    let input = options.to_string();
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let typed: SewOptions = serde_json::from_str(&input).unwrap();
+    let plan: Value =
+        serde_json::from_str(&manufacturing::sew_plan(PATTERN, &input).unwrap()).unwrap();
+    let program: Value =
+        serde_json::from_str(&manufacturing::sew_stitches(PATTERN, &input).unwrap()).unwrap();
+    assert_eq!(
+        plan,
+        serde_json::to_value(SewPlan::build(&pattern, &typed).unwrap()).unwrap()
+    );
+    assert_eq!(
+        program,
+        serde_json::to_value(SewProgram::build(&pattern, &typed).unwrap()).unwrap()
+    );
+    assert_eq!(program["plan"], plan);
+    assert_eq!(plan["ordering"]["baseline_changes"]["total_changes"], 4);
+    assert_eq!(plan["ordering"]["selected_changes"]["total_changes"], 2);
+    assert_eq!(
+        plan["ordering"]["selected_order"],
+        json!(["join", "reinforce", "middle"])
+    );
+    assert_eq!(plan["ordering"]["optimality_proven"], true);
+    assert_eq!(plan["hardware_execution_authorized"], false);
+    let mut denied: Value = serde_json::from_str(PATTERN).unwrap();
+    denied["fabric"]["material"]["allow_estimates"] = json!(false);
+    assert!(manufacturing::sew_stitches(&denied.to_string(), &input).is_err());
+}

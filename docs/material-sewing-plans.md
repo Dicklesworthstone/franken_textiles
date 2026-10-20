@@ -93,6 +93,65 @@ workholding, accessibility or operator setup. Consequently `hardware_execution_a
 
 ## Geometry, feed and sequencing
 
+### Optional setup-change optimization
+
+Add an `ordering` policy to the existing sewing options to minimize changes between
+the declared needle and thread identities while respecting every `after` prerequisite:
+
+```json
+{
+  "ordering": {
+    "objective": "minimize_setup_changes",
+    "max_search_nodes": 20000,
+    "initial_setup": {"needle": "installed-needle", "thread": "installed-thread"}
+  }
+}
+```
+
+The explicit objective is **needle changes + thread changes**. Changing both counts
+as two; keeping both counts as zero. Exact identifiers determine equality. This is
+a count of declared setup changes, without invented changeover seconds, thread
+consumption, quality weights or a whole-job production-time estimate. The optional
+`initial_setup` counts changes from that declared installed setup to the first pass.
+When omitted, first installation is outside the count. No final reset is assumed.
+
+For example, four independent operations `A, B, C, D` with setup pairs `X, Y, X, Y`
+normally use their alphabetical order. If both the needle and thread differ between
+X and Y, that order has three needle and three thread changes. The selected order
+`A, C, B, D` has one of each, reducing the explicit count from six to two. Prerequisites
+can prevent this grouping. The planner never relaxes them to improve the objective.
+
+Every original seam, material, recipe, geometry, qualification and allocation check
+finishes before optimization. The optimizer moves complete admitted operations;
+stations, offsets, folds, backtacks, source locks and feed-only duration are retained.
+Each declared flat assembly remains an operation-local input. A better order does
+not establish physical accessibility, infer missing prerequisites or simulate how
+the garment moves from one operation to the next.
+
+The optional search supports at most **20 passes** and requires `max_search_nodes`
+in **1..200000**. Larger jobs can use the existing planner without this policy.
+It starts with the complete normal lexicographic topological schedule, then searches
+feasible prefixes deterministically by immediate change count and operation ID.
+Equal total counts retain the incumbent; there is no hidden secondary objective.
+Each examined feasible prefix extension, including a pruned trial, uses one search
+node. Search memory holds at most 20 frames with at most 20 candidate indices each;
+the original station and geometry budgets still apply independently.
+
+The version-6 plan's `ordering` report retains `baseline_order`, `selected_order`,
+separate needle/thread/total counts for both, `search_nodes`, and
+`lower_bound_total_changes`. `search_complete` and `optimality_proven` are true only
+when all better schedules have been eliminated by the search or its valid count
+bound. This proves the count optimum only for the declared prerequisites and setup
+identities. If the work limit is reached first, `budget_exhausted` is true and both
+proof fields are false; the returned order is still a complete validated incumbent,
+never an unfinished prefix, and cannot be worse than the baseline.
+
+Omitting `ordering` preserves existing order, arithmetic and serialized output.
+The existing `sew-plan`, `sew-stitches`, native/WASM and material-study consumers
+use the same planner; an expanded stitch program follows the selected order.
+
+### Paired geometry and machine limits
+
 `Pattern::seam_pairs` supplies the actual curved/mirrored seam geometry and matches
 notches in the existing reverse-side convention. Stations include edge junctions
 and matched notches. The requested pitch is a maximum on either side, not an exact
@@ -171,6 +230,8 @@ The pattern, materials and machine in this fixture are synthetic, not calibrated
 Unchanged legacy jobs still serialize as `ftx-sewing-plan/1`, without added default
 fields or altered arithmetic. Jobs requesting operation IDs, reverse capability,
 direction or locks use `ftx-sewing-plan/2`; explicit offset paths use `ftx-sewing-plan/3`, explicit folded assemblies use `/4`, and source-qualified jobs use `/5`.
+An explicit ordering policy uses `/6`, retaining any requested offsets, assemblies
+and qualifications alongside its search result.
 Each operation contains ordered `runs`
 over its unchanged `stations.a` and `stations.b` arrays. A run visits every consecutive
 integer index from `from_station` to `to_station`. Adjacent runs share an endpoint;
@@ -179,6 +240,8 @@ that shared station is not an extra interval.
 `sew-stitches` calls `ftx_export::sewing::program::SewProgram::build` and emits
 `ftx-sewing-program/1` for centerline jobs or `/2` for offset jobs. Its nested `plan`
 uses explicit version-2 runs for centerline input and version 3 for offset input.
+With an ordering policy, the nested plan retains version 6 and the expanded program
+recognizes any actual offset or folded-assembly geometry independently of that version.
 Its `stitches` enumerates every actual interval with operation/run
 indices, source and destination station indices, both destination coordinates,
 signed arclength advances, the b/a ratio and continuous-feed duration. Reverse feed

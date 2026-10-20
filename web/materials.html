@@ -103,6 +103,11 @@ the retained <code>observed_on</code> and <code>as_of</code> dates must match th
 The latest observation at the requested time controls availability and expiry; an older offer cannot fill a gap.</p>
 <label>Sewing recipe and machine limits JSON <input id="sewOptions" type="file" accept=".json,application/json"></label>
 <button id="sew" data-command="sew" disabled>Evaluate sewing &amp; stitch paths</button>
+<p class="note">To reduce needle and thread changes, add <code>ordering</code> to the recipe with
+<code>objective: "minimize_setup_changes"</code> and an explicit <code>max_search_nodes</code>.
+The bounded planner preserves declared predecessors and every stitch pass. The result shows the
+original and selected change counts and whether the minimum was proven. Supply an optional
+<code>initial_setup</code> with exact needle and thread identities to include the first change.</p>
 </div></div>
 <h3>Thermal exchange on this drape</h3>
 <p class="note">Run a fresh drape above first. These conditions use the existing native JSON schemas; no air-gap, body-layer or environmental data is inferred by the page.</p>

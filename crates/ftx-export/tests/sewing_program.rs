@@ -45,6 +45,8 @@ fn legacy_job_retains_v1_wire_shape_and_arithmetic() {
     let raw = serde_json::to_value(&a).unwrap();
     assert_eq!(a.schema, "ftx-sewing-plan/1");
     assert_eq!(raw["options"], o);
+    assert!(raw.get("ordering").is_none());
+    assert!(raw["options"].get("ordering").is_none());
     assert!(raw["seams"][0].get("runs").is_none());
     assert_eq!(a.stitch_intervals, 40);
     assert_eq!(a.feed_seconds, 4.0);

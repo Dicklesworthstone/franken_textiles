@@ -380,6 +380,33 @@ test('changing interface evidence withdraws bound consumers and rejects an in-fl
   p.e.reset.onclick(); await p.e.bind.onclick();
   assert.equal(Object.hasOwn(JSON.parse(p.current().messages.at(-1).changes),'interfaces'),false);
 });
+test('sewing setup results retain Rust order, proof scope and complete downloads until recipe changes', async () => {
+  const p = await pageModule(); await p.load(); await p.bind();
+  const options = '{"ordering":{"objective":"minimize_setup_changes","max_search_nodes":1000},"source":-0.0}';
+  p.select('sewOptions', options); p.e.sewOptions.handlers.change(); p.ready();
+  await p.e.sew.onclick(); assert.equal(p.current().messages.at(-1).options, options);
+  const changes = n => ({needle_changes:n,thread_changes:n,total_changes:2*n});
+  const report = {schema:'ftx-sewing-program/1',stitches:[{}],plan:{schema:'ftx-sewing-plan/6',
+    options:JSON.parse(options),feed_seconds:12,hardware_execution_authorized:false,
+    seams:['a','c','b'].map((id,i)=>({pass:{id,seam:'side',needle:i<2?'N1':'N2',thread:i<2?'T1':'T2',after:id==='c'?['a']:[]}})),
+    ordering:{baseline_order:['a','b','c'],selected_order:['a','c','b'],baseline_changes:changes(2),
+      selected_changes:changes(1),search_nodes:8,optimality_proven:true,budget_exhausted:false}}};
+  const raw=JSON.stringify(report), files=[{name:'sewing.json',text:raw,mime:'application/json'}];
+  p.emit(report, files); const s=section(p,'sew');
+  assert.match(visibleText(s),/Minimum setup-change count proven for the declared operations/);
+  assert.match(visibleText(s),/No initial setup was supplied/);
+  const tables=descendants(s).filter(n=>n.tag==='table');
+  assert.deepEqual(plain(tables[0].children[3].children.map(n=>n.textContent)),['Selected order','1','1','2']);
+  assert.deepEqual(plain(tables[1].children[3].children.map(n=>n.textContent)),['2','c','side','N1','T1','a']);
+  const download=descendants(s).find(n=>n.download==='sewing.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  await p.e.sew.onclick(); report.plan.ordering.optimality_proven=false; report.plan.ordering.budget_exhausted=true;
+  p.emit(report); assert.match(visibleText(s),/minimum setup-change count has not been proven/);
+  assert.match(visibleText(s),/search reached its declared work limit/);
+  p.e.sewOptions.handlers.change(); assert.equal(s.hidden,true);
+  assert.equal(p.live.size,1); // only the still-current bound pattern remains
+});
+
 test('pressure-conditioned selections enter ordinary piece bindings without a numeric JSON round trip', async () => {
   const p = await pageModule(); await p.load();
   const request = '{"pressure_pa":250.0,"source_value":-0.0}';

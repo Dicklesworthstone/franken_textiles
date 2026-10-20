@@ -342,3 +342,258 @@ fn estimated_qualification_and_reverse_travel_need_separate_explicit_admission()
         Some("measured-coupon-v1")
     );
 }
+
+fn setup_job() -> Value {
+    let mut o = options();
+    let original = o["passes"][0].clone();
+    o["passes"] = json!(
+        (0..4)
+            .map(|i| {
+                let mut pass = original.clone();
+                pass["id"] = json!(["A", "B", "C", "D"][i]);
+                pass["needle"] = json!(if i % 2 == 0 { "needle-X" } else { "needle-Y" });
+                pass["thread"] = json!(if i % 2 == 0 { "thread-X" } else { "thread-Y" });
+                pass
+            })
+            .collect::<Vec<_>>()
+    );
+    o
+}
+
+fn ordering(nodes: usize) -> Value {
+    json!({"objective":"minimize_setup_changes","max_search_nodes":nodes})
+}
+
+#[test]
+fn setup_order_reduces_changes_without_changing_any_admitted_operation() {
+    let p = pattern();
+    let mut o = setup_job();
+    let baseline = plan(p.clone(), o.clone()).unwrap();
+    o["ordering"] = ordering(20000);
+    let optimized = plan(p.clone(), o.clone()).unwrap();
+    assert_eq!(optimized.schema, "ftx-sewing-plan/6");
+    let report = optimized.ordering.as_ref().unwrap();
+    assert_eq!(report.baseline_order, ["A", "B", "C", "D"]);
+    assert_eq!(report.selected_order, ["A", "C", "B", "D"]);
+    assert_eq!(report.baseline_changes.total_changes, 6);
+    assert_eq!(report.selected_changes.needle_changes, 1);
+    assert_eq!(report.selected_changes.thread_changes, 1);
+    assert_eq!(report.selected_changes.total_changes, 2);
+    assert!(report.optimality_proven && report.search_complete && !report.budget_exhausted);
+    assert_eq!(report.lower_bound_total_changes, 2);
+    assert_eq!(optimized.pattern_sha256, baseline.pattern_sha256);
+    assert_eq!(optimized.stitch_intervals, baseline.stitch_intervals);
+    assert_eq!(optimized.feed_seconds, baseline.feed_seconds);
+    assert_eq!(
+        serde_json::to_value(&optimized.materials).unwrap(),
+        serde_json::to_value(&baseline.materials).unwrap()
+    );
+    for seam in &optimized.seams {
+        let old = baseline
+            .seams
+            .iter()
+            .find(|s| s.pass.id == seam.pass.id)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(seam).unwrap(),
+            serde_json::to_value(old).unwrap()
+        );
+    }
+    o["passes"].as_array_mut().unwrap().reverse();
+    let repeated = plan(p.clone(), o.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&repeated.ordering).unwrap(),
+        serde_json::to_value(&optimized.ordering).unwrap()
+    );
+
+    let program = ftx_export::sewing::program::SewProgram::build(
+        &Pattern::new(p),
+        &serde_json::from_value(o).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(program.plan.schema, "ftx-sewing-plan/6");
+    assert_eq!(program.stitches.len(), baseline.stitch_intervals);
+    assert_eq!(
+        serde_json::to_value(program.plan.ordering).unwrap(),
+        serde_json::to_value(optimized.ordering).unwrap()
+    );
+    assert!(
+        !program.plan.hardware_execution_authorized
+            && !program.plan.physical_seam_quality_validated
+    );
+}
+
+#[test]
+fn setup_order_respects_initial_state_precedence_and_budget_without_partial_schedules() {
+    let mut o = setup_job();
+    o["ordering"] = ordering(1);
+    let limited = plan(pattern(), o.clone()).unwrap();
+    let r = limited.ordering.unwrap();
+    assert_eq!(r.selected_order, r.baseline_order);
+    assert_eq!(r.selected_order.len(), 4);
+    assert_eq!(r.search_nodes, 1);
+    assert!(r.budget_exhausted && !r.optimality_proven && !r.search_complete);
+    assert_eq!(r.lower_bound_total_changes, 2);
+
+    o["ordering"] = ordering(20000);
+    o["ordering"]["initial_setup"] = json!({"needle":"needle-Y","thread":"thread-Y"});
+    let initial = plan(pattern(), o.clone()).unwrap().ordering.unwrap();
+    assert_eq!(initial.baseline_changes.total_changes, 8);
+    assert_eq!(initial.selected_order, ["B", "D", "A", "C"]);
+    assert_eq!(initial.selected_changes.total_changes, 2);
+
+    // Complete declared chain defeats grouping; reverse travel and locks stay attached to their pass.
+    o["machine"]["reverse"] =
+        json!({"stitch_mm":[0.1,5.],"feed_b_over_a":[0.5,2.],"max_stitches_per_minute":1000.});
+    for i in 1..4 {
+        let predecessor = ["A", "B", "C"][i - 1];
+        o["passes"][i]["after"] = json!([predecessor]);
+    }
+    o["passes"][1]["direction"] = json!("reverse");
+    o["passes"][3]["backtack"] = json!({"start_stitches":2,"end_stitches":1});
+    let chained = plan(pattern(), o.clone()).unwrap();
+    let r = chained.ordering.as_ref().unwrap();
+    assert_eq!(r.selected_order, ["A", "B", "C", "D"]);
+    assert_eq!(r.selected_changes.total_changes, 8);
+    assert!(r.optimality_proven);
+    assert_eq!(r.lower_bound_total_changes, 8);
+    assert_eq!(chained.stitch_intervals, 166);
+    let mut legacy = o;
+    legacy.as_object_mut().unwrap().remove("ordering");
+    assert_eq!(
+        serde_json::to_value(chained.seams).unwrap(),
+        serde_json::to_value(plan(pattern(), legacy).unwrap().seams).unwrap()
+    );
+}
+
+#[test]
+fn setup_search_preserves_source_qualification_and_early_refusals() {
+    let p = pattern();
+    let base = plan(p.clone(), options()).unwrap();
+    let mut o = setup_job();
+    let mut qualifiers = Vec::new();
+    for name in ["X", "Y"] {
+        let mut q = qualification_for(&base);
+        q.id = format!("coupon-{name}");
+        q.needle = format!("needle-{name}");
+        q.thread = format!("thread-{name}");
+        qualifiers.push(q);
+    }
+    o["qualifications"] = json!(qualifiers);
+    o["require_qualification"] = json!(true);
+    let baseline = plan(p.clone(), o.clone()).unwrap();
+    o["ordering"] = ordering(20000);
+    let optimized = plan(p.clone(), o.clone()).unwrap();
+    for seam in optimized.seams {
+        let old = baseline
+            .seams
+            .iter()
+            .find(|s| s.pass.id == seam.pass.id)
+            .unwrap();
+        assert_eq!(seam.qualification_id, old.qualification_id);
+        assert_eq!(
+            serde_json::to_value(seam).unwrap(),
+            serde_json::to_value(old).unwrap()
+        );
+    }
+    let mut changed = p.clone();
+    changed["fabric"] = fabric("other-lot", 0.4);
+    assert!(
+        plan(changed, o.clone())
+            .unwrap_err()
+            .message
+            .contains("exact stack")
+    );
+    o["passes"][0]["after"] = json!(["D"]);
+    o["passes"][3]["after"] = json!(["A"]);
+    assert!(
+        plan(p.clone(), o.clone())
+            .unwrap_err()
+            .message
+            .contains("cyclic")
+    );
+    for limit in [0, 200001] {
+        o["ordering"] = ordering(limit);
+        assert_eq!(
+            plan(p.clone(), o.clone()).unwrap_err().code,
+            ftx_core::RefusalCode::BudgetExceeded
+        );
+    }
+    let mut oversized = setup_job();
+    let original = oversized["passes"][0].clone();
+    oversized["passes"] = json!(
+        (0..21)
+            .map(|i| {
+                let mut p = original.clone();
+                p["id"] = json!(format!("pass-{i}"));
+                p
+            })
+            .collect::<Vec<_>>()
+    );
+    oversized["ordering"] = ordering(20000);
+    assert_eq!(
+        plan(p, oversized).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
+fn setup_optimum_matches_exhaustive_permutations_with_crossed_components() {
+    // Independent full permutation oracle: no pruning, setup bitsets or production search logic.
+    fn visit(passes: &[Value], order: &mut Vec<usize>, best: &mut usize) {
+        if order.len() == passes.len() {
+            let cost = order
+                .windows(2)
+                .map(|w| {
+                    usize::from(passes[w[0]]["needle"] != passes[w[1]]["needle"])
+                        + usize::from(passes[w[0]]["thread"] != passes[w[1]]["thread"])
+                })
+                .sum();
+            *best = (*best).min(cost);
+            return;
+        }
+        for i in 0..passes.len() {
+            if !order.contains(&i)
+                && passes[i]["after"].as_array().is_none_or(|deps| {
+                    deps.iter()
+                        .all(|id| order.iter().any(|&j| &passes[j]["id"] == id))
+                })
+            {
+                order.push(i);
+                visit(passes, order, best);
+                order.pop();
+            }
+        }
+    }
+    for dependencies in [false, true] {
+        let mut o = setup_job();
+        o["passes"][1]["thread"] = json!("thread-X");
+        o["passes"][2]["thread"] = json!("thread-Y");
+        let mut extra = o["passes"][0].clone();
+        extra["id"] = json!("E");
+        extra["needle"] = json!("needle-Z");
+        o["passes"].as_array_mut().unwrap().push(extra);
+        if dependencies {
+            o["passes"][2]["after"] = json!(["B"]);
+            o["passes"][4]["after"] = json!(["A"]);
+        }
+        let mut expected = usize::MAX;
+        visit(
+            o["passes"].as_array().unwrap(),
+            &mut Vec::new(),
+            &mut expected,
+        );
+        if !dependencies {
+            o["ordering"] = ordering(5);
+            let limited = plan(pattern(), o.clone()).unwrap().ordering.unwrap();
+            assert!(limited.budget_exhausted && !limited.optimality_proven);
+            assert_eq!(limited.selected_order.len(), 5);
+            assert_eq!(limited.baseline_changes.total_changes, 6);
+            assert_eq!(limited.selected_changes.total_changes, 5);
+        }
+        o["ordering"] = ordering(20000);
+        let r = plan(pattern(), o).unwrap().ordering.unwrap();
+        assert!(r.optimality_proven && r.search_complete);
+        assert_eq!(r.selected_changes.total_changes, expected);
+    }
+}

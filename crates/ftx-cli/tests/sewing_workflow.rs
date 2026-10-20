@@ -78,6 +78,99 @@ fn real_cli_matches_library_and_does_not_mutate_evidence() {
 }
 
 #[test]
+fn real_cli_optimizes_setups_without_changing_the_admitted_stitch_operations() {
+    let mut options: Value = serde_json::from_str(OPTIONS).unwrap();
+    let template = options["passes"][0].clone();
+    options["passes"] = json!([
+        ("a", "first"),
+        ("b", "second"),
+        ("c", "first"),
+        ("d", "second")
+    ])
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|entry| {
+        let mut pass = template.clone();
+        pass["id"] = entry[0].clone();
+        pass["needle"] = entry[1].clone();
+        pass["thread"] = entry[1].clone();
+        pass
+    })
+    .collect::<Vec<_>>()
+    .into();
+    options["passes"][2]["after"] = json!(["a"]);
+    options["passes"][3]["after"] = json!(["b"]);
+    let original_path = changed_pattern(&options);
+    let original = run(&[
+        "sew-stitches",
+        &fixture("synthetic-sewing-pattern.json"),
+        &original_path,
+    ]);
+    assert!(
+        original.status.success(),
+        "{}",
+        String::from_utf8_lossy(&original.stderr)
+    );
+    let original: Value = serde_json::from_slice(&original.stdout).unwrap();
+    options["ordering"] = json!({"objective":"minimize_setup_changes","max_search_nodes":1000});
+    let path = changed_pattern(&options);
+    let output = run(&[
+        "sew-stitches",
+        &fixture("synthetic-sewing-pattern.json"),
+        &path,
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let expected = ftx_export::sewing::program::SewProgram::build(
+        &Pattern::from_json(PATTERN).unwrap(),
+        &serde_json::from_value(options.clone()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(actual, serde_json::to_value(expected).unwrap());
+    assert_eq!(actual["plan"]["schema"], "ftx-sewing-plan/6");
+    assert_eq!(
+        actual["plan"]["ordering"]["baseline_changes"]["total_changes"],
+        6
+    );
+    assert_eq!(
+        actual["plan"]["ordering"]["selected_changes"]["total_changes"],
+        2
+    );
+    assert_eq!(actual["plan"]["ordering"]["optimality_proven"], true);
+    assert_eq!(
+        actual["stitches"].as_array().unwrap().len(),
+        original["stitches"].as_array().unwrap().len()
+    );
+    assert_eq!(
+        actual["plan"]["feed_seconds"],
+        original["plan"]["feed_seconds"]
+    );
+    assert_eq!(
+        actual["plan"]["pattern_sha256"],
+        original["plan"]["pattern_sha256"]
+    );
+    for row in actual["plan"]["seams"].as_array().unwrap() {
+        let before = original["plan"]["seams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|other| other["pass"]["id"] == row["pass"]["id"])
+            .unwrap();
+        assert_eq!(row, before);
+    }
+    assert_eq!(actual["plan"]["hardware_execution_authorized"], false);
+    assert_eq!(
+        serde_json::from_str::<Value>(&fs::read_to_string(path).unwrap()).unwrap(),
+        options
+    );
+}
+
+#[test]
 fn material_swap_affects_machine_feasibility_and_failure_has_no_partial_stdout() {
     let mut p: Value = serde_json::from_str(PATTERN).unwrap();
     p["fabric"]["material"]["record"]["properties"]["thickness"]["value"] = json!(2.0);

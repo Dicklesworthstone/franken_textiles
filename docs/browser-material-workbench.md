@@ -64,6 +64,16 @@ The UI deliberately asks for the existing JSON contracts rather than inventing c
 constants. The synthetic sewing pattern/options under `tests/fixtures/materials/` illustrate process
 inputs, not a real qualified textile or recommended machine configuration.
 
+Sewing recipes may opt into `ordering` with `objective: "minimize_setup_changes"` and an explicit
+`max_search_nodes` work limit. The existing Rust planner counts needle and thread changes separately
+and minimizes their sum while honoring declared predecessors. An optional `initial_setup` names the
+initial needle and thread; without it, the first installation is excluded. The workbench displays
+baseline and selected counts, the selected operation sequence, and whether optimality was established
+or the search stopped at its budget with a complete feasible schedule. The downloaded stitch program
+retains the same result and source identities. This count does not infer handling time, undeclared
+assembly access, machine calibration or permission to execute hardware. Editing the recipe withdraws
+the old program and optimization result together.
+
 Purchasing also accepts `ftx-textile-quotes/2` histories with exact UTC `observed_at` instants and an
 explicit market `as_of_at`. Retain the matching `observed_on` and `as_of` dates. The result displays
 the Rust evaluator's latest eligible and excluded observations for each roll, their exact times,
