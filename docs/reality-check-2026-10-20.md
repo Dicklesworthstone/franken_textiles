@@ -1,8 +1,9 @@
 # FrankenTextiles reality check — 2026-10-20
 
 Assessed source: `main` at `6410556378514874274e77c304efd0d4e2200a73`.
-This is an assessment and delivery plan, not release certification. No product code or oracle
-fixture was changed. AGENTS.md and README.md were read in full before investigation.
+This initial assessment and delivery plan is not release certification. It preceded product changes;
+the implementation follow-through at the end records subsequent work and current verification.
+AGENTS.md and README.md were read in full before investigation. Oracle fixtures remain unchanged.
 
 ## Verdict
 
@@ -322,3 +323,54 @@ rather than deleted.
 The next high-value work is an honest numerical acceptance boundary and the matched three-material
 experiment, backed by current production-asset execution. More module count or catalogue rows cannot
 substitute for either result.
+
+## Implementation follow-through — 2026-10-20
+
+This checklist follows the user's request to implement the highest-value repairs and track the
+remaining work. It is a session handoff, retired as an active checklist when its rows are resolved
+or handed back to the named Beads. It is not another release gate or evidence of physical validity.
+The original assessment above describes `6410556`, not the repaired tree.
+
+- [x] R1: preserve the complete Beads directory before repair; retain all 74 original issues,
+  114 dependencies and 65 comments, including both distinct `ftx-enu` comments formerly numbered 1.
+- [x] R1: assign the second duplicate comment the unused ID 65; recover supported `br` operations.
+- [x] R1: reconcile the three staged material-study issues additively, preserving five dependencies;
+  verify canonical sync and successful flush. `br doctor` reports healthy data with warnings about
+  its stale merge anchor and missing optional WAL-index ignore pattern; it is not an all-green result.
+- [x] Register `ftx-6en` (P0, in progress), and `ftx-dzf` (P1, now closed), with existing parent gates.
+- [x] R7 / `ftx-dzf`: explicitly reject source-clock overflow before Python datetime normalization;
+  retain valid offsets, expiry, source precision and source data. Implemented in `b23c281`.
+- [x] R7: fresh solo rerun of `python3.12`, `python3.13`, `python3.14`, and `python3.15`, each with
+  `-m unittest discover -s scripts`: **84 passed on each version**. Parent `ftx-tm6` stays open.
+- [x] R2 / `ftx-6en`: require every inner Newton solve, including friction rounds, to converge;
+  return a structured refusal with residual/correction diagnostics otherwise (`9cef987`).
+- [x] R2: preserve accepted geometry, velocities, contact lag and caches on step/static-solve failure;
+  preserve the phase's contact-offset ramp on failure too (`ed0fdee`).
+- [x] R2: retain per-step Newton reports and actual maximum speeds in phase reports and saved
+  `numerical` output; gate gravity drapes lacking three consecutive steps at at most 1 mm/s.
+- [x] R2: preserve reference metric values/texts; mark sewing-only gravity settling unavailable;
+  validate the existing adaptive `Solver::settle` limits rather than admitting an empty quiet window.
+- [x] R2: direct exhaustion/rollback/replay, valid quiet window, oscillatory cancellation and
+  qualification tests: **112 drape library tests passed remotely** on `vmi1227854`.
+- [ ] R2: verify the actual material-to-drape diagnostic/gating path and failed-phase frame/ramp
+  rollback regression; expose numerical status in the direct CLI JSON and human summary.
+- [ ] R2/R3: complete workspace tests, all-target clippy and wasm compilation remotely, and fresh
+  review against the original acceptance conditions. Keep `ftx-6en` open until the evidence suffices.
+- [x] R8: correct the 21-tape description, frozen `outfit --sim` command, and numerical/parity
+  boundaries in README and touched contracts (`60ae9b4`). Full scope/budget review remains open.
+- [ ] R3: run production-Anny fitting and fitted garment gates with the converted pinned asset;
+  ordinary synthetic/debug tests cannot substitute for these or the release-only contact tests.
+- [ ] R4: complete production-model capture-to-body acceptance, then private photo/tape comparisons.
+- [ ] R5: acquire matched specimens/raw observations and execute held-out coupons and fixed-jacket
+  swaps (`ftx-tm2`, `ftx-md1`, restored `ftx-ms3`, `ftx-tm8`, `ftx-tmf`).
+- [ ] R6: continue source-qualified thermal/process/purchasing slices through their existing tasks;
+  restored `ftx-ms2` remains open. No new coefficients or physical acceptance are inferred here.
+- [ ] R9/R10: current hardware/input-bound benchmarks, native/wasm/browser comparisons, private
+  muslin evidence and the existing `ftx-onn` release gate remain required.
+- [ ] Finalize fresh self-review, Beads evidence/flush and reservation release; report any failed or
+  unavailable checks separately from passed checks.
+
+Raw command output for this block is retained outside the repository at
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-followthrough-20261020T214254Z/`.
+Remote checks use `RCH_REQUIRE_REMOTE=1`; the laptop's `sbh check --need 20G` failed its free-space-ratio
+gate, so no heavy local compilation was substituted. This is not a current garment benchmark or G2 pass.
