@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 
 use super::CutPlan;
 
+/// Source-locked purchasing of individually identified hides and remnants, not fungible roll area.
+pub mod finite;
+
 /// Comparable market scope; purchase quantities are derived from the marker rather than guessed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
