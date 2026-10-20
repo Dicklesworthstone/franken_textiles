@@ -343,6 +343,7 @@ pub fn drape(
         pattern,
         casing_mu,
     );
+    add_numerical_report(&mut report, &sew, &drape, opts);
     report["material"] = material.report;
     if let Some(fabrics) = &material.piece_fabrics {
         report["fabric"] = json!({"basis":"per_piece", "see":"material.records"});
@@ -439,6 +440,49 @@ pub fn drape(
         drape,
         fabric,
     })
+}
+
+/// Preserve reference metrics; native acceptance additionally requires a quiet instantaneous tail.
+fn add_numerical_report(
+    report: &mut Value,
+    sew: &PhaseReport,
+    drape: &PhaseReport,
+    opts: &DrapeOptions,
+) {
+    const SPEED_M_S: f64 = 1e-3;
+    const QUIET_STEPS: usize = 3;
+    let quiet = drape
+        .samples
+        .iter()
+        .rev()
+        .take_while(|s| s.solve.converged && s.max_speed_m_s <= SPEED_M_S)
+        .count();
+    let gravity_simulated = drape.steps > 0;
+    let settled = gravity_simulated.then_some(quiet >= QUIET_STEPS);
+    report["numerical"] = json!({
+        "step_acceptance":"every Newton solve converged; stalled steps are refused without advancing the accepted state",
+        "newton_correction_speed_tolerance_m_s":opts.tol,
+        "time_step_s":opts.step,
+        "velocity_tolerance_m_s":SPEED_M_S,
+        "required_quiet_steps":QUIET_STEPS,
+        "consecutive_quiet_steps":quiet,
+        "gravity_simulated":gravity_simulated,
+        "settled":settled,
+        "sew":sew,
+        "drape":drape,
+        "basis":"Newton correction/h and instantaneous speed; reference settled remains the legacy window-drift metric, not static stress equilibrium or real fit"
+    });
+    if settled == Some(false) {
+        let flag = format!(
+            "not numerically settled (maximum speed {} m/s; need {QUIET_STEPS} consecutive steps <= {SPEED_M_S} m/s): rerun with more drape steps",
+            drape.max_speed
+        );
+        for key in ["flags", "gating"] {
+            if let Some(flags) = report[key].as_array_mut() {
+                flags.push(json!(flag));
+            }
+        }
+    }
 }
 
 /// The run fields of spec 04 §6.11 that a run knows (the CLI adds file hashes and timing).
@@ -646,7 +690,77 @@ pub fn viewer(
 #[cfg(test)]
 mod self_contact_tests {
     use super::*;
+    use crate::cloth::SolveReport;
     use crate::contact::Body;
+    use crate::scene::PhaseStep;
+
+    #[test]
+    fn numerical_settledness_rejects_motion_hidden_by_window_means() {
+        let options = DrapeOptions::default();
+        let frames = [0.0_f64, 0.001, 0.0, 0.001, 0.0, 0.001, 0.0];
+        assert_eq!(
+            frames[..2].iter().sum::<f64>(),
+            frames[4..6].iter().sum::<f64>()
+        );
+        let mut phase = PhaseReport::default();
+        for pair in frames.windows(2) {
+            let speed = (pair[1] - pair[0]).abs() / options.step;
+            phase.samples.push(PhaseStep {
+                solve: SolveReport {
+                    converged: true,
+                    ..SolveReport::default()
+                },
+                max_speed_m_s: speed,
+            });
+            phase.steps += 1;
+            phase.max_speed = speed;
+        }
+        let mut report = json!({"settled":true,"flags":[],"gating":[]});
+        add_numerical_report(&mut report, &PhaseReport::default(), &phase, &options);
+        assert_eq!(report["settled"], true, "reference metric is preserved");
+        assert_eq!(report["numerical"]["settled"], false);
+        assert_eq!(report["numerical"]["consecutive_quiet_steps"], 0);
+        assert_eq!(report["gating"].as_array().unwrap().len(), 1);
+        assert_eq!(report["flags"], report["gating"]);
+        assert_eq!(
+            report["numerical"]["drape"]["samples"]
+                .as_array()
+                .unwrap()
+                .len(),
+            6
+        );
+
+        for _ in 0..3 {
+            phase.samples.push(PhaseStep {
+                solve: SolveReport {
+                    converged: true,
+                    ..SolveReport::default()
+                },
+                max_speed_m_s: 0.0,
+            });
+            phase.steps += 1;
+        }
+        phase.max_speed = 0.0;
+        let mut quiet = json!({"settled":true,"flags":[],"gating":[]});
+        add_numerical_report(&mut quiet, &PhaseReport::default(), &phase, &options);
+        assert_eq!(quiet["numerical"]["settled"], true);
+        assert_eq!(quiet["numerical"]["consecutive_quiet_steps"], 3);
+        assert_eq!(quiet["gating"], json!([]));
+    }
+
+    #[test]
+    fn sewing_only_qualification_does_not_claim_gravity_settling() {
+        let mut report = json!({"settled":true,"flags":[],"gating":[]});
+        add_numerical_report(
+            &mut report,
+            &PhaseReport::default(),
+            &PhaseReport::default(),
+            &DrapeOptions::default(),
+        );
+        assert_eq!(report["numerical"]["gravity_simulated"], false);
+        assert!(report["numerical"]["settled"].is_null());
+        assert_eq!(report["gating"], json!([]));
+    }
 
     #[test]
     fn options_validate_before_geometry_work() {

@@ -12,6 +12,7 @@ use ftx_body::BodyFrames;
 use ftx_core::np::linspace;
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, det};
 use ftx_pattern::{Pattern, truthy};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::cloth::{ClothModel, SheetMaterial, SolveReport, Solver};
@@ -817,8 +818,17 @@ fn ramp_thickness(scene: &mut Scene) {
     }
 }
 
+/// One accepted step; the Newton residual is in N, correction in m and potential in J.
+#[derive(Clone, Debug, Serialize)]
+pub struct PhaseStep {
+    /// Newton diagnostics for this accepted implicit step.
+    pub solve: SolveReport,
+    /// Largest instantaneous vertex speed after the step (m/s), never a window-mean drift.
+    pub max_speed_m_s: f64,
+}
+
 /// One phase's per-step reports.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct PhaseReport {
     /// Steps taken.
     pub steps: usize,
@@ -840,6 +850,8 @@ pub struct PhaseReport {
     pub max_speed: f64,
     /// The cloth offset at the end (m).
     pub thickness: f64,
+    /// Accepted steps in execution order. A failed step produces no sample or animation frame.
+    pub samples: Vec<PhaseStep>,
 }
 
 /// Runs `steps` implicit steps of `h` seconds under `gravity` (m/s², along −z), calling `frame` after
@@ -867,6 +879,10 @@ pub fn run_phase(
         rep.halvings += r.halvings;
         rep.projected_iterations += r.projected_iterations;
         rep.pcg_iterations += r.pcg_iterations;
+        rep.samples.push(PhaseStep {
+            solve: r,
+            max_speed_m_s: scene.solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max),
+        });
         frame(k, &scene.positions());
     }
     rep.max_speed = scene.solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max);

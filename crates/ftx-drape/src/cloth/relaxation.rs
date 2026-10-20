@@ -193,7 +193,7 @@ impl Solver {
     }
 
     // The opt-in history path is transactional, including contact lag and linear-solver caches.
-    // Existing memoryless workloads do not incur this clone or acquire stricter stopping semantics.
+    // Memoryless steps use the same accepted-state boundary in step_at_body.
     pub(super) fn relaxing_step(
         &mut self,
         h: f64,

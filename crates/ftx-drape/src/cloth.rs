@@ -10,6 +10,7 @@
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
 use ftx_pattern::material_response::CompiledMembrane;
+use serde::Serialize;
 
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::eigen::{project_psd, project_psd_translation_free};
@@ -376,7 +377,7 @@ impl ClothModel {
 }
 
 /// What one minimisation did.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct SolveReport {
     /// Newton iterations taken.
     pub iterations: usize,
@@ -1025,6 +1026,12 @@ impl Solver {
             }
             // Singular even after projection: steepest descent.
             let mut p = p.unwrap_or_else(|| g.iter().map(|v| -v).collect());
+            if g.iter().chain(&p).any(|v| !v.is_finite()) {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "Newton gradient or direction is non-finite",
+                ));
+            }
             let mut slope: f64 = g.iter().zip(&p).map(|(a, b)| a * b).sum();
             if slope.is_nan() || slope >= 0.0 {
                 p = g.iter().map(|v| -v).collect();
@@ -1076,6 +1083,15 @@ impl Solver {
         if !rep.converged {
             let (g, _) = self.assemble(&self.x, inertia, false);
             rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            return Err(Refusal::new(
+                RefusalCode::NotConverged,
+                format!(
+                    "Newton did not converge after {} iterations (residual {} N, last correction {} m, {} failed line searches)",
+                    rep.iterations, rep.residual, rep.last_step, rep.line_search_failures
+                ),
+            )
+            .repair("increase the Newton iteration budget or reduce the time step")
+            .repair("check the material domain and the garment start state"));
         }
         Ok(rep)
     }
@@ -1128,7 +1144,8 @@ impl Solver {
     ///
     /// # Errors
     /// [`RefusalCode::OutOfRange`] for a non-positive step; [`RefusalCode::NonFinite`] when the state
-    /// becomes non-finite; a failed symbolic analysis.
+    /// becomes non-finite; [`RefusalCode::NotConverged`] for a stalled solve. Refusals preserve
+    /// positions, velocity, contact lag and linear-solver caches.
     pub fn step(&mut self, h: f64) -> Result<SolveReport, Refusal> {
         self.step_at_body(h, None)
     }
@@ -1146,7 +1163,16 @@ impl Solver {
         {
             return self.relaxing_step(h, body_start);
         }
-        self.step_inner(h, body_start)
+        let mut trial = self.clone();
+        let report = trial.step_inner(h, body_start)?;
+        if trial.v.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "the cloth velocity became non-finite",
+            ));
+        }
+        *self = trial;
+        Ok(report)
     }
 
     fn step_inner(&mut self, h: f64, body_start: Option<&[Vec3]>) -> Result<SolveReport, Refusal> {
@@ -1250,6 +1276,20 @@ impl Solver {
         quiet: usize,
         max_steps: usize,
     ) -> Result<SettleReport, Refusal> {
+        if !h0.is_finite()
+            || h0 <= 0.0
+            || !h_max.is_finite()
+            || h_max < h0
+            || !v_tol.is_finite()
+            || v_tol <= 0.0
+            || quiet == 0
+            || max_steps < quiet
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "settling needs finite positive time/speed limits, h_max >= h0, and a nonzero quiet window within the step budget",
+            ));
+        }
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
@@ -1297,27 +1337,18 @@ impl Solver {
                 "a static solve cannot choose a material-history duration or irreversible loading path; use explicit time steps",
             ));
         }
-        self.audit_self_contact()?;
-        let x0 = self.x.clone();
-        let rep = match self.minimize(None) {
-            Ok(rep) => rep,
-            Err(e) => {
-                self.x = x0;
-                return Err(e);
-            }
-        };
-        if self.x.iter().any(|p| !p.is_finite()) {
-            self.x = x0;
+        let mut trial = self.clone();
+        trial.audit_self_contact()?;
+        let rep = trial.minimize(None)?;
+        if trial.x.iter().any(|p| !p.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
                 "the cloth state became non-finite",
             ));
         }
-        if let Err(e) = self.audit_self_contact() {
-            self.x = x0;
-            return Err(e);
-        }
-        self.v = vec![Vec3::ZERO; self.x.len()];
+        trial.audit_self_contact()?;
+        trial.v.fill(Vec3::ZERO);
+        *self = trial;
         Ok(rep)
     }
 
@@ -1638,6 +1669,67 @@ mod self_contact_tests {
         }
         assert!(s.x[..3].iter().all(|p| p.z == 0.0));
         assert!(s.v.iter().all(|v| *v == Vec3::ZERO));
+    }
+
+    #[test]
+    fn unconverged_step_preserves_contact_and_caches_then_replays() {
+        let mut s = layers(false);
+        for (i, v) in s.v.iter_mut().enumerate() {
+            v.z = if i < 3 { 0.3 } else { -0.3 };
+        }
+        s.max_newton = 1;
+        let mut control = s.clone();
+        let before = format!("{s:?}");
+        let refusal = s.step(0.002).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::NotConverged);
+        assert!(refusal.message.contains("residual"));
+        assert_eq!(format!("{s:?}"), before);
+
+        s.max_newton = 200;
+        control.max_newton = 200;
+        let report = s.step(0.002).unwrap();
+        assert!(report.converged);
+        assert_eq!(report, control.step(0.002).unwrap());
+        assert_eq!(s.x, control.x);
+        assert_eq!(s.v, control.v);
+    }
+
+    #[test]
+    fn unconverged_static_solve_preserves_velocity_and_caches() {
+        let mut s = layers(true);
+        s.gravity.z = -9.81;
+        s.v[3].z = 0.1;
+        s.max_newton = 1;
+        let before = format!("{s:?}");
+        assert_eq!(
+            s.static_solve().unwrap_err().code,
+            RefusalCode::NotConverged
+        );
+        assert_eq!(format!("{s:?}"), before);
+    }
+
+    #[test]
+    fn settling_requires_a_real_finite_quiet_window() {
+        let mut s = layers(false);
+        let before = format!("{s:?}");
+        for (h0, h_max, speed, quiet, budget) in [
+            (0.001, 0.01, 1e-3, 0, 3),
+            (0.001, 0.01, 1e-3, 3, 2),
+            (0.001, 0.0001, 1e-3, 3, 3),
+            (0.001, f64::INFINITY, 1e-3, 3, 3),
+            (0.001, 0.01, f64::NAN, 3, 3),
+            (0.001, 0.01, 0.0, 3, 3),
+        ] {
+            assert_eq!(
+                s.settle(h0, h_max, speed, quiet, budget).unwrap_err().code,
+                RefusalCode::OutOfRange
+            );
+            assert_eq!(format!("{s:?}"), before);
+        }
+        let report = s.settle(0.001, 0.01, 1e-3, 3, 3).unwrap();
+        assert!(report.settled);
+        assert_eq!(report.steps, 3);
+        assert_eq!(report.max_speed, 0.0);
     }
 
     #[test]
