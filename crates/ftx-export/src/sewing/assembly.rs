@@ -13,7 +13,7 @@ use ftx_core::{
 use ftx_pattern::{Pattern, SeamPairs, material_catalog::Selection};
 use serde::{Deserialize, Serialize};
 
-use super::{bad, positive, sheet};
+use super::{bad, path::obstacles::Obstacles, positive, sheet};
 use crate::{
     Ctx,
     outline::{cut_outline, ring_is_simple, segments_touch},
@@ -83,7 +83,7 @@ pub struct FlatAssembly {
     /// Largest admitted distance between paired side targets after their respective folds (mm).
     /// Side A drives the needle; the discrepancy is reported, not averaged or fitted away.
     pub registration_tolerance_mm: f64,
-    /// Required needle/chord distance from each intersected ply's cut edge and crease (mm).
+    /// Required needle/chord distance from cut edges, cutouts, drill rims and creases (mm).
     pub minimum_boundary_clearance_mm: f64,
 }
 
@@ -165,6 +165,7 @@ pub struct AssemblyReceipt {
 struct Sheet {
     instance: String,
     cut: Vec<Vec2>,
+    obstacles: Obstacles,
     sha: String,
     thickness: f64,
     upper: bool,
@@ -243,8 +244,8 @@ fn clip(mask: &[Vec2], n: Vec2, c: f64) -> Vec<Vec2> {
 }
 
 // A segment may pass through a disconnected concave fragment with neither endpoint in that ply.
-// Clip it to the convex mask, then test the remaining segment against the actual source polygon.
-fn intersects_region(a: Vec2, b: Vec2, mask: &[Vec2], cut: &[Vec2]) -> bool {
+// Clip it to the convex mask before testing source material and its removed regions.
+fn clipped_segment(a: Vec2, b: Vec2, mask: &[Vec2]) -> Option<(Vec2, Vec2)> {
     let mut lo: f64 = 0.0;
     let mut hi: f64 = 1.0;
     for (u, v) in edges(mask) {
@@ -252,7 +253,7 @@ fn intersects_region(a: Vec2, b: Vec2, mask: &[Vec2], cut: &[Vec2]) -> bool {
         let da = n.dot(a - u);
         let db = n.dot(b - u);
         if da < 0.0 && db < 0.0 {
-            return false;
+            return None;
         }
         if da < 0.0 {
             lo = lo.max(da / (da - db));
@@ -260,11 +261,10 @@ fn intersects_region(a: Vec2, b: Vec2, mask: &[Vec2], cut: &[Vec2]) -> bool {
             hi = hi.min(da / (da - db));
         }
         if lo > hi {
-            return false;
+            return None;
         }
     }
-    let (a, b) = (a + (b - a) * lo, a + (b - a) * hi);
-    contains(a, cut) || contains(b, cut) || edges(cut).any(|(u, v)| segments_touch(a, b, u, v))
+    Some((a + (b - a) * lo, a + (b - a) * hi))
 }
 
 impl FlatAssembly {
@@ -391,16 +391,6 @@ impl FlatAssembly {
                     "assembly outline budget exceeded",
                 ));
             }
-            if piece
-                .internal
-                .as_ref()
-                .is_some_and(|m| m.iter().any(|m| m.kind.as_deref() == Some("cut")))
-                || piece.drills.as_ref().is_some_and(|d| !d.is_empty())
-            {
-                return Err(bad(
-                    "flat-fold assembly needs explicit internal cut/drill obstacles",
-                ));
-            }
             // Bound outline construction BEFORE its sampled offset/union work, not only its output.
             let estimate: usize = instance
                 .edges
@@ -425,6 +415,7 @@ impl FlatAssembly {
                     "flat-fold assembly requires a bounded simple cut polygon",
                 ));
             }
+            let obstacles = Obstacles::load(pattern, instance, &cut, work)?;
             let (selected, thickness, upper) = sheet(pattern, instance.piece_index)?;
             let sha = selected.sha256().to_string();
             materials
@@ -450,6 +441,7 @@ impl FlatAssembly {
             sheets.push(Sheet {
                 instance: p.instance.clone(),
                 cut,
+                obstacles,
                 sha,
                 thickness,
                 upper,
@@ -488,7 +480,7 @@ impl FlatAssembly {
                     continue;
                 }
                 charge(work, r.mask.len() + s.cut.len())?;
-                if contains(p, &r.mask) && contains(p, &s.cut) {
+                if contains(p, &r.mask) && contains(p, &s.cut) && !s.obstacles.removed(p, work)? {
                     if found.is_some() {
                         return Err(bad("sewing target lies on an ambiguous fold crease"));
                     }
@@ -543,7 +535,9 @@ impl FlatAssembly {
                 needle.len().saturating_mul(r.mask.len() + s.cut.len()),
             )?;
             let first = r.frame.inverse(needle[0]);
-            let present = contains(first, &r.mask) && contains(first, &s.cut);
+            let present = contains(first, &r.mask)
+                && contains(first, &s.cut)
+                && !s.obstacles.removed(first, work)?;
             let mut source = Vec::new();
             if present {
                 if layers.len().saturating_add(1).saturating_mul(needle.len()) > MAX_LAYER_STATIONS
@@ -569,13 +563,30 @@ impl FlatAssembly {
                         }
                     }
                     source.push(b);
-                } else if intersects_region(a, b, &r.mask, &s.cut) {
-                    return Err(bad(
-                        "needle chord encounters an extra material ply between stations",
-                    ));
+                } else if let Some((a, b)) = clipped_segment(a, b, &r.mask)
+                    && (contains(a, &s.cut)
+                        || contains(b, &s.cut)
+                        || edges(&s.cut).any(|(u, v)| segments_touch(a, b, u, v)))
+                {
+                    // Material is absent only with a whole-chord proof, never because the first
+                    // sample happens to lie in a hole. Fold masks remain source-space masks.
+                    let clear = s.obstacles.void_clearance(a, b, work)?.ok_or_else(|| {
+                        bad("needle chord encounters an extra material ply between stations")
+                    })?;
+                    if clear + EPS < self.minimum_boundary_clearance_mm {
+                        return Err(bad(
+                            "assembled needle path lacks removed-region rim clearance",
+                        ));
+                    }
+                    minimum = minimum.min(clear);
                 }
             }
             if present {
+                minimum = minimum.min(s.obstacles.clearance(
+                    &source,
+                    self.minimum_boundary_clearance_mm,
+                    work,
+                )?);
                 let z0 = stack;
                 stack += s.thickness;
                 layers.push(NeedleLayer {

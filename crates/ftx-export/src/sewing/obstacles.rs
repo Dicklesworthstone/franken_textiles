@@ -61,6 +61,51 @@ fn budget() -> Refusal {
 }
 
 impl Obstacles {
+    /// Removed source material, not a nominal ply. Open slits have no inferred kerf area.
+    pub(in crate::sewing) fn removed(&self, p: Vec2, work: &mut usize) -> Result<bool, Refusal> {
+        for (cut, closed) in &self.cuts {
+            path::charge(work, cut.len())?;
+            if *closed && point_in_polygon(p, cut) {
+                return Ok(true);
+            }
+        }
+        path::charge(work, self.drills.len())?;
+        Ok(self.drills.iter().any(|(c, d)| p.dist(*c) <= d * 0.5))
+    }
+
+    /// Prove the whole source chord is in one removed region, including its rim clearance.
+    /// Endpoint tests alone are insufficient for concave holes. Overlapping holes are not unioned:
+    /// when no individual void contains the whole chord this deliberately returns no proof.
+    pub(in crate::sewing) fn void_clearance(
+        &self,
+        a: Vec2,
+        b: Vec2,
+        work: &mut usize,
+    ) -> Result<Option<f64>, Refusal> {
+        let mut best: Option<f64> = None;
+        for (cut, closed) in &self.cuts {
+            path::charge(work, cut.len().saturating_mul(3))?;
+            if !closed || !point_in_polygon(a, cut) || !point_in_polygon(b, cut) {
+                continue;
+            }
+            let d = edges(cut, true)
+                .map(|(c, d)| distance(a, b, c, d))
+                .fold(f64::INFINITY, f64::min);
+            if d.is_finite() && d > EPS {
+                best = Some(best.map_or(d, |old| old.max(d)));
+            }
+        }
+        path::charge(work, self.drills.len())?;
+        for &(c, diameter) in &self.drills {
+            // A disk is convex, and distance to its centre is convex along the chord.
+            let d = diameter * 0.5 - a.dist(c).max(b.dist(c));
+            if d.is_finite() && d > EPS {
+                best = Some(best.map_or(d, |old| old.max(d)));
+            }
+        }
+        Ok(best)
+    }
+
     /// Consume strict source geometry, while sharing the cutter's instance transforms. A slit that
     /// reaches the exterior changes the outline/topology and must be represented there instead.
     pub(in crate::sewing) fn load(
