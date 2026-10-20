@@ -29,9 +29,27 @@ fn read<T: DeserializeOwned>(path: &str, left: &mut u64) -> Result<T, Refusal> {
 }
 fn build(pattern: &str, request: &str) -> Result<Plan, Refusal> {
     let mut left = 64 * 1024 * 1024;
-    let pattern = Pattern::new(read(pattern, &mut left)?);
-    let request: Request = read(request, &mut left)?;
+    build_with_budget(pattern, request, &mut left)
+}
+fn build_with_budget(pattern: &str, request: &str, left: &mut u64) -> Result<Plan, Refusal> {
+    let pattern = Pattern::new(read(pattern, left)?);
+    let request: Request = read(request, left)?;
     request.build(&pattern)
+}
+pub(super) fn identities(pattern: &str, request: &str) -> Result<Value, Refusal> {
+    serde_json::to_value(ftx_export::cutting::procurement::finite::identities(
+        &build(pattern, request)?,
+    )?)
+    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
+}
+pub(super) fn price(pattern: &str, request: &str, pricing: &str) -> Result<Value, Refusal> {
+    let mut left = 64 * 1024 * 1024;
+    let pricing = read(pricing, &mut left)?;
+    let plan = build_with_budget(pattern, request, &mut left)?;
+    serde_json::to_value(ftx_export::cutting::procurement::finite::evaluate(
+        &plan, &pricing,
+    )?)
+    .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))
 }
 pub(super) fn plan(pattern: &str, request: &str) -> Result<Value, Refusal> {
     serde_json::to_value(build(pattern, request)?)

@@ -57,17 +57,24 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
-    if matches!(action, "stock-plan" | "stock-residual" | "stock-svg") {
+    if matches!(
+        action,
+        "stock-plan" | "stock-residual" | "stock-svg" | "stock-identities" | "stock-price"
+    ) {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
             ("stock-plan", [pattern, request]) => stock::plan(pattern, request)?,
+            ("stock-identities", [pattern, request]) => stock::identities(pattern, request)?,
+            ("stock-price", [pattern, request, pricing]) => {
+                stock::price(pattern, request, pricing)?
+            }
             ("stock-residual", [pattern, request]) => stock::residual(pattern, request)?,
             ("stock-svg", [pattern, request, index, out]) => {
                 stock::preview(pattern, request, index, out)?
             }
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials stock-plan PATTERN.json STOCK.json | stock-residual PATTERN.json STOCK.json | stock-svg PATTERN.json STOCK.json INDEX NEW.svg",
+                    "usage: ftx materials stock-plan|stock-identities|stock-residual PATTERN.json STOCK.json | stock-price PATTERN.json STOCK.json PRICING.json | stock-svg PATTERN.json STOCK.json INDEX NEW.svg",
                 ));
             }
         };

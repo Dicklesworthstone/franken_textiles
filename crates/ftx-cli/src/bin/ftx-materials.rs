@@ -54,6 +54,8 @@ ftx-materials screen REQUEST.json
 ftx-materials study PATTERN.json REQUEST.json
 ftx-materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody
 ftx-materials stock-plan PATTERN.json STOCK.json
+ftx-materials stock-identities PATTERN.json STOCK.json
+ftx-materials stock-price PATTERN.json STOCK.json PRICING.json
 ftx-materials stock-residual PATTERN.json STOCK.json
 ftx-materials stock-svg PATTERN.json STOCK.json STOCK-INDEX NEW.svg
 ftx-materials show ID [--allow-estimates]
@@ -269,6 +271,10 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             model,
         ] => scenarios::run(pattern, request, scenario, measurements, model),
         ["stock-plan", pattern, request] => finite_stock::plan(pattern, request),
+        ["stock-identities", pattern, request] => finite_stock::identities(pattern, request),
+        ["stock-price", pattern, request, pricing] => {
+            finite_stock::price(pattern, request, pricing)
+        }
         ["stock-residual", pattern, request] => finite_stock::residual(pattern, request),
         ["stock-svg", pattern, request, index, out] => {
             finite_stock::preview(pattern, request, index, out)

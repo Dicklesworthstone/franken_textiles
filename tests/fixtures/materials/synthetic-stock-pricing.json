@@ -1,0 +1,47 @@
+{
+  "schema": "ftx-finite-stock-pricing/1",
+  "quotes": {
+    "schema": "ftx-textile-quotes/1",
+    "quotes": [
+      {
+        "offer_id": "synthetic/hide-001",
+        "material_id": "example-hide",
+        "material_sha256": "2fbefc33804bf7e093972b55fbc02b714d79db427d54b758606e0db7b5f374a4",
+        "supplier": "synthetic-not-a-supplier",
+        "sku": "hide-001",
+        "price": 17.0,
+        "quantity": 0.006974999999999999,
+        "unit": "square_meter",
+        "minimum_quantity": 0.006974999999999999,
+        "order_increment": 0.006974999999999999,
+        "available_quantity": 0.006974999999999999,
+        "available": true,
+        "currency": "USD",
+        "region": "synthetic",
+        "quality": "synthetic",
+        "terms": "synthetic merchandise only",
+        "observed_on": "2026-10-20",
+        "source": "test:synthetic-whole-hide-offer",
+        "source_sha256": "ed976fffc5f7bde4ab04ec492bd00405ebcb69c4920c50838cccd00e188bd6cf"
+      }
+    ]
+  },
+  "market": {
+    "currency": "USD",
+    "region": "synthetic",
+    "quality": "synthetic",
+    "terms": "synthetic merchandise only",
+    "as_of": "2026-10-20",
+    "max_age_days": 0,
+    "require_observed_quantity": true
+  },
+  "bindings": [
+    {
+      "stock_id": "hide-001",
+      "stock_sha256": "0fc323f351743d0a1f635042d038951bcb199fc43673105ca588dfbc3c2bc9fb",
+      "offer_ids": [
+        "synthetic/hide-001"
+      ]
+    }
+  ]
+}
