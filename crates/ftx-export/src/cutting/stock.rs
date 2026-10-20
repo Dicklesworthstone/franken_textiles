@@ -4,7 +4,7 @@
 //! Placement is a bounded lattice heuristic, not an optimality or infeasibility proof. Accepted
 //! paths use full polygon containment/clearance shared with roll nesting. No partial plan escapes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, Vec2, det, polyline::signed_area, receipt::sha256_hex};
 use ftx_pattern::{
@@ -21,6 +21,9 @@ use super::{
     grain_reversal, half_turn, place, positive, relocate,
 };
 use crate::{Ctx, ExportOptions, layout::rotation};
+
+/// Source-bearing finite-stock placement regions.
+pub mod zones;
 
 /// One individually inventoried hide, remnant or finite sheet, in its own measured mm frame.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,6 +45,9 @@ pub struct Stock {
     /// Stable receipt chain explaining the occupied regions. Required when `occupied_mm` is nonempty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occupied_basis: Option<String>,
+    /// Optional source-bearing placement regions. Names do not infer mechanical or quality values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<zones::Zone>,
     /// Directed preferred cutting axis; for a hide this is authored, never inferred as a weave.
     pub grain_mm: [Vec2; 2],
     /// Evidence/rationale for actual stock geometry, exclusions, units and cutting axis.
@@ -69,6 +75,13 @@ pub struct Options {
     /// Empty by default. This is an explicit nap/print-direction decision, not a fiber-name inference.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grain_reversal_materials: Vec<String>,
+    /// Source-piece ID -> required named region. Applies to every expanded instance and copy.
+    /// Unmapped pieces remain unrestricted; constrained pieces are allocated first.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub piece_zones: BTreeMap<String, String>,
+    /// Minimum Euclidean clearance to a required region boundary, independent of stock/defect margin.
+    #[serde(default, skip_serializing_if = "zones::is_zero")]
+    pub zone_margin_mm: f64,
 }
 
 /// Finite stock allocation. Stock order is an explicit first-fit preference.
@@ -98,6 +111,9 @@ pub struct Marker {
     pub defects_mm: Vec<Vec<Vec2>>,
     /// Prior accepted cuts transformed into the same planning frame.
     pub occupied_mm: Vec<Vec<Vec2>>,
+    /// Original source-bearing regions transformed into this marker frame; not cutting paths.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<zones::Zone>,
     /// Whole polygon area including defects, in m²; not roll width times guessed length.
     pub gross_area_m2: f64,
     /// Polygon area less disjoint defects; margins and kerf are NOT subtracted.
@@ -238,6 +254,7 @@ fn marker(stock: &Stock, material: ResolvedMaterial, work: &mut Work) -> Result<
         occupied.push(path);
     }
     let available = positive("available finite-stock area", usable - consumed)?;
+    let zones = zones::compile(stock, &r, &outline, work)?;
     let mass = material
         .material()
         .require("areal_density", "kg/m2", material.allows_estimates())
@@ -250,6 +267,7 @@ fn marker(stock: &Stock, material: ResolvedMaterial, work: &mut Work) -> Result<
         outline_mm: outline,
         defects_mm: defects,
         occupied_mm: occupied,
+        zones,
         gross_area_m2: gross,
         defect_free_area_m2: usable,
         available_area_m2: available,
@@ -282,7 +300,7 @@ impl Request {
             ));
         }
         positive("finite-stock search step", o.step_mm)?;
-        for v in [o.gap_mm, o.boundary_margin_mm]
+        for v in [o.gap_mm, o.boundary_margin_mm, o.zone_margin_mm]
             .into_iter()
             .chain(o.seam_allowance_mm)
         {
@@ -296,15 +314,16 @@ impl Request {
             s.defects_mm
                 .iter()
                 .chain(&s.occupied_mm)
+                .chain(s.zones.iter().map(|z| &z.outline_mm))
                 .try_fold(n.checked_add(s.outline_mm.len())?, |n, p| {
                     n.checked_add(p.len())
                 })
         });
         if vertices.is_none_or(|n| n > 32768)
-            || self
-                .stocks
-                .iter()
-                .any(|s| s.defects_mm.len() > 256 || s.occupied_mm.len() > 4096)
+            || self.stocks.iter().any(|s| {
+                s.defects_mm.len() > 256 || s.occupied_mm.len() > 4096 || s.zones.len() > 256
+            })
+            || o.piece_zones.len() > 4096
         {
             return Err(budget());
         }
@@ -325,6 +344,7 @@ impl Request {
         {
             return Err(budget());
         }
+        zones::validate_assignments(o, pieces)?;
         if raw["fabric"].get("layers").is_some() {
             return Err(bad(
                 "implicit layers need explicit cut pieces; finite stock cannot invent them",
@@ -366,6 +386,19 @@ impl Request {
             }
             materials.push(m);
         }
+        for (i, piece) in pieces.iter().enumerate() {
+            if let Some(zone) = piece["id"].as_str().and_then(|id| o.piece_zones.get(id))
+                && !markers.iter().any(|stock| {
+                    same_material(&stock.material, &materials[i])
+                        && stock.zones.iter().any(|z| z.id == *zone)
+                })
+            {
+                return Err(bad(format!(
+                    "no stock matches piece {} required zone {zone} and material identity",
+                    piece["id"]
+                )));
+            }
+        }
         let reversible = grain_reversal(&o.grain_reversal_materials, &materials)?;
         let shapes = pattern
             .instances
@@ -402,15 +435,17 @@ impl Request {
             .flat_map(|i| (0..o.copies).map(move |c| (i, c)))
             .collect();
         order.sort_by(|&(a, ac), &(b, bc)| {
-            shapes[b]
-                .area
-                .total_cmp(&shapes[a].area)
+            o.piece_zones
+                .contains_key(&shapes[b].geom.pid)
+                .cmp(&o.piece_zones.contains_key(&shapes[a].geom.pid))
+                .then_with(|| shapes[b].area.total_cmp(&shapes[a].area))
                 .then_with(|| shapes[a].geom.iid.cmp(&shapes[b].geom.iid))
                 .then(ac.cmp(&bc))
         });
         for (index, copy) in order {
             let s = &shapes[index];
             let m = &materials[pattern.instances[index].piece_index];
+            let required_zone = o.piece_zones.get(&s.geom.pid).map(String::as_str);
             let cutter = place(s, copy, Vec2::ZERO)?;
             let turned = if reversible.contains(m.sha256()) {
                 checked(work.spend(cutter.cut_mm.len()))?;
@@ -423,11 +458,11 @@ impl Request {
                 if !same_material(&marker.material, m) {
                     continue;
                 }
-                let mut candidate = locate(&cutter, s.area, marker, o, &mut work)?;
+                let mut candidate = locate(&cutter, s.area, marker, required_zone, o, &mut work)?;
                 if candidate.is_none()
                     && let Some(turned) = &turned
                 {
-                    candidate = locate(turned, s.area, marker, o, &mut work)?;
+                    candidate = locate(turned, s.area, marker, required_zone, o, &mut work)?;
                 }
                 if let Some(p) = candidate {
                     marker.external_cut_area_m2 += s.area;
@@ -480,8 +515,16 @@ impl Request {
             hardware_execution_authorized: false,
             limitations: vec![
                 "Finite single-ply stock; authored defects/axis and frozen material identity, not a hide scan or measured property acquisition.",
-                "Largest-exterior-area-first pieces, stock input order, forward then explicitly permitted half-turn, bottom-left lattice; no reflection or crossgrain rotation. Not globally optimal.",
-                "Full polygon checks on emitted geometry; no reuse of internal holes, no shrinkage, pattern-repeat matching, variable-quality zones or physical process qualification.",
+                if o.piece_zones.is_empty() {
+                    "Largest-exterior-area-first pieces, stock input order, forward then explicitly permitted half-turn, bottom-left lattice; no reflection or crossgrain rotation. Not globally optimal."
+                } else {
+                    "Region-constrained pieces first, then largest exterior area, stock input order and bounded lattice. Grain permissions remain material-specific. No optimality claim."
+                },
+                if self.stocks.iter().all(|s| s.zones.is_empty()) {
+                    "Full polygon checks on emitted geometry; no reuse of internal holes, no shrinkage, pattern-repeat matching, variable-quality zones or physical process qualification."
+                } else {
+                    "Named regions constrain complete cut outlines only; source declarations do not infer local material laws or certify quality. Defects and prior cuts remain excluded."
+                },
                 "Residual requests preserve prior exterior cuts as occupied geometry; they do not reconstruct arbitrary free-space polygons, price offcuts, or authorize hardware.",
             ],
         })
@@ -499,17 +542,33 @@ fn locate(
     shape: &CutPlacement,
     area: f64,
     stock: &Marker,
+    required_zone: Option<&str>,
     o: &Options,
     work: &mut Work,
 ) -> Result<Option<CutPlacement>, Refusal> {
+    let zone = match required_zone {
+        Some(id) => match stock.zones.iter().find(|z| z.id == id) {
+            Some(zone) => Some(zone),
+            None => return Ok(None),
+        },
+        None => None,
+    };
     let b = bbox(&stock.outline_mm)?;
     let w = shape.bounds_mm[2] - shape.bounds_mm[0];
     let h = shape.bounds_mm[3] - shape.bounds_mm[1];
     // Padding affects candidate construction only; no geometry or requested clearance is clamped.
     let guard = 128.0 * f64::EPSILON * (1.0 + b.iter().map(|v| v.abs()).fold(0.0, f64::max));
     let margin = o.boundary_margin_mm + guard;
-    let lo = Vec2::new(b[0] + margin, b[1] + margin);
-    let hi = Vec2::new(b[2] - margin - w, b[3] - margin - h);
+    let mut lo = Vec2::new(b[0] + margin, b[1] + margin);
+    let mut hi = Vec2::new(b[2] - margin - w, b[3] - margin - h);
+    if let Some(zone) = zone {
+        let z = bbox(&zone.outline_mm)?;
+        let margin = o.zone_margin_mm + guard;
+        lo.x = lo.x.max(z[0] + margin);
+        lo.y = lo.y.max(z[1] + margin);
+        hi.x = hi.x.min(z[2] - margin - w);
+        hi.y = hi.y.min(z[3] - margin - h);
+    }
     if hi.x < lo.x || hi.y < lo.y {
         return Ok(None);
     }
@@ -539,6 +598,11 @@ fn locate(
                 o.boundary_margin_mm,
                 work,
             ))? {
+                continue;
+            }
+            if let Some(zone) = zone
+                && !checked(enclosed(&ring, &zone.outline_mm, o.zone_margin_mm, work))?
+            {
                 continue;
             }
             let mut free = true;
