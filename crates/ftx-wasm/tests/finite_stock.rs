@@ -104,3 +104,53 @@ fn source_regions_flow_through_file_free_plans_previews_and_residuals() {
     assert!(manufacturing::stock_svg(PATTERN, &escaped.to_string(), 0).is_err());
     assert!(manufacturing::stock_residual(PATTERN, &escaped.to_string()).is_err());
 }
+
+#[test]
+fn file_free_search_recovers_inventory_and_replays_only_accepted_cuts() {
+    let mut p: Value = serde_json::from_str(PATTERN).unwrap();
+    p["pieces"][1]["vertices"] = json!({"a":[0,0],"b":[30,0],"c":[30,10],"d":[0,10]});
+    let mut r: Value = serde_json::from_str(STOCK).unwrap();
+    r["stocks"][0]["defects_mm"] = json!([]);
+    r["stocks"][0]["outline_mm"] = json!([[0, 0], [35, 0], [35, 25], [0, 25]]);
+    let mut second = r["stocks"][0].clone();
+    second["id"] = json!("second");
+    second["outline_mm"] = json!([[0, 0], [25, 0], [25, 25], [0, 25]]);
+    r["stocks"].as_array_mut().unwrap().push(second);
+    r["options"]["step_mm"] = json!(10);
+    let pattern = p.to_string();
+    assert!(manufacturing::stock_plan(&pattern, &r.to_string()).is_err());
+    r["options"]["backtrack_limit"] = json!(20);
+    let request = r.to_string();
+    let native: Request = serde_json::from_str(&request).unwrap();
+    let native = native
+        .build(&Pattern::from_json(&pattern).unwrap())
+        .unwrap();
+    let report = manufacturing::stock_plan(&pattern, &request).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&report).unwrap(),
+        serde_json::to_value(&native).unwrap()
+    );
+    assert_eq!(
+        manufacturing::stock_svg(&pattern, &request, 0).unwrap(),
+        stock_svg(&native, 0).unwrap()
+    );
+    let residual = manufacturing::stock_residual(&pattern, &request).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&residual).unwrap(),
+        serde_json::to_value(native.residual_request().unwrap()).unwrap()
+    );
+    assert_eq!(
+        report,
+        manufacturing::stock_plan(&pattern, &serde_json::to_string(native.request()).unwrap())
+            .unwrap()
+    );
+    r["options"]["backtrack_limit"] = json!(1);
+    assert_eq!(
+        manufacturing::stock_plan(&pattern, &r.to_string())
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+    assert!(manufacturing::stock_svg(&pattern, &r.to_string(), 0).is_err());
+    assert!(manufacturing::stock_residual(&pattern, &r.to_string()).is_err());
+}

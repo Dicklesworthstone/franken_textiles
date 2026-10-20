@@ -201,3 +201,44 @@ fn both_binaries_enforce_regions_and_export_reusable_source_preserving_inventory
         );
     }
 }
+
+#[test]
+fn both_binaries_reconsider_stock_and_never_publish_budget_exhausted_previews() {
+    let mut p: Value = serde_json::from_str(PATTERN).unwrap();
+    p["pieces"][1]["vertices"] = json!({"a":[0,0],"b":[30,0],"c":[30,10],"d":[0,10]});
+    let mut r: Value = serde_json::from_str(STOCK).unwrap();
+    r["stocks"][0]["defects_mm"] = json!([]);
+    r["stocks"][0]["outline_mm"] = json!([[0, 0], [35, 0], [35, 25], [0, 25]]);
+    let mut second = r["stocks"][0].clone();
+    second["id"] = json!("second");
+    second["outline_mm"] = json!([[0, 0], [25, 0], [25, 25], [0, 25]]);
+    r["stocks"].as_array_mut().unwrap().push(second);
+    r["options"]["step_mm"] = json!(10);
+    for main in [false, true] {
+        let dir = workspace();
+        fs::write(dir.join("pattern.json"), p.to_string()).unwrap();
+        fs::write(dir.join("stock.json"), r.to_string()).unwrap();
+        assert!(!invoke(main, &dir, "stock-plan", &[]).status.success());
+        let mut search = r.clone();
+        search["options"]["backtrack_limit"] = json!(20);
+        fs::write(dir.join("stock.json"), search.to_string()).unwrap();
+        let expected: Request = serde_json::from_value(search.clone()).unwrap();
+        let expected = expected.build(&Pattern::new(p.clone())).unwrap();
+        let report = success(&invoke(main, &dir, "stock-plan", &[]));
+        assert_eq!(report, serde_json::to_value(&expected).unwrap());
+        assert!(report["backtracks_used"].as_u64().unwrap() > 0);
+        assert_eq!(
+            success(&invoke(main, &dir, "stock-residual", &[])),
+            serde_json::to_value(expected.residual_request().unwrap()).unwrap()
+        );
+        search["options"]["backtrack_limit"] = json!(1);
+        fs::write(dir.join("stock.json"), search.to_string()).unwrap();
+        assert!(
+            !invoke(main, &dir, "stock-svg", &["0", "exhausted.svg"])
+                .status
+                .success()
+        );
+        assert!(!dir.join("exhausted.svg").exists());
+        assert!(!invoke(main, &dir, "stock-residual", &[]).status.success());
+    }
+}

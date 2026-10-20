@@ -22,6 +22,7 @@ use super::{
 };
 use crate::{Ctx, ExportOptions, layout::rotation};
 
+mod search;
 /// Source-bearing finite-stock placement regions.
 pub mod zones;
 
@@ -58,7 +59,7 @@ pub struct Stock {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Options {
-    /// Complete garment copies; pattern cut quantities are expanded exactly once.
+    /// Complete garment copies; the pattern's cut quantities are expanded exactly once.
     pub copies: usize,
     /// Minimum Euclidean distance between external cut paths, in mm.
     pub gap_mm: f64,
@@ -82,6 +83,11 @@ pub struct Options {
     /// Minimum Euclidean clearance to a required region boundary, independent of stock/defect margin.
     #[serde(default, skip_serializing_if = "zones::is_zero")]
     pub zone_margin_mm: f64,
+    /// Opt-in reconsideration of earlier placements after a later piece cannot fit.
+    /// Limits undone decisions to 1..=100,000; all trials still share `work_limit`.
+    /// Omission preserves the original first-fit path and serialized request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backtrack_limit: Option<usize>,
 }
 
 /// Finite stock allocation. Stock order is an explicit first-fit preference.
@@ -145,6 +151,8 @@ pub struct Plan {
     external_cut_area_m2: f64,
     work_used: usize,
     candidates: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backtracks_used: Option<usize>,
     optimality_claim: bool,
     hardware_execution_authorized: bool,
     limitations: Vec<&'static str>,
@@ -300,6 +308,11 @@ impl Request {
             ));
         }
         positive("finite-stock search step", o.step_mm)?;
+        if o.backtrack_limit
+            .is_some_and(|n| !(1..=100_000).contains(&n))
+        {
+            return Err(bad("backtrack_limit must be in 1..100000 when supplied"));
+        }
         for v in [o.gap_mm, o.boundary_margin_mm, o.zone_margin_mm]
             .into_iter()
             .chain(o.seam_allowance_mm)
@@ -442,42 +455,62 @@ impl Request {
                 .then_with(|| shapes[a].geom.iid.cmp(&shapes[b].geom.iid))
                 .then(ac.cmp(&bc))
         });
-        for (index, copy) in order {
-            let s = &shapes[index];
-            let m = &materials[pattern.instances[index].piece_index];
-            let required_zone = o.piece_zones.get(&s.geom.pid).map(String::as_str);
-            let cutter = place(s, copy, Vec2::ZERO)?;
-            let turned = if reversible.contains(m.sha256()) {
-                checked(work.spend(cutter.cut_mm.len()))?;
-                Some(half_turn(&cutter).ok_or_else(|| bad("grain reversal overflows"))?)
-            } else {
-                None
-            };
-            let mut placed = false;
-            for marker in &mut markers {
-                if !same_material(&marker.material, m) {
-                    continue;
+        let backtracks_used = if let Some(limit) = o.backtrack_limit {
+            let tasks = order
+                .iter()
+                .map(|&(index, copy)| {
+                    let shape = &shapes[index];
+                    let material = &materials[pattern.instances[index].piece_index];
+                    search::Task {
+                        shape,
+                        material,
+                        copy,
+                        zone: o.piece_zones.get(&shape.geom.pid).map(String::as_str),
+                        reversible: reversible.contains(material.sha256()),
+                    }
+                })
+                .collect::<Vec<_>>();
+            Some(search::allocate(&tasks, &mut markers, o, limit, &mut work)?)
+        } else {
+            for (index, copy) in order {
+                let s = &shapes[index];
+                let m = &materials[pattern.instances[index].piece_index];
+                let required_zone = o.piece_zones.get(&s.geom.pid).map(String::as_str);
+                let cutter = place(s, copy, Vec2::ZERO)?;
+                let turned = if reversible.contains(m.sha256()) {
+                    checked(work.spend(cutter.cut_mm.len()))?;
+                    Some(half_turn(&cutter).ok_or_else(|| bad("grain reversal overflows"))?)
+                } else {
+                    None
+                };
+                let mut placed = false;
+                for marker in &mut markers {
+                    if !same_material(&marker.material, m) {
+                        continue;
+                    }
+                    let mut candidate =
+                        locate(&cutter, s.area, marker, required_zone, o, &mut work)?;
+                    if candidate.is_none()
+                        && let Some(turned) = &turned
+                    {
+                        candidate = locate(turned, s.area, marker, required_zone, o, &mut work)?;
+                    }
+                    if let Some(p) = candidate {
+                        marker.external_cut_area_m2 += s.area;
+                        marker.placements.push(p);
+                        placed = true;
+                        break;
+                    }
                 }
-                let mut candidate = locate(&cutter, s.area, marker, required_zone, o, &mut work)?;
-                if candidate.is_none()
-                    && let Some(turned) = &turned
-                {
-                    candidate = locate(turned, s.area, marker, required_zone, o, &mut work)?;
-                }
-                if let Some(p) = candidate {
-                    marker.external_cut_area_m2 += s.area;
-                    marker.placements.push(p);
-                    placed = true;
-                    break;
+                if !placed {
+                    return Err(bad(format!(
+                        "no checked finite-stock placement for {} copy {copy}; refine step_mm, reorder stock or supply more matching stock (not a proof of infeasibility)",
+                        s.geom.iid
+                    )));
                 }
             }
-            if !placed {
-                return Err(bad(format!(
-                    "no checked finite-stock placement for {} copy {copy}; refine step_mm, reorder stock or supply more matching stock (not a proof of infeasibility)",
-                    s.geom.iid
-                )));
-            }
-        }
+            None
+        };
         let mut used = 0;
         let mut gross = 0.0;
         let mut cut = 0.0;
@@ -511,11 +544,14 @@ impl Request {
             external_cut_area_m2: cut,
             work_used: work.used,
             candidates: work.candidates,
+            backtracks_used,
             optimality_claim: false,
             hardware_execution_authorized: false,
             limitations: vec![
                 "Finite single-ply stock; authored defects/axis and frozen material identity, not a hide scan or measured property acquisition.",
-                if o.piece_zones.is_empty() {
+                if o.backtrack_limit.is_some() {
+                    "Bounded depth-first reconsideration of stock, lattice and explicitly permitted half-turn choices; first complete checked layout, not a minimum-waste or globally optimal solution."
+                } else if o.piece_zones.is_empty() {
                     "Largest-exterior-area-first pieces, stock input order, forward then explicitly permitted half-turn, bottom-left lattice; no reflection or crossgrain rotation. Not globally optimal."
                 } else {
                     "Region-constrained pieces first, then largest exterior area, stock input order and bounded lattice. Grain permissions remain material-specific. No optimality claim."
@@ -546,6 +582,25 @@ fn locate(
     o: &Options,
     work: &mut Work,
 ) -> Result<Option<CutPlacement>, Refusal> {
+    locate_next(
+        shape,
+        area,
+        stock,
+        required_zone,
+        o,
+        work,
+        &mut search::Cursor::default(),
+    )
+}
+fn locate_next(
+    shape: &CutPlacement,
+    area: f64,
+    stock: &Marker,
+    required_zone: Option<&str>,
+    o: &Options,
+    work: &mut Work,
+    cursor: &mut search::Cursor,
+) -> Result<Option<CutPlacement>, Refusal> {
     let zone = match required_zone {
         Some(id) => match stock.zones.iter().find(|z| z.id == id) {
             Some(zone) => Some(zone),
@@ -574,13 +629,19 @@ fn locate(
     }
     let nx = axis_steps(lo.x, hi.x, o.step_mm, work.limit)?;
     let ny = axis_steps(lo.y, hi.y, o.step_mm, work.limit)?;
-    for iy in 0..=ny {
+    let start = *cursor;
+    for iy in start.y..=ny {
         let y = if iy == ny {
             hi.y
         } else {
             lo.y + iy as f64 * o.step_mm
         };
-        for ix in 0..=nx {
+        for ix in (if iy == start.y { start.x } else { 0 })..=nx {
+            *cursor = if ix == nx {
+                search::Cursor { x: 0, y: iy + 1 }
+            } else {
+                search::Cursor { x: ix + 1, y: iy }
+            };
             checked(work.tick())?;
             work.candidates += 1;
             checked(work.spend(shape.cut_mm.len()))?;
