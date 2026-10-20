@@ -1988,8 +1988,8 @@ An invalid FIT history refuses before identification. A held-out CHECK-domain fa
 same FIT candidate and diagnostics, publishes no material, and cannot change model selection or
 consume its FIT-only work allowance. Fixed and searched directional spectra use this same rule.
 
-The next concrete integration increments use the same authorities: qualify actual finite supplier
-capacity against complete rounded cut orders (`ftx-pq1`/`ftx-tm6`), and carry admitted plastic-work heat
+The following integration increments use the same authorities: qualify actual finite supplier
+capacity against complete rounded cut orders (§25.29, `ftx-pq1`/`ftx-tm6`), and carry admitted plastic-work heat
 through changing covered/exposed cloth partitions (`ftx-ps1`/`ftx-tmb`) without counting source energy
 twice or turning remap residual into heat. Neither requires a brand-specific physics branch.
 Matched conditioned linen, treated cowhide, performance-knit and fill characterization, measured
@@ -2022,6 +2022,42 @@ offline adapter tests additionally cover source drift and malformed observations
 coverage, observed stock-depletion/replenishment histories, matched material characterization and
 empirical garment/process acceptance remain open. Quotes neither reserve inventory nor establish
 delivery, landed cost or worldwide price distributions.
+
+---
+
+### 25.30 Material-qualified deformation heat through moving coverage
+
+**Covered layers and exposed cloth (`ftx-ch1`, supports `ftx-ps1`/`ftx-tmb`).** An optional
+`motion.transient_coverage.plastic_dissipation_heat: "uniform_reference_thickness"` consumes the
+same source-qualified material conversion fractions and accepted permanent-work increments as
+the independent-sheet history. Each retained triangle's nonnegative joules are partitioned over
+its covered and exposed reference area, then through its own layer depth. This preserves distinct
+layer capacities, heats adiabatic exposed cloth, and supplies no heat to bare body. The existing
+bounded enthalpy kernel handles temperature-dependent capacity and refuses unsupported domains.
+
+Initial drape work and rejected solver trials supply no heat. Mechanical work is captured once
+when either or both histories request it; the two histories remain separate model domains, with
+separate energy totals. Conversion evidence, exact material/law identities and temperature limits
+are retained. Explicit zero conversion is supported; missing evidence refuses only the affected
+thermal history. No material family, brand, empirical conversion value or thermal feedback is
+inferred.
+
+Reference enthalpy survives cover/expose/re-cover remapping. Physical storage change equals net
+boundary energy plus supplied source heat, with allocation and inversion residuals reported;
+remap residual is separate. A fully covered source no longer requests nonexistent exposed history
+when actual overlap falls short only within the existing allocation tolerance. Covered donor
+weights and reported area/enthalpy residuals remain unchanged; larger gaps and empty stencils refuse.
+Native/WASM scenario reports and browser comparison expose the same
+source receipts, per-step energy, fields and refusals. The comparator admits coverage heat only
+when its accepted-work history and exact frozen source evidence reconcile. Heating work budgets
+include every layer cell and body face; unsupported work leaves no partial thermal result.
+
+Independent synthetic enthalpy tests cover variable heat capacity, layer/reference-area allocation,
+moving exposure, exterior exchange and invalid-state rollback. The actual accepted-body native
+workflow checks unchanged mechanical motion with conversion-only temperature changes, coverage-only
+capture and preserved mechanics on missing conversion evidence. These validate software coupling;
+matched measured conversion laws, held-out thermal histories, moisture physiology and physical
+garment acceptance remain open. See [material-scenario-studies.md](docs/material-scenario-studies.md).
 
 ---
 

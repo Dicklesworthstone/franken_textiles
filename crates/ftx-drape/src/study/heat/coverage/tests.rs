@@ -78,6 +78,7 @@ fn history() -> (History, Vec<Vec3>) {
         bare_boundaries: None,
         exposed_boundaries: vec![Some(exposed); 4],
         exposed_exterior_exchange: Some(vec![Some(exterior); 4]),
+        plastic_dissipation_heat: None,
         max_step_s: 0.25,
         max_cell_steps: 1000,
         max_geometry_operations: 100_000,
@@ -108,6 +109,7 @@ fn history() -> (History, Vec<Vec3>) {
         absolute_step_error_j: 0.,
         trace: Vec::new(),
         final_field: Value::Null,
+        plastic: None,
     };
     (history, cloth)
 }
@@ -118,7 +120,7 @@ fn declared_exterior_survives_full_partial_full_partial_coverage_with_heat_intac
     for (i, offset) in [0., 0.5, 0., 0.5].into_iter().enumerate() {
         let previous = [history.exposed_convective_j, history.exposed_radiative_j];
         history
-            .advance(&cloth, &body(offset), (i + 1) as f64 * 0.5, i, i)
+            .advance(&cloth, &body(offset), (i + 1) as f64 * 0.5, i, i, None)
             .unwrap();
         let exchange = &history.final_field["exposed_exterior_exchange"];
         let trace = &history.trace[i]["exposed_exterior_exchange"];

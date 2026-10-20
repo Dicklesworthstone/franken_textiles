@@ -69,6 +69,12 @@ extrema. `motion_required` exposes whether the comparison policy requires moveme
 for transient comparisons. Required motion/history failures never borrow initial static outputs;
 existing static metric names and default consumer requirements keep their original meaning.
 See `docs/material-scenario-studies.md`; geometric settledness is not stress equilibrium or fit.
+Opted-in plastic work is admitted separately for independent-sheet and covered/exposed histories.
+Each requires the exact bound material conversion observation, accepted per-triangle cumulative
+work, excluded initial dissipation and complete source-energy accounting at every sample. Coverage
+uses physical storage, never remap residual, in the balance. Conversion protocols participate only
+when that thermal domain is consumed. A refusal preserves independent domain and manufacturing
+outputs; neither a boundary total nor the other thermal model can substitute for supplied heat.
 
 **Text and numbers** (`text.rs`, §2). `fnum` (fixed-point, ties to even on the exact binary value, trailing
 zeros stripped, `-0` → `0`), `ascii_text` (NFKD, `×` → `x`, `— – ·` → `-`, code points 32..126 kept),

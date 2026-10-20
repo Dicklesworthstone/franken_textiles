@@ -266,8 +266,14 @@ fn computed_scenario_objectives_use_actual_heat_and_strain_without_weakening_adm
         output["simulations"][0]["evaluation"]["result"]["drape"]["settled"],
         false
     );
-    assert_eq!(
-        output["simulations"][0]["evaluation"]["result"]["drape"]["gating"],
-        json!([])
+    let drape = &output["simulations"][0]["evaluation"]["result"]["drape"];
+    assert_eq!(drape["numerical"]["settled"], false);
+    let gating = drape["gating"].as_array().unwrap();
+    assert_eq!(gating.len(), 1);
+    assert!(
+        gating[0]
+            .as_str()
+            .unwrap()
+            .contains("not numerically settled")
     );
 }

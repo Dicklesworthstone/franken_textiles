@@ -181,11 +181,13 @@ Optional <code>motion.transient_surface</code> and <code>motion.transient_covera
 They require sourced heat capacity plus their own initial temperatures, interval films and budgets. Coverage also requires exact body/layer assignments
 and explicit exposed-cloth conditions. The results separately report physical stored heat, signed boundary energy and remap error;
 these histories are not interchangeable with each other or steady power snapshots. A heat refusal preserves successful mechanics.
+Either thermal history can request <code>plastic_dissipation_heat: "uniform_reference_thickness"</code> when its materials supply
+qualified conversion observations. Accepted work follows the material through covered and exposed regions; initial forming work and bare body are excluded.
 Motion heat objectives use <code>transient_surface_</code> or <code>transient_coverage_</code> with <code>inside_energy_j</code>,
 <code>net_boundary_energy_j</code>, <code>final_min_temperature_c</code> or <code>final_max_temperature_c</code>.
 Use <code>min_sample_temperature_c</code> or <code>max_sample_temperature_c</code> for extrema across the initial state and retained sample endpoints;
 these differ from the final endpoint temperature and are not continuous-time bounds.
-Select minimize or maximize explicitly: signed energy can reverse with the environment, and net energy is stored-heat change, not a warmth score.
+Select minimize or maximize explicitly: signed energy can reverse with the environment. Internal sources and boundary exchange contribute separately to stored heat.
 No two-way thermomechanical, body self-intersection, seated/squat or empirical ride-up claim is made.</p>
 <p class="note">Scenario comparisons require a settled initial drape with clear gating. Static heat, strain and simulated-cloth-mass objectives describe
 that initial frame. Motion objectives additionally require complete, converged continuation; the final moving state need not be at rest.

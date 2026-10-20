@@ -1748,7 +1748,10 @@ mod self_contact_tests {
         let before = format!("{s:?}");
         let error = s.static_solve().unwrap_err();
         assert_eq!(error.code, RefusalCode::NotConverged);
-        assert!(error.message.contains("1 failed line searches"), "{error:?}");
+        assert!(
+            error.message.contains("1 failed line searches"),
+            "{error:?}"
+        );
         assert_eq!(format!("{s:?}"), before);
     }
 

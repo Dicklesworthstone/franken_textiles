@@ -57,7 +57,12 @@ impl DryThermalModel {
         Ok(step)
     }
 
-    fn cell_heat(&self, cell: usize, old: f64, next: f64) -> Result<f64, Refusal> {
+    pub(in crate::thermal) fn cell_heat(
+        &self,
+        cell: usize,
+        old: f64,
+        next: f64,
+    ) -> Result<f64, Refusal> {
         match &self.variable {
             Some(variable) => variable.heat(cell, old, next),
             None => {
@@ -78,7 +83,11 @@ impl DryThermalModel {
         }
     }
 
-    fn prepare_heat(&self, old: &[f64], heat: &[f64]) -> Result<Option<(Vec<f64>, f64)>, Refusal> {
+    pub(in crate::thermal) fn prepare_heat(
+        &self,
+        old: &[f64],
+        heat: &[f64],
+    ) -> Result<Option<(Vec<f64>, f64)>, Refusal> {
         if old.len() != self.cells() || heat.len() != self.cells() {
             return Err(invalid(
                 "internal heat needs one energy and temperature per cell",

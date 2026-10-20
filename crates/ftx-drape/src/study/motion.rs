@@ -231,9 +231,16 @@ fn evaluate_path(
         .transient_surface
         .as_ref()
         .map(|policy| policy.start(run, &request.keyframes, heat_budget));
+    let mut coverage_heat = request
+        .transient_coverage
+        .as_ref()
+        .map(|policy| policy.start(run, body.collision, request.keyframes.len(), heat_budget));
     let capture_dissipation = surface_heat
         .as_ref()
-        .is_some_and(|h| h.as_ref().is_ok_and(|h| h.needs_dissipation()));
+        .is_some_and(|h| h.as_ref().is_ok_and(|h| h.needs_dissipation()))
+        || coverage_heat
+            .as_ref()
+            .is_some_and(|h| h.as_ref().is_ok_and(|h| h.needs_dissipation()));
     let history_scalars = if capture_dissipation {
         run.scene.solver.model.membranes.len()
     } else {
@@ -253,10 +260,6 @@ fn evaluate_path(
         initial_sample["membrane_plastic_dissipation_j"] =
             json!(run.scene.solver.membrane_plastic_dissipation_j()?);
     }
-    let mut coverage_heat = request
-        .transient_coverage
-        .as_ref()
-        .map(|policy| policy.start(run, body.collision, request.keyframes.len(), heat_budget));
     let faces: Vec<_> = run
         .scene
         .solver
@@ -341,8 +344,14 @@ fn evaluate_path(
                 surface_heat = Some(Err(refusal));
             }
             if let Some(Ok(history)) = &mut coverage_heat
-                && let Err(refusal) =
-                    history.advance(&sample.cloth, &sample.body, time, i, samples.len())
+                && let Err(refusal) = history.advance(
+                    &sample.cloth,
+                    &sample.body,
+                    time,
+                    i,
+                    samples.len(),
+                    sample.membrane_plastic_dissipation_j.as_deref(),
+                )
             {
                 coverage_heat = Some(Err(refusal));
             }

@@ -22,11 +22,36 @@ use super::{
     material_side,
 };
 use crate::thermal::{
+    DryThermalModel,
     exterior::ExteriorFlux,
     steady::exterior::Exterior,
     surface::projection::{self, Projection, Request},
 };
 use projection::clip::{Work, area, bounds_overlap, intersection};
+
+// The supplied model has reference-area-scaled capacities, so both arguments and returned
+// requested/realized energies are joules. Inversion and source-domain checks stay in one kernel.
+fn preload(
+    model: &DryThermalModel,
+    old: &[f64],
+    heat: &[f64],
+) -> Result<(Vec<f64>, f64, f64), Refusal> {
+    let Some((heated, requested)) = model.prepare_heat(old, heat)? else {
+        return Ok((old.to_vec(), 0., 0.));
+    };
+    let realized = old
+        .iter()
+        .zip(&heated)
+        .enumerate()
+        .map(|(cell, (&before, &after))| model.cell_heat(cell, before, after))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .sum::<f64>();
+    if !realized.is_finite() {
+        return Err(invalid("coverage internal enthalpy overflows"));
+    }
+    Ok((heated, requested, realized))
+}
 
 /// Canonical inside/outside faces of uncovered cloth, in retained source-triangle order.
 /// Optional environments replace the outside films only on currently exposed fractions.
@@ -119,8 +144,36 @@ pub struct Step {
     exposed_stored_change_j: f64,
     exposed_balance_error_j: f64,
     exposed_exterior_exchange: Option<ExposedExteriorExchange>,
+    internal_heat: Option<InternalHeat>,
+}
+
+/// A prescribed source apportioned over the complete retained material domain, in joules.
+/// Covered and exposed fractions are disjoint; bare body receives no internal source.
+#[derive(Clone, Debug, Serialize)]
+pub struct InternalHeat {
+    /// Exact sum of requested source-triangle energies, independent of current area or coverage.
+    pub supplied_heat_j: f64,
+    /// Sum allocated to material portions in covered series columns.
+    pub covered_heat_j: f64,
+    /// Sum allocated to the remaining, optionally adiabatic exposed cloth.
+    pub exposed_heat_j: f64,
+    /// Covered plus exposed allocation minus supplied energy; retained in the overall residual.
+    pub allocation_residual_j: f64,
 }
 impl Step {
+    /// Present after a nonzero source-bearing step; omitted steps retain the original output.
+    #[must_use]
+    pub fn internal_heat(&self) -> Option<&InternalHeat> {
+        self.internal_heat.as_ref()
+    }
+
+    /// Requested internal energy over all source material, excluding boundary exchange, J.
+    #[must_use]
+    pub fn supplied_heat_j(&self) -> f64 {
+        self.internal_heat
+            .as_ref()
+            .map_or(0., |q| q.supplied_heat_j)
+    }
     /// Existing coverage fields, including boundary heat and reference-mass storage change.
     #[must_use]
     pub fn heat(&self) -> &CoverageStep {
@@ -234,7 +287,12 @@ impl Step {
     /// Covered plus uncovered material energy-balance residual, J.
     #[must_use]
     pub fn balance_error_j(&self) -> f64 {
-        self.heat.balance_error_j + self.exposed_balance_error_j
+        self.heat.balance_error_j
+            + self.exposed_balance_error_j
+            + self
+                .internal_heat
+                .as_ref()
+                .map_or(0., |q| q.allocation_residual_j)
     }
 }
 
@@ -614,6 +672,7 @@ impl Frame {
             exposed_stored_change_j: 0.,
             exposed_balance_error_j: 0.,
             exposed_exterior_exchange: None,
+            internal_heat: None,
         })
     }
 
@@ -712,6 +771,7 @@ impl Frame {
                 exposed_stored_change_j: 0.,
                 exposed_balance_error_j: 0.,
                 exposed_exterior_exchange: None,
+                internal_heat: None,
             });
         };
         let fractions = self.exposed_fractions();
@@ -802,6 +862,7 @@ impl Frame {
             exposed_stored_change_j: stored,
             exposed_balance_error_j: error,
             exposed_exterior_exchange: exchange,
+            internal_heat: None,
         };
         if step
             .exterior_totals()
@@ -821,6 +882,155 @@ impl Frame {
             ));
         }
         Ok(step)
+    }
+
+    /// Advance boundary exchange with one nonnegative internal energy per retained source triangle.
+    /// Joules are uniform over that triangle's reference area and thickness, then apportioned over
+    /// its disjoint covered and exposed portions. Even adiabatic exposed cloth receives its share.
+    /// Enthalpy preloading uses the same bounded kernel as independent sheet heating and supplies
+    /// the backward-Euler source term; it is not a new elapsed step or a remap. Source qualification
+    /// and its physical origin belong to the caller. The source never heats the bare-body path.
+    ///
+    /// # Errors
+    /// Invalid state/time/boundaries, wrong source count, negative/nonfinite energy, characterized
+    /// temperature-domain violation, failed enthalpy inversion or inconsistent material allocation.
+    /// Failure changes neither the supplied state nor any retained mechanical/thermal history.
+    pub fn advance_with_exchange_and_heat(
+        &self,
+        state: &State,
+        seconds: f64,
+        boundaries: &[Boundary],
+        covered_exterior: Option<ExteriorConditions<'_>>,
+        exposed_conditions: Option<ExposedConditions<'_>>,
+        source_heat_j: &[f64],
+    ) -> Result<Step, Refusal> {
+        self.check(state)?;
+        if source_heat_j.len() != self.cloth_triangle_count()
+            || source_heat_j.iter().any(|q| !q.is_finite() || *q < 0.)
+            || !seconds.is_finite()
+            || seconds <= 0.
+        {
+            return Err(invalid(
+                "coverage heat needs positive time and one finite nonnegative energy per source triangle",
+            ));
+        }
+        let supplied: f64 = source_heat_j.iter().sum();
+        if !supplied.is_finite() {
+            return Err(invalid("coverage source heat overflows"));
+        }
+        if supplied == 0. {
+            return self.advance_with_exchange(
+                state,
+                seconds,
+                boundaries,
+                covered_exterior,
+                exposed_conditions,
+            );
+        }
+        let mut heated = state.clone();
+        let cells = self.coverage.layout.cells_per_layer;
+        let mut covered = Vec::with_capacity(self.coverage.models.len());
+        for (i, region) in self.coverage.layout.regions.iter().enumerate() {
+            // This temporary model measures capacities in J/K rather than J/(m² K): each layer
+            // owns its allocated REFERENCE area, independent of current body or cloth geometry.
+            let capacities: Vec<_> = region
+                .layers
+                .iter()
+                .map(|p| {
+                    self.coverage.source.patches[p.cloth_triangle].reference_area_m2 * p.fraction
+                })
+                .collect();
+            let model = self.coverage.models[i]
+                .with_area_factors(&vec![1.; capacities.len()], &capacities)?;
+            let energy: Vec<_> = region
+                .layers
+                .iter()
+                .flat_map(|p| {
+                    vec![source_heat_j[p.cloth_triangle] * p.fraction / cells as f64; cells]
+                })
+                .collect();
+            let (next, requested, realized) =
+                preload(&model, &state.inner.temperatures[i], &energy)?;
+            heated.inner.temperatures[i] = next;
+            covered.push((requested, realized));
+        }
+        let mut exposed_requested = 0.;
+        let mut exposed_realized = 0.;
+        for (i, fraction) in self.exposed_fractions().into_iter().enumerate() {
+            if fraction <= 0. {
+                continue;
+            }
+            let reference = self.coverage.source.patches[i].reference_area_m2 * fraction;
+            let model = self.exposed_models[i].with_area_factors(&[1.], &[reference])?;
+            let energy = vec![source_heat_j[i] * fraction / model.cells() as f64; model.cells()];
+            let (next, requested, realized) = preload(&model, &state.exposed[i], &energy)?;
+            heated.exposed[i] = next;
+            exposed_requested += requested;
+            exposed_realized += realized;
+        }
+        let covered_requested: f64 = covered.iter().map(|q| q.0).sum();
+        let allocation_error = covered_requested + exposed_requested - supplied;
+        if [
+            covered_requested,
+            exposed_requested,
+            exposed_realized,
+            allocation_error,
+        ]
+        .iter()
+        .any(|v| !v.is_finite())
+            || allocation_error.abs() > 1e-9 * (1. + supplied)
+        {
+            return Err(invalid(
+                "coverage heat does not conserve the complete source material",
+            ));
+        }
+        let mut step = self.advance_with_exchange(
+            &heated,
+            seconds,
+            boundaries,
+            covered_exterior,
+            exposed_conditions,
+        )?;
+        // The ordinary solver measures storage from the temporary preloaded state. Restore the
+        // physical old-to-new change and retain preload roundoff against the requested energy.
+        for (region, (requested, realized)) in step.heat.regions.iter_mut().zip(covered) {
+            region.stored_change_j += realized;
+            step.heat.stored_change_j += realized;
+            step.heat.balance_error_j += realized - requested;
+        }
+        step.exposed_stored_change_j += exposed_realized;
+        step.exposed_balance_error_j += exposed_realized - exposed_requested;
+        step.internal_heat = Some(InternalHeat {
+            supplied_heat_j: supplied,
+            covered_heat_j: covered_requested,
+            exposed_heat_j: exposed_requested,
+            allocation_residual_j: allocation_error,
+        });
+        if !step.stored_change_j().is_finite() || !step.balance_error_j().is_finite() {
+            return Err(invalid("coverage heat accounting overflows"));
+        }
+        Ok(step)
+    }
+
+    /// Every covered/exposed temperature grouped by its unchanged source triangle. This allows
+    /// source-qualified conversions to check all partitions, including hidden inner material.
+    pub(crate) fn source_temperatures(&self, state: &State) -> Result<Vec<Vec<f64>>, Refusal> {
+        self.check(state)?;
+        let mut values = state.exposed.clone();
+        let cells = self.coverage.layout.cells_per_layer;
+        for (region, temperatures) in self
+            .coverage
+            .layout
+            .regions
+            .iter()
+            .zip(&state.inner.temperatures)
+        {
+            for (layer, portion) in region.layers.iter().enumerate() {
+                values[portion.cloth_triangle]
+                    .extend_from_slice(&temperatures[layer * cells..(layer + 1) * cells]);
+            }
+        }
+        Ok(values)
     }
 
     fn exposed_fractions(&self) -> Vec<f64> {
@@ -930,6 +1140,18 @@ impl Frame {
                 let mut from_exposed = p.fraction - received;
                 let tol = 5e-10 * p.fraction + 64. * f64::EPSILON;
                 if from_exposed < 0. && from_exposed.abs() <= tol {
+                    from_exposed = 0.;
+                }
+                // Fully covered old material has no exposed donor. Independent inverse
+                // projections/clipping can leave a positive overlap deficit within the same
+                // allocation tolerance already admitted below. Keep the actual covered weights
+                // and received area: destination/donor allocation and enthalpy residuals must
+                // still report this roundoff. A missing or materially incomplete stencil fails.
+                if old_exposed[p.cloth_triangle] == 0.
+                    && received > 0.
+                    && from_exposed > 0.
+                    && from_exposed <= tol
+                {
                     from_exposed = 0.;
                 }
                 if from_exposed > 0. {
@@ -1383,6 +1605,72 @@ fn mix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn covered_roundoff_allowance_cannot_supply_a_missing_spatial_donor() {
+        use crate::thermal::{DryThermalModel, surface::Patch, surface::projection::Settings};
+        use ftx_pattern::{material_catalog::Selection, materials::Catalog};
+
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/materials/synthetic-variable-thermal.json"
+        )))
+        .unwrap();
+        let selection: Selection = serde_json::from_value(fixture["layers"][0].clone()).unwrap();
+        let model = DryThermalModel::new(
+            vec![Catalog::builtin().unwrap().resolve(&selection).unwrap()],
+            vec![],
+            1,
+        )
+        .unwrap();
+        let source = Surface::new(
+            vec![model],
+            3,
+            vec![Patch {
+                vertices: [0, 1, 2],
+                reference_area_m2: 0.5,
+                column: 0,
+            }],
+        )
+        .unwrap();
+        let body = vec![Vec3::ZERO, Vec3::new(1., 0., 0.), Vec3::new(0., 1., 0.)];
+        let old = Frame::new(
+            source,
+            body.iter().map(|&p| p + Vec3::new(0., 0., 0.04)).collect(),
+            body,
+            &[[0, 1, 2]],
+            Request {
+                schema: "ftx-thermal-projection/1".into(),
+                cloth_layers: vec!["shell".into()],
+                settings: Settings {
+                    max_distance_m: 0.2,
+                    min_normal_cosine: 0.2,
+                    separation_tolerance_m: 1e-8,
+                    cells_per_layer: 1,
+                    interfaces: vec![],
+                },
+            },
+        )
+        .unwrap();
+        let state = old.initial(20.).unwrap();
+        for (offset, fraction) in [(0.25, 1.), (1., 1e-16)] {
+            // Deliberately damage the private spatial stencil. Public frames derive these
+            // footprints from geometry; scalar allocation tolerances must still never turn
+            // a finite uncovered wedge or an entirely empty microscopic stencil into heat.
+            let mut next = old.clone();
+            for p in &mut next.projection.footprints[0].hits[0].cloth_polygon {
+                p.x += offset;
+            }
+            next.coverage.layout.regions[0].layers[0].fraction = fraction;
+            let refusal = next.remap(&old, &state).unwrap_err();
+            assert_eq!(
+                refusal.message,
+                "newly covered cloth has no retained exposed thermal history"
+            );
+        }
+        assert_eq!(state.temperature_c(), &[vec![20.]]);
+        assert!(state.exposed_temperature_c()[0].is_empty());
+    }
 
     #[test]
     fn microscopic_inward_edge_cannot_delete_a_finite_remap_donor() {

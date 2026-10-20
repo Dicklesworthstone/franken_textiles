@@ -148,6 +148,101 @@ fn coarsening_mixes_enthalpy_not_temperature_and_refinement_does_not_invent_grad
 }
 
 #[test]
+fn fully_covered_overlap_roundoff_preserves_enthalpy_without_an_exposed_donor() {
+    // One triangle reduced from the accepted-motion regression. Both projected cloth triangles
+    // lie wholly inside the body face. Independent inverse projections round the old fraction
+    // to 1 and the new fraction to 1 - 1.44e-15; their clipped overlap falls short by 2.22e-15.
+    // This is not newly covered material and must not request nonexistent exposed history.
+    let body = vec![
+        v(0.1, 0., 0.52),
+        v(0.092_387_953_251_128_68, 0.038_268_343_236_508_98, 0.52),
+        v(0.092_387_953_251_128_68, 0.038_268_343_236_508_98, 1.04),
+    ];
+    let old = frame(
+        source(&selection()),
+        vec![
+            v(
+                0.094_521_360_135_866_87,
+                0.036_449_699_618_585_98,
+                0.540_656_514_817_741_2,
+            ),
+            v(
+                0.101_304_215_849_790_41,
+                0.006_830_905_207_137_199,
+                0.540_676_849_856_315_4,
+            ),
+            v(
+                0.094_494_702_124_663_52,
+                0.036_435_531_136_497_15,
+                0.520_766_480_695_692_4,
+            ),
+        ],
+        body.clone(),
+        &[[0, 1, 2]],
+        2,
+    );
+    let new = frame(
+        source(&selection()),
+        vec![
+            v(
+                0.094_521_369_700_209_29,
+                0.036_449_924_240_243_97,
+                0.540_656_566_826_756_2,
+            ),
+            v(
+                0.101_304_454_206_541_8,
+                0.006_831_244_760_361_624_6,
+                0.540_676_872_694_003_7,
+            ),
+            v(
+                0.094_495_078_973_144_9,
+                0.036_435_868_409_566_31,
+                0.520_766_532_164_110_3,
+            ),
+        ],
+        body,
+        &[[0, 1, 2]],
+        3,
+    );
+    assert!(!old.has_exposed_cloth());
+    let state = old
+        .steady(&[Boundary {
+            inside_c: 40.,
+            outside_c: 0.,
+            ..boundary(0.)
+        }])
+        .unwrap()
+        .into_state();
+    assert!(state.exposed_temperature_c()[0].is_empty());
+    let saved = old.checkpoint(&state).unwrap();
+    let transfer = new.remap(&old, &state).unwrap();
+    let before = &state.temperature_c()[0];
+    let expected = [before[0], mix(before[0], before[1], 0.5), before[1]];
+    for row in transfer
+        .state
+        .temperature_c()
+        .iter()
+        .chain(transfer.state.exposed_temperature_c())
+    {
+        for (&actual, &expected) in row.iter().zip(&expected) {
+            near(actual, expected);
+        }
+    }
+    near(
+        source_enthalpy(&new, &transfer.state),
+        source_enthalpy(&old, &state),
+    );
+    near(
+        transfer.balance.residual_j,
+        transfer.balance.after_j - transfer.balance.before_j,
+    );
+    assert!(transfer.balance.allocation_residual_m2 > 0.);
+    assert!(transfer.balance.allocation_residual_m2 < 1e-12);
+    near(transfer.balance.absolute_residual_j, 0.);
+    assert_eq!(old.checkpoint(&state).unwrap(), saved);
+}
+
+#[test]
 fn through_thickness_two_to_three_cells_conserves_integrated_heat() {
     let old = one(2);
     let new = one(3);
@@ -424,6 +519,38 @@ fn different_materials_keep_their_own_enthalpy_laws_during_a_layered_remap() {
     near(transfer.state.temperature_c()[0][1], 20.);
     near(transfer.balance.absolute_residual_j, 0.);
     near(transfer.balance.reference_area_m2, 1.);
+
+    // Two source layers cover the SAME half-square-metre body patch. Each source keeps its
+    // own energy and capacity; the body area must not be counted twice or choose one layer's Cp.
+    let heat = new
+        .advance_with_exchange_and_heat(
+            &new.initial(10.).unwrap(),
+            0.5,
+            &[boundary(10.)],
+            None,
+            None,
+            &[500., 100.],
+        )
+        .unwrap();
+    let temperatures = &heat.heat().state.temperature_c()[0];
+    let physical = 0.5 * (h(temperatures[0]) - h(10.) + 400. * (temperatures[1] - 10.));
+    near(heat.heat().covered_area_m2, 0.5);
+    near(heat.supplied_heat_j(), 600.);
+    near(heat.internal_heat().unwrap().covered_heat_j, 600.);
+    near(heat.internal_heat().unwrap().exposed_heat_j, 0.);
+    near(physical, heat.stored_change_j());
+    near(physical, 0.5 * heat.net_heat_w() + 600.);
+    let direct = DryThermalModel::new(
+        vec![db.resolve(&a).unwrap(), db.resolve(&b).unwrap()],
+        vec![0.05],
+        1,
+    )
+    .unwrap()
+    .advance_with_heat(&[10., 10.], 0.5, boundary(10.), &[1000., 200.])
+    .unwrap();
+    for (&a, &b) in temperatures.iter().zip(&direct.temperature_c) {
+        near(a, b);
+    }
 }
 
 #[test]
@@ -572,4 +699,175 @@ fn uncovered_cloth_heats_only_under_explicit_face_conditions_and_reenters_with_t
     assert!(returned.state.temperature_c()[0].iter().all(|&t| t > 10.));
     assert!(returned.state.exposed_temperature_c()[0].is_empty());
     near(returned.balance.absolute_residual_j, 0.);
+}
+
+// Independent physical enthalpy for this one reference-half-square-metre variable-Cp sheet.
+fn source_enthalpy(f: &Frame, state: &ftx_drape::thermal::surface::coverage::motion::State) -> f64 {
+    let mut covered = 0.;
+    let mut energy = 0.;
+    for (region, values) in f
+        .projection()
+        .layout
+        .regions
+        .iter()
+        .zip(state.temperature_c())
+    {
+        assert_eq!(region.layers.len(), 1);
+        let fraction = region.layers[0].fraction;
+        covered += fraction;
+        energy += 0.5 * fraction * values.iter().copied().map(h).sum::<f64>() / values.len() as f64;
+    }
+    let exposed = &state.exposed_temperature_c()[0];
+    if !exposed.is_empty() {
+        energy += 0.5 * (1. - covered) * exposed.iter().copied().map(h).sum::<f64>()
+            / exposed.len() as f64;
+    }
+    energy
+}
+
+#[test]
+fn internal_heat_follows_reference_material_through_covered_exposed_and_recovered_states() {
+    let mut current = one(3);
+    let mut state = current.initial(10.).unwrap();
+    let initial_enthalpy = source_enthalpy(&current, &state);
+    let mut physical = 0.;
+    let mut remapped = 0.;
+    for offset in [0., 0.5, 2., 0.] {
+        let next = frame(
+            source(&selection()),
+            tri(0.04),
+            vec![v(offset, 0., 0.), v(offset + 1., 0., 0.), v(offset, 1., 0.)],
+            &[[0, 1, 2]],
+            3,
+        );
+        if next.sha256() != current.sha256() {
+            let transfer = next.remap(&current, &state).unwrap();
+            near(
+                source_enthalpy(&next, &transfer.state) - source_enthalpy(&current, &state),
+                transfer.balance.residual_j,
+            );
+            remapped += transfer.balance.residual_j;
+            state = transfer.state;
+        }
+        current = next;
+        let before = source_enthalpy(&current, &state);
+        let saved = current.checkpoint(&state).unwrap();
+        let step = current
+            .advance_with_exchange_and_heat(&state, 0.25, &[boundary(10.)], None, None, &[500.])
+            .unwrap();
+        let source = step.internal_heat().unwrap();
+        let fraction: f64 = current
+            .projection()
+            .layout
+            .regions
+            .iter()
+            .map(|r| r.layers[0].fraction)
+            .sum();
+        near(source.covered_heat_j, 500. * fraction);
+        near(source.exposed_heat_j, 500. * (1. - fraction));
+        near(source.supplied_heat_j, 500.);
+        near(source.allocation_residual_j, 0.);
+        near(step.stored_change_j(), 0.25 * step.net_heat_w() + 500.);
+        near(step.balance_error_j(), 0.);
+        assert_eq!(current.checkpoint(&state).unwrap(), saved);
+        let stored = step.stored_change_j();
+        physical += stored;
+        state = step.into_state();
+        near(source_enthalpy(&current, &state) - before, stored);
+        if fraction == 0. {
+            // There is no explicit exposed reservoir. All received energy stays in source storage.
+            near(stored, 500.);
+            assert!(state.exposed_temperature_c()[0].iter().all(|&t| t > 10.));
+        }
+    }
+    assert!(state.exposed_temperature_c()[0].is_empty());
+    near(
+        source_enthalpy(&current, &state) - initial_enthalpy,
+        physical + remapped,
+    );
+}
+
+#[test]
+fn covered_internal_heat_matches_direct_column_with_exterior_exchange() {
+    use ftx_drape::thermal::steady::exterior::Exterior;
+    use ftx_drape::thermal::surface::coverage::ExteriorConditions;
+    let f = one(2);
+    let old = f.initial(10.).unwrap();
+    let b = Boundary {
+        outside_resistance: 0.,
+        ..boundary(10.)
+    };
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+    ))
+    .unwrap();
+    let mut exterior: Exterior =
+        serde_json::from_value(fixture["exterior_exchange"].clone()).unwrap();
+    exterior.air_c = 10.;
+    exterior.convection_w_m2_k = 5.;
+    exterior.radiation = None;
+    let step = f
+        .advance_with_exchange_and_heat(
+            &old,
+            0.5,
+            &[b],
+            Some(ExteriorConditions {
+                environments: std::slice::from_ref(&exterior),
+                bare_boundaries: &[],
+            }),
+            None,
+            &[500.],
+        )
+        .unwrap();
+    let model = DryThermalModel::new(
+        vec![Catalog::builtin().unwrap().resolve(&selection()).unwrap()],
+        vec![],
+        2,
+    )
+    .unwrap();
+    let direct = model
+        .advance_exterior_with_heat(&[10.; 2], 0.5, b, &exterior, &[500.; 2])
+        .unwrap();
+    for (a, b) in step.heat().state.temperature_c()[0]
+        .iter()
+        .zip(&direct.state.temperature_c)
+    {
+        near(*a, *b);
+    }
+    near(
+        step.stored_change_j(),
+        0.5 * direct.state.stored_change_j_m2,
+    );
+    near(step.inside_heat_w(), 0.5 * direct.state.inside_flux_w_m2);
+    near(step.outside_heat_w(), 0.5 * direct.state.outside_flux_w_m2);
+    near(
+        step.exterior_convective_heat_w().unwrap(),
+        step.outside_heat_w(),
+    );
+    near(step.balance_error_j(), 0.);
+}
+
+#[test]
+fn internal_heat_refuses_bad_sources_without_mutation_and_zero_source_preserves_ordinary_solve() {
+    let f = one(2);
+    let state = f.initial(10.).unwrap();
+    let saved = f.checkpoint(&state).unwrap();
+    for energy in [vec![], vec![1., 2.], vec![-1.], vec![f64::NAN], vec![1e12]] {
+        assert!(
+            f.advance_with_exchange_and_heat(&state, 0.25, &[boundary(20.)], None, None, &energy)
+                .is_err()
+        );
+        assert_eq!(f.checkpoint(&state).unwrap(), saved);
+    }
+    let ordinary = f.advance(&state, 0.25, &[boundary(20.)]).unwrap();
+    let zero = f
+        .advance_with_exchange_and_heat(&state, 0.25, &[boundary(20.)], None, None, &[0.])
+        .unwrap();
+    assert!(zero.internal_heat().is_none());
+    assert_eq!(
+        zero.heat().state.temperature_c(),
+        ordinary.heat().state.temperature_c()
+    );
+    assert_eq!(zero.stored_change_j(), ordinary.stored_change_j());
+    assert_eq!(zero.balance_error_j(), ordinary.balance_error_j());
 }
