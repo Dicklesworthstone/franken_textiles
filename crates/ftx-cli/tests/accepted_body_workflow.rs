@@ -1013,6 +1013,9 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     converted["record"]["properties"]["membrane_plastic_heat_fraction"]["value"] = json!(0.8);
     let mut plastic_pattern = pattern.clone();
     plastic_pattern["fabric"]["material"] = unconverted.clone();
+    // Put the collar in the articulated upper ring's contact region. A waist band on the rigid
+    // root cannot be loaded by shoulder motion once its gravity transient has actually settled.
+    plastic_pattern["pieces"][0]["placement"]["y0"] = json!(600.0);
     save(&plastic_dir.join("pattern.json"), &plastic_pattern);
     save(
         &plastic_dir.join("study.json"),
@@ -1024,6 +1027,11 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
             {"metric":"transient_surface_final_max_temperature_c","direction":"minimize"}]}}),
     );
     let mut plastic_scenario = scenario.clone();
+    plastic_scenario["motion"]["keyframes"] = json!([
+        {"time_s":0.02,"arm_abduction_deg":35.5},
+        {"time_s":0.04,"arm_abduction_deg":36.0}]);
+    // The longer explicit path needs forty 1 ms steps; this is a work cap, not a solve tolerance.
+    plastic_scenario["motion"]["max_trials"] = json!(64);
     plastic_scenario["motion"]
         .as_object_mut()
         .unwrap()
