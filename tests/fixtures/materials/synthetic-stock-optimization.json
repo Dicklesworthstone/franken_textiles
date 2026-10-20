@@ -1,0 +1,48 @@
+{
+  "schema": "ftx-finite-stock-request/1",
+  "stocks": [
+    {
+      "id": "large-first",
+      "material": {
+        "id": "example-hide", "allow_estimates": true,
+        "record": {"id": "example-hide", "name": "Synthetic hide, not measured", "form": "hide",
+          "properties": {"areal_density": {"value": 0.5, "unit": "kg/m2", "evidence": "estimate", "source": "test", "method": "Synthetic areal mass"}},
+          "sources": {"test": {"reference": "test:finite-stock-example", "accessed_on": "2026-10-15", "note": "Synthetic material for geometry checks only"}}
+        }
+      },
+      "outline_mm": [[0,0],[70,0],[70,30],[0,30]],
+      "grain_mm": [[0,0],[0,10]],
+      "geometry_source": {"reference":"test:stock-optimization","accessed_on":"2026-10-20","note":"Synthetic miniature sheet, not measured stock or price evidence"}
+    },
+    {
+      "id": "small-a",
+      "material": {
+        "id": "example-hide", "allow_estimates": true,
+        "record": {"id": "example-hide", "name": "Synthetic hide, not measured", "form": "hide",
+          "properties": {"areal_density": {"value": 0.5, "unit": "kg/m2", "evidence": "estimate", "source": "test", "method": "Synthetic areal mass"}},
+          "sources": {"test": {"reference": "test:finite-stock-example", "accessed_on": "2026-10-15", "note": "Synthetic material for geometry checks only"}}
+        }
+      },
+      "outline_mm": [[0,0],[25,0],[25,25],[0,25]],
+      "grain_mm": [[0,0],[0,10]],
+      "geometry_source": {"reference":"test:stock-optimization","accessed_on":"2026-10-20","note":"Synthetic miniature remnant A"}
+    },
+    {
+      "id": "small-b",
+      "material": {
+        "id": "example-hide", "allow_estimates": true,
+        "record": {"id": "example-hide", "name": "Synthetic hide, not measured", "form": "hide",
+          "properties": {"areal_density": {"value": 0.5, "unit": "kg/m2", "evidence": "estimate", "source": "test", "method": "Synthetic areal mass"}},
+          "sources": {"test": {"reference": "test:finite-stock-example", "accessed_on": "2026-10-15", "note": "Synthetic material for geometry checks only"}}
+        }
+      },
+      "outline_mm": [[0,0],[25,0],[25,25],[0,25]],
+      "grain_mm": [[0,0],[0,10]],
+      "geometry_source": {"reference":"test:stock-optimization","accessed_on":"2026-10-20","note":"Synthetic miniature remnant B"}
+    }
+  ],
+  "options": {
+    "copies":1,"gap_mm":2,"boundary_margin_mm":2,"step_mm":20,"work_limit":2000000,
+    "backtrack_limit":10000,"optimize":"minimize_gross_area"
+  }
+}

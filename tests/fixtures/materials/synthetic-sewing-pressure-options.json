@@ -1,0 +1,176 @@
+{
+  "machine": {
+    "id": "example-configuration-not-a-qualified-machine",
+    "stitch_mm": [
+      0.5,
+      5.0
+    ],
+    "feed_b_over_a": [
+      0.5,
+      2.0
+    ],
+    "max_stack_mm": 3.0,
+    "max_stitches_per_minute": 1000.0,
+    "presser_foot": {
+      "pressure_pa": [
+        100.0,
+        1000.0
+      ],
+      "max_loaded_stack_mm": 0.5
+    }
+  },
+  "seam_tolerance_mm": 0.5,
+  "passes": [
+    {
+      "seam": "side",
+      "max_stitch_mm": 2.5,
+      "plies": [
+        1,
+        1
+      ],
+      "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0,
+      "needle": "operator-selected-needle",
+      "thread": "operator-selected-thread",
+      "after": [],
+      "presser_foot": {
+        "model": "independent_ply_equal_pressure/1",
+        "pressure_pa": 500.0,
+        "conditioning": "synthetic dry",
+        "loading_branch": "first loading",
+        "materials": {
+          "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b": {
+            "schema": "ftx-material-compression/1",
+            "material": {
+              "composition": [],
+              "composition_complete": false,
+              "form": "woven",
+              "id": "synthetic-sewing-sheet",
+              "name": "Artificial sheet for sewing software tests",
+              "properties": {
+                "thickness": {
+                  "bounds": null,
+                  "conditions": {},
+                  "evidence": "estimate",
+                  "method": "Invented software test value, not an empirical measurement",
+                  "source": "test",
+                  "unit": "mm",
+                  "value": 0.4
+                }
+              },
+              "sources": {
+                "test": {
+                  "accessed_on": "2026-10-14",
+                  "note": "Synthetic test only",
+                  "reference": "test:sewing"
+                }
+              },
+              "structure": {}
+            },
+            "specimen": "synthetic-sewing-sheet",
+            "conditioning": "synthetic dry",
+            "loading_branch": "first loading",
+            "method": "Synthetic pressure/thickness observations; not a machine or textile recommendation",
+            "conditioned_on": "2026-10-20",
+            "pressure_pa": 500.0,
+            "samples": [
+              {
+                "pressure_pa": 0.0,
+                "properties": {
+                  "thickness": {
+                    "value": 0.4,
+                    "unit": "mm",
+                    "bounds": [
+                      0.36,
+                      0.44
+                    ],
+                    "source": "test",
+                    "evidence": "estimate",
+                    "method": "Synthetic software-only pressure/thickness pair",
+                    "conditions": {
+                      "specimen": "synthetic-sewing-sheet",
+                      "conditioning": "synthetic dry",
+                      "loading_branch": "first loading"
+                    }
+                  }
+                }
+              },
+              {
+                "pressure_pa": 500.0,
+                "properties": {
+                  "thickness": {
+                    "value": 0.2,
+                    "unit": "mm",
+                    "bounds": [
+                      0.18,
+                      0.22
+                    ],
+                    "source": "test",
+                    "evidence": "estimate",
+                    "method": "Synthetic software-only pressure/thickness pair",
+                    "conditions": {
+                      "specimen": "synthetic-sewing-sheet",
+                      "conditioning": "synthetic dry",
+                      "loading_branch": "first loading"
+                    }
+                  }
+                }
+              }
+            ],
+            "allow_estimates": true
+          }
+        }
+      }
+    }
+  ],
+  "require_qualification": true,
+  "qualifications": [
+    {
+      "id": "synthetic-pressure-process",
+      "materials": [
+        "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b",
+        "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"
+      ],
+      "machine": "example-configuration-not-a-qualified-machine",
+      "needle": "operator-selected-needle",
+      "thread": "operator-selected-thread",
+      "stitch_mm": [
+        0.5,
+        5.0
+      ],
+      "feed_b_over_a": [
+        0.5,
+        2.0
+      ],
+      "stack_mm": [
+        0.7,
+        0.9
+      ],
+      "stitches_per_minute": [
+        500.0,
+        700.0
+      ],
+      "allow_reverse": false,
+      "presser_foot": {
+        "pressure_pa": [
+          250.0,
+          500.0
+        ],
+        "loaded_stack_mm": [
+          0.4,
+          0.5
+        ],
+        "conditioning": "synthetic dry",
+        "loading_branch": "first loading"
+      },
+      "evidence": "estimate",
+      "allow_estimates": true,
+      "source": {
+        "reference": "test:synthetic-pressure-seam",
+        "accessed_on": "2026-10-20",
+        "note": "Invented numerical example; not a physical coupon or calibrated machine"
+      },
+      "method": "Synthetic process envelope for software integration only"
+    }
+  ]
+}
