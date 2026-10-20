@@ -450,9 +450,14 @@ study results. Declared computed objectives display the Rust frontier, units, ex
 incomparable pairs; no weighted score or Pareto frontier is fabricated in JavaScript.
 Requested motion adds a separate completion/substep/strain table and per-endpoint steady-heat table,
 including independent refusals and the initial settledness warning. Raw reports contain the full
-sample arrays and material history. The existing single-fold viewer remains a static-workflow
-viewer; these controls do not silently replace it with an untested endpoint animation. Editing the
-scenario's time/pose policy invalidates these results through the existing request lifecycle.
+sample arrays and material history. Expand an available trajectory to inspect the retained body
+and cloth from front or side. The integer slider selects an actual recorded state and displays its
+exact physical timestamp, including nonuniform adaptive steps. Both views and every state use one
+fixed metric scale; the inspector does not interpolate between states or infer depth from its
+wireframe projections. A separate initial state is shown only when the report retains it. Older
+accepted-only reports start at their actual first positive timestamp. The existing single-fold
+viewer remains a separate static workflow. Editing the scenario's time/pose policy invalidates
+these results and their inspector through the existing request lifecycle.
 Requested transient histories add separate time/temperature/energy tables with independent refusals,
 remap residuals and lazy source/checkpoint inspection. The page displays Rust results without summing
 energy or deriving a warmth score. Its existing scenario download retains the exact thermal policy.

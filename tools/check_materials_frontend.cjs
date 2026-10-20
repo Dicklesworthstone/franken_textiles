@@ -263,6 +263,12 @@ class Element {
   append(...items) { this.children.push(...items); }
   replaceChildren(...items) { this.children = items; }
   removeAttribute(name) { delete this[name]; }
+  getContext(kind) {
+    assert.equal(this.tag, 'canvas'); assert.equal(kind, '2d');
+    this.paint = [];
+    return { clearRect: () => { this.paint = []; }, beginPath() {}, closePath() {}, stroke() {},
+      moveTo: (...point) => this.paint.push(['move', ...point]), lineTo: (...point) => this.paint.push(['line', ...point]) };
+  }
 }
 async function pageModule() {
   const html = read('materials.html');
@@ -736,6 +742,57 @@ test('motion displays complete continuation separately from initial static heat 
   assert.match(visibleText(table('Prescribed motion')), /trajectory budget exhausted/);
   assert.equal(table('A: endpoint'), undefined);
   assert.equal(table('Initial static-drape').children[2].children[5].textContent, '-4.5');
+});
+
+test('motion inspector selects exact adaptive states at one physical scale, including accepted-only reports', async () => {
+  for (const includeInitial of [true, false]) {
+    const p = await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
+    const report = scenarioReport(); report.scenario.scenario = { motion: {} };
+    const sample = (time_s, x, y) => ({ time_s,
+      body_positions_m: [[x,y,0],[x+1,y,0],[x,y,1]], positions_m: [[x,y+1,0],[x+1,y+1,0],[x,y+1,1]] });
+    const motion = { duration_s: 0.00375, trials: 2, keyframes: [], triangles: [[0,1,2]], body_triangles: [[0,1,2]],
+      samples: [sample(0.001,1,0), sample(0.00375,3,1)] };
+    if (includeInitial) motion.initial_sample = sample(0,0,0);
+    report.simulations.find(row => row.key === 'A').evaluation.result.motion = outcome(motion); p.emit(report);
+    const s = section(p, 'Fresh drape and heat alternatives');
+    const inspector = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.includes('inspect retained motion samples'));
+    assert.equal(descendants(inspector).some(n => n.tag === 'canvas'), false);
+    inspector.open = true; inspector.handlers.toggle();
+    const slider = descendants(inspector).find(n => n.tag === 'input');
+    const canvases = descendants(inspector).filter(n => n.tag === 'canvas');
+    const stamp = descendants(inspector).find(n => n.tag === 'output');
+    assert.equal(canvases.length, 2); assert.equal(slider.step, '1');
+    assert.equal(slider.max, includeInitial ? '2' : '1');
+    assert.equal(stamp.textContent, includeInitial ? 'Initial state · t = 0 s' : 'Accepted step 1 of 2 · t = 0.001 s');
+    const first = plain(canvases.map(c => c.paint[0]));
+    assert.deepEqual(first, includeInitial ? [['move',24,256.5],['move',117,256.5]] : [['move',24,272],['move',86,272]]);
+    slider.value = slider.max; slider.handlers.input();
+    assert.equal(stamp.textContent, 'Accepted step 2 of 2 · t = 0.00375 s');
+    const last = plain(canvases.map(c => c.paint[0]));
+    assert.deepEqual(last, includeInitial ? [['move',303,256.5],['move',210,256.5]] : [['move',272,272],['move',210,272]]);
+    assert.equal(canvases[0].paint[1][1] - canvases[0].paint[0][1], includeInitial ? 93 : 124);
+    inspector.handlers.toggle(); assert.equal(descendants(inspector).filter(n => n.tag === 'canvas').length, 2);
+    p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true);
+    assert.equal(descendants(s).filter(n => n.tag === 'canvas').length, 0);
+  }
+});
+
+test('invalid retained display geometry or timestamps cannot erase independent scenario outcomes', async () => {
+  for (const badTime of [false, true]) {
+    const p = await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
+    const report = scenarioReport(); report.scenario.scenario = { motion: {} };
+    const sample = { time_s: 0.001, positions_m: [[0,0,0],[1,0,0],[0,0,1]], body_positions_m: [[0,1,0],[1,1,0],[0,1,1]] };
+    report.simulations.find(row => row.key === 'A').evaluation.result.motion = outcome({ keyframes: [], samples: [sample, sample],
+      triangles: [[0,1,badTime ? 2 : 3]], body_triangles: [[0,1,2]] }); p.emit(report);
+    const s = section(p, 'Fresh drape and heat alternatives');
+    const inspector = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.includes('inspect retained motion samples'));
+    inspector.open = true; inspector.handlers.toggle();
+    assert.match(visibleText(inspector), badTime ? /physical sample times are invalid/ : /geometry is incomplete/);
+    assert.equal(descendants(inspector).some(n => n.tag === 'canvas'), false);
+    const initial = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent.startsWith('Initial static-drape'));
+    assert.equal(initial.children[2].children[5].textContent, '-4.5');
+    assert.match(visibleText(s), /missing mechanics/);
+  }
 });
 
 test('study output invalidation follows the actual request/body dependencies, not unrelated preview controls', async () => {

@@ -240,6 +240,90 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     "Geometry uses accepted motion samples; smaller thermal substeps do not refine the body motion. Small energy residuals are not empirical accuracy.";
   parent.append(note);
 }
+function motionSamples(parent, key, motion) {
+  const d = document.createElement("details"), title = document.createElement("summary");
+  title.textContent = `${key}: inspect retained motion samples`; d.append(title); parent.append(d);
+  let initialized = false;
+  d.addEventListener("toggle", () => {
+    if (!d.open || initialized) return;
+    initialized = true;
+    try {
+      const accepted = motion.samples, hasInitial = motion.initial_sample != null;
+      const samples = Array.isArray(accepted) && accepted.length ? (hasInitial ? [motion.initial_sample, ...accepted] : accepted) : null;
+      const counts = [samples?.[0]?.body_positions_m?.length, samples?.[0]?.positions_m?.length];
+      const tracks = ["body_positions_m", "positions_m"], topology = [motion.body_triangles, motion.triangles];
+      if (!samples || counts.some(n => !n) || topology.some((triangles, i) =>
+        !Array.isArray(triangles) || !triangles.length || triangles.some(t => !Array.isArray(t) || t.length !== 3 ||
+          t.some(v => !Number.isInteger(v) || v < 0 || v >= counts[i])))) {
+        throw Error("Retained body/cloth geometry is incomplete; inspect the downloaded report.");
+      }
+      const low = [Infinity, Infinity, Infinity], high = [-Infinity, -Infinity, -Infinity];
+      let previous = hasInitial ? -1 : 0;
+      for (const sample of samples) {
+        if (!Number.isFinite(sample.time_s) || sample.time_s <= previous || (hasInitial && previous === -1 && sample.time_s !== 0)) {
+          throw Error("Retained physical sample times are invalid; no intermediate motion is inferred.");
+        }
+        previous = sample.time_s;
+        for (const [i, track] of tracks.entries()) {
+          if (!Array.isArray(sample[track]) || sample[track].length !== counts[i]) {
+            throw Error("Retained samples changed topology; inspect the downloaded report.");
+          }
+          for (const p of sample[track]) {
+            if (!Array.isArray(p) || p.length !== 3 || p.some(v => !Number.isFinite(v))) {
+              throw Error("Retained sample coordinates are invalid; inspect the downloaded report.");
+            }
+            for (let axis = 0; axis < 3; ++axis) { low[axis] = Math.min(low[axis], p[axis]); high[axis] = Math.max(high[axis], p[axis]); }
+          }
+        }
+      }
+      const span = Math.max(...high.map((v, i) => v - low[i]), 1e-6);
+      if (!Number.isFinite(span)) throw Error("Retained sample coordinates exceed the display range.");
+      const center = high.map((v, i) => low[i] + (v - low[i]) / 2), scale = 372 / span;
+      const note = document.createElement("p"); note.className = "note";
+      note.textContent = "Select a retained state at its exact physical time. " + (hasInitial ?
+        "The first state precedes motion; later states are accepted solver steps. " :
+        "This report retains accepted solver steps; its initial geometry was not retained. ") +
+        "Grey body and teal cloth use one fixed metre scale across both views and every sample. Wireframe projections do not resolve depth.";
+      const label = document.createElement("label"), slider = document.createElement("input"), stamp = document.createElement("output");
+      label.textContent = "Retained sample"; slider.type = "range"; slider.min = "0"; slider.max = String(samples.length - 1);
+      slider.step = "1"; slider.value = "0"; slider.ariaLabel = `${key}: retained motion sample`; label.append(slider);
+      const views = document.createElement("div"); views.className = "motion-views";
+      const contexts = ["Front · X / Z", "Side · Y / Z"].map(name => {
+        const figure = document.createElement("figure"), caption = document.createElement("figcaption"), canvas = document.createElement("canvas");
+        caption.textContent = name; canvas.width = 420; canvas.height = 420;
+        canvas.ariaLabel = `${key}: ${name} at the selected physical sample`; canvas.textContent = canvas.ariaLabel;
+        const context = canvas.getContext("2d");
+        if (!context) throw Error("Canvas preview unavailable; retained sample geometry remains in the downloaded report.");
+        figure.append(caption, canvas); views.append(figure); return context;
+      });
+      function render() {
+        const index = Number(slider.value);
+        if (!Number.isInteger(index) || index < 0 || index >= samples.length) return;
+        const sample = samples[index];
+        stamp.textContent = `${hasInitial && index === 0 ? "Initial state" :
+          `Accepted step ${index + 1 - Number(hasInitial)} of ${accepted.length}`} · t = ${metric(sample.time_s)} s`;
+        for (const [axis, ctx] of contexts.entries()) {
+          ctx.clearRect(0, 0, 420, 420);
+          for (const [i, track] of tracks.entries()) {
+            ctx.strokeStyle = i === 0 ? "#a0adb2" : "#145b68"; ctx.lineWidth = i === 0 ? 0.5 : 1;
+            ctx.beginPath();
+            for (const triangle of topology[i]) {
+              for (const [j, vertex] of triangle.entries()) {
+                const p = sample[track][vertex], x = 210 + (p[axis] - center[axis]) * scale, y = 210 - (p[2] - center[2]) * scale;
+                if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+              }
+              ctx.closePath();
+            }
+            ctx.stroke();
+          }
+        }
+      }
+      slider.addEventListener("input", render); d.append(note, label, stamp, views); render();
+    } catch (e) {
+      const message = document.createElement("p"); message.textContent = e.message; d.append(message);
+    }
+  });
+}
 function motionComparison(parent, rows, simulations, requested) {
   if (!requested && ![...simulations.values()].some(o => available(o)?.motion)) return;
   const note = document.createElement("p");
@@ -270,6 +354,7 @@ function motionComparison(parent, rows, simulations, requested) {
       endpoints: result.keyframes.map(e => ({ time_s: e.time_s, positions_sha256: e.positions_sha256,
         body_collision_sha256: e.body_collision_sha256, surface_refusal: e.surface?.refusal, coverage_refusal: e.coverage?.refusal })),
       scope: result.scope, thermal_basis: result.thermal_basis });
+    motionSamples(parent, row.key, result);
   }
 }
 function comparison(op, r) {
