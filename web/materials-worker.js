@@ -120,15 +120,38 @@ self.onmessage = async ({ data: msg }) => {
         }
         break;
       case "stock": {
-        raw = ftx.stock_plan(msg.pattern, msg.stockRequest); result = json(raw);
-        const residual = ftx.stock_residual(msg.pattern, msg.stockRequest);
-        json(residual);
-        files = [file("finite-stock-plan.json", raw), file("residual-stock-request.json", residual)];
-        const i = result.markers.findIndex(m => m.placements.length);
-        if (i >= 0) {
-          picture = ftx.stock_svg(msg.pattern, msg.stockRequest, i);
-          files.push(file(`stock-${i}.svg`, picture, "image/svg+xml"));
+        // Older bundles keep their existing single-product contract. Unknown optimizer options
+        // still fail their native request parser; the worker never removes or rewrites a policy.
+        if (ftx.stock_job === undefined) {
+          raw = ftx.stock_plan(msg.pattern, msg.stockRequest); result = json(raw);
+          const residual = ftx.stock_residual(msg.pattern, msg.stockRequest); json(residual);
+          files = [file("finite-stock-plan.json", raw), file("residual-stock-request.json", residual)];
+          const i = result.markers.findIndex(m => m.placements.length);
+          if (i >= 0) {
+            picture = ftx.stock_svg(msg.pattern, msg.stockRequest, i);
+            files.push(file(`stock-${i}.svg`, picture, "image/svg+xml"));
+          }
+          break;
         }
+        if (typeof ftx.stock_job !== "function") throw Error("Rebuild web/pkg: invalid single-run finite-stock engine.");
+        const job = json(ftx.stock_job(msg.pattern, msg.stockRequest));
+        if (job.schema !== "ftx-stock-job/1" || typeof job.plan_json !== "string" || typeof job.residual_json !== "string") {
+          throw Error("Rebuild web/pkg: incomplete finite-stock job response.");
+        }
+        raw = job.plan_json; result = json(raw); json(job.residual_json);
+        const i = job.stock_index;
+        if (!Number.isInteger(i) || i < 0 || !result.markers?.[i]?.placements?.length) {
+          throw Error("Finite-stock preview does not identify an allocated item.");
+        }
+        files = [file("finite-stock-plan.json", raw), file("residual-stock-request.json", job.residual_json)];
+        if (typeof job.preview_svg === "string" && job.preview_refusal == null) {
+          picture = job.preview_svg; files.push(file(`stock-${i}.svg`, picture, "image/svg+xml"));
+        } else if (job.preview_svg == null && job.preview_refusal?.message) {
+          files.push(file("stock-preview-refusal.json", job.preview_refusal));
+        } else {
+          throw Error("Finite-stock preview needs either its SVG or its explicit refusal.");
+        }
+        if (result.optimization) files.push(file("stock-optimization.json", result.optimization));
         break;
       }
       case "price":

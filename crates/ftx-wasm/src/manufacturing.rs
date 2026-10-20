@@ -3,6 +3,61 @@
 use ftx_core::{Refusal, RefusalCode};
 use ftx_export::sewing::{SewOptions, SewPlan, program::SewProgram};
 use ftx_pattern::Pattern;
+use serde::Serialize;
+
+// The operator needs the plan, next inventory and preview from ONE bounded search. JSON strings
+// carry the Rust number representations across JavaScript without weakening source receipts.
+#[derive(Serialize)]
+struct StockJob {
+    schema: &'static str,
+    plan_json: String,
+    residual_json: String,
+    stock_index: usize,
+    preview_svg: Option<String>,
+    preview_refusal: Option<Refusal>,
+}
+
+struct LimitedJson {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+impl std::io::Write for LimitedJson {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .is_none_or(|n| n > self.limit)
+        {
+            self.exceeded = true;
+            return Err(std::io::Error::other(
+                "finite-stock job output exceeds its byte budget",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+fn limited_json(value: &impl Serialize, limit: usize) -> Result<String, Refusal> {
+    let mut writer = LimitedJson {
+        bytes: Vec::new(),
+        limit,
+        exceeded: false,
+    };
+    let result = serde_json::to_writer(&mut writer, value);
+    if writer.exceeded {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "finite-stock job output exceeds 64 MiB",
+        ));
+    }
+    result.map_err(|e| invalid(e.to_string()))?;
+    String::from_utf8(writer.bytes).map_err(|e| invalid(e.to_string()))
+}
 
 fn budget(inputs: &[&str]) -> Result<(), Refusal> {
     if inputs
@@ -39,6 +94,49 @@ fn stock_inputs(pattern: &str, request: &str) -> Result<ftx_export::cutting::sto
 /// Invalid/oversized inputs, stock/material mismatch, geometry or bounded search refusal.
 pub fn stock_plan(pattern: &str, request: &str) -> Result<String, Refusal> {
     serde_json::to_string(&stock_inputs(pattern, request)?).map_err(|e| invalid(e.to_string()))
+}
+
+/// Execute one finite-stock search and retain its complete plan, residual inventory and preview.
+/// A preview refusal is separate from successful allocation. Both JSON documents remain strings
+/// so JavaScript cannot change receipt-bound numbers by parsing and re-serializing them.
+///
+/// # Errors
+/// Same input/planning refusals as [`stock_plan`], residual generation failure, or any serialized
+/// document / complete escaped response exceeding 64 MiB. No second search is performed.
+pub fn stock_job(pattern: &str, request: &str) -> Result<String, Refusal> {
+    const LIMIT: usize = 64 * 1024 * 1024;
+    let plan = stock_inputs(pattern, request)?;
+    let stock_index = plan
+        .markers()
+        .iter()
+        .position(|m| !m.placements.is_empty())
+        .ok_or_else(|| invalid("complete finite-stock plan contains no placements"))?;
+    let preview = ftx_export::cutting::preview::stock_svg(&plan, stock_index);
+    let (preview_svg, preview_refusal) = match preview {
+        Ok(svg) => (Some(svg), None),
+        Err(refusal) => (None, Some(refusal)),
+    };
+    limited_json(
+        &StockJob {
+            schema: "ftx-stock-job/1",
+            plan_json: limited_json(&plan, LIMIT)?,
+            residual_json: limited_json(&plan.residual_request()?, LIMIT)?,
+            stock_index,
+            preview_svg,
+            preview_refusal,
+        },
+        LIMIT,
+    )
+}
+
+/// Browser export of [`stock_job`], retaining one complete optimization run for all products.
+///
+/// # Errors
+/// Same errors as [`stock_job`]; preview-only refusals remain in the successful job response.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = stock_job)]
+pub fn web_stock_job(pattern: &str, request: &str) -> Result<String, wasm_bindgen::JsError> {
+    stock_job(pattern, request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
 /// Frozen finite-stock request after consuming every accepted cutter in this complete plan.
@@ -214,4 +312,19 @@ pub fn sew_stitches(pattern: &str, options: &str) -> Result<String, Refusal> {
 pub fn sew_svg(pattern: &str, options: &str, operation: &str) -> Result<String, Refusal> {
     let (pattern, options) = inputs(pattern, options)?;
     ftx_export::sewing::preview::svg(&pattern, &options, operation)
+}
+
+#[cfg(test)]
+mod stock_job_tests {
+    use super::*;
+    #[test]
+    fn escaped_job_output_obeys_its_serialization_budget() {
+        let value = "\"\n💡";
+        let expected = serde_json::to_string(value).unwrap();
+        assert_eq!(limited_json(&value, expected.len()).unwrap(), expected);
+        assert_eq!(
+            limited_json(&value, expected.len() - 1).unwrap_err().code,
+            RefusalCode::BudgetExceeded
+        );
+    }
 }
