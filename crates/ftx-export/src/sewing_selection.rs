@@ -3,6 +3,7 @@
 //! material evidence, backtacks and prerequisites stay in the original job.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::Pattern;
@@ -16,6 +17,7 @@ const MAX_GROUPS: usize = 12;
 const MAX_ALTERNATIVES: usize = 15;
 const MAX_ORDERING_NODES: usize = 200_000;
 const TEMPLATE: &str = "template";
+const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
 
 /// An explicit process candidate, never inferred from a textile's brand or composition.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -313,4 +315,85 @@ impl Request {
             tie_break: "template first, then operation ID / recipe ID lexicographic; retain first equal feed time",
         })
     }
+}
+
+struct JsonBytes {
+    bytes: Vec<u8>,
+    exceeded: bool,
+}
+
+impl Write for JsonBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .is_none_or(|n| n > MAX_JSON_BYTES)
+        {
+            self.exceeded = true;
+            return Err(std::io::Error::other("sewing selection output budget"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encode(value: &impl Serialize) -> Result<String, Refusal> {
+    let mut writer = JsonBytes {
+        bytes: Vec::new(),
+        exceeded: false,
+    };
+    if let Err(error) = serde_json::to_writer(&mut writer, value) {
+        return Err(Refusal::new(
+            if writer.exceeded {
+                RefusalCode::BudgetExceeded
+            } else {
+                RefusalCode::InvalidDocument
+            },
+            error.to_string(),
+        ));
+    }
+    String::from_utf8(writer.bytes).map_err(|e| invalid(e.to_string()))
+}
+
+/// Clock-free native/browser boundary: report plus an exact options document for ordinary sewing.
+/// Keep `selected_options_json` as text when saving it; parsing/reformatting in JavaScript can change
+/// floating-point source identities. Absent incumbents yield no assignable options, not stale output.
+///
+/// # Errors
+/// Combined input over 64 MiB, malformed JSON, invalid search policy, or output over 64 MiB.
+/// A completed search with no admitted recipe is a report with null selected options, not a parse error.
+pub fn select_json(pattern: &str, request: &str) -> Result<String, Refusal> {
+    if pattern
+        .len()
+        .checked_add(request.len())
+        .is_none_or(|n| n > MAX_JSON_BYTES)
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "combined sewing selection input exceeds 64 MiB",
+        ));
+    }
+    let pattern = Pattern::new(serde_json::from_str(pattern).map_err(|e| invalid(e.to_string()))?);
+    let request: Request = serde_json::from_str(request).map_err(|e| invalid(e.to_string()))?;
+    let report = request.select(&pattern)?;
+    let options = report
+        .selected_plan
+        .as_ref()
+        .map(|plan| encode(&plan.options))
+        .transpose()?;
+    #[derive(Serialize)]
+    struct Job<'a> {
+        schema: &'static str,
+        report: &'a Report,
+        selected_options_json: Option<String>,
+    }
+    encode(&Job {
+        schema: "ftx-sewing-selection-job/1",
+        report: &report,
+        selected_options_json: options,
+    })
 }
