@@ -160,3 +160,44 @@ fn unsupported_inputs_and_incomplete_inventory_never_publish_a_preview() {
         assert!(diagnostics.contains("64 MiB"));
     }
 }
+
+#[test]
+fn both_binaries_enforce_regions_and_export_reusable_source_preserving_inventory() {
+    const ZONES: &str =
+        include_str!("../../../tests/fixtures/materials/synthetic-stock-zones.json");
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let request: Request = serde_json::from_str(ZONES).unwrap();
+    let direct = request.build(&p).unwrap();
+    for main in [false, true] {
+        let dir = workspace();
+        fs::write(dir.join("stock.json"), ZONES).unwrap();
+        let plan = success(&invoke(main, &dir, "stock-plan", &[]));
+        assert_eq!(plan, serde_json::to_value(&direct).unwrap());
+        let residual = success(&invoke(main, &dir, "stock-residual", &[]));
+        assert_eq!(
+            residual,
+            serde_json::to_value(direct.residual_request().unwrap()).unwrap()
+        );
+        let _ = success(&invoke(main, &dir, "stock-svg", &["0", "zone-review.svg"]));
+        let preview = fs::read_to_string(dir.join("zone-review.svg")).unwrap();
+        assert_eq!(preview, stock_svg(&direct, 0).unwrap());
+        assert!(preview.contains("data-required-zone=\"prime\""));
+        assert_eq!(fs::read_to_string(dir.join("stock.json")).unwrap(), ZONES);
+        let mut invalid: Value = serde_json::from_str(ZONES).unwrap();
+        invalid["options"]["piece_zones"]["front"] = json!("missing");
+        fs::write(dir.join("stock.json"), invalid.to_string()).unwrap();
+        for action in ["stock-plan", "stock-residual"] {
+            assert!(!invoke(main, &dir, action, &[]).status.success());
+        }
+        assert!(
+            !invoke(main, &dir, "stock-svg", &["0", "invalid.svg"])
+                .status
+                .success()
+        );
+        assert!(!dir.join("invalid.svg").exists());
+        assert_eq!(
+            fs::read_to_string(dir.join("zone-review.svg")).unwrap(),
+            preview
+        );
+    }
+}

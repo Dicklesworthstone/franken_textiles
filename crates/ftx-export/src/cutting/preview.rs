@@ -128,6 +128,7 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
         .iter()
         .chain(&marker.occupied_mm)
         .map(Vec::len)
+        .chain(marker.zones.iter().map(|z| z.outline_mm.len()))
         .chain(marker.placements.iter().flat_map(|p| {
             [p.cut_mm.len(), 2, p.drills_mm.len()]
                 .into_iter()
@@ -167,10 +168,39 @@ pub fn stock_svg(plan: &super::stock::Plan, index: usize) -> Result<String, Refu
     for occupied in &marker.occupied_mm {
         out.push_str(&format!("<path d=\"{}\"/>\n", path(occupied, true)));
     }
-    out.push_str("</g>\n<g id=\"placements\" fill=\"none\" stroke=\"black\">\n");
+    out.push_str("</g>\n");
+    if !marker.zones.is_empty() {
+        out.push_str(
+            "<g id=\"stock-zones\" fill=\"none\" stroke=\"#17695e\" stroke-dasharray=\"3 1\">\n",
+        );
+        for zone in &marker.zones {
+            out.push_str(&format!(
+                "<path data-zone=\"{}\" d=\"{}\"><title>{}</title></path>\n",
+                xml_escape(&zone.id),
+                path(&zone.outline_mm, true),
+                xml_escape(&format!(
+                    "{}: placement region, NOT a cut path; {}",
+                    zone.id, zone.geometry_source.note
+                ))
+            ));
+            if out.len() > 64 * 1024 * 1024 {
+                return Err(preview_budget());
+            }
+        }
+        out.push_str("</g>\n");
+    }
+    out.push_str("<g id=\"placements\" fill=\"none\" stroke=\"black\">\n");
     for (i, p) in marker.placements.iter().enumerate() {
+        let zone_attribute = plan
+            .request()
+            .options
+            .piece_zones
+            .get(&p.piece)
+            .map_or_else(String::new, |id| {
+                format!(" data-required-zone=\"{}\"", xml_escape(id))
+            });
         out.push_str(&format!(
-            "<g id=\"piece-{i}\" data-instance=\"{}\" data-copy=\"{}\"{}><path class=\"cut-exterior\" d=\"{}\"/>\n",
+            "<g id=\"piece-{i}\" data-instance=\"{}\" data-copy=\"{}\"{}{zone_attribute}><path class=\"cut-exterior\" d=\"{}\"/>\n",
             xml_escape(&p.instance), p.copy, reversal_attribute(p.grain_reversed), path(&p.cut_mm, true)
         ));
         for (v, closed) in &p.internal_cut_mm {

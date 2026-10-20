@@ -70,3 +70,37 @@ fn budgets_precede_parsing_and_geometry_work_exhaustion_publishes_nothing() {
         RefusalCode::BudgetExceeded
     );
 }
+
+#[test]
+fn source_regions_flow_through_file_free_plans_previews_and_residuals() {
+    const ZONES: &str =
+        include_str!("../../../tests/fixtures/materials/synthetic-stock-zones.json");
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let r: Request = serde_json::from_str(ZONES).unwrap();
+    let direct = r.build(&p).unwrap();
+    let actual: Value =
+        serde_json::from_str(&manufacturing::stock_plan(PATTERN, ZONES).unwrap()).unwrap();
+    assert_eq!(actual, serde_json::to_value(&direct).unwrap());
+    let residual = manufacturing::stock_residual(PATTERN, ZONES).unwrap();
+    let restored: Request = serde_json::from_str(&residual).unwrap();
+    assert_eq!(restored.options.piece_zones, r.options.piece_zones);
+    assert_eq!(
+        serde_json::to_value(&restored.stocks[0].zones).unwrap(),
+        serde_json::to_value(&r.stocks[0].zones).unwrap()
+    );
+    let preview = manufacturing::stock_svg(PATTERN, ZONES, 0).unwrap();
+    assert_eq!(preview, stock_svg(&direct, 0).unwrap());
+    assert!(preview.contains("id=\"stock-zones\""));
+    assert!(preview.contains("data-required-zone=\"prime\""));
+    let mut escaped: Value = serde_json::from_str(ZONES).unwrap();
+    let id = "prime<\"&";
+    escaped["stocks"][0]["zones"][0]["id"] = json!(id);
+    escaped["options"]["piece_zones"]["front"] = json!(id);
+    let preview = manufacturing::stock_svg(PATTERN, &escaped.to_string(), 0).unwrap();
+    assert!(preview.contains("data-required-zone=\"prime&lt;&quot;&amp;\""));
+    assert!(!preview.contains("data-required-zone=\"prime<"));
+    escaped["options"]["piece_zones"]["front"] = json!("missing");
+    assert!(manufacturing::stock_plan(PATTERN, &escaped.to_string()).is_err());
+    assert!(manufacturing::stock_svg(PATTERN, &escaped.to_string(), 0).is_err());
+    assert!(manufacturing::stock_residual(PATTERN, &escaped.to_string()).is_err());
+}
