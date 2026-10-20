@@ -849,9 +849,8 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     assert_eq!(read(&dir.join("accepted.json")), accepted);
     assert_eq!(std::fs::read(dir.join("model.ftxbody")).unwrap(), bytes);
 
-    // Rank the actual histories through both native adapters, retaining the existing initial
-    // settledness gate. This short-motion fixture is not promoted to an accepted garment by
-    // changing a flag. Its source-complete output is also replayed through compiled WASM.
+    // The short, loose-band run has not physically settled, even though its window means barely
+    // drift. Retain it as a negative comparison before constructing a supported positive case.
     let mut compared_study = study.clone();
     compared_study["comparison"] = json!({"basis":"nominal", "objectives":[
         {"metric":"motion_max_absolute_edge_strain_pct","direction":"minimize"},
@@ -861,6 +860,48 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
         {"metric":"transient_coverage_final_min_temperature_c","direction":"maximize"}],
         "required_consumers":["transient_surface","transient_coverage"]});
     save(&dir.join("study.json"), &compared_study);
+    let unsettled = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    assert!(
+        unsettled["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    for sim in unsettled["simulations"].as_array().unwrap() {
+        assert_eq!(
+            sim["evaluation"]["result"]["drape"]["numerical"]["settled"],
+            false
+        );
+        assert_eq!(
+            sim["evaluation"]["result"]["metrics"]["simulation_gating_clear"],
+            false
+        );
+    }
+
+    // A slightly stretched band grips the 100 mm radius synthetic cylinder. Give contact and
+    // friction explicit physical time to settle; do not relax any numerical acceptance limit.
+    let width = std::f64::consts::TAU * 98.0;
+    pattern["pieces"][0]["vertices"]["b"][0] = json!(width);
+    pattern["pieces"][0]["vertices"]["c"][0] = json!(width);
+    pattern["pieces"][0]["placement"]["radius_mm"] = json!(110.0);
+    pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+    scenario["options"] = json!({"spacing":30.0,"sew_steps":12,"drape_steps":96,"step":0.005});
+    save(&dir.join("pattern.json"), &pattern);
+    save(&dir.join("scenario.json"), &scenario);
+    save(&dir.join("study.json"), &study);
+    let settled = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    for sim in settled["simulations"].as_array().unwrap() {
+        assert_eq!(
+            sim["evaluation"]["result"]["drape"]["numerical"]["settled"],
+            true,
+            "status {}, refusal {}, gates {}, final speed {}",
+            sim["evaluation"]["status"],
+            sim["evaluation"]["refusal"],
+            sim["evaluation"]["result"]["drape"]["gating"],
+            sim["evaluation"]["result"]["drape"]["numerical"]["drape"]["max_speed"]
+        );
+    }
+    save(&dir.join("study.json"), &compared_study);
     let compared = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
     assert_eq!(
         compared,
@@ -869,20 +910,20 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
             &["--json", "materials", "scenario-study"]
         )
     );
-    assert_eq!(compared["simulations"], slower["simulations"]);
+    assert_eq!(compared["simulations"], settled["simulations"]);
     // The policy changes the canonical study identity, while every manufacturing outcome stays
     // unchanged as parsed JSON. Scenario-only comparison remains top-level.
     let compared_request: ftx_export::material_study::Request =
         serde_json::from_value(compared_study).unwrap();
-    let mut expected_manufacturing = slower["manufacturing"].clone();
+    let mut expected_manufacturing = settled["manufacturing"].clone();
     expected_manufacturing["request_sha256"] =
         json!(sha256_hex(&serde_json::to_vec(&compared_request).unwrap()));
     assert_ne!(
         expected_manufacturing["request_sha256"],
-        slower["manufacturing"]["request_sha256"]
+        settled["manufacturing"]["request_sha256"]
     );
     assert_eq!(compared["manufacturing"], expected_manufacturing);
-    assert_ne!(compared["request_sha256"], slower["request_sha256"]);
+    assert_ne!(compared["request_sha256"], settled["request_sha256"]);
     assert_eq!(
         compared["comparison"]["alternatives"]
             .as_array()
