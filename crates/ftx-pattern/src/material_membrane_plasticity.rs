@@ -14,6 +14,9 @@ use crate::material_response::Response;
 use crate::material_return_map::{self, Failure, Parameters};
 use crate::materials::{Form, Material};
 
+/// Source-qualified identification from complete signed loading histories.
+pub mod calibration;
+
 /// Explicit opt-in at `structure.membrane_plasticity_model`.
 pub const MODEL: &str = "orthotropic_green_return_map/1";
 /// Fixed reference material coordinates; engineering shear is twice E12.

@@ -485,7 +485,56 @@ function sewingResult(parent, r) {
     setup_changes: order?.selected_changes, minimum_setup_changes_proven: order?.optimality_proven,
     search_nodes: order?.search_nodes, hardware_execution_authorized: plan?.hardware_execution_authorized };
 }
+function permanentStretchResult(parent, r) {
+  const c = r.calibration, d = c.diagnostics;
+  const decision = document.createElement("p");
+  decision.textContent = `Permanent-stretch identification: ${c.status}. Held-out replay: ${c.check_status}. ` +
+    c.decision_reasons.join(" ") + (c.check_refusal ? ` ${c.check_refusal.message}` : "");
+  parent.append(decision);
+  const errors = table(parent, "Cyclic load errors — independent whole histories",
+    ["Partition", "Observed components", "Scaled RMS", "Scaled peak"]);
+  for (const [name, quality] of [["Fit", c.fit], [`Held out: ${c.check_status}`, c.check]]) {
+    cells(errors, [name, metric(quality?.components), metric(quality?.rms_scaled), metric(quality?.peak_scaled)]);
+  }
+  const parameters = table(parent, "Selected FIT coefficients and declared search bounds",
+    ["Material direction", "Yield (N/m)", "Yield search range (N/m)", "Hardening (N/m)", "Hardening search range (N/m)"]);
+  const domain = table(parent, "Source-declared total and accumulated Green-strain limits",
+    ["Material direction", "Total strain limit", "Accumulated plastic-strain limit"]);
+  const sourceQuantity = q => q ? `${metric(q.value)} ${q.unit}` : "Unknown";
+  for (const [i, axis] of ["warp", "weft", "shear"].entries()) {
+    const name = ["Warp / wale", "Weft / course", "Engineering shear"][i];
+    const bounds = values => `[${values.map(metric).join(", ")}]`;
+    cells(parameters, [name, metric(c.parameters?.yield_n_m[i]), bounds(c.input.yield_bounds_n_m[i]),
+      metric(c.parameters?.hardening_n_m[i]), bounds(c.input.hardening_bounds_n_m[i])]);
+    const properties = c.input.material.properties;
+    cells(domain, [name, sourceQuantity(properties[`membrane_strain_limit_${axis}`]),
+      sourceQuantity(properties[`membrane_accumulation_limit_${axis}`])]);
+  }
+  const work = table(parent, "Identification work and FIT excitation", ["Diagnostic", "Value"]);
+  for (const row of [
+    ["Completed / attempted starts", `${metric(d.starts_completed)} / ${metric(d.starts_attempted)}`],
+    ["Forward evaluations / limit", `${metric(d.evaluations)} / ${metric(d.evaluation_limit)}`],
+    ["Reserved history nodes / limit", `${metric(d.history_steps)} / ${metric(d.history_step_limit)}`],
+    ["Refused forward trials", metric(d.trials_refused)],
+    ["FIT excitation pivot", d.sensitivity_evaluated ? metric(d.excitation_pivot) : "Not evaluated"]
+  ]) cells(work, row);
+  const note = document.createElement("p");
+  note.textContent = "The shared rate-independent law follows every recorded loading, unloading and reversal node, including nodes with unobserved forces. " +
+    "Strains are raw material-frame Green strain; loads are second-Piola sheet resultants in N/m. " +
+    "FIT chooses the coefficients before CHECK replay. Search ranges, force scales and local sensitivity are not confidence intervals or a proof of global uniqueness. " +
+    "Applicability limits remain supplied source observations; the fitter does not infer them from the largest load. Fitted coefficients remain estimates.";
+  parent.append(note);
+  detail(parent, "Complete source histories, permanent strain, stored energy, dissipation and residuals", c);
+  return { response: "Permanent stretch and directional hardening", status: c.status,
+    held_out: c.check_status, input_sha256: c.input_sha256, material_id: r.selection?.id,
+    allow_estimates: r.selection?.allow_estimates,
+    mechanical_coefficients_available: r.material?.capabilities.mechanical_coefficients?.ready === true,
+    mechanics_refusal: r.material?.capabilities.mechanical_coefficients?.refusal,
+    next: r.selection ? "Review capabilities, then assign the identified selection above and bind the pattern." :
+      "Review the retained diagnostics and source histories. No identified selection is available to assign." };
+}
 function calibrationResult(parent, r) {
+  if (r.calibration?.schema === "ftx-membrane-plasticity-calibration-report/1") return permanentStretchResult(parent, r);
   if (r.comparison) {
     const comparison = r.comparison, decision = comparison.fit_decision;
     const models = table(parent, "Recovery model comparison — FIT choice before held-out checks",

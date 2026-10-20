@@ -44,6 +44,8 @@ mod bending_calibration;
 mod cutting;
 #[path = "material_workbench/friction.rs"]
 mod friction_calibration;
+#[path = "material_workbench/membrane_plasticity.rs"]
+mod membrane_plasticity_calibration;
 #[path = "material_workbench/relaxation.rs"]
 mod relaxation_calibration;
 
@@ -65,6 +67,7 @@ ftx-materials pressure-condition REQUEST.json
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-nonlinear SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
+ftx-materials calibrate-membrane-plasticity HISTORIES.json [--allow-estimates]
 ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials calibrate-friction SLIDING.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
@@ -96,6 +99,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-steady-coverage` recomputes layered body coverage and heat directly from retained drape materials, without invented storage.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
 `calibrate-nonlinear` identifies signed nonlinear membrane curves from nominal forces without extrapolating.
+`calibrate-membrane-plasticity` identifies permanent stretch and hardening from source-qualified loading cycles; unresolved fits retain their report without publishing a selection.
 `calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
 `calibrate-friction` identifies explicit pair/self/body kinetic coefficients from corrected steady sliding forces.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
@@ -270,6 +274,12 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-at", id, t, "--allow-estimates"] => thermal_transient::point(id, t, true),
         ["calibrate-bending", path] => bending_calibration::run(path, false),
         ["calibrate-bending", path, "--allow-estimates"] => bending_calibration::run(path, true),
+        ["calibrate-membrane-plasticity", path] => {
+            membrane_plasticity_calibration::run(path, false)
+        }
+        ["calibrate-membrane-plasticity", path, "--allow-estimates"] => {
+            membrane_plasticity_calibration::run(path, true)
+        }
         ["calibrate-relaxation", path] => relaxation_calibration::run(path, false),
         ["calibrate-relaxation", path, "--allow-estimates"] => {
             relaxation_calibration::run(path, true)

@@ -36,6 +36,19 @@ Python's `str(KeyError)`; `Value` prints as is).
 
 **Determinism class.** Fixed-order f64 arithmetic over `ftx-core`; bit-identical across targets.
 
+**Permanent membrane identification** (`material_membrane_plasticity::calibration`). Whole acquired
+histories replay the existing raw-Green/second-Piola incremental return map from explicitly pristine
+reference states. Four source-qualified elastic observations and six independently supplied strain/
+accumulation domains stay fixed; only six yield/hardening values are identified inside declared bounds.
+FIT alone controls bounded multistart optimization, equivalent-candidate checks and local sensitivity;
+CHECK replays the fixed choice afterwards. Missing force channels remain absent while their strain
+nodes advance memory. Numerical bound projection never substitutes for stationarity, and every forward
+probe/refusal/replay consumes the shared work budget. Ambiguous, incomplete or rejected reports carry
+no material. Accepted source-bearing fitted quantities remain estimates with no inferred confidence,
+continuous-path, measured-textile, damage, fatigue or empirical garment claim. The independent synthetic
+cycle fixture and `tests/membrane_plasticity_calibration.rs` exercise signed history, coupled elasticity,
+unobserved peaks, held-out isolation and constrained identification.
+
 **Validation** (`validate`, spec 01 §9): seam walk, truing, points of measure, report status, text table
 and the role-based default fit spec. The body comes through the `BodyMeasure` trait (values, σ, landmark
 heights); `Measurements` implements it for a measurement file (flat or fused) with the reference's

@@ -98,7 +98,8 @@ through the exported `thermal_steady` WASM API; it is not an additional workbenc
 ## Identify material behavior from local observations
 
 Section 1 accepts `ftx-nonlinear-swatch-calibration/1` observations for nonlinear stretch and shear,
-or `ftx-relaxation-calibration/1` complete loading histories for relaxation, creep and recovery.
+`ftx-relaxation-calibration/1` complete loading histories for relaxation, creep and recovery, or
+`ftx-membrane-plasticity-calibration/1` cycles for permanent stretch and directional hardening.
 Choose the matching response, load the source-bearing JSON and run **Identify material behavior**.
 Timed requests preserve their independent long-time equilibrium. Directional recovery accepts either
 fixed `orthotropic.times_seconds` or one to three nonoverlapping `orthotropic.time_bounds_seconds`
@@ -106,6 +107,23 @@ windows for identifying the times. Omit or leave empty the other field; supplyin
 Proportional ratio/time search uses its separate top-level time bounds. The shared Rust
 calibrators own the models, fitting, evidence admission, identifiability and residual gates; the page
 neither fits coefficients itself nor rewrites the supplied measurements.
+
+For permanent stretch, supply complete pristine-start loading/unloading/reversal histories in raw
+Green strain and second-Piola sheet resultants. Missing force channels remain null, while every
+recorded strain node still advances the existing permanent-state law. The material supplies matched
+elastic coefficients and source-bearing total/accumulated strain limits; explicit search ranges
+bound identification of all three yields and all three hardening values. Those ranges do not define
+confidence intervals or replace the independently supplied applicability limits.
+
+The result displays the selected FIT parameters, original search bounds, independent partition
+errors, held-out status, actual work and excitation diagnostics. Accepted, ambiguous, rejected and
+budget-exhausted outcomes remain distinct. A failed CHECK retains the same FIT choice rather than
+promoting another candidate. Nonaccepted outcomes clear the previous selection and offer only the
+complete report and original request for download; accepted results additionally publish the normal
+source-locked selection for existing binding and drape consumers. Complete histories, permanent and
+accumulated strain, stored energy, dissipation and force residuals remain inspectable. See
+[material-membrane-plasticity.md](material-membrane-plasticity.md) and its deliberately synthetic
+calibration fixture; no source identity or observed force is inferred from a fiber or brand label.
 
 The **Admit the fitted estimates** checkbox is off initially. It only sets the returned selection's
 estimate policy. Estimated input observations, estimated equilibrium and replacement of an existing

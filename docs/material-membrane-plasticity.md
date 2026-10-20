@@ -221,7 +221,100 @@ Each captured scalar costs one vertex-equivalent against the motion sample budge
 enabled, every thermal cell/substep conservatively costs **129** `max_cell_steps` units, covering
 bounded enthalpy inversion and transport, including steps with zero newly dissipated work.
 
+## Identify yield and hardening from acquired histories
+
+`ftx-membrane-plasticity-calibration/1` identifies the **six yield and hardening coefficients** of
+the law above. It keeps the four elastic observations and all six strain/accumulation limits fixed.
+Those ten source-bearing quantities must already be present in `material.properties`, with matching
+`specimen_id`, `conditioning` and any additional acquisition conditions. A range explored by the
+optimizer is not a material validity interval or a confidence bound. Total strain and accumulation
+limits must come from independent characterization; the calibration never derives them from the
+largest observed load or replaces them with a search result.
+
+The complete executable example is
+[`synthetic-membrane-plasticity-calibration.json`](../tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json).
+It is entirely artificial, with independently computed directional loading, unloading, reversed
+loading and reloading. A deliberately unobserved load at a recorded higher warp strain still changes
+the later permanent state. It does not supply constants for linen, leather or knit fabric.
+
+Each experiment names a source, evidence class, unique acquisition ID, whole-history `fit` or `check`
+partition and mandatory `initialization: "pristine"`. Every history starts at zero time and zero
+strain in the unworked reference. Each subsequent node contains increasing `time_seconds`, raw
+`green_strain: [E11,E22,2E12]`, `second_piola_n_m: [S11,S22,S12]`, and positive `scale_n_m` for residual
+weighting. Missing load channels are `null`; their strain nodes still advance the existing material
+memory. Do not replace a missing lateral force with zero or confuse nominal/Cauchy loads with these
+work-conjugate second-Piola sheet resultants. The acquisition protocol must explain that reduction.
+The solver replays the retained incremental nodes. It does not infer a continuous load path between
+them or establish increment-size independence. Time labels preserve acquisition order; this law has
+no relaxation-rate parameter.
+
+Set explicit, strictly ordered `yield_bounds_n_m` and `hardening_bounds_n_m`, each three pairs in
+warp/weft/shear order. Yield lower bounds must be positive; hardening can include an explicit zero.
+`allow_estimated_material` admits independently supplied estimated elastic/domain quantities;
+`allow_estimated_observations` separately admits estimated or synthetic acquisitions. Neither changes
+the fitted coefficients' `estimate` classification. `replace_existing` is necessary to replace a prior
+permanent-law selector or yield/hardening observation; the original remains in the report.
+
+The existing command and workbench paths expose this operation:
+
+```sh
+cargo run --locked -p ftx-cli --bin ftx-materials -- calibrate-membrane-plasticity \
+  tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json --allow-estimates
+cargo run --locked -p ftx-cli --bin ftx -- --json materials calibrate-membrane-plasticity \
+  tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json --allow-estimates
+```
+
+The commands' final `--allow-estimates` controls **consumption** of the fitted material, separately
+from permission to use the supplied acquisition. Library callers use
+`material_membrane_plasticity::calibration::calibrate`; accepted reports supply an ordinary material
+for the existing catalog/resolver/frozen-selection boundary. No calibration-specific solver or changed
+pattern is needed to carry an admitted selection into sewn drape and prescribed-body motion.
+
+Identification uses four deterministic starts and bounded damped Gauss–Newton steps in normalized
+parameter coordinates. A complete observed FIT prefix may supply an algebraic starting estimate;
+it adds no observations. Finite-difference probes replay complete FIT histories from their declared
+initial states. Bound-constrained gradient stationarity is checked so a Newton step clipped to a
+corner cannot be mistaken for convergence. All starts, attempted forward evaluations, rejected
+trials and final probes/replays share `max_evaluations` (1–4096) and a fixed 2,000,000 recorded-node
+budget. The input permits up to 32 histories and 2048 recorded nodes. These are work limits, not
+runtime or accuracy guarantees.
+
+The report retains original evidence, source identity, every entered start, the selected FIT
+coefficients, work counts, observed-component residuals and the accepted permanent strain,
+accumulation, storage and dissipated work at each successfully replayed node. FIT sensitivity and a
+column-normalized Gram pivot describe local numerical excitation. Missing directions, indistinguishable
+yield/hardening effects or materially different residual-equivalent start solutions are `AMBIGUOUS`.
+Iteration limits and incomplete sensitivity calculations cannot produce an assignable material.
+Work exhaustion is `BUDGET_EXHAUSTED`, including exhaustion during final diagnostics or CHECK replay.
+Numerical convergence and local excitation do not prove global uniqueness or coefficient confidence.
+
+All parameter selection and excitation analysis finish **before CHECK replay**. A CHECK failure
+rejects the same selected candidate; another start is never promoted because it fits CHECK better.
+FIT and CHECK must each meet the declared RMS and peak scaled-residual limits. When no CHECK load is
+observed, its status is `NOT_PROVIDED`, with no passing independent validation claim. Only `ACCEPTED`
+contains a material; ambiguous, rejected and incomplete results retain reviewable diagnostics but
+cannot leave an old assignable calibration active. Source-locked fitted quantities remain estimates
+with no manufactured uncertainty bounds. Empirical cyclic-coupon and garment acceptance remain open.
+
 ## Verification and remaining material evidence
+
+### Calibration checks
+
+The independent synthetic cycle fixture and focused calibration checks cover all six coefficients,
+coupled yielding, missing load channels that still advance memory, a constrained optimum, explicit
+replacement, insufficient excitation, FIT/CHECK isolation and exhaustion during final replay.
+The command and shared WASM checks additionally exercise ordinary frozen selection, unchanged
+pattern binding, material-hash tampering and separate acquisition/consumption admission. Browser
+state checks cover all unresolved outcomes and withdrawal of a previously assignable selection.
+
+```sh
+cargo test --locked -p ftx-pattern --test membrane_plasticity_calibration
+cargo test --locked -p ftx-cli --test membrane_plasticity_calibration_workflow
+cargo test --locked -p ftx-wasm --test materials
+node --experimental-vm-modules --test tools/check_materials_frontend.cjs
+```
+
+### Forward-law and qualified heat checks
 
 ```sh
 cargo test --locked -p ftx-pattern --test material_membrane_plasticity --test material_plasticity
@@ -251,7 +344,7 @@ a textile's conversion fraction or establish temperature agreement with a real s
 `ftx-ps1` and `ftx-tm4` remain open for matched cyclic warp/weft/shear acquisitions and independent
 loading, unloading and reloading checks, plus stiffness degradation, damage and rupture. Joint
 Maxwell/nonlinear plastic response, gathered compression, conditioning effects, serialized restart,
-remeshing transfer and thermomechanical feedback remain separate missing capabilities. Existing
-elastic or relaxation calibration commands do not identify permanent yields or hardening. The
-linen/leather/knit substitution and independent garment gates need measured specimens, not the
-synthetic fixture's values.
+remeshing transfer and temperature feedback to mechanics remain separate missing capabilities. Existing
+elastic or relaxation calibration commands retain their own models; permanent yield/hardening uses
+the separate existing-law identification request above. The linen/leather/knit substitution and
+independent garment gates need measured specimens, not the synthetic fixture's values.

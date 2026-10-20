@@ -232,6 +232,53 @@ pub fn material_calibrate_relaxation(
         .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Identify permanent stretch and hardening from complete source-qualified cyclic histories.
+/// Nonaccepted fits retain their diagnostics but cannot supply an assignable material selection.
+///
+/// # Errors
+/// Oversized or invalid input, unsupported initial state, incompatible specimen conditions or
+/// inadmissible source evidence. Missing unrelated properties remain explicit capability gaps.
+pub fn calibrate_membrane_plasticity(
+    input: &str,
+    allow_estimates: bool,
+) -> Result<String, Refusal> {
+    budget(&[input])?;
+    let input = serde_json::from_str(input).map_err(invalid)?;
+    let report = ftx_pattern::material_membrane_plasticity::calibration::calibrate(&input)?;
+    let Some(material) = &report.material else {
+        return serde_json::to_string(&json!({"calibration":report,"selection":null,
+            "selection_json":null,"material":null,"simulation_ready":false,
+            "fit_claim":false,"empirical_validation_claim":false}))
+        .map_err(invalid);
+    };
+    let snapshot = textile_import::catalog()?.resolve(&Selection {
+        id: material.id.clone(),
+        record: Some(material.clone()),
+        allow_estimates,
+        ..Selection::default()
+    })?;
+    let selection = snapshot.frozen_selection();
+    let selection_json = serde_json::to_string(&selection).map_err(invalid)?;
+    serde_json::to_string(&json!({"calibration":report,"selection":selection,
+        "selection_json":selection_json,"material":detail(&snapshot)?,
+        "fit_claim":false,"empirical_validation_claim":false}))
+    .map_err(invalid)
+}
+
+/// Browser permanent-stretch identification through the shared production material law.
+///
+/// # Errors
+/// Same refusals as [`calibrate_membrane_plasticity`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_calibrate_membrane_plasticity(
+    input: &str,
+    allow_estimates: bool,
+) -> Result<String, wasm_bindgen::JsError> {
+    calibrate_membrane_plasticity(input, allow_estimates)
+        .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Screen source-locked alternatives under explicit constraints, evidence policy and objectives.
 ///
 /// # Errors

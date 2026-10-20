@@ -38,6 +38,127 @@ fn changes(default: Value) -> Value {
 }
 
 #[test]
+fn permanent_stretch_api_identifies_the_native_law_and_preserves_consumption_policy() {
+    let input = include_str!(
+        "../../../tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json"
+    );
+    let native = ftx_pattern::material_membrane_plasticity::calibration::calibrate(
+        &serde_json::from_str(input).unwrap(),
+    )
+    .unwrap();
+    let expected = serde_json::to_value(native).unwrap();
+    assert_eq!(expected["status"], "ACCEPTED");
+    for admission in [false, true] {
+        let fitted: Value = serde_json::from_str(
+            &materials::calibrate_membrane_plasticity(input, admission).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fitted["calibration"], expected);
+        assert_eq!(fitted["selection"]["allow_estimates"], admission);
+        assert_eq!(
+            fitted["material"]["capabilities"]["mechanical_coefficients"]["ready"],
+            admission
+        );
+        assert_eq!(fitted["fit_claim"], false);
+        assert_eq!(fitted["empirical_validation_claim"], false);
+        for (i, (axis, yield_value, hardening)) in [
+            ("warp", 10.0, 100.0),
+            ("weft", 8.0, 50.0),
+            ("shear", 5.0, 25.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let parameters = &fitted["calibration"]["parameters"];
+            assert!((parameters["yield_n_m"][i].as_f64().unwrap() - yield_value).abs() < 1e-3);
+            assert!((parameters["hardening_n_m"][i].as_f64().unwrap() - hardening).abs() < 1e-3);
+            for (prefix, field) in [
+                ("membrane_yield", "yield_n_m"),
+                ("membrane_hardening", "hardening_n_m"),
+            ] {
+                let quantity =
+                    &fitted["selection"]["record"]["properties"][format!("{prefix}_{axis}")];
+                assert_eq!(quantity["value"], parameters[field][i]);
+                assert_eq!(quantity["evidence"], "estimate");
+                assert!(
+                    fitted["selection"]["record"]["sources"][quantity["source"].as_str().unwrap()]
+                        .is_object()
+                );
+            }
+        }
+        let selection = fitted["selection_json"].as_str().unwrap();
+        let inspected: Value =
+            serde_json::from_str(&materials::inspect(selection).unwrap()).unwrap();
+        assert_eq!(inspected, fitted["material"]);
+        let request = format!(r#"{{"schema":"ftx-material-bindings/1","default":{selection}}}"#);
+        let bound: Value =
+            serde_json::from_str(&materials::bind(PATTERN, &request).unwrap()).unwrap();
+        assert_eq!(bound["geometry_changed"], false);
+        assert_eq!(
+            bound["drape_materials_without_self_contact"]["ready"],
+            admission
+        );
+        let original: Value = serde_json::from_str(PATTERN).unwrap();
+        assert_eq!(bound["pattern"]["pieces"], original["pieces"]);
+        assert_eq!(bound["pattern"]["seams"], original["seams"]);
+        let mut altered: Value = serde_json::from_str(selection).unwrap();
+        altered["record"]["properties"]["membrane_yield_warp"]["value"] = json!(999.0);
+        assert!(materials::inspect(&altered.to_string()).is_err());
+    }
+    let mut unapproved: Value = serde_json::from_str(input).unwrap();
+    unapproved["allow_estimated_observations"] = json!(false);
+    assert!(materials::calibrate_membrane_plasticity(&unapproved.to_string(), true).is_err());
+    assert!(materials::calibrate_membrane_plasticity("{}", true).is_err());
+}
+
+#[test]
+fn unresolved_permanent_stretch_api_keeps_diagnostics_without_publishing_a_selection() {
+    let input: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json"
+    ))
+    .unwrap();
+    let mut failed = input.clone();
+    let check = failed["experiments"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|experiment| experiment["partition"] == "check")
+        .unwrap();
+    check["samples"].as_array_mut().unwrap().last_mut().unwrap()["second_piola_n_m"][0] =
+        json!(1_000_000.0);
+    let mut limited = input.clone();
+    limited["max_evaluations"] = json!(1);
+    let mut unexcited = input;
+    for experiment in unexcited["experiments"].as_array_mut().unwrap() {
+        for sample in experiment["samples"].as_array_mut().unwrap() {
+            sample["green_strain"][2] = json!(0.0);
+            sample["second_piola_n_m"][2] = json!(0.0);
+        }
+    }
+    for (request, status) in [
+        (failed, "REJECTED"),
+        (limited, "BUDGET_EXHAUSTED"),
+        (unexcited, "AMBIGUOUS"),
+    ] {
+        let output: Value = serde_json::from_str(
+            &materials::calibrate_membrane_plasticity(&request.to_string(), true).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(output["calibration"]["status"], status, "{output}");
+        assert!(output["calibration"]["material"].is_null());
+        assert!(output["calibration"]["diagnostics"].is_object());
+        assert!(
+            output["calibration"]["decision_reasons"]
+                .as_array()
+                .is_some_and(|v| !v.is_empty())
+        );
+        for field in ["selection", "selection_json", "material"] {
+            assert!(output[field].is_null(), "{field}: {output}");
+        }
+    }
+}
+
+#[test]
 fn nonlinear_swatch_api_reuses_native_identification_and_binding() {
     let input = include_str!("../../../tests/fixtures/materials/synthetic-nonlinear-swatch.json");
     let denied: Value =

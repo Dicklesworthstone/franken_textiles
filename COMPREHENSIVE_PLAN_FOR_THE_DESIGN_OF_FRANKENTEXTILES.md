@@ -1944,6 +1944,33 @@ See [material-sewing-plans.md](docs/material-sewing-plans.md).
 
 ---
 
+### 25.27 Permanent stretch identified from complete cyclic acquisitions
+
+**Source-qualified yield and hardening identification (`ftx-ps1`, `ftx-tm4`).** The existing
+permanent membrane law now accepts bounded identification of its six directional yield/hardening
+coefficients from signed raw-Green strain and work-conjugate second-Piola sheet-load histories.
+Four independently supplied elastic observations and six characterized strain/accumulation limits
+remain fixed. Every recorded strain node advances the same return-map memory used by the simulator,
+including unloading, reversal and nodes with missing load channels. No rate law or unobserved
+loading path is inferred.
+
+Whole histories are partitioned into FIT and CHECK. Four bounded deterministic starts, local
+excitation and residual-equivalent candidate checks use FIT only; CHECK replays the fixed choice
+afterwards. All forward probes, refused trials and final replays share explicit work limits.
+Unexcited, ambiguous, incomplete or rejected results retain diagnostics and publish no material.
+Accepted fitted quantities remain source-bearing estimates, with search bounds separate from
+independently characterized domains and no invented confidence intervals.
+
+Both native commands, the shared WASM API and the browser expose the same calibration-to-frozen-
+selection path. Acquisition admission and downstream use of estimates remain separate decisions.
+The browser retains exact input, residuals, permanent state and work diagnostics, and clears a
+previous assignable result when a new identification is unresolved. Ordinary material binding
+then carries an admitted selection into existing sewn and moving-body consumers. Independent
+synthetic cyclic answers check software behavior; measured coupon, damage/rupture and garment
+acceptance remain open. See [material-membrane-plasticity.md](docs/material-membrane-plasticity.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

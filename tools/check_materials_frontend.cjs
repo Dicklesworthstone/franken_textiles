@@ -10,6 +10,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const calibrationSelection = admission => `{"id":"identified","expected_sha256":"locked","allow_estimates":${admission},"value":-0.0,"coefficient":1.0}`;
 function calibrationReport(mode = 'nonlinear', admission = false, check = true) {
+  if (mode === 'membrane_plasticity') return permanentCalibration('ACCEPTED', admission, check);
   const selection = calibrationSelection(admission), quality = { components: 12, rms_scaled: 0.02, peak_scaled: 0.04 };
   return { selection: JSON.parse(selection), selection_json: selection, fit_claim: false,
     material: { selection: JSON.parse(selection), selection_json: selection, snapshot: { id: 'identified' },
@@ -38,6 +39,24 @@ function recoveryComparison(status = 'AMBIGUOUS') {
     {comparison,calibration:null,material:null,selection:null,selection_json:null,fit_claim:false};
 }
 
+function permanentCalibration(status = 'ACCEPTED', admission = false, check = true) {
+  const selected = calibrationReport('nonlinear', admission, check), quality = selected.calibration.fit;
+  const properties = Object.fromEntries(['warp','weft','shear'].flatMap(axis => [
+    [`membrane_strain_limit_${axis}`,{value:0.25,unit:'1'}],
+    [`membrane_accumulation_limit_${axis}`,{value:1,unit:'1'}]]));
+  selected.calibration = {schema:'ftx-membrane-plasticity-calibration-report/1',status,
+    input:{material:{properties},yield_bounds_n_m:[[1,20],[1,20],[1,10]],
+      hardening_bounds_n_m:[[0,200],[0,100],[0,50]],max_rms_scaled:0.05,max_peak_scaled:0.1},
+    parameters:{yield_n_m:[10,8,5],hardening_n_m:[100,50,25]},fit:quality,check:check?quality:null,
+    check_status:check?(status==='REJECTED'?'REJECTED':'ACCEPTED'):'NOT_PROVIDED',check_refusal:null,
+    decision_reasons:status==='ACCEPTED'?[]:['FIT coefficients are not independently resolved.'],
+    input_sha256:'exact-cycle-source',predictions:[{plastic_strain:[0.03,0,0],stored_j_m2:2,plastic_dissipation_j_m2:1}],
+    diagnostics:{starts_completed:4,starts_attempted:4,evaluations:400,evaluation_limit:4096,
+      history_steps:3000,history_step_limit:2000000,trials_refused:1,excitation_pivot:0.2,sensitivity_evaluated:true}};
+  if (status !== 'ACCEPTED') Object.assign(selected,{selection:null,selection_json:null,material:null});
+  return selected;
+}
+
 async function workerModule({ failFold = false, failExport = false, trap = false, rejectLoad = false,
   failScenario = false, trapScenario = false, bindings = null } = {}) {
   const sent = [], called = [], freed = [];
@@ -52,6 +71,7 @@ async function workerModule({ failFold = false, failExport = false, trap = false
     },
     material_calibrate_nonlinear: (r, a) => { called.push(['calibrate-nonlinear',r,a]); return JSON.stringify(calibrationReport('nonlinear',a)); },
     material_calibrate_relaxation: (r, a) => { called.push(['calibrate-relaxation',r,a]); return JSON.stringify(calibrationReport('relaxation',a)); },
+    material_calibrate_membrane_plasticity: (r, a) => { called.push(['calibrate-membrane_plasticity',r,a]); return JSON.stringify(calibrationReport('membrane_plasticity',a)); },
     material_screen: r => { called.push(['screen', r]); return '{"alternatives":[],"coefficient":1.0}'; },
     material_study: (p, r) => { called.push(['study', p, r]); return '{"alternatives":[],"coordinate":-0.0}'; },
     material_scenario_study: (b, p, r, s, m) => {
@@ -190,9 +210,9 @@ test('pressure conditioning preserves exact request and frozen selection through
   assert.equal(result.result.inspection.selection.id, 'compressed');
 });
 
-test('calibration worker routes both shared engines with explicit consent and lossless reusable selections', async () => {
+test('calibration worker routes all shared engines with explicit consent and lossless reusable selections', async () => {
   const w = await workerModule(), input = '{"coefficient":1.0,"origin":-0.0}';
-  for (const mode of ['nonlinear','relaxation']) for (const allowEstimates of [false,true]) {
+  for (const mode of ['nonlinear','relaxation','membrane_plasticity']) for (const allowEstimates of [false,true]) {
     const result = await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest:input,allowEstimates,request:19});
     assert.equal(result.type,'result'); assert.equal(result.request,19);
     assert.deepEqual(w.called.at(-1),['calibrate-'+mode,input,allowEstimates]);
@@ -223,6 +243,22 @@ test('unresolved recovery comparisons preserve reports and source without publis
   const invalid={...recoveryComparison(),selection_json:calibrationSelection(true)};
   const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_relaxation:()=>JSON.stringify(invalid)}});
   const result=await w.send({type:'calibrate',calibrationMode:'relaxation',calibrationRequest:input,allowEstimates:true});
+  assert.equal(result.type,'error'); assert.match(result.message,/cannot publish a selection/);
+});
+
+test('permanent-stretch worker keeps rejected and ambiguous histories without selectable output', async () => {
+  const input='{"schema":"ftx-membrane-plasticity-calibration/1","origin":-0.0}';
+  for (const status of ['ACCEPTED','AMBIGUOUS','BUDGET_EXHAUSTED','REJECTED']) {
+    const report=permanentCalibration(status,true), raw=JSON.stringify(report);
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_membrane_plasticity:()=>raw}});
+    const result=await w.send({type:'calibrate',calibrationMode:'membrane_plasticity',calibrationRequest:input,allowEstimates:true});
+    assert.equal(result.type,'result',result.message);
+    assert.equal(result.files[0].text,raw); assert.equal(result.files.at(-1).text,input);
+    assert.equal(result.files.some(f=>f.name==='calibrated-selection.json'),status==='ACCEPTED');
+  }
+  const invalid={...permanentCalibration('REJECTED',true),selection_json:calibrationSelection(true)};
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_membrane_plasticity:()=>JSON.stringify(invalid)}});
+  const result=await w.send({type:'calibrate',calibrationMode:'membrane_plasticity',calibrationRequest:input,allowEstimates:true});
   assert.equal(result.type,'error'); assert.match(result.message,/cannot publish a selection/);
 });
 
@@ -517,6 +553,34 @@ test('directional time search shows identified values inside declared windows wi
   assert.match(rendered,/Every identified time must retain an observable recovery branch/);
   assert.doesNotMatch(rendered,/at supplied times|not optimized from the histories|entirely inactive spectrum retains/);
   assert.equal(p.e.selection.value,calibrationSelection(true));
+});
+
+test('permanent-stretch results show bounded coefficients and withdraw selections for every unresolved outcome', async () => {
+  const p=await pageModule(); await p.load();
+  p.e.calibrationMode.value='membrane_plasticity'; p.e.calibrationEstimates.checked=true;
+  const input='{"schema":"ftx-membrane-plasticity-calibration/1","source":-0.0}';
+  p.select('calibrationRequest',input); p.e.calibrationRequest.handlers.change(); p.ready();
+  await p.e.calibrate.onclick(); assert.equal(p.current().messages.at(-1).calibrationMode,'membrane_plasticity');
+  const report=permanentCalibration('ACCEPTED',true,false), raw=JSON.stringify(report);
+  p.emit(report,[{name:'material-calibration.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'Identified material behavior');
+  assert.equal(p.e.assign.disabled,false); assert.equal(p.e.selection.value,report.selection_json);
+  assert.match(visibleText(s),/Held-out replay: NOT_PROVIDED/);
+  assert.match(visibleText(s),/second-Piola sheet resultants/);
+  const parameters=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Yield search range'));
+  assert.deepEqual(plain(parameters.children[2].children.map(n=>n.textContent)),['Warp / wale','10','[1, 20]','100','[0, 200]']);
+  const download=descendants(s).find(n=>n.download==='material-calibration.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  p.e.target.value='front'; p.e.assign.onclick(); await p.e.bind.onclick();
+  assert.ok(p.current().messages.at(-1).changes.includes(report.selection_json));
+  p.emit({pattern_json:'{}',pieces:[]});
+  for (const status of ['AMBIGUOUS','BUDGET_EXHAUSTED','REJECTED']) {
+    await p.e.calibrate.onclick(); p.emit(permanentCalibration(status,true));
+    assert.equal(p.e.assign.disabled,true); assert.equal(p.e.selection.value,'');
+    assert.match(visibleText(s),new RegExp(`identification: ${status}`));
+    assert.match(visibleText(s),/No identified selection is available/);
+  }
+  p.e.calibrationRequest.handlers.change(); assert.equal(s.hidden,true);
 });
 
 test('a refused replacement calibration leaves no previous selection or report available for assignment', async () => {
@@ -1008,7 +1072,8 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     }
     for (const [mode, filename] of [['nonlinear','synthetic-nonlinear-swatch.json'],
       ['relaxation','synthetic-relaxation-history.json'], ['relaxation','synthetic-orthotropic-relaxation-history.json'],
-      ['relaxation','synthetic-orthotropic-relaxation-search.json']]) {
+      ['relaxation','synthetic-orthotropic-relaxation-search.json'],
+      ['membrane_plasticity','synthetic-membrane-plasticity-calibration.json']]) {
       const calibrationRequest = fixture(filename);
       for (const allowEstimates of [false, true]) {
         const identified = await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest,allowEstimates});

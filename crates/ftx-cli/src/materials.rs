@@ -5,6 +5,8 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
+#[path = "bin/material_workbench/membrane_plasticity.rs"]
+mod membrane_plasticity;
 mod nonlinear;
 #[path = "bin/material_workbench/relaxation.rs"]
 mod relaxation;
@@ -15,18 +17,21 @@ mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
-    if matches!(action, "calibrate-nonlinear" | "calibrate-relaxation") {
+    if matches!(
+        action,
+        "calibrate-nonlinear" | "calibrate-relaxation" | "calibrate-membrane-plasticity"
+    ) {
         known_options(args, "materials", &["allow-estimates"])?;
         let [path] = &args.positional[2..] else {
             return Err(bad_input(
-                "usage: ftx materials calibrate-nonlinear SWATCHES.json | calibrate-relaxation HISTORIES.json [--allow-estimates]",
+                "usage: ftx materials calibrate-nonlinear SWATCHES.json | calibrate-relaxation HISTORIES.json | calibrate-membrane-plasticity HISTORIES.json [--allow-estimates]",
             ));
         };
         let allow = args.options.contains_key("allow-estimates");
-        let result = if action == "calibrate-relaxation" {
-            relaxation::run(path, allow)?
-        } else {
-            nonlinear::run(path, allow)?
+        let result = match action {
+            "calibrate-relaxation" => relaxation::run(path, allow)?,
+            "calibrate-membrane-plasticity" => membrane_plasticity::run(path, allow)?,
+            _ => nonlinear::run(path, allow)?,
         };
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
