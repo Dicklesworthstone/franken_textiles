@@ -9,6 +9,7 @@ use ftx_pattern::material_catalog::ResolvedMaterial;
 use ftx_pattern::materials::Form;
 use serde_json::{Value, json};
 
+pub mod compression;
 pub mod exterior;
 mod heating;
 mod nonlinear;

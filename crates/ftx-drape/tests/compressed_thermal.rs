@@ -1,0 +1,321 @@
+//! Independent RC and pressure/work answers; no measured textile or private wearer evidence.
+use ftx_drape::thermal::{
+    Boundary, DryThermalModel,
+    compression::{CompressedStack, Hold, Input, Setup, evaluate},
+};
+use ftx_pattern::{
+    material_compression::{self, stack},
+    materials::{CATALOG_SCHEMA, Catalog},
+};
+
+fn preparation() -> material_compression::Input {
+    let mut p: material_compression::Input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-compression.json"
+    ))
+    .unwrap();
+    p.pressure_pa = 0.0;
+    p
+}
+
+fn setup(n: usize, cells: usize) -> Setup {
+    Setup {
+        stack: stack::Input {
+            schema: stack::SCHEMA.into(),
+            gap_m: n as f64 * 0.020,
+            reference_area_m2: 0.25,
+            direction: stack::Direction::Loading,
+            layers: (0..n)
+                .map(|i| stack::Layer {
+                    id: format!("layer-{i}"),
+                    preparation: preparation(),
+                })
+                .collect(),
+            allow_estimates: true,
+        },
+        cells_per_layer: cells,
+        initial_temperature_c: vec![20.0; n * cells],
+        thermal_evidence: "Synthetic constant heat capacities and transport; prescribed interfaces and reservoirs; mechanical heat conversion omitted for numerical verification".into(),
+    }
+}
+
+fn hold(gap: f64, n: usize) -> Hold {
+    Hold {
+        seconds: 10.0,
+        gap_m: gap,
+        interface_resistance_m2_k_w: vec![0.0; n - 1],
+        inside_c: 40.0,
+        outside_c: 0.0,
+        inside_resistance_m2_k_w: 0.0,
+        outside_resistance_m2_k_w: 0.0,
+    }
+}
+
+fn near(a: f64, b: f64, tolerance: f64) {
+    assert!((a - b).abs() <= tolerance, "{a} != {b}");
+}
+
+fn fingerprint(s: &CompressedStack) -> serde_json::Value {
+    serde_json::json!({"compression": s.compression(), "temperature":s.temperatures(), "last":s.last()})
+}
+
+#[test]
+fn compression_changes_resistance_without_resetting_or_creating_heat() {
+    let mut initial = setup(1, 1);
+    initial.initial_temperature_c[0] = 0.0;
+    let mut compressed = CompressedStack::new(&initial).unwrap();
+    let mut unloaded = compressed.clone();
+    let first = compressed.advance(&hold(0.015, 1)).unwrap();
+    let free = unloaded.advance(&hold(0.020, 1)).unwrap();
+    // C=100 J/(m² K). R changes 0.5 -> 0.375; two half-cell conductances are 2/R.
+    // (C/dt + 4/R) T_new = C/dt T_old + (2/R)(T_inside+T_outside).
+    let expected = ((2.0 / 0.375) * 40.0) / (100.0 / 10.0 + 4.0 / 0.375);
+    near(first.temperature_c[0], expected, 1e-12);
+    assert!(first.temperature_c[0] > free.temperature_c[0]);
+    near(first.pressure_pa, 250.0, 1e-10);
+    near(first.normal_force_n, 62.5, 1e-10);
+    near(first.reference_mass_kg, 0.025, 1e-14);
+    near(first.external_work_j, 0.15625, 1e-12);
+    near(first.stored_change_j, 25.0 * expected, 1e-11);
+    near(first.heat_balance_error_j, 0.0, 1e-10);
+    let second = compressed.advance(&hold(0.010, 1)).unwrap();
+    let expected_second = (10.0 * expected + (2.0 / 0.25) * 40.0) / (10.0 + 4.0 / 0.25);
+    near(second.temperature_c[0], expected_second, 1e-12);
+    near(second.external_work_j, 0.46875, 1e-12);
+    near(second.cumulative_external_work_j, 0.625, 1e-12);
+    near(
+        second.cumulative_stored_change_j,
+        25.0 * expected_second,
+        1e-10,
+    );
+    near(second.cumulative_heat_balance_error_j, 0.0, 1e-10);
+    assert_ne!(first.layer_material_sha256, second.layer_material_sha256);
+    // A hold at the characterized endpoint is legal; it adds heat, but no mechanical work.
+    let third = compressed.advance(&hold(0.010, 1)).unwrap();
+    near(third.external_work_j, 0.0, 0.0);
+    assert!(third.temperature_c[0] > second.temperature_c[0]);
+}
+
+#[test]
+fn squeeze_at_uniform_temperature_does_not_turn_external_work_into_heat() {
+    let mut state = CompressedStack::new(&setup(2, 4)).unwrap();
+    let mut input = hold(0.030, 2);
+    input.inside_c = 20.0;
+    input.outside_c = 20.0;
+    let r = state.advance(&input).unwrap();
+    assert_eq!(r.temperature_c, vec![20.0; 8]);
+    assert_eq!(r.stored_change_j, 0.0);
+    assert_eq!(r.inside_heat_j, 0.0);
+    assert_eq!(r.outside_heat_j, 0.0);
+    near(r.external_work_j, 0.3125, 1e-12);
+    near(r.reference_mass_kg, 0.05, 1e-14);
+}
+
+#[test]
+fn unequal_layer_storage_and_declared_interfaces_match_an_independent_two_cell_solve() {
+    let mut initial = setup(2, 1);
+    initial.initial_temperature_c = vec![0.0, 0.0];
+    initial.stack.layers[1]
+        .preparation
+        .material
+        .properties
+        .get_mut("areal_density")
+        .unwrap()
+        .value = 300.0;
+    let mut state = CompressedStack::new(&initial).unwrap();
+    let mut h = hold(0.030, 2);
+    h.interface_resistance_m2_k_w[0] = 0.125;
+    h.inside_resistance_m2_k_w = 0.1;
+    h.outside_resistance_m2_k_w = 0.2;
+    let r = state.advance(&h).unwrap();
+    let gi = 1.0 / (0.1 + 0.375 / 2.0);
+    let go = 1.0 / (0.2 + 0.375 / 2.0);
+    let gm = 1.0 / (0.375 + 0.125);
+    let a = 100.0 / 10.0 + gi + gm;
+    let d = 300.0 / 10.0 + go + gm;
+    let b0 = gi * 40.0;
+    let det = a * d - gm * gm;
+    near(r.temperature_c[0], b0 * d / det, 1e-12);
+    near(r.temperature_c[1], b0 * gm / det, 1e-12);
+    near(r.reference_mass_kg, 0.1, 1e-14);
+    near(
+        r.stored_change_j,
+        0.25 * (100.0 * r.temperature_c[0] + 300.0 * r.temperature_c[1]),
+        1e-11,
+    );
+    // Returned selections are ordinary source-locked materials, not private thermal coefficients.
+    let catalog = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    };
+    let layers = state
+        .compression()
+        .layers
+        .iter()
+        .map(|l| {
+            let selection = serde_json::from_str(&l.conditioned.selection_json).unwrap();
+            catalog.resolve(&selection).unwrap()
+        })
+        .collect();
+    let ordinary = DryThermalModel::new(layers, h.interface_resistance_m2_k_w.clone(), 1).unwrap();
+    let direct = ordinary
+        .advance(
+            &[0.0, 0.0],
+            10.0,
+            Boundary {
+                inside_c: 40.0,
+                outside_c: 0.0,
+                inside_resistance: 0.1,
+                outside_resistance: 0.2,
+            },
+        )
+        .unwrap();
+    assert_eq!(r.temperature_c, direct.temperature_c);
+    let locks: Vec<_> = ordinary.snapshot()["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["sha256"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(r.layer_material_sha256, locks);
+}
+
+#[test]
+fn failed_compression_or_late_thermal_step_rolls_back_every_field() {
+    let mut state = CompressedStack::new(&setup(2, 2)).unwrap();
+    state.advance(&hold(0.030, 2)).unwrap();
+    let before = fingerprint(&state);
+    let valid = hold(0.025, 2);
+    for mutate in [
+        |h: &mut Hold| h.gap_m = 0.050,     // wrong direction
+        |h: &mut Hold| h.gap_m = 0.010,     // extrapolation
+        |h: &mut Hold| h.inside_c = -300.0, // fails AFTER valid compression
+        |h: &mut Hold| h.outside_c = f64::NAN,
+        |h: &mut Hold| h.interface_resistance_m2_k_w.clear(),
+        |h: &mut Hold| h.interface_resistance_m2_k_w[0] = -1.0,
+        |h: &mut Hold| h.seconds = 0.0,
+        |h: &mut Hold| h.seconds = f64::MIN_POSITIVE, // not representable after elapsed=10
+        |h: &mut Hold| h.inside_c = f64::MAX,         // finite input, unrepresentable heat load
+    ] {
+        let mut bad = valid.clone();
+        mutate(&mut bad);
+        assert!(state.advance(&bad).is_err());
+        assert_eq!(fingerprint(&state), before);
+    }
+    let mut untouched = state.clone();
+    assert_eq!(
+        serde_json::to_value(state.advance(&valid).unwrap()).unwrap(),
+        serde_json::to_value(untouched.advance(&valid).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn preload_and_unloading_have_separate_signed_work_without_a_guessed_recovery_law() {
+    let mut initial = setup(1, 1);
+    initial.stack.gap_m = 0.015;
+    initial.stack.layers[0].preparation.pressure_pa = 250.0;
+    initial.stack.direction = stack::Direction::Unloading;
+    // A synthetic unloading acquisition: same numbers, explicitly requalified branch throughout.
+    let p = &mut initial.stack.layers[0].preparation;
+    p.loading_branch = "unloading".into();
+    for q in p
+        .material
+        .properties
+        .values_mut()
+        .chain(p.samples.iter_mut().flat_map(|s| s.properties.values_mut()))
+    {
+        q.conditions
+            .insert("loading_branch".into(), "unloading".into());
+    }
+    for i in p.invariants.values_mut() {
+        i.conditions
+            .insert("loading_branch".into(), "unloading".into());
+    }
+    let mut state = CompressedStack::new(&initial).unwrap();
+    let r = state.advance(&hold(0.020, 1)).unwrap();
+    near(r.pressure_pa, 0.0, 0.0);
+    near(r.external_work_j, -0.15625, 1e-12);
+    let before = fingerprint(&state);
+    assert!(state.advance(&hold(0.015, 1)).is_err());
+    assert_eq!(fingerprint(&state), before);
+}
+
+#[test]
+fn thermal_storage_needs_explicit_pressure_invariance_and_transport() {
+    let initial = setup(1, 1);
+    for key in ["areal_density", "specific_heat"] {
+        let mut bad = initial.clone();
+        bad.stack.layers[0].preparation.invariants.remove(key);
+        assert!(CompressedStack::new(&bad).is_err());
+        let mut bad = initial.clone();
+        let p = &mut bad.stack.layers[0].preparation;
+        for row in &mut p.samples {
+            row.properties
+                .insert(key.into(), p.material.properties[key].clone());
+        }
+        assert!(CompressedStack::new(&bad).is_err());
+    }
+    let mut bad = initial.clone();
+    for row in &mut bad.stack.layers[0].preparation.samples {
+        row.properties.remove("thermal_resistance");
+    }
+    // Geometry alone can still be characterized; this consumer additionally needs transport.
+    assert!(stack::close(&bad.stack).is_ok());
+    assert!(CompressedStack::new(&bad).is_err());
+    let mut bad = initial.clone();
+    bad.thermal_evidence.clear();
+    assert!(CompressedStack::new(&bad).is_err());
+    let mut bad = initial.clone();
+    bad.stack.layers[0].preparation.allow_estimates = false;
+    assert!(CompressedStack::new(&bad).is_err());
+    let mut bad = initial;
+    bad.initial_temperature_c[0] = f64::INFINITY;
+    assert!(CompressedStack::new(&bad).is_err());
+}
+
+#[test]
+fn history_is_deterministic_conservative_and_bounded_with_no_partial_success() {
+    let mut input = Input {
+        schema: "ftx-compressed-thermal-history/1".into(),
+        setup: setup(2, 3),
+        holds: (0..80)
+            .map(|i| {
+                let mut h = hold(0.040 - i as f64 * 0.0002, 2);
+                h.seconds = 0.2;
+                h.inside_c = 25.0 + (i % 7) as f64;
+                h.outside_c = 10.0 + (i % 11) as f64;
+                h.interface_resistance_m2_k_w[0] = 0.01 + (i % 5) as f64 * 0.01;
+                h
+            })
+            .collect(),
+    };
+    let original = serde_json::to_value(&input).unwrap();
+    let report = evaluate(&input).unwrap();
+    assert_eq!(serde_json::to_value(&input).unwrap(), original);
+    for r in &report.steps {
+        assert!(r.temperature_c.iter().all(|&t| (10.0..=31.0).contains(&t)));
+        near(r.reference_mass_kg, 0.05, 1e-14);
+        near(r.cumulative_heat_balance_error_j, 0.0, 1e-9);
+    }
+    assert_eq!(
+        serde_json::to_value(&report).unwrap(),
+        serde_json::to_value(evaluate(&input).unwrap()).unwrap()
+    );
+    let mut direct = input.setup.stack.clone();
+    direct.gap_m = input.holds.last().unwrap().gap_m;
+    near(
+        report.steps.last().unwrap().cumulative_external_work_j,
+        stack::close(&direct).unwrap().external_work_j,
+        1e-12,
+    );
+    input.holds.last_mut().unwrap().inside_c = -300.0;
+    assert!(evaluate(&input).is_err());
+    input.holds = vec![hold(0.03, 2); 513];
+    assert_eq!(
+        evaluate(&input).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    let mut json = original;
+    json["setup"]["cells_per_layer"] = serde_json::json!(usize::MAX);
+    let input: Input = serde_json::from_value(json).unwrap();
+    assert!(evaluate(&input).is_err());
+}
