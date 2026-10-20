@@ -7,6 +7,19 @@ thickness-offset gap, additive CCD, lagged smoothed Coulomb friction); and the g
 (`garment.rs`). Placement, pre-sew, the drape schedule and the reference's metrics are described below.
 Optional cloth self-contact adds moving cloth–cloth barriers and independent friction.
 
+**Numerical acceptance** (`ftx-6en`). Every Newton solve, including friction lag rounds, must converge;
+iteration exhaustion or a failed line search returns `not_converged` with the residual (N), last
+correction (m), iteration count and repair suggestions. A refused step or static solve preserves
+positions, velocities, contact lag and linear-solver caches. `PhaseReport.samples` retains the accepted
+steps' Newton diagnostics and instantaneous maximum vertex speeds. Native drape reports expose these
+under `numerical`; gravity draping additionally requires three consecutive accepted steps at at most
+1 mm/s, otherwise a numerical-settling gating flag propagates to CLI, round and browser consumers.
+The fixed phase schedule is not automatically extended. Sewing-only qualification reports numerical
+settledness as unavailable. The reference's top-level `settled` and other oracle metrics retain their
+legacy window-mean definition; they do not override the numerical gate. Neither criterion certifies
+static stress equilibrium, material-history relaxation or real-person fit. Historical timings and
+verdicts below predate this stricter acceptance boundary and require fresh production-model checks.
+
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
 and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform interval films are

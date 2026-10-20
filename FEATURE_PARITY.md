@@ -64,6 +64,14 @@ from the reference by `tools/oracle/capture_pattern_geometry.py`; 98.8 % of 15,8
 
 ## Draping (`ftx-drape`, spec 04 §1–9, plan §11)
 
+Native numerical acceptance deliberately goes beyond the reference metrics (`ftx-6en`): a stalled
+Newton solve is refused transactionally, and gravity drapes require three consecutive instantaneous
+maximum speeds at most 1 mm/s. `sim_report.json.numerical` reports the basis and accepted-step
+diagnostics; a failed quiet window adds a gating flag. The oracle `metrics()` values and texts remain
+unchanged. Direct rollback/replay, quiet-window and oscillatory mean-cancellation regressions are in
+`cloth.rs` and `run.rs`. Historical fitted-garment timings/verdicts below are not fresh proof of this
+stricter boundary, nor evidence of physical fit.
+
 | Feature | Spec | Status | Fixtures |
 |---|---|---|---|
 | Garment mesh (spacing, seam pairs, instance ranges) | 04 §2 | present | drape/garment_mesh (7 garments: bolero and trousers at 80/92/116 cm, bolero at 8 mm; structure exact, vertices 99.0 % bit-exact, worst 3.8e-15; all 42,003 triangles identical to Blender's CDT) |
