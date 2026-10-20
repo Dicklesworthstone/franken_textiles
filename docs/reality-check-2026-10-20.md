@@ -374,3 +374,67 @@ Raw command output for this block is retained outside the repository at
 `/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-followthrough-20261020T214254Z/`.
 Remote checks use `RCH_REQUIRE_REMOTE=1`; the laptop's `sbh check --need 20G` failed its free-space-ratio
 gate, so no heavy local compilation was substituted. This is not a current garment benchmark or G2 pass.
+
+### Fresh self-review of this implementation block
+
+Creation-gate worksheet: running code does not consume this checklist. Its consumer is the user who
+explicitly requested a granular TODO list; its gate is an accurate implementation handoff; its observed
+defects are the lost backlog rows and unsupported numerical verdict described above. The checklist
+retires at handoff into its named Beads. Recovery snapshots are separate minimal integrity controls:
+they preserve both DB-only work and incoming JSONL before reconciliation of demonstrated corruption;
+both stores are needed, a copy is the smallest reliable protection, and no cheaper destructive rebuild
+is justified. The ready capability priority is numerical acceptance (`ftx-6en`); an hour of additional
+report machinery would have less value. Verdict: keep only this requested checklist and command logs.
+
+Real-work worksheet, task-owned changes since the initial assessment: source-clock repair, numerical
+solver/report behavior and user documentation are USER (3); direct regression execution is ENABLER
+(1); backlog recovery and this requested handoff are PROCESS (2); UNKNOWN (0). Concurrent material
+features committed by other sessions are excluded from this task's delivery credit. The most visible
+result is a moving drape retaining its diagnostics and gaining a gating flag. Without the process work,
+the capability would still exist but scheduling/evidence would again be lost to the duplicate-comment
+import failure. Existing CLI/scenario/wasm consumers exercise the solver/report seam; no new framework
+was built. The older release and measured-material tasks remain open because numerical correctness
+precedes their acceptance and physical specimens cannot be invented. No swarm was dispatched. No plan
+edit substitutes for implementation and no parent gate was closed by creating these repair items.
+Verdict: capability work dominates; continue focused checks, not more machinery.
+
+Honesty inventory (solo self-review, **not independent verification**):
+
+1. No (checked: task-owned test diffs retain the positive frontier, heat-accounting, replay and KAT
+   assertions; added a short-run negative and a physically supported positive input).
+2. No (checked: rollback, phase and CLI tests use the actual solver; synthetic report arithmetic is
+   labelled and is not counted as measured cloth proof).
+3. No (checked: oracle capture scripts and oracle fixtures are unchanged).
+4. Yes: this repair changes the runtime acceptance gate and its tests together. It strengthens
+   acceptance; no tolerance, ignore, suppression or bypass was added. Original positive checks remain.
+   Countermeasure RH-1: retain those assertions and execute the new negative and real positive paths.
+5. Fixture inputs changed after stricter acceptance exposed unsupported positives: a 3 ms loose band
+   and an inadequately hardened plastic band. This is disclosed, not a numerical-limit adjustment;
+   the original short-run negative remains. The elastic positive passed before the later plastic
+   comparison failed. The revised plastic positive still requires actual execution before credit.
+6. No (checked: 84 Python tests per version and 112 initial drape tests actually ran; filtered focused
+   commands are reported with their denominators, not as full workspace results).
+7. No (checked: saved command output; pending or failed broader checks are not called passed).
+8. No (checked: synthetic Anny interchange and invented materials remain software evidence only).
+9. The initial workspace run failed at the comparison frontier; the next focused run reached and
+   failed the plastic frontier. Both failures are retained in logs and this handoff; no all-green
+   workspace claim or closure of `ftx-6en` is made on that evidence.
+10. No (checked: command logs combine stdout and stderr; CASS timeout output was retained).
+11. No (checked: only the narrow timestamp bug was closed after fresh four-version execution;
+    numerical, release and empirical parents remain open).
+12. No (checked: the technical plan was not changed by this task; docs distinguish legacy metrics
+    from the stricter result and retain the unmet production-asset and empirical gates).
+13–17. Not applicable: no delegated agents or panes were dispatched or accepted as independent proof;
+    concurrent external commits are not credited as this task's verified delivery.
+18. No (checked: test-command denominators and explicit exclusions; no aggregate completion score).
+19. The moments requiring explanation are the physical test-input changes and the repeated upstream
+    restoration of old backlog bytes. Neither is a reason to hide failures or overwrite DB-only work.
+20. Strongest current evidence: real solver rollback/replay plus the direct CLI test reaching the
+    genuinely settled elastic frontier with all positive assertions intact. Full completion still
+    depends on the pending commands and plastic case, not this statement.
+
+Older-session inventory is unavailable: CASS reported a healthy index, but the bounded project-scoped
+search timed out. This block does not claim an audit of older sessions. Disposition: no test weakening,
+oracle regeneration or false closure found in this bounded review; observed invalid positive fixtures
+are being corrected with explicit negative coverage and original positive acceptance retained (RH-1,
+RH-2). Final command outcomes below must supersede the intermediate status in this inventory.
