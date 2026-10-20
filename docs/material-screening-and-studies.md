@@ -175,8 +175,8 @@ pre-finishing cut inventory. The result is not a weighed final-garment predictio
 `reported_bounds_kg` scales and adds input endpoints only when every contribution reports bounds.
 Missing bounds stay absent, never zero-width. These ranges hold authored geometry and inventory
 fixed; they are not confidence intervals or propagated geometric/measurement uncertainty. Study
-comparison remains explicitly nominal: `assembly_mass_kg` can be an objective or inclusive constraint,
-and `assembly_mass` a required consumer. Unknown/incomplete totals exclude a candidate without
+comparison accepts `assembly_mass_kg` as an objective or inclusive constraint under explicit
+`nominal` or `reported_bounds` policies, and `assembly_mass` as a required consumer. Unknown/incomplete totals exclude a candidate without
 erasing its other results. Density methods, conditions and evidence remain part of the existing
 protocol comparison; unrelated width observations do not block a mass-only comparison.
 
@@ -283,10 +283,54 @@ block it. `allow_mixed_protocols` deliberately relaxes this check, never the sel
 policy. Equal protocols are not empirical comparability. Full source observations remain in the
 binding and ordinary planner reports; those outputs do not change when comparison is requested.
 
-`nominal` is an explicit required choice. Source ranges are **not** numerical output intervals;
-`reported_bounds` comparison is refused rather than pretending uncertainty has been propagated.
+`basis` is required. `nominal` explicitly compares computed central values and preserves the existing
+behavior for every metric. The separate `reported_bounds` mode below is limited to complete declared
+assembly mass; it does not turn source ranges into intervals for cutting choices, sewing, cost, drape
+or heat.
 This finite-candidate frontier is conditional on upstream screening, process options, quantities,
 market date and input data. It is not optimal nesting, a global material optimum or physical validation.
+
+### Assembly-mass limits over the complete reported range
+
+Use `basis: "reported_bounds"` when a mass requirement must hold throughout the source-reported
+range, instead of only at its central value. For example, this comparison accepts a maximum of
+0.35 kg as an **illustrative authored requirement**, not a measured garment limit:
+
+```json
+{
+  "basis": "reported_bounds",
+  "objectives": [{"metric": "assembly_mass_kg", "direction": "minimize"}],
+  "constraints": [{"metric": "assembly_mass_kg", "maximum": 0.35}],
+  "required_consumers": ["sewing"],
+  "allow_mixed_protocols": false
+}
+```
+
+The containing study must request `assembly_mass` with complete inventory and source-reported bounds
+for every retained sheet density and extra group. This example also requires its existing sewing
+request to succeed. Other consumers can be required as usual; their ordinary completion/source gates
+do not become uncertain-output predictions. Both native `study` commands, scenario studies and the
+material workbench use the same policy and Rust comparison, without a separate solver.
+
+An inclusive maximum checks the upper mass endpoint; an inclusive minimum checks the lower endpoint.
+A nominally acceptable candidate whose range crosses either requirement is excluded with its actual
+range and reason retained. A missing sheet or extra bound excludes the candidate even when nominal
+mass is available. Its central value remains visible, and no zero-width range is invented. The
+`readings.assembly_mass_kg.reported_bounds` field contains the exact admitted consumer endpoints in kg.
+
+For minimization, A dominates B only when A's upper endpoint is strictly below B's lower endpoint;
+maximization reverses that ordering. Overlapping, touching and equal ranges keep both alternatives
+on the frontier with an explicit unresolved-range reason. They cannot be ordered by their central
+values. Reported methods, conditions, evidence, exact material binding and complete-inventory gates
+still apply; allowing mixed protocols never bypasses missing bounds or a failed required consumer.
+
+Only `assembly_mass_kg` objectives and constraints currently support this mode. Any other requested
+metric refuses the policy before evaluation, including mixing a nominal cost objective into a
+reported-bounds comparison. Use explicit nominal mode for existing mixed computed objectives.
+The guarantee is conditional on the reported endpoints, fixed authored geometry and additive
+pre-finishing inventory. It does not cover omitted components, finishing changes, geometric error,
+source truth or confidence levels. `uncertainty_propagated` and `physical_validation_claim` remain
+false; this is the specific mass-endpoint propagation already reported by the mass consumer.
 
 `tests/fixtures/materials/study-compared-insulation.json` is an executable example using the same
 synthetic sewing pattern and source-bearing insulation records. It compares gross marker mass and

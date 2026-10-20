@@ -784,6 +784,42 @@ test('computed objectives display Rust admission, signed units and incomparabili
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true);
 });
 
+test('reported mass comparisons display admitted ranges and unresolved alternatives without nominal reranking', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const comparison = {
+    policy: { basis: 'reported_bounds', allow_mixed_protocols: false,
+      objectives: [{ metric: 'assembly_mass_kg', direction: 'minimize' }],
+      constraints: [{ metric: 'assembly_mass_kg', maximum: 0.22 }] },
+    frontier: ['A', 'B'], motion_required: false, uncertainty_propagated: false,
+    alternatives: [
+      { key: 'A', eligible: true, dominated_by: [], exclusions: [],
+        readings: { assembly_mass_kg: { value: 0.2, unit: 'kg', reported_bounds: [0.19, 0.21] } } },
+      { key: 'B', eligible: true, dominated_by: [], exclusions: [],
+        readings: { assembly_mass_kg: { value: 0.21, unit: 'kg', reported_bounds: [0.2, 0.22] } } },
+      { key: 'C', eligible: false, dominated_by: [], exclusions: [{ message: 'No complete reported bounds' }],
+        readings: { assembly_mass_kg: { value: 0.18, unit: 'kg' } } }],
+    incomparable: [{ alternatives: ['A', 'B'], reason: 'Reported mass ranges overlap; no strict dominance' }]
+  };
+  const manufacturing = studyReport(['A', 'B', 'C'].map(key => studyRow(key)));
+  for (const op of ['study', 'scenario']) {
+    await p.e[op].onclick();
+    p.emit(op === 'study' ? { ...manufacturing, comparison } : { ...scenarioReport(), manufacturing, comparison });
+    const s = section(p, op === 'study' ? 'Fixed-pattern manufacturing alternatives' : 'Fresh drape and heat alternatives');
+    assert.match(visibleText(s), /Computed reported_bounds frontier: A, B/);
+    assert.match(visibleText(s), /complete reported mass ranges at fixed authored geometry and inventory/);
+    assert.match(visibleText(s), /Declared assembly mass ranges evaluated by Rust/);
+    assert.doesNotMatch(visibleText(s), /Declared nominal objectives/);
+    assert.match(visibleText(s), /A \/ B: Reported mass ranges overlap/);
+    const t = descendants(s).find(n => n.tag === 'table');
+    assert.deepEqual(plain(t.children[2].children.map(n => n.textContent)),
+      ['A', 'Eligible', 'None reported', '0.2 kg; reported range [0.19, 0.21] kg']);
+    assert.deepEqual(plain(t.children[3].children.map(n => n.textContent)),
+      ['B', 'Eligible', 'None reported', '0.21 kg; reported range [0.2, 0.22] kg']);
+    assert.deepEqual(plain(t.children[4].children.map(n => n.textContent)),
+      ['C', 'Excluded: No complete reported bounds', 'None reported', '0.18 kg; reported range unknown']);
+  }
+});
+
 test('assembly mass and finite stock retain independent totals and refusals in manufacturing and scenario studies', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const a = studyRow('complete'), b = studyRow('unknown'), c = studyRow('refused');

@@ -696,6 +696,265 @@ fn aggregate_extra_inventory_is_admitted_before_any_study_evaluation() {
     );
 }
 
+fn reported_mass_study() -> Request {
+    let mut r = request();
+    r.cutting = None;
+    r.sewing = None;
+    r.purchasing = None;
+    r.assembly_mass = Some(mass_request());
+    r.assembly_mass.as_mut().unwrap().extras[0]
+        .mass
+        .as_mut()
+        .unwrap()
+        .bounds = Some([0.0199, 0.0201]);
+    r.variants.clear();
+    for (key, density, bounds) in [
+        ("light", 0.1, Some([0.08, 0.12])),
+        ("overlap", 0.12, Some([0.10, 0.14])),
+        ("heavy", 0.3, Some([0.28, 0.32])),
+        ("unbounded", 0.07, None),
+    ] {
+        let mut material = selection(key, 0.1, 0.4);
+        material["record"]["properties"]["areal_density"]["value"] = json!(density);
+        if let Some(bounds) = bounds {
+            material["record"]["properties"]["areal_density"]["bounds"] = json!(bounds);
+        }
+        r.variants
+            .push(serde_json::from_value(variant(key, material)).unwrap());
+    }
+    r.comparison = Some(
+        serde_json::from_value(json!({"basis":"reported_bounds",
+        "objectives":[{"metric":"assembly_mass_kg","direction":"minimize"}]}))
+        .unwrap(),
+    );
+    r
+}
+
+#[test]
+fn reported_mass_constraints_admit_the_whole_range_instead_of_only_nominal_mass() {
+    use ftx_export::material_study::comparison::Basis;
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = reported_mass_study();
+    r.variants.retain(|v| v.key == "light");
+    let baseline = evaluate(&r, &p);
+    let observed = &row(&baseline["comparison"], "light")["readings"]["assembly_mass_kg"];
+    let nominal = observed["value"].as_f64().unwrap();
+    let bounds: [f64; 2] = serde_json::from_value(observed["reported_bounds"].clone()).unwrap();
+    for (actual, expected) in bounds
+        .into_iter()
+        .zip([0.0096 * 0.08 + 0.0199, 0.0096 * 0.12 + 0.0201])
+    {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+    assert!(bounds[0] < nominal && nominal < bounds[1]);
+    assert_eq!(
+        observed["reported_bounds"],
+        row(&baseline, "light")["assembly_mass"]["result"]["assembly_mass"]["reported_bounds_kg"]
+    );
+    r.comparison.as_mut().unwrap().constraints = vec![
+        serde_json::from_value(json!({
+        "metric":"assembly_mass_kg", "maximum":nominal}))
+        .unwrap(),
+    ];
+    r.comparison.as_mut().unwrap().basis = Basis::Nominal;
+    let admitted_nominal = evaluate(&r, &p);
+    assert_eq!(admitted_nominal["comparison"]["frontier"], json!(["light"]));
+    assert!(
+        row(&admitted_nominal["comparison"], "light")["readings"]["assembly_mass_kg"]
+            .get("reported_bounds")
+            .is_none()
+    );
+    r.comparison.as_mut().unwrap().basis = Basis::ReportedBounds;
+    let rejected_upper = evaluate(&r, &p);
+    assert_eq!(rejected_upper["comparison"]["frontier"], json!([]));
+    assert!(
+        row(&rejected_upper["comparison"], "light")["exclusions"]
+            .to_string()
+            .contains("reported range")
+    );
+    assert_eq!(
+        row(&admitted_nominal, "light")["assembly_mass"],
+        row(&rejected_upper, "light")["assembly_mass"]
+    );
+    let constraint = &mut r.comparison.as_mut().unwrap().constraints[0];
+    constraint.minimum = Some(bounds[0]);
+    constraint.maximum = Some(bounds[1]);
+    assert_eq!(evaluate(&r, &p)["comparison"]["frontier"], json!(["light"]));
+    r.comparison.as_mut().unwrap().constraints[0].minimum = Some(nominal);
+    assert_eq!(evaluate(&r, &p)["comparison"]["frontier"], json!([]));
+}
+
+#[test]
+fn reported_mass_overlap_and_absent_sheet_or_extra_bounds_never_imply_certainty() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = reported_mass_study();
+    let report = evaluate(&r, &p);
+    let comparison = &report["comparison"];
+    assert_eq!(comparison["frontier"], json!(["light", "overlap"]));
+    assert_eq!(
+        row(comparison, "heavy")["dominated_by"],
+        json!(["light", "overlap"])
+    );
+    assert_eq!(
+        comparison["incomparable"][0]["alternatives"],
+        json!(["light", "overlap"])
+    );
+    assert!(
+        comparison["incomparable"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("overlap")
+    );
+    let unbounded = row(comparison, "unbounded");
+    assert_eq!(unbounded["eligible"], false);
+    assert!(unbounded["readings"]["assembly_mass_kg"]["value"].is_number());
+    assert!(
+        unbounded["readings"]["assembly_mass_kg"]
+            .get("reported_bounds")
+            .is_none()
+    );
+    assert!(
+        unbounded["exclusions"]
+            .to_string()
+            .contains("no complete valid reported bounds")
+    );
+    assert_eq!(comparison["uncertainty_propagated"], false);
+    assert_eq!(comparison["physical_validation_claim"], false);
+    r.assembly_mass.as_mut().unwrap().extras[0]
+        .mass
+        .as_mut()
+        .unwrap()
+        .bounds = None;
+    let missing_extra = evaluate(&r, &p);
+    assert_eq!(missing_extra["comparison"]["frontier"], json!([]));
+    assert!(
+        row(&missing_extra, "light")["assembly_mass"]["result"]["assembly_mass"]["kg"].is_number()
+    );
+    // Identical reported endpoints are inclusive constraints, but are not strict dominance.
+    r.variants
+        .retain(|v| ["light", "overlap"].contains(&v.key.as_str()));
+    r.assembly_mass.as_mut().unwrap().extras[0]
+        .mass
+        .as_mut()
+        .unwrap()
+        .bounds = Some([0.02, 0.02]);
+    let density = r
+        .variants
+        .iter_mut()
+        .find(|v| v.key == "overlap")
+        .unwrap()
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("areal_density")
+        .unwrap();
+    density.value = 0.14;
+    density.bounds = Some([0.12, 0.16]);
+    let touching = evaluate(&r, &p);
+    assert_eq!(
+        row(&touching["comparison"], "light")["readings"]["assembly_mass_kg"]["reported_bounds"][1],
+        row(&touching["comparison"], "overlap")["readings"]["assembly_mass_kg"]["reported_bounds"]
+            [0]
+    );
+    assert_eq!(
+        touching["comparison"]["frontier"],
+        json!(["light", "overlap"])
+    );
+}
+
+#[test]
+fn reported_mass_frontier_keeps_direction_protocol_and_required_consumer_rules() {
+    use ftx_pattern::material_screen::Direction;
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = reported_mass_study();
+    r.variants
+        .retain(|v| ["light", "heavy"].contains(&v.key.as_str()));
+    r.comparison.as_mut().unwrap().objectives[0].direction = Direction::Maximize;
+    let report = evaluate(&r, &p);
+    assert_eq!(report["comparison"]["frontier"], json!(["heavy"]));
+    let replay: Request = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+    assert_eq!(evaluate(&replay, &p), report);
+    r.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("areal_density")
+        .unwrap()
+        .conditions
+        .insert("conditioning".into(), "different".into());
+    let different = evaluate(&r, &p);
+    assert_eq!(
+        different["comparison"]["frontier"],
+        json!(["heavy", "light"])
+    );
+    assert!(
+        different["comparison"]["incomparable"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("methods, conditions or evidence differ")
+    );
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    assert_eq!(evaluate(&r, &p)["comparison"]["frontier"], json!(["heavy"]));
+    r.sewing = Some(serde_json::from_str(SEW).unwrap());
+    r.variants
+        .iter_mut()
+        .find(|v| v.key == "heavy")
+        .unwrap()
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("thickness")
+        .unwrap()
+        .value = 2.;
+    r.comparison.as_mut().unwrap().required_consumers =
+        vec![ftx_export::material_study::comparison::Consumer::Sewing];
+    let sewn = evaluate(&r, &p);
+    assert_eq!(row(&sewn, "heavy")["sewing"]["status"], "refused");
+    assert_eq!(row(&sewn, "heavy")["assembly_mass"]["status"], "available");
+    assert_eq!(sewn["comparison"]["frontier"], json!(["light"]));
+}
+
+#[test]
+fn reported_mass_policy_refuses_unsupported_objectives_and_constraints_before_evaluation() {
+    use ftx_export::material_study::comparison::Metric;
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = reported_mass_study();
+    r.comparison.as_mut().unwrap().objectives[0].metric = Metric::StockMassKg;
+    let rejected = r
+        .evaluate_with(&p, &json!({}), |_, _| -> Result<Value, ftx_core::Refusal> {
+            panic!("unsupported interval policy must refuse before any scenario evaluation")
+        })
+        .unwrap_err();
+    assert!(rejected.message.contains("supports only assembly_mass_kg"));
+    r.comparison.as_mut().unwrap().objectives[0].metric = Metric::AssemblyMassKg;
+    r.comparison.as_mut().unwrap().constraints = vec![
+        serde_json::from_value(json!({
+        "metric":"feed_seconds", "maximum":10.}))
+        .unwrap(),
+    ];
+    assert!(
+        r.evaluate(&p)
+            .unwrap_err()
+            .message
+            .contains("supports only assembly_mass_kg")
+    );
+}
+
 #[test]
 fn computed_pareto_set_keeps_real_cost_mass_tradeoffs_ties_and_frozen_outputs() {
     let p = Pattern::from_json(PATTERN).unwrap();
@@ -913,11 +1172,14 @@ fn comparison_constraints_use_inclusive_computed_values_and_refuse_invalid_polic
     );
     r.cutting = None;
     assert!(r.evaluate(&p).is_err());
+    let policy: ftx_export::material_study::comparison::Policy =
+        serde_json::from_value(json!({"basis":"reported_bounds","objectives":[]})).unwrap();
     assert!(
-        serde_json::from_value::<ftx_export::material_study::comparison::Policy>(
-            json!({"basis":"reported_bounds","objectives":[]})
-        )
-        .is_err()
+        policy
+            .validate(&r, false)
+            .unwrap_err()
+            .message
+            .contains("1..16 objectives")
     );
 }
 

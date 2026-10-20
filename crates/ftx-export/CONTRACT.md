@@ -19,18 +19,23 @@ contributions and undeclared inventory completeness keep the assembly total unkn
 endpoints are scaled/summed only with complete bounds and fixed authored geometry. This is one
 pre-finishing cut assembly, not purchased stock, a simulated subset, propagated geometry uncertainty,
 a weighed final garment or automatic discovery of unrepresented components. Studies optionally rerun
-this consumer and compare `assembly_mass_kg` under the existing nominal/protocol policy. Effective
+this consumer and compare `assembly_mass_kg` under explicit nominal or reported-bounds policies. Effective
 cutting/mass allowances must match; missing complete mass never becomes a winning zero. Aggregate
 instance, extra-group and polygon work limits apply before returning a study frontier. Tests:
 `assembly_mass`, `material_study`; native/WASM adapters use the same evaluator.
 
 **Material-study comparison** (`material_study::comparison`, plan §25.10). Optional explicit
-nominal objectives/constraints consume actual cutting/sewing/dated procurement results on the same
+objectives/constraints consume actual cutting/sewing/dated procurement results on the same
 unchanged pattern and shared process inputs. Canonical metric names fix m², kg, seconds, counts or
 the exact market currency. Required unknown/refused/incomplete outputs exclude the candidate,
 never score zero. Default dominance requires matching relevant reported protocols by source piece;
-mixed protocols require deliberate consent. No source bounds are promoted to propagated result
-uncertainty. Ties, tradeoffs, exclusions and incompatible pairs remain visible. Existing reports and
+mixed protocols require deliberate consent. Nominal mode retains its existing point comparisons.
+Reported-bounds mode supports only complete `assembly_mass_kg` endpoints from the real mass consumer,
+conditional on fixed authored geometry and additive inventory. Inclusive constraints must contain
+the whole range; dominance requires strictly separated ranges, while overlap/touching and missing
+bounds remain explicit. Other objective/constraint metrics refuse this mode before evaluation;
+source bounds are not relabeled as numerical-solver or physical-garment uncertainty. Required
+consumer/source gates remain independent. Ties, tradeoffs, exclusions and incompatible pairs remain visible. Existing reports and
 request identities are unchanged when the optional comparison is absent. See
 `docs/material-screening-and-studies.md`; direct real-planner, native-binary and file-free WASM
 regressions use synthetic geometry/data. No physical validation or global optimum is asserted.

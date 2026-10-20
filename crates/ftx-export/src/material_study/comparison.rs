@@ -14,6 +14,9 @@ use super::{Alternative, Request, ScenarioAlternative, hash, invalid};
 pub enum Basis {
     /// Explicitly compare nominal computed results, without a propagated uncertainty claim.
     Nominal,
+    /// Require complete reported assembly-mass endpoints at fixed authored geometry/inventory.
+    /// Other computed metrics have no supported output intervals and refuse this policy.
+    ReportedBounds,
 }
 
 /// Consumer whose successful completion can be required independently of the chosen objectives.
@@ -273,11 +276,11 @@ pub struct Constraint {
     pub maximum: Option<f64>,
 }
 
-/// An opt-in nominal comparison of alternatives evaluated in ONE study and process context.
+/// An opt-in comparison of alternatives evaluated in ONE study and process context.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    /// Required explicit admission of nominal (not uncertainty-propagated) computed objectives.
+    /// Explicit nominal outputs or supported, conditionally propagated reported mass bounds.
     pub basis: Basis,
     /// One to sixteen unique objective metrics. No hidden scalarization or automatic winner.
     pub objectives: Vec<Objective>,
@@ -298,6 +301,10 @@ pub struct Policy {
 pub struct Reading {
     /// Finite computed value, including genuine zero; unknown values have no reading.
     pub value: f64,
+    /// Complete conditional endpoints in `unit`, only under a reported-bounds policy. An absent
+    /// range excludes that candidate; it never implies an exact nominal observation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_bounds: Option<[f64; 2]>,
     /// Fixed physical unit or exact currency; no conversions occur in the comparator.
     pub unit: String,
     /// Required production consumer, not a value copied from scalar screening.
@@ -321,7 +328,7 @@ pub struct Candidate {
     pub dominated_by: Vec<String>,
 }
 
-/// An eligible pair which cannot be ordered under the chosen reported-protocol policy.
+/// An eligible pair whose protocols or reported ranges do not establish an ordering.
 #[derive(Clone, Debug, Serialize)]
 pub struct Incomparable {
     /// Stable keys in deterministic order.
@@ -330,7 +337,7 @@ pub struct Incomparable {
     pub reason: &'static str,
 }
 
-/// Nominal Pareto set among evaluated, eligible alternatives, never a global material optimum.
+/// Conditional Pareto set among evaluated, eligible alternatives, never a global material optimum.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
     /// `ftx-material-comparison/1`.
@@ -345,9 +352,10 @@ pub struct Report {
     pub alternatives: Vec<Candidate>,
     /// Eligible non-dominated keys; ties and incomparable candidates remain alternatives.
     pub frontier: Vec<String>,
-    /// Explicit reported-protocol incompatibilities, not silently discarded comparisons.
+    /// Explicit protocol incompatibilities or unresolved reported-range overlap.
     pub incomparable: Vec<Incomparable>,
-    /// Always false. Reported input ranges are not propagated numerical-result intervals.
+    /// Always false. Conditional mass endpoints are not a general uncertainty estimate for the
+    /// geometry, inventory, numerical solvers or physical garment.
     pub uncertainty_propagated: bool,
     /// Always false, including when all computed constraints pass.
     pub physical_validation_claim: bool,
@@ -390,6 +398,13 @@ impl Policy {
                     "comparison constraints need unique metrics and finite ordered bounds",
                 ));
             }
+        }
+        if matches!(self.basis, Basis::ReportedBounds)
+            && self.metrics().iter().any(|m| *m != Metric::AssemblyMassKg)
+        {
+            return Err(invalid(
+                "reported_bounds comparison supports only assembly_mass_kg; other computed objectives and constraints have no propagated reported bounds",
+            ));
         }
         let unique: BTreeSet<_> = self.required_consumers.iter().collect();
         if unique.len() != self.required_consumers.len() {
@@ -521,6 +536,11 @@ impl Policy {
                 } else if self.dominates(&candidates[j], &candidates[i]) {
                     let key = candidates[j].key.clone();
                     candidates[i].dominated_by.push(key);
+                } else if matches!(self.basis, Basis::ReportedBounds) {
+                    incomparable.push(Incomparable {
+                        alternatives: [candidates[i].key.clone(), candidates[j].key.clone()],
+                        reason: "Reported assembly-mass ranges overlap or touch; no guaranteed strict dominance inferred.",
+                    });
                 }
             }
         }
@@ -541,7 +561,14 @@ impl Policy {
             physical_validation_claim: false,
             motion_required: self.needs_motion(),
             notes: vec![
-                "Nominal computed outputs only; source bounds are not propagated uncertainty intervals. Estimate permission stays with each source selection.",
+                match self.basis {
+                    Basis::Nominal => {
+                        "Nominal computed outputs only; source bounds are not propagated uncertainty intervals. Estimate permission stays with each source selection."
+                    }
+                    Basis::ReportedBounds => {
+                        "Assembly-mass constraints must contain the entire reported range. Dominance requires no worse endpoints with a strict improvement; overlapping or touching ranges remain unresolved. Bounds propagate only through fixed authored areas and additive inventory, not finishing, omitted components, geometry uncertainty or a confidence model. Estimate permission stays with each source selection."
+                    }
+                },
                 "The frontier is conditional on the evaluated alternatives, constraints, process policy and reported-protocol admission. Scalar pre-screening may have removed better garment alternatives.",
                 "Matching reported protocols is a software comparison rule, not proof that specimens or experiments are comparable. Missing or refused required outputs exclude a row without erasing other consumers.",
                 "Stock mass includes waste, costs are dated complete independent order observations, and feed time excludes handling. No empirical fit, warmth, hardware authorization or global optimum is claimed.",
@@ -626,19 +653,50 @@ impl Policy {
                 .filter(|v| v.is_finite() && (metric.signed() || *v >= 0.))
             {
                 Some(value) if consumer_available(row, metric.consumer(), &admitted) => {
+                    let reported_bounds = match self.basis {
+                        Basis::Nominal => None,
+                        Basis::ReportedBounds => row
+                            .assembly_mass
+                            .value()
+                            .and_then(|r| r.assembly_mass.reported_bounds_kg)
+                            .filter(|[lo, hi]| {
+                                lo.is_finite()
+                                    && hi.is_finite()
+                                    && *lo >= 0.
+                                    && *lo <= value
+                                    && value <= *hi
+                            }),
+                    };
                     result.readings.insert(
                         metric,
                         Reading {
                             value,
+                            reported_bounds,
                             unit: metric.unit(currency).into(),
                             consumer: metric.consumer(),
                         },
                     );
+                    let [lo, hi] = match self.basis {
+                        Basis::Nominal => [value, value],
+                        Basis::ReportedBounds => {
+                            let Some(bounds) = reported_bounds else {
+                                result.exclusions.push(invalid(format!(
+                                    "{metric:?} has no complete valid reported bounds; nominal mass remains visible but no exact range is substituted"
+                                )));
+                                continue;
+                            };
+                            bounds
+                        }
+                    };
                     for c in self.constraints.iter().filter(|c| c.metric == metric) {
-                        if c.minimum.is_some_and(|min| value < min)
-                            || c.maximum.is_some_and(|max| value > max)
+                        if c.minimum.is_some_and(|min| lo < min)
+                            || c.maximum.is_some_and(|max| hi > max)
                         {
-                            result.exclusions.push(invalid(format!("{metric:?} = {value} {} violates the inclusive comparison constraint", metric.unit(currency))));
+                            let observed = match self.basis {
+                                Basis::Nominal => value.to_string(),
+                                Basis::ReportedBounds => format!("reported range [{lo}, {hi}]"),
+                            };
+                            result.exclusions.push(invalid(format!("{metric:?} = {observed} {} violates the inclusive comparison constraint", metric.unit(currency))));
                         }
                     }
                 }
@@ -658,12 +716,28 @@ impl Policy {
     fn dominates(&self, a: &Candidate, b: &Candidate) -> bool {
         let mut strictly = false;
         for objective in &self.objectives {
-            let x = a.readings[&objective.metric].value;
-            let y = b.readings[&objective.metric].value;
+            let interval = |candidate: &Candidate| {
+                let reading = &candidate.readings[&objective.metric];
+                match self.basis {
+                    Basis::Nominal => [reading.value, reading.value],
+                    Basis::ReportedBounds => reading.reported_bounds.expect("admitted mass range"),
+                }
+            };
+            let [al, ah] = interval(a);
+            let [bl, bh] = interval(b);
             match objective.direction {
-                Direction::Minimize if x > y => return false,
-                Direction::Maximize if x < y => return false,
-                _ => strictly |= x != y,
+                Direction::Minimize => {
+                    if ah > bl {
+                        return false;
+                    }
+                    strictly |= ah < bl;
+                }
+                Direction::Maximize => {
+                    if al < bh {
+                        return false;
+                    }
+                    strictly |= al > bh;
+                }
             }
         }
         strictly

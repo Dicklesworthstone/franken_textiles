@@ -299,8 +299,10 @@ For a complete declared cut inventory, request `assembly_mass` in the study and 
 `assembly_mass_kg` instead. It counts all physical cut pieces (including unsimulated lining) and
 explicit sourced retained extras, independently of the body. Unknown components or an incomplete
 inventory block that mass objective, not valid drape/heat or other manufacturing results. It is one
-pre-finishing assembly, not purchased waste or a weighed finished garment. Its conditional reported
-ranges do not relax the nominal-only comparison policy. See `docs/material-screening-and-studies.md`.
+pre-finishing assembly, not purchased waste or a weighed finished garment. Explicit `reported_bounds`
+comparison can use its complete conditional mass range for whole-range constraints and separated-range
+dominance. That mode permits only `assembly_mass_kg` objectives/constraints; additional required
+consumers still keep their ordinary gates. See `docs/material-screening-and-studies.md`.
 
 Every scenario objective requires this bound pattern's identity, the retained body/scenario identities,
 `drape.settled == true`, empty drape gating and `simulation_gating_clear == true`. Successful thermal
@@ -313,8 +315,9 @@ request identity; there is no misleading manufacturing-only frontier nested bene
 Relevant reported methods, full conditions and evidence must match by source piece unless explicitly
 relaxed. Different nonlinear/relaxation/temperature records and constitutive-model selectors use
 conservative exact-record comparison. Protocol override never bypasses freshness, settledness or
-missing-value checks. Nominal comparison requires explicit consent: input ranges are not propagated
-objective intervals. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
+missing-value checks. Nominal comparison requires explicit consent: source ranges are not propagated
+drape/thermal objective intervals. Reported assembly-mass bounds hold authored geometry and inventory
+fixed and do not establish general scenario uncertainty. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
 comfort or proof that the requested run duration was physically sufficient. Positive admission tests
 use explicitly synthetic callback outcomes; the actual cylinder integration test demonstrates that
 clear-gating but drifting cloth is excluded. No settled anatomical garment experiment is claimed.

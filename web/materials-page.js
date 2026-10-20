@@ -136,10 +136,13 @@ function screening(parent, r) {
 }
 function objectiveComparison(parent, r) {
   const motionQualified = r.motion_required === true;
+  const massBounds = r.policy.basis === "reported_bounds";
   const note = document.createElement("p");
   note.textContent = `Computed ${r.policy.basis} frontier: ${r.frontier.length ? r.frontier.join(", ") : "No eligible non-dominated alternatives"}. ` +
     (r.policy.allow_mixed_protocols ? "Mixed source protocols explicitly admitted. " : "Reported input protocols must match. ") +
-    "Conditional on these inputs and evaluated alternatives; no propagated uncertainty, empirical fit or global optimum claim.";
+    (massBounds ? "Mass limits and dominance use complete reported mass ranges at fixed authored geometry and inventory. " +
+      "Conditional on these inputs and evaluated alternatives; no general scenario uncertainty, confidence level, empirical fit or global optimum claim." :
+      "Conditional on these inputs and evaluated alternatives; no propagated uncertainty, empirical fit or global optimum claim.");
   parent.append(note);
   const scope = document.createElement("p");
   scope.textContent = motionQualified ?
@@ -156,7 +159,13 @@ function objectiveComparison(parent, r) {
   for (const row of r.alternatives) {
     cells(t, [row.key, row.eligible ? "Eligible" : `Excluded: ${row.exclusions.map(e => e.message).join("; ")}`,
       row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
-      ...metrics.map(o => { const q = row.readings[o.metric]; return q ? `${metric(q.value)} ${q.unit}` : "Unknown"; })]);
+      ...metrics.map(o => {
+        const q = row.readings[o.metric];
+        if (!q) return "Unknown";
+        const range = q.reported_bounds ? `; reported range [${q.reported_bounds.map(metric).join(", ")}] ${q.unit}` :
+          massBounds ? "; reported range unknown" : "";
+        return `${metric(q.value)} ${q.unit}${range}`;
+      })]);
   }
   for (const pair of r.incomparable) {
     const p = document.createElement("p"); p.textContent = `${pair.alternatives.join(" / ")}: ${pair.reason}`; parent.append(p);
@@ -300,7 +309,9 @@ function comparison(op, r) {
     geometry_changed: study.geometry_changed, physical_validation_claim: study.physical_validation_claim,
     hardware_execution_authorized: study.hardware_execution_authorized, notes: study.notes,
     computed_frontier: r.comparison?.frontier ?? null,
-    comparison_basis: r.comparison ? "Declared nominal objectives evaluated by Rust; conditional Pareto set, not an empirical fit/warmth claim or global optimum." :
+    comparison_basis: r.comparison ? (r.comparison.policy.basis === "reported_bounds" ?
+      "Declared assembly mass ranges evaluated by Rust with fixed authored geometry and inventory; unresolved overlap and unknown ranges remain explicit." :
+      "Declared nominal objectives evaluated by Rust; conditional Pareto set, not an empirical fit/warmth claim or global optimum.") :
       "Actual consumer results; no computed objectives requested. Unknowns are not zero, and no ranking is inferred by this page." };
 }
 function inspectResult(r, selectionJson) {

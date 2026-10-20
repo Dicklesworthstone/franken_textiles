@@ -1866,6 +1866,27 @@ coupon and garment acceptance stay open under `ftx-rc1`, `ftx-tm2` and `ftx-tm8`
 
 ---
 
+### 25.24 Assembly-mass limits from complete reported source bounds
+
+**Conditional mass comparison (`ftx-ms2`).** Existing manufacturing and scenario studies can
+request `basis: "reported_bounds"` for `assembly_mass_kg` objectives and constraints. Complete
+source endpoints propagate through the unchanged authored areas and explicit additive inventory.
+An inclusive mass limit must contain the entire reported range; a nominally light garment whose
+upper endpoint exceeds the limit is excluded. Missing bounds retain visible nominal mass with an
+explicit exclusion, and overlapping or touching ranges remain unresolved on the Pareto frontier.
+The browser displays these ranges alongside each nominal value through the existing study flow.
+Ordinary nominal comparisons preserve their previous policy and output semantics.
+
+This policy currently supports mass only. Other consumers can still be required through their
+own completion gates, but unsupported drape, thermal, cost or process-result intervals refuse.
+Reported mass endpoints are conditional on the authored geometry, complete selected inventory
+and admitted source protocols. They are not confidence intervals, uncertain-geometry propagation,
+finishing allowances or an empirical garment guarantee. See
+[material-screening-and-studies.md](docs/material-screening-and-studies.md) and
+[material-scenario-studies.md](docs/material-scenario-studies.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
