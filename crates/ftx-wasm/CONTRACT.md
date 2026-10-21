@@ -30,7 +30,8 @@ was given (`.ftxbody`, not verified array by array, as the CLI loads it), and `f
 measurements, fit_spec, self_contact_mm, progress)` fits Anny to the tape in the drape pose, trims the
 collision skin, sews and drapes (self-contact at `self_contact_mm` when positive, the skill's 2 mm), and
 returns the fit report (`sim_report.json` without the CLI's `pattern`, `measurements_sha256`, `body` and
-`wall_s`) and the viewer page. `web` exposes `WebBody(bytes)`, `fold_up(body, pattern, measurements, fit,
+`wall_s`) and the viewer page. The shared generator embeds the pinned renderer, orbit controls and
+MIT notice; downloaded HTML and blob previews need no network for rendering. `web` exposes `WebBody(bytes)`, `fold_up(body, pattern, measurements, fit,
 mm)` → `WebFold {report(), viewer()}`, and calls the worker's `self.ftxProgress(line)` with the drape's
 progress lines.
 

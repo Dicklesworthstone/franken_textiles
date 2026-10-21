@@ -591,3 +591,30 @@ The bolero reports 30 consecutive quiet steps and no gating flags. No native com
 is inferred from those repeated browser reports. The initial driver's failure above is superseded,
 not erased. `ftx-onn.1` is complete on fresh solo re-execution; parent `ftx-onn`, the physical-material,
 capture, offline-viewer and performance work remain open.
+
+### Offline-viewer continuation — `ftx-onn.2`
+
+- [x] Reproduce the current downloaded viewer offline: two attempted CDN imports, no canvas and no ready state.
+- [x] Retain exact Three.js r160 and OrbitControls bytes from the primary upstream tag, with hashes
+  and the complete MIT license; keep the existing renderer version and two-module closure.
+- [x] Document the named `viewer-offline-r160` HTML exception in spec 04 before implementation;
+  keep numerical payloads, oracle fixtures and capture scripts unchanged.
+- [x] Embed both modules and their notice through the existing shared `viewer_html` path;
+  replace template markers before user payload insertion and refuse missing/duplicated markers.
+- [x] Extend existing unit/CLI regressions and the existing browser checker with offline rendering,
+  frame/pixel changes, controls and zero HTTP(S) requests. No new harness or crate.
+- [ ] Pass focused Rust tests and the actual native viewer reconstruction.
+- [ ] Pass all-target clippy and current workspace tests on frozen remote inputs.
+- [ ] Build WASM and execute its viewer generation, then open that generated HTML fully offline.
+- [ ] Record actual native/WASM artifact and browser outcomes; do not credit preview templating as compiled proof.
+- [ ] Fresh solo audit, scoped UBS review, Beads evidence/flush, commit and reservation handoff.
+
+Checks are retained at
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-offline-viewer-checks-pwtimqo3/`.
+The laptop's fresh `sbh check --need 20G` fails its ratio threshold (200.6 GB available, 5.02% free),
+so Rust compilation remains strictly remote. Local `cargo fmt --check` and Node syntax checking pass.
+The first remote request refuses with RCH-E413/exit 103 because this task added the CLI fixture-path
+print while admission was queued. No local compilation followed; selected Rust/assets are now frozen
+and that request is retried. This is a source-freeze mistake, not a passing compiler result.
+An external HTML preview reuses the prior real production payload to check the proposed module packaging;
+it is labelled `preview-not-compiled.html` and cannot establish Rust/WASM generation acceptance.
