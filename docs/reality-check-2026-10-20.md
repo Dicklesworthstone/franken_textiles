@@ -1349,10 +1349,45 @@ their separate body friction and actual simulated/attached weight, source immuta
 replay, valid disabled mechanics, retained intersection refusal, legacy singular-report normalization
 and real drafted jacket/trouser composition with explicitly synthetic material data. No oracle changed.
 Source is base `34cf0eb722e82e9fede9863ac72d24bb4142d8a8` plus the five exact source/test overlays;
-fingerprint `fabfca43150edd9133ef00183c291bf4f5e34e48d7f0bdd61b49200ceba185b6`, tree
+fingerprint `fabfca43150edd9133ef00183c291bf4f5e34e48d7f0bdd61b49200ceba185b6`, base tree
 `f957cb40ce1ccccc6722bda9148210e4d8b7fdf0`. Logs are ignored under `out/ftx-99t-20261021/checks/`.
 Three failed iterations are retained: the initial synthetic elastic was slack rather than taut;
 the disabled test's shortened geometry intersected (that refusal is now asserted, with a separately
 valid disabled start); and a legacy-report comparison wrongly expected the new explicit friction field.
 The final test preserves legacy absence and independently checks the explicit coefficient instead.
 Positive force assertions, contact checks, rest/mass arithmetic and solver budgets were not relaxed.
+
+Bounded fresh-solo review, 2026-10-21 (`ftx-99t`, nine feature/source/test/docs/tracker paths):
+
+- **Process worksheet:** runtime casing declarations are FEATURE: scene assembly consumes them.
+  This existing report/TODO and Bead are PROCESS, explicitly requested by the operator; consumer is
+  the operator reviewing this casing delivery, not a new runtime consumer. The observed gap was the
+  composer's blanket refusal of drafted trousers. Retirement: this block's TODO stops at handoff;
+  no recurring report or harness is introduced. Small ignored logs preserve failed and completed
+  commands against concurrent automatic commits; no cheaper reliable substitute was found for
+  retaining their output. Highest-value executable gap here was the casing connection; an extra hour
+  of reporting would lose to implementation. Verdict: bounded requested tracking only.
+- **Real-work worksheet:** purpose is patterns that sew together and fit a particular body, with usable
+  manufacturing files. Actual diff inventory for this item: USER 6 (four runtime modules and two API
+  documents), ENABLER 1 (the outfit regression target), PROCESS 2 (this report and Beads), UNKNOWN 0.
+  Demo: the existing outfit test actually drapes two separately loaded sewn bands, one taut and one
+  slack, and replays the saved composition. Omitting the process files changes no runtime behavior;
+  they provide the requested task/evidence handoff only. The existing solver and ordinary replay
+  consume the enabled mechanics. The older G5/real-garment acceptance remains open because this
+  synthetic connection cannot supply physical measurements. No delegated panes or substitute
+  follow-up closure. Verdict: working product change, with tracking bounded to this delivery.
+- **Honesty worksheet, tests/gates 1–6:** No (checked: all four added test bodies and changed runtime
+  paths; no removed/ignored test, modified oracle, timeout/tolerance/config relaxation, mock solver,
+  environment-specific production path or zero-run focused result). The three failed fixture/report
+  assumptions and corrections are recorded above rather than hidden. Checks 7–10: No (checked:
+  observed command exits/logs and test counts; synthetic composition/physics are not real fit,
+  empirical material qualification, browser casing parity or performance proof; stderr retained).
+  Checks 11–12: No (checked: this narrow Bead's original acceptance; existing empirical/G5 items
+  remain open; no plan/spec requirement reduced to match this code). Checks 13–17: not applicable,
+  solo execution; incoming automatic commits are not independent review. Check 18: No (checked:
+  the four focused targets and workspace command were fixed before their results). Older-session
+  mining was not repeated for this bounded continuation. Check 19: explain the slack fixture,
+  invalid disabled start and incorrect legacy-field expectation before claiming success. Check 20:
+  strongest evidence is the re-executable two-casing solve with analytic scoped mass, nonzero/zero
+  tension, exact source rest lengths and equal saved-pattern replay. Disposition: those assumptions
+  were corrected in place and disclosed; no acceptance relaxation or fabricated evidence found.
