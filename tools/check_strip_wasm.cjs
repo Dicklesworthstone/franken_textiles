@@ -120,6 +120,38 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
     assert.ok(state.grip_balance_residual_n <= simulated.nativeReport.input.controls.force_tolerance_n);
   }
 
+  const nonlinear = await compare('calibrate-strip', 'stripFit', 'material_calibrate_strip', 'strip-calibration', example('synthetic-nonlinear-calibration.json'));
+  const nonlinearFit = nonlinear.nativeReport.calibration;
+  assert.equal(nonlinearFit.accepted, true, JSON.stringify(nonlinearFit.reasons));
+  assert.equal(nonlinearFit.domain_replay_verified, true);
+  assert.deepEqual(nonlinearFit.parameter_descriptors.map(parameter => [parameter.id, parameter.unit]), [
+    ['warp_scale', '1'], ['weft_scale', '1'], ['shear_scale', '1'], ['normal_coupling', 'N/m']
+  ]);
+  for (const [index, expected] of [1.1, 0.9, 1.2, 40].entries()) {
+    assert.ok(Math.abs(nonlinearFit.parameters[index] - expected) < 1e-4);
+  }
+  assert.equal(nonlinearFit.input.response_family.model, 'scaled_piecewise_linear/1');
+  assert.equal(nonlinearFit.input.response_family.allow_estimated_shapes, true);
+  assert.equal(nonlinearFit.input.allow_estimated_observations, true);
+  assert.equal(nonlinear.nativeReport.selection.allow_estimates, true);
+  assert.equal(artifact(nonlinear.message, 'strip-calibrated-selection.json'), nonlinear.nativeReport.selection_json);
+  assert.equal(nonlinear.wasmReport.material.selection_json, nonlinear.nativeReport.selection_json);
+  assert.equal(nonlinear.wasmReport.material.capabilities.mechanical_coefficients.ready, false);
+  assert.deepEqual(nonlinearFit.material.properties, {});
+  assert.equal(nonlinearFit.material.membrane_response.model, 'tabulated_green_strain/1');
+  for (const axis of ['warp', 'weft', 'shear']) {
+    assert.equal(nonlinearFit.material.membrane_response[axis].evidence, 'estimate');
+  }
+  assert.deepEqual(JSON.parse(ftx.material_inspect(nonlinear.nativeReport.selection_json)), nonlinear.wasmReport.material);
+  const nonlinearForward = await compare('strip-experiment', 'stripExperiment', 'material_strip_experiment', 'strip-experiment', example('synthetic-nonlinear-forward.json'));
+  assert.equal(nonlinearForward.nativeReport.input.material.expected_sha256, nonlinear.nativeReport.selection.expected_sha256);
+  assert.equal(nonlinearForward.nativeReport.states.length, 3);
+  assert.ok(nonlinearForward.nativeReport.states.every(state => state.force_n > 0));
+  for (const state of nonlinearForward.nativeReport.states) {
+    assert.ok(state.free_force_residual_n <= nonlinearForward.nativeReport.input.controls.force_tolerance_n);
+    assert.ok(state.grip_balance_residual_n <= nonlinearForward.nativeReport.input.controls.force_tolerance_n);
+  }
+
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-strip-wasm-'));
   const altered = JSON.parse(fs.readFileSync(example('synthetic-calibration.json'), 'utf8'));
   const check = altered.experiments.find(experiment => experiment.partition === 'check');
@@ -148,7 +180,40 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
   assert.equal('result' in refusal, false);
   assert.equal('files' in refusal, false);
 
-  console.log('PASS: compiled WASM + actual worker/native equality for complete source acquisitions, accepted inverse identification, exact frozen selections, production forward replay and rejected held-out CHECK reports.');
-  console.log('Original source channels and explicit estimate permissions are preserved. Browser navigation and empirical material or garment fit are not asserted.');
-  console.log('Synthetic rejection input retained at:', rejectedPath);
+  const nonlinearInput = JSON.parse(fs.readFileSync(example('synthetic-nonlinear-calibration.json'), 'utf8'));
+  const nonlinearAltered = structuredClone(nonlinearInput);
+  nonlinearAltered.experiments.find(experiment => experiment.partition === 'check').observations[0].force_n += 10;
+  const nonlinearRejectedPath = path.join(work, 'rejected-nonlinear-check.json');
+  fs.writeFileSync(nonlinearRejectedPath, JSON.stringify(nonlinearAltered), {flag: 'wx'});
+  const nonlinearRejected = await compare('calibrate-strip', 'stripFit', 'material_calibrate_strip', 'strip-calibration', nonlinearRejectedPath);
+  assert.equal(nonlinearRejected.nativeReport.calibration.accepted, false);
+  assert.deepEqual(nonlinearRejected.nativeReport.calibration.parameters, nonlinearFit.parameters);
+  assert.deepEqual(nonlinearRejected.nativeReport.calibration.parameter_descriptors, nonlinearFit.parameter_descriptors);
+  assert.ok(nonlinearRejected.nativeReport.calibration.reasons.some(reason => reason.includes('CHECK')));
+  assert.ok(nonlinearRejected.nativeReport.calibration.check.peak_scaled > 90);
+  for (const field of ['material', 'selection', 'selection_json']) {
+    assert.equal(nonlinearRejected.nativeReport.calibration[field], null);
+    assert.equal(nonlinearRejected.wasmReport[field], null);
+  }
+  assert.equal(nonlinearRejected.message.files.some(file => file.name === 'strip-calibrated-selection.json'), false);
+
+  // Neither explicit output consent nor observation consent admits estimated shape evidence.
+  // Omitted shape consent is also a refusal; no adapter may fill it in silently.
+  for (const omitted of [false, true]) {
+    const denied = structuredClone(nonlinearInput);
+    if (omitted) delete denied.response_family.allow_estimated_shapes;
+    else denied.response_family.allow_estimated_shapes = false;
+    const request = ++sequence;
+    await context.self.onmessage({data: {type: 'stripFit', request, stripRequest: JSON.stringify(denied)}});
+    const refusal = sent.at(-1);
+    assert.equal(refusal.request, request);
+    assert.equal(refusal.type, 'error');
+    assert.match(refusal.message, /allow_estimated_shapes/);
+    assert.equal('result' in refusal, false);
+    assert.equal('files' in refusal, false);
+  }
+
+  console.log('PASS: compiled WASM + actual worker/native equality for complete source acquisitions, scalar and nonlinear inverse identification, exact frozen selections, production forward replay and rejected held-out CHECK reports.');
+  console.log('Original source channels and independent shape, observation and output estimate permissions are preserved. Browser navigation and empirical material or garment fit are not asserted.');
+  console.log('Synthetic rejection inputs retained at:', work);
 })().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; });

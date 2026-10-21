@@ -2319,8 +2319,8 @@ garment gate remain open under `ftx-tm2` and `ftx-tm8`.
 
 ### 25.39 Declared nonlinear shapes enter the clamped-strip inverse solver
 
-**Product gap (`ftx-ki5`, continuing `ftx-ki4`).** Scalar strip identification cannot express a
-knit's changing tangent stiffness. Extend the existing finite-strip authority with an explicitly
+**Delivered capability (`ftx-ki5`, continuing `ftx-ki4`).** Scalar strip identification cannot express a
+knit's changing tangent stiffness. The existing finite-strip authority now accepts an explicitly
 declared `scaled_piecewise_linear/1` response family: three source-bearing signed Green-strain
 curves, three positive dimensionless amplitude scales and one signed normal coupling in N/m.
 Knot locations and relative branch shapes remain caller-supplied assumptions. Every candidate uses
@@ -2339,7 +2339,10 @@ Missing unrelated material properties stay unknown.
 The same public native/WASM requests and browser workbench expose this optional family, with
 report-owned parameter names/units and exact frozen selection downloads. Existing scalar requests
 retain their serialized identities when the family is absent. A reproducible synthetic nonlinear
-example exercises identification and frozen forward replay; it does not qualify an industrial knit.
+example recovers dimensionless scales `[1.1, 0.9, 1.2]` and coupling `40 N/m`, passes actual
+publication-domain replay and freezes a directly reusable selection. Native/WASM/worker comparisons
+cover accepted and rejected nonlinear requests, independent permissions and exact output identities.
+These numerical checks do not qualify an industrial knit.
 
 **Empirical continuation remains open.** The Sperl source fits an area-preserving shell model using
 force and contraction in all three cut directions. Its fitted coefficients cannot supply an

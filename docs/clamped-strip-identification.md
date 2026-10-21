@@ -24,7 +24,7 @@ cargo build -p ftx-cli --bin ftx --bin ftx-materials
 |---|---|---|
 | Validate and expose original source observations | `ftx-materials strip-acquisition ACQUISITION.json` | Source identities, complete force histories, geometry and optional original transverse curves |
 | Predict a declared membrane in a grip fixture | `ftx-materials strip-experiment REQUEST.json` | Frozen material request, equilibrium states, reactions, local strain ranges and solver residuals |
-| Identify four scalar membrane coefficients | `ftx-materials calibrate-strip REQUEST.json [--allow-estimates]` | `calibration` report, conditional exact material selection and separate garment readiness |
+| Identify scalar coefficients or amplitudes of declared nonlinear shapes | `ftx-materials calibrate-strip REQUEST.json [--allow-estimates]` | `calibration` report, conditional exact material selection and separate garment readiness |
 
 The same actions are available as `ftx materials ACTION FILE.json --json`; their report is inside
 the ordinary `ftx-cli/1` envelope's `result`. The companion writes the report directly as JSON to
@@ -33,7 +33,8 @@ standard output. These commands do not alter the input files.
 For `calibrate-strip`, `--allow-estimates` controls admission of fitted output properties and overrides
 `input.allow_estimates` in the effective recorded request; omission leaves that permission false.
 Estimated acquisition observations still require the separate JSON permission
-`allow_estimated_observations`. `strip-experiment` uses its material selection's estimate policy,
+`allow_estimated_observations`. Estimated nonlinear shapes require their own
+`response_family.allow_estimated_shapes` permission. `strip-experiment` uses its material selection's estimate policy,
 and `strip-acquisition` does not infer or admit a constitutive law.
 
 The calibration command returns an envelope containing `calibration`, `selection`, exact
@@ -87,6 +88,109 @@ controls, analysis date, weights and bounds. It emits the public `ftx-strip-cali
 The returned material contains only the four identified membrane properties. Missing density,
 bending, thickness and friction remain missing, so this successful membrane example still cannot
 be presented as a complete garment material.
+
+## Identify amplitudes of declared nonlinear shapes
+
+The same `ftx-strip-calibration/1` request can include an optional `response_family` with
+`model: "scaled_piecewise_linear/1"`. It supplies three existing `StressCurve` objects named `warp`,
+`weft` and `shear`, plus `allow_estimated_shapes`. Each curve retains its `points`, `source`,
+`evidence`, `method` and `conditions`; source keys resolve in the input material. The curve points
+are **material-frame Green strain and second-Piola sheet resultant in N/m**, not grip extension and
+total force. Each supplied signed curve includes a stress-free `[0,0]` origin and strictly increasing
+strain/resultant knots on both sides of zero. The family uses the existing piecewise-linear material
+response, with its analytically integrated energy and coupled-tangent stability checks.
+
+Directly reusing curves from an earlier calibration as the three shape inputs is currently refused.
+A shape carrying `fitted_green_strain_range` or a recognized calibration source reference belongs to
+a prior four-component law, including its coupling and joint domain; the three-curve declaration
+does not retain that complete group. Removing its domain field does not make a recognized calibrated
+source independent. Supply separately authored shape evidence or an explicit modeling assumption.
+This limitation is separate from replacing an existing material: its complete nonlinear law and
+fitted support remain in `material` and constrain the replacement fit.
+
+With a family present, the four entries of `parameter_bounds` and `calibration.parameters` mean:
+
+| Position | Parameter | Unit |
+|---|---|---|
+| 0 | Positive warp shape scale | dimensionless |
+| 1 | Positive weft shape scale | dimensionless |
+| 2 | Positive shear shape scale | dimensionless |
+| 3 | Signed constant normal coupling | N/m |
+
+For supplied shape functions `w`, `f` and `s`, the identified law is:
+
+```text
+S11 = warp_scale * w(E11) + normal_coupling * E22
+S22 = weft_scale * f(E22) + normal_coupling * E11
+S12 = shear_scale * s(2 E12)
+```
+
+Only those amplitudes and coupling are fitted. Knot locations, branch shapes and interpolation stay
+as declared. This lets an independently characterized or explicitly assumed nonlinear family enter
+the actual grip experiment without a second constitutive engine. It does not learn arbitrary curve
+shapes, certify unexcited compression/shear behavior or turn the supplied shape prior into a measured
+property. The output remains a conditional model estimate, even when the acquisition forces are
+measured. The scalar parameter order elsewhere in this guide applies only when `response_family`
+is absent.
+
+Every candidate must be stable over the full declared shape domain, and the entire parameter box
+must satisfy the worst-case coupling bound. Shape support and any inherited material support constrain
+searches and replay; the published range is further restricted by FIT states. CHECK does not select
+shapes, coefficients, knots or strain support. Keep a shape's preparation independent of CHECK:
+fitting a shape to all observations first and later relabeling some of them as CHECK does not reserve
+independent evidence.
+
+`response_family.allow_estimated_shapes: true` explicitly admits estimated input shapes. It neither
+admits estimated acquisition observations nor authorizes consumption of the fitted output. The latter
+still requires the ordinary CLI `--allow-estimates` flag or the explicit WASM output-policy argument.
+No family is selected from a fiber name, a catalog brand or an incomplete source curve.
+
+### Run the synthetic nonlinear identification and replay
+
+The [nonlinear request](../examples/strip-identification/synthetic-nonlinear-calibration.json)
+uses explicitly assumed signed shapes and known generating parameters `[1.1, 0.9, 1.2, 40]` in the
+family order above. All forces and material-midpoint widths are recomputed by the public production
+strip experiment. FIT has warp, weft and bias states at 2%, 6% and 10% extension; CHECK is a separately
+computed warp state at 4%. The shape prior and both partitions are synthetic software data.
+
+```sh
+target/debug/ftx-materials calibrate-strip \
+  examples/strip-identification/synthetic-nonlinear-calibration.json --allow-estimates \
+  > /tmp/nonlinear-strip-report.json
+
+target/debug/ftx-materials strip-experiment \
+  examples/strip-identification/synthetic-nonlinear-forward.json \
+  > /tmp/nonlinear-strip-forward-report.json
+
+python3 - <<'PY'
+import json
+r = json.load(open("/tmp/nonlinear-strip-report.json"))["calibration"]
+print("accepted:", r["accepted"], "domain replay:", r["domain_replay_verified"])
+for parameter, value in zip(r["parameter_descriptors"], r["parameters"]):
+    print(parameter["id"], value, parameter["unit"])
+print("remaining reasons:", r["reasons"])
+PY
+```
+
+The accepted result is an ordinary estimated piecewise-linear membrane with support restricted to
+FIT, not four scalar stiffness properties. The standalone forward request embeds its exact frozen
+selection and replays the three warp FIT extensions. Final predictions and residuals use the doubled
+mesh and actual published law, including its clipped domain endpoints; refinement diagnostics compare
+those results with the declared mesh. Missing mass, bending, thickness, friction and thermal properties
+remain missing.
+
+Regenerate every nonlinear observation with the
+[production-solver generator](../crates/ftx-drape/examples/strip_nonlinear_fixture.rs):
+
+```sh
+cargo run -p ftx-drape --example strip_nonlinear_fixture > /tmp/new-nonlinear-strip-request.json
+target/debug/ftx-materials calibrate-strip /tmp/new-nonlinear-strip-request.json --allow-estimates \
+  > /tmp/new-nonlinear-strip-report.json
+```
+
+The generator reuses the scalar example's fixture declarations, partitions and numerical controls;
+it replaces every force, width and source description. The signed shape nodes, scales and coupling
+are declared in its source. It does not derive a nonlinear family from the empirical Sperl curves.
 
 ## Use the retained real production-knit observations
 
@@ -229,7 +333,7 @@ a separate numerical computation and never evidence of an independent physical r
 Different construction, finish, lot, temperature, moisture and rate conditions require
 separate source qualification rather than combining specimens into one apparent material response.
 
-`parameter_bounds` uses the order:
+Without `response_family`, `parameter_bounds` uses the scalar order:
 
 ```text
 [warp stiffness N/m, weft stiffness N/m, major Poisson ratio, shear stiffness N/m]
@@ -240,16 +344,20 @@ The whole box must be positive-definite, including its most adverse combination 
 the algorithm does not repair an invalid box. At least four FIT scalar channels are required, but
 counting four values does not guarantee independent excitation of four coefficients.
 
-Three permissions serve different purposes:
+The permissions serve different purposes:
 
 | Field | What it authorizes |
 |---|---|
 | `admit_planar_elastic_model` | Use of the declared planar, ideal-grip elastic experiment model |
 | `allow_estimated_observations` | Estimated input observations, including explicitly synthetic solver outputs |
+| `response_family.allow_estimated_shapes` | Estimated supplied nonlinear shapes, independently of acquisition and output permissions |
 | `allow_estimates` | Admission of resulting estimated properties through the returned material selection; the CLI flag or WASM boolean supplies the effective value |
 
-`replace_existing` separately permits replacement of existing scalar membrane coefficients. Existing
-nonlinear or history laws are not erased. The complete prior input remains in the result for review.
+`replace_existing` separately permits replacement of existing equilibrium evidence. A declared
+nonlinear family may replace scalar coefficients or an existing nonlinear response while retaining
+the prior compiled and fitted strain limits. Scalar-only calibration still refuses to replace a
+nonlinear response, and existing history laws cannot be silently discarded. The complete prior
+input remains in the result for review.
 The native `strip::fit::calibrate(&input)` API uses the input's output-consent setting directly;
 `material_calibrate_strip(input, allowEstimates)` and the CLI record their explicit output policy in
 that same input. This never grants permission for estimated acquisition observations.
@@ -318,16 +426,26 @@ requirements are satisfied.
 
 The original paper explicitly says that these strip data approximate uniaxial deformations and lack
 biaxial response information. Its fitted thin-shell law augments anisotropic Saint Venant–Kirchhoff
-elasticity with an area-preservation term because an unaugmented law can invert within tested knit
-stretches. The present four-parameter scalar fit uses the production membrane already in this
-project; it does not claim to reproduce the authors' augmented model. Good synthetic recovery proves
-the software identification path, and real-source residuals test this particular approximation.[^scope]
+elasticity with explicit area terms `kn1 * (J - 1)^2 + kn2 * (log J)^2`, where `J` is the area ratio,
+because an unaugmented law can invert within tested knit stretches. The authors fit both force and
+transverse contraction across all three cut directions. Neither this workbench's scalar fit nor its
+separable nonlinear shape family implements those area terms. Positive curve tangents alone do not
+establish accurate transverse contraction or general biaxial response. Good synthetic recovery proves
+the software identification path; real-source residuals test the declared approximation.[^scope]
+
+The [authors' supplementary document][supplement] reports fitted six-parameter thin-shell models for
+SJ1, SJ3 and DKIN8. Shapes derived from those fitted coefficients already depend on the original
+all-direction observations. A later bias CHECK from the same source therefore cannot be described as
+independent of that shape prior. The released [dataset][dataset] explorer only loads and plots the
+source curves; it supplies no additional spatial width operator. This workbench does not select a
+nonlinear family automatically from those source measurements or from the published fit coefficients.
 
 Independent matched-specimen bending/contact data and real dressed-garment evidence remain necessary
 for broader claims. More raw fabric records, including datasets whose redistribution terms are not
 yet established, should be acquired and qualified before becoming bundled empirical properties.
 
 [paper]: https://mslab.es/projects/YarnLevelFabrics/contents/sperl2022eylsmpf.pdf
+[supplement]: https://mslab.es/projects/YarnLevelFabrics/contents/sperl2022eylsmpf_supplementary.pdf
 [dataset]: https://mslab.es/projects/YarnLevelFabrics/dataset/dataset.zip
 [^scope]: Sperl et al., *Estimation of Yarn-Level Simulation Models for Production Fabrics*, ACM
     Transactions on Graphics 41(4), 2022, sections 4.3 and 5.1, DOI

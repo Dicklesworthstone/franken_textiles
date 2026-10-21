@@ -55,8 +55,11 @@ extension, total `force_n` and a positive `scale_n`. Optional `mid_width` provid
 reference gauge. The scales are explicit residual weights, not inferred uncertainties.
 Source acquisition aliases cannot be relabeled as independent held-out experiments.
 
-The four parameter bounds are ordered as warp stiffness in N/m, weft stiffness in N/m,
-major Poisson ratio, and shear stiffness in N/m. The entire search box must be physically
+By default, the four parameter bounds are ordered as warp stiffness in N/m, weft stiffness in N/m,
+major Poisson ratio, and shear stiffness in N/m. An optional `response_family` instead identifies
+three dimensionless fixed-shape scales and normal coupling in N/m; see
+[declared nonlinear shape identification](clamped-strip-identification.md#identify-amplitudes-of-declared-nonlinear-shapes)
+for its schema, separate shape permission and reproducible example. The entire search box must be physically
 admissible. Three deterministic bounded searches use only FIT observations. Publication
 requires stationary starts, interior parameters, independent local sensitivity, no
 discovered separated equivalent minimum, acceptable FIT and held-out CHECK errors,
@@ -77,7 +80,9 @@ The `--allow-estimates` flag controls consumption of the fitted output and overr
 to use estimated acquisition observations: those require the separate input permission
 `allow_estimated_observations`. Changing output consent changes the effective request
 and frozen selection identities; it does not change fitted coefficients or residuals.
-Explicit `replace_existing` consent is required to replace existing scalar coefficients.
+Explicit `replace_existing` consent is required to replace existing equilibrium evidence. A declared
+nonlinear family may replace a scalar or nonlinear law while retaining its inherited support;
+scalar-only calibration cannot replace a nonlinear law, and history laws remain unsupported.
 
 ## Replay the accepted result without changing source identities
 

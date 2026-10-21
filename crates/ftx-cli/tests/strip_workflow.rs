@@ -17,6 +17,8 @@ const ACQUISITION: &str =
     include_str!("../../ftx-pattern/src/material_catalog/knit-strip-measurements.json");
 const INVERSE: &str =
     include_str!("../../../examples/strip-identification/synthetic-calibration.json");
+const NONLINEAR: &str =
+    include_str!("../../../examples/strip-identification/synthetic-nonlinear-calibration.json");
 
 fn workspace() -> PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -298,6 +300,131 @@ fn both_inverse_commands_keep_candidate_decisions_source_permissions_and_exact_s
             "invalid_document",
         );
     }
+}
+
+#[test]
+fn nonlinear_strip_commands_keep_shape_observation_and_output_policies_independent() {
+    let dir = workspace();
+    write(&dir, "nonlinear.json", NONLINEAR.as_bytes());
+    let input: Value = serde_json::from_str(NONLINEAR).unwrap();
+    let mut fitted = Value::Null;
+    for unified in [false, true] {
+        // Exercise both output policies without changing the supplied shape/observation consent.
+        let mut args = vec!["calibrate-strip", "nonlinear.json"];
+        if unified {
+            args.push("--allow-estimates");
+        }
+        let result = success(&run(&dir, unified, &args), unified);
+        let calibration = &result["calibration"];
+        assert_eq!(calibration["accepted"], true, "{calibration}");
+        assert_eq!(calibration["domain_replay_verified"], true);
+        assert_eq!(
+            calibration["input"]["response_family"],
+            input["response_family"]
+        );
+        assert_eq!(calibration["input"]["allow_estimated_observations"], true);
+        assert_eq!(calibration["input"]["allow_estimates"], unified);
+        if !fitted.is_null() {
+            assert_eq!(calibration["parameters"], fitted);
+        }
+        fitted = calibration["parameters"].clone();
+        assert_eq!(calibration["parameter_descriptors"][2]["id"], "shear_scale");
+        assert_eq!(calibration["parameter_descriptors"][2]["unit"], "1");
+        assert_eq!(
+            calibration["parameter_descriptors"][3]["id"],
+            "normal_coupling"
+        );
+        assert_eq!(calibration["parameter_descriptors"][3]["unit"], "N/m");
+        let raw = result["selection_json"].as_str().unwrap();
+        assert_eq!(result["selection_json"], calibration["selection_json"]);
+        let selection: Selection = serde_json::from_str(raw).unwrap();
+        let resolved = ftx_pattern::textile_import::catalog()
+            .unwrap()
+            .resolve(&selection)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_string(&resolved.frozen_selection()).unwrap(),
+            raw
+        );
+        assert_eq!(resolved.membrane_response().is_ok(), unified);
+        assert_eq!(result["simulation_ready"], false);
+        let record = selection.record.as_ref().unwrap();
+        assert!(record.properties.is_empty());
+        let response = record.membrane_response.as_ref().unwrap();
+        assert_eq!(response.model, "tabulated_green_strain/1");
+        for curve in [&response.warp, &response.weft, &response.shear] {
+            assert_eq!(curve.evidence, ftx_pattern::materials::Evidence::Estimate);
+        }
+        for (key, source) in input["material"]["sources"].as_object().unwrap() {
+            assert_eq!(serde_json::to_value(&record.sources[key]).unwrap(), *source);
+        }
+    }
+    for (name, shape) in [
+        ("denied-shapes.json", true),
+        ("denied-observations.json", false),
+    ] {
+        let mut denied = input.clone();
+        if shape {
+            denied["response_family"]["allow_estimated_shapes"] = json!(false);
+        } else {
+            denied["allow_estimated_observations"] = json!(false);
+        }
+        write(&dir, name, &serde_json::to_vec(&denied).unwrap());
+        for unified in [false, true] {
+            refused(
+                &run(
+                    &dir,
+                    unified,
+                    &["calibrate-strip", name, "--allow-estimates"],
+                ),
+                unified,
+                "invalid_document",
+            );
+        }
+    }
+    let mut rejected = input;
+    let check = rejected["experiments"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["partition"] == "check")
+        .unwrap();
+    let force = check["observations"][0]["force_n"].as_f64().unwrap();
+    check["observations"][0]["force_n"] = json!(force + 10.0);
+    write(
+        &dir,
+        "rejected-nonlinear.json",
+        &serde_json::to_vec(&rejected).unwrap(),
+    );
+    for unified in [false, true] {
+        let result = success(
+            &run(
+                &dir,
+                unified,
+                &[
+                    "calibrate-strip",
+                    "rejected-nonlinear.json",
+                    "--allow-estimates",
+                ],
+            ),
+            unified,
+        );
+        assert_eq!(result["calibration"]["accepted"], false);
+        assert_eq!(result["calibration"]["parameters"], fitted);
+        assert!(
+            result["calibration"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason.as_str().unwrap().contains("CHECK"))
+        );
+        assert!(result["selection"].is_null() && result["selection_json"].is_null());
+        assert!(result["calibration"]["material"].is_null());
+    }
+    assert_eq!(
+        fs::read(dir.join("nonlinear.json")).unwrap(),
+        NONLINEAR.as_bytes()
+    );
 }
 
 #[test]
