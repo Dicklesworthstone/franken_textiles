@@ -8,7 +8,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-mod knit_strips;
+pub mod knit_strips;
 mod leather;
 mod loaded_insulation;
 mod mit;

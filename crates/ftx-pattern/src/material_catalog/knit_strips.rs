@@ -2,13 +2,15 @@
 //! Clamped strips are spatially nonuniform: their force/extension curves are not homogeneous
 //! membrane observations. Only exact author-reported loading rows become specimen-level attributes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-#[cfg(test)]
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::materials::{Component, Evidence, Form, Material, Quantity, Source};
+
+mod transverse;
+pub use transverse::{AcquisitionDocument, TransverseCurve, TransverseObservation};
 
 #[cfg(test)]
 const DATA: &str = include_str!("knit-strip-measurements.json");
@@ -16,8 +18,196 @@ const ARCHIVE: &str = "https://mslab.es/projects/YarnLevelFabrics/dataset/datase
 const ARTICLE: &str = "https://doi.org/10.1145/3528223.3530167";
 const METADATA_SHA256: &str = "258e3cc2a40ba40d1e0152f80b1fb08c67d14c08db10efbc2ec385669887a6d4";
 const RETRIEVED: &str = "2026-10-20";
+const LICENSE_SHA256: &str = "a65ec8d5d26449679b482bc791c6d57abc17f5d14291d45886803027bf8a7480";
 
-#[cfg(test)]
+/// The source's three strip cuts. Its zero angle is the weft/course direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    /// Source 90-degree cut, loaded along warp/wale.
+    Warp,
+    /// Source zero-degree cut, loaded along weft/course.
+    Weft,
+    /// Source 45-degree cut.
+    Bias,
+}
+
+impl Direction {
+    /// Original source label, independent from any solver's coordinate convention.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Warp => "warp",
+            Self::Weft => "weft",
+            Self::Bias => "bias",
+        }
+    }
+
+    /// Cut angle in the paper's weft-zero convention, in degrees.
+    #[must_use]
+    pub const fn source_angle_degrees(self) -> f64 {
+        match self {
+            Self::Warp => 90.0,
+            Self::Weft => 0.0,
+            Self::Bias => 45.0,
+        }
+    }
+}
+
+/// Original acquisition branch, retained rather than averaged into an elastic response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Branch {
+    /// Increasing grip separation.
+    Loading,
+    /// Decreasing grip separation after the loading branch.
+    Unloading,
+}
+
+/// One unmodified numeric row from the author-supplied force CSV.
+#[derive(Clone, Debug, Serialize)]
+pub struct Observation {
+    /// One-based original CSV line number, including the header at line one.
+    pub csv_line: usize,
+    /// Change in grip separation divided by its initial free gauge; not local membrane strain.
+    pub extension_fraction: f64,
+    /// Signed total measured grip force in newtons; negative noise is retained.
+    pub force_n: f64,
+    /// Original loading/unloading tag.
+    pub branch: Branch,
+}
+
+/// A source-locked force history belonging to exactly one specimen and cut.
+#[derive(Clone, Debug, Serialize)]
+pub struct StripCurve {
+    /// Exact source fabric codename, not a supplier SKU or another specimen's lot.
+    pub specimen: String,
+    /// Original source cut.
+    pub direction: Direction,
+    /// Entry within the retained source archive.
+    pub entry: String,
+    /// SHA-256 of the complete original CSV bytes before parsing.
+    pub sha256: String,
+    /// Citation, acquisition date and processing limitations.
+    pub source: Source,
+    /// Original row order; no interpolation, smoothing, truncation or resampling.
+    pub observations: Vec<Observation>,
+}
+
+impl StripCurve {
+    /// Find an exact loading-branch extension without inventing an interpolated measurement.
+    ///
+    /// # Errors
+    /// Nonfinite/negative extension or an extension absent from the original loading rows.
+    pub fn exact_loading(&self, extension_fraction: f64) -> Result<&Observation, Refusal> {
+        if !extension_fraction.is_finite() || extension_fraction < 0.0 {
+            return Err(invalid(
+                "knit strip extension must be finite and nonnegative",
+            ));
+        }
+        self.observations
+            .iter()
+            .find(|row| {
+                row.branch == Branch::Loading && row.extension_fraction == extension_fraction
+            })
+            .ok_or_else(|| invalid("knit strip has no exact requested loading observation"))
+    }
+}
+
+/// Geometry reported in section 4.3/Figure 4; solver idealizations remain separate.
+#[derive(Clone, Debug, Serialize)]
+pub struct StripProtocol {
+    /// Initial free gauge length, excluding both gripped regions, in metres.
+    pub free_gauge_length_m: f64,
+    /// Initial strip width in metres.
+    pub reference_width_m: f64,
+    /// Paper's stated stretch-test working force in newtons; does not truncate retained rows.
+    pub paper_working_force_limit_n: f64,
+    /// Provenance of the geometry and protocol, distinct from the measured CSV values.
+    pub source: Source,
+    /// Reported facts and explicitly unreported acquisition conditions.
+    pub conditions: BTreeMap<String, String>,
+    /// Idealizations which an inverse consumer must declare, never measured facts.
+    pub unverified_model_assumptions: Vec<String>,
+}
+
+/// Parsed retained Sperl acquisition, supplied by the caller rather than embedded in the binary.
+#[derive(Clone, Debug, Serialize)]
+pub struct StripAcquisition {
+    /// SHA-256 of the exact supplied acquisition JSON bytes, including its source locks.
+    pub acquisition_sha256: String,
+    /// Original archive URL.
+    pub archive_url: String,
+    /// Retained retrieval date; not a new live observation.
+    pub retrieved_on: String,
+    /// Complete original MIT license and attribution notice.
+    pub license: String,
+    /// Original metadata archive entry.
+    pub metadata_entry: String,
+    /// SHA-256 of the complete original metadata bytes.
+    pub metadata_sha256: String,
+    /// Lossless original metadata including yarns, finishes and linked additional experiments.
+    pub metadata_json: String,
+    /// Source protocol shared by these pinned observations.
+    pub protocol: StripProtocol,
+    /// Complete histories in the caller's retained source order.
+    pub curves: Vec<StripCurve>,
+    /// Optional original transverse-contraction observations; not a solver width operator.
+    pub transverse_curves: Vec<TransverseCurve>,
+    /// Original dataset README establishing units and distribution terms, when supplied.
+    pub transverse_readme: Option<AcquisitionDocument>,
+}
+
+// Only these original curve bytes have been acquired and linked to the paper's geometry.
+// A caller cannot attach the source protocol to invented or merely rehashed observations.
+const CURVE_PINS: [(&str, Direction, &str); 9] = [
+    (
+        "SJ1",
+        Direction::Warp,
+        "0f60fa0dbc3f99bcd0f0ba19c41f6988d7e8931bbfc6790003e12b326bddf0b6",
+    ),
+    (
+        "SJ1",
+        Direction::Weft,
+        "0fe20ce39b5632ccf2437abc2646d70b5f65406fb5b19f8ea3fb804a26a26249",
+    ),
+    (
+        "SJ1",
+        Direction::Bias,
+        "3a2abad579ebc91afbb2ae801365d69bc266b197ff5f11a9d737b63a38c55c1b",
+    ),
+    (
+        "SJ3",
+        Direction::Warp,
+        "38332753d6bf437b5294f99e07c7cda87e1898c57d0be236891b17f662235688",
+    ),
+    (
+        "SJ3",
+        Direction::Weft,
+        "ad9fa8d6a07a700348684813d5bf87212de2dba43a2577d2930922aec57780f9",
+    ),
+    (
+        "SJ3",
+        Direction::Bias,
+        "fcb93afd8c919d3a6189f6622cb8fe8573a90afd09a04bb90b78b762dda327bf",
+    ),
+    (
+        "DKIN8",
+        Direction::Warp,
+        "2e1e6c775fb40ac69df48eac521c6926463799753cf1d35a7e8bbf8999d34f59",
+    ),
+    (
+        "DKIN8",
+        Direction::Weft,
+        "491b997ec5ce460c9f2018d7a791b63a3b656fa5654efb316212888cd3c3d10f",
+    ),
+    (
+        "DKIN8",
+        Direction::Bias,
+        "d6b48f9f457932ffec430546f1660f4819fd316106b8bfc42aee3421e9f20365",
+    ),
+];
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Acquisition {
@@ -28,9 +218,12 @@ struct Acquisition {
     metadata_sha256: String,
     metadata_json: String,
     curves: Vec<Curve>,
+    #[serde(default)]
+    transverse_curves: Vec<transverse::RawCurve>,
+    #[serde(default)]
+    transverse_readme: Option<transverse::RawDocument>,
 }
 
-#[cfg(test)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Curve {
@@ -47,9 +240,10 @@ struct Fabric {
     density_g_m2: f64,
     thickness_mm: f64,
     finishes: Vec<String>,
-    #[cfg(test)]
     #[serde(default)]
     stretch: BTreeMap<String, String>,
+    #[serde(default)]
+    poisson: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -59,15 +253,11 @@ struct Yarn {
     count: u32,
 }
 
-#[cfg(test)]
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }
 
-/// Preserve signed source values and both branches. This importer applies no smoothing, resampling,
-/// force inversion or strain conversion. Missing exact loading rows are never interpolated.
-#[cfg(test)]
-fn loading_observations(curve: &Curve) -> Result<[f64; 2], Refusal> {
+fn observations(curve: &Curve) -> Result<Vec<Observation>, Refusal> {
     if sha256_hex(curve.csv.as_bytes()) != curve.sha256 {
         return Err(invalid(
             "knit strip source bytes differ from their retained hash",
@@ -79,7 +269,7 @@ fn loading_observations(curve: &Curve) -> Result<[f64; 2], Refusal> {
             "knit strip CSV requires its original measured columns",
         ));
     }
-    let mut observations = [None; 2];
+    let mut observations = Vec::new();
     let mut previous_loading = None;
     let mut previous_unloading = None;
     let mut unloading = false;
@@ -106,7 +296,7 @@ fn loading_observations(curve: &Curve) -> Result<[f64; 2], Refusal> {
                 "knit strip acquisition exceeds its finite observation domain",
             ));
         }
-        match branch {
+        let branch = match branch {
             "loading" if !unloading => {
                 if previous_loading.is_some_and(|v| extension <= v) {
                     return Err(invalid(
@@ -114,11 +304,7 @@ fn loading_observations(curve: &Curve) -> Result<[f64; 2], Refusal> {
                     ));
                 }
                 previous_loading = Some(extension);
-                for (i, target) in [0.1, 0.3].into_iter().enumerate() {
-                    if extension == target {
-                        observations[i] = Some(force);
-                    }
-                }
+                Branch::Loading
             }
             "unloading" => {
                 if previous_loading.is_none()
@@ -129,21 +315,140 @@ fn loading_observations(curve: &Curve) -> Result<[f64; 2], Refusal> {
                 }
                 unloading = true;
                 previous_unloading = Some(extension);
+                Branch::Unloading
             }
             _ => return Err(invalid("knit strip branch is unknown or loading restarts")),
-        }
+        };
+        observations.push(Observation {
+            csv_line: count + 1,
+            extension_fraction: extension,
+            force_n: force,
+            branch,
+        });
     }
-    let [Some(low), Some(high)] = observations else {
-        return Err(invalid(
-            "knit strip has no exact 10% or 30% loading observation",
-        ));
-    };
     if !unloading {
         return Err(invalid(
             "knit strip source acquisition is missing its unloading branch",
         ));
     }
-    Ok([low, high])
+    Ok(observations)
+}
+
+/// Parse the pinned retained acquisition or an explicitly selected subset of its known curves.
+///
+/// Original metadata, license, archive entries and CSV hashes are checked before returning the
+/// source's geometry. Altered rows with freshly computed hashes still refuse. This is an acquisition
+/// adapter, not a constitutive fit: force remains total grip force and extension remains nonuniform
+/// swatch extension. No thermal, contact, bending or plane-stress properties are inferred.
+///
+/// # Errors
+/// Malformed/oversized input, unknown source revision or curve, changed original bytes, duplicate
+/// specimen/cut identity, or invalid branch/row ordering. Input is limited to 2 MiB, nine force
+/// histories and nine optional transverse curves. Transverse observations have their own retrieval
+/// date and retain unreported sampling details; they are never silently converted to solver widths.
+pub fn parse_acquisition(data: &str) -> Result<StripAcquisition, Refusal> {
+    if data.len() > 2 * 1024 * 1024 {
+        return Err(invalid("knit strip acquisition exceeds 2 MiB"));
+    }
+    let acquisition: Acquisition = serde_json::from_str(data)
+        .map_err(|e| invalid(format!("measured knit acquisition: {e}")))?;
+    if acquisition.archive_url != ARCHIVE
+        || acquisition.retrieved_on != RETRIEVED
+        || acquisition.metadata_entry != "dataset/data/fabrics.json"
+        || acquisition.metadata_sha256 != METADATA_SHA256
+        || sha256_hex(acquisition.metadata_json.as_bytes()) != METADATA_SHA256
+        || sha256_hex(acquisition.license.as_bytes()) != LICENSE_SHA256
+        || acquisition.curves.is_empty()
+        || acquisition.curves.len() > CURVE_PINS.len()
+    {
+        return Err(invalid(
+            "knit strip acquisition does not match the retained primary source",
+        ));
+    }
+    let metadata: BTreeMap<String, Fabric> = serde_json::from_str(&acquisition.metadata_json)
+        .map_err(|e| invalid(format!("measured knit metadata: {e}")))?;
+    let (transverse_curves, transverse_readme) = transverse::parse(
+        &acquisition.transverse_curves,
+        acquisition.transverse_readme.as_ref(),
+        &metadata,
+    )?;
+    let mut identities = BTreeSet::new();
+    let mut curves = Vec::with_capacity(acquisition.curves.len());
+    for curve in &acquisition.curves {
+        let direction = match curve.direction.as_str() {
+            "warp" => Direction::Warp,
+            "weft" => Direction::Weft,
+            "bias" => Direction::Bias,
+            _ => return Err(invalid("knit strip cut direction is unknown")),
+        };
+        if !identities.insert((&curve.specimen, direction)) {
+            return Err(invalid("knit strip specimen/cut identity is duplicated"));
+        }
+        let (_, _, expected_hash) = CURVE_PINS
+            .iter()
+            .find(|(specimen, cut, _)| *specimen == curve.specimen && *cut == direction)
+            .ok_or_else(|| invalid("knit strip specimen/cut has no acquired source pin"))?;
+        if curve.sha256 != *expected_hash
+            || metadata
+                .get(&curve.specimen)
+                .and_then(|f| f.stretch.get(direction.as_str()))
+                .map(|path| format!("dataset/data/{path}"))
+                != Some(curve.entry.clone())
+        {
+            return Err(invalid(
+                "knit strip source hash or metadata entry does not match its specimen/cut",
+            ));
+        }
+        let observations = observations(curve)?;
+        curves.push(StripCurve {
+            specimen: curve.specimen.clone(), direction, entry: curve.entry.clone(),
+            sha256: curve.sha256.clone(), observations,
+            source: Source {
+                reference: format!("{ARCHIVE}#{}", curve.entry),
+                accessed_on: acquisition.retrieved_on.clone(),
+                note: format!("Sperl et al. (2022), original {} {} force CSV SHA-256 {}. Signed force and loading/unloading order retained without smoothing, interpolation, truncation or strain conversion. Upstream processing and instrument-level rawness unspecified.", curve.specimen, direction.as_str(), curve.sha256),
+            },
+        });
+    }
+    Ok(StripAcquisition {
+        acquisition_sha256: sha256_hex(data.as_bytes()), archive_url: acquisition.archive_url,
+        retrieved_on: acquisition.retrieved_on, license: acquisition.license,
+        metadata_entry: acquisition.metadata_entry, metadata_sha256: acquisition.metadata_sha256,
+        metadata_json: acquisition.metadata_json, curves, transverse_curves, transverse_readme,
+        protocol: StripProtocol {
+            free_gauge_length_m: 0.100, reference_width_m: 0.060,
+            paper_working_force_limit_n: 5.0,
+            source: Source {
+                reference: ARTICLE.into(), accessed_on: RETRIEVED.into(),
+                note: "Sperl et al. (2022), section 4.3 and Figure 4; 100 mm free gauge excluding clamps, 60 mm width; horizontal displacement-controlled clamped stretch with measured force. Source angular origin is weft (0 degrees), bias (45 degrees), warp (90 degrees).".into(),
+            },
+            conditions: BTreeMap::from([
+                ("boundary_condition".into(), "Two clamped ends; horizontal displacement control, total force measured; transverse deformation is nonuniform".into()),
+                ("conditioning".into(), "Temperature, relative humidity and conditioning duration not supplied".into()),
+                ("rate".into(), "Displacement rate and sample timestamps not supplied".into()),
+                ("uncertainty".into(), "Replicate identities, instrument uncertainty and population bounds not supplied".into()),
+                ("source_processing".into(), "Author CSV; preprocessing and instrument-level rawness unspecified".into()),
+                ("additional_experiments".into(), "Original transverse-contraction curves may be supplied separately in transverse_curves; their spatial sampling and branch tags are not reported. Pear-loop observations are not supplied".into()),
+            ]),
+            unverified_model_assumptions: vec![
+                "Planar deformation and exclusion of out-of-plane buckling must be explicitly chosen by the consumer".into(),
+                "Ideal no-slip grip locking is a model approximation; clamp slip/compliance is not measured here".into(),
+                "A membrane/plane-stress law and quasi-static equilibrium are modeling assumptions, not properties inferred by this acquisition".into(),
+            ],
+        },
+    })
+}
+
+#[cfg(test)]
+fn loading_observations(curve: &Curve) -> Result<[f64; 2], Refusal> {
+    let rows = observations(curve)?;
+    let exact = |extension| {
+        rows.iter()
+            .find(|row| row.branch == Branch::Loading && row.extension_fraction == extension)
+            .map(|row| row.force_n)
+            .ok_or_else(|| invalid("knit strip has no exact 10% or 30% loading observation"))
+    };
+    Ok([exact(0.1)?, exact(0.3)?])
 }
 
 fn record(specimen: &str, fabric: &Fabric, curves: &[(&str, &str, [f64; 2])]) -> Material {
@@ -281,8 +586,8 @@ pub(super) fn records() -> Vec<Material> {
         density_g_m2: mass,
         thickness_mm: gauge,
         finishes: vec![finish.into()],
-        #[cfg(test)]
         stretch: BTreeMap::new(),
+        poisson: BTreeMap::new(),
     };
     vec![
         record(
