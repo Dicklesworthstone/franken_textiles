@@ -85,7 +85,7 @@ cargo run --locked -p ftx-cli --bin ftx -- materials thermal-compression \
 ```
 
 The standalone command emits the report directly; the unified command wraps it under `result`.
-Success exits 0, refusal exits 2 standalone or 3 unified. A late refusal emits no successful partial
+Success exits 0; refusals exit 2 standalone, or 3 unified (4 for `budget_exceeded`). A late refusal emits no successful partial
 history or final selection. Inputs are only read, and no source path mentioned in evidence is opened.
 The commands print to standard output; shell redirection itself is not an overwrite-safe writer.
 

@@ -205,6 +205,16 @@ fn adaptive_histories_reach_the_same_portable_authority_without_publishing_exhau
         value["adaptive"] = json!({"absolute_temperature_tolerance_k":1e-6,
             "absolute_heat_tolerance_j_m2":1e-4,"relative_tolerance":0.0,
             "min_step_s":0.00001,"max_step_s":10.0,"max_trials":10000,"max_cell_solves":262144});
+        // The four-cell nonuniform transient exhausts this smaller declared trial allowance.
+        // Keep that request rejected; the positive request explicitly allocates more trials,
+        // retaining the same temperature/heat tolerances and the same aggregate cell-work cap.
+        assert_eq!(
+            ftx_wasm::thermal::compression_history(&value.to_string())
+                .unwrap_err()
+                .code,
+            ftx_core::RefusalCode::BudgetExceeded
+        );
+        value["adaptive"]["max_trials"] = json!(20000);
         let raw = value.to_string();
         let actual = ftx_wasm::thermal::compression_history(&raw).unwrap();
         assert_eq!(

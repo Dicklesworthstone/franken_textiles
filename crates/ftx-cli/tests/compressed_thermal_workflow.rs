@@ -388,8 +388,9 @@ fn both_commands_run_adaptive_monotone_and_cyclic_histories_and_keep_one_work_bu
             .stdout
             .is_empty()
         );
-        let out = run(&rejected, true, &["thermal-compression", "request.json"], 3);
+        let out = run(&rejected, true, &["thermal-compression", "request.json"], 4);
         let failure: Value = serde_json::from_slice(&out.stdout).unwrap();
         assert!(failure["result"].is_null());
+        assert_eq!(failure["refusal"]["code"], "budget_exceeded");
     }
 }
