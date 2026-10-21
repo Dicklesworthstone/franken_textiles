@@ -4,13 +4,14 @@
 //! Additional thread, closures, trim and fill require an explicit source-bearing mass inventory.
 //! This is a pre-finishing inventory calculation, not a weighed finished garment prediction.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use ftx_core::{Refusal, RefusalCode, Vec2, polyline::signed_area, receipt::sha256_hex};
 use ftx_pattern::{
     Pattern,
     material_catalog::ResolvedMaterial,
-    materials::{Evidence, Form, Quantity, Source},
+    material_mass::Attachments,
+    materials::{Form, Quantity},
     textile_import::{piece_fabric, resolve_fabric},
 };
 use serde::{Deserialize, Serialize};
@@ -21,21 +22,7 @@ use crate::{
     cutting::geometry::{Work, clear_paths, enclosed, simple},
 };
 
-/// A named group of retained extras absent from the pattern's physical cut pieces.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Extra {
-    /// Unique group identity, e.g. all thread or the complete closure set for ONE assembly.
-    pub id: String,
-    /// Total retained group mass, in kg, not per-item mass or purchased quantity. Null means unknown.
-    pub mass: Option<Quantity>,
-    /// Existing source vocabulary, shared within this group. No fiber-name mass defaults.
-    #[serde(default)]
-    pub sources: BTreeMap<String, Source>,
-    /// Permission applies only to this additional group's estimate, not the sheet selections.
-    #[serde(default)]
-    pub allow_estimates: bool,
-}
+pub use ftx_pattern::material_mass::Extra;
 
 /// Assembly inventory and the existing export allowance policy, for ONE complete pattern expansion.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,6 +82,10 @@ pub struct Report {
     pub request_sha256: String,
     /// Original sourced inventory; quantities/sources are never edited to make totals agree.
     pub request: Request,
+    /// Pattern-owned attachment groups merged once with the explicit request inventory. Exact
+    /// repeated group observations share one contribution; conflicting same-ID observations refuse.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attached_inventory: Option<Attachments>,
     /// Every expanded physical cut instance, in the pattern's deterministic order.
     pub pieces: Vec<PieceMass>,
     /// Mass of every sheet piece, or unknown if even one contribution is unavailable.
@@ -192,38 +183,6 @@ fn scale(q: &Quantity, multiplier: f64) -> Result<(f64, Option<[f64; 2]>), Refus
     Ok((kg, bounds))
 }
 
-impl Extra {
-    fn evaluate(&self) -> Result<(f64, Option<[f64; 2]>), Refusal> {
-        let q = self.mass.as_ref().ok_or_else(|| {
-            invalid(format!(
-                "{}: mass of retained extra group is unknown",
-                self.id
-            ))
-        })?;
-        let source = self
-            .sources
-            .get(&q.source)
-            .ok_or_else(|| invalid("extra mass needs its retained source"))?;
-        if q.unit != "kg"
-            || q.method.trim().is_empty()
-            || q.source.trim().is_empty()
-            || source.reference.trim().is_empty()
-            || source.accessed_on.trim().is_empty()
-            || source.note.trim().is_empty()
-        {
-            return Err(invalid(
-                "extra mass needs kg, method and complete source identity",
-            ));
-        }
-        if q.evidence == Evidence::Estimate && !self.allow_estimates {
-            return Err(invalid(
-                "extra mass is estimated; explicit group estimate consent is required",
-            ));
-        }
-        scale(q, 1.0)
-    }
-}
-
 impl Request {
     /// Validate inventory shape before geometry work. Missing/unsupported observations stay as
     /// individual unknown contributions so the report still exposes the other physical pieces.
@@ -253,6 +212,41 @@ impl Request {
         Ok(())
     }
 
+    // Use the same source merge for accounting and study admission. Order, exact-observation
+    // deduplication and same-ID conflict refusals must not depend on the caller.
+    fn merged_inventory<'a>(
+        &'a self,
+        attached: Option<&'a Attachments>,
+    ) -> Result<Vec<&'a Extra>, Refusal> {
+        let mut inventory: Vec<&Extra> = self.extras.iter().collect();
+        if let Some(attached) = attached {
+            for group in &attached.groups {
+                if let Some(previous) = inventory.iter().find(|x| x.id == group.extra.id) {
+                    if !previous.same_observation(&group.extra)? {
+                        return Err(invalid(format!(
+                            "attached mass group {} conflicts with the assembly inventory observation",
+                            group.extra.id
+                        )));
+                    }
+                } else {
+                    inventory.push(&group.extra);
+                }
+            }
+        }
+        if inventory.len() > 1024 {
+            return Err(budget());
+        }
+        Ok(inventory)
+    }
+
+    // Material variants retain the source attachment inventory. Refusals here still belong to
+    // individual mass outcomes; a study uses the count only when the merged inventory is valid.
+    pub(crate) fn merged_inventory_count(&self, pattern: &Pattern) -> Result<usize, Refusal> {
+        self.validate()?;
+        let attached = Attachments::from_pattern(pattern)?;
+        Ok(self.merged_inventory(attached.as_ref())?.len())
+    }
+
     /// Compute actual retained cut-sheet mass and sourced extras for one declared assembly.
     /// Requires no roll width, grain direction, mechanics, body or thermal coefficients.
     ///
@@ -275,6 +269,9 @@ impl Request {
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
         }
+        let attached_inventory =
+            Attachments::from_pattern(pattern)?.filter(|a| !a.groups.is_empty());
+        let inventory = self.merged_inventory(attached_inventory.as_ref())?;
         if pattern.instances.is_empty() || pattern.instances.len() > 4096 {
             return Err(budget());
         }
@@ -370,8 +367,7 @@ impl Request {
             });
         }
         let sheet_mass = Mass::sum(pieces.iter().map(|p| &p.mass));
-        let extras: Vec<_> = self
-            .extras
+        let extras: Vec<_> = inventory
             .iter()
             .map(|x| (x.id.clone(), Mass::from_result(x.evaluate())))
             .collect();
@@ -385,6 +381,7 @@ impl Request {
             pattern_sha256: hash(pattern.raw())?,
             request_sha256: hash(self)?,
             request: self.clone(),
+            attached_inventory,
             pieces,
             sheet_mass,
             extras,

@@ -387,7 +387,15 @@ pub fn drape(
             }
         }
     }
-    report["mass_kg"] = json!(scene.solver.model.mass.iter().sum::<f64>());
+    if let Some(attached) = scene.solver.model.attached_mass_report()? {
+        // Preserve the existing simulated-cloth metric. Actual solver/elastic gravity and inertia
+        // use the augmented mass vector; thermal surfaces retain only characterized sheet mass.
+        report["mass_kg"] = json!(attached.cloth_mass_kg);
+        report["attached_mass"] = serde_json::to_value(attached)
+            .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
+    } else {
+        report["mass_kg"] = json!(scene.solver.model.mass.iter().sum::<f64>());
+    }
     let model = &scene.solver.model;
     if !model.panel_bending_patches().is_empty() {
         let models: std::collections::BTreeSet<_> = model

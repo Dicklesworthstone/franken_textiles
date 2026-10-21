@@ -72,6 +72,63 @@ fn all_cut_pieces_plus_sourced_extras_not_stock_or_simulation_mass() {
 }
 
 #[test]
+fn attached_groups_share_accounting_without_duplicate_mass_or_source_authorities() {
+    let mut raw = pattern();
+    raw["attached_mass"] = json!({"schema":"ftx-attached-mass/1","groups":[{
+        "extra":extra(),"targets":[{"instance":"front","vertex":"a","fraction":0.5},
+        {"instance":"back","vertex":"a","fraction":0.5}]}]});
+    let p = Pattern::new(raw.clone());
+    let mut input = request();
+    let a = input.evaluate(&p).unwrap();
+    close(a.assembly_mass.kg.unwrap(), a.sheet_mass.kg.unwrap() + 0.03);
+    assert_eq!(a.extras.len(), 1);
+    assert!(a.attached_inventory.is_some());
+    input.extras.push(serde_json::from_value(extra()).unwrap());
+    let b = input.evaluate(&p).unwrap();
+    assert_eq!(a.assembly_mass.kg, b.assembly_mass.kg);
+    assert_eq!(
+        a.assembly_mass.reported_bounds_kg,
+        b.assembly_mass.reported_bounds_kg
+    );
+    assert_eq!(b.extras.len(), 1);
+    input.extras[0].mass.as_mut().unwrap().value = 0.031;
+    assert!(
+        input
+            .evaluate(&p)
+            .unwrap_err()
+            .message
+            .contains("conflicts")
+    );
+    assert_eq!(p.raw(), &raw);
+    let plain = request().evaluate(&Pattern::new(pattern())).unwrap();
+    assert!(
+        serde_json::to_value(plain)
+            .unwrap()
+            .get("attached_inventory")
+            .is_none()
+    );
+}
+
+#[test]
+fn unknown_attached_mass_remains_unknown_and_inventory_completeness_is_not_inferred() {
+    let mut raw = pattern();
+    let mut group = extra();
+    group["mass"] = Value::Null;
+    raw["attached_mass"] = json!({"schema":"ftx-attached-mass/1","groups":[{
+        "extra":group,"targets":[{"instance":"front","vertex":"a","fraction":1.0}]}]});
+    let a = request().evaluate(&Pattern::new(raw.clone())).unwrap();
+    assert!(a.sheet_mass.kg.is_some());
+    assert!(a.assembly_mass.kg.is_none());
+    assert!(a.extras[0].1.kg.is_none());
+    raw["attached_mass"]["groups"][0]["extra"] = extra();
+    let mut incomplete = request();
+    incomplete.inventory_complete = false;
+    let b = incomplete.evaluate(&Pattern::new(raw)).unwrap();
+    close(b.extras[0].1.kg.unwrap(), 0.03);
+    assert!(b.assembly_mass.kg.is_none());
+}
+
+#[test]
 fn mirror_fold_and_notches_use_the_actual_physical_export_geometry() {
     let mut raw = pattern();
     raw["seams"] = json!([]);

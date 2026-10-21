@@ -653,6 +653,7 @@ fn build_scene_inner(
             elastic_rings.push(at..model.elastics.len());
         }
     }
+    crate::attached_mass::bind(pattern, &mesh, &weld, &mut model)?;
     let body = Body::new(skin_vertices.to_vec(), skin_triangles.to_vec(), 5e-3)?;
     let untangled = untangle(&mut x, &tris, &body, &tree)?;
     model.check_membrane_domains(&x)?;

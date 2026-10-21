@@ -97,7 +97,7 @@ pub struct SewOptions {
     pub machine: SewingMachine,
     /// Explicit passes covering every seam, including seams omitted from a simulation.
     pub passes: Vec<SewingPass>,
-    /// Optional bounded ordering of the complete admitted job by needle/thread changes.
+    /// Optional bounded ordering by setup-change counts or source-qualified directed setup time.
     /// Omission preserves the existing lexicographic topological order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ordering: Option<ordering::Policy>,
@@ -209,7 +209,7 @@ pub struct PlannedSeam {
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
     /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering,
-    /// `/7` pressure stacks, `/8` clearance closure. Capabilities compose rather than replace others.
+    /// `/7` pressure, `/8` clearance, `/9` timed ordering. Capabilities compose rather than replace.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
     pub pattern_sha256: String,
@@ -219,7 +219,7 @@ pub struct SewPlan {
     pub materials: BTreeMap<String, Selection>,
     /// Admitted operation order; optional optimization preserves every declared predecessor.
     pub seams: Vec<PlannedSeam>,
-    /// Counted setup changes and bounded-search result; absent without an ordering policy.
+    /// Setup counts, optional times and bounded-search result; absent without an ordering policy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ordering: Option<ordering::Report>,
     /// Total traversed stitch intervals, including locks; not thread consumption.
@@ -408,7 +408,7 @@ impl SewPlan {
             ));
         }
         if let Some(ordering) = &options.ordering {
-            ordering.validate(options.passes.len())?;
+            ordering.validate(options.passes.len(), &machine.id)?;
         }
         let ctx = Ctx::new(
             pattern,
@@ -487,7 +487,13 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if machine
+            schema: if options
+                .ordering
+                .as_ref()
+                .is_some_and(|o| o.setup_times.is_some())
+            {
+                "ftx-sewing-plan/9"
+            } else if machine
                 .presser_foot
                 .as_ref()
                 .is_some_and(|f| f.normal_force_n.is_some())
@@ -500,7 +506,8 @@ impl SewPlan {
                     q.presser_foot
                         .as_ref()
                         .is_some_and(|f| f.clearance.is_some())
-                }) {
+                })
+            {
                 "ftx-sewing-plan/8"
             } else if machine.presser_foot.is_some()
                 || options.passes.iter().any(|p| p.presser_foot.is_some())
@@ -768,7 +775,7 @@ impl SewPlan {
         // All original geometric, material and recipe gates apply before a schedule is considered.
         // Reordering moves complete admitted operations; no physical assembly state is inferred.
         if let Some(policy) = &options.ordering {
-            let report = ordering::optimize(policy, &out.seams);
+            let report = ordering::optimize(policy, &out.seams)?;
             let ranks: BTreeMap<_, _> = report
                 .selected_order
                 .iter()

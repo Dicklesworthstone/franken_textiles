@@ -184,6 +184,7 @@ fn advance_body_impl(
     options: MotionOptions,
     capture: DissipationCapture,
 ) -> Result<MotionReport, Refusal> {
+    solver.model.check_attached_mass()?;
     if !duration_s.is_finite()
         || !(1e-9..=60.0).contains(&duration_s)
         || !options.max_step_s.is_finite()

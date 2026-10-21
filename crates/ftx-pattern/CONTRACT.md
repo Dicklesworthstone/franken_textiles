@@ -36,6 +36,14 @@ Python's `str(KeyError)`; `Value` prints as is).
 
 **Determinism class.** Fixed-order f64 arithmetic over `ftx-core`; bit-identical across targets.
 
+**Retained extra mass** (`material_mass`). One shared source-qualified total-group `Extra` observation
+feeds assembly accounting and optional `attached_mass` dynamics. Explicit physical instance/boundary
+vertex targets allocate fractions summing to one; mirrors are never inferred and mass is not multiplied
+by target count. Unknown or unadmitted observations stay unknown for accounting. Dynamics requires an
+admitted nominal kg value. Structural, evidence and budget failures are typed refusals. Schema, units,
+shared-ID semantics and the point-mass/no-accessory-geometry boundary are in `docs/attached-mass.md`;
+synthetic tests are `tests/attached_mass.rs`.
+
 **Permanent membrane identification** (`material_membrane_plasticity::calibration`). Whole acquired
 histories replay the existing raw-Green/second-Piola incremental return map from explicitly pristine
 reference states. Four source-qualified elastic observations and six independently supplied strain/

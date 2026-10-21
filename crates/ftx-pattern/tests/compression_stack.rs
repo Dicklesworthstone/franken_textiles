@@ -274,3 +274,213 @@ fn nonzero_work_cannot_silently_underflow_to_zero() {
     let error = stack::close(&input).unwrap_err();
     assert!(error.to_string().contains("force/work"), "{error}");
 }
+
+fn bounded_input() -> stack::Input {
+    let mut i = input();
+    i.layers.truncate(1);
+    i.gap_m = 0.015;
+    i
+}
+
+#[test]
+fn reported_thickness_intervals_bound_pressure_and_force_without_changing_nominal_work() {
+    let mut input = bounded_input();
+    let r = stack::close(&input).unwrap();
+    // Lower curve: 18 -> 9 mm; upper: 22 -> 11 mm, on 0..500 Pa.
+    let bounds = r.reported_bounds.unwrap();
+    near(bounds.pressure_pa[0], 500.0 / 3.0);
+    near(bounds.pressure_pa[1], 3500.0 / 11.0);
+    near(bounds.normal_force_n[0], 125.0 / 3.0);
+    near(bounds.normal_force_n[1], 875.0 / 11.0);
+    near(r.pressure_pa, 250.0);
+    near(r.external_work_j, 0.15625);
+    assert!(r.bounds_unavailable.is_empty());
+    input.reference_area_m2 *= 2.0;
+    let doubled = stack::close(&input).unwrap().reported_bounds.unwrap();
+    assert_eq!(doubled.pressure_pa, bounds.pressure_pa);
+    assert_eq!(
+        doubled.normal_force_n,
+        bounds.normal_force_n.map(|f| 2.0 * f)
+    );
+}
+
+#[test]
+fn missing_or_domain_limited_bounds_remain_unknown_not_nominal_or_clipped() {
+    let mut missing = bounded_input();
+    missing.layers[0].preparation.samples[1]
+        .properties
+        .get_mut("thickness")
+        .unwrap()
+        .bounds = None;
+    let r = stack::close(&missing).unwrap();
+    near(r.pressure_pa, 250.0);
+    assert!(r.reported_bounds.is_none());
+    assert!(r.bounds_unavailable[0].contains("outer"));
+    // Nominally supported, but part of the reported interval lies outside the branch or the
+    // declared loading direction. Neither acquisition endpoints nor preload may clip the answer.
+    for (gap, initial, direction) in [
+        (0.019, 0.0, stack::Direction::Loading),
+        (0.010, 0.0, stack::Direction::Loading),
+        (0.015, 200.0, stack::Direction::Loading),
+        (0.015, 300.0, stack::Direction::Unloading),
+    ] {
+        let mut input = bounded_input();
+        input.gap_m = gap;
+        input.layers[0].preparation.pressure_pa = initial;
+        input.direction = direction;
+        let r = stack::close(&input).unwrap();
+        assert!(r.reported_bounds.is_none());
+        assert!(r.bounds_unavailable[0].contains("no extrapolation or truncated bounds"));
+    }
+    let mut unloading = bounded_input();
+    unloading.direction = stack::Direction::Unloading;
+    unloading.layers[0].preparation.pressure_pa = 350.0;
+    let r = stack::close(&unloading).unwrap();
+    assert!(r.external_work_j < 0.0);
+    near(r.reported_bounds.unwrap().pressure_pa[1], 3500.0 / 11.0);
+}
+
+fn replace_thickness_knots(input: &mut stack::Input, points: &[[f64; 4]]) {
+    let p = &mut input.layers[0].preparation;
+    let template = p.samples[0].clone();
+    p.samples = points
+        .iter()
+        .map(|&[pressure, value, low, high]| {
+            let mut row = template.clone();
+            row.pressure_pa = pressure;
+            for q in row.properties.values_mut() {
+                q.conditions
+                    .insert("pressure_pa".into(), pressure.to_string());
+            }
+            let q = row.properties.get_mut("thickness").unwrap();
+            q.value = value;
+            q.unit = "mm".into();
+            q.bounds = Some([low, high]);
+            row
+        })
+        .collect();
+}
+
+#[test]
+fn monotone_envelopes_use_all_knots_and_include_independent_admissible_curves() {
+    let mut input = bounded_input();
+    replace_thickness_knots(
+        &mut input,
+        &[
+            [0.0, 20.0, 18.0, 22.0],
+            [100.0, 17.0, 12.0, 21.0],
+            [300.0, 14.0, 13.0, 22.0],
+            [500.0, 10.0, 8.0, 12.0],
+        ],
+    );
+    // Enforce monotonicity, not monotonicity of the printed error bars:
+    // lower = [18,13,13,8]; upper = [22,21,21,12] mm.
+    let r = stack::close(&input).unwrap();
+    let bounds = r.reported_bounds.unwrap().pressure_pa;
+    near(bounds[0], 60.0);
+    near(bounds[1], 1300.0 / 3.0);
+    let mut checked = 0;
+    // Enumerate independently chosen knot values; retain only monotone branches. This exercises
+    // interior combinations too, not just a replay of the two envelopes used by the implementation.
+    for code in 0..256 {
+        let mut n = code;
+        let values: Vec<f64> = input.layers[0]
+            .preparation
+            .samples
+            .iter()
+            .map(|row| {
+                let [lo, hi] = row.properties["thickness"].bounds.unwrap();
+                let value = lo + (hi - lo) * f64::from(n % 4) / 3.0;
+                n /= 4;
+                value
+            })
+            .collect();
+        if values.windows(2).any(|p| p[0] < p[1]) {
+            continue;
+        }
+        let mut candidate = input.clone();
+        for (row, v) in candidate.layers[0]
+            .preparation
+            .samples
+            .iter_mut()
+            .zip(values)
+        {
+            row.properties.get_mut("thickness").unwrap().value = v;
+        }
+        let p = stack::close(&candidate).unwrap().pressure_pa;
+        assert!(
+            p >= bounds[0] - 1e-10 && p <= bounds[1] + 1e-10,
+            "{p} outside {bounds:?}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 50);
+}
+
+#[test]
+fn envelope_plateaus_keep_earliest_lower_and_latest_upper_crossings() {
+    let mut input = bounded_input();
+    replace_thickness_knots(
+        &mut input,
+        &[
+            [0.0, 20.0, 18.0, 22.0],
+            [100.0, 17.0, 15.0, 19.0],
+            [200.0, 15.0, 15.0, 15.0],
+            [300.0, 13.0, 12.0, 15.0],
+            [500.0, 10.0, 8.0, 12.0],
+        ],
+    );
+    let r = stack::close(&input).unwrap();
+    near(r.pressure_pa, 200.0);
+    assert_eq!(r.reported_bounds.unwrap().pressure_pa, [100.0, 300.0]);
+}
+
+#[test]
+fn unequal_layer_knots_and_repeated_source_plies_do_not_assume_independent_noise() {
+    let mut input = bounded_input();
+    let mut second = input.layers[0].clone();
+    second.id = "second physical ply".into();
+    input.layers.push(second);
+    input.gap_m = 0.030;
+    let r = stack::close(&input).unwrap();
+    // Duplicating the SAME source does not shrink its interval by sqrt(2).
+    let b = r.reported_bounds.unwrap();
+    near(b.pressure_pa[0], 500.0 / 3.0);
+    near(b.pressure_pa[1], 3500.0 / 11.0);
+    // Add a consistent knot in only one layer, preserving the underlying envelopes.
+    let p = &mut input.layers[1].preparation;
+    let mut row = p.samples[0].clone();
+    row.pressure_pa = 100.0;
+    for q in row.properties.values_mut() {
+        q.conditions.insert("pressure_pa".into(), "100".into());
+    }
+    let q = row.properties.get_mut("thickness").unwrap();
+    q.value = 18.0;
+    q.bounds = Some([16.2, 19.8]);
+    p.samples.insert(1, row);
+    let r = stack::close(&input).unwrap();
+    near(
+        r.reported_bounds.as_ref().unwrap().pressure_pa[0],
+        b.pressure_pa[0],
+    );
+    near(r.reported_bounds.unwrap().pressure_pa[1], b.pressure_pa[1]);
+}
+
+#[test]
+fn exact_reported_values_collapse_bounds_and_unrepresentable_force_stays_unknown() {
+    let mut input = bounded_input();
+    for row in &mut input.layers[0].preparation.samples {
+        let q = row.properties.get_mut("thickness").unwrap();
+        q.bounds = Some([q.value; 2]);
+    }
+    let r = stack::close(&input).unwrap();
+    let b = r.reported_bounds.unwrap();
+    assert_eq!(b.pressure_pa, [r.pressure_pa; 2]);
+    assert_eq!(b.normal_force_n, [r.normal_force_n; 2]);
+    let mut input = bounded_input();
+    input.reference_area_m2 = 6e305;
+    let r = stack::close(&input).unwrap();
+    assert!(r.normal_force_n.is_finite());
+    assert!(r.reported_bounds.is_none());
+    assert!(r.bounds_unavailable[0].contains("cannot be represented"));
+}

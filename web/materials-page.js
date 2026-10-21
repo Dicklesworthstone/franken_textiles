@@ -225,6 +225,22 @@ function assemblyMassComparison(parent, rows) {
       report || { refusal: row.assembly_mass?.refusal });
   }
 }
+function attachedMassComparison(parent, rows, simulations) {
+  if (!rows.some(row => available(simulations.get(row.key))?.drape?.attached_mass)) return;
+  const note = document.createElement("p");
+  note.textContent = "Source-qualified accessory groups contribute to gravity and inertia at their declared physical attachment points. " +
+    "Cloth thermal storage continues to use the characterized sheet materials and reference areas.";
+  parent.append(note);
+  const t = table(parent, "Attached accessory mass — gravity and inertia", ["Alternative", "Drape", "Simulated cloth (kg)",
+    "Attached groups (kg)", "Total inertial mass (kg)", "Mass balance residual (kg)"]);
+  for (const row of rows) {
+    const outcome = simulations.get(row.key), report = available(outcome)?.drape?.attached_mass;
+    cells(t, [row.key, state(outcome), metric(report?.cloth_mass_kg), metric(report?.attached_mass_kg),
+      metric(report?.total_inertial_mass_kg), metric(report?.mass_balance_residual_kg)]);
+    detail(parent, `${row.key}: attached mass sources and welded physical targets (display only)`,
+      report || { refusal: outcome?.refusal });
+  }
+}
 function transientHeatComparison(parent, key, result, dependency, policy) {
   const consumers = [["transient_surface", "Independent sheets"], ["transient_coverage", "Body coverage + exposed cloth"]]
     .filter(([name]) => policy?.[name] || result?.[name]);
@@ -443,6 +459,7 @@ function comparison(op, r) {
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
     }
+    attachedMassComparison(parent, study.alternatives, simulations);
     motionComparison(parent, study.alternatives, simulations, r.scenario?.scenario?.motion);
     detail(parent, "Retained body fit, scenario options and environment (display only)", r.scenario);
   }

@@ -105,8 +105,38 @@ arithmetic refuse without extrapolation, silent clamping or an invented air gap.
 
 Root `allow_estimates: true` admits the inverse and branch-path model. Each layer's own consent
 still governs estimated acquisitions, retained properties and interior interpolation. Exact knots
-retain the original authored quantities; interior quantities remain estimates. Observation bounds
-are retained by conditioning, but are **not** propagated to a pressure or work confidence interval.
+retain the original authored quantities; interior quantities remain estimates. Complete reported
+thickness bounds also produce the pressure/force enclosure below. They are **not** confidence
+intervals, and no work uncertainty is inferred.
+
+### Reported thickness bounds through the inverse
+
+`reported_bounds`, when available, contains `pressure_pa: [lower, upper]` and
+`normal_force_n: [lower, upper]`. These enclose the inverse under the same monotone piecewise-linear
+branch model, conditional on the exact supplied gap, reference area, pressure knots and preload.
+Every acquired thickness in every physical layer must provide both bounds; missing bounds never
+become zero-width nominal observations. There is no assumed Gaussian error, independence, sample
+count or confidence level. Repeated plies of the same source do not reduce its reported interval.
+
+The calculation first converts authored units, then constructs each layer's monotone envelopes.
+A lower bound at a later pressure also bounds every earlier thickness from below; an upper bound
+at an earlier pressure bounds every later thickness from above. The resulting lower and upper
+curves are summed on the union of all acquired pressure knots. The earliest lower-curve crossing
+and latest upper-curve crossing bound the closing pressure, including any target plateaus in the
+envelopes. Force uses that interval times the fixed area. No pressure-grid sampling is used.
+
+Both envelopes must bracket the target over the entire admitted travel interval. When some admitted
+branches would require extrapolation or travel against the declared direction from preload, the
+result has `reported_bounds: null` and a reason in `bounds_unavailable`, rather than silently clipping
+the range to the available data. Incomplete bounds or unrepresentable range arithmetic likewise
+leave the independent nominal result available with no claimed enclosure.
+
+For the single-layer synthetic fixture at a 15 mm gap, the 18–22 mm initial and 9–11 mm final
+thickness bounds imply **166.6666667–318.1818182 Pa**, not the single nominal answer of 250 Pa.
+At 0.25 m², this gives **41.6666667–79.5454545 N**. These are conditional numerical bounds, not a
+measured pressure range. The nominal work and all frozen material selections remain unchanged;
+the enclosure does not propagate to work, transport, per-layer geometry or thermal history, and
+does not cover uncertainty in gap/area, calibration, loading history or the interpolation law.
 
 External work integrates `p * (-d thickness)` over every traversed segment of each layer's branch,
 starting at the supplied preload. Loading is positive and unloading negative. This is not a split

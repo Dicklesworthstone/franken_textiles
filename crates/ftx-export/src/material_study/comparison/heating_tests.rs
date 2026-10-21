@@ -119,6 +119,7 @@ fn case(combined: bool) -> (Alternative, Value, Value) {
         "default":records[0],"pieces":if combined {json!({"back":records[1]})} else {json!({})}}))
     .unwrap();
     let alternative = Alternative {
+        choices: BTreeMap::new(),
         key: "synthetic".into(),
         binding: Outcome::NotRequested,
         frozen_changes: Some(changes),

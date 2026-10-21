@@ -39,6 +39,8 @@ pub struct ClothModel {
     pub hinges: Vec<Hinge>,
     /// Lumped vertex masses (kg).
     pub mass: Vec<f64>,
+    // Optional source-bound point masses, applied once after sheet assembly and seam welding.
+    pub(crate) attached_mass: Option<crate::attached_mass::Binding>,
     /// Membrane material.
     pub membrane: Membrane,
     /// Compression factor of each membrane element, per direction (`membrane.compression` unless set by
@@ -215,6 +217,7 @@ impl ClothModel {
             membranes,
             hinges,
             mass,
+            attached_mass: None,
             membrane,
             bending,
             elastics: Vec::new(),
@@ -1206,6 +1209,7 @@ impl Solver {
         h: f64,
         body_start: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
+        self.model.check_attached_mass()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
@@ -1377,6 +1381,7 @@ impl Solver {
     /// # Errors
     /// As [`Solver::step`].
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
+        self.model.check_attached_mass()?;
         if self.relaxation.is_some()
             || self.plasticity.is_some()
             || self.membrane_plasticity.is_some()
