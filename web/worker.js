@@ -4,6 +4,7 @@
 let ftx = null;
 let body = null; // the parsed body model, kept for every fold-up
 let docs = null; // the last round's pattern, measurements and fit spec (JSON text)
+let bodyRequest, foldRequest;
 
 const pad = (n) => String(n).padStart(2, "0");
 function clock() {
@@ -14,7 +15,7 @@ function clock() {
 }
 
 // the drape's progress lines, called from inside the module while it works
-self.ftxProgress = (line) => postMessage({ type: "foldProgress", text: line });
+self.ftxProgress = (line) => postMessage({ type: "foldProgress", request: foldRequest, text: line });
 
 const text = (bytes) => (bytes ? new TextDecoder().decode(bytes) : null);
 // Python truthiness, as webapp.py's has_fold_up reads a placement: {} and [] are false
@@ -25,7 +26,7 @@ let dead = false; // set when the module traps: its memory and handles can no lo
 onmessage = async (ev) => {
   const msg = ev.data;
   if (dead) {
-    return postMessage({ type: "error", op: msg.type, fatal: true, message: "the module stopped after an internal error: reload the page" });
+    return postMessage({ type: "error", op: msg.type, request: msg.request, fatal: true, message: "the module stopped after an internal error: reload the page" });
   }
   try {
     if (msg.type === "init") {
@@ -37,41 +38,49 @@ onmessage = async (ev) => {
     }
     if (msg.type === "fields") {
       const rows = JSON.parse(ftx.form_fields(JSON.stringify(msg.args), clock().today));
-      return postMessage({ type: "fields", rows, program: msg.args.program });
+      return postMessage({ type: "fields", request: msg.request, rows, program: msg.args.program });
     }
     if (msg.type === "run") {
+      docs = null; // a refused replacement must never leave the previous garment available
       const { today, created } = clock();
       const round = ftx.run(JSON.stringify(msg.req), today, created);
-      const res = JSON.parse(round.page());
-      const blobs = {};
-      if (res.zip) blobs.zip = round.zip();
-      for (const f of res.files || []) blobs[f.name] = round.file(f.name);
-      docs = null;
-      const pattern = text(round.file("pattern.json"));
-      const data = pattern && !res.errors ? JSON.parse(pattern) : null;
-      // a fold-up needs a pattern that validates, is to scale and has a piece with a fold-up placement
-      const foldable = !!data && res.status !== "BLOCKED" && (data.meta || {}).scale_status !== "UNSCALED"
-        && (data.pieces || []).some((p) => truthy(p.placement) && p.sim !== false);
-      if (foldable) {
-        docs = { pattern, measurements: text(round.file("measurements.json")), fit: text(round.file("fit_spec.json")) };
-      }
-      round.free();
-      return postMessage({ type: "result", res, blobs, foldable }, Object.values(blobs).map((b) => b.buffer));
+      try {
+        const res = JSON.parse(round.page());
+        const blobs = {};
+        if (res.zip) blobs.zip = round.zip();
+        for (const f of res.files || []) blobs[f.name] = round.file(f.name);
+        const pattern = text(round.file("pattern.json"));
+        const data = pattern && !res.errors ? JSON.parse(pattern) : null;
+        // a fold-up needs a pattern that validates, is to scale and has a piece with a fold-up placement
+        const foldable = !!data && res.status !== "BLOCKED" && (data.meta || {}).scale_status !== "UNSCALED"
+          && (data.pieces || []).some((p) => truthy(p.placement) && p.sim !== false);
+        if (foldable) {
+          docs = { request: msg.request, pattern, measurements: text(round.file("measurements.json")), fit: text(round.file("fit_spec.json")) };
+        }
+        return postMessage({ type: "result", request: msg.request, res, blobs, foldable }, Object.values(blobs).map((b) => b.buffer));
+      } finally { round.free(); }
+    }
+    if (msg.type === "clearBody") {
+      if (body) body.free();
+      body = null; bodyRequest = undefined;
+      return;
     }
     if (msg.type === "body") {
-      const parsed = new ftx.WebBody(new Uint8Array(msg.bytes)); // a bad file throws and keeps the loaded one
       if (body) body.free();
-      body = parsed;
-      return postMessage({ type: "bodyReady" });
+      body = null; bodyRequest = msg.request;
+      body = new ftx.WebBody(new Uint8Array(msg.bytes));
+      return postMessage({ type: "bodyReady", request: msg.request });
     }
     if (msg.type === "fold") {
       if (!body || !docs) throw new Error("load the body model and run a round first");
+      if (msg.round !== docs.request || msg.body !== bodyRequest) throw new Error("the garment or body changed: run the current round and load its body first");
+      foldRequest = msg.request;
       const fold = ftx.fold_up(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm);
       try {
         const reportText = fold.report(); // preserve numerical JSON for source-locked thermal replay
         const report = JSON.parse(reportText);
         const viewer = fold.viewer();
-        return postMessage({ type: "folded", report, reportText, viewer });
+        return postMessage({ type: "folded", request: msg.request, report, reportText, viewer });
       } finally { fold.free(); }
     }
   } catch (e) {
@@ -80,7 +89,7 @@ onmessage = async (ev) => {
     const fatal = e instanceof WebAssembly.RuntimeError;
     if (fatal) dead = true;
     postMessage({
-      type: "error", op: msg.type, fatal,
+      type: "error", op: msg.type, request: msg.request, fatal,
       message: fatal ? "the module stopped after an internal error: reload the page" : full.split("\n").pop(),
       detail: full,
     });

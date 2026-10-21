@@ -45,6 +45,16 @@ drape. `tools/check_web.cjs` (Playwright) drives it in headless Chromium: every 
 tape form NOT_READY, a refused stature, and with `--model` both garments folded up (bolero 25 s, trousers
 76–85 s; natively 22 s and 57 s) with viewer pages byte-identical to `ftx drape`'s on the same documents
 (bolero `c8a4ae42…`, trousers `3c5b499e…`), so the drape is bit-identical across native and the browser.
+These sizes, timings and viewer digests describe the historical browser checks of 2026-10-13;
+they are not benchmarks or acceptance of a newer artifact under the numerical settling gate.
+
+The workshop withdraws round downloads on measurement, garment or style edits, and withdraws only
+the drape when the body model or self-contact setting changes. Worker replies and fold source
+documents carry request identities; superseded replies and asynchronous file reads cannot publish
+results. A cleared or refused replacement model leaves folding disabled until a current model loads.
+Round and fold handles are freed even when extraction refuses. `check_materials_frontend.cjs` covers
+these lifecycle paths with explicit DOM/WASM doubles; those checks establish no numerical or fit claim.
+Obsolete synchronous solver work may finish in the worker, but its result is not published.
 
 **Error model.** `page` returns the reference's message as a `String` for a request it refuses, and a
 refusal's message for a draft or export the library refuses; `web` turns them into `JsError`s.

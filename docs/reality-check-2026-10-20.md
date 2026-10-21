@@ -503,3 +503,91 @@ returned 101 (1,536 passed, 2 failed, 28 ignored); both failed targets have pass
 reruns. No full current-snapshot zero-exit workspace run, browser navigation, hardware-bound
 performance result, empirical material qualification, real-person fit or complete G2/G4/G5 pass
 is claimed. The pinned model is now installed in the documented local cache outside Git.
+
+### Browser continuation — `ftx-onn.1`
+
+- [x] Refresh the live tree, ready Beads and existing frontend lane (64 passed, two optional cases skipped).
+- [x] Identify obsolete round/body reuse and missing round-handle cleanup in the primary workshop.
+- [x] Withdraw round/fold downloads when their actual inputs change or a replacement starts.
+- [x] Bind worker replies and fold source documents to current round/body request identities.
+- [x] Reject superseded async file reads; clear an absent or refused replacement body.
+- [x] Free round handles on every extraction path; retain valid latest round/body/fold behavior.
+- [x] Exercise positive, stale, failed replacement and cleanup paths in the existing frontend tests.
+  All four new regressions fail against the original `92e1cec` page/worker and pass on the repair.
+- [x] Run the existing compiled-WASM frontend lane with the previously confirmed frozen artifact;
+  record its source boundary, without calling it a current-source build or browser navigation.
+- [x] Finish the actual Chromium production-Anny bolero run, malformed replacement and result-withdrawal checks.
+- [x] Fresh solo review and scoped UBS scan; close the repair Bead and flush it.
+- [x] Prepare the scoped commit and reservation handoff; final completion receipts are in the session output.
+
+This repairs browser input/result association; it supplies no empirical fit, source-material or timing evidence.
+`FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_trace_frontend.cjs` passes
+**66 tests, zero skips**. The ordinary lane passes 64 with its two optional WASM cases skipped.
+The WASM input SHA-256 remains `25e19a8b0a5f059c132ee3919eadc71e994d8d6d39525298dbe0172faf97643f`:
+the previous confirmed fixed-base/four-overlay build, not a new compilation. The current Rust differences
+from that base are exactly those four paths; this block changes JavaScript and documentation only.
+
+The first Chromium command passes the three chart programs, URL revocation, production-model loading,
+malformed replacement refusal and actual production bolero drape (`gating: []`, numerical settled,
+30 consecutive quiet steps). It returns nonzero afterward because the test driver tries to fill the
+Style textarea without opening its enclosing details panel. That failure is retained; the corrected
+driver opens the panel and is rerunning the complete flow. Its earlier report and screenshot remain at
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-workbench-browser-6AYQtQ/`.
+The final driver and UBS outputs use the sibling `ftx-workbench-browser-final-IBMQDZ/` directory.
+Viewer HTML still depends on the CDN identified in R8. This block verifies reports and download
+lifecycle, not offline viewer rendering or the complete G4/G5 gate.
+`git diff --check`, `node --check web/worker.js`, and `node --check tools/check_materials_frontend.cjs`
+pass. The staged `ubs $(git diff --name-only --cached)` exits zero: two JavaScript files scanned,
+zero critical, 251 warning and 581 informational findings. Changed-line findings were reviewed:
+the listener warning is the test DOM adapter, deep-chain warnings are test assertions, and worker
+JSON extraction is inside its outer catch. HTML is outside that scanner lane and was reviewed
+directly and executed by the Node/Chromium checks. No suppression was added. No Rust source changes,
+fresh Cargo compile/test/clippy or hardware benchmark are part of this JavaScript repair.
+
+Fresh solo audit of this browser block (not independent verification):
+
+- Creation worksheet: this is the existing user-requested granular checklist, not runtime state.
+  Consumer: the user; gate: accurate handoff of `ftx-onn.1`; observed defect: old garment/model reuse;
+  retirement: completed checklist rows hand off to that Bead. No integrity-control exception is needed;
+  no new process artifact or framework is created. Highest actionable software item is this browser
+  repair; an hour extending the report would deliver less value. Verdict: keep this bounded extension.
+- Real-work worksheet: purpose is sewing patterns that sew together and fit a specific body, with usable
+  manufacturing files. USER 1 (browser repair/contract), ENABLER 1 (direct regressions), PROCESS 1
+  (requested checklist/Bead), UNKNOWN 0. Demo: edit an input and obsolete downloads/folding disappear.
+  Omitting process would change tracking, not runtime behavior. Existing page/worker code exercises the
+  tests; nothing speculative is enabled. Older material acquisition remains open because raw specimens
+  and physical validation are unavailable here. No swarm or plan edit substitutes for implementation;
+  no parent's unfinished acceptance was moved into this repair to close it. Verdict: HEALTHY; finish checks.
+- Honesty 1: No (checked: existing test assertions unchanged; four new tests added).
+  2: No (checked: explicit DOM/WASM doubles exercise actual modules and are labelled lifecycle evidence;
+  separate compiled-WASM and Chromium paths run actual production code).
+  3: No (checked: no oracle/golden/capture changes).
+  4: Runtime stale-result guards and their regressions change together; no accuracy, CI, ignore,
+  timeout, suppression or parity gate is relaxed. Original-source negatives fail on observable behavior.
+  5: No (checked: request identities apply to ordinary worker traffic, not fixture detection).
+  6: No (checked: focused five-test run and complete 66-test compiled lane have nonzero denominators).
+  7: No (checked: completed outputs distinguished from the pending corrected browser command).
+  8: No (checked: doubles, compiled WASM, real Chromium and the earlier frozen build are distinct claims).
+  9: The initial regression failed because its DOM double replaced rather than accumulated event
+  listeners; corrected the double to match DOM semantics, retaining every product assertion. The first
+  browser driver fails on the collapsed Style panel after the positive drape; its failure is disclosed.
+  10: No (checked: stderr retained in tool outputs or combined command logs).
+  11: No (checked: repair remains in progress pending final checks; empirical/release parents stay open).
+  12: No (checked: no technical-plan/spec edits; contract adds lifecycle behavior and labels old timings).
+  13–17: Not applicable because this block is solo, with no delegated reports or independent verifier.
+  18: No (checked: existing complete frontend lane and its optional-case denominator were selected before execution).
+  Older-session mining is outside this block; the earlier bounded CASS timeout remains disclosed above.
+  19: Explain the initial test-double and closed-panel driver mistakes and the earlier artifact's source boundary.
+  20: Strongest evidence is actual production-Anny browser settling plus original-source failing lifecycle
+  regressions; all are reproducible. Disposition: no test weakening or false closure found; RH-1/RH-2
+  countermeasures are retained assertions, original-source negatives and separately labelled runtime proof.
+
+Final browser disposition: the corrected complete command returns **zero**. All three chart drafts,
+empty-tape NOT_READY, invalid-stature refusal, revoked downloads, refused replacement model, actual
+production-Anny bolero drape and post-drape style invalidation pass. It records zero page errors;
+all four local HTTP requests carry the mandated user agent. Both browser runs produce byte-identical
+`sim_report.json`, SHA-256 `d6f1d1cf8c89db4b456e2d3b3018ae86b3fa795ad75dea0ca07415630fa624d4`.
+The bolero reports 30 consecutive quiet steps and no gating flags. No native comparison or benchmark
+is inferred from those repeated browser reports. The initial driver's failure above is superseded,
+not erased. `ftx-onn.1` is complete on fresh solo re-execution; parent `ftx-onn`, the physical-material,
+capture, offline-viewer and performance work remain open.

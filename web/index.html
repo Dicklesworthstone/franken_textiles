@@ -68,7 +68,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
 <main>
   <h1>Pattern Workbench</h1>
   <p class="mut">Draft a sewing pattern from measurements, check every seam and fit point, and download print-at-home
-    PDFs and cutter files. It runs FrankenTextiles in this page (Rust compiled to WebAssembly, about 2 MB), so
+    PDFs and cutter files. It runs FrankenTextiles in this page (Rust compiled to WebAssembly), so
     nothing you type leaves your browser. Open the <a href="materials.html">material workbench</a> to inspect
     source records, change per-piece materials, and recompute drape, heat, cutting, sewing and costs.
     You can also <a href="trace.html">trace, name and scale a PNG pattern
@@ -163,6 +163,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   };
   let info = {}, program = store.get("program", "zouave_bolero"), fields = [], urls = [], ready = false;
   let foldable = false, bodyLoaded = false, folding = false, dead = false;
+  let nextRequest = 0, roundRequest = 0, bodyRequest = 0, foldRequest = 0, fieldsRequest = 0;
   const worker = new Worker(new URL("worker.js", location.href), { type: "module" });
   const status = (t) => { $("status").textContent = t; };
   const human = (n) => n.replace(/_deg$/, "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
@@ -185,6 +186,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("programs").querySelectorAll("input").forEach((el) => el.addEventListener("change", () => { program = el.value; onProgram(); }));
   }
   function onProgram() {
+    invalidateRound();
     store.set("program", program);
     showBodyMode();
     const audit = program === "audit";
@@ -202,7 +204,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   }
   function requestFields() {
     if (!ready) return;                                  // the worker has no module until "ready"
-    worker.postMessage({ type: "fields", args: { program, stature_cm: +$("stature").value || 92, age_months: +$("age").value || null,
+    fieldsRequest = ++nextRequest;
+    worker.postMessage({ type: "fields", request: fieldsRequest, args: { program, stature_cm: +$("stature").value || 92, age_months: +$("age").value || null,
                                                  nappies: $("nappies").checked && nappyGarment() } });
   }
   function renderFields() {
@@ -213,6 +216,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         placeholder="${f.chart == null ? "" : esc(f.chart)}" aria-label="${esc(human(f.name))} (${f.unit})"> ${f.unit}</td></tr>`).join("");
     $("tapeRows").querySelectorAll("input").forEach((el) => el.addEventListener("input", () => {
       const t = store.get("tape", {}); t[el.dataset.name] = el.value; store.set("tape", t);
+      invalidateRound();
     }));
   }
   async function readJson(input, what) {
@@ -309,9 +313,30 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("foldView").classList.add("hidden"); $("foldView").removeAttribute("src");
     foldUrls.forEach((u) => URL.revokeObjectURL(u)); foldUrls = [];
   }
+  function invalidateFold() {
+    foldRequest = ++nextRequest; folding = false;
+    dropFold(); foldButton(); status("");
+  }
+  function invalidateRound() {
+    roundRequest = ++nextRequest; foldable = false;
+    urls.forEach((u) => URL.revokeObjectURL(u)); urls = [];
+    $("results").classList.add("hidden"); $("resFiles").innerHTML = "";
+    $("resPreview").removeAttribute("src"); $("foldBox").classList.add("hidden");
+    invalidateFold();
+    $("go").disabled = !ready || dead;
+    if (ready && !dead) status("Inputs changed; draft and check again.");
+  }
 
   worker.onmessage = (ev) => {
     const msg = ev.data;
+    if (dead) return;
+    const expected = { fields: fieldsRequest, result: roundRequest, bodyReady: bodyRequest,
+      foldProgress: foldRequest, folded: foldRequest };
+    if (msg.type in expected && msg.request !== expected[msg.type]) return;
+    if (msg.type === "error" && !msg.fatal) {
+      const request = { fields: fieldsRequest, run: roundRequest, body: bodyRequest, fold: foldRequest }[msg.op];
+      if (request !== undefined && msg.request !== request) return;
+    }
     if (msg.type === "progress") status(msg.text);
     else if (msg.type === "ready") {
       info = msg.info; ready = true;
@@ -355,6 +380,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       if (!folding || msg.op === "fold") status("");     // a stray field error keeps the fold's status
       if (msg.fatal) {                                  // the module trapped: nothing in it can be trusted now
         dead = true; ready = false;
+        bodyLoaded = false; invalidateRound();
         $("go").disabled = true; $("go").textContent = "Reload the page";
       } else if (!ready) {
         $("go").textContent = "Could not load";         // no module to run: keep it disabled
@@ -368,13 +394,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     }
   };
   worker.onerror = (e) => {
-    status(""); $("go").textContent = ready ? "Draft and check" : "Could not load";
+    dead = true; ready = false; bodyLoaded = false; invalidateRound();
+    status(""); $("go").textContent = "Reload the page";
     showError(e.message || "the worker failed to start");
   };
 
   document.querySelectorAll("input[name=bodyMode]").forEach((el) => {
     if (el.value === store.get("bodyMode", "chart")) el.checked = true;
-    el.addEventListener("change", showBodyMode);
+    el.addEventListener("change", () => { showBodyMode(); invalidateRound(); });
   });
   for (const id of ["stature", "age", "sex"]) {
     const v = store.get(id, null);
@@ -384,29 +411,55 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("nappies").checked = !!store.get("nappies", false);
   $("nappies").addEventListener("change", () => { store.set("nappies", $("nappies").checked); requestFields(); });
   showBodyMode();
-  $("resetStyle").addEventListener("click", () => { $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); });
+  for (const id of ["stature", "age", "sex", "nappies", "style", "patternFile", "fitFile", "measFile"]) {
+    for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateRound);
+  }
+  $("selfContact").addEventListener("change", invalidateFold);
+  $("resetStyle").addEventListener("click", () => {
+    $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); invalidateRound();
+  });
   $("go").addEventListener("click", async () => {
     // disable first: reading an uploaded file is async, and a second click would start a second run
+    invalidateRound();
+    const request = roundRequest;
     $("go").disabled = true;
     $("results").classList.add("hidden"); $("errorBox").classList.add("hidden");
+    status("Reading the inputs…");
     try {
       const req = await buildRequest();
+      if (request !== roundRequest || dead) return;
       status("Drafting, checking and exporting…");
-      worker.postMessage({ type: "run", req });
-    } catch (e) { $("go").disabled = false; showError(e.message); finished(); }
+      worker.postMessage({ type: "run", request, req });
+    } catch (e) {
+      if (request !== roundRequest || dead) return;
+      $("go").disabled = false; showError(e.message); finished();
+    }
   });
   $("bodyFile").addEventListener("change", async () => {
+    if (dead) return;
+    const request = bodyRequest = ++nextRequest;
+    bodyLoaded = false; invalidateFold();
+    worker.postMessage({ type: "clearBody" });
     const f = $("bodyFile").files[0];
-    if (!f) return;
+    if (!f) { status("Choose a body model to fold the garment."); return; }
     status("Reading the body model…");
-    const buf = await f.arrayBuffer();
-    worker.postMessage({ type: "body", bytes: buf }, [buf]);
+    try {
+      const buf = await f.arrayBuffer();
+      if (request !== bodyRequest || dead) return;
+      worker.postMessage({ type: "body", request, bytes: buf }, [buf]);
+    } catch (e) {
+      if (request !== bodyRequest || dead) return;
+      status(""); showError(e.message);
+    }
   });
   $("foldGo").addEventListener("click", () => {
+    if (dead || folding || !foldable || !bodyLoaded) return;
+    foldRequest = ++nextRequest;
     folding = true; foldButton(); dropFold();
     $("errorBox").classList.add("hidden");
     status("Fitting the body, sewing and draping…");
-    worker.postMessage({ type: "fold", selfContactMm: $("selfContact").checked ? 2 : 0 });
+    worker.postMessage({ type: "fold", request: foldRequest, round: roundRequest, body: bodyRequest,
+      selfContactMm: $("selfContact").checked ? 2 : 0 });
   });
   worker.postMessage({ type: "init", pkg: PKG });
 })();

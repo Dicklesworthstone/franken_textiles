@@ -636,6 +636,121 @@ test('original drafting worker also retains replayable drape JSON and frees its 
   assert.ok(read('index.html').includes('new Blob([msg.reportText]'));
 });
 
+test('drafting worker discards refused replacements, frees failed rounds and checks fold sources', async () => {
+  const sent=[], freed=[], calls=[]; let failure;
+  const values={default:async()=>{},program_info:()=> '{}',
+    run:()=> {
+      if(failure==='run') throw Error('run refused');
+      return {page:()=>{if(failure==='page') throw Error('page refused');return '{"status":"CONVERGED","zip":"round.zip"}';},
+        zip:()=>{if(failure==='zip') throw Error('zip refused');return new Uint8Array([1]);},
+        file:n=>{if(failure===n) throw Error('file refused');return new TextEncoder().encode(n==='pattern.json'?'{"pieces":[{"placement":{"part":"torso"}}]}':'{}');},
+        free:()=>freed.push('round')};
+    },
+    WebBody:class {constructor(bytes){if(bytes[0]===0)throw Error('body refused');}free(){freed.push('body');}},
+    fold_up:()=>{calls.push('fold');return {report:()=>'{"gating":[]}',viewer:()=>'<html/>',free:()=>freed.push('fold')};}};
+  const context=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});
+  const imports=new vm.SyntheticModule(Object.keys(values),function(){for(const[n,v]of Object.entries(values))this.setExport(n,v);},{context});
+  await imports.link(()=>{});await imports.evaluate();
+  const module=new vm.SourceTextModule(read('worker.js'),{context,importModuleDynamically:()=>imports});
+  await module.link(()=>{});await module.evaluate();
+  const send=async data=>{await context.onmessage({data});return sent.at(-1);};
+  await send({type:'init',pkg:'./pkg/'});
+  const body=()=>send({type:'body',request:2,bytes:new Uint8Array([1]).buffer});
+  const run=()=>send({type:'run',request:3,req:{}});
+  const fold=extra=>send({type:'fold',request:4,round:3,body:2,...extra});
+  await body();await run();assert.equal((await fold()).type,'folded');
+  assert.equal((await fold({round:1})).type,'error');assert.equal(calls.length,1);
+  for(const stage of ['run','page','zip','pattern.json','measurements.json','fit_spec.json']) {
+    failure=undefined;await run();const count=freed.filter(x=>x==='round').length;
+    failure=stage;const refused=await run();assert.equal(refused.type,'error');assert.equal(refused.request,3);
+    assert.equal(freed.filter(x=>x==='round').length,count+(stage==='run'?0:1),stage);
+    assert.match((await fold()).message,/run a round first/);
+  }
+  failure=undefined;await run();await send({type:'body',request:5,bytes:new Uint8Array([0]).buffer});
+  assert.match((await fold()).message,/load the body model/); // no fallback to the prior model
+  await body();assert.equal((await fold()).type,'folded');
+  await send({type:'clearBody'});assert.match((await fold()).message,/load the body model/);
+});
+
+// The original inline workshop script, using a small DOM transport double. These tests inspect
+// source/result association and handle lifetime, not browser rendering or computed garment physics.
+function draftingPage() {
+  const html=read('index.html'), e=Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],new Element()]));
+  for(const el of Object.values(e)) {
+    el.addEventListener=(name,fn)=>{const previous=el.handlers[name];el.handlers[name]=(...args)=>{
+      const a=previous?.(...args),b=fn(...args);return Promise.all([a,b]);};};
+    const classes=new Set(['hidden']);el.classList={add:x=>classes.add(x),remove:x=>classes.delete(x),
+      contains:x=>classes.has(x),toggle:(x,on)=>on?classes.add(x):classes.delete(x)};
+    el.dataset={};el.querySelectorAll=()=>[];el.scrollIntoView=()=>{};
+  }
+  e.stature.value='92';e.age.value='30';e.style.value='{}';
+  const modes=['chart','tape','file'].map(value=>Object.assign(new Element(),{value,checked:value==='chart'}));
+  const messages=[], live=new Map();let worker, next=0;
+  class Worker {constructor(){worker=this;}postMessage(m){messages.push(m);}}
+  class LocalURL extends URL {}
+  LocalURL.createObjectURL=blob=>{const u=`blob:${++next}`;live.set(u,blob);return u;};
+  LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
+  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,location:{href:'https://unit.invalid/'},
+    localStorage:{getItem:()=>null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
+      querySelector:()=>modes.find(m=>m.checked),querySelectorAll:()=>modes}});
+  vm.runInContext(/<script>([\s\S]*?)<\/script>/.exec(html)[1],context);
+  const emit=m=>worker.onmessage({data:m}), last=type=>messages.findLast(m=>m.type===type);
+  emit({type:'ready',info:{zouave_bolero:{style:{}}},version:'test',dxf:'test'});
+  const result=request=>emit({type:'result',request:request??last('run').request,foldable:true,
+    res:{title:'current',status:'CONVERGED',basis:{},zip:'round.zip',files:[],validation:{}},blobs:{zip:new Uint8Array([1])}});
+  const body=async()=>{e.bodyFile.files=[{arrayBuffer:async()=>new ArrayBuffer(1)}];await e.bodyFile.handlers.change();
+    emit({type:'bodyReady',request:last('body').request});};
+  const dispatch=(id,event)=>e[id].handlers[event]?.();
+  return {e,modes,messages,live,emit,last,result,body,worker,dispatch};
+}
+
+test('primary workshop withdraws obsolete rounds and folds while retaining the latest positive workflow', async () => {
+  const p=draftingPage();await p.e.go.handlers.click();p.result();await p.body();
+  assert.equal(p.e.foldGo.disabled,false);p.e.foldGo.handlers.click();const fold=p.last('fold');
+  assert.equal(fold.round,p.last('run').request);assert.equal(fold.body,p.last('body').request);
+  p.emit({type:'folded',request:fold.request,report:{settled:true,gating:[]},reportText:'{"value":-0.0}',viewer:'<html/>'});
+  assert.equal(p.live.size,3);assert.match(p.e.foldSummary.innerHTML,/no gating flag/);
+  assert.ok([...p.live.values()].some(b=>b.type==='application/json'));
+  p.e.stature.value='93';p.dispatch('stature','input');
+  assert.equal(p.live.size,0);assert.equal(p.e.foldGo.disabled,true);assert.ok(p.e.results.classList.contains('hidden'));
+  assert.equal(p.e.status.textContent,'Inputs changed; draft and check again.');
+  p.result(fold.round);p.emit({type:'folded',request:fold.request,report:{settled:true},reportText:'{}',viewer:'old'});
+  assert.equal(p.live.size,0);assert.equal(p.e.foldGo.disabled,true);
+  await p.e.go.handlers.click();p.result();assert.equal(p.e.foldGo.disabled,false);
+  p.e.foldGo.handlers.click();const current=p.last('fold');
+  p.e.selfContact.handlers.change();assert.equal(p.live.size,1);assert.equal(p.e.foldGo.disabled,false);
+  p.emit({type:'folded',request:current.request,reportText:'{}',report:{},viewer:'obsolete'});assert.equal(p.live.size,1);
+  const oldRound=p.last('run').request;await p.e.go.handlers.click();
+  assert.equal(p.e.foldGo.disabled,true);assert.equal(p.live.size,0);
+  p.emit({type:'error',op:'run',request:oldRound,message:'obsolete failure'});assert.ok(p.e.errorBox.classList.contains('hidden'));
+  p.emit({type:'error',op:'run',request:p.last('run').request,message:'replacement refused'});
+  assert.equal(p.e.errorText.textContent,'replacement refused');assert.equal(p.e.foldGo.disabled,true);
+});
+
+test('primary workshop cancels delayed measurement reads and accepts only the latest fields', async () => {
+  const p=draftingPage(), pending=deferred();p.modes[0].checked=false;p.modes[2].checked=true;
+  p.e.measFile.files=[{text:()=>pending.promise}];const loading=p.e.go.handlers.click();
+  p.dispatch('stature','input');pending.resolve('{}');await loading;
+  assert.equal(p.last('run'),undefined);assert.equal(p.e.go.disabled,false);
+  p.e.measFile.files=[{text:async()=>'{}'}];await p.e.go.handlers.click();p.result();assert.equal(p.live.size,1);
+  const old=p.last('fields');p.e.stature.handlers.change();const fresh=p.last('fields');
+  p.emit({type:'fields',request:old.request,program:'zouave_bolero',rows:[{name:'old'}]});assert.equal(p.e.tapeRows.innerHTML,undefined);
+  p.emit({type:'fields',request:fresh.request,program:'zouave_bolero',rows:[]});assert.equal(p.e.tapeRows.innerHTML,'');
+});
+
+test('primary workshop cannot install a superseded body, revive a cleared model or use a dead worker', async () => {
+  const p=draftingPage(), pending=deferred();await p.e.go.handlers.click();p.result();await p.body();
+  p.e.bodyFile.files=[{arrayBuffer:()=>pending.promise}];const loading=p.e.bodyFile.handlers.change();
+  assert.equal(p.e.foldGo.disabled,true);assert.equal(p.live.size,1);
+  await p.body();const current=p.last('body').request;pending.resolve(new ArrayBuffer(2));await loading;
+  assert.equal(p.last('body').request,current);assert.equal(p.e.foldGo.disabled,false);
+  p.e.bodyFile.files=[];await p.e.bodyFile.handlers.change();p.emit({type:'bodyReady',request:current});assert.equal(p.e.foldGo.disabled,true);
+  p.e.bodyFile.files=[{arrayBuffer:async()=>{throw Error('read refused');}}];await p.e.bodyFile.handlers.change();
+  assert.equal(p.e.errorText.textContent,'read refused');assert.equal(p.e.foldGo.disabled,true);
+  p.emit({type:'error',op:'fold',request:0,fatal:true,message:'trap'});assert.equal(p.live.size,0);assert.equal(p.e.go.disabled,true);
+  p.result();assert.equal(p.live.size,0);assert.equal(p.e.go.textContent,'Reload the page');
+});
+
 test('finite-stock input and material edits invalidate only their current dependencies', async () => {
   const p = await pageModule(); await p.load(); await p.bind();
   p.select('stockRequest', '{"value":1.0}'); p.e.stockRequest.handlers.change();
