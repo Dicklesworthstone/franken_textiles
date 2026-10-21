@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ftx_core::{Refusal, RefusalCode, linalg::lstsq, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 
-use crate::material_response::StrainDomain;
+use crate::material_response::{FITTED_AREA_RANGE_KEY, StrainDomain};
 use crate::materials::{Evidence, Form, Material, Quantity, Source};
 
 /// Identify the existing nonlinear membrane directly from finite-strain swatch observations.
@@ -27,9 +27,9 @@ const KEYS: [&str; 4] = [
 ];
 
 /// Recover a fitted membrane's operating domain from its source-bearing quantities or curves.
-/// Each set of four components belongs to one fit; dropping or mixing their bounds must not turn
-/// a calibrated material into an unrestricted law. Independently authored materials without
-/// calibration metadata retain their existing contract.
+/// Each set of four components belongs to one fit, with two more coefficients when area response
+/// was jointly identified. Dropping or mixing components or bounds must not turn a calibrated
+/// material into an unrestricted law. Independently authored materials retain their contract.
 ///
 /// # Errors
 /// A fitted coefficient has missing, inconsistent, nonfinite or reversed domain/source metadata.
@@ -67,6 +67,64 @@ pub fn fitted_domain(material: &Material) -> Result<Option<StrainDomain>, Refusa
             ),
         ]
     });
+    if let Some(components) = nonlinear {
+        let fitted_area = components.iter().any(|(_, component)| {
+            component.is_some_and(|(source, conditions)| {
+                conditions.contains_key(FITTED_AREA_RANGE_KEY)
+                    || material.sources.get(source).is_some_and(|source| {
+                        [
+                            "local:ftx-nonlinear-swatch-area-calibration/",
+                            "local:ftx-strip-area-calibration/",
+                        ]
+                        .iter()
+                        .any(|prefix| source.reference.starts_with(prefix))
+                    })
+            })
+        });
+        if fitted_area {
+            let response = material.membrane_response.as_ref().unwrap();
+            let area = response.area_response.as_ref().ok_or_else(|| {
+                invalid("jointly fitted membrane is missing its identified area response")
+            })?;
+            let [lo, hi] = area.area_ratio_range;
+            if !lo.is_finite() || !hi.is_finite() || lo <= 0.0 || lo >= hi || lo > 1.0 || hi < 1.0 {
+                return Err(invalid(
+                    "jointly fitted membrane has an invalid area domain",
+                ));
+            }
+            for (name, component) in components.into_iter().chain([
+                (
+                    "quadratic area coefficient",
+                    Some((area.quadratic.source.as_str(), &area.quadratic.conditions)),
+                ),
+                (
+                    "log-squared area coefficient",
+                    Some((
+                        area.log_squared.source.as_str(),
+                        &area.log_squared.conditions,
+                    )),
+                ),
+                (
+                    "area response",
+                    Some((response.coupling.source.as_str(), &area.conditions)),
+                ),
+            ]) {
+                let (source, conditions) = component.unwrap();
+                let range = conditions.get(FITTED_AREA_RANGE_KEY).ok_or_else(|| {
+                    invalid(format!(
+                        "fitted membrane {name} is missing its physical-area domain"
+                    ))
+                })?;
+                let range: [f64; 2] = serde_json::from_str(range)
+                    .map_err(|e| invalid(format!("fitted membrane {name} area domain: {e}")))?;
+                if source != response.coupling.source || range != area.area_ratio_range {
+                    return Err(invalid(
+                        "jointly fitted membrane components must share one source and physical-area domain",
+                    ));
+                }
+            }
+        }
+    }
     let mut result: Option<StrainDomain> = None;
     for components in std::iter::once(scalar).chain(nonlinear) {
         let fitted = components.iter().any(|(_, component)| {
@@ -77,6 +135,8 @@ pub fn fitted_domain(material: &Material) -> Result<Option<StrainDomain>, Refusa
                             "local:ftx-swatch-calibration/",
                             "local:ftx-nonlinear-swatch-calibration/",
                             "local:ftx-strip-calibration/",
+                            "local:ftx-nonlinear-swatch-area-calibration/",
+                            "local:ftx-strip-area-calibration/",
                         ]
                         .iter()
                         .any(|prefix| source.reference.starts_with(prefix))

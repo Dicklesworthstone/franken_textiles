@@ -14,7 +14,8 @@ use crate::materials::{Evidence, Quantity, Source};
 
 mod area;
 use area::CompiledArea;
-pub use area::{AREA_MODEL, AreaResponse};
+pub(crate) use area::area_response_basis;
+pub use area::{AREA_MODEL, AreaResponse, FITTED_AREA_RANGE_KEY, physical_area_ratio};
 
 /// Fixes work conjugacy: [E11, E22, 2 E12] versus second-Piola sheet resultants in N/m.
 pub const MODEL: &str = "tabulated_green_strain/1";

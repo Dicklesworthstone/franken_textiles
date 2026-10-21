@@ -1,0 +1,44 @@
+{
+  "schema": "ftx-nonlinear-swatch-calibration/1",
+  "material": {
+    "id": "synthetic-area-swatch",
+    "name": "Synthetic joint directional and area-response identification",
+    "form": "sheet",
+    "structure": {
+      "specimen_id": "synthetic-area-swatch",
+      "scope": "Independent analytic numerical observations; no measured textile or garment validation"
+    },
+    "sources": {
+      "synthetic": {
+        "reference": "test:independent-area-swatch-forces",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic analytic observations, independently calculated from P=F*S. Base warp slopes 200/350 and weft slopes 150/250 N/m in compression/tension; shear slopes 70/90 N/m for negative/positive engineering shear; normal coupling 20 N/m. Area energy is 40*(J-1)^2+15*(ln J)^2 N/m with J=det(F)>0. No laboratory evidence, uncertainty distribution, missing-property inference or empirical validation claim."
+      }
+    }
+  },
+  "method": "Independent homogeneous deformation gradients and analytic nominal force resultants P=F*S for joint identification of signed directional knots, normal coupling and two area coefficients. All observations are synthetic software inputs, not grip-extension approximations or real instrument acquisitions.",
+  "conditions": {
+    "specimen": "synthetic-area-swatch",
+    "specimen_id": "synthetic-area-swatch",
+    "conditioning": "synthetic-reference-state"
+  },
+  "fitted_on": "2026-10-21",
+  "area_response": {
+    "model": "area_green_strain/1",
+    "area_ratio_range": [0.7, 1.5]
+  },
+  "interior_knots": [[0.0], [0.0], [0.0]],
+  "allow_estimated_observations": true,
+  "replace_existing": false,
+  "max_rms_scaled": 1e-8,
+  "max_peak_scaled": 1e-7,
+  "samples": [
+    {"id":"analytic-00","deformation":[[0.8366600265340756,0.0],[0.0,0.8944271909999159]],"nominal_n_m":[[-55.176289237115896,0.0],[0.0,-42.66842063970837]],"scale_n_m":1.0,"source":"synthetic","evidence":"estimate","partition":"fit"},
+    {"id":"analytic-01","deformation":[[1.224744871391589,0.0],[0.0,1.1832159566199232]],"nominal_n_m":[[163.66514437710646,0.0],[0.0,118.4889752517596]],"scale_n_m":1.0,"source":"synthetic","evidence":"estimate","partition":"fit"},
+    {"id":"analytic-02","deformation":[[1.224744871391589,0.0],[0.0,0.8944271909999159]],"nominal_n_m":[[113.77815690932455,0.0],[0.0,3.465026759325148]],"scale_n_m":1.0,"source":"synthetic","evidence":"estimate","partition":"fit"},
+    {"id":"analytic-03","deformation":[[0.8366600265340756,0.0],[0.0,1.1832159566199232]],"nominal_n_m":[[-23.06671705424198,0.0],[0.0,54.68232534842951]],"scale_n_m":1.0,"source":"synthetic","evidence":"estimate","partition":"fit"},
+    {"id":"analytic-04","deformation":[[1.0954451150103321,0.18257418583505539],[0.0,1.0327955589886444]],"nominal_n_m":[[56.95696874462423,22.365337764794283],[16.073972878111555,30.073618707439604]],"scale_n_m":1.0,"source":"synthetic","evidence":"estimate","partition":"fit"},
+    {"id":"analytic-05","deformation":[[0.9486832980505138,-0.21081851067789198],[0.0,1.0749676997731399]],"nominal_n_m":[[-2.3147888496593154,-18.341210428976602],[-14.593927186025912,27.84951754314657]],"scale_n_m":1.0,"source":"synthetic","evidence":"estimate","partition":"fit"},
+    {"id":"analytic-06","deformation":[[1.0583005244258363,-0.07559289460184544],[0.0,1.0364775512695459]],"nominal_n_m":[[34.151349634525296,-6.773123356325353],[-5.0270269917419,22.49001070936472]],"scale_n_m":1.0,"source":"synthetic","evidence":"estimate","partition":"check"}
+  ]
+}

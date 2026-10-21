@@ -16,6 +16,9 @@ use crate::materials::{Quantity, Source};
 /// Explicit physical-area extension; no area penalty is inferred from textile identity.
 pub const AREA_MODEL: &str = "area_green_strain/1";
 
+/// Source-condition key binding an identified area response to its actual FIT-only domain.
+pub const FITTED_AREA_RANGE_KEY: &str = "fitted_area_ratio_range";
+
 /// Jointly qualified coefficients added to the declared separable equilibrium law.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,6 +118,35 @@ impl AreaResponse {
                 ));
             }
         }
+        let fitted = self.conditions.contains_key(FITTED_AREA_RANGE_KEY)
+            || [&self.quadratic, &self.log_squared].iter().any(|quantity| {
+                quantity.conditions.contains_key(FITTED_AREA_RANGE_KEY)
+                    || sources.get(&quantity.source).is_some_and(|source| {
+                        [
+                            "local:ftx-nonlinear-swatch-area-calibration/",
+                            "local:ftx-strip-area-calibration/",
+                        ]
+                        .iter()
+                        .any(|prefix| source.reference.starts_with(prefix))
+                    })
+            });
+        if fitted {
+            let recorded: [f64; 2] = serde_json::from_str(
+                self.conditions.get(FITTED_AREA_RANGE_KEY).ok_or_else(|| {
+                    invalid("identified area response is missing its FIT area-ratio domain")
+                })?,
+            )
+            .map_err(|_| invalid("identified area response has invalid FIT area-ratio metadata"))?;
+            if recorded != self.area_ratio_range
+                || [&self.quadratic, &self.log_squared]
+                    .iter()
+                    .any(|quantity| quantity.source != base.coupling.source)
+            {
+                return Err(invalid(
+                    "identified area response must retain its exact FIT area-ratio domain and joint membrane source",
+                ));
+            }
+        }
         let compiled = CompiledArea {
             quadratic: self.quadratic.value,
             log_squared: self.log_squared.value,
@@ -156,6 +188,28 @@ fn metric(strain: [f64; 3]) -> Option<(f64, f64)> {
         j - 1.0
     };
     Some((j, minus_one))
+}
+
+/// Positive surface-area ratio from physical `[E11, E22, 2 E12]` using the production metric.
+/// Returns `None` for a nonfinite or non-positive-definite metric. This is geometry, not an
+/// admission of any material's source qualifications or operating domain.
+#[must_use]
+pub fn physical_area_ratio(strain: [f64; 3]) -> Option<f64> {
+    metric(strain).map(|(j, _)| j)
+}
+
+// Unit coefficient columns for linear identification, evaluated by the production constitutive
+// authority. These mathematical basis responses do not supply material evidence or a domain.
+pub(crate) fn area_response_basis(strain: [f64; 3]) -> Option<[Response; 2]> {
+    let evaluate = |quadratic, log_squared| {
+        CompiledArea {
+            quadratic,
+            log_squared,
+            range: [f64::MIN_POSITIVE, f64::MAX],
+        }
+        .evaluate(strain)
+    };
+    Some([evaluate(1.0, 0.0)?, evaluate(0.0, 1.0)?])
 }
 
 // ln(J) near one uses its accurately retained difference. Fixed-order atanh terms avoid

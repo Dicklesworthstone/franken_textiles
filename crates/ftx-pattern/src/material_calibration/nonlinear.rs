@@ -1,9 +1,9 @@
-//! Identify separable nonlinear sheet response from measured nominal loads and deformations.
+//! Identify nonlinear sheet response from measured nominal loads and deformations.
 //!
 //! The unknowns are piecewise-linear second-Piola resultants at declared interior Green-strain
-//! knots and one constant warp/weft coupling. Endpoints come from FIT observations; neither
-//! missing forces nor unmeasured compression branches are invented. The resulting ordinary
-//! material uses the production tabulated membrane, including its stability and domain checks.
+//! knots, one constant warp/weft coupling and optionally two physical-area coefficients. Endpoints
+//! come from FIT observations; neither missing forces nor unmeasured compression branches are
+//! invented. The resulting material uses the production tabulated membrane and its domain checks.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{Partition, Quality, Residual, Sample};
 use crate::{
-    material_response::{Interpolation, StressCurve, TabulatedMembrane},
+    material_response::{
+        AREA_MODEL, AreaResponse, FITTED_AREA_RANGE_KEY, Interpolation, StressCurve,
+        TabulatedMembrane, area_response_basis, physical_area_ratio,
+    },
     materials::{Evidence, Form, Material, Quantity, Source},
 };
 
@@ -28,6 +31,17 @@ const SCALAR_KEYS: [&str; 4] = [
 
 fn origin_knots() -> [Vec<f64>; 3] {
     std::array::from_fn(|_| vec![0.0])
+}
+
+/// Explicit area-model identification. Coefficients are fitted jointly with the base law;
+/// the declared J interval only limits admissible observations, never supplies missing data.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AreaIdentification {
+    /// Exactly [`AREA_MODEL`].
+    pub model: String,
+    /// Positive finite admissible J interval containing one. Publication uses FIT extrema.
+    pub area_ratio_range: [f64; 2],
 }
 
 /// A bounded nonlinear identification problem in the same swatch frames as linear calibration.
@@ -51,6 +65,9 @@ pub struct Input {
     /// The two endpoints are derived from observations, so the compiled law cannot extrapolate.
     #[serde(default = "origin_knots")]
     pub interior_knots: [Vec<f64>; 3],
+    /// Jointly identify the existing production area response; absent preserves separable fitting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_response: Option<AreaIdentification>,
     /// Permit estimated INPUT observations; fitted coefficients are always estimates separately.
     #[serde(default)]
     pub allow_estimated_observations: bool,
@@ -74,12 +91,15 @@ pub struct Report {
     pub input_sha256: String,
     /// Source-bearing material with the identified production tabulated membrane.
     pub material: Material,
-    /// Number of independently identified knot resultants plus the constant coupling.
+    /// Number of identified knot resultants, constant coupling and optional area coefficients.
     pub parameter_count: usize,
     /// Smallest normalized design Gram Cholesky pivot; deficient excitation refuses.
     pub excitation_pivot: f64,
     /// Actual FIT strain extrema, which are also the compiled law's exact domain endpoints.
     pub fitted_strain_range: [[f64; 2]; 3],
+    /// Actual FIT physical J extrema including the undeformed reference, only in area mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitted_area_ratio_range: Option<[f64; 2]>,
     /// Quality of observations used for identification.
     pub fit: Quality,
     /// Independent held-out quality; absent when none were provided.
@@ -98,10 +118,15 @@ struct Basis {
     knots: [Vec<f64>; 3],
     columns: [Vec<Option<usize>>; 3],
     coupling: usize,
+    area_range: Option<[f64; 2]>,
 }
 
 impl Basis {
-    fn new(input: &Input, ranges: [[f64; 2]; 3]) -> Result<Self, Refusal> {
+    fn new(
+        input: &Input,
+        ranges: [[f64; 2]; 3],
+        area_range: Option<[f64; 2]>,
+    ) -> Result<Self, Refusal> {
         let mut next = 0;
         let mut knots = std::array::from_fn(|_| Vec::new());
         let mut columns = std::array::from_fn(|_| Vec::new());
@@ -136,10 +161,16 @@ impl Basis {
                 })
                 .collect();
         }
+        if next + 1 + usize::from(area_range.is_some()) * 2 > MAX_PARAMETERS {
+            return Err(invalid(
+                "nonlinear swatch identification supports at most 49 total coefficients; reduce declared knots when identifying area response",
+            ));
+        }
         Ok(Self {
             knots,
             columns,
             coupling: next,
+            area_range,
         })
     }
 
@@ -178,6 +209,32 @@ impl Basis {
                 .zip([a * strain[1], b * strain[0], c * strain[1], d * strain[0]])
         {
             row[self.coupling] = value;
+        }
+        if let Some([lo, hi]) = self.area_range {
+            let j = physical_area_ratio(strain)
+                .ok_or_else(|| invalid("nonlinear swatch has an invalid physical area metric"))?;
+            if j < lo || j > hi {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!(
+                        "{}: outside FIT area-ratio domain; held-out observations cannot extend it",
+                        sample.id
+                    ),
+                ));
+            }
+            let basis = area_response_basis(strain)
+                .ok_or_else(|| invalid("nonlinear area basis arithmetic overflow"))?;
+            for (column, response) in basis.iter().enumerate() {
+                let [x, y, s] = response.stress;
+                for (row, value) in rows.iter_mut().zip([
+                    a * x + b * s,
+                    a * s + b * y,
+                    c * x + d * s,
+                    c * s + d * y,
+                ]) {
+                    row[self.coupling + 1 + column] = value;
+                }
+            }
         }
         Ok((strain, rows))
     }
@@ -271,6 +328,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         .membrane_response
         .as_ref()
         .is_some_and(|response| response.area_response.is_some())
+        && input.area_response.is_none()
     {
         return Err(invalid(
             "separable nonlinear swatch calibration cannot identify or discard an existing area response; use an area-capable characterization model",
@@ -318,6 +376,42 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             "nonlinear swatches and material name different specimens",
         ));
     }
+    if let Some(area) = &input.area_response {
+        let [lo, hi] = area.area_ratio_range;
+        if area.model != AREA_MODEL
+            || !lo.is_finite()
+            || !hi.is_finite()
+            || lo <= 0.0
+            || lo > 1.0
+            || hi < 1.0
+            || lo >= hi
+            || input.conditions.get("specimen") != input.conditions.get("specimen_id")
+        {
+            return Err(invalid(
+                "area identification needs its model, positive J bounds containing one, and explicit matching specimen/specimen_id conditions",
+            ));
+        }
+        if let Some(prior) = input
+            .material
+            .membrane_response
+            .as_ref()
+            .and_then(|response| response.area_response.as_ref())
+            && prior.conditions.iter().any(|(key, value)| {
+                ![
+                    "fitted_green_strain_range",
+                    FITTED_AREA_RANGE_KEY,
+                    "held_out_checks",
+                    "fixture_model",
+                ]
+                .contains(&key.as_str())
+                    && input.conditions.get(key) != Some(value)
+            })
+        {
+            return Err(invalid(
+                "area identification must retain every existing area specimen and conditioning qualifier",
+            ));
+        }
+    }
     if input.material.membrane_relaxation.is_some() {
         return Err(invalid(
             "recharacterize relaxation explicitly before replacing its equilibrium membrane; old relaxation is not silently reused",
@@ -334,6 +428,19 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         ));
     }
     let mut ranges = [[f64::INFINITY, f64::NEG_INFINITY]; 3];
+    let mut area_range = input.area_response.as_ref().map(|_| [1.0_f64, 1.0_f64]);
+    // New area identification may replace coefficients, but cannot erase an earlier law's
+    // physical support. Keep the original separable fitting path and arithmetic unchanged.
+    let prior_law = if input.area_response.is_some() {
+        input.material.compiled_membrane(true)?
+    } else {
+        None
+    };
+    let prior_domain = if input.area_response.is_some() {
+        super::fitted_domain(&input.material)?
+    } else {
+        None
+    };
     let mut ids = BTreeSet::new();
     for sample in &input.samples {
         if sample.id.trim().is_empty()
@@ -356,6 +463,33 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             )));
         }
         let (strain, _) = super::design(sample)?;
+        if prior_domain.is_some_and(|domain| !domain.contains(strain))
+            || prior_law.as_ref().is_some_and(|law| !law.contains(strain))
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "{}: area identification cannot widen inherited membrane support",
+                    sample.id
+                ),
+            ));
+        }
+        if let Some(area) = &input.area_response {
+            let j = physical_area_ratio(strain)
+                .ok_or_else(|| invalid("area identification needs a positive physical metric"))?;
+            if j < area.area_ratio_range[0] || j > area.area_ratio_range[1] {
+                return Err(Refusal::new(
+                    RefusalCode::OutOfRange,
+                    format!("{}: outside declared area-ratio domain", sample.id),
+                ));
+            }
+            if sample.partition == Partition::Fit
+                && let Some(range) = &mut area_range
+            {
+                range[0] = range[0].min(j);
+                range[1] = range[1].max(j);
+            }
+        }
         if sample.partition == Partition::Fit {
             for (range, e) in ranges.iter_mut().zip(strain) {
                 range[0] = range[0].min(e);
@@ -363,7 +497,12 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             }
         }
     }
-    let basis = Basis::new(input, ranges)?;
+    if area_range.is_some_and(|[lo, hi]| lo >= hi) {
+        return Err(invalid(
+            "FIT swatches do not excite physical area change; both area coefficients are unidentifiable",
+        ));
+    }
+    let basis = Basis::new(input, ranges, area_range)?;
     let mut rows = Vec::new();
     let mut target = Vec::new();
     for sample in &input.samples {
@@ -382,7 +521,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             }
         }
     }
-    let count = basis.coupling + 1;
+    let count = basis.coupling + 1 + usize::from(area_range.is_some()) * 2;
     let (values, pivot) = solve(&rows, &target, count)?;
     let digest = sha256_hex(&serde_json::to_vec(input).map_err(|e| invalid(e.to_string()))?);
     let source_id = format!("nonlinear-swatch-{digest}");
@@ -390,10 +529,20 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     if material.sources.contains_key(&source_id) {
         return Err(invalid("nonlinear calibration source ID already exists"));
     }
+    let source_kind = if area_range.is_some() {
+        "local:ftx-nonlinear-swatch-area-calibration"
+    } else {
+        "local:ftx-nonlinear-swatch-calibration"
+    };
+    let model_name = if area_range.is_some() {
+        "Joint directional and physical-area model"
+    } else {
+        "Piecewise-linear model"
+    };
     material.sources.insert(source_id.clone(), Source {
-        reference: format!("local:ftx-nonlinear-swatch-calibration/{digest}"),
+        reference: format!("{source_kind}/{digest}"),
         accessed_on: input.fitted_on.clone(),
-        note: format!("Piecewise-linear model identified from nominal force/deformation swatches; complete observations and prior evidence in ftx-nonlinear-swatch-calibration-report/1 input SHA-256 {digest}. Protocol: {}", input.method),
+        note: format!("{model_name} identified from nominal force/deformation swatches; complete observations and prior evidence in ftx-nonlinear-swatch-calibration-report/1 input SHA-256 {digest}. Protocol: {}", input.method),
     });
     let mut conditions = input.conditions.clone();
     conditions.insert(
@@ -408,21 +557,53 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             .any(|s| s.partition == Partition::Check)
             .to_string(),
     );
+    if let Some(range) = area_range {
+        conditions.insert(
+            FITTED_AREA_RANGE_KEY.into(),
+            serde_json::to_string(&range).map_err(|e| invalid(e.to_string()))?,
+        );
+    }
     let curve = |axis: usize| {
         StressCurve {
         points: basis.knots[axis].iter().zip(&basis.columns[axis]).map(|(&e, &column)| [e, column.map_or(0.0, |j| values[j])]).collect(),
         source: source_id.clone(), evidence: Evidence::Estimate,
-        method: "Weighted identification from observed components of nominal P=F*S, with separable piecewise-linear S(Green strain); origin fixed stress-free, no extrapolation or hysteresis fit.".into(),
+        method: if area_range.is_some() {
+            "Weighted joint nominal P=F*S identification of the directional contribution, constant base coupling and physical-area response; origin fixed stress-free, no extrapolation or hysteresis fit."
+        } else {
+            "Weighted identification from observed components of nominal P=F*S, with separable piecewise-linear S(Green strain); origin fixed stress-free, no extrapolation or hysteresis fit."
+        }.into(),
         conditions: conditions.clone(),
     }
     };
+    let area_response = area_range.map(|range| {
+        let quantity = |value, term: &str| Quantity {
+            value,
+            unit: "N/m".into(),
+            evidence: Evidence::Estimate,
+            source: source_id.clone(),
+            method: format!("Joint nominal-force identification of the {term} area-energy coefficient using the production constitutive basis; no empirical qualification or confidence interval inferred."),
+            conditions: conditions.clone(),
+            bounds: None,
+        };
+        AreaResponse {
+            model: AREA_MODEL.into(),
+            quadratic: quantity(values[basis.coupling + 1], "quadratic"),
+            log_squared: quantity(values[basis.coupling + 2], "log-squared"),
+            area_ratio_range: range,
+            conditions: conditions.clone(),
+        }
+    });
     let response = TabulatedMembrane {
         model: crate::material_response::MODEL.into(), interpolation: Interpolation::PiecewiseLinear,
-        area_response: None,
+        area_response,
         warp: curve(0), weft: curve(1), shear: curve(2),
         coupling: Quantity {
             value: values[basis.coupling], unit: "N/m".into(), evidence: Evidence::Estimate,
-            source: source_id, method: "Jointly identified constant dS11/dE22=dS22/dE11 in the nonlinear nominal-force fit.".into(),
+            source: source_id, method: if area_range.is_some() {
+                "Jointly identified constant base normal coupling, separate from the physical-area stress derivatives, in the nonlinear nominal-force fit."
+            } else {
+                "Jointly identified constant dS11/dE22=dS22/dE11 in the nonlinear nominal-force fit."
+            }.into(),
             conditions, bounds: None,
         },
     };
@@ -490,6 +671,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         parameter_count: count,
         excitation_pivot: pivot,
         fitted_strain_range: ranges,
+        fitted_area_ratio_range: area_range,
         fit,
         check,
         residuals,
