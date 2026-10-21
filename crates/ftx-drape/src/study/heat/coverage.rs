@@ -6,8 +6,12 @@ use ftx_core::{Refusal, Vec3};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Budget, PlasticHeatDistribution, boundary, budget, hash, invalid, plastic};
+use super::{
+    Budget, DissipationHeatDistribution, PlasticHeatDistribution, boundary, budget, hash, invalid,
+    plastic,
+};
 use crate::{
+    motion::DissipationCapture,
     run::DrapeRun,
     thermal::{
         steady::{exterior::Exterior, request::Film},
@@ -58,6 +62,10 @@ pub struct Request {
     /// initial drape work is excluded and bare body receives no internal energy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plastic_dissipation_heat: Option<PlasticHeatDistribution>,
+    /// Convert separately qualified Maxwell dashpot work over the same covered/exposed material.
+    /// Initial drape work, reversible storage and backward-Euler numerical loss are excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxation_dissipation_heat: Option<DissipationHeatDistribution>,
     /// Maximum physical thermal substep, seconds, independent of mechanical adaptive steps.
     pub max_step_s: f64,
     /// Maximum cell plus body-face advances, including all substeps, in 1..=10000000. Heating
@@ -191,6 +199,16 @@ impl Request {
             .plastic_dissipation_heat
             .map(|_| plastic::Heating::new(run, self.initial_temperature_c))
             .transpose()?;
+        let relaxation = self
+            .relaxation_dissipation_heat
+            .map(|_| {
+                plastic::Heating::new_kind(
+                    run,
+                    self.initial_temperature_c,
+                    plastic::Kind::Relaxation,
+                )
+            })
+            .transpose()?;
         Ok(History {
             request: self.clone(),
             source,
@@ -218,6 +236,7 @@ impl Request {
             trace: Vec::new(),
             final_field: Value::Null,
             plastic,
+            relaxation,
         })
     }
 }
@@ -258,17 +277,25 @@ pub(in crate::study) struct History {
     trace: Vec<Value>,
     final_field: Value,
     plastic: Option<plastic::Heating>,
+    relaxation: Option<plastic::Heating>,
 }
 
 impl History {
-    pub(in crate::study) fn needs_dissipation(&self) -> bool {
-        self.plastic.is_some()
+    pub(in crate::study) fn dissipation_capture(&self) -> DissipationCapture {
+        DissipationCapture {
+            plastic: self.plastic.is_some(),
+            relaxation: self.relaxation.is_some(),
+        }
     }
 
     fn supplied_heat_j(&self) -> f64 {
         self.plastic
             .as_ref()
             .map_or(0., plastic::Heating::supplied_j)
+            + self
+                .relaxation
+                .as_ref()
+                .map_or(0., plastic::Heating::supplied_j)
     }
 
     fn geometry(&mut self, n: usize) -> Result<(), Refusal> {
@@ -281,6 +308,7 @@ impl History {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::study) fn advance(
         &mut self,
         cloth: &[Vec3],
@@ -289,6 +317,7 @@ impl History {
         interval: usize,
         sample_index: usize,
         plastic_dissipation_j: Option<&[f64]>,
+        relaxation_dissipation_j: Option<&[f64]>,
     ) -> Result<(), Refusal> {
         let seconds = time_s - self.time_s;
         if !time_s.is_finite() || seconds <= 0. || self.trace.len() >= 512 {
@@ -329,7 +358,8 @@ impl History {
             self.projection.clone(),
         )?;
         self.geometry(next.projection().geometry_operations)?;
-        let cell_cost = if self.plastic.is_some() { 129 } else { 1 };
+        let heated = self.plastic.is_some() || self.relaxation.is_some();
+        let cell_cost = if heated { 129 } else { 1 };
         let unit = next
             .cells()
             .checked_mul(cell_cost)
@@ -358,18 +388,33 @@ impl History {
             Some(transfer.balance)
         };
         self.frame = next;
-        let source = self
-            .plastic
-            .as_mut()
-            .map(|heating| {
-                heating.check_temperatures(&self.frame.source_temperatures(&self.state)?)?;
-                // The core owns thickness and covered/exposed allocation. These are whole-triangle
-                // joules from the same qualified accepted mechanical increments as independent sheets.
-                heating
-                    .increment(plastic_dissipation_j, 1)
-                    .map(|values| values.into_iter().map(|row| row[0]).collect::<Vec<_>>())
-            })
-            .transpose()?;
+        let source = if heated {
+            let temperatures = self.frame.source_temperatures(&self.state)?;
+            let mut total = vec![0.0; self.frame.cloth_triangle_count()];
+            for (heating, work) in [
+                (&mut self.plastic, plastic_dissipation_j),
+                (&mut self.relaxation, relaxation_dissipation_j),
+            ] {
+                if let Some(heating) = heating {
+                    heating.check_temperatures(&temperatures)?;
+                    // Both channels retain separate source/work receipts. Sum whole-triangle joules
+                    // once; the core owns covered/exposed allocation and material depth distribution.
+                    let values = heating.increment(work, 1)?;
+                    if values.len() != total.len() {
+                        return Err(invalid("coverage dissipation heat source topology changed"));
+                    }
+                    for (sum, row) in total.iter_mut().zip(values) {
+                        *sum += row[0];
+                        if !sum.is_finite() {
+                            return Err(invalid("combined coverage dissipation heat overflows"));
+                        }
+                    }
+                }
+            }
+            Some(total)
+        } else {
+            None
+        };
         let boundaries = vec![boundary(film)?; self.frame.body_triangle_count()];
         let environments = exterior.map(|e| vec![e; self.frame.body_triangle_count()]);
         let bare_boundaries = bare
@@ -428,10 +473,11 @@ impl History {
                     exposed_conditions,
                 )?
             };
-            if let Some(heating) = &self.plastic {
-                heating.check_temperatures(
-                    &self.frame.source_temperatures(&step.clone().into_state())?,
-                )?;
+            if heated {
+                let temperatures = self.frame.source_temperatures(&step.clone().into_state())?;
+                for heating in [&self.plastic, &self.relaxation].into_iter().flatten() {
+                    heating.check_temperatures(&temperatures)?;
+                }
             }
             self.inside_j += dt * step.inside_heat_w();
             self.outside_j += dt * step.outside_heat_w();
@@ -462,7 +508,7 @@ impl History {
             self.final_field["exposed_exterior_exchange"] = json!(e);
             self.final_field["exposed_temperature_c"] = json!(last.exposed_temperature_c());
         }
-        if self.plastic.is_some() {
+        if heated {
             self.final_field["supplied_heat_j"] = json!(last.supplied_heat_j());
             self.final_field["internal_heat"] = json!(last.internal_heat());
         }
@@ -507,10 +553,15 @@ impl History {
             "covered_area_m2":self.final_field["covered_area_m2"],
             "bare_energy_j":self.bare_j,"net_boundary_energy_j":self.net_j,"physical_stored_change_j":self.stored_j,
             "signed_remap_residual_j":self.signed_remap_j,"balance_error_j":self.stored_j-self.net_j-self.supplied_heat_j()});
-        if let Some(heating) = &self.plastic {
+        if heated {
             sample["inside_energy_j"] = json!(self.inside_j);
             sample["outside_energy_j"] = json!(self.outside_j);
+        }
+        if let Some(heating) = &self.plastic {
             sample["plastic_dissipation_heat"] = heating.snapshot(false);
+        }
+        if let Some(heating) = &self.relaxation {
+            sample["relaxation_dissipation_heat"] = heating.snapshot(false);
         }
         for (field, convective, radiative) in [
             (
@@ -561,6 +612,12 @@ impl History {
             result["plastic_dissipation_heat"] = heating.snapshot(true);
             result["scope"] = json!(
                 "One-way transient heat on the explicit collision-body domain with qualified accepted irreversible membrane work deposited over covered and exposed source material. Reference mass, stored enthalpy and source energy follow material through remapping; remap residuals are separate from physical heat. Bare body receives no internal energy. No temperature feedback, friction/Maxwell/bending heating, moisture, thermoregulation or empirical garment claim."
+            );
+        }
+        if let Some(heating) = &self.relaxation {
+            result["relaxation_dissipation_heat"] = heating.snapshot(true);
+            result["scope"] = json!(
+                "One-way transient heat on the explicit collision-body domain with independently qualified accepted Maxwell dashpot dissipation and, only when separately requested, irreversible membrane yield dissipation. Source heat follows covered and exposed reference material and is summed once in the physical balance; remap residuals remain separate and bare body receives no internal energy. Initial drape work, reversible storage, backward-Euler numerical loss, bending and friction heating are excluded. No temperature feedback, moisture, thermoregulation or empirical garment claim."
             );
         }
         for (field, schedule, convective, radiative) in [

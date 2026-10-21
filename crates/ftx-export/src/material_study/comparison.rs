@@ -417,7 +417,7 @@ impl Policy {
             let requested = match consumer {
                 Consumer::Cutting => request.cutting.is_some(),
                 Consumer::FiniteStock => request.finite_stock.is_some(),
-                Consumer::Sewing => request.sewing.is_some(),
+                Consumer::Sewing => request.sewing.is_some() || request.sewing_selection.is_some(),
                 Consumer::Purchasing => request.purchasing.is_some(),
                 Consumer::AssemblyMass => request.assembly_mass.is_some(),
                 Consumer::Drape
@@ -802,10 +802,16 @@ impl Policy {
         }) {
             keys.insert("membrane_plastic_heat_fraction");
         }
-        if consumers.contains(&Consumer::TransientSurface)
-            && descriptor["scenario"]["motion"]["transient_surface"]["relaxation_dissipation_heat"]
-                == "uniform_reference_thickness"
-        {
+        if [
+            (Consumer::TransientSurface, "transient_surface"),
+            (Consumer::TransientCoverage, "transient_coverage"),
+        ]
+        .into_iter()
+        .any(|(consumer, name)| {
+            consumers.contains(&consumer)
+                && descriptor["scenario"]["motion"][name]["relaxation_dissipation_heat"]
+                    == "uniform_reference_thickness"
+        }) {
             keys.insert("membrane_relaxation_heat_fraction");
         }
         let pieces = bound["pattern"]["pieces"]
@@ -1211,10 +1217,7 @@ fn admit_heat<'a>(
     for channel in [HeatWork::Plastic, HeatWork::Relaxation] {
         let field = channel.policy();
         match request.get(field).filter(|v| !v.is_null()) {
-            Some(policy)
-                if policy.as_str() == Some("uniform_reference_thickness")
-                    && !(coverage && channel == HeatWork::Relaxation) =>
-            {
+            Some(policy) if policy.as_str() == Some("uniform_reference_thickness") => {
                 let source = admit_dissipation_heat(alternative, motion, h, consumer, channel)?;
                 for (sum, value) in supplied.iter_mut().zip(source) {
                     *sum += value;

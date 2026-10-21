@@ -38,8 +38,11 @@ explicit. Heat storage follows reference mass; changing coverage preserves cover
 enthalpy, with remap residual separated from physical heat. Thermal failures never erase complete
 mechanics or another consumer. Complete histories retain time/geometry/source identities and final
 fields; coverage includes a restorable checkpoint. Per-history/session work is bounded. Prescribed
-films, qualified exterior exchange and independently opted-in plastic-work heating retain separate
-energy accounting. There is no inferred ambient state, moisture, thermal feedback, human
+films, qualified exterior exchange and independently opted-in plastic-yield/Maxwell-dashpot heating retain
+separate source ledgers. Both thermal domains qualify their own conversion observations and sum selected
+source heat once; mechanical work arrays are captured once per channel across the domains. Exact sample
+admission uses retained sewn triangles, while conservative session reservations include both channels.
+There is no inferred ambient state, moisture, thermal feedback, human
 thermoregulation or empirical warmth claim. Schemas, accounting and
 limits are in `docs/material-scenario-studies.md`; production regressions in `material_scenario.rs`
 compare every sample against direct solvers and independent reference-mass heat accounting.
@@ -418,8 +421,13 @@ kernel preserves distinct layer capacities and heats adiabatic exposed cloth wit
 body. Source allocation and inversion residuals remain in the physical balance; remap residuals
 stay separate. Invalid sources or temperatures leave input checkpoints unchanged. Production
 coverage reuses the independent-sheet material conversion authority and accepted-work capture,
-excluding initial drape work and rejected trials. Both histories may consume the same motion
-without duplicating retained work; their energy totals remain separate model domains. Tests in
+excluding initial drape work, rejected trials, reversible storage and numerical spring loss.
+Plastic-yield and Maxwell-dashpot conversion each need independent source-qualified fractions and
+temperature domains. Their whole-triangle heat is summed once before covered/exposed depth allocation;
+either source can be selected independently, including in coverage-only motion. Both histories may
+consume the same motion without duplicating retained work; their energy totals remain separate model
+domains. `tests/relaxation_heating.rs` checks sewn-garment work capture, independent reference-mass
+enthalpy, mixed-source conservation and independent source/temperature/budget refusals. Tests in
 `thermal_motion` integrate enthalpy independently through coverage transitions, and the native
 accepted-body workflow compares conversion-only substitutions and coverage-only source capture.
 That supported workflow also exercises fully covered overlap roundoff: only a positive retained

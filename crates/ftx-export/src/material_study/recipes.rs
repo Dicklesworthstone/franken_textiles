@@ -1,0 +1,142 @@
+//! Material alternatives reuse the qualified production recipe selector. The selected station
+//! geometry lives once in the ordinary sewing outcome; this receipt preserves the entire search.
+use std::collections::BTreeMap;
+
+use ftx_core::{Refusal, RefusalCode};
+use ftx_pattern::Pattern;
+use serde::Serialize;
+
+use super::{Outcome, budget};
+use crate::{sewing::SewPlan, sewing_selection};
+
+/// Recipe-selection receipt for one material-study alternative. Its selected complete plan is
+/// `Alternative.sewing`, not a duplicated set of source/material/needle station arrays.
+#[derive(Clone, Debug, Serialize)]
+pub struct Selection {
+    /// `ftx-material-study-sewing-selection/1`.
+    pub schema: &'static str,
+    /// Original source-bearing candidates, machine limits and qualification policy.
+    pub request: sewing_selection::Request,
+    /// Exact substituted pattern which was passed to the production selector.
+    pub pattern_sha256: String,
+    /// Number of complete combinations in the explicitly supplied recipe choice space.
+    pub candidate_combinations: u64,
+    /// Every examined whole-job trial, including its original production-planner refusals.
+    pub trials: Vec<sewing_selection::Trial>,
+    /// Selected operation-to-recipe identities; absent when no qualified plan was found.
+    pub selected_choices: Option<BTreeMap<String, String>>,
+    /// Selected objective, including qualified setup time when requested by the selector.
+    pub selected_objective_seconds: Option<f64>,
+    /// Trials whose resource/convergence refusal prevents a proof of infeasibility or optimality.
+    pub unresolved_trials: usize,
+    /// All supplied combinations were examined; not a global manufacturing search.
+    pub search_complete: bool,
+    /// The requested plan-evaluation limit stopped the finite search.
+    pub budget_exhausted: bool,
+    /// Source selector's proof for the requested objective over the listed choices only.
+    pub optimality_proven: bool,
+    /// Every supplied combination was definitively refused, without unresolved trials.
+    pub no_feasible_listed_recipe: bool,
+    /// Source selector's deterministic rule for equal objective values.
+    pub tie_break: &'static str,
+}
+
+pub(super) fn check_budget(
+    request: &sewing_selection::Request,
+    variants: usize,
+) -> Result<(), Refusal> {
+    // Reject the whole configured search before binding any alternative. The selector still
+    // enforces its per-job geometry, station, pass, candidate and source-qualification limits.
+    let plans = request.max_plan_evaluations.saturating_mul(variants);
+    let passes = plans.saturating_mul(request.options.passes.len());
+    if plans > 256 || passes > 4096 {
+        return Err(budget(
+            "material study exceeds 256 aggregate sewing recipe plan evaluations or 4096 operation evaluations; reduce alternatives or recipe search limits",
+        ));
+    }
+    if request
+        .options
+        .ordering
+        .as_ref()
+        .is_some_and(|policy| plans.saturating_mul(policy.max_search_nodes) > 200_000)
+    {
+        return Err(budget(
+            "material study exceeds 200000 aggregate recipe/ordering search nodes",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn evaluate(
+    pattern: &Pattern,
+    request: &sewing_selection::Request,
+) -> (Outcome<SewPlan>, Outcome<Selection>) {
+    let report = match request.select(pattern) {
+        Ok(report) => report,
+        Err(refusal) => {
+            return (
+                Outcome::Refused {
+                    refusal: refusal.clone(),
+                },
+                Outcome::Refused { refusal },
+            );
+        }
+    };
+    // Keep the selector's status and evidence unchanged while moving (not cloning) the geometry
+    // into the existing consumer. An available search is not necessarily an available sew plan.
+    let sewing_selection::Report {
+        schema: _,
+        request,
+        pattern_sha256,
+        candidate_combinations,
+        trials,
+        selected_choices,
+        selected_objective_seconds,
+        selected_plan,
+        unresolved_trials,
+        search_complete,
+        budget_exhausted,
+        optimality_proven,
+        no_feasible_listed_recipe,
+        tie_break,
+    } = report;
+    let sewing = match selected_plan {
+        Some(result) => Outcome::Available { result },
+        None => Outcome::Refused {
+            refusal: Refusal::new(
+                if budget_exhausted {
+                    RefusalCode::BudgetExceeded
+                } else if unresolved_trials > 0 {
+                    RefusalCode::NotConverged
+                } else {
+                    RefusalCode::InvalidDocument
+                },
+                if no_feasible_listed_recipe {
+                    "Every listed sewing recipe combination was refused by the production planner; inspect sewing_selection.trials for source qualification and machine limits"
+                } else {
+                    "No qualified sewing plan was found before the recipe search stopped or encountered unresolved trials; this does not establish infeasibility"
+                },
+            ),
+        },
+    };
+    (
+        sewing,
+        Outcome::Available {
+            result: Selection {
+                schema: "ftx-material-study-sewing-selection/1",
+                request,
+                pattern_sha256,
+                candidate_combinations,
+                trials,
+                selected_choices,
+                selected_objective_seconds,
+                unresolved_trials,
+                search_complete,
+                budget_exhausted,
+                optimality_proven,
+                no_feasible_listed_recipe,
+                tie_break,
+            },
+        },
+    )
+}

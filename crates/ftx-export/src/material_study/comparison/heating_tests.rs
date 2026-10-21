@@ -126,6 +126,7 @@ fn case(combined: bool) -> (Alternative, Value, Value) {
         cutting: Outcome::NotRequested,
         finite_stock: Outcome::NotRequested,
         sewing: Outcome::NotRequested,
+        sewing_selection: Outcome::NotRequested,
         purchasing: Outcome::NotRequested,
         assembly_mass: Outcome::NotRequested,
         metrics: Metrics::default(),
@@ -217,4 +218,88 @@ fn maxwell_outputs_need_explicit_domain_policy_and_bound_source_identity() {
         .unwrap()
         .expected_sha256 = Some("unrelated".into());
     assert!(admit_heat(&a, &d, &m, Consumer::TransientSurface).is_err());
+}
+
+fn coverage_case(combined: bool) -> (Alternative, Value, Value) {
+    let (a, mut d, mut m) = case(combined);
+    let mut request = d["scenario"]["motion"]["transient_surface"].clone();
+    request["schema"] = json!("ftx-motion-coverage-heat/1");
+    request["exposed_boundaries"] = json!([null]);
+    let mut heat = m["transient_surface"]["result"].clone();
+    heat["schema"] = json!("ftx-motion-coverage-heat-result/1");
+    heat["request"] = request.clone();
+    heat["physical_stored_change_j"] = heat
+        .as_object_mut()
+        .unwrap()
+        .remove("stored_change_j")
+        .unwrap();
+    for field in [
+        "bare_energy_j",
+        "signed_remap_residual_j",
+        "absolute_remap_residual_j",
+    ] {
+        heat[field] = json!(0.);
+    }
+    for (i, trace) in heat["trace"].as_array_mut().unwrap().iter_mut().enumerate() {
+        trace["physical_stored_change_j"] = trace
+            .as_object_mut()
+            .unwrap()
+            .remove("stored_change_j")
+            .unwrap();
+        trace["body_positions_sha256"] = json!(hash(&m["samples"][i]["body_positions_m"]).unwrap());
+    }
+    d["scenario"]["motion"]["transient_coverage"] = request;
+    m["transient_coverage"] = json!({"status":"available","result":heat});
+    (a, d, m)
+}
+
+#[test]
+fn coverage_maxwell_and_mixed_sources_use_the_same_accepted_work_admission() {
+    for combined in [false, true] {
+        let (a, d, mut m) = coverage_case(combined);
+        assert!(admit_heat(&a, &d, &m, Consumer::TransientCoverage).is_ok());
+        assert_eq!(
+            m["transient_coverage"]["result"]["physical_stored_change_j"],
+            if combined { 4. } else { 2. }
+        );
+        // An existing valid independent-sheet history cannot excuse a changed coverage source.
+        m["transient_coverage"]["result"]["relaxation_dissipation_heat"]["material_fractions"][0]
+            ["observation"]["method"] = json!("unrelated source");
+        assert!(admit_heat(&a, &d, &m, Consumer::TransientCoverage).is_err());
+        assert!(admit_heat(&a, &d, &m, Consumer::TransientSurface).is_ok());
+    }
+}
+
+#[test]
+fn coverage_heat_refuses_missing_work_partial_sources_and_unrequested_conversion() {
+    for fault in 0..7 {
+        let (a, mut d, mut m) = coverage_case(true);
+        match fault {
+            0 => m["samples"][0]["membrane_relaxation_dissipation_j"] = Value::Null,
+            1 => m["samples"][0]["membrane_relaxation_dissipation_j"] = json!([1., 0.]),
+            2 => {
+                m["transient_coverage"]["result"]["trace"][0]["relaxation_dissipation_heat"] =
+                    Value::Null
+            }
+            3 => m["transient_coverage"]["result"]["physical_stored_change_j"] = json!(2.),
+            4 => {
+                m["transient_coverage"]["result"]["relaxation_dissipation_heat"]["initial_viscous_dissipation_j"] =
+                    json!(0.)
+            }
+            5 => {
+                m["transient_coverage"]["result"]["relaxation_dissipation_heat"]["material_fractions"] =
+                    json!([])
+            }
+            _ => {
+                d["scenario"]["motion"]["transient_coverage"]["relaxation_dissipation_heat"] =
+                    Value::Null;
+                m["transient_coverage"]["result"]["request"] =
+                    d["scenario"]["motion"]["transient_coverage"].clone();
+            }
+        }
+        assert!(
+            admit_heat(&a, &d, &m, Consumer::TransientCoverage).is_err(),
+            "fault {fault}"
+        );
+    }
 }

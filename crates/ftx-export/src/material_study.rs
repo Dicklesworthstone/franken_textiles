@@ -23,10 +23,12 @@ use crate::{
         stock,
     },
     sewing::{SewOptions, SewPlan},
+    sewing_selection,
 };
 
 pub mod combinations;
 pub mod comparison;
+pub mod recipes;
 
 /// Explicit substitution, including heterogeneous source-piece assignments.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -113,6 +115,10 @@ pub struct Request {
     /// Shared machine/assembly/seam policy, checked separately for every substituted material.
     #[serde(default)]
     pub sewing: Option<SewOptions>,
+    /// Optional qualified recipe search, rerun on each substituted material. Exclusive with
+    /// `sewing`; its selected production plan supplies the same sewing metrics and comparisons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sewing_selection: Option<sewing_selection::Request>,
     /// Optional pricing requires cutting, because purchased area comes from the actual marker.
     #[serde(default)]
     pub purchasing: Option<Purchasing>,
@@ -215,6 +221,10 @@ pub struct Alternative {
     pub finite_stock: Outcome<stock::Plan>,
     /// Real sewing plan output or refusal; preserves uncompressed-stack and recipe limitations.
     pub sewing: Outcome<SewPlan>,
+    /// Complete finite recipe-search receipt; the selected plan is stored once in `sewing`.
+    /// A valid search can be available without finding any admissible sewing plan.
+    #[serde(skip_serializing_if = "Outcome::is_not_requested")]
+    pub sewing_selection: Outcome<recipes::Selection>,
     /// Real marker-derived purchasing output or refusal; missing offers remain explicit within it.
     pub purchasing: Outcome<Value>,
     /// Every physical cut piece plus sourced extras; an available report can still have unknown mass.
@@ -312,11 +322,13 @@ impl Request {
                 && self.cutting.is_none()
                 && self.finite_stock.is_none()
                 && self.sewing.is_none()
+                && self.sewing_selection.is_none()
                 && self.assembly_mass.is_none())
             || (self.purchasing.is_some() && self.cutting.is_none())
+            || (self.sewing.is_some() && self.sewing_selection.is_some())
         {
             return Err(invalid(
-                "study needs its schema, exactly one variant source, at least one manufacturing consumer, and cutting when pricing",
+                "study needs its schema, exactly one variant source, at least one manufacturing consumer, cutting when pricing, and at most one of sewing or sewing_selection",
             ));
         }
         if self.variants.len() > 32 {
@@ -511,6 +523,9 @@ impl Request {
                 "material study exceeds 20000000 aggregate finite-stock work units; reduce alternatives or the per-plan work limit",
             ));
         }
+        if let Some(selection) = &self.sewing_selection {
+            recipes::check_budget(selection, variants.len())?;
+        }
         variants.sort_by(|a, b| a.variant.key.cmp(&b.variant.key));
         let mut alternatives = Vec::new();
         let mut stations = 0usize;
@@ -567,6 +582,9 @@ impl Request {
         if self.combinations.is_some() {
             notes.push("Every declared material combination is evaluated through the same production consumers. The frontier is conditional on this finite choice set and the declared comparison policy, not a global material/design optimum. Explicit interface pools select exact assigned snapshot pairs only; missing pair evidence remains a consumer refusal.");
         }
+        if self.sewing_selection.is_some() {
+            notes.push("Each material alternative reruns the declared finite qualified sewing recipe search. Sewing metrics describe its complete selected incumbent, including when the search budget stops before an optimum is proven. No selected plan keeps sewing unavailable; independent consumers are preserved. Recipe qualification and manufacturing hardware permission remain separate.");
+        }
         Ok(Report {
             schema: "ftx-material-study-report/1",
             source_pattern_sha256,
@@ -607,6 +625,7 @@ impl Request {
             cutting: Outcome::NotRequested,
             finite_stock: Outcome::NotRequested,
             sewing: Outcome::NotRequested,
+            sewing_selection: Outcome::NotRequested,
             purchasing: Outcome::NotRequested,
             assembly_mass: Outcome::NotRequested,
             metrics: Metrics::default(),
@@ -624,8 +643,13 @@ impl Request {
                         refusal: refusal.clone(),
                     };
                 }
-                if self.sewing.is_some() {
+                if self.sewing.is_some() || self.sewing_selection.is_some() {
                     row.sewing = Outcome::Refused {
+                        refusal: refusal.clone(),
+                    };
+                }
+                if self.sewing_selection.is_some() {
+                    row.sewing_selection = Outcome::Refused {
                         refusal: refusal.clone(),
                     };
                 }
@@ -653,6 +677,9 @@ impl Request {
         }
         if let Some(options) = &self.sewing {
             row.sewing = Outcome::from_result(SewPlan::build(&pattern, options));
+        }
+        if let Some(request) = &self.sewing_selection {
+            (row.sewing, row.sewing_selection) = recipes::evaluate(&pattern, request);
         }
         if let Some(request) = &self.assembly_mass {
             let mass = (|| {

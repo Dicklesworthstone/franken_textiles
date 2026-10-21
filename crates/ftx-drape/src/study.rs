@@ -265,15 +265,23 @@ impl<'a, 'body> Session<'a, 'body> {
         let motion_admission = self.scenario.motion.as_ref().map(|request| {
             // A planar material mesh has fewer than twice its expanded mesh points in triangles.
             // Optional per-triangle dissipation samples are charged as vertex equivalents too.
-            let history_points = if request.transient_surface.as_ref()
+            let plastic_capture = request.transient_surface.as_ref()
                 .is_some_and(|h| h.plastic_dissipation_heat.is_some())
                 || request.transient_coverage.as_ref()
-                    .is_some_and(|h| h.plastic_dissipation_heat.is_some())
-                { points.saturating_mul(2) } else { 0 };
-            let count = self.body.collision.0.len().saturating_add(points).saturating_add(history_points);
-            if count > request.max_sample_vertices {
+                    .is_some_and(|h| h.plastic_dissipation_heat.is_some());
+            let relaxation_capture = request.transient_surface.as_ref()
+                .is_some_and(|h| h.relaxation_dissipation_heat.is_some())
+                || request.transient_coverage.as_ref()
+                    .is_some_and(|h| h.relaxation_dissipation_heat.is_some());
+            let channels = usize::from(plastic_capture) + usize::from(relaxation_capture);
+            let history_points = points.saturating_mul(2).saturating_mul(channels);
+            let geometry_count = self.body.collision.0.len().saturating_add(points);
+            // History points bound a mesh not yet triangulated. Reserve their upper bound here,
+            // but let the retained sewn topology admit its exact sample budget in motion::evaluate.
+            if geometry_count > request.max_sample_vertices {
                 return Err(budget("motion cannot retain its initial body and cloth sample"));
             }
+            let count = geometry_count.saturating_add(history_points);
             let samples = count.saturating_mul(request.max_trials + 1)
                 .min(request.max_sample_vertices);
             let endpoint_copies = if self.scenario.surface.is_some() || self.scenario.coverage.is_some() {

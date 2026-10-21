@@ -52,6 +52,59 @@ fn run(main: bool, dir: &Path) -> Value {
 }
 
 #[test]
+fn both_study_binaries_select_qualified_recipes_per_material_without_stale_reuse() {
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let source: Value = serde_json::from_str(pattern).unwrap();
+    let original = source["fabric"]["material"].clone();
+    let mut changed = original.clone();
+    changed["record"]["name"] = json!("Different lot with the same nominal thickness");
+    let input = json!({"schema":"ftx-material-study/1",
+        "variants":[
+            {"key":"original","changes":{"schema":"ftx-material-bindings/1","default":original}},
+            {"key":"changed","changes":{"schema":"ftx-material-bindings/1","default":changed}}],
+        "sewing_selection":serde_json::from_str::<Value>(include_str!(
+            "../../../tests/fixtures/materials/synthetic-sewing-selection.json")).unwrap(),
+        "comparison":{"basis":"nominal","required_consumers":["sewing"],
+            "objectives":[{"metric":"feed_seconds","direction":"minimize"}]}});
+    let typed: Request = serde_json::from_value(input.clone()).unwrap();
+    let expected = serde_json::to_value(typed.evaluate(&Pattern::new(source)).unwrap()).unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-study-recipes-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), pattern).unwrap();
+    fs::write(dir.join("study.json"), input.to_string()).unwrap();
+    for main in [false, true] {
+        let report = run(main, &dir);
+        assert_eq!(report, expected);
+        let changed = &report["alternatives"][0];
+        let original = &report["alternatives"][1];
+        assert_eq!(changed["sewing"]["status"], "refused");
+        assert_eq!(
+            changed["sewing_selection"]["result"]["no_feasible_listed_recipe"],
+            true
+        );
+        assert!(changed["metrics"]["feed_seconds"].is_null());
+        assert_eq!(original["sewing"]["status"], "available");
+        assert_eq!(
+            original["sewing_selection"]["result"]["selected_choices"]["side"],
+            "faster-qualified"
+        );
+        assert_eq!(original["metrics"]["feed_seconds"], 2.0);
+        assert_eq!(report["comparison"]["frontier"], json!(["original"]));
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("pattern.json")).unwrap(),
+        pattern
+    );
+}
+
+#[test]
 fn both_study_commands_expand_mixed_material_choices_through_actual_planners() {
     let mut input = request();
     let choices: Vec<Value> = input["variants"]
