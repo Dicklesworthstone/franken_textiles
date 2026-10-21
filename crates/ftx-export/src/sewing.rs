@@ -21,6 +21,8 @@ use assembly::{AssemblyReceipt, FlatAssembly};
 use program::{Backtack, FeedDirection, ReverseFeed, StitchRun};
 pub mod path;
 use path::{OffsetPath, PathReceipt};
+pub mod span;
+use span::SourceSpan;
 
 const MAX_OPERATIONS: usize = 4096;
 const MAX_STATIONS: usize = 250_000;
@@ -47,7 +49,7 @@ pub struct SewingMachine {
     pub presser_foot: Option<pressure::FootLimits>,
 }
 
-/// One declared pass over an existing seam. Every seam needs at least one pass.
+/// One declared pass over an existing seam. The passes must cover both complete source sides.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SewingPass {
@@ -56,6 +58,10 @@ pub struct SewingPass {
     pub id: Option<String>,
     /// Exact pattern seam ID.
     pub seam: String,
+    /// Optional [start, end] in the original side-A arclength fractions, before any path offset.
+    /// B is paired by the existing notch correspondence; omission covers the whole seam.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_range: Option<[f64; 2]>,
     /// Upper bound on each side's stitch advance, not a guarantee of uniform pitch.
     pub max_stitch_mm: f64,
     /// Legacy declared ply counts. Supply this OR an explicit flat-fold assembly, never both.
@@ -179,7 +185,11 @@ pub struct PlannedSeam {
     /// Side a and side b, in that order.
     pub sides: [SewSide; 2],
     /// Corresponding needle stations in each original side's local mm frame, not a robot frame.
+    /// Fractions and lengths retain their full-path reference, including on partial operations.
     pub stations: SeamPairs,
+    /// Selected source coverage and traveled lengths; absent on legacy whole-seam operations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_span: Option<SourceSpan>,
     /// Offset polylines and source correspondence; absent on legacy centerline operations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathReceipt>,
@@ -209,7 +219,8 @@ pub struct PlannedSeam {
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
     /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering,
-    /// `/7` pressure, `/8` clearance, `/9` timed ordering. Capabilities compose rather than replace.
+    /// `/7` pressure, `/8` clearance, `/9` timed ordering, `/10` partial source spans.
+    /// Capabilities compose rather than replace.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
     pub pattern_sha256: String,
@@ -446,6 +457,9 @@ impl SewPlan {
                     pass.seam
                 )));
             }
+            if let Some(range) = pass.source_range {
+                span::validate(range)?;
+            }
             program::validate_primary_feed(pass, machine)?;
             if let Some(path) = &pass.stitch_path {
                 path.validate()?;
@@ -471,6 +485,17 @@ impl SewPlan {
                 "provide at least one sewing pass for every pattern seam, and no unknown seams",
             ));
         }
+        for id in source_seams.keys() {
+            span::require_coverage(
+                id,
+                "a",
+                remaining
+                    .values()
+                    .filter(|p| p.seam == *id)
+                    .map(|p| p.source_range.unwrap_or([0.0, 1.0]))
+                    .collect(),
+            )?;
+        }
         for pass in remaining.values() {
             let deps: BTreeSet<_> = pass.after.iter().collect();
             if deps.len() != pass.after.len() || deps.iter().any(|id| !remaining.contains_key(*id))
@@ -487,7 +512,9 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if options
+            schema: if options.passes.iter().any(|p| p.source_range.is_some()) {
+                "ftx-sewing-plan/10"
+            } else if options
                 .ordering
                 .as_ref()
                 .is_some_and(|o| o.setup_times.is_some())
@@ -576,8 +603,13 @@ impl SewPlan {
                 }
                 breaks += edges.len() + notches.len();
             }
-            // Bound allocation BEFORE seam_pairs computes ceil(span / pitch) samples per segment.
-            let slots = ((la + lb) / pass.max_stitch_mm).ceil() + breaks as f64;
+            // Bound legacy seam_pairs before allocation. Partial/offset samplers independently
+            // bound their actual span before allocation; unused source length is not sewn work.
+            let slots = if pass.source_range.is_some() {
+                breaks as f64
+            } else {
+                ((la + lb) / pass.max_stitch_mm).ceil() + breaks as f64
+            };
             let extra = pass.backtack.extra_intervals()?;
             if !positive(la)
                 || !positive(lb)
@@ -592,7 +624,16 @@ impl SewPlan {
             }
             budget += slots as usize + extra;
             let (stations, path) = if let Some(path) = &pass.stitch_path {
-                path.build(pattern, seam, pass.max_stitch_mm, &ctx, &mut geometry_work)?
+                path.build(
+                    pattern,
+                    seam,
+                    pass.max_stitch_mm,
+                    pass.source_range,
+                    &ctx,
+                    &mut geometry_work,
+                )?
+            } else if let Some(range) = pass.source_range {
+                (span::build(pattern, seam, range, pass.max_stitch_mm)?, None)
             } else {
                 (
                     pattern
@@ -601,14 +642,14 @@ impl SewPlan {
                     None,
                 )
             };
-            // Offsets can lengthen a path. Charge the larger actual table, including lock travel.
+            // Charge the larger actual table, including lock travel and offset/span sampling.
             let actual_slots = stations.fa.len();
             if actual_slots > slots as usize {
                 budget = budget.saturating_add(actual_slots - slots as usize);
                 if budget > MAX_STATIONS {
                     return Err(Refusal::new(
                         RefusalCode::BudgetExceeded,
-                        "sewing station budget exceeded after path offset",
+                        "sewing station budget exceeded after path sampling",
                     ));
                 }
             }
@@ -616,6 +657,9 @@ impl SewPlan {
             if stations.notch_match.starts_with("count-mismatch") {
                 return Err(bad(format!("{id}: notches must pair before sewing")));
             }
+            let source_span = pass
+                .source_range
+                .map(|range| SourceSpan::new(range, &stations, path.as_ref()));
             let assembly = pass
                 .assembly
                 .as_ref()
@@ -747,6 +791,7 @@ impl SewPlan {
                 pass: pass.clone(),
                 sides,
                 stations,
+                source_span,
                 path,
                 assembly,
                 feed_b_over_a: feeds,
@@ -762,6 +807,23 @@ impl SewPlan {
                 qualification_id,
             });
             done.insert(id);
+        }
+        // Different offset recipes can pair the same A split with different B source positions.
+        // Coverage must therefore hold in both original source frames, with no gap tolerance.
+        for id in source_seams.keys() {
+            span::require_coverage(
+                id,
+                "b",
+                out.seams
+                    .iter()
+                    .filter(|p| p.pass.seam == *id)
+                    .map(|p| {
+                        p.source_span
+                            .as_ref()
+                            .map_or([0.0, 1.0], |s| s.source_ranges[1])
+                    })
+                    .collect(),
+            )?;
         }
         for row in ftx_pattern::validate::seam_walk(pattern, options.seam_tolerance_mm) {
             if row.status != "PASS" {

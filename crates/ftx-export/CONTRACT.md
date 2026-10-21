@@ -250,6 +250,13 @@ a wrong paper, master vertices 1 mm off and a master vertex off every tile each 
 `check_hpgl` (same layout as the master, pen-2 bounding box against the master's) and the cutter SVG check give
 exactly the reference checker's 113 items on its HPGL and cutter files and pass on ftx's.
 
+**Partial sewing operations.** `SewingPass.source_range` selects original side-A arclength and
+retains oriented-B notch correspondence. Selected stations, offsets, folds, reverse feed and locks
+reuse the production checks; every seam's passes must jointly cover both full source sides. Explicit
+ranges produce `ftx-sewing-plan/10` and a `source_span` with original ranges/full lengths and selected
+one-way traveled lengths. Whole-seam source acceptance and hardware refusal remain intact. Omitted
+ranges retain legacy serialization/arithmetic. See `docs/material-sewing-plans.md`.
+
 **Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve, a seam allowance
 outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` for a projector page over
 200 in; `io` for an unreadable output directory.

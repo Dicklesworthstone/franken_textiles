@@ -2511,6 +2511,32 @@ energy coupling and garment comfort remain open under `ftx-tm5` and `ftx-tmc`. S
 
 ---
 
+### 25.46 Partial-seam sewing operations for changing construction
+
+**Delivered software (`ftx-sp3`).** A sewing pass can select an interval of original side-A
+arclength, with side B derived through the existing oriented notch map. Exact selected endpoints,
+enclosed junctions/notches and both-side stitch pitch survive ordinary and offset paths. Separate
+sections of one source seam can now use distinct explicit fold/reinforcement stacks, material
+thickness, feed direction and lock recipes. This closes the previous inability to act on the
+assembly planner's instruction to split a seam into constant-layer operations.
+
+The union of passes must cover both complete original seam sides; overlap is allowed and gaps
+refuse. Different offsets retain their source mapping and receive clearance checks on traveled
+polylines and stitch chords. Reverse/backtack expansion stays within the selected station table.
+Full-source seam acceptance, material/qualification limits, ordering and hardware refusal remain
+authoritative. Explicit spans use plan schema `/10`, retaining original ranges/full lengths and
+one-way traveled lengths. Omitted spans preserve existing whole-seam serialization and arithmetic.
+
+Focused core, real CLI and portable checks cover local reinforced/folded sections, material-only
+thickness substitution, curved/notched/reversed endpoints, clearance outside a selected span,
+complete A/B coverage and expanded interval/time accounting. The synthetic 100 mm split seam
+travels 60 mm forward and 40 mm reverse in 40 intervals at four seconds of continuous feed.
+These checks do not establish seam quality, physical fold transitions or robot execution;
+source-qualified seam coupons and calibrated machine handoff remain open under `ftx-sp2`.
+See [material-sewing-plans.md](docs/material-sewing-plans.md#partial-seam-operations-and-local-construction-changes).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

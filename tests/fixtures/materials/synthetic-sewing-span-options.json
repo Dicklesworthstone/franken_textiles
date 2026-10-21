@@ -1,0 +1,41 @@
+{
+  "machine": {
+    "id": "synthetic-span-machine-not-physically-qualified",
+    "stitch_mm": [0.5, 5.0],
+    "feed_b_over_a": [0.5, 2.0],
+    "max_stack_mm": 3.0,
+    "max_stitches_per_minute": 1000.0,
+    "reverse": {
+      "stitch_mm": [0.5, 5.0],
+      "feed_b_over_a": [0.5, 2.0],
+      "max_stitches_per_minute": 800.0
+    }
+  },
+  "seam_tolerance_mm": 0.5,
+  "passes": [
+    {
+      "id": "lower-side",
+      "seam": "side",
+      "source_range": [0.0, 0.6],
+      "max_stitch_mm": 2.5,
+      "plies": [1, 1],
+      "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0,
+      "needle": "operator-selected-needle",
+      "thread": "operator-selected-thread"
+    },
+    {
+      "id": "upper-side",
+      "seam": "side",
+      "source_range": [0.6, 1.0],
+      "max_stitch_mm": 2.5,
+      "plies": [1, 1],
+      "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0,
+      "needle": "operator-selected-needle",
+      "thread": "operator-selected-thread",
+      "direction": "reverse",
+      "after": ["lower-side"]
+    }
+  ]
+}

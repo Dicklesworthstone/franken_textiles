@@ -225,6 +225,56 @@ intervals at 300 stitches/minute: **90 intervals and 13 continuous-feed seconds*
 The reinforcement's extra declared ply is a thickness check, not a simulated fold.
 The pattern, materials and machine in this fixture are synthetic, not calibrated data.
 
+## Partial-seam operations and local construction changes
+
+A pass can now select `source_range: [start, end]`, with finite
+`0 <= start < end <= 1`. These fractions refer to the **original side-A seam arclength**,
+before an offset or feed reversal. They are not Bézier parameters. Omission retains a whole-seam
+operation. Side B follows the existing piecewise notch correspondence, including the pattern seam's
+`reverse` setting; a user does not supply an independent B interval that could lose that pairing.
+
+This makes the existing assembly instruction to split a changing construction into operations
+actionable: a lower section can join two sheets while an upper section includes an explicitly
+positioned reinforcement or folded flap. Each section uses its own recipe, selected material stack,
+feed direction, offset and locks. Distinct passes need distinct operation IDs and explicit `after`
+dependencies when their order matters. The explicit folded assembly still has to be valid and
+constant-layer along each selected operation; no physical fold transition or workholding sequence
+is inferred.
+
+Every original seam must be completely covered on **both source sides** by the union of its passes.
+Overlap is allowed for reinforcement; any gap refuses. B coverage is checked independently because
+different offset recipes can map the same A split to different B positions. A whole-seam pass covers
+both sides and may be followed by a local reinforcement. The original complete seam-walk acceptance
+still applies: selecting an easier span does not rescue a rejected source seam.
+
+Exact selected endpoints, enclosed notches and edge junctions become stations on the original dense
+arclength geometry. Sampling respects maximum pitch on both paired sides. Offset paths map the
+source interval through the existing offset correspondence, and both the traveled dense polyline
+and between-stitch chords receive the existing cut/drill clearance checks. An obstacle outside the
+selected span does not invalidate that operation. Reverse feed and backtacks traverse only the
+selected station table and retain the existing machine and qualification limits.
+
+Run the executable synthetic split-seam example:
+
+```sh
+cargo run -p ftx-cli --bin ftx-materials -- sew-stitches \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  tests/fixtures/materials/synthetic-sewing-span-options.json
+```
+
+Its 100 mm source seam is split at 0.6. `lower-side` travels 60 mm forward; `upper-side` then travels
+40 mm in reverse. With 2.5 mm maximum pitch the job has **24 + 16 = 40 intervals** and **4 seconds**
+of continuous feed. This does not include handling/setup time or qualify the synthetic machine.
+`sew-plan` and `sew-svg` accept the same options; preview an operation by its exact ID.
+
+Any explicit range produces a nested `ftx-sewing-plan/10`, alongside all other requested capabilities.
+Each partial operation's `source_span` retains `source_ranges` for A/oriented B, the **full original**
+`source_lengths_mm`, and the **one-way selected** `sewn_lengths_mm`. Repeated lock travel is counted
+in the ordinary interval/feed totals instead. Station fractions and lengths keep their full-path
+reference; offset receipt polylines contain only the traveled span. Omitted ranges preserve the
+existing whole-seam serialization and arithmetic. The browser material workbench displays both
+source intervals and full/selected lengths without recomputing the geometry.
+
 ## Compact plans, expanded travel and browser bindings
 
 Unchanged legacy jobs still serialize as `ftx-sewing-plan/1`, without added default
