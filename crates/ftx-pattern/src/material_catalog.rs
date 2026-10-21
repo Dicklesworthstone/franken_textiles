@@ -113,7 +113,8 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         "specific_heat" => "J/(kg*K)",
         "vapor_resistance" => "m2*Pa/W",
         "air_permeability" => "m/s",
-        "breaking_force_warp"
+        "axial_stiffness"
+        | "breaking_force_warp"
         | "breaking_force_weft"
         | "tear_force"
         | "cut_force"
