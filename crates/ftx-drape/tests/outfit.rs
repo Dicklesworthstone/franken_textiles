@@ -312,3 +312,95 @@ fn coincident_garment_starts_refuse_instead_of_inventing_layer_offsets() {
             .is_err()
     );
 }
+
+#[test]
+fn two_sewn_bands_weld_independently_and_continue_on_the_same_moving_body() {
+    let mut input = input();
+    for (i, g) in input.garments.iter_mut().enumerate() {
+        let radius = if i == 0 { 40.0 } else { 44.0 };
+        let width = radius * std::f64::consts::PI;
+        let mut front = g.pattern["pieces"][0].clone();
+        front["id"] = json!("front");
+        front["vertices"] = json!({"a":[0,0],"b":[width,0],"c":[width,20],"d":[0,20]});
+        front["placement"] =
+            json!({"part":"torso","radius_mm":radius,"x0":width/2.0,"theta_deg":0});
+        let mut back = front.clone();
+        back["id"] = json!("back");
+        back["placement"]["theta_deg"] = json!(180);
+        g.pattern["pieces"] = json!([front, back]);
+        g.pattern["seams"] = json!([
+            {"id":"right","a":"front/right","b":"back/left"},
+            {"id":"left","a":"back/right","b":"front/left"}
+        ]);
+    }
+    let opts = DrapeOptions {
+        spacing: 24.0,
+        ..options()
+    };
+    let prepared = prepare(&input, &opts).unwrap();
+    let skin = skin();
+    let mut joint = prepared
+        .drape(&json!({}), &body(&skin), &opts, |_| {})
+        .unwrap();
+    assert!(joint.scene.weld.len() > joint.scene.solver.model.mass.len());
+    assert_eq!(prepared.pattern().seams().len(), 4);
+    let masses = joint.report["outfit"]["garment_mass_kg"]
+        .as_array()
+        .unwrap();
+    for (mass, radius) in masses.iter().zip([40.0, 44.0]) {
+        let expected = std::f64::consts::TAU * radius * 20.0 * 1e-6 * 0.2;
+        assert!((mass.as_f64().unwrap() - expected).abs() < 1e-12);
+    }
+    let before_mass = joint.scene.solver.model.mass.clone();
+    let target: Vec<_> = skin
+        .vertices
+        .iter()
+        .map(|v| *v + Vec3::new(0.0, 0.0, 0.00001))
+        .collect();
+    let motion = ftx_drape::motion::advance_body(
+        &mut joint.scene.solver,
+        &target,
+        0.001,
+        Default::default(),
+    )
+    .unwrap();
+    assert!(!motion.samples.is_empty());
+    assert_eq!(before_mass, joint.scene.solver.model.mass);
+    let contact = joint.scene.solver.contact.as_ref().unwrap();
+    assert_eq!(contact.body.vertices, target);
+    contact.audit_self_contact(&joint.scene.solver.x).unwrap();
+}
+
+#[test]
+fn shared_interface_evidence_is_coalesced_but_conflicting_sources_are_not_overwritten() {
+    let mut input = input();
+    input.garments[1].pattern["fabric"]["material"]["record"]["name"] = json!("Distinct specimen");
+    let interface = pair(&input, 0.2);
+    input.garments[0].pattern["fabric"]["interfaces"] = json!([interface]);
+    input.garments[1].pattern["fabric"]["interfaces"] = json!([interface]);
+    input.interfaces.push(interface.clone());
+    let prepared = prepare(&input, &options()).unwrap();
+    assert_eq!(
+        prepared.pattern().raw()["fabric"]["interfaces"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    input.interfaces[0]["friction"]["value"] = json!(0.7);
+    assert!(
+        prepare(&input, &options())
+            .err()
+            .unwrap()
+            .message
+            .contains("conflicting")
+    );
+    input.interfaces = vec![interface.clone(), interface];
+    assert!(
+        prepare(&input, &options())
+            .err()
+            .unwrap()
+            .message
+            .contains("duplicate")
+    );
+}

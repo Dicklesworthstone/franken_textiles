@@ -1,0 +1,344 @@
+{
+  "schema": "ftx-outfit-drape/1",
+  "garments": [
+    {
+      "id": "inner",
+      "pattern": {
+        "schema": "fabric-pattern/1",
+        "units": "mm",
+        "fabric": {
+          "material": {
+            "id": "synthetic-scenario-sheet",
+            "allow_estimates": true,
+            "record": {
+              "id": "synthetic-scenario-sheet",
+              "name": "Synthetic scenario sheet",
+              "form": "woven",
+              "sources": {
+                "test": {
+                  "reference": "test:scenario",
+                  "accessed_on": "2026-10-16",
+                  "note": "Synthetic software parameters only; not measured textile data"
+                }
+              },
+              "properties": {
+                "areal_density": {
+                  "value": 0.2,
+                  "unit": "kg/m2",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "thickness": {
+                  "value": 0.0004,
+                  "unit": "m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "warp_stiffness": {
+                  "value": 640.0,
+                  "unit": "N/m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "weft_stiffness": {
+                  "value": 420.0,
+                  "unit": "N/m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "shear_stiffness": {
+                  "value": 95.0,
+                  "unit": "N/m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "poisson_warp_weft": {
+                  "value": 0.2,
+                  "unit": "1",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "bending_rigidity": {
+                  "value": 2.8e-05,
+                  "unit": "N*m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "friction_skin": {
+                  "value": 0.24,
+                  "unit": "1",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "friction_self": {
+                  "value": 0.36,
+                  "unit": "1",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "thermal_conductivity": {
+                  "value": 0.05,
+                  "unit": "W/(m*K)",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "width": {
+                  "value": 1.4,
+                  "unit": "m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                }
+              }
+            }
+          }
+        },
+        "pieces": [
+          {
+            "id": "band",
+            "cut": {
+              "qty": 1
+            },
+            "grain": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                20.0
+              ]
+            ],
+            "vertices": {
+              "a": [
+                0,
+                0
+              ],
+              "b": [
+                20,
+                0
+              ],
+              "c": [
+                20,
+                20
+              ],
+              "d": [
+                0,
+                20
+              ]
+            },
+            "edges": [
+              {
+                "id": "bottom",
+                "from": "a",
+                "to": "b"
+              },
+              {
+                "id": "right",
+                "from": "b",
+                "to": "c"
+              },
+              {
+                "id": "top",
+                "from": "c",
+                "to": "d"
+              },
+              {
+                "id": "left",
+                "from": "d",
+                "to": "a"
+              }
+            ],
+            "placement": {
+              "part": "torso",
+              "radius_mm": 180.0,
+              "x0": 10
+            }
+          }
+        ],
+        "seams": [],
+        "style": "SYNTHETIC_OUTFIT_PANEL"
+      }
+    },
+    {
+      "id": "outer",
+      "pattern": {
+        "schema": "fabric-pattern/1",
+        "units": "mm",
+        "fabric": {
+          "material": {
+            "id": "synthetic-scenario-sheet",
+            "allow_estimates": true,
+            "record": {
+              "id": "synthetic-scenario-sheet",
+              "name": "Synthetic scenario sheet",
+              "form": "woven",
+              "sources": {
+                "test": {
+                  "reference": "test:scenario",
+                  "accessed_on": "2026-10-16",
+                  "note": "Synthetic software parameters only; not measured textile data"
+                }
+              },
+              "properties": {
+                "areal_density": {
+                  "value": 0.2,
+                  "unit": "kg/m2",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "thickness": {
+                  "value": 0.0004,
+                  "unit": "m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "warp_stiffness": {
+                  "value": 640.0,
+                  "unit": "N/m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "weft_stiffness": {
+                  "value": 420.0,
+                  "unit": "N/m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "shear_stiffness": {
+                  "value": 95.0,
+                  "unit": "N/m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "poisson_warp_weft": {
+                  "value": 0.2,
+                  "unit": "1",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "bending_rigidity": {
+                  "value": 2.8e-05,
+                  "unit": "N*m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "friction_skin": {
+                  "value": 0.24,
+                  "unit": "1",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "friction_self": {
+                  "value": 0.36,
+                  "unit": "1",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "thermal_conductivity": {
+                  "value": 0.05,
+                  "unit": "W/(m*K)",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                },
+                "width": {
+                  "value": 1.4,
+                  "unit": "m",
+                  "source": "test",
+                  "evidence": "estimate",
+                  "method": "Synthetic software gate"
+                }
+              }
+            }
+          }
+        },
+        "pieces": [
+          {
+            "id": "band",
+            "cut": {
+              "qty": 1
+            },
+            "grain": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                20.0
+              ]
+            ],
+            "vertices": {
+              "a": [
+                0,
+                0
+              ],
+              "b": [
+                20,
+                0
+              ],
+              "c": [
+                20,
+                20
+              ],
+              "d": [
+                0,
+                20
+              ]
+            },
+            "edges": [
+              {
+                "id": "bottom",
+                "from": "a",
+                "to": "b"
+              },
+              {
+                "id": "right",
+                "from": "b",
+                "to": "c"
+              },
+              {
+                "id": "top",
+                "from": "c",
+                "to": "d"
+              },
+              {
+                "id": "left",
+                "from": "d",
+                "to": "a"
+              }
+            ],
+            "placement": {
+              "part": "torso",
+              "radius_mm": 183.0,
+              "x0": 10
+            }
+          }
+        ],
+        "seams": [],
+        "style": "SYNTHETIC_OUTFIT_PANEL"
+      }
+    }
+  ],
+  "interfaces": []
+}
