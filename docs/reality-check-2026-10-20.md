@@ -1486,3 +1486,97 @@ requests and unchanged default/strip control paths; no new true defect found the
 five-file Rust scan above remains a separate result. `ftx-99t` is closed with the exact source and
 positive test evidence; the original empirical Beads remain open. The final handoff commits only
 owned paths on `main`, flushes Beads and releases reservations. Unrelated untracked paths are retained.
+
+### Decoded JPEG frame selection — ftx-dsu
+
+The CLI's video loader rejected every JPEG although the strict photo decoder and grayscale converter
+already existed. This bounded core-input repair reuses those implementations, keeps frames/masks/
+calibration already aligned, and leaves the material and physical acceptance gates open. The requested
+TODO is maintained here and retires at this work item's handoff; no new tracking framework.
+
+- [x] Refresh complete AGENTS/README, ready Beads, plan §10.2, contracts and actual loader/tests.
+- [x] Claim `ftx-dsu`, reserve the six affected paths, and connect existing strict JPEG decoding.
+- [x] Preserve binary PNG masks, explicit orientation, size, quality and output policies; document limits.
+- [x] Observe the new positive CLI regression fail against the unchanged baseline.
+- [x] Verify actual JPEG selection, equivalent decoded PNG scores, source preservation and refusals.
+- [x] Run formatting, strict-remote focused tests, all-target lint and wasm build.
+- [ ] Complete the full strict-remote native workspace test run.
+- [x] Preserve the previously owned four-file browser bundle, install the matching release and run
+  the existing compiled frontend and actual browser checks for the concurrent joint-study delivery.
+- [x] Fresh solo review, bounded worksheets and complete staged UBS scan.
+- [ ] Commit owned paths, close/sync Bead and release reservations.
+
+The new positive test fails against frozen `5e0bd0f` plus only the test-file overlay: **one failed,
+zero passed**, with the CLI returning exit 3 and its original PNG-only refusal. The initial `hz3`
+namespace setup was killed (status 73); RCH retried remotely on `vmi1227854`, where compilation and
+the actual failing test completed (exit 101). This expected functional failure is retained in
+`out/ftx-dsu-20261021/checks/baseline-jpeg.log`, not called a passing check.
+
+The implementation snapshot is `b14693aef745731afa91dbc66d7216e94beb0cc1` plus exactly
+`crates/ftx-cli/src/measure/video.rs` and `crates/ftx-cli/tests/video_selection_workflow.rs`.
+RCH overlay fingerprint: `660677ca6e514f0e623411ac7f8a45e29668737ba875e97ee3ae3dd2d26231af`;
+base tree: `8a774335cb5bea92f2695ad751158629edf5981d`. The source hash file binds both local files.
+The three focused targets (`video_selection_workflow`, `photo_image_workflow`, `body_fit_workflow`)
+pass **28 tests, zero failed/ignored** on `ovh-b` with `cargo test --locked -j1 -p ftx-cli` and those
+three `--test` arguments. All-target `cargo clippy --locked -j1 --all-targets -- -D warnings` passes
+on `ts1`. `cargo fmt --check` and diff checks pass locally. The laptop's
+`sbh check --need 20G` failed its free-space policy (about 114 GB / 2.86% free); no Rust compilation
+ran locally. Every remote command uses `RCH_REQUIRE_REMOTE=1`, explicit base/clean/two-path overlays,
+and the required HTTP user agent forwarded through `RCH_ENV_ALLOWLIST=CARGO_HTTP_USER_AGENT`.
+
+Release `cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm` passes on
+`hz2` with that same snapshot. Raw WASM SHA-256 `521f0267a66dd301f746d8d547dc2ff108dc6c0b76846772638944f39ea9fb30`
+matches the artifact directly on the worker. The prior four-file owned browser bundle was verified
+and preserved before bindgen; installed WASM is now
+`b39eb123ddd88c05855d930e26959119f0dd44c3de5e8dc885a623228ed4d2b8`. Glue/type bytes stay unchanged.
+This delivers the concurrent `b14693a` joint-study source adapter too; JPEG frame selection itself
+is a CLI input feature. The existing compiled frontend passes **71/71, zero skipped**; actual
+Chromium drafting and `tools/check_materials_web.cjs --outfit-proof` pass with no console errors.
+The latter capture is `/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-IJLWaA/`.
+No model-backed browser drape, real textile, stillness, accuracy or speed claim follows.
+
+The stale PNG-only photo note on `ftx-q3m` received a factual source/test comment; its remaining
+codec/precision/parity acceptance stays in progress. No original material or G5 item was closed.
+
+`ubs $(git diff --name-only --cached)` completed with exit 0 for the two Rust files: **zero
+critical, 170 warnings, 102 informational**. The warnings remain reported, largely test
+unwrap/index patterns and the existing guarded PNG parser/allocation paths. Reviewed the full
+two-file diff, including bounded test-fixture offsets and the new decoder branch; no new true
+defect found. No scanner suppression, partial-scan override or oracle change was used. The
+complete output is retained in `out/ftx-dsu-20261021/checks/staged-ubs.log`.
+
+Bounded worksheets for this work item (fresh solo review, not independent verification):
+
+- **Process:** runtime decoding and the four generated browser files are FEATURE. The requested
+  TODO/Bead serves the operator reviewing this particular JPEG-input delivery and retires at its
+  handoff. The observed defect is the original PNG-only refusal, reproduced above. Ignored command
+  logs preserve that failure, the worker retry and the successful source-bound checks; these are
+  the smallest recovery evidence here. No new checker, schema, dependency or recurring report.
+  The higher-priority material acquisition needs matched independent observations; more reporting
+  would not supply them. Verdict: bounded requested tracking supporting a concrete input capability.
+- **Real work:** six tracked paths: USER 3 (loader and two user/API documents), ENABLER 1 (direct CLI
+  regressions), PROCESS 2 (Beads/report), UNKNOWN 0. Four refreshed ignored browser runtime files are
+  additional USER delivery of existing incoming code, not a new library feature authored here.
+  Demo: the real CLI selects the synthetic JPEG frame and writes the same scores as equivalent
+  decoded PNG pixels, preserving its sources. Omitting process files changes no runtime outcome;
+  they satisfy the requested task/evidence handoff. Existing decoder, grayscale conversion and
+  selector are actually exercised. The older G5 item remains open; this small reusable input fix
+  delivers value before that larger proof effort. No swarm, speculative enabler or acceptance
+  moved to a follow-up. Verdict: product work and direct tests, bounded tracking.
+- **Honesty 1–6:** No (checked: full two-file Rust diff and added positive/negative CLI cases; no
+  test removal/ignore, golden rewrite, solver mock, production special case, suppression or relaxed
+  tolerance/policy. The baseline runs one failing test; focused checks run 28 passing tests).
+  **7–10:** No (checked: observed exits/logs, retained stderr and raw artifact hashes; no claimed
+  stillness, decoder-parity proof, measured textile accuracy, real fit or speed from these cases).
+  The generated comparison PNG is decoded-pixel integration evidence, not an independent JPEG
+  oracle. **11–12:** No (checked: `ftx-dsu` remains in progress while the full workspace check is
+  pending; existing empirical/codec/G5 requirements remain; documentation adds a format boundary,
+  with binary-mask/orientation/quality gates retained). **13–17:** not applicable, solo; automatic
+  incoming commits are not peer verification. **18:** No (checked: one baseline target, the three
+  focused targets and the complete workspace command were selected before their results).
+  Older-session mining was not repeated for this bounded continuation. **19:** explain the worker
+  setup failure and intentionally failing baseline before presenting success. **20:** strongest
+  evidence is the same positive actual-CLI regression failing with the original PNG-only refusal
+  and passing with the 16-line decoder connection, plus source/output preservation and exact
+  decoded-pixel score agreement. Disposition: no acceptance weakening or fabricated result found
+  in this checked window; all remaining unverified physical claims stay open.

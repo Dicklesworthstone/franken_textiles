@@ -9,6 +9,7 @@ use ftx_measure::video::{FrameMetadata, SelectionOptions, score_frame, select_fr
 use ftx_trace::raster::{
     color::bgr_to_gray,
     image::{Gray, load_png_with_limit},
+    jpeg::decode_photo,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -68,6 +69,21 @@ pub(super) fn load(base: &Path, name: &str, mask: bool) -> Result<Gray, Refusal>
     }
     let path = base.join(name);
     let bytes = read_limited(&path, 128 * 1024 * 1024)?;
+    if !mask && bytes.starts_with(&[0xff, 0xd8]) {
+        let photo = decode_photo(&bytes, 40_000_000)?;
+        // Frame metadata, both masks and calibrated pixels already share one orientation. A
+        // photo's automatic EXIF transpose would change only the frame and invalidate that contract.
+        if photo
+            .exif_orientation
+            .is_some_and(|orientation| orientation != 1)
+        {
+            return Err(bad_input(format!(
+                "{}: video frames must already be oriented; apply JPEG EXIF orientation to pixels, both masks and calibration before selection",
+                path.display()
+            )));
+        }
+        return Ok(bgr_to_gray(&photo.image));
+    }
     // Restrict the evidence boundary to explicit 8-bit pixels. In particular, alpha compositing
     // on white would silently turn transparent mask backgrounds into foreground evidence.
     if bytes.len() < 33

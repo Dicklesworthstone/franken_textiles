@@ -55,11 +55,18 @@ before calling this command. `rotation_cw_deg` records the already-applied clock
 be unique. Timestamps are nonnegative integer microseconds on a declared stream clock; this
 command does not align clocks between cameras.
 
-Frames must be opaque 8-bit grayscale or RGB PNGs. Masks must be 8-bit grayscale PNGs containing
+Frames may be opaque 8-bit grayscale or RGB PNGs, or complete 8-bit JPEGs supported by the existing
+strict photo decoder. JPEG stored pixels must already be oriented: EXIF orientation must be absent
+or identity (1). A rotation or reflection declaration refuses, even when it would preserve image
+dimensions, because transforming only the frame would detach it from its masks and calibration.
+Apply the transform to all three before selection. JPEG damage, incomplete scans, unsupported color
+models and ambiguous orientation metadata retain the strict photo decoder's refusals.
+Masks must be 8-bit grayscale PNGs containing
 only 0 (outside) and 255 (inside), with exactly the oriented image's width and height. No
 resizing, mask inference or thresholding is performed. Transparency, embedded EXIF and animated
 PNGs are refused: remove these metadata/encodings after correctly decoding and orienting the
-pixels. The manifest is bounded to 16 MiB and 20,000 frames; each PNG to 128 MiB and 40 million
+pixels. The manifest is bounded to 16 MiB and 20,000 frames; each PNG to 128 MiB, JPEG to 64 MiB,
+and either image to 40 million
 pixels. Images are processed sequentially, not all held in memory. PNG inflation is bounded
 by the declared scanline sizes, including interlaced images.
 
@@ -105,4 +112,6 @@ separate work; no real-wearer fit claim follows from a selected frame.
 
 Rust callers can use `ftx_measure::video::{score_frame, select_frames}` directly with
 already-oriented grayscale/mask buffers. These APIs have no I/O or image-decoder dependency.
-The CLI reuses the existing trace PNG and grayscale implementations, without adding a crate.
+The CLI reuses the existing trace PNG, strict JPEG and grayscale implementations, without adding a crate.
+Selection scores concern the decoded JPEG pixels; lossy compression can change sharpness. Equivalent
+decoded pixels have the same scores, but re-encoding an image is not promised to preserve selection.

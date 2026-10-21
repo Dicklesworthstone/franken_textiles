@@ -1,4 +1,4 @@
-//! Decoded synthetic PNG frames through the real CLI. No private media or inferred stillness.
+//! Decoded synthetic PNG/JPEG frames through the real CLI. No private media or inferred stillness.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -96,6 +96,142 @@ fn run(dir: &Path, extra: &[&str], code: i32) -> Value {
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["exit"], code);
     value
+}
+
+fn frame_jpeg(orientation: u8) -> Vec<u8> {
+    // The existing synthetic paper photograph: stored 800 x 600 with a big-endian EXIF entry.
+    // Only change its orientation declaration, never its compressed pixel data or source fixture.
+    let mut bytes = include_bytes!("../../../tests/fixtures/photo/plain-letter-exif6.jpg").to_vec();
+    let tag = [0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6];
+    let at = bytes.windows(tag.len()).position(|p| p == tag).unwrap();
+    bytes[at + 9] = orientation;
+    bytes
+}
+
+fn jpeg_setup() -> PathBuf {
+    let dir = setup();
+    std::fs::write(dir.join("video/frame.jpg"), frame_jpeg(1)).unwrap();
+    for (name, left) in [("person-wide", true), ("sheet-wide", false)] {
+        let data = (0..800 * 600)
+            .map(|i| if (i % 800 < 400) == left { 255 } else { 0 })
+            .collect();
+        std::fs::write(
+            dir.join(format!("video/{name}.png")),
+            encode_png_gray(&Gray {
+                w: 800,
+                h: 600,
+                data,
+            }),
+        )
+        .unwrap();
+    }
+    let mut manifest = read(&dir.join("video/frames.json"));
+    manifest["frames"].as_array_mut().unwrap().truncate(1);
+    manifest["frames"][0]["image"] = json!("frame.jpg");
+    manifest["frames"][0]["person_mask"] = json!("person-wide.png");
+    manifest["frames"][0]["sheet_mask"] = json!("sheet-wide.png");
+    manifest["frames"][0]["metadata"]["rotation_cw_deg"] = json!(90);
+    save(&dir.join("video/frames.json"), &manifest);
+    dir
+}
+
+#[test]
+fn jpeg_frames_reuse_strict_pixels_and_preserve_selection_and_source_files() {
+    let dir = jpeg_setup();
+    let paths = [
+        "frames.json",
+        "frame.jpg",
+        "person-wide.png",
+        "sheet-wide.png",
+    ];
+    let before: Vec<_> = paths
+        .iter()
+        .map(|p| std::fs::read(dir.join("video").join(p)).unwrap())
+        .collect();
+    let result = run(&dir, &["--out", "jpeg-selection.json"], 0)["result"].clone();
+    assert_eq!(result, read(&dir.join("jpeg-selection.json")));
+    assert_eq!(result["status"], "SELECTED");
+    assert_eq!(
+        result["selected_frames"],
+        json!([{"stream":"synthetic","timestamp_us":0}])
+    );
+    let quality = &result["windows"][0]["candidates"][0]["quality"];
+    assert_eq!(quality["image_size_px"], json!([800, 600]));
+    assert_eq!(quality["metadata"]["rotation_cw_deg"], 90);
+    for region in ["person", "sheet"] {
+        assert!(quality[region]["laplacian_variance"].as_f64().unwrap() > 10.0);
+    }
+    for (path, bytes) in paths.iter().zip(before) {
+        assert_eq!(std::fs::read(dir.join("video").join(path)).unwrap(), bytes);
+    }
+    let pixels = ftx_trace::raster::jpeg::decode_photo(&frame_jpeg(1), 40_000_000).unwrap();
+    let gray = ftx_trace::raster::color::bgr_to_gray(&pixels.image);
+    std::fs::write(dir.join("video/decoded.png"), encode_png_gray(&gray)).unwrap();
+    let mut manifest = read(&dir.join("video/frames.json"));
+    manifest["frames"][0]["image"] = json!("decoded.png");
+    save(&dir.join("video/frames.json"), &manifest);
+    assert_eq!(run(&dir, &[], 0)["result"]["windows"], result["windows"]);
+    // Remove only the fixture's APP1 bytes in memory: an untagged JPEG has the same stored pixels.
+    let bytes = frame_jpeg(1);
+    assert_eq!(
+        &bytes[20..30],
+        &[0xff, 0xe1, 0, 34, b'E', b'x', b'i', b'f', 0, 0]
+    );
+    std::fs::write(
+        dir.join("video/no-exif.jpg"),
+        [&bytes[..20], &bytes[56..]].concat(),
+    )
+    .unwrap();
+    manifest["frames"][0]["image"] = json!("no-exif.jpg");
+    save(&dir.join("video/frames.json"), &manifest);
+    assert_eq!(run(&dir, &[], 0)["result"]["windows"], result["windows"]);
+    for path in [
+        "video/frame.jpg",
+        "video/person-wide.png",
+        "jpeg-selection.json",
+    ] {
+        let before = std::fs::read(dir.join(path)).unwrap();
+        run(&dir, &["--out", path], 3);
+        assert_eq!(std::fs::read(dir.join(path)).unwrap(), before);
+    }
+}
+
+#[test]
+fn jpeg_frames_refuse_orientation_changes_corruption_and_non_png_masks() {
+    let dir = jpeg_setup();
+    let original = read(&dir.join("video/frames.json"));
+    for orientation in [0, 2, 3, 4, 5, 6, 7, 8] {
+        std::fs::write(dir.join("video/rotated.jpg"), frame_jpeg(orientation)).unwrap();
+        let mut manifest = original.clone();
+        manifest["frames"][0]["image"] = json!("rotated.jpg");
+        save(&dir.join("video/frames.json"), &manifest);
+        run(&dir, &["--out", "refused.json"], 3);
+        assert!(!dir.join("refused.json").exists());
+    }
+    let bytes = frame_jpeg(1);
+    for (name, bytes) in [
+        ("cut.jpg", bytes[..bytes.len() / 2].to_vec()),
+        ("trailing.jpg", [bytes.as_slice(), b"trailing"].concat()),
+    ] {
+        std::fs::write(dir.join("video").join(name), bytes).unwrap();
+        let mut manifest = original.clone();
+        manifest["frames"][0]["image"] = json!(name);
+        save(&dir.join("video/frames.json"), &manifest);
+        run(&dir, &["--out", "refused.json"], 3);
+        assert!(!dir.join("refused.json").exists());
+    }
+    for (field, name) in [
+        ("person_mask", "frame.jpg"),
+        ("sheet_mask", "frame.jpg"),
+        ("person_mask", "person.png"),
+        ("sheet_mask", "sheet.png"),
+    ] {
+        let mut manifest = original.clone();
+        manifest["frames"][0][field] = json!(name);
+        save(&dir.join("video/frames.json"), &manifest);
+        run(&dir, &["--out", "refused.json"], 3);
+        assert!(!dir.join("refused.json").exists());
+    }
 }
 
 #[test]

@@ -167,3 +167,12 @@ explicit date is given; the library is clock-free. Repeated `--value` readings a
 edits never replace the input; successful writes use same-directory atomic rename and mode 0600 on Unix.
 Exit 3 includes invalid measurement documents and NOT_READY. The evidence gate distinguishes
 READY_REFERENCE from ordinary readiness and makes no fit claim.
+
+`video-select` accepts already-oriented opaque 8-bit PNG or supported complete JPEG frames; JPEG
+EXIF orientation is absent or identity. It reuses the strict photo decoder, refusing automatic
+rotation/reflection because masks and calibration already share the stored pixel frame. Masks stay
+binary grayscale PNGs of the exact frame size. Encoded limits are 128 MiB PNG / 64 MiB JPEG; decoded
+frames stay within 40 million pixels. Tests in `video_selection_workflow` cover JPEG/decoded-PNG
+selection equality, absent/identity orientation, source preservation and create-only outputs, and
+nonidentity/corrupt/mask refusals. JPEG quality is decoded-pixel quality, not stillness, frame decoding,
+segmentation or measurement accuracy.
