@@ -2224,6 +2224,7 @@ Executed checks and proof, with remaining native/scanner results recorded below 
 | Actual Chromium `tools/check_materials_web.cjs --compression-proof` | exit 0; fixed/adaptive v1/v2, RC answer, native diagnostic cells, exact downloads, binding and withdrawal; `checks/chromium-compression.log` |
 | Actual Chromium `tools/check_materials_web.cjs --purchasing-proof` | configured execution exit 0; intact bounded markers, one whole material order, stale-price withdrawal; `checks/chromium-purchasing-configured.log` |
 | Installed WASM final Node replay | exit 0; both original fixed report bytes exact, all four complete native/WASM reports structurally identical, unchanged final materials, late aggregate exhaustion refuses; `checks/installed-wasm-final-replay.log` |
+| Existing remote UBS 5.5.3 `--no-auto-update --only=rust` on the six final Rust paths | hz2, exit 0, six files, 0 critical / 652 warnings / 135 info; `checks/remote-rust-ubs.log`; source hashes matched before/after execution |
 
 Browser commands use existing `FTX_PLAYWRIGHT_MODULE=playwright-core` and
 `NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules`; no dependency was installed.
@@ -2276,6 +2277,20 @@ Failures and corrections, retained without changing production solver thresholds
   before producing results. All seven stalled invocations were stopped through their verified own
   process groups (exit 143); unrelated scanner processes remain untouched. The staged scan is
   incomplete. Direct diff review plus completed compiler/runtime tests do not turn it into a pass.
+  The existing hz2 UBS subsequently completes on the six final Rust paths after exact source-hash
+  comparison and its read-only doctor pass; no tool installation, update, suppression or repair.
+  Its 652 warnings comprise 170 unwrap/expect, 166 assert, 262 indexing, 29 deserialization-unwrap,
+  11 clone-in-loop, 9 string-allocation and 5 temporary-write notices. Reviewed categories/examples
+  against all changed numerical lines and the test helpers: test assertions/fixture decoding are
+  deliberate; existing production storage/hold unwraps follow validated invariants, and new paths
+  introduce no unchecked indexing or unwrap. Loop work remains bounded; rollback needs the state
+  clone. The temporary writes are pre-existing synthetic CLI test helpers in a newly created
+  PID/nanosecond/counter directory; no production source/output writer is introduced. No new
+  actionable defect was identified. The targeted scan has no Cargo.toml and explicitly does not
+  run Cargo/dependency phases; separately completed fmt/Clippy/native tests supply their own proof.
+  This completed remote Rust scan and page scan do not relabel local staged/checker stalls as passes.
+  Post-scan remote hashes are retained in `remote-rust-source-sha256.txt` and match all six final
+  local Rust hashes. The same already-installed tools were used without downloading/updating assets.
 - DCG rejects a combined staging/scanning shell command because it cannot parse zsh array command
   substitution. Nothing in that command runs. Separate literal-path staging, a verified nonempty
   index and an explicit path-list scan avoid that grammar; no allowlist or approval bypass.
@@ -2287,6 +2302,7 @@ adapter commit `a53c2b1` is preserved but outside the frozen build snapshot; its
 reserved whitespace wrap repair here. The numerical/native/browser results qualify the named
 snapshot and installed bundle, not every live-main change. DSR quality/release, G5, empirical
 material/coupon/garment acceptance, real-person fit and new performance claims are not established.
+DSR quality/release and G5 did not run in this continuation.
 
 Bounded fresh-solo worksheets for this continuation:
 
@@ -2294,7 +2310,8 @@ Bounded fresh-solo worksheets for this continuation:
   that requested delivery/handoff; observed defect: an unreachable tested adaptive integrator.
   Record only this item in existing report/Beads, retire its active checklist at handoff and add no
   new process framework. The product is the shared history connection, not this evidence section.
-- **Real work:** actual last-five commits, newest five closes and all 29 open items were examined.
+- **Real work:** actual last-five-commit intake ending at `a823a61`, newest five closes and all 29
+  then-open items were examined; later shared-main casing-load commits remain outside this snapshot.
   Purpose: sewing patterns that sew together and fit a specific body, with usable manufacturing
   files. Owned maintained paths classify USER 5 (two numerical modules, guide, contract, page),
   ENABLER 7 (five direct Rust tests including incoming whitespace repair, two existing checkers),
