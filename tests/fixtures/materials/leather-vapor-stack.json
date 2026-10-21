@@ -1,0 +1,24 @@
+{
+  "schema": "ftx-vapor-stack/1",
+  "layers": [
+    {
+      "key": "leather-shell",
+      "selection": {
+        "id": "zagreb/leather-2022/cr-neck"
+      }
+    }
+  ],
+  "area_m2": 0.5,
+  "inside_vapor_pressure_pa": 3000.0,
+  "outside_vapor_pressure_pa": 1000.0,
+  "inside_film_resistance_m2_pa_w": 10.0,
+  "outside_film_resistance_m2_pa_w": 20.0,
+  "latent_heat_j_kg": 2400000.0,
+  "required_conditions": {
+    "air_temperature_c": "35",
+    "relative_humidity_percent": "40",
+    "air_speed_m_s": "1"
+  },
+  "required_method": "ISO 11092:2014 sweating guarded hotplate; Table 5 Ret mean",
+  "allow_mixed_protocols": false
+}

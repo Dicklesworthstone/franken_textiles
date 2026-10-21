@@ -41,6 +41,10 @@ relax another layer's policy. Missing heat capacity is an error, never a polymer
 For resistance-only supplier data use the existing `ftx-materials thermal STACK.json` static command;
 it does not need specific heat. A thermal-ready record is not necessarily mechanically characterized.
 
+For measured vapor resistance, [potential evaporative transfer](vapor-resistance.md) provides the
+separate `thermal-vapor` consumer. It uses canonical Ret observations and explicit vapor pressures,
+films and latent heat; it does not add evaporation to this dry transient model.
+
 ## Scope and next acceptance work
 
 This is a constant-property effective **dry one-dimensional model**, not a prediction of garment

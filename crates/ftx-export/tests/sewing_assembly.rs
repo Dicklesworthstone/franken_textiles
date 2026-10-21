@@ -74,6 +74,108 @@ fn registered_needle_has_exact_preimages_on_both_original_pieces() {
 }
 
 #[test]
+fn partial_operations_sew_a_local_reinforcement_without_changing_the_source_seam() {
+    let mut p = pattern(100.);
+    let mut patch = piece("reinforcement", 50.);
+    patch["fabric"] = fabric("patch", 0.3);
+    p["pieces"].as_array_mut().unwrap().push(patch);
+    let mut o = options(false);
+    o["passes"][0]["id"] = json!("join-lower");
+    o["passes"][0]["source_range"] = json!([0., 0.5]);
+    let mut upper = o["passes"][0].clone();
+    upper["id"] = json!("join-reinforced-upper");
+    upper["after"] = json!(["join-lower"]);
+    upper["source_range"] = json!([0.5, 1.]);
+    upper["assembly"]["pieces"]
+        .as_array_mut()
+        .unwrap()
+        .push(placement("reinforcement", 0., 50., false));
+    o["passes"].as_array_mut().unwrap().push(upper);
+    let result = plan(p.clone(), o.clone()).unwrap();
+    assert_eq!(result.schema, "ftx-sewing-plan/10");
+    assert_eq!(result.seams.len(), 2);
+    let lower = result.seams[0].assembly.as_ref().unwrap();
+    let upper = result.seams[1].assembly.as_ref().unwrap();
+    assert_eq!(lower.layers.len(), 2);
+    assert_eq!(upper.layers.len(), 3);
+    close(lower.stack_mm, 0.6);
+    close(upper.stack_mm, 0.9);
+    assert_eq!(upper.layers[2].instance, "reinforcement");
+    for (needle, source) in upper
+        .needle_mm
+        .iter()
+        .zip(&upper.layers[2].source_stations_mm)
+    {
+        close(needle.x, source.x);
+        close(needle.y, source.y + 50.);
+        assert!((50. ..=100.).contains(&needle.y));
+    }
+    close(upper.minimum_boundary_clearance_mm, 10.);
+    assert_eq!(
+        result.seams[0].stations.a.last(),
+        result.seams[1].stations.a.first()
+    );
+    let program = SewProgram::build(
+        &Pattern::new(p.clone()),
+        &serde_json::from_value(o.clone()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(program.schema, "ftx-sewing-program/3");
+    assert_eq!(program.plan.pattern_sha256, result.pattern_sha256);
+    assert!(program.stitches.iter().all(|s| s.assembly_mm.is_some()));
+
+    // The same assembly cannot silently sew its unreinforced lower region as a three-ply stack.
+    let mut whole = o.clone();
+    whole["passes"] = json!([whole["passes"][1].clone()]);
+    whole["passes"][0]["after"] = json!([]);
+    whole["passes"][0]["source_range"] = json!([0., 1.]);
+    assert!(
+        plan(p.clone(), whole)
+            .unwrap_err()
+            .message
+            .contains("extra material ply")
+    );
+
+    p["pieces"][2]["fabric"] = fabric("thicker-patch", 0.6);
+    let swapped = plan(p.clone(), o.clone()).unwrap();
+    assert_eq!(result.seams[1].stations, swapped.seams[1].stations);
+    close(swapped.seams[0].stack_mm, 0.6);
+    close(swapped.seams[1].stack_mm, 1.2);
+    p["pieces"][2]["fabric"] = fabric("too-thick-patch", 1.0);
+    let refusal = plan(p, o).unwrap_err();
+    assert!(
+        refusal.message.contains("join-reinforced-upper")
+            && refusal.message.contains("stack thickness")
+    );
+}
+
+#[test]
+fn adjacent_source_spans_can_use_different_declared_fold_recipes() {
+    let p = pattern(100.);
+    let mut o = options(false);
+    o["passes"][0]["id"] = json!("plain-lower");
+    o["passes"][0]["source_range"] = json!([0., 0.5]);
+    let mut upper = options(true)["passes"][0].clone();
+    upper["id"] = json!("folded-upper");
+    upper["after"] = json!(["plain-lower"]);
+    upper["source_range"] = json!([0.5, 1.]);
+    o["passes"].as_array_mut().unwrap().push(upper);
+    let result = plan(p, o).unwrap();
+    let lower = result.seams[0].assembly.as_ref().unwrap();
+    let upper = result.seams[1].assembly.as_ref().unwrap();
+    assert_eq!(lower.layers.len(), 2);
+    assert_eq!(upper.layers.len(), 3);
+    close(result.seams[0].stack_mm, 0.6);
+    close(result.seams[1].stack_mm, 0.8);
+    assert_eq!(lower.needle_mm.last(), upper.needle_mm.first());
+    assert_eq!(
+        result.seams[1].pass.assembly.as_ref().unwrap().folds.len(),
+        1
+    );
+    assert!(!result.hardware_execution_authorized);
+}
+
+#[test]
 fn flat_fold_derives_three_plies_and_material_swap_changes_stack_not_geometry() {
     let p = pattern(100.);
     let a = plan(p.clone(), options(true)).unwrap();

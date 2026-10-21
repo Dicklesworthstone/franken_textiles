@@ -2487,6 +2487,62 @@ The model, commands, source citation and executable examples are documented in
 
 ---
 
+### 25.45 Potential vapor transfer from canonical source observations
+
+**Delivered software (`ftx-vp1`).** The canonical material authority now resolves measured
+`vapor_resistance` into a bounded, common-area series network. Explicit inside/outside vapor
+pressures, boundary-film resistances, area and caller-supplied latent heat determine conditional
+potential heat and mass transfer. The report retains every material's source-qualified Ret, method,
+conditions, evidence and content lock, plus layer/film pressure drops and exact frozen replay JSON.
+The native primary/companion commands and file-free WASM boundary share this one implementation.
+
+The material workbench accepts a standalone vapor-stack request, shows potential heat/water exchange
+and source-qualified layer pressure profiles, and downloads exact input/report/frozen replay bytes.
+It also displays partial-seam correspondence from §25.46, including full source and traveled lengths.
+Compiled-worker outputs for both features match complete native reports; replacing or refusing input
+withdraws obsolete results. No browser-side physics or replacement material observation is introduced.
+
+The existing ten measured bovine-leather groups can now drive this consumer without fabricated
+mechanics or heat storage. Their 35°C air, 40% RH and 1 m/s source conditions remain visible;
+reported SD/CV is not an uncertainty interval. Exact required method/condition filters, independent
+estimate admission and explicit mixed-protocol consent remain enforced. Source observations are
+separate from the assumed fixed-resistance, isothermal network; adding measured layers does not
+make the assembled network a measured specimen.
+
+Analytical layer/film balances, equal-pressure and material-substitution cases, finite arithmetic,
+source refusals and exact native/portable offline replay verify this software path. Water supply,
+actual sweat evaporation, condensation, moisture storage, temperature/humidity dependence, dry/wet
+energy coupling and garment comfort remain open under `ftx-tm5` and `ftx-tmc`. See
+[vapor-resistance.md](docs/vapor-resistance.md) for the request, equations and source references.
+
+---
+
+### 25.46 Partial-seam sewing operations for changing construction
+
+**Delivered software (`ftx-sp3`).** A sewing pass can select an interval of original side-A
+arclength, with side B derived through the existing oriented notch map. Exact selected endpoints,
+enclosed junctions/notches and both-side stitch pitch survive ordinary and offset paths. Separate
+sections of one source seam can now use distinct explicit fold/reinforcement stacks, material
+thickness, feed direction and lock recipes. This closes the previous inability to act on the
+assembly planner's instruction to split a seam into constant-layer operations.
+
+The union of passes must cover both complete original seam sides; overlap is allowed and gaps
+refuse. Different offsets retain their source mapping and receive clearance checks on traveled
+polylines and stitch chords. Reverse/backtack expansion stays within the selected station table.
+Full-source seam acceptance, material/qualification limits, ordering and hardware refusal remain
+authoritative. Explicit spans use plan schema `/10`, retaining original ranges/full lengths and
+one-way traveled lengths. Omitted spans preserve existing whole-seam serialization and arithmetic.
+
+Focused core, real CLI and portable checks cover local reinforced/folded sections, material-only
+thickness substitution, curved/notched/reversed endpoints, clearance outside a selected span,
+complete A/B coverage and expanded interval/time accounting. The synthetic 100 mm split seam
+travels 60 mm forward and 40 mm reverse in 40 intervals at four seconds of continuous feed.
+These checks do not establish seam quality, physical fold transitions or robot execution;
+source-qualified seam coupons and calibrated machine handoff remain open under `ftx-sp2`.
+See [material-sewing-plans.md](docs/material-sewing-plans.md#partial-seam-operations-and-local-construction-changes).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

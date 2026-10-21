@@ -51,6 +51,17 @@ across prescribed gap changes and thermal holds. Version 2 also requires explici
 links for loading/unloading branch changes. Review chronological heat and external work separately,
 and keep the full report with its original input; a final selection alone is not saved heat state.
 These local column calculations do not solve 3D garment contact or qualify presser-foot clearance.</p>
+<h3>Potential evaporative transfer</h3>
+<label>Vapor-resistance stack JSON (<code>ftx-vapor-stack/1</code>) <input id="vaporRequest" type="file" accept=".json,application/json"></label>
+<button id="vapor" data-command="vapor" disabled>Calculate potential vapor transfer</button>
+<p class="note">Supply the ordered material layers, area, inside/outside vapor pressures in pascals,
+boundary-film resistances and latent heat in J/kg. The shared material engine uses each layer's
+source-qualified <code>vapor_resistance</code> and reports potential latent heat and water transfer,
+with every pressure drop, measurement protocol and frozen material source retained.
+Different reported protocols require explicit admission in the request. Estimated material observations
+require their own selection consent. This fixed-resistance, isothermal calculation does not determine
+sweat availability, actual wearer cooling, condensation or garment comfort; it does not add an
+evaporation term to the separate dry-heat simulation.</p>
 <h3>Identify behavior from swatch measurements</h3>
 <label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch and shear</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option><option value="clamped_strip">Clamped strip forces and transverse widths</option></select></label>
 <label>Source-bearing swatch or complete history JSON <input id="calibrationRequest" type="file" accept=".json,application/json"></label>

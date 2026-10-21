@@ -9,6 +9,21 @@ const read = name => fs.readFileSync(path.join(__dirname, '../web', name), 'utf8
 const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const calibrationSelection = admission => `{"id":"identified","expected_sha256":"locked","allow_estimates":${admission},"value":-0.0,"coefficient":1.0}`;
+function vaporReport() {
+  const replay = '{"schema":"ftx-vapor-stack/1","area_m2":1.0,"source_value":-0.0}';
+  return { schema:'ftx-vapor-stack-report/1', request:{area_m2:1}, request_sha256:'source-lock',
+    replay_request:JSON.parse(replay), replay_request_json:replay,
+    layers:[{key:'<shell>',selection:{id:'retained-specimen'},material_sha256:'material-lock',
+      observation:{value:20,unit:'m2*Pa/W',evidence:'measured',method:'Original <measurement>',
+        conditions:{air_temperature_c:'35',relative_humidity_percent:'40',air_speed_m_s:'1'}},
+      source:{title:'Retained source'},inside_pressure_pa:2500,outside_pressure_pa:1500,pressure_drop_pa:1000}],
+    layer_resistance_m2_pa_w:20,total_resistance_m2_pa_w:40,pressure_difference_pa:2000,
+    inside_film_pressure_drop_pa:500,outside_film_pressure_drop_pa:500,
+    potential_heat_flux_w_m2:50,potential_heat_flow_w:50,
+    potential_mass_flux_kg_m2_s:0.00002,potential_mass_flow_kg_s:0.00002,mixed_protocols:false,
+    effective_model:'Declared synthetic constant-resistance series network',physical_validation_claim:false,
+    notes:['Synthetic UI test only; latent heat is a caller-supplied conversion.'] };
+}
 function calibrationReport(mode = 'nonlinear', admission = false, check = true) {
   if (mode === 'membrane_plasticity') return permanentCalibration('ACCEPTED', admission, check);
   if (mode === 'clamped_strip') return stripCalibration('ACCEPTED', admission, check);
@@ -128,6 +143,7 @@ async function workerModule({ failFold = false, failExport = false, trap = false
     },
     thermal_steady_surface: (r, c) => { called.push(['heat', r, c]); return '{}'; },
     thermal_steady_coverage: r => { called.push(['coverage', JSON.parse(r), r]); return '{}'; },
+    thermal_vapor: r => { called.push(['vapor',r]); return JSON.stringify(vaporReport()); },
     cut_plan: (p, o) => { called.push(['cut', p, o]); return '{"rolls":[{},{}]}'; },
     cut_svg: (p, o, i) => { called.push(['svg', p, o, i]); return '<svg/>'; },
     stock_plan: (p, r) => { called.push(['stock', p, r]); return '{"markers":[{"placements":[]},{"placements":[{}]}],"stock_value":1.0}'; },
@@ -178,6 +194,16 @@ test('material worker calls the shared consumers with exact current inputs and c
   const r = await w.send({ ...base, type: 'exports', fit: '{}', measurements: '{}', today: '2026-10-15', created: '2026-10-15T12:00' });
   assert.equal(r.files[0].name, 'round.zip'); assert.deepEqual([...r.files[0].bytes], [1, 2]);
   assert.deepEqual(w.freed, ['round']);
+});
+test('vapor worker retains the original request, exact Rust report and frozen replay bytes', async () => {
+  const w=await workerModule(), vaporRequest=' {"area_m2":1.0,"value":-0.0}\n';
+  const result=await w.send({type:'vapor',request:41,vaporRequest});
+  assert.equal(result.type,'result',result.message);
+  assert.deepEqual(w.called,[['vapor',vaporRequest]]);
+  assert.deepEqual(plain(result.files.map(f=>[f.name,f.text])),[
+    ['vapor-report.json',JSON.stringify(vaporReport())],['vapor-request.json',vaporRequest],
+    ['vapor-replay-request.json',vaporReport().replay_request_json]]);
+  assert.equal(result.files.length,3); assert.deepEqual(w.freed,[]);
 });
 test('bounded-marker worker previews the selected intact marker and refuses invalid indices', async () => {
   const w = await workerModule(), pattern = '{"origin":-0.0}',
@@ -666,6 +692,65 @@ test('sewing setup results retain Rust order, proof scope and complete downloads
   assert.match(visibleText(s),/search reached its declared work limit/);
   p.e.sewOptions.handlers.change(); assert.equal(s.hidden,true);
   assert.equal(p.live.size,1); // only the still-current bound pattern remains
+});
+
+test('partial sewing spans display both source sides without an ordering policy or new geometry', async () => {
+  const p=await pageModule(); await p.load(); await p.bind(); p.select('sewOptions');
+  await p.e.sew.onclick();
+  const report={schema:'ftx-sewing-program/1',stitches:[{}],plan:{schema:'ftx-sewing-plan/10',
+    feed_seconds:1,hardware_execution_authorized:false,seams:[{
+      pass:{id:'left-part',seam:'join',direction:'reverse'},
+      source_span:{source_ranges:[[0,0.4],[0,0.6]],source_lengths_mm:[40,60],sewn_lengths_mm:[42,63]}
+    },{pass:{id:'whole-reinforcement',seam:'join',direction:'forward'}}]}};
+  const raw=JSON.stringify(report);
+  p.emit(report,[{name:'sewing.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'sew'), t=descendants(s).find(n=>n.tag==='table');
+  assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
+    ['left-part','join','[0, 0.4]','[0, 0.6]','40 / 60','42 / 63','reverse']);
+  assert.equal(t.children[3].children[2].textContent,'Whole seam');
+  assert.match(visibleText(s),/complete coverage on both source sides/);
+  const download=descendants(s).find(n=>n.download==='sewing.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  p.e.sewOptions.handlers.change(); assert.equal(s.hidden,true);
+});
+
+test('vapor calculation works without a pattern and preserves unrelated inspected material', async () => {
+  const p=await pageModule(); await p.inspect('existing-selection');
+  assert.equal(p.e.vapor.disabled,true);
+  const selected=p.e.selection.value, request=' {"area_m2":1.0,"value":-0.0}\n';
+  p.select('vaporRequest',request); p.e.vaporRequest.handlers.change();
+  assert.equal(p.e.vapor.disabled,false); await p.e.vapor.onclick();
+  assert.equal(p.current().messages.at(-1).vaporRequest,request);
+  const report=vaporReport(), raw=JSON.stringify(report);
+  p.emit(report,[{name:'vapor-report.json',text:raw,mime:'application/json'},
+    {name:'vapor-replay-request.json',text:report.replay_request_json,mime:'application/json'}]);
+  const s=section(p,'Potential evaporative transfer'), tables=descendants(s).filter(n=>n.tag==='table');
+  assert.match(visibleText(s),/Potential steady transfer/);
+  assert.match(visibleText(s),/actual evaporative cooling/);
+  assert.deepEqual(plain(tables[1].children[2].children.map(n=>n.textContent)),
+    ['<shell>','retained-specimen','20','2500','1500','1000','measured']);
+  assert.equal(p.e.selection.value,selected);
+  const source=descendants(s).find(n=>n.tag==='details'); source.open=true; source.handlers.toggle();
+  assert.match(visibleText(source),/"air_temperature_c": "35"/);
+  assert.match(visibleText(source),/Original <measurement>/);
+  const download=descendants(s).find(n=>n.download==='vapor-replay-request.json');
+  assert.equal(await p.blobs.get(download.href).text(),report.replay_request_json);
+  p.e.vaporRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+  assert.equal(p.e.selection.value,selected);
+  await p.e.vapor.onclick(); p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'Missing vapor resistance'});
+  assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('replacing a vapor request cancels delayed file reads and stale worker results', async () => {
+  const p=await pageModule(), delay=deferred(); p.select('vaporRequest');
+  p.e.vaporRequest.files[0].text=()=>delay.promise;
+  const old=p.current(), running=p.e.vapor.onclick();
+  p.select('vaporRequest','{"new":true}'); p.e.vaporRequest.handlers.change(); p.ready();
+  delay.resolve('{"old":true}'); await running;
+  assert.equal(old.dead,true); assert.equal(old.messages.length,0);
+  old.emit({type:'result',request:1,result:vaporReport(),files:[]});
+  assert.equal(section(p,'Potential evaporative transfer').hidden,true);
+  await p.e.vapor.onclick(); assert.equal(p.current().messages.at(-1).vaporRequest,'{"new":true}');
 });
 
 test('pressure-conditioned selections enter ordinary piece bindings without a numeric JSON round trip', async () => {
@@ -1849,6 +1934,57 @@ test('assembly mass and finite stock retain independent totals and refusals in m
 // Opt in after tools/build_web.sh. This executes the real production WASM through the actual
 // worker module, with only the Node transport/module loader adapted. It is not HTTP/browser or
 // native parity, successful anatomical body fitting, or empirical textile validation.
+test('compiled WASM vapor exchange preserves source-qualified substitutions and frozen replay',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx});
+    const request=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/leather-vapor-stack.json'),'utf8');
+    const first=await w.send({type:'vapor',request:1,vaporRequest:request});
+    assert.equal(first.type,'result',first.message);
+    assert.equal(first.files[0].text,ftx.thermal_vapor(request));
+    assert.equal(first.files[1].text,request);
+    assert.equal(first.files[2].text,first.result.replay_request_json);
+    assert.equal(first.result.layers[0].observation.value,11.27);
+    assert.equal(first.result.layers[0].observation.conditions.air_temperature_c,'35');
+    assert.equal(first.result.physical_validation_claim,false);
+    const frozen=JSON.parse(ftx.thermal_vapor(first.result.replay_request_json));
+    assert.deepEqual(frozen.layers,first.result.layers);
+    assert.equal(frozen.potential_heat_flow_w,first.result.potential_heat_flow_w);
+    const swap=JSON.parse(request); swap.layers[0].selection.id='zagreb/leather-2022/syn-d-h-neck';
+    const second=await w.send({type:'vapor',request:2,vaporRequest:JSON.stringify(swap)});
+    assert.equal(second.type,'result',second.message);
+    assert.equal(second.result.layers[0].observation.value,30.38);
+    assert.ok(second.result.potential_heat_flow_w<first.result.potential_heat_flow_w);
+    assert.notEqual(second.result.layers[0].material_sha256,first.result.layers[0].material_sha256);
+    assert.deepEqual(second.result.request.required_conditions,first.result.request.required_conditions);
+    if(process.env.FTX_VAPOR_REPLAY) assert.deepEqual(first.result,JSON.parse(fs.readFileSync(process.env.FTX_VAPOR_REPLAY,'utf8')));
+    const tampered=JSON.parse(first.result.replay_request_json);
+    tampered.layers[0].selection.record.name+=' changed';
+    const rejected=await w.send({type:'vapor',request:3,vaporRequest:JSON.stringify(tampered)});
+    assert.equal(rejected.type,'error'); assert.equal(rejected.files,undefined);
+  });
+
+test('compiled WASM partial sewing spans reach the same stitch program and reject uncovered joins',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx}), fixture=n=>fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials',n),'utf8');
+    const pattern=fixture('synthetic-sewing-pattern.json'), options=fixture('synthetic-sewing-span-options.json');
+    const result=await w.send({type:'sew',request:1,pattern,options});
+    assert.equal(result.type,'result',result.message);
+    assert.equal(result.files[0].text,ftx.sew_stitches(pattern,options));
+    assert.equal(result.result.plan.schema,'ftx-sewing-plan/10');
+    assert.ok(result.result.plan.seams.every(s=>s.source_span));
+    assert.equal(result.result.plan.hardware_execution_authorized,false);
+    if(process.env.FTX_SEWING_SPAN_REPLAY) assert.deepEqual(result.result,JSON.parse(fs.readFileSync(process.env.FTX_SEWING_SPAN_REPLAY,'utf8')));
+    const gap=JSON.parse(options); gap.passes[1].source_range[0]+=0.1;
+    const rejected=await w.send({type:'sew',request:2,pattern,options:JSON.stringify(gap)});
+    assert.equal(rejected.type,'error'); assert.equal(rejected.files,undefined);
+  });
+
 test('compiled WASM studies preserve source replay and optional model-backed motion equality',
   { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
     const pkg = process.env.FTX_WASM_PKG ? path.resolve(process.env.FTX_WASM_PKG) : path.join(__dirname, '../web/pkg');

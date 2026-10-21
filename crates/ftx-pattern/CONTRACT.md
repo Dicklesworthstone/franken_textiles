@@ -135,6 +135,17 @@ absolute enthalpies near equilibrium. Existing tabulated arithmetic and serializ
 The same law reaches dry thermal stepping and source-locked surface replay; evidence qualification
 is independent from physical specimen validation, uncertainty propagation and garment safety.
 
+**Conditional steady vapor transport** (`material_vapor`, `tests/material_vapor.rs`). The canonical
+material resolver supplies only source-qualified `vapor_resistance` observations in m²·Pa/W. A fixed,
+common-area isothermal series assumption adds nominal layer Ret and two explicit positive films;
+prescribed inside/outside vapor pressures determine potential latent heat flux and a layer pressure
+profile. Caller-supplied positive latent heat converts that potential to mass flow. Water availability,
+actual sweating, condensation, dry/wet thermal coupling and warmth/comfort are not inferred. Observed
+specimen/method/conditions and variability remain separate from the network assumptions; neither
+source temperature extrapolation nor uncertainty propagation occurs. Complete protocol differences
+require explicit admission; exact filters, estimate consent and digest locks still apply. Frozen
+requests replay offline. Vapor data do not supply missing mechanics or transient heat-storage inputs.
+
 **Purchasing instants** (`material_cost`). `ftx-textile-quotes/1` retains its calendar-only observation,
 scope and conflict semantics. Explicit `/2` books require UTC source timestamps and an explicit
 matching-date evaluation instant. Bounded Gregorian/clock parsing and integer nanoseconds establish

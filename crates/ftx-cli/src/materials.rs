@@ -154,6 +154,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     if matches!(
         action,
         "thermal-compression"
+            | "thermal-vapor"
             | "thermal-steady"
             | "thermal-steady-surface"
             | "thermal-steady-coverage"
@@ -161,6 +162,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
             ("thermal-compression", [path]) => thermal::compression_history(path)?,
+            ("thermal-vapor", [path]) => thermal::vapor(path)?,
             ("thermal-steady", [path]) => thermal::stack(path)?,
             ("thermal-steady-surface", [report, conditions]) => {
                 thermal::surface(report, conditions)?
@@ -171,7 +173,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             }
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials thermal-compression HISTORY.json | thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
+                    "usage: ftx materials thermal-compression HISTORY.json | thermal-vapor STACK.json | thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
                 ));
             }
         };

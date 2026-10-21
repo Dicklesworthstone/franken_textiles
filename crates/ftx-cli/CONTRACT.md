@@ -77,6 +77,11 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 - `ftx materials list|show|validate|fit|thermal ... [--json]`: inspects and validates the material
   catalogue, fits fabric parameters to cantilever/stretch tests, and computes dry/evaporative thermal
   resistance (`docs/material-catalog.md`, `docs/material-calibration.md`, `docs/material-thermal.md`).
+- `ftx materials thermal-vapor REQUEST.json [--json]` and companion
+  `ftx-materials thermal-vapor REQUEST.json` expose the shared `ftx-vapor-stack/1` consumer.
+  Canonical measured Ret and explicit area, vapor pressures, films and latent heat determine
+  conditional steady heat/water transfer; exact frozen replay and source refusals are retained.
+  This is independent of dry thermal storage and mechanical readiness; see `docs/vapor-resistance.md`.
 - `ftx materials strip-experiment REQUEST.json [--json]` and
   `calibrate-strip ACQUISITION.json [--allow-estimates] [--json]` expose the shared finite-strip
   forward and inverse experiment. The companion `ftx-materials` accepts the same commands.

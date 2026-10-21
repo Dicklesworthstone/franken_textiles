@@ -8,7 +8,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, np};
 use ftx_pattern::{Pattern, Seam, SeamPairs};
 use serde::{Deserialize, Serialize};
 
-use super::{MAX_STATIONS, bad, positive};
+use super::{bad, positive, span};
 use crate::Ctx;
 use crate::outline::{cut_outline, edge_sa, ring_is_simple, segments_touch};
 
@@ -35,13 +35,14 @@ pub struct OffsetPath {
 /// Reproducible offset geometry and links back to the authored seam, independent of feed direction.
 #[derive(Clone, Debug, Serialize)]
 pub struct PathReceipt {
-    /// Full offset side polylines, in paired canonical order and separate local millimetre frames.
+    /// Traveled offset polylines, in paired canonical order and separate local millimetre frames.
+    /// A source-range operation contains only its selected span, including exact endpoints.
     pub polylines_mm: [Vec<Vec2>; 2],
     /// Original seam-side lengths [a, b] before offset, in mm.
     pub source_lengths_mm: [f64; 2],
     /// Original arclength fractions at each output station, in paired canonical order.
     pub source_fractions: [Vec<f64>; 2],
-    /// Smallest cut/drill-rim clearance of the full path AND between-stitch chords, by side (mm).
+    /// Smallest cut/drill-rim clearance of the traveled path AND between-stitch chords, by side (mm).
     pub minimum_cut_clearance_mm: [f64; 2],
 }
 
@@ -159,6 +160,20 @@ impl Line {
             .map(|&f| np::interp(f, &self.offset_f, &self.source_f))
             .collect()
     }
+
+    fn portion(&self, range: [f64; 2]) -> Vec<Vec2> {
+        let ends = at_fractions(&self.points, &range);
+        std::iter::once(ends[0])
+            .chain(
+                self.offset_f
+                    .iter()
+                    .zip(&self.points)
+                    .filter(|(f, _)| range[0] < **f && **f < range[1])
+                    .map(|(_, &point)| point),
+            )
+            .chain(std::iter::once(ends[1]))
+            .collect()
+    }
 }
 
 /// Non-adjacent contact is invalid, including overlapping spans. Adjacent reversal is checked too.
@@ -244,6 +259,7 @@ impl OffsetPath {
         pattern: &Pattern,
         seam: &Seam,
         pitch: f64,
+        source_range: Option<[f64; 2]>,
         ctx: &Ctx<'_>,
         work: &mut usize,
     ) -> Result<(SeamPairs, Option<PathReceipt>), Refusal> {
@@ -330,76 +346,40 @@ impl OffsetPath {
         if notches[0].len() != notches[1].len() {
             return Err(bad("offset stitch-line notches must pair before sewing"));
         }
-        let wrap = |ns: &[f64]| [&[0.0][..], ns, &[1.0][..]].concat();
-        let ka = wrap(&notches[0]);
-        let kb = wrap(&notches[1]);
-        let to_b = |f| np::interp(f, &ka, &kb);
-        let to_a = |f| np::interp(f, &kb, &ka);
-        let mut breaks: Vec<_> = ka
-            .iter()
-            .chain(&junctions[0])
-            .copied()
-            .chain(junctions[1].iter().map(|&f| to_a(f)))
-            .collect();
-        breaks.sort_by(f64::total_cmp);
-        // Distinct authored boundaries are never rounded together to manufacture a feasible stitch.
-        breaks.dedup();
-        let mut counts = Vec::with_capacity(breaks.len());
-        let mut total = 1usize;
-        for w in breaks.windows(2) {
-            let span =
-                ((w[1] - w[0]) * lines[0].length).max((to_b(w[1]) - to_b(w[0])) * lines[1].length);
-            let count = (span / pitch).ceil().max(1.0);
-            if !count.is_finite()
-                || count > MAX_STATIONS as f64
-                || total.saturating_add(count as usize) > MAX_STATIONS
-            {
-                return Err(Refusal::new(
-                    RefusalCode::BudgetExceeded,
-                    "offset stitch station budget exceeded",
-                ));
-            }
-            total += count as usize;
-            counts.push(count as usize);
-        }
-        let mut fa = Vec::with_capacity(total);
-        let mut fb = Vec::with_capacity(total);
-        fa.push(0.0);
-        fb.push(0.0);
-        for (w, count) in breaks.windows(2).zip(counts) {
-            for &u in &np::linspace(w[0], w[1], count + 1)[1..] {
-                fa.push(u);
-                fb.push(to_b(u));
-            }
-        }
-        let mut stations = SeamPairs {
-            a: at_fractions(&lines[0].points, &fa),
-            b: at_fractions(&lines[1].points, &fb),
-            fa,
-            fb,
-            len_a: lines[0].length,
-            len_b: lines[1].length,
-            a_junctions: junctions[0].clone(),
-            b_junctions: junctions[1].clone(),
-            notches_a: notches[0].clone(),
-            notches_b: notches[1].clone(),
-            notch_match: if notches[0].is_empty() {
-                "none"
-            } else {
-                "piecewise"
-            }
-            .into(),
-        };
+        let range = source_range.map_or([0.0, 1.0], |range| {
+            let projected = lines[0].project(&range);
+            [projected[0], projected[1]]
+        });
+        let mut stations = span::sample(
+            [&lines[0].points, &lines[1].points],
+            [lines[0].length, lines[1].length],
+            [junctions[0].clone(), junctions[1].clone()],
+            [notches[0].clone(), notches[1].clone()],
+            range,
+            pitch,
+        )?;
         // Explicit zero offsets add a clearance check but keep original station arithmetic unchanged.
         if self.offset_mm == [0.0, 0.0] {
-            stations = pattern
-                .seam_pairs(seam, pitch)
-                .map_err(|e| bad(e.to_string()))?;
+            stations = if let Some(range) = source_range {
+                span::build(pattern, seam, range, pitch)?
+            } else {
+                pattern
+                    .seam_pairs(seam, pitch)
+                    .map_err(|e| bad(e.to_string()))?
+            };
         }
+        let polylines = if source_range.is_some() {
+            [
+                lines[0].portion([stations.fa[0], stations.fa[stations.fa.len() - 1]]),
+                lines[1].portion([stations.fb[0], stations.fb[stations.fb.len() - 1]]),
+            ]
+        } else {
+            [lines[0].points.clone(), lines[1].points.clone()]
+        };
         let mut minimum = [0.0; 2];
         for (i, points) in [&stations.a, &stations.b].into_iter().enumerate() {
             minimum[i] = clearance(
-                &lines[i].points,
+                &polylines[i],
                 &rings[i],
                 self.minimum_cut_clearance_mm,
                 work,
@@ -410,7 +390,7 @@ impl OffsetPath {
                 self.minimum_cut_clearance_mm,
                 work,
             )?)
-            .min(obstacles[i].clearance(&lines[i].points, self.minimum_cut_clearance_mm, work)?)
+            .min(obstacles[i].clearance(&polylines[i], self.minimum_cut_clearance_mm, work)?)
             .min(obstacles[i].clearance(
                 points,
                 self.minimum_cut_clearance_mm,
@@ -418,7 +398,7 @@ impl OffsetPath {
             )?);
         }
         let receipt = PathReceipt {
-            polylines_mm: [lines[0].points.clone(), lines[1].points.clone()],
+            polylines_mm: polylines,
             source_lengths_mm: [lines[0].source_len, lines[1].source_len],
             source_fractions: [
                 lines[0].unproject(&stations.fa),

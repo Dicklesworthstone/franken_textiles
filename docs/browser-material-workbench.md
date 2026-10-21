@@ -74,6 +74,14 @@ retains the same result and source identities. This count does not infer handlin
 assembly access, machine calibration or permission to execute hardware. Editing the recipe withdraws
 the old program and optimization result together.
 
+An operation may also select `source_range` on its original side-A seam. The planner derives side B
+through the existing notch/offset correspondence and checks complete coverage of both source sides.
+This allows separate constant-layer recipes for a plain section and a folded or reinforced section
+of one join. The workbench displays both source ranges, full original lengths and selected traveled
+lengths even without an ordering policy. Reverse feed, backtacks, qualification and clearance keep
+their ordinary checks. See the runnable split-seam example in
+[material-sewing-plans.md](material-sewing-plans.md#partial-seam-operations-and-local-construction-changes).
+
 Purchasing also accepts `ftx-textile-quotes/2` histories with exact UTC `observed_at` instants and an
 explicit market `as_of_at`. Retain the matching `observed_on` and `as_of` dates. The result displays
 the Rust evaluator's latest eligible and excluded observations for each roll, their exact times,
@@ -94,6 +102,27 @@ No face editor or missing optical data is supplied by the page. See
 [material optical faces](material-optical-faces.md) for the source, specimen, spectral and
 temperature qualifications and a runnable synthetic stack. The same stack request is available
 through the exported `thermal_steady` WASM API; it is not an additional workbench upload mode.
+
+## Potential evaporative transfer
+
+Section 1 accepts a standalone `ftx-vapor-stack/1` request through **Calculate potential vapor
+transfer**. It needs no bound pattern or mechanical/heat-storage capability. The request owns its
+ordered material selections, common area, boundary vapor pressures, positive film resistances,
+latent-heat conversion and source-admission policy. The worker calls the same `thermal_vapor`
+WASM export as the native consumer; JavaScript performs no transport calculation.
+
+The result displays total resistance, potential latent heat/water flux and flow, film pressure
+drops, every layer's face pressures and its original measurement method/conditions/source.
+Source conditions are retained observations, not an inferred operating domain. Mixed protocols
+and estimated observations require the existing explicit permissions. Potential transfer does not
+determine available sweat, actual wearer cooling, condensation, comfort or a dry/wet heat history.
+
+Downloads preserve the exact Rust `vapor-report.json`, original `vapor-request.json` and
+`vapor-replay-request.json` with complete frozen material selections. Running this calculation
+preserves the independently inspected material; it creates no replacement material selection.
+Replacing or refusing a request withdraws its previous results, and delayed reads or stale worker
+replies cannot publish them. See [vapor-resistance.md](vapor-resistance.md) for the schema, equations
+and a runnable measured-leather example with explicitly illustrative boundary assumptions.
 
 ## Identify material behavior from local observations
 

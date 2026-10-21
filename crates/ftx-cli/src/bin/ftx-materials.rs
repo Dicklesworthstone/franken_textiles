@@ -80,6 +80,7 @@ ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials calibrate-friction SLIDING.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
 ftx-materials thermal-compression HISTORY.json
+ftx-materials thermal-vapor STACK.json
 ftx-materials thermal-steady STACK.json
 ftx-materials thermal-steady-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-steady-coverage REQUEST.json
@@ -102,6 +103,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `price` is a dated offer sample, not a checkout or a worldwide market price.
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `thermal-compression` retains material heat state across qualified gap changes and thermal holds; mechanical work is not converted to heat.
+`thermal-vapor` computes potential evaporative exchange from source-qualified vapor resistances and explicit boundary pressures; it does not infer sweat availability, condensation or wearer comfort.
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `pressure-condition` prepares a frozen material at a declared normal pressure from qualified observations; it does not infer contact pressure.
 `compression-stack` infers common pressure from a rigid-face stack clearance and qualified branches, returning one frozen selection per layer; it is not a garment-contact or recovery simulation.
@@ -348,6 +350,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-motion", schedule] => thermal_motion::run(schedule),
         ["thermal-transient", path] => thermal_transient::run(path),
         ["thermal-compression", path] => steady_workbench::compression_history(path),
+        ["thermal-vapor", path] => steady_workbench::vapor(path),
         ["thermal-steady", path] => steady_workbench::stack(path),
         ["thermal-steady-surface", report, conditions] => {
             steady_workbench::surface(report, conditions)

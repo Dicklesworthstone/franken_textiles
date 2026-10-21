@@ -28,6 +28,7 @@ pub mod material_response;
 mod material_return_map;
 pub mod material_screen;
 pub mod material_thermal;
+pub mod material_vapor;
 pub mod materials;
 pub mod pattern;
 pub mod round;

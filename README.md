@@ -70,6 +70,9 @@ stays absent. Start with the [catalog guide](docs/material-catalog.md) and
 
 - [Measured leather](docs/measured-leather.md): ten bovine leather sample groups distinguish tanning,
   finishes and neck/back locations, with measured dry/vapor resistance and thickness.
+- [Potential evaporative transfer](docs/vapor-resistance.md): use source-qualified vapor resistance
+  in a declared layer stack, retaining pressure drops and potential heat/water transfer. Actual sweat
+  supply and garment comfort remain outside this calculation.
 - [Transient exterior heat](docs/transient-exterior-heat.md): run source-qualified convection and
   material-following radiation on a layer stack, a saved drape or a complete motion history. Reports
   retain the exposed face temperature, separate signed heat contributions and reference-mass storage.
