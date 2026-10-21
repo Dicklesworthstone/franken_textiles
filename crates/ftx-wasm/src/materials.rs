@@ -240,8 +240,17 @@ pub fn calibrate_strip(input: &str, allow_estimates: bool) -> Result<String, Ref
         .as_ref()
         .ok_or_else(|| invalid("accepted strip fit lacks its frozen selection"))?;
     let snapshot = textile_import::catalog()?.resolve(selection)?;
+    let readiness = (|| {
+        snapshot.mechanics()?;
+        snapshot.membrane_relaxation()?;
+        snapshot.membrane_plasticity()?;
+        snapshot.bending_response()?;
+        snapshot.bending_plasticity()?;
+        Ok::<(), Refusal>(())
+    })();
     serde_json::to_string(&json!({"calibration":report,"selection":selection,
         "selection_json":report.selection_json,"material":detail(&snapshot)?,
+        "simulation_ready":readiness.is_ok(),"mechanics_refusal":readiness.err(),
         "fit_claim":false,"empirical_validation_claim":false}))
     .map_err(invalid)
 }
