@@ -112,6 +112,32 @@ Reuse `selection_json` directly when assembling material bindings. Reformatting 
 source numbers in a browser can invalidate a frozen identity. A rejected fit has no such
 selection; keep its diagnostics and change only independently justified inputs or policy.
 
+## Use the browser material workbench
+
+In the material workbench, choose **Clamped strip forces and transverse widths** under
+material identification, load the acquisition JSON, and explicitly choose whether to admit
+the fitted estimates. The worker runs the same `strip::fit` authority locally through
+`material_calibrate_strip(input, allow_estimates)`.
+
+The result separates FIT and CHECK errors and displays all four coefficients with their
+search bounds, actual strip dimensions and warp axes, midpoint-width usage, local FIT
+strain support, stationary starts, forward-work use, mesh-refinement error and enforced-domain
+replay. A prediction table retains each acquisition/observation identity alongside actual
+force, midpoint width and residuals. Acquisition methods and rejection reasons are plain text.
+
+An accepted result supplies the exact frozen selection to the ordinary pattern-assignment
+controls; independent capability refusals stay visible. A completed but unaccepted fit retains
+the original input and diagnostic report without an assignable selection. A physical or budget
+refusal, changed request, changed response mode or changed estimate policy withdraws stale
+results and selections. Report, original input and exact accepted selection are downloadable.
+
+The file-free `material_strip_experiment(input)` export also provides the canonical forward
+experiment for browser integrations. Both exports share the native source, model, geometry and
+work guards. The frontend checks execute the compiled WASM through the real worker and compare
+the complete synthetic calibration and exact frozen selection with native output; lifecycle
+tests separately cover source-preserving downloads and rejected replacements. These checks do
+not establish empirical textile accuracy or a graphical browser rendering guarantee.
+
 ## Matched published knit acquisitions
 
 The existing acquisition parser retains the Sperl 2022 force histories and matched

@@ -1,0 +1,205 @@
+//! Browser adapter integration against the real finite-strip inverse; no browser or solver doubles.
+//! Synthetic acquisitions establish numerical plumbing, never measured textile or garment fit.
+
+use ftx_core::{RefusalCode, receipt::sha256_hex};
+use ftx_drape::strip::fit::Input;
+use ftx_pattern::{material_catalog::Selection, textile_import};
+use ftx_wasm::materials;
+use serde_json::{Value, json};
+
+const INPUT: &str = include_str!("../../../tests/fixtures/materials/synthetic-clamped-strip.json");
+const PATTERN: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+
+#[test]
+fn accepted_strip_api_freezes_the_source_estimate_without_fabricating_missing_physics() {
+    // Exactly one accepted inverse run; all following checks reuse its frozen selection.
+    // The API argument, rather than the serialized output-consumption policy, controls consent.
+    let mut request: Value = serde_json::from_str(INPUT).unwrap();
+    request["allow_estimates"] = json!(false);
+    let identified: Value =
+        serde_json::from_str(&materials::calibrate_strip(&request.to_string(), true).unwrap())
+            .unwrap();
+    let calibration = &identified["calibration"];
+    assert_eq!(calibration["accepted"], true, "{identified}");
+    assert_eq!(calibration["reasons"], json!([]));
+    assert_eq!(calibration["domain_replay_verified"], true);
+    assert!(calibration["check"].is_object());
+    assert_eq!(identified["fit_claim"], false);
+    assert_eq!(identified["empirical_validation_claim"], false);
+    let mut input: Input = serde_json::from_value(request).unwrap();
+    input.allow_estimates = true;
+    let hash = sha256_hex(&serde_json::to_vec(&input).unwrap());
+    assert_eq!(calibration["input_sha256"], hash);
+    assert_eq!(calibration["input"], serde_json::to_value(&input).unwrap());
+    let selection_json = identified["selection_json"].as_str().unwrap();
+    let selection: Selection = serde_json::from_str(selection_json).unwrap();
+    assert_eq!(
+        serde_json::to_value(&selection).unwrap(),
+        identified["selection"]
+    );
+    assert_eq!(identified["selection"], calibration["selection"]);
+    assert_eq!(identified["selection_json"], calibration["selection_json"]);
+    assert!(selection.allow_estimates);
+    let source = format!("strip-{hash}");
+    let record = selection.record.as_ref().unwrap();
+    assert_eq!(
+        record.sources[&source].reference,
+        format!("local:ftx-strip-calibration/{hash}")
+    );
+    assert_eq!(
+        serde_json::to_value(record).unwrap(),
+        calibration["material"]
+    );
+    for (key, original) in &input.material.sources {
+        assert_eq!(
+            serde_json::to_value(&record.sources[key]).unwrap(),
+            serde_json::to_value(original).unwrap()
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&record.properties["areal_density"]).unwrap(),
+        serde_json::to_value(&input.material.properties["areal_density"]).unwrap()
+    );
+    for key in [
+        "warp_stiffness",
+        "weft_stiffness",
+        "poisson_warp_weft",
+        "shear_stiffness",
+    ] {
+        let coefficient = &record.properties[key];
+        assert_eq!(
+            serde_json::to_value(coefficient.evidence).unwrap(),
+            "estimate"
+        );
+        assert_eq!(coefficient.source, source);
+        let domain: Value =
+            serde_json::from_str(&coefficient.conditions["fitted_green_strain_range"]).unwrap();
+        assert_eq!(domain, calibration["fitted_green_strain_range"]);
+    }
+    let catalog = textile_import::catalog().unwrap();
+    let resolved = catalog.resolve(&selection).unwrap();
+    assert_eq!(
+        selection.expected_sha256.as_deref(),
+        Some(resolved.sha256())
+    );
+    assert!(
+        resolved
+            .material()
+            .require("warp_stiffness", "N/m", resolved.allows_estimates())
+            .is_ok()
+    );
+    assert!(resolved.mechanics().is_err());
+    let detail: Value = serde_json::from_str(&materials::inspect(selection_json).unwrap()).unwrap();
+    assert_eq!(detail, identified["material"]);
+    assert_eq!(
+        detail["capabilities"]["mechanical_coefficients"]["ready"],
+        false
+    );
+    for missing in [
+        "bending_rigidity",
+        "thickness",
+        "friction_skin",
+        "friction_self",
+    ] {
+        assert!(
+            detail["missing_mechanics"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(missing))
+        );
+    }
+    let changes = json!({"schema":"ftx-material-bindings/1","default":identified["selection"]});
+    let bound: Value =
+        serde_json::from_str(&materials::bind(PATTERN, &changes.to_string()).unwrap()).unwrap();
+    assert_eq!(bound["geometry_changed"], false);
+    assert_eq!(
+        bound["drape_materials_without_self_contact"]["ready"],
+        false
+    );
+    let original: Value = serde_json::from_str(PATTERN).unwrap();
+    assert_eq!(bound["pattern"]["pieces"], original["pieces"]);
+    assert_eq!(bound["pattern"]["seams"], original["seams"]);
+    assert_eq!(
+        bound["pattern"]["fabric"]["material"],
+        identified["selection"]
+    );
+    let mut changed: Value = serde_json::from_str(selection_json).unwrap();
+    changed["record"]["properties"]["warp_stiffness"]["value"] =
+        json!(record.properties["warp_stiffness"].value + 1.0);
+    assert!(materials::inspect(&changed.to_string()).is_err());
+    let mut changed: Value = serde_json::from_str(selection_json).unwrap();
+    changed["allow_estimates"] = json!(false);
+    assert!(materials::inspect(&changed.to_string()).is_err());
+}
+
+#[test]
+fn unresolved_strip_api_keeps_its_report_without_an_assignable_selection() {
+    let mut request: Value = serde_json::from_str(INPUT).unwrap();
+    request["policy"]["max_iterations"] = json!(1);
+    let response: Value =
+        serde_json::from_str(&materials::calibrate_strip(&request.to_string(), true).unwrap())
+            .unwrap();
+    assert_eq!(response["calibration"]["accepted"], false, "{response}");
+    assert!(
+        response["calibration"]["reasons"]
+            .as_array()
+            .is_some_and(|v| !v.is_empty())
+    );
+    assert!(
+        response["calibration"]["starts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|start| start["converged"] == false)
+    );
+    for field in ["material", "selection", "selection_json"] {
+        assert!(response["calibration"][field].is_null());
+    }
+    for field in ["selection", "selection_json", "material"] {
+        assert!(response[field].is_null(), "{field}: {response}");
+    }
+    assert_eq!(response["simulation_ready"], false);
+    assert_eq!(response["fit_claim"], false);
+    assert_eq!(response["empirical_validation_claim"], false);
+    let mut input: Input = serde_json::from_value(request).unwrap();
+    input.allow_estimates = true;
+    assert_eq!(
+        response["calibration"]["input_sha256"],
+        sha256_hex(&serde_json::to_vec(&input).unwrap())
+    );
+}
+
+#[test]
+fn exhausted_strip_api_refuses_without_publishing_a_candidate() {
+    let mut request: Value = serde_json::from_str(INPUT).unwrap();
+    request["policy"]["max_forward_solves"] = json!(1);
+    let refusal = materials::calibrate_strip(&request.to_string(), true).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::BudgetExceeded);
+}
+
+#[test]
+fn strip_api_requires_acquisition_consent_and_valid_observation_units() {
+    assert!(materials::calibrate_strip("{}", true).is_err());
+    let original: Value = serde_json::from_str(INPUT).unwrap();
+    // These guards run before an inverse evaluation; result-consumption permission cannot
+    // substitute for independent admission of the model or estimated acquisition observations.
+    for policy in ["admit_planar_elastic_model", "allow_estimated_observations"] {
+        let mut request = original.clone();
+        request[policy] = json!(false);
+        assert!(
+            materials::calibrate_strip(&request.to_string(), true).is_err(),
+            "{policy}"
+        );
+    }
+    let mut request = original.clone();
+    request["experiments"][0]["observations"][0]["mid_width"]["value_m"] = json!(0);
+    assert!(materials::calibrate_strip(&request.to_string(), true).is_err());
+    let mut request = original.clone();
+    // An unqualified compression fraction cannot silently become a physical midpoint width.
+    request["experiments"][0]["observations"][0]["compression_fraction"] = json!(0.1);
+    assert!(materials::calibrate_strip(&request.to_string(), true).is_err());
+    let mut request = original;
+    request["policy"]["max_forward_solves"] = json!(0);
+    assert!(materials::calibrate_strip(&request.to_string(), true).is_err());
+}

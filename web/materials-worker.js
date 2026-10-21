@@ -155,14 +155,16 @@ self.onmessage = async ({ data: msg }) => {
       case "calibrate": {
         const identify = ({ nonlinear: ftx.material_calibrate_nonlinear,
           relaxation: ftx.material_calibrate_relaxation,
-          membrane_plasticity: ftx.material_calibrate_membrane_plasticity })[msg.calibrationMode];
-        if (!["nonlinear", "relaxation", "membrane_plasticity"].includes(msg.calibrationMode)) throw Error("Choose the response to identify.");
+          membrane_plasticity: ftx.material_calibrate_membrane_plasticity,
+          clamped_strip: ftx.material_calibrate_strip })[msg.calibrationMode];
+        if (!["nonlinear", "relaxation", "membrane_plasticity", "clamped_strip"].includes(msg.calibrationMode)) throw Error("Choose the response to identify.");
         if (typeof identify !== "function") throw Error("Rebuild web/pkg: missing material calibration engine.");
         if (typeof msg.allowEstimates !== "boolean") throw Error("Declare admission of fitted estimates explicitly.");
         raw = identify(msg.calibrationRequest, msg.allowEstimates); result = json(raw);
-        if (result.calibration?.schema === "ftx-membrane-plasticity-calibration-report/1" && result.calibration.status !== "ACCEPTED") {
+        if ((result.calibration?.schema === "ftx-membrane-plasticity-calibration-report/1" && result.calibration.status !== "ACCEPTED") ||
+            (result.calibration?.schema === "ftx-strip-calibration-report/1" && !result.calibration.accepted)) {
           if (result.selection !== null || result.selection_json !== null || result.material !== null) {
-            throw Error("Unresolved permanent-stretch identification cannot publish a selection.");
+            throw Error("Unresolved material identification cannot publish a selection.");
           }
           files = [file("material-calibration.json", raw), file("calibration-input.json", msg.calibrationRequest)];
           break;

@@ -2242,6 +2242,26 @@ retain their separate acceptance requirements. See
 
 ---
 
+### 25.37 Browser finite-strip identification and source-preserving assignment
+
+The file-free WASM boundary and material workbench now expose the same finite-strip inverse
+authority as the native commands (`ftx-ki3`). The user loads source-bearing acquisitions,
+declares consumption of output estimates, reviews independent FIT/CHECK errors and actual
+grip-force/width predictions, then assigns only an accepted frozen material selection.
+Geometry, warp axes, search bounds, numerical work, doubled-mesh change and enforced-domain
+replay remain visible. Source text is displayed literally and original JSON downloads retain
+their exact bytes; numbers are not reconstructed from the display tables.
+
+Completed unaccepted fits retain diagnostics without a material selection. Physical refusals,
+work exhaustion and changed inputs withdraw stale output. A separate forward WASM export permits
+independent strip experiments using the ordinary source/material authority. Real compiled-WASM
+worker checks compare the complete synthetic fit and exact selection with native results and
+exercise forward replay, ordinary pattern binding, missing mechanics and refused replacement.
+This delivers the interactive characterization-to-assignment path; it does not supply a missing
+source width-measurement operator or establish measured-knit and garment accuracy under `ftx-ki1`.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

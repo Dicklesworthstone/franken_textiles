@@ -11,6 +11,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const calibrationSelection = admission => `{"id":"identified","expected_sha256":"locked","allow_estimates":${admission},"value":-0.0,"coefficient":1.0}`;
 function calibrationReport(mode = 'nonlinear', admission = false, check = true) {
   if (mode === 'membrane_plasticity') return permanentCalibration('ACCEPTED', admission, check);
+  if (mode === 'clamped_strip') return stripCalibration('ACCEPTED', admission, check);
   const selection = calibrationSelection(admission), quality = { components: 12, rms_scaled: 0.02, peak_scaled: 0.04 };
   return { selection: JSON.parse(selection), selection_json: selection, fit_claim: false,
     material: { selection: JSON.parse(selection), selection_json: selection, snapshot: { id: 'identified' },
@@ -57,6 +58,26 @@ function permanentCalibration(status = 'ACCEPTED', admission = false, check = tr
   return selected;
 }
 
+function stripCalibration(status = 'ACCEPTED', admission = false, check = true) {
+  const selected = calibrationReport('nonlinear', admission, check), quality = selected.calibration.fit;
+  selected.calibration = {schema:'ftx-strip-calibration-report/1',accepted:status==='ACCEPTED',
+    input:{method:'Explicit synthetic midpoint chord; <literal evidence>',
+      parameter_bounds:[[100,500],[100,300],[0.05,0.4],[10,100]],
+      policy:{max_forward_solves:8000,max_mesh_scaled:1},
+      experiments:[{id:'strip-source',partition:'fit',
+        fixture:{width_m:0.06,gauge_length_m:0.1,warp_axis:[0.6,0.8],cells:[2,4]},
+        observations:[{mid_width:{value_m:0.059,scale_m:0.001}}]}]},
+    parameters:[300,180,0.2,70],fit:quality,check:check?quality:null,
+    fitted_green_strain_range:[[-0.02,0.1],[-0.03,0.12],[-0.1,0.1]],input_sha256:'strip-source-lock',
+    reasons:status==='ACCEPTED'?[]:[`${status}: The declared strip observations do not resolve this law.`],
+    starts:[{converged:true},{converged:true},{converged:true}],excitation_pivot:0.1,
+    forward_solves:600,mesh_change_peak_scaled:0.08,domain_replay_verified:status==='ACCEPTED',
+    predictions:[{experiment:'strip-source',observation:'point-1',partition:'fit',
+      state:{extension_fraction:0.05,force_n:1.2,mid_width_m:0.059},force_residual_n:0.01,width_residual_m:-0.0001}]};
+  if (status !== 'ACCEPTED') Object.assign(selected,{selection:null,selection_json:null,material:null});
+  return selected;
+}
+
 async function workerModule({ failFold = false, failExport = false, trap = false, rejectLoad = false,
   failScenario = false, trapScenario = false, bindings = null } = {}) {
   const sent = [], called = [], freed = [];
@@ -72,6 +93,7 @@ async function workerModule({ failFold = false, failExport = false, trap = false
     material_calibrate_nonlinear: (r, a) => { called.push(['calibrate-nonlinear',r,a]); return JSON.stringify(calibrationReport('nonlinear',a)); },
     material_calibrate_relaxation: (r, a) => { called.push(['calibrate-relaxation',r,a]); return JSON.stringify(calibrationReport('relaxation',a)); },
     material_calibrate_membrane_plasticity: (r, a) => { called.push(['calibrate-membrane_plasticity',r,a]); return JSON.stringify(calibrationReport('membrane_plasticity',a)); },
+    material_calibrate_strip: (r, a) => { called.push(['calibrate-clamped_strip',r,a]); return JSON.stringify(calibrationReport('clamped_strip',a)); },
     material_screen: r => { called.push(['screen', r]); return '{"alternatives":[],"coefficient":1.0}'; },
     material_study: (p, r) => { called.push(['study', p, r]); return '{"alternatives":[],"coordinate":-0.0}'; },
     material_scenario_study: (b, p, r, s, m) => {
@@ -212,7 +234,7 @@ test('pressure conditioning preserves exact request and frozen selection through
 
 test('calibration worker routes all shared engines with explicit consent and lossless reusable selections', async () => {
   const w = await workerModule(), input = '{"coefficient":1.0,"origin":-0.0}';
-  for (const mode of ['nonlinear','relaxation','membrane_plasticity']) for (const allowEstimates of [false,true]) {
+  for (const mode of ['nonlinear','relaxation','membrane_plasticity','clamped_strip']) for (const allowEstimates of [false,true]) {
     const result = await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest:input,allowEstimates,request:19});
     assert.equal(result.type,'result'); assert.equal(result.request,19);
     assert.deepEqual(w.called.at(-1),['calibrate-'+mode,input,allowEstimates]);
@@ -260,6 +282,21 @@ test('permanent-stretch worker keeps rejected and ambiguous histories without se
   const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_membrane_plasticity:()=>JSON.stringify(invalid)}});
   const result=await w.send({type:'calibrate',calibrationMode:'membrane_plasticity',calibrationRequest:input,allowEstimates:true});
   assert.equal(result.type,'error'); assert.match(result.message,/cannot publish a selection/);
+});
+
+test('clamped-strip worker preserves unresolved physical acquisitions without a selectable material', async () => {
+  const input='{"schema":"ftx-strip-calibration/1","origin":-0.0}';
+  for (const status of ['ACCEPTED','AMBIGUOUS','REJECTED']) {
+    const raw=JSON.stringify(stripCalibration(status,true));
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_strip:()=>raw}});
+    const result=await w.send({type:'calibrate',calibrationMode:'clamped_strip',calibrationRequest:input,allowEstimates:true});
+    assert.equal(result.type,'result',result.message);
+    assert.equal(result.files[0].text,raw);assert.equal(result.files.at(-1).text,input);
+    assert.equal(result.files.some(f=>f.name==='calibrated-selection.json'),status==='ACCEPTED');
+  }
+  const invalid={...stripCalibration('AMBIGUOUS',true),selection_json:calibrationSelection(true)};
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_strip:()=>JSON.stringify(invalid)}});
+  assert.match((await w.send({type:'calibrate',calibrationMode:'clamped_strip',calibrationRequest:input,allowEstimates:true})).message,/cannot publish a selection/);
 });
 
 test('scenario studies retain partial failures and free the fresh model on success, refusal and trap', async () => {
@@ -581,6 +618,39 @@ test('permanent-stretch results show bounded coefficients and withdraw selection
     assert.match(visibleText(s),/No identified selection is available/);
   }
   p.e.calibrationRequest.handlers.change(); assert.equal(s.hidden,true);
+});
+
+test('clamped-strip results show geometry and operator assumptions and withdraw unresolved selections', async () => {
+  const p=await pageModule();await p.load();
+  p.e.calibrationMode.value='clamped_strip';p.e.calibrationEstimates.checked=true;
+  const input='{"schema":"ftx-strip-calibration/1","origin":-0.0}';
+  p.select('calibrationRequest',input);p.e.calibrationRequest.handlers.change();p.ready();
+  await p.e.calibrate.onclick();assert.equal(p.current().messages.at(-1).calibrationMode,'clamped_strip');
+  const report=stripCalibration('ACCEPTED',true,false),raw=JSON.stringify(report);
+  p.emit(report,[{name:'material-calibration.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'Identified material behavior');
+  assert.equal(p.e.assign.disabled,false);assert.equal(p.e.selection.value,report.selection_json);
+  assert.match(visibleText(s),/Not supplied/);
+  assert.match(visibleText(s),/Explicit synthetic midpoint chord; <literal evidence>/);
+  assert.match(visibleText(s),/Grip extension is not treated as uniform fabric strain/);
+  const geometry=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Warp axis [across, along]'));
+  assert.deepEqual(plain(geometry.children[2].children.map(n=>n.textContent)),
+    ['strip-source','fit','0.06','0.1','0.6, 0.8','2 × 4','Chord at half the reference gauge']);
+  assert.match(visibleText(s),/Doubled-mesh change/);
+  assert.match(visibleText(s),/Enforced-domain replay/);
+  const predictions=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Actual refined strip predictions'));
+  assert.deepEqual(plain(predictions.children[2].children.map(n=>n.textContent)),
+    ['strip-source / point-1','fit','0.05','1.2','0.01','0.059','-0.0001']);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  const download=descendants(s).find(n=>n.download==='material-calibration.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  for (const status of ['AMBIGUOUS','REJECTED']) {
+    await p.e.calibrate.onclick();p.emit(stripCalibration(status,true));
+    assert.equal(p.e.assign.disabled,true);assert.equal(p.e.selection.value,'');
+    assert.match(visibleText(s),new RegExp(status));
+    assert.match(visibleText(s),/No identified selection is available/);
+  }
+  p.e.calibrationMode.value='nonlinear';p.e.calibrationMode.handlers.change();assert.equal(s.hidden,true);
 });
 
 test('a refused replacement calibration leaves no previous selection or report available for assignment', async () => {
@@ -1317,6 +1387,52 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
         assert.equal(binding.result.drape_materials_with_self_contact.ready,allowEstimates);
       }
     }
+    const stripRequest=fixture('synthetic-clamped-strip.json');
+    const strip=await w.send({type:'calibrate',calibrationMode:'clamped_strip',
+      calibrationRequest:stripRequest,allowEstimates:true});
+    assert.equal(strip.type,'result',strip.message);
+    assert.equal(strip.result.calibration.accepted,true);
+    assert.equal(strip.result.calibration.domain_replay_verified,true);
+    assert.deepEqual(strip.result.calibration.reasons,[]);
+    assert.equal(strip.result.calibration.fit.components,12);
+    assert.equal(strip.result.calibration.check.components,2);
+    assert.equal(strip.result.material.capabilities.mechanical_coefficients.ready,false);
+    assert.equal(strip.files[1].text,strip.result.selection_json);
+    assert.equal(strip.files[2].text,stripRequest);
+    assert.deepEqual(JSON.parse(ftx.material_inspect(strip.result.selection_json)),strip.result.material);
+    if(process.env.FTX_STRIP_REPLAY) {
+      const native=JSON.parse(fs.readFileSync(process.env.FTX_STRIP_REPLAY,'utf8'));
+      assert.deepEqual(strip.result.calibration,native.calibration);
+      assert.equal(strip.result.selection_json,native.selection_json);
+    }
+    const stripInput=JSON.parse(stripRequest);
+    const forwardRequest=`{"schema":"ftx-strip-experiment/1","material":${strip.result.selection_json},`+
+      `"fixture":${JSON.stringify(stripInput.experiments[0].fixture)},"extensions":[0,0.03],`+
+      `"controls":${JSON.stringify(stripInput.controls)}}`;
+    const forwardRaw=ftx.material_strip_experiment(forwardRequest),forward=JSON.parse(forwardRaw);
+    assert.equal(forward.states.length,2);
+    assert.ok(forward.states[1].force_n>0);
+    assert.equal(forward.input.material.expected_sha256,strip.result.selection.expected_sha256);
+    assert.equal(ftx.material_strip_experiment(JSON.stringify(forward.input)),forwardRaw);
+    const stripBinding=await w.send({type:'bind',pattern:fixture('synthetic-sewing-pattern.json'),
+      changes:`{"schema":"ftx-material-bindings/1","default":${strip.result.selection_json}}`});
+    assert.equal(stripBinding.type,'result',stripBinding.message);
+    assert.equal(stripBinding.result.geometry_changed,false);
+    assert.equal(stripBinding.result.drape_materials_with_self_contact.ready,false);
+    const unfinished={...stripInput,policy:{...stripInput.policy,max_iterations:1}};
+    const unfinishedRaw=JSON.stringify(unfinished);
+    const unfinishedReport=await w.send({type:'calibrate',calibrationMode:'clamped_strip',
+      calibrationRequest:unfinishedRaw,allowEstimates:true});
+    assert.equal(unfinishedReport.type,'result',unfinishedReport.message);
+    assert.equal(unfinishedReport.result.calibration.accepted,false);
+    assert.equal(unfinishedReport.result.selection_json,null);
+    assert.equal(unfinishedReport.files.length,2);
+    assert.equal(unfinishedReport.files[1].text,unfinishedRaw);
+    const exhausted={...stripInput,policy:{...stripInput.policy,max_forward_solves:1}};
+    const exhaustedReport=await w.send({type:'calibrate',calibrationMode:'clamped_strip',
+      calibrationRequest:JSON.stringify(exhausted),allowEstimates:true});
+    assert.equal(exhaustedReport.type,'error');
+    assert.match(exhaustedReport.message,/budget/i);
     const compressionRequest = fixture('synthetic-compression.json');
     const prepared = await w.send({ type: 'pressure', compressionRequest });
     assert.equal(prepared.type, 'result', prepared.message);
