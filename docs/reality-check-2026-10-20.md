@@ -2159,3 +2159,185 @@ Those changes were preserved without restarting the entire validation cycle. The
 handoff records final evidence/TODO and Bead status, plus the three thermal-assert formatting changes.
 `ftx-ai1` closes only the delivered software capability; `ftx-ki4`, empirical material/garment tasks
 and G5 stay open. The two unrelated untracked paths remain untouched.
+
+## 2026-10-21 continuation: adaptive heat in compression histories (`ftx-cp2.1`)
+
+The existing tested `DryThermalModel::advance_adaptive` had no product callers. The smallest useful
+connection is an explicit optional `adaptive` policy on both existing compression-history versions.
+It now reaches both native commands, the portable adapter and the material workbench through the
+same history authority. Accepted half-step heat enters the thermal ledger; endpoint flux is not
+multiplied by the whole hold. One attempted-work budget spans holds and qualified reversals.
+Failed advances preserve physical state while keeping attempted work charged externally. Omitting
+the policy preserves the original fixed-step arithmetic and serialized WASM report bytes.
+
+The browser displays the native local-error/work diagnostics and original policy, retains exact
+requests/reports/frozen selections, withdraws failed selections and binds the ordinary final
+material without changing pattern geometry. There is no new solver, crate, dependency, material
+inference or empirical claim. Local estimates do not bound global/spatial error or source uncertainty.
+The parent `ftx-cp2` still requires measured contact/compression/recovery and independent physical
+acceptance; this child does not relocate or satisfy that acceptance.
+
+Detailed delivery TODO, bounded to this software connection:
+
+- [x] Read complete AGENTS/README, relevant plan/spec/contract, live history and Beads; verify the
+  unused integrator and preserve the original empirical parent.
+- [x] Retain both old compiled-WASM requests/reports before editing; both reject the new field.
+- [x] Wire both histories to the original integrator, with accepted-half-step heat and cumulative
+  trial/cell accounting, maximum 262144 attempted cell solves per request.
+- [x] Preserve branch/source/storage gates, mechanical work, exact material locks and rollback;
+  charge partial failed attempts and retain exhaustion on direct retries.
+- [x] Document optional policy, diagnostics, fixed-step compatibility and no-claim boundaries;
+  correct the guide's pre-existing unified budget exit-code description to the existing contract.
+- [x] Add direct analytic/conservation/reversal/budget/minimum-interval regressions; all 18 focused
+  drape tests pass, including existing cases. Both corrected consumer suites pass 5/5 each.
+- [x] Build/install/hash release WASM; replay both fixed/adaptive versions against actual native
+  command output; run compiled frontend 87/87 with no skips and actual Chromium binding/refusals.
+- [x] Recheck the existing purchasing browser flow against the installed bundle; inspect the
+  compression screenshot and review changed product/test code separately from reported success.
+- [ ] Finish corrected full native workspace and strict all-target Clippy; preserve every failure.
+- [ ] Finish the bounded scanner disposition, final source barrier and original-acceptance review;
+  close/flush only this child, make the scoped main handoff and release its file reservations.
+
+Evidence is retained under ignored `out/ftx-cp2.1-20261021/`. Every Cargo command uses
+`RCH_REQUIRE_REMOTE=1`, base `9a84f3f3038a1418ac43076badb96dfd04081037` (tree
+`05ff3aa16be87759f27ca0c80e91a048f69d134c`), `--clean-overlay` and explicit overlays for the
+two thermal production modules, their two integration tests and the CLI/WASM consumer tests.
+The initial core-only overlay fingerprint is
+`9bb65b7b9cb4a7c6ccda509ae0747cfe1fe41338e9b38da3115f4bd1f664aa40`;
+initial full overlays are `bf0f04fad8df66e30e1bb3701ea65f2af38bd7b1bfca193e4e5245c3115b657a`;
+the final corrected-test overlay is
+`b4f676ab3fa120f90177a329b850252a0840f6e3c846e4bc05178b24c4ccea02`.
+`CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0` omit debug symbols, retaining normal
+debug assertions. Cargo's HTTP user agent is explicitly forwarded as required by AGENTS.
+SBH reports only 22749081600 free bytes (0.56925689%), below its threshold: no local Rust build.
+
+Executed checks and proof, with remaining native/scanner results recorded below at handoff:
+
+| Command / lane | Observed result |
+| --- | --- |
+| `cargo test --locked -j1 -p ftx-drape --test compressed_thermal --test compressed_thermal_path` | hz1, 18 passed, no failures/ignores/filters; `checks/core-first.log` |
+| `cargo test --locked -j1 -p ftx-cli --test compressed_thermal_workflow -p ftx-wasm --test compressed_thermal` | hz2, 10 passed, no failures/ignores/filters; `checks/consumers-corrected.log` |
+| `cargo clippy --locked -j1 --all-targets -- -D warnings` | initial vmi1152480 and final corrected-test hz2 executions both exit 0; `checks/clippy.log`, `checks/clippy-final.log` |
+| `cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm` | ovh-b, exit 0; `checks/wasm.log`; subsequent changes affect tests/docs only |
+| `cargo fmt --check`, `git diff --check` | exit 0 after the single incoming test assertion's whitespace repair |
+| `FTX_REAL_WASM=1 node --test tools/check_materials_frontend.cjs` | 87 passed, 0 failed/skipped; `checks/frontend-compiled.log` |
+| Actual Chromium `tools/check_materials_web.cjs --compression-proof` | exit 0; fixed/adaptive v1/v2, RC answer, native diagnostic cells, exact downloads, binding and withdrawal; `checks/chromium-compression.log` |
+| Actual Chromium `tools/check_materials_web.cjs --purchasing-proof` | configured execution exit 0; intact bounded markers, one whole material order, stale-price withdrawal; `checks/chromium-purchasing-configured.log` |
+| Installed WASM final Node replay | exit 0; both original fixed report bytes exact, all four complete native/WASM reports structurally identical, unchanged final materials, late aggregate exhaustion refuses; `checks/installed-wasm-final-replay.log` |
+
+Browser commands use existing `FTX_PLAYWRIGHT_MODULE=playwright-core` and
+`NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules`; no dependency was installed.
+Compression browser artifacts are in
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-8n8PDP/`,
+including `compression-history.png`, exact fixed/adaptive requests/reports and the bound pattern.
+Purchasing artifacts are in the adjacent `ftx-materials-browser-9j9Kwc/` directory.
+
+For the actual one-cell browser requests the analytic RC errors are **0.000822164708 K** after
+the first hold and **0.000652922065 K** after the cyclic second hold, against the declared 0.01 K
+regression tolerance. Cumulative balance residuals are 5.6843418861e-13 and 1.1368683772e-12 J.
+The first hold consumes 6949 trials / 20847 cells; the two-hold cycle consumes 8996 trials /
+26988 cells, within its explicit 10000-trial / 262144-cell allowance. All accepted local error
+ratios are at most 1. These are synthetic numerical checks, not measured textile results or timings.
+
+Raw release WASM SHA-256 is `259225f9809e66181b3df3509c6ba997af3bfa1cbd3679276cb2c9abd4a45e9d`.
+After wasm-bindgen 0.2.128, installed `ftx_wasm_bg.wasm` is
+`1ea3233fa6b9ea466c28323334686ba5a2771b490a7cc3ea6cc28d2da2bf26d9`.
+The actual native companion executable hashes before and after captures to
+`108a1950c157ae8cac1ad4096b87967fc50647c3cefda4503a18b7cef660c16b`.
+The four installed bundle hashes and thirteen maintained source hashes are retained in
+`installed-bundle-sha256.txt` and `source-final-sha256.txt`. The prior bundle is preserved separately.
+
+Failures and corrections, retained without changing production solver thresholds:
+
+- Initial complete workspace execution fails in the new CLI negative: expected exit 3, actual 4.
+  The existing CLI contract and dispatch reserve 4 for `budget_exceeded`. The new test now asserts
+  exit 4 plus that exact refusal code; no old assertion changes. `checks/workspace.log` remains.
+- Direct execution of the initially compiled four-cell portable test fails because its explicit
+  10000-trial allocation is exhausted. That identical request is now an asserted refusal. The
+  positive explicitly requests 20000 trials with the same temperature/heat tolerances and the
+  same 262144-cell cap; both consumer versions now pass. This is a disclosed test-input change,
+  not evidence that the original 10000-trial request succeeded or of universal convergence.
+- Two requested-hz1 retries exit 103 (`RCH-I003`, no free slots), before testing. Automatic healthy
+  selection then executes the corrected consumer tests on hz2; no slot/pressure/toolchain override.
+- An optional purchasing check initially cannot load `playwright`; its pipeline writer exits 0,
+  which is **not** a browser pass. The configured rerun uses pipefail and observed exit 0. No
+  dependency changes. A diagnostic assertion also incorrectly compares compact raw WASM JSON to
+  pretty-printed native JSON. The corrected final replay asserts byte equality only against the
+  original raw WASM capture and full structural equality against native output; all four pass.
+- The initial frontend run without `FTX_REAL_WASM=1` has six skips; it is not the compiled proof.
+  The later 87/87 no-skip compiled execution is the credited result.
+- The ordinary scoped UBS stalls at startup; stopping its verified own process group produces
+  exit 143, not a scan pass. Read-only `ubs doctor` exits 0 with verified helper/module checksums.
+  Ordinary retry and narrower Rust invocations also stall; no tool repair, suppressions or partial
+  override is used. The separate page scan completes, exit 0, 0 critical / 29 warnings / 210 info.
+  Changed page code uses text nodes and native values; existing JSON-parse/listener/URL findings
+  are outside the added diagnostic block. Runtime/refusal/stale-output checks run in Chromium.
+  Both existing checker-file scans and the verified nonempty three-path staged scan also stall
+  before producing results. All seven stalled invocations were stopped through their verified own
+  process groups (exit 143); unrelated scanner processes remain untouched. The staged scan is
+  incomplete. Direct diff review plus completed compiler/runtime tests do not turn it into a pass.
+- DCG rejects a combined staging/scanning shell command because it cannot parse zsh array command
+  substitution. Nothing in that command runs. Separate literal-path staging, a verified nonempty
+  index and an explicit path-list scan avoid that grammar; no allowlist or approval bypass.
+
+Automatic commits `451d8c1`, `a823a61` and `3044da8` captured implementation/test corrections during
+this work, including while verification was unfinished.
+Their titles establish neither completion nor independent verification. Incoming strip-readiness
+adapter commit `a53c2b1` is preserved but outside the frozen build snapshot; its test has only a
+reserved whitespace wrap repair here. The numerical/native/browser results qualify the named
+snapshot and installed bundle, not every live-main change. DSR quality/release, G5, empirical
+material/coupon/garment acceptance, real-person fit and new performance claims are not established.
+
+Bounded fresh-solo worksheets for this continuation:
+
+- **Creation:** the user explicitly requests granular TODO and reality-check tracking. Consumer:
+  that requested delivery/handoff; observed defect: an unreachable tested adaptive integrator.
+  Record only this item in existing report/Beads, retire its active checklist at handoff and add no
+  new process framework. The product is the shared history connection, not this evidence section.
+- **Real work:** actual last-five commits, newest five closes and all 29 open items were examined.
+  Purpose: sewing patterns that sew together and fit a specific body, with usable manufacturing
+  files. Owned maintained paths classify USER 5 (two numerical modules, guide, contract, page),
+  ENABLER 7 (five direct Rust tests including incoming whitespace repair, two existing checkers),
+  PROCESS 2 (existing Beads/report), UNKNOWN 0; four ignored bundle files deliver runtime bytes.
+  Q1: demo adaptive history, native work table, exact binding and exhaustion withdrawal in two
+  minutes. Q2: without PROCESS the same product works, but requested tracking/evidence is absent.
+  Q3: the actual CLI, compiled-WASM/browser and direct numerical tests exercise every new enabler;
+  the incoming whitespace repair only unblocks root fmt. Q4: oldest open is G5 (`ftx-onn`); the
+  high-priority measured library/coupon/garment gaps stay open. This ready, small shared connection
+  delivers a positive capability without inventing measurements. Q5: solo, no pane/close-count race.
+  Q6: no parent acceptance moves to this child; measured parent remains open. Verdict: useful
+  product increment, bounded requested tracking; stop scanner investigation before it becomes a
+  tool-maintenance project.
+- **Honesty 1:** Yes, a newly added positive request's trial allowance changes after failure.
+  Correction: retain the unchanged smaller request as a required refusal, disclose both cases and
+  verify the positive with identical tolerances/cell ceiling; old tests/gates remain unchanged.
+  **2–3:** No (checked: production engine/actual consumers, display-only DOM double, retained old
+  runtime capture; no oracle fixture or golden was regenerated).
+- **4:** Yes, direct tests and existing browser checkers change with the feature. Fresh solo diff
+  review verifies old fixed-step assertions and tolerances remain in their original branch;
+  adaptive analytic checks are additional. The new positive budget allocation is explicit above,
+  with its original negative retained. No production gate, suppression, timeout, default or
+  automatic retry increase. Countermeasure RH-1: checker changes and changed new request reviewed
+  separately; do not reinterpret either as the unchanged original request passing. **5:** No
+  (checked: no fixture IDs, request-specific cases or environment sniffing in numerical code).
+  **6:** No (checked: 18 core, 10 consumers, 87 compiled frontend run; skipped initial frontend
+  and refused remote invocations receive no pass credit).
+- **7:** No (checked: actual logs and exit reports; the missing-module pipeline zero and the
+  compact-versus-pretty diagnostic failure are explicitly uncredited). **8:** No (checked:
+  compatibility captures are not reference parity oracles; analytic and synthetic consumer checks
+  are not physical qualification). **9–10:** No (checked: failed tests, refused jobs, incomplete
+  scanner and diagnostic mistakes above; stderr retained). **11:** Pending final closure review;
+  parent remains open and this child's original acceptance has not been narrowed. **12:** No
+  (checked: technical plan/spec/gates unchanged; guide adds the implemented option and fixes an
+  existing exit-code description).
+- **13–17:** Not applicable: no subagents or delegated verification; automatic commits receive
+  no independent-review credit. **18:** No (checked: full native/frontend denominators fixed before
+  their final execution, old cases retained; the post-result trial-allocation change is disclosed
+  separately above). Older-session mining is not repeated for this bounded continuation; these
+  answers cover this item and examined history, not a new comprehensive audit of every session.
+- **19:** Explain the two new-test mistakes, the larger explicit positive request, pipeline writer
+  zero, raw-versus-pretty comparison and scanner stalls before claiming success; all are recorded.
+  **20:** Strongest proof is complete actual native/installed-WASM report equality plus independent
+  analytic RC answers and actual Chromium binding/refusal execution. A skeptic can rerun the
+  named tests and retained requests. Disposition: RH-1 checker/test-policy change disclosed and
+  bounded by unchanged negative/old gates; fresh solo re-execution is not independent verification.
