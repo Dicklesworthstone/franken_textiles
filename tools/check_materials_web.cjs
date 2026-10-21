@@ -4,6 +4,7 @@
 // NODE_PATH=$(npm root -g) node tools/check_materials_web.cjs --native target/debug/ftx-materials
 // Optional CHROMIUM_EXECUTABLE chooses an already installed Chromium binary.
 // --strip-proof DIR runs only strip browser checks against retained native reports (manifest.json).
+// --outfit-proof checks public-prior drafted garment composition with synthetic materials, without a model.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -18,6 +19,8 @@ const native = path.resolve(index < 0 ? path.join(root, 'target/debug/ftx-materi
 const stripIndex = process.argv.indexOf('--strip-proof');
 if (stripIndex >= 0 && !process.argv[stripIndex + 1]) throw Error('--strip-proof requires a native report directory');
 const stripProof = stripIndex < 0 ? null : path.resolve(process.argv[stripIndex + 1]);
+const outfitProof = process.argv.includes('--outfit-proof');
+assert.ok(!(stripProof && outfitProof), 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -42,7 +45,7 @@ const server = http.createServer((req, res) => {
 });
 (async () => {
   assert.ok(fs.existsSync(path.join(web, 'pkg/ftx_wasm_bg.wasm')), 'Build web/pkg first');
-  if (!stripProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
+  if (!stripProof && !outfitProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
@@ -67,6 +70,34 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (outfitProof) {
+      const drafts = JSON.parse(fs.readFileSync(path.join(root,'tests/fixtures/oracle/pattern/drafts.json'),'utf8')).cases;
+      const request = load('synthetic-joint-outfit.json'), fabric = request.garments[0].pattern.fabric;
+      for (const [i,id] of ['zouave_bolero-920','zouave_trousers-920'].entries()) {
+        request.garments[i].id = ['jacket','trousers'][i];
+        request.garments[i].pattern = structuredClone(drafts.find(c => c.id === id).input.pattern);
+        request.garments[i].pattern.fabric = structuredClone(fabric);
+      }
+      request.interfaces = [];
+      const original = JSON.stringify(request);
+      await input('patternFile',request);
+      await page.waitForFunction(() => /^outfit (complete|refused)/.test(document.getElementById('status').textContent));
+      assert.equal(await page.locator('#error').isVisible(),false,await page.textContent('#error'));
+      assert.match(await page.textContent('#patternName'),/2 garments in one composed outfit/);
+      assert.equal(await page.isChecked('#selfContact'),true); assert.equal(await page.isDisabled('#selfContact'),true);
+      assert.equal(await download('outfit-request.json'),original);
+      const raw = await download('outfit-pattern.json'), pattern = JSON.parse(raw);
+      const casings = pattern.meta.solved.elastic_casings, source = request.garments[1].pattern.meta;
+      assert.equal(casings.length,1); assert.ok(casings[0].instance.startsWith('trousers::'));
+      assert.ok(casings[0].load_instances.length > 0 && casings[0].load_instances.every(i => i.startsWith('trousers::')));
+      assert.equal(casings[0].relaxed_m,(source.solved.elastic_cut_mm-source.style.elastic_overlap)*0.001);
+      fs.writeFileSync(path.join(work,'outfit-pattern.json'),raw,{flag:'wx'});
+      fs.writeFileSync(path.join(work,'outfit-request.json'),original,{flag:'wx'});
+      await page.screenshot({path:path.join(work,'drafted-outfit-import.png'),fullPage:true});
+      assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
+      console.log('PASS: real Chromium imports drafted bolero/trousers, retains exact original request and independent casing rest/load scope, and locks required self-contact; no errors or uploads. Composition only, synthetic material; no drape or fit claim. Artifacts:',work);
+      return;
+    }
     if (stripProof) {
       const sha = bytes => createHash('sha256').update(bytes).digest('hex');
       const manifest = JSON.parse(fs.readFileSync(path.join(stripProof,'manifest.json'),'utf8'));

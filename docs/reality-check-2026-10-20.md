@@ -1338,12 +1338,14 @@ handoff. Original empirical material and G5 gates remain open.
 - [x] Connect the ordinary replay and study mesh-budget path; retain EA-zero and legacy behavior.
 - [x] Run actual two-casing/replay/attached-mass and drafted-trouser composition regressions; fix defects.
 - [x] Run narrow legacy regressions, formatting, all-target lint and full native tests remotely.
-- [ ] Complete the matching release wasm build remotely.
-- [ ] Preserve the previous ignored browser bundle, deliver the matching release and run existing
+- [x] Complete the matching release wasm build remotely.
+- [x] Preserve the previous ignored browser bundle, deliver the matching release and run existing
   compiled-worker/drafting smoke checks; do not claim new-case browser parity from compilation alone.
-- [ ] Rebuild and recheck the concurrently landed outfit API/nonlinear fitter so current frontend
+- [x] Rebuild and recheck the concurrently landed outfit API/nonlinear fitter so current frontend
   positive tests consume the same source version as their wasm module.
-- [ ] Fresh solo recheck; record exact source/results/limits and bounded worksheets; scan and commit
+- [x] Exercise real drafted jacket/trouser import through actual Chromium, preserving casing scope,
+  exact source download and required self-contact; keep physical drape/fit claims separate.
+- [x] Fresh solo recheck; record exact source/results/limits and bounded worksheets; scan and commit
   scoped changes, close/sync the Bead and release reservations.
 
 Focused native result: **43 passed, zero failed, one ignored** across `outfit`, `attached_mass`,
@@ -1360,7 +1362,7 @@ valid disabled start); and a legacy-report comparison wrongly expected the new e
 The final test preserves legacy absence and independently checks the explicit coefficient instead.
 Positive force assertions, contact checks, rest/mass arithmetic and solver budgets were not relaxed.
 
-Bounded fresh-solo review, 2026-10-21 (`ftx-99t`, nine feature/source/test/docs/tracker paths):
+Bounded fresh-solo review, 2026-10-21 (`ftx-99t`, ten feature/source/test/docs/tracker paths):
 
 - **Process worksheet:** runtime casing declarations are FEATURE: scene assembly consumes them.
   This existing report/TODO and Bead are PROCESS, explicitly requested by the operator; consumer is
@@ -1372,7 +1374,8 @@ Bounded fresh-solo review, 2026-10-21 (`ftx-99t`, nine feature/source/test/docs/
   of reporting would lose to implementation. Verdict: bounded requested tracking only.
 - **Real-work worksheet:** purpose is patterns that sew together and fit a particular body, with usable
   manufacturing files. Actual diff inventory for this item: USER 6 (four runtime modules and two API
-  documents), ENABLER 1 (the outfit regression target), PROCESS 2 (this report and Beads), UNKNOWN 0.
+  documents), ENABLER 2 (the outfit regression target and existing browser checker), PROCESS 2
+  (this report and Beads), UNKNOWN 0.
   Demo: the existing outfit test actually drapes two separately loaded sewn bands, one taut and one
   slack, and replays the saved composition. Omitting the process files changes no runtime behavior;
   they provide the requested task/evidence handoff only. The existing solver and ordinary replay
@@ -1437,3 +1440,49 @@ waiting process was terminated (exit 143, queue entry verified removed) before r
 remote scheduling. No executing peer job was canceled and no local compilation was allowed.
 The three corrected test assumptions above are guarded against RH-1/RH-5 by retained positive
 force/analytic-mass/source/replay assertions, and against RH-2 by explicit synthetic/fit boundaries.
+
+Final release wasm succeeds on `hz2` with `cargo build --locked --release -j1 --target
+wasm32-unknown-unknown -p ftx-wasm`. Raw SHA-256 is
+`d41e3b71ce7095a19c3c70443fbdf296ffc2e6e0687afb34e7e7494d8b2a6dc3`, independently equal to the
+remote artifact before bindgen. Installed browser WASM SHA-256 is
+`7774ada3dd6da59b530adf91113ce9bef6fe83d9a742308987979a11bf877be8`; JavaScript SHA-256 is
+`fb10878a12da286d6b8073afddebbdb4fd3da2df959764b11d4e75bf16ce62e8`. The new outfit export changes
+the glue/types as expected. The intermediate four-file bundle is preserved in `casing-only-bundle/`
+before replacement; both raw releases remain in the ignored evidence directory.
+
+Final `FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs`:
+**71 passed, zero failed/skipped**. Both formerly failing positive cases now run against the actual
+matching module. `FTX_PLAYWRIGHT_MODULE=playwright-core
+NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules node tools/check_web.cjs` also
+passes again: actual bolero/trouser/fez rounds converge, invalid tape inputs refuse, no console errors.
+This is the chart-body drafting smoke, not model-backed browser drape or a speed benchmark.
+
+The additional actual browser import is a 33-line change in the existing
+`tools/check_materials_web.cjs`, selected with `--outfit-proof`. It composes public-prior oracle bolero
+and trousers with explicitly synthetic material records, checks the original request download byte
+for byte, the trousers' original relaxed elastic length and trousers-only load scope, and locked
+cloth self-contact. It passes with no console errors, external requests or non-GET requests. The
+default checker and existing strip route retain their checks. Capture and downloaded documents:
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-YYOAOd/`.
+This proves browser composition; the two-casing physical solve/replay evidence remains native.
+An attempted inline capture script was rejected by DCG's heredoc parser before execution. No
+allowlist or guard setting changed. The bounded browser API lacked the required user-agent setting;
+the existing static checker supplies it and now retains this product regression. Its shell entry is:
+
+```sh
+FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules node tools/check_materials_web.cjs --outfit-proof
+```
+
+Fresh `cargo fmt --check`, `node --check tools/check_materials_web.cjs`, `git diff --check` and all
+five source SHA-256 checks pass. Original empirical material, actual-garment fit and G5 requirements
+remain open. The broad 1,786-test result is attached to the earlier casing snapshot; final source
+has the 130 affected native checks plus all-target lint, release wasm and the actual browser checks.
+
+Final staged UBS exits **2 / partial**, with **zero critical, 35 warnings, 89 informational** for the
+browser checker. Its existing `js.taint.command` analysis reaches the dataflow work limit; this is
+not a completed scan and no `UBS_ALLOW_PARTIAL` or suppression was used. Reviewed the added branch's
+fixture reads, fail-fast assertions, constant output filenames with exclusive creation, local-only
+requests and unchanged default/strip control paths; no new true defect found there. The completed
+five-file Rust scan above remains a separate result. `ftx-99t` is closed with the exact source and
+positive test evidence; the original empirical Beads remain open. The final handoff commits only
+owned paths on `main`, flushes Beads and releases reservations. Unrelated untracked paths are retained.
