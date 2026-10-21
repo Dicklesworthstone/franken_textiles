@@ -588,3 +588,70 @@ fn elastic_bands_with_missing_or_unadmitted_stiffness_fail_before_body_loading()
         assert!(!text.contains("model magic"), "{text}");
     }
 }
+
+#[test]
+fn joint_casing_source_loads_survive_command_publication_and_exact_replay() {
+    let dir = joint_setup();
+    let mut request = elastic_band_outfit();
+    let width = std::f64::consts::TAU * 180.0;
+    let source = &mut request["garments"][0]["pattern"];
+    let mut extension = source["pieces"][0].clone();
+    extension["id"] = json!("extension");
+    extension["vertices"] = json!({"a":[0,-40],"b":[width,-40],"c":[width,0],"d":[0,0]});
+    source["pieces"].as_array_mut().unwrap().push(extension);
+    source["seams"].as_array_mut().unwrap().extend([
+        json!({"id":"close_extension","a":"extension/end_r","b":"extension/end_l","reverse":true}),
+        json!({"id":"load_seam","a":"band/bottom","b":"extension/top","reverse":true}),
+    ]);
+    source["attached_mass"] = accessorized()["garments"][0]["pattern"]["attached_mass"].clone();
+    source["attached_mass"]["groups"][0]["targets"][1]["instance"] = json!("extension");
+    source["attached_mass"]["groups"][0]["targets"][1]["vertex"] = json!("d");
+    save(&dir.join("scoped.json"), &request);
+    let original = std::fs::read(dir.join("scoped.json")).unwrap();
+    let out = elastic_band_command(&dir, "scoped.json", "scoped");
+    assert!(
+        matches!(out.status.code(), Some(0 | 2)),
+        "{} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report = read(&dir.join("scoped/sim_report.json"));
+    let load = &report["elastics"][0]["load_mass"];
+    let cloth = width * 20e-6 * 0.2;
+    let extra = 0.0002 * 0.25;
+    assert!((load["cloth_kg"].as_f64().unwrap() - cloth).abs() < 1e-12);
+    assert!((load["attached_kg"].as_f64().unwrap() - extra).abs() < 1e-12);
+    assert!((load["inertial_kg"].as_f64().unwrap() - cloth - extra).abs() < 1e-12);
+    let targets = &report["attached_mass"]["groups"][0]["targets"];
+    assert_eq!(targets[0]["solver_vertex"], targets[1]["solver_vertex"]);
+    assert_eq!(
+        report["elastics"][0]["load_instances"],
+        json!(["inner::band"])
+    );
+    assert_eq!(
+        report["elastics"][0]["weight_n"],
+        json!(ftx_core::py::round((cloth + extra) * 9.81, 3))
+    );
+    let replay = elastic_band_command(&dir, "scoped/outfit_pattern.json", "scoped-replay");
+    assert_eq!(
+        replay.status.code(),
+        out.status.code(),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    assert_eq!(
+        report["elastics"],
+        read(&dir.join("scoped-replay/sim_report.json"))["elastics"]
+    );
+    for artifact in ["fold.pc2", "garment.obj", "body.obj"] {
+        assert_eq!(
+            std::fs::read(dir.join("scoped").join(artifact)).unwrap(),
+            std::fs::read(dir.join("scoped-replay").join(artifact)).unwrap()
+        );
+    }
+    assert_eq!(original, std::fs::read(dir.join("scoped.json")).unwrap());
+    assert_eq!(
+        original,
+        std::fs::read(dir.join("scoped/outfit_request.json")).unwrap()
+    );
+}
