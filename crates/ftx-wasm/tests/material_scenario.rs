@@ -277,3 +277,123 @@ fn computed_scenario_objectives_use_actual_heat_and_strain_without_weakening_adm
             .contains("not numerically settled")
     );
 }
+
+#[test]
+fn joint_outfit_boundary_uses_real_contact_and_ordered_layer_heat_with_frozen_replay() {
+    use ftx_drape::{run::DrapeOptions, study_input::PreparedInput};
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.0,
+    };
+    let mut outfit: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-joint-outfit.json"
+    ))
+    .unwrap();
+    for (g, r) in outfit["garments"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip([40.0, 43.0])
+    {
+        g["pattern"]["pieces"][0]["placement"]["radius_mm"] = json!(r);
+    }
+    let base = outfit["garments"][0]["pattern"]["fabric"]["material"].clone();
+    let mut thermal = base.clone();
+    thermal["record"]["properties"]["thermal_conductivity"]["value"] = json!(0.1);
+    let request = json!({"schema":"ftx-material-study/1","variants":[
+        {"key":"baseline","changes":{"schema":"ftx-material-bindings/1"}},
+        {"key":"thermal","changes":{"schema":"ftx-material-bindings/1",
+            "pieces":{"inner::band":thermal,"outer::band":thermal}}}]});
+    let mut scenario: Value = serde_json::from_str(SCENARIO).unwrap();
+    scenario["options"]["spacing"] = json!(10.0);
+    scenario["options"]["self_contact"] =
+        serde_json::to_value(DrapeOptions::default().contact).unwrap();
+    scenario["coverage"]["body_triangle_ids"] = json!([24, 25]);
+    scenario["coverage"]["instance_layers"] = json!({"inner::band":"lining","outer::band":"shell"});
+    scenario["coverage"]["settings"]["interfaces"] = json!([{
+        "inner":"lining","outer":"shell","resistance_m2_k_w":0.02,
+        "basis":"Explicit synthetic interface, not inferred from garment order"}]);
+    let options: Scenario = serde_json::from_value(scenario.clone()).unwrap();
+    let prepared = PreparedInput::new(outfit.clone(), &options.options).unwrap();
+    let output = on_body(
+        &body,
+        &outfit.to_string(),
+        &request.to_string(),
+        &scenario.to_string(),
+        |_| {},
+    )
+    .unwrap();
+    let report: Value = serde_json::from_str(&output).unwrap();
+    let baseline = &report["simulations"][0]["evaluation"];
+    let changed = &report["simulations"][1]["evaluation"];
+    assert_eq!(baseline["status"], "available", "{baseline}");
+    assert_eq!(changed["status"], "available", "{changed}");
+    let baseline = &baseline["result"];
+    let changed = &changed["result"];
+    assert_eq!(baseline["drape"]["self_contact"]["enabled"], true);
+    assert_eq!(baseline["positions_sha256"], changed["positions_sha256"]);
+    assert_eq!(
+        baseline["coverage"]["status"], "available",
+        "{}",
+        baseline["coverage"]
+    );
+    assert_eq!(
+        changed["coverage"]["status"], "available",
+        "{}",
+        changed["coverage"]
+    );
+    assert!(
+        baseline["coverage"]["result"]["projection"]["layout"]["regions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["layers"].as_array().is_some_and(|layers| {
+                layers.len() == 2 && layers[0]["layer"] == "lining" && layers[1]["layer"] == "shell"
+            })),
+        "the fixture must actually conduct through both garments in series, not disjoint patches"
+    );
+    assert_ne!(
+        baseline["metrics"]["body_coverage_power_w"],
+        changed["metrics"]["body_coverage_power_w"]
+    );
+    // Same source and exact existing evaluators, not an independent WASM-specific calculation.
+    let mut session = Session::new(&options, &body).unwrap();
+    let mut descriptor = session.descriptor();
+    prepared.annotate(&mut descriptor).unwrap();
+    let request: Request = serde_json::from_value(request.clone()).unwrap();
+    let direct = request
+        .evaluate_with(prepared.pattern(), &descriptor, |_, p| {
+            session.evaluate(p, |_| {})
+        })
+        .unwrap();
+    assert_eq!(report, serde_json::to_value(direct).unwrap());
+    let replay: Value = serde_json::from_str(
+        &on_body(
+            &body,
+            report["scenario"]["outfit"]["pattern_json"]
+                .as_str()
+                .unwrap(),
+            &serde_json::to_string(&request).unwrap(),
+            &scenario.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(replay["simulations"], report["simulations"]);
+    assert!(replay["scenario"].get("outfit").is_none());
+    scenario["options"]["self_contact"] = Value::Null;
+    assert!(
+        on_body(
+            &body,
+            &outfit.to_string(),
+            &serde_json::to_string(&request).unwrap(),
+            &scenario.to_string(),
+            |_| {}
+        )
+        .is_err()
+    );
+}

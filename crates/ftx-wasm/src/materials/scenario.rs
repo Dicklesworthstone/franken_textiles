@@ -7,9 +7,9 @@ use ftx_drape::{
         Scenario, Session,
         fitted::{BodyRequest, FittedBody},
     },
+    study_input::PreparedInput,
 };
 use ftx_export::material_study::Request;
-use ftx_pattern::Pattern;
 use serde_json::{Value, json};
 
 use super::{budget, invalid};
@@ -27,15 +27,18 @@ pub fn on_body(
     mut progress: impl FnMut(&str),
 ) -> Result<String, Refusal> {
     budget(&[pattern, request, scenario])?;
-    let pattern = Pattern::from_json(pattern).map_err(invalid)?;
+    let source: Value = serde_json::from_str(pattern).map_err(invalid)?;
     let request: Request = serde_json::from_str(request).map_err(invalid)?;
     if let Some(policy) = &request.comparison {
         policy.validate(&request, true)?;
     }
     let scenario: Scenario = serde_json::from_str(scenario).map_err(invalid)?;
+    scenario.validate()?;
+    let prepared = PreparedInput::new(source, &scenario.options)?;
     let mut session = Session::new(&scenario, body)?;
-    let descriptor = session.descriptor();
-    let report = request.evaluate_with(&pattern, &descriptor, |key, pattern| {
+    let mut descriptor = session.descriptor();
+    prepared.annotate(&mut descriptor)?;
+    let report = request.evaluate_with(prepared.pattern(), &descriptor, |key, pattern| {
         session.evaluate(pattern, |line| progress(&format!("{key}: {line}")))
     })?;
     serde_json::to_string(&report).map_err(invalid)
@@ -57,7 +60,7 @@ pub fn on_model(
     mut progress: impl FnMut(&str),
 ) -> Result<String, Refusal> {
     budget(&[pattern, request, scenario, measurements, model_sha256])?;
-    let pattern = Pattern::from_json(pattern).map_err(invalid)?;
+    let source: Value = serde_json::from_str(pattern).map_err(invalid)?;
     let request: Request = serde_json::from_str(request).map_err(invalid)?;
     if let Some(policy) = &request.comparison {
         policy.validate(&request, true)?;
@@ -65,6 +68,7 @@ pub fn on_model(
     let scenario: Scenario = serde_json::from_str(scenario).map_err(invalid)?;
     let body_input: Value = serde_json::from_str(measurements).map_err(invalid)?;
     scenario.validate()?;
+    let prepared = PreparedInput::new(source, &scenario.options)?;
     let body_request = BodyRequest::read(&body_input);
     let fitted = body_request
         .as_ref()
@@ -90,7 +94,8 @@ pub fn on_model(
     descriptor["body_fit"] = fitted
         .as_ref()
         .map_or(Value::Null, |body| body.report.clone());
-    let report = request.evaluate_with(&pattern, &descriptor, |key, pattern| {
+    prepared.annotate(&mut descriptor)?;
+    let report = request.evaluate_with(prepared.pattern(), &descriptor, |key, pattern| {
         session
             .as_mut()
             .map_err(|e| e.clone())?

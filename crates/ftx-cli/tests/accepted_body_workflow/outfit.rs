@@ -260,3 +260,198 @@ fn incomplete_joint_inputs_refuse_before_body_fitting_or_publication() {
     assert!(!dir.join("denied").exists());
     assert!(!dir.join("denied/sim_report.json").exists());
 }
+
+fn study_inputs() -> (Value, Value, Value) {
+    let mut raw = accessorized();
+    for garment in raw["garments"].as_array_mut().unwrap() {
+        garment["pattern"]["fabric"]["material"]["record"]["properties"]["specific_heat"] = json!({
+            "value":1000.0,"unit":"J/(kg*K)","source":"test","evidence":"estimate",
+            "method":"Synthetic outfit heat storage, not a measured textile"});
+    }
+    let base = raw["garments"][0]["pattern"]["fabric"]["material"].clone();
+    let mut thermal = base.clone();
+    thermal["record"]["properties"]["thermal_conductivity"]["value"] = json!(0.1);
+    let request = json!({"schema":"ftx-material-study/1", "variants":[
+        {"key":"base","changes":{"schema":"ftx-material-bindings/1"}},
+        {"key":"heat","changes":{"schema":"ftx-material-bindings/1",
+            "pieces":{"inner::band":thermal,"outer::band":thermal}}},
+        {"key":"unqualified-pair","changes":{"schema":"ftx-material-bindings/1",
+            "pieces":{"outer::band":thermal}}}],
+        "cutting":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0.0,"end_margin_mm":0.0,"seam_allowance_mm":0.0}});
+    let mut scenario: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/materials/synthetic-scenario.json"
+    ))
+    .unwrap();
+    scenario["options"]["spacing"] = json!(10.0);
+    scenario["options"]["self_contact"] =
+        serde_json::to_value(ftx_drape::run::DrapeOptions::default().contact).unwrap();
+    scenario["coverage"] = Value::Null; // No body patch or interlayer thermal topology is guessed.
+    let film = scenario["surface"]["boundaries"][0].clone();
+    scenario["motion"] = json!({"schema":"ftx-drape-motion/1",
+        "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.1}],
+        "max_step_s":0.001,"max_trials":8,"max_pairs":100000,"max_sample_vertices":10000,
+        "transient_surface":{"schema":"ftx-motion-surface-heat/1",
+            "initial_temperature_c":15.0,"cells_per_layer":1,"boundaries":[film],
+            "max_step_s":0.001,"max_cell_steps":100000}});
+    (raw, request, scenario)
+}
+
+fn study_command(dir: &Path, binary: &str, prefix: &[&str], source: &str) -> Output {
+    Command::new(binary)
+        .current_dir(dir)
+        .args(prefix)
+        .args([
+            source,
+            "study.json",
+            "scenario.json",
+            "body-input.json",
+            "model.ftxbody",
+        ])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn joint_scenario_commands_recompute_motion_and_heat_without_material_or_source_leaks() {
+    let dir = joint_setup();
+    let (raw, request, scenario) = study_inputs();
+    save(&dir.join("outfit.json"), &raw);
+    save(&dir.join("study.json"), &request);
+    save(&dir.join("scenario.json"), &scenario);
+    save(
+        &dir.join("body-input.json"),
+        &json!({"schema":"ftx-scenario-body/1",
+        "accepted_body_fit":read(&dir.join("fit.json")),"arm_abduction_deg":35.0,
+        "measurements":read(&dir.join("measurements.json"))}),
+    );
+    let source_before = std::fs::read(dir.join("outfit.json")).unwrap();
+    let run = |binary, prefix: &[&str], source| {
+        let out = study_command(&dir, binary, prefix, source);
+        assert!(
+            out.status.success(),
+            "{} / {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        value.get("result").unwrap_or(&value).clone()
+    };
+    let a = run(
+        env!("CARGO_BIN_EXE_ftx"),
+        &["--json", "materials", "scenario-study"],
+        "outfit.json",
+    );
+    let b = run(
+        env!("CARGO_BIN_EXE_ftx-materials"),
+        &["scenario-study"],
+        "outfit.json",
+    );
+    assert_eq!(a, b);
+    assert_eq!(a["scenario"]["outfit"]["source_request"], raw);
+    assert_eq!(a["scenario"]["body_fit"]["shape_source"]["refitted"], false);
+    let first = &a["simulations"][0]["evaluation"];
+    let second = &a["simulations"][1]["evaluation"];
+    assert_eq!(first["status"], "available", "{first}");
+    assert_eq!(second["status"], "available", "{second}");
+    let first = &first["result"];
+    let second = &second["result"];
+    assert_eq!(first["positions_sha256"], second["positions_sha256"]);
+    assert_eq!(
+        first["drape"]["attached_mass"],
+        second["drape"]["attached_mass"]
+    );
+    assert_eq!(first["drape"]["self_contact"]["enabled"], true);
+    assert_eq!(first["surface"]["status"], "available");
+    assert_eq!(second["surface"]["status"], "available");
+    assert_ne!(
+        first["metrics"]["independent_surface_power_w"],
+        second["metrics"]["independent_surface_power_w"]
+    );
+    assert_eq!(
+        first["motion"]["status"], "available",
+        "{}",
+        first["motion"]
+    );
+    assert_eq!(
+        second["motion"]["status"], "available",
+        "{}",
+        second["motion"]
+    );
+    assert_eq!(
+        first["motion"]["result"]["final_positions_sha256"],
+        second["motion"]["result"]["final_positions_sha256"]
+    );
+    assert_eq!(
+        first["motion"]["result"]["final_velocities_m_s"],
+        second["motion"]["result"]["final_velocities_m_s"]
+    );
+    assert_eq!(
+        first["motion"]["result"]["transient_surface"]["status"], "available",
+        "{}",
+        first["motion"]
+    );
+    assert_eq!(
+        second["motion"]["result"]["transient_surface"]["status"],
+        "available"
+    );
+    assert_ne!(
+        first["motion"]["result"]["transient_surface"],
+        second["motion"]["result"]["transient_surface"]
+    );
+    assert_eq!(a["simulations"][2]["evaluation"]["status"], "refused");
+    assert!(
+        a["simulations"][2]["evaluation"]["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("pairwise friction")
+    );
+    for row in a["manufacturing"]["alternatives"].as_array().unwrap() {
+        assert_eq!(row["cutting"]["status"], "available");
+    }
+    // Replaying exact baseline composition uses the same binding and fresh-state physical paths.
+    std::fs::write(
+        dir.join("composed.json"),
+        a["scenario"]["outfit"]["pattern_json"].as_str().unwrap(),
+    )
+    .unwrap();
+    let replay = run(
+        env!("CARGO_BIN_EXE_ftx-materials"),
+        &["scenario-study"],
+        "composed.json",
+    );
+    assert_eq!(a["manufacturing"], replay["manufacturing"]);
+    assert_eq!(a["simulations"], replay["simulations"]);
+    assert_eq!(
+        std::fs::read(dir.join("outfit.json")).unwrap(),
+        source_before
+    );
+}
+
+#[test]
+fn joint_scenario_requires_contact_before_attempting_body_loading() {
+    let dir = joint_setup();
+    let (raw, request, mut scenario) = study_inputs();
+    scenario["options"]["self_contact"] = Value::Null;
+    save(&dir.join("outfit.json"), &raw);
+    save(&dir.join("study.json"), &request);
+    save(&dir.join("scenario.json"), &scenario);
+    save(&dir.join("body-input.json"), &json!({}));
+    // Wrong model bytes must not conceal the source-composition refusal.
+    std::fs::write(dir.join("model.ftxbody"), b"not a model").unwrap();
+    for (binary, prefix) in [
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            vec!["--json", "materials", "scenario-study"],
+        ),
+        (env!("CARGO_BIN_EXE_ftx-materials"), vec!["scenario-study"]),
+    ] {
+        let out = study_command(&dir, binary, &prefix, "outfit.json");
+        assert!(!out.status.success());
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(text.contains("explicit cloth-cloth self-contact"), "{text}");
+    }
+}

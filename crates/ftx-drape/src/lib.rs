@@ -39,6 +39,7 @@ pub mod start;
 pub mod stepping;
 pub mod strip;
 pub mod study;
+pub mod study_input;
 pub mod thermal;
 pub mod two_start;
 
