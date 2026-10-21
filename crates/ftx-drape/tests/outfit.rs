@@ -340,7 +340,8 @@ fn casing_outfit() -> Input {
     for (i, garment) in input.garments.iter_mut().enumerate() {
         let radius = [40.0, 44.0][i];
         let width = std::f64::consts::TAU * radius;
-        let fraction = [0.9, 1.1][i];
+        // The inner rest is shorter than the 30 mm body's circumference; the outer is slack.
+        let fraction = [0.7, 1.1][i];
         let piece = &mut garment.pattern["pieces"][0];
         piece["id"] = json!("waistband");
         piece["role"] = json!("waistband");
