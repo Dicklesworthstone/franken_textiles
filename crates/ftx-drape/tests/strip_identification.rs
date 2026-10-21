@@ -95,6 +95,7 @@ fn input() -> Input {
         parameter_bounds: vec![[200.0, 400.0], [100.0, 260.0], [0.05, 0.35], [40.0, 100.0]],
         response_family: None,
         nonlinear: None,
+        area_response: None,
         admit_planar_elastic_model: true,
         allow_estimated_observations: true,
         replace_existing: false,
