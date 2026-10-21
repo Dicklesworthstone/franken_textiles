@@ -7,8 +7,8 @@ use ftx_drape::study::{
     Scenario, Session,
     fitted::{BodyRequest, FittedBody},
 };
+use ftx_drape::study_input::PreparedInput;
 use ftx_export::material_study::Request;
-use ftx_pattern::Pattern;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -41,14 +41,15 @@ pub(super) fn run(
     model: &str,
 ) -> Result<Value, Refusal> {
     let mut remaining = 64 * 1024 * 1024;
-    let pattern = Pattern::new(read(pattern, &mut remaining)?);
+    let source: Value = read(pattern, &mut remaining)?;
     let request: Request = read(request, &mut remaining)?;
     if let Some(policy) = &request.comparison {
         policy.validate(&request, true)?;
     }
     let scenario: Scenario = read(scenario, &mut remaining)?;
-    let body_input: Value = read(measurements, &mut remaining)?;
     scenario.validate()?;
+    let prepared = PreparedInput::new(source, &scenario.options)?;
+    let body_input: Value = read(measurements, &mut remaining)?;
     let bytes = bytes(model, &mut (512 * 1024 * 1024))?;
     let model_sha256 = sha256_hex(&bytes);
     let model = AnnyData::from_bytes(&bytes, false).and_then(AnnyModel::from_data);
@@ -84,7 +85,8 @@ pub(super) fn run(
     descriptor["body_fit"] = fitted
         .as_ref()
         .map_or(Value::Null, |body| body.report.clone());
-    let report = request.evaluate_with(&pattern, &descriptor, |key, pattern| {
+    prepared.annotate(&mut descriptor)?;
+    let report = request.evaluate_with(prepared.pattern(), &descriptor, |key, pattern| {
         session
             .as_mut()
             .map_err(|e| e.clone())?
