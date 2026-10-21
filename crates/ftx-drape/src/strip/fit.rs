@@ -7,7 +7,7 @@ use ftx_core::{Refusal, RefusalCode, linalg::lstsq, receipt::sha256_hex};
 use ftx_pattern::{
     material_calibration::{Partition, fitted_domain},
     material_catalog::Selection,
-    material_response::StrainDomain,
+    material_response::{CompiledMembrane, StrainDomain},
     materials::{Evidence, Form, Material, Quantity, Source},
     textile_import,
 };
@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use super::experiment::{Controls, Fixture, SCOPE, State, invalid, solve_law};
 use crate::Membrane;
+
+/// Caller-declared nonlinear shapes identified through the same bounded strip experiment.
+pub mod family;
 
 const KEYS: [&str; 4] = [
     "warp_stiffness",
@@ -102,15 +105,20 @@ pub struct Input {
     pub fitted_on: String,
     /// Complete strip acquisitions (1..16, at most 64 observed states in total).
     pub experiments: Vec<Experiment>,
-    /// Bounds for [warp N/m, weft N/m, major Poisson ratio, shear N/m].
-    /// The entire box must be positive-definite; no bound is silently repaired.
+    /// Scalar bounds are [warp N/m, weft N/m, major Poisson ratio, shear N/m]. With
+    /// response_family, these are [warp scale, weft scale, shear scale, coupling N/m].
+    /// The entire box must be stable; no bound is silently repaired.
     pub parameter_bounds: [[f64; 2]; 4],
+    /// Optional declared piecewise-linear shapes. Their knots and relative shape are fixed;
+    /// only three dimensionless amplitudes and signed normal coupling are identified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_family: Option<family::Family>,
     /// Acknowledge the planar ideal-grip elastic model; this does not assert it fits a real knit.
     pub admit_planar_elastic_model: bool,
     /// Explicit permission for estimated input observations, independently of fitted outputs.
     #[serde(default)]
     pub allow_estimated_observations: bool,
-    /// Explicit permission to replace existing scalar membrane coefficients.
+    /// Explicit permission to replace existing scalar or nonlinear equilibrium evidence.
     #[serde(default)]
     pub replace_existing: bool,
     /// Explicit admission of the resulting estimated coefficients in the returned frozen selection.
@@ -177,6 +185,9 @@ pub struct Report {
     pub input_sha256: String,
     /// Best FIT candidate, whether or not accepted.
     pub parameters: [f64; 4],
+    /// Physical meaning of nonlinear family parameters; absent for legacy scalar reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameter_descriptors: Option<[family::ParameterDescriptor; 4]>,
     /// Whether every publication gate passed.
     pub accepted: bool,
     /// Specific remaining numerical, identifiability or model-adequacy gates.
@@ -215,6 +226,15 @@ struct Budget {
     limit: usize,
     // Replacing coefficients does not erase the original specimen's characterized support.
     inherited_domain: Option<StrainDomain>,
+    family: Option<family::Prepared>,
+}
+
+fn intersect(a: StrainDomain, b: StrainDomain) -> Result<StrainDomain, Refusal> {
+    let a = a.ranges();
+    let b = b.ranges();
+    StrainDomain::new(std::array::from_fn(|i| {
+        [a[i][0].max(b[i][0]), a[i][1].min(b[i][1])]
+    }))
 }
 
 impl Budget {
@@ -237,11 +257,18 @@ impl Budget {
         controls: &Controls,
     ) -> Result<State, Refusal> {
         self.admit()?;
-        let [warp, weft, nu, shear] = parameters;
+        let response = self
+            .family
+            .as_ref()
+            .map(|family| family.compile(parameters))
+            .transpose()?;
+        let [warp, weft, nu, shear] = response
+            .as_ref()
+            .map_or(Ok(parameters), CompiledMembrane::reference_moduli)?;
         solve_law(
             fixture,
             Membrane::orthotropic(warp, weft, nu, shear, 1.0),
-            None,
+            response.as_ref(),
             self.inherited_domain,
             extension,
             controls,
@@ -252,11 +279,7 @@ impl Budget {
         let Some(inherited) = self.inherited_domain else {
             return Ok(domain);
         };
-        let prior = inherited.ranges();
-        let fitted = domain.ranges();
-        StrainDomain::new(std::array::from_fn(|i| {
-            [prior[i][0].max(fitted[i][0]), prior[i][1].min(fitted[i][1])]
-        }))
+        intersect(inherited, domain)
     }
 
     fn replay(
@@ -264,15 +287,17 @@ impl Budget {
         fixture: &Fixture,
         parameters: [f64; 4],
         domain: StrainDomain,
+        response: Option<&CompiledMembrane>,
         extension: f64,
         controls: &Controls,
     ) -> Result<State, Refusal> {
         self.admit()?;
-        let [warp, weft, nu, shear] = parameters;
+        let [warp, weft, nu, shear] =
+            response.map_or(Ok(parameters), CompiledMembrane::reference_moduli)?;
         solve_law(
             fixture,
             Membrane::orthotropic(warp, weft, nu, shear, 1.0),
-            None,
+            response,
             Some(self.within_inherited_domain(domain)?),
             extension,
             controls,
@@ -298,7 +323,7 @@ fn validate(input: &Input) -> Result<(), Refusal> {
         || matches!(input.material.form, Form::Fiber | Form::Yarn | Form::Fill)
         || input.experiments.is_empty()
         || input.experiments.len() > 16
-        || input.material.membrane_response.is_some()
+        || (input.material.membrane_response.is_some() && input.response_family.is_none())
         || input.material.membrane_relaxation.is_some()
         || input
             .material
@@ -306,13 +331,14 @@ fn validate(input: &Input) -> Result<(), Refusal> {
             .contains_key("membrane_plasticity_model")
     {
         return Err(invalid(
-            "strip calibration needs its schema, explicit planar elastic model consent, sheet specimen, protocol/date and 1..16 experiments; existing nonlinear/history laws cannot be erased",
+            "strip calibration needs its schema, explicit planar elastic model consent, sheet specimen, protocol/date and 1..16 experiments; history laws cannot be erased and nonlinear replacement needs a declared response family",
         ));
     }
     if !input.replace_existing
-        && KEYS
-            .iter()
-            .any(|key| input.material.properties.contains_key(*key))
+        && (input.material.membrane_response.is_some()
+            || KEYS
+                .iter()
+                .any(|key| input.material.properties.contains_key(*key)))
     {
         return Err(invalid(
             "strip calibration would replace existing stiffness observations; explicit replace_existing is required",
@@ -350,7 +376,11 @@ fn validate(input: &Input) -> Result<(), Refusal> {
             || !hi.is_finite()
             || hi <= lo
             || !((hi - lo).is_finite())
-            || (i != 2 && lo <= 0.0)
+            || (if input.response_family.is_some() {
+                i < 3
+            } else {
+                i != 2
+            } && lo <= 0.0)
         {
             return Err(invalid(
                 "strip parameter bounds must be finite, nonempty and positive for all stiffnesses",
@@ -360,7 +390,9 @@ fn validate(input: &Input) -> Result<(), Refusal> {
     let nu = input.parameter_bounds[2][0]
         .abs()
         .max(input.parameter_bounds[2][1].abs());
-    if nu * nu * input.parameter_bounds[1][1] / input.parameter_bounds[0][0] >= 1.0 {
+    if input.response_family.is_none()
+        && nu * nu * input.parameter_bounds[1][1] / input.parameter_bounds[0][0] >= 1.0
+    {
         return Err(invalid(
             "the entire declared orthotropic parameter box must be positive-definite",
         ));
@@ -633,15 +665,44 @@ fn quality(values: &[f64]) -> Quality {
     }
 }
 
-/// Identify the same scalar orthotropic law used by garment assembly, including actual grips.
-/// Three bounded starts, local excitation, held-out experiments and doubled-mesh checks are
-/// publication gates. An inadequate candidate returns diagnostics with no material or selection.
+/// Identify scalar orthotropy or declared nonlinear shape amplitudes/coupling using actual grips.
+/// Both families use the ordinary production membrane authority. Three bounded starts, local
+/// excitation, held-out experiments and doubled-mesh checks are publication gates. An inadequate
+/// candidate returns diagnostics with no material or selection.
 ///
 /// # Errors
 /// Invalid acquisition/source/model input, exhausted aggregate work, or any failed forward solve.
 pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     validate(input)?;
-    let inherited_domain = fitted_domain(&input.material)?;
+    let family = input
+        .response_family
+        .as_ref()
+        .map(|family| {
+            family::Prepared::new(family, &input.material.sources, input.parameter_bounds)
+        })
+        .transpose()?;
+    let mut inherited_domain = fitted_domain(&input.material)?;
+    let prior_response = input
+        .material
+        .membrane_response
+        .as_ref()
+        .map(|response| response.compile(&input.material.sources, true))
+        .transpose()?;
+    for domain in [
+        prior_response
+            .as_ref()
+            .map(|response| StrainDomain::new(response.strain_range()))
+            .transpose()?,
+        family.as_ref().map(family::Prepared::domain),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        inherited_domain = Some(match inherited_domain {
+            Some(prior) => intersect(prior, domain)?,
+            None => domain,
+        });
+    }
     if inherited_domain.is_some_and(|domain| !domain.contains([0.0; 3])) {
         return Err(invalid(
             "the inherited material domain must admit the strip's undeformed reference; replacing coefficients cannot widen it",
@@ -651,6 +712,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         used: 0,
         limit: input.policy.max_forward_solves,
         inherited_domain,
+        family,
     };
     let mut starts = Vec::new();
     let mut coordinates = Vec::new();
@@ -755,8 +817,8 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     ranges = budget
         .within_inherited_domain(StrainDomain::new(ranges)?)?
         .ranges();
-    let fit = quality(&fit_errors);
-    let check = (!check_errors.is_empty()).then(|| quality(&check_errors));
+    let mut fit = quality(&fit_errors);
+    let mut check = (!check_errors.is_empty()).then(|| quality(&check_errors));
     if predictions
         .iter()
         .filter(|p| p.partition == Partition::Check)
@@ -797,41 +859,132 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
                 .into(),
         );
     }
+    let digest = sha256_hex(&serde_json::to_vec(input).map_err(invalid)?);
+    let mut nonlinear_material = None;
+    if reasons.is_empty() && budget.family.is_some() {
+        match publish(input, &digest, parameters, ranges, budget.family.as_ref()) {
+            Ok(material) => nonlinear_material = Some(material),
+            Err(refusal) => reasons.push(format!(
+                "nonlinear FIT-support publication failed: {}; no material or missing branch was invented",
+                refusal.message
+            )),
+        }
+    }
+    // Replay the actual clipped publication, including its production interpolation arithmetic.
+    // Its reference moduli are initialization/reporting values, never a replacement scalar law.
+    let replay_response = nonlinear_material
+        .as_ref()
+        .map(|material| {
+            material
+                .membrane_response
+                .as_ref()
+                .ok_or_else(|| invalid("nonlinear strip publication lacks its response"))?
+                .compile(&material.sources, true)
+        })
+        .transpose()?;
     // A converged unconstrained state alone does not prove that ordinary initialization and
     // Newton trials can reproduce it inside the fitted domain. Exercise the real domain gate;
     // never enlarge the authority with CHECK states, trial states or a numerical tolerance.
     let mut domain_replay_verified = false;
     if reasons.is_empty() {
         let domain = StrainDomain::new(ranges)?;
+        let mut replayed = Vec::new();
         'replay: for experiment in &input.experiments {
+            let mut coarse_states: Vec<State> = Vec::new();
             for factor in [1, 2] {
                 let mut fixture = experiment.fixture.clone();
                 fixture.cells.iter_mut().for_each(|n| *n *= factor);
-                for observation in &experiment.observations {
-                    if let Err(refusal) = budget.replay(
+                for (i, observation) in experiment.observations.iter().enumerate() {
+                    let state = match budget.replay(
                         &fixture,
                         parameters,
                         domain,
+                        replay_response.as_ref(),
                         observation.extension_fraction,
                         &input.controls,
                     ) {
-                        if refusal.code == RefusalCode::BudgetExceeded {
-                            return Err(refusal);
+                        Ok(state) => state,
+                        Err(refusal) => {
+                            if refusal.code == RefusalCode::BudgetExceeded {
+                                return Err(refusal);
+                            }
+                            reasons.push(format!(
+                                "fitted-domain replay failed for {} / {} at mesh factor {factor}: {}; no domain was widened",
+                                experiment.id, observation.id, refusal.message,
+                            ));
+                            break 'replay;
                         }
-                        reasons.push(format!(
-                            "fitted-domain replay failed for {} / {} at mesh factor {factor}: {}; no domain was widened",
-                            experiment.id, observation.id, refusal.message,
-                        ));
-                        break 'replay;
+                    };
+                    if replay_response.is_some() {
+                        if factor == 1 {
+                            coarse_states.push(state);
+                        } else {
+                            replayed.push((coarse_states[i].clone(), state));
+                        }
                     }
                 }
             }
         }
+        if reasons.is_empty() && replay_response.is_some() {
+            fit_errors.clear();
+            check_errors.clear();
+            mesh_peak = 0.0;
+            let observations = input
+                .experiments
+                .iter()
+                .flat_map(|e| e.observations.iter().map(move |o| (e.partition, o)));
+            for ((prediction, (coarse, state)), (partition, observation)) in
+                predictions.iter_mut().zip(replayed).zip(observations)
+            {
+                mesh_peak =
+                    mesh_peak.max((state.force_n - coarse.force_n).abs() / observation.scale_n);
+                let error = state.force_n - observation.force_n;
+                let width_error = observation
+                    .mid_width
+                    .as_ref()
+                    .map(|width| state.mid_width_m - width.value_m);
+                let errors = if partition == Partition::Fit {
+                    &mut fit_errors
+                } else {
+                    &mut check_errors
+                };
+                errors.push(error / observation.scale_n);
+                if let Some(width) = &observation.mid_width {
+                    errors.push((state.mid_width_m - width.value_m) / width.scale_m);
+                    mesh_peak = mesh_peak
+                        .max((state.mid_width_m - coarse.mid_width_m).abs() / width.scale_m);
+                }
+                prediction.state = state;
+                prediction.force_residual_n = error;
+                prediction.width_residual_m = width_error;
+            }
+            fit = quality(&fit_errors);
+            check = Some(quality(&check_errors));
+            for (name, quality) in [("FIT", &fit), ("CHECK", check.as_ref().unwrap())] {
+                if !quality.rms_scaled.is_finite()
+                    || !quality.peak_scaled.is_finite()
+                    || quality.rms_scaled > input.policy.max_rms_scaled
+                    || quality.peak_scaled > input.policy.max_peak_scaled
+                {
+                    reasons.push(format!(
+                        "published nonlinear {name} force/width residuals exceed the declared elastic-model budget"
+                    ));
+                }
+            }
+            if !mesh_peak.is_finite() || mesh_peak > input.policy.max_mesh_scaled {
+                reasons.push(
+                    "published nonlinear coarse/refined predictions exceed the declared numerical budget"
+                        .into(),
+                );
+            }
+        }
         domain_replay_verified = reasons.is_empty();
     }
-    let digest = sha256_hex(&serde_json::to_vec(input).map_err(invalid)?);
     let material = if reasons.is_empty() {
-        Some(publish(input, &digest, parameters, ranges)?)
+        Some(match nonlinear_material {
+            Some(material) => material,
+            None => publish(input, &digest, parameters, ranges, None)?,
+        })
     } else {
         None
     };
@@ -858,6 +1011,10 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         input: input.clone(),
         input_sha256: digest,
         parameters,
+        parameter_descriptors: input
+            .response_family
+            .as_ref()
+            .map(|_| family::descriptors()),
         accepted: material.is_some(),
         reasons,
         material,
@@ -872,7 +1029,13 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         domain_replay_verified,
         fitted_green_strain_range: ranges,
         predictions,
-        model_scope: SCOPE.into(),
+        model_scope: if input.response_family.is_some() {
+            format!(
+                "{SCOPE} Conditional on caller-declared signed piecewise-linear shapes; only three dimensionless amplitudes and constant normal coupling are identified. Knots, relative shape, unobserved branches and area-preserving behavior are not identified."
+            )
+        } else {
+            SCOPE.into()
+        },
     })
 }
 
@@ -881,6 +1044,7 @@ fn publish(
     digest: &str,
     parameters: [f64; 4],
     ranges: [[f64; 2]; 3],
+    family: Option<&family::Prepared>,
 ) -> Result<Material, Refusal> {
     let mut material = input.material.clone();
     let source = format!("strip-{digest}");
@@ -895,8 +1059,16 @@ fn publish(
     );
     conditions.insert("held_out_checks".into(), "true".into());
     conditions.insert("fixture_model".into(), SCOPE.into());
-    for (key, value) in KEYS.into_iter().zip(parameters) {
-        material.properties.insert(key.into(), Quantity { value, unit: if key == "poisson_warp_weft" { "1" } else { "N/m" }.into(), evidence: Evidence::Estimate, source: source.clone(), method: "Bounded inverse orthotropic Green-strain membrane using clamped strip equilibrium, total grip force and optional transverse width; local sensitivity and held-out doubled-mesh checks. No independent bending or contact identification.".into(), conditions: conditions.clone(), bounds: None });
+    if let Some(family) = family {
+        material.membrane_response =
+            Some(family.publish(parameters, StrainDomain::new(ranges)?, &source, &conditions)?);
+        for key in KEYS {
+            material.properties.remove(key);
+        }
+    } else {
+        for (key, value) in KEYS.into_iter().zip(parameters) {
+            material.properties.insert(key.into(), Quantity { value, unit: if key == "poisson_warp_weft" { "1" } else { "N/m" }.into(), evidence: Evidence::Estimate, source: source.clone(), method: "Bounded inverse orthotropic Green-strain membrane using clamped strip equilibrium, total grip force and optional transverse width; local sensitivity and held-out doubled-mesh checks. No independent bending or contact identification.".into(), conditions: conditions.clone(), bounds: None });
+        }
     }
     material.validate()?;
     Ok(material)

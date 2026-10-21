@@ -1,7 +1,7 @@
 //! Independent synthetic forces identify the production nonlinear law, not measured fabric data.
 use ftx_pattern::{
     material_calibration::{
-        Partition, Sample,
+        Partition, Sample, fitted_domain,
         nonlinear::{Input, calibrate},
     },
     material_catalog::Selection,
@@ -99,6 +99,10 @@ fn nonlinear_forces_recover_compression_toe_stiffening_shear_and_coupling() {
     assert!(report.fit.rms_scaled < 1e-10);
     let law = report.material.compiled_membrane(true).unwrap().unwrap();
     assert_eq!(law.strain_range(), report.fitted_strain_range);
+    assert_eq!(
+        fitted_domain(&report.material).unwrap().unwrap().ranges(),
+        report.fitted_strain_range
+    );
     for e in [[-0.1, 0.1, 0.3], [0.17, -0.08, -0.6], [0.03, 0.18, 0.7]] {
         for (actual, expected) in law
             .try_evaluate(e)
@@ -155,6 +159,77 @@ fn nonlinear_forces_recover_compression_toe_stiffening_shear_and_coupling() {
         .warp
         .points[0][1] *= 1.01;
     assert!(catalog.resolve(&changed).is_err());
+}
+
+#[test]
+fn nonlinear_fitted_support_cannot_be_dropped_or_mixed_after_publication() {
+    let material = calibrate(&input()).unwrap().material;
+    for mutation in 0..7 {
+        let mut bad = material.clone();
+        let response = bad.membrane_response.as_mut().unwrap();
+        match mutation {
+            0 => {
+                response.warp.conditions.remove("fitted_green_strain_range");
+            }
+            1 => {
+                response
+                    .coupling
+                    .conditions
+                    .remove("fitted_green_strain_range");
+            }
+            2 => {
+                response.shear.conditions.insert(
+                    "fitted_green_strain_range".into(),
+                    "[[-1,1],[-1,1],[-1,1]]".into(),
+                );
+            }
+            3 => {
+                response.weft.source = "synthetic".into();
+            }
+            4 => {
+                response.coupling.conditions.insert(
+                    "fitted_green_strain_range".into(),
+                    "[[1,-1],[-1,1],[-1,1]]".into(),
+                );
+            }
+            _ => {
+                // Source identity independently preserves the fit marker if every bound is lost.
+                for curve in [&mut response.warp, &mut response.weft, &mut response.shear] {
+                    curve.conditions.remove("fitted_green_strain_range");
+                }
+                response
+                    .coupling
+                    .conditions
+                    .remove("fitted_green_strain_range");
+                if mutation == 6 {
+                    bad.sources
+                        .get_mut(&response.coupling.source)
+                        .unwrap()
+                        .reference =
+                        "local:ftx-strip-calibration/synthetic-support-regression".into();
+                }
+            }
+        }
+        assert!(fitted_domain(&bad).is_err(), "mutation {mutation}");
+        assert!(bad.validate().is_err(), "mutation {mutation}");
+        assert!(bad.mechanics(true).is_err(), "mutation {mutation}");
+    }
+    let mut authored = material;
+    let response = authored.membrane_response.as_mut().unwrap();
+    authored
+        .sources
+        .get_mut(&response.coupling.source)
+        .unwrap()
+        .reference = "test:independently-authored-nonlinear-law".into();
+    for curve in [&mut response.warp, &mut response.weft, &mut response.shear] {
+        curve.conditions.remove("fitted_green_strain_range");
+    }
+    response
+        .coupling
+        .conditions
+        .remove("fitted_green_strain_range");
+    assert!(fitted_domain(&authored).unwrap().is_none());
+    authored.validate().unwrap();
 }
 
 #[test]

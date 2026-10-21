@@ -78,6 +78,22 @@ function stripCalibration(status = 'ACCEPTED', admission = false, check = true) 
   return selected;
 }
 
+function nonlinearStripCalibration(status = 'ACCEPTED') {
+  const result = stripCalibration(status,true), c = result.calibration;
+  const curve = {points:[[-0.1,-10],[0,0],[0.05,8],[0.1,24]],source:'declared-shape',evidence:'estimate',
+    method:'Synthetic supplied shape; <literal source>',conditions:{specimen_id:'synthetic'}};
+  c.input.response_family = {model:'scaled_piecewise_linear/1',warp:curve,weft:curve,shear:curve,allow_estimated_shapes:true};
+  c.input.parameter_bounds = [[0.5,2],[0.4,1.2],[0.5,3],[-30,30]];
+  c.parameters = [1.25,0.75,2,-12];
+  c.parameter_descriptors = [
+    {id:'warp_scale',label:'Warp shape scale',unit:'1'},
+    {id:'weft_scale',label:'Weft shape scale',unit:'1'},
+    {id:'shear_scale',label:'Shear shape scale',unit:'1'},
+    {id:'normal_coupling',label:'Normal coupling',unit:'N/m'}
+  ];
+  return result;
+}
+
 async function workerModule({ failFold = false, failExport = false, trap = false, rejectLoad = false,
   failScenario = false, trapScenario = false, bindings = null } = {}) {
   const sent = [], called = [], freed = [];
@@ -700,6 +716,39 @@ test('clamped-strip results show geometry and operator assumptions and withdraw 
     assert.match(visibleText(s),/No identified selection is available/);
   }
   p.e.calibrationMode.value='nonlinear';p.e.calibrationMode.handlers.change();assert.equal(s.hidden,true);
+});
+
+test('nonlinear strip coefficients retain declared shape assumptions, physical units and rejection gates in both controls', async () => {
+  for (const dedicated of [false,true]) {
+    const p=await pageModule();await p.load();
+    const input='{"schema":"ftx-strip-calibration/1","allow_estimates":true,"origin":-0.0}';
+    const operation=dedicated?'stripFit':'calibrate';
+    p.e.calibrationMode.value='clamped_strip';p.e.calibrationEstimates.checked=true;
+    p.select(dedicated?'stripFitRequest':'calibrationRequest',input);
+    await p.e[operation].onclick();
+    const report=nonlinearStripCalibration(),raw=JSON.stringify(report);
+    p.emit(report,[{name:'nonlinear-calibration.json',text:raw,mime:'application/json'}]);
+    const s=section(p,dedicated?'Clamped-strip identification':'Identified material behavior');
+    const coefficients=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Identified nonlinear shape scales'));
+    assert.deepEqual(plain(coefficients.children.slice(2).map(n=>n.children.map(v=>v.textContent))),[
+      ['Warp shape scale','1.25','1','0.5','2'],['Weft shape scale','0.75','1','0.4','1.2'],
+      ['Shear shape scale','2','1','0.5','3'],['Normal coupling','-12','N/m','-30','30']]);
+    assert.doesNotMatch(visibleText(coefficients),/Poisson/);
+    assert.match(visibleText(s),/shapes and strain knots were supplied/);
+    assert.match(visibleText(s),/does not identify the curve shapes or impose area preservation/);
+    const shapes=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='Declared nonlinear response shapes and source evidence');
+    shapes.open=true;shapes.handlers.toggle();
+    assert.match(visibleText(shapes),/Synthetic supplied shape; <literal source>/);
+    assert.match(visibleText(shapes),/"allow_estimated_shapes": true/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    assert.equal(p.e.selection.value,report.selection_json);assert.equal(p.e.assign.disabled,false);
+    const download=descendants(s).find(n=>n.download==='nonlinear-calibration.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    await p.e[operation].onclick();p.emit(nonlinearStripCalibration('REJECTED'));
+    assert.equal(p.e.selection.value,'');assert.equal(p.e.assign.disabled,true);
+    assert.match(visibleText(s),/Candidate nonlinear shape scales and coupling/);
+    assert.match(visibleText(s),/No identified selection is available/);
+  }
 });
 
 test('a refused replacement calibration leaves no previous selection or report available for assignment', async () => {
