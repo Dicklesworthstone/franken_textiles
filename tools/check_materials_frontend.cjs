@@ -841,6 +841,32 @@ test('identified swatches show independent errors, retain their source across pa
   assert.equal(JSON.parse(p.current().messages.at(-1).changes).pieces.front.allow_estimates,false);
 });
 
+test('adaptive heat histories display native local errors and charged work without changing selections', async () => {
+  const p=await pageModule(); await p.load();
+  p.select('compressionRequest',' {"schema":"ftx-compressed-thermal-history/1"}\n');
+  await p.e.pressure.onclick();
+  const selection='{"id":"adaptive-layer","expected_sha256":"frozen"}';
+  const report={schema:'ftx-compressed-thermal-history-report/1',chosen_layer_id:'layer',
+    selection:JSON.parse(selection),selection_json:selection,inspection:{snapshot:{id:'adaptive-layer'},capabilities:{}},
+    input:{adaptive:{max_cell_solves:120}},initial_compression:{external_work_j:0},
+    final_compression:{reference_mass_kg:0.025},no_claim:'Synthetic display fixture only',
+    steps:[{elapsed_s:10,pressure_pa:500,thickness_m:0.01,temperature_c:[15.9],
+      cumulative_external_work_j:0.625,cumulative_inside_heat_j:500,cumulative_outside_heat_j:102.5,
+      cumulative_stored_change_j:397.5,cumulative_heat_balance_error_j:0,
+      integration:{accepted_substeps:20,rejected_trials:3,cell_solves:39,cumulative_cell_solves:39,max_accepted_error_ratio:0.7}}]};
+  const raw=' '+JSON.stringify(report)+'\n';
+  p.emit(report,[{name:'compression-thermal-report.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'Pressure-conditioned material');
+  const t=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Charged cell solves'));
+  assert.deepEqual(plain(t.children.at(-1).children.map(n=>n.textContent)),['10','20','3','39','39','0.7']);
+  assert.match(visibleText(s),/not global accuracy or confidence bounds/);
+  assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,false);
+  const link=descendants(s).find(n=>n.download==='compression-thermal-report.json');
+  assert.equal(await p.blobs.get(link.href).text(),raw);
+  p.e.compressionRequest.handlers.change();
+  assert.equal(s.hidden,true); assert.equal(p.e.assign.disabled,true);
+});
+
 test('calibration consent and response changes withdraw only the prepared result and cannot revive stale work', async () => {
   const p=await pageModule(); await p.load();
   p.e.calibrationMode.value='relaxation'; p.e.calibrationEstimates.checked=true;

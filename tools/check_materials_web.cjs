@@ -214,8 +214,10 @@ const server = http.createServer((req, res) => {
       assert.ok(Math.abs(preparedStack.pressure_pa-250)<1e-9);
       assert.equal(await download('compression-layer-1-selection.json'),preparedStack.layers[0].conditioned.selection_json);
       let selected;
-      for (const version of [1,2]) {
-        const request=version===1?{schema:'ftx-compressed-thermal-history/1',setup,holds:[hold(0.010)]}:cycle;
+      for (const adaptive of [false,true]) for (const version of [1,2]) {
+        const request=structuredClone(version===1?{schema:'ftx-compressed-thermal-history/1',setup,holds:[hold(0.010)]}:cycle);
+        if(adaptive) request.adaptive={absolute_temperature_tolerance_k:1e-6,absolute_heat_tolerance_j_m2:1e-4,
+          relative_tolerance:0,min_step_s:0.00001,max_step_s:10,max_trials:10000,max_cell_solves:262144};
         const original=await upload(request); assert.equal(await run('pressure'),'');
         const raw=await download('compression-thermal-report.json'), report=JSON.parse(raw);
         assert.equal(await page.locator('a[download="compression-stack-report.json"]').count(),0);
@@ -223,13 +225,27 @@ const server = http.createServer((req, res) => {
         assert.equal(report.steps.length,version); assert.equal(await download('compression-request.json'),original);
         const t=page.locator('table').filter({has:page.locator('caption',{hasText:'Compression and heat history — chronological holds'})});
         assert.equal(await t.locator('tr').count(),version+1);
-        let temperature=0;
+        let temperature=0, chargedCells=0;
         for (const [i,step] of report.steps.entries()) {
           const resistance=[0.25,0.5][i];
-          temperature=(10*temperature+2/resistance*40)/(10+4/resistance);
-          assert.ok(Math.abs(step.temperature_c[0]-temperature)<1e-10);
-          assert.ok(Math.abs(step.cumulative_stored_change_j-25*temperature)<1e-9);
-          assert.ok(Math.abs(step.cumulative_heat_balance_error_j)<1e-9);
+          if(adaptive) {
+            temperature=20+(temperature-20)*Math.exp(-40/(100*resistance));
+            assert.ok(Math.abs(step.temperature_c[0]-temperature)<0.01);
+            const d=step.integration;
+            assert.ok(d.max_accepted_error_ratio<=1); assert.ok(d.accepted_substeps>2);
+            chargedCells+=d.cell_solves; assert.equal(d.cumulative_cell_solves,chargedCells);
+            assert.ok(Math.abs(step.cumulative_stored_change_j-25*step.temperature_c[0])<1e-8);
+            assert.ok(Math.abs(step.cumulative_heat_balance_error_j)<1e-8);
+            const diagnostics=page.locator('table').filter({has:page.locator('caption',{hasText:'Adaptive thermal integration — local estimates and charged work'})});
+            assert.deepEqual(await diagnostics.locator('tr').nth(i+1).locator('td').allTextContents(),
+              [step.elapsed_s,d.accepted_substeps,d.rejected_trials,d.cell_solves,d.cumulative_cell_solves,d.max_accepted_error_ratio].map(String));
+          } else {
+            temperature=(10*temperature+2/resistance*40)/(10+4/resistance);
+            assert.ok(Math.abs(step.temperature_c[0]-temperature)<1e-10);
+            assert.ok(Math.abs(step.cumulative_stored_change_j-25*temperature)<1e-9);
+            assert.ok(Math.abs(step.cumulative_heat_balance_error_j)<1e-9);
+            assert.equal(step.integration,undefined);
+          }
           assert.ok(Math.abs(step.cumulative_external_work_j-[0.625,0][i])<1e-10);
           assert.equal(step.elapsed_s,(i+1)*10); assert.equal(step.reference_mass_kg,0.025);
           assert.equal(await t.locator('tr').nth(i+1).locator('td').nth(3).textContent(),String(step.temperature_c[0]));
@@ -239,8 +255,17 @@ const server = http.createServer((req, res) => {
         assert.equal(await download('compression-layer-1-selection.json'),selected);
         assert.equal(await page.inputValue('#selection'),selected);
         assert.match(await page.textContent('#outputs'),/External mechanical work is separate from sensible heat/);
-        fs.writeFileSync(path.join(work,`history-v${version}-request.json`),original,{flag:'wx'});
-        fs.writeFileSync(path.join(work,`history-v${version}-report.json`),raw,{flag:'wx'});
+        const prefix=adaptive?'adaptive-':'';
+        fs.writeFileSync(path.join(work,`${prefix}history-v${version}-request.json`),original,{flag:'wx'});
+        fs.writeFileSync(path.join(work,`${prefix}history-v${version}-report.json`),raw,{flag:'wx'});
+        if(adaptive && version===2) {
+          const limited=structuredClone(request); limited.adaptive.max_cell_solves=report.steps[0].integration.cell_solves;
+          await upload(limited); assert.notEqual(await run('pressure'),'');
+          assert.equal(await page.locator('a[download="compression-layer-1-selection.json"]').count(),0);
+          assert.equal(await page.isDisabled('#assign'),true);
+          await upload(request); assert.equal(await run('pressure'),'');
+          assert.equal(await download('compression-thermal-report.json'),raw);
+        }
       }
       await page.click('#assign'); assert.equal(await run('bind'),'');
       const bound=JSON.parse(await download('pattern.json'));
@@ -265,7 +290,7 @@ const server = http.createServer((req, res) => {
         assert.equal(await page.isDisabled('#assign'),true);
       }
       assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m=>m==='GET'));
-      console.log('PASS: real Chromium runs both compression/heat history versions, matches independent one-cell heat/work answers, retains exact source and final selections, binds without geometry changes, withdraws stale results and refuses missing links/late heat/unknown fields. Synthetic software evidence, no measured textile/contact/fit claim. Artifacts:',work);
+      console.log('PASS: real Chromium runs fixed and adaptive heat in both compression history versions, matches independent RC answers, displays native local-error/work diagnostics, retains exact source and selections, binds without geometry changes and refuses aggregate exhaustion/missing links/late heat/unknown fields. Synthetic software evidence, no global-error, measured textile/contact/fit claim. Artifacts:',work);
       return;
     }
     if (outfitProof) {
