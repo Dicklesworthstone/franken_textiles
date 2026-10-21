@@ -2,7 +2,7 @@
 //! No real textile data or assertion that loop work has been measured as generated heat.
 use ftx_core::RefusalCode;
 use ftx_drape::thermal::{
-    Boundary, DryThermalModel,
+    Boundary, DryThermalModel, adaptive,
     compression::{
         CompressedStack, Hold, Setup,
         path::{self, BranchChange, Leg, TransitionEvidence},
@@ -108,6 +108,7 @@ fn input() -> path::Input {
     let setup = setup(1, 1);
     path::Input {
         schema: "ftx-compressed-thermal-history/2".into(),
+        adaptive: None,
         legs: vec![
             Leg {
                 branch_change: None,
@@ -130,6 +131,100 @@ fn near(a: f64, b: f64) {
 }
 fn fingerprint(s: &CompressedStack) -> Value {
     json!({"compression": s.compression(), "temperature":s.temperatures(), "last":s.last()})
+}
+
+fn adaptive_options() -> adaptive::Options {
+    adaptive::Options {
+        absolute_temperature_tolerance_k: 1e-6,
+        absolute_heat_tolerance_j_m2: 1e-4,
+        relative_tolerance: 0.0,
+        min_step_s: 1e-5,
+        max_step_s: 10.0,
+        max_trials: 20_000,
+        max_cell_solves: 262_144,
+    }
+}
+
+#[test]
+fn adaptive_cycles_keep_one_budget_across_reversals_without_resetting_heat_or_sources() {
+    let mut request = input();
+    let legacy = path::evaluate(&request).unwrap();
+    request.adaptive = Some(adaptive_options());
+    let report = path::evaluate(&request).unwrap();
+    assert_eq!(report.transitions.len(), 2);
+    assert_eq!(
+        serde_json::to_value(&report.final_compression).unwrap(),
+        serde_json::to_value(&legacy.final_compression).unwrap()
+    );
+    let (mut temperature, mut work) = (0.0_f64, 0);
+    for ((step, old), resistance) in report
+        .steps
+        .iter()
+        .zip(&legacy.steps)
+        .zip([0.25_f64, 0.3, 0.5, 0.375])
+    {
+        temperature = 20.0 + (temperature - 20.0) * (-40.0 / (100.0 * resistance)).exp();
+        assert!((step.temperature_c[0] - temperature).abs() < 0.01);
+        assert_eq!(step.external_work_j, old.external_work_j);
+        assert_eq!(step.layer_material_sha256, old.layer_material_sha256);
+        assert!(step.cumulative_heat_balance_error_j.abs() < 1e-8);
+        let integration = step.integration.as_ref().unwrap();
+        assert_eq!(
+            integration.cumulative_cell_solves,
+            work + integration.cell_solves
+        );
+        assert!(integration.max_accepted_error_ratio <= 1.0);
+        work = integration.cumulative_cell_solves;
+    }
+    for transition in &report.transitions {
+        assert_eq!(
+            serde_json::to_value(&transition.result.step).unwrap(),
+            serde_json::to_value(&report.steps[transition.before_hold]).unwrap()
+        );
+    }
+    request.adaptive.as_mut().unwrap().max_cell_solves =
+        report.steps[0].integration.as_ref().unwrap().cell_solves;
+    assert_eq!(
+        path::evaluate(&request).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
+fn refused_adaptive_reversal_preserves_the_active_branch_but_charges_attempted_work() {
+    let request = input();
+    let report = {
+        let mut warmup = request.clone();
+        warmup.adaptive = Some(adaptive_options());
+        path::evaluate(&warmup).unwrap()
+    };
+    let mut options = adaptive_options();
+    options.max_cell_solves = report.steps[0].integration.as_ref().unwrap().cell_solves + 5;
+    let mut budget = adaptive::Budget::new(options).unwrap();
+    let mut state = CompressedStack::new(&request.setup).unwrap();
+    state
+        .advance_adaptive(&request.legs[0].holds[0], &mut budget)
+        .unwrap();
+    let before = fingerprint(&state);
+    let used = budget.used()[1];
+    let leg = &request.legs[1];
+    let reversal = leg.branch_change.as_ref().unwrap();
+    assert_eq!(
+        state
+            .advance_on_adaptive(&leg.holds[0], reversal, &mut budget)
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+    assert_eq!(fingerprint(&state), before);
+    assert_eq!(budget.used()[1], used + 5);
+    assert!(
+        state
+            .advance_on_adaptive(&leg.holds[0], reversal, &mut budget)
+            .is_err()
+    );
+    assert_eq!(fingerprint(&state), before);
+    assert_eq!(budget.used()[1], used + 5);
 }
 
 #[test]
@@ -393,12 +488,14 @@ fn splitting_one_branch_into_legs_preserves_legacy_results_and_links_change_path
     let holds = vec![hold(0.015, 1), hold(0.010, 1)];
     let old = ftx_drape::thermal::compression::evaluate(&ftx_drape::thermal::compression::Input {
         schema: "ftx-compressed-thermal-history/1".into(),
+        adaptive: None,
         setup: initial.clone(),
         holds: holds.clone(),
     })
     .unwrap();
     let segmented = path::evaluate(&path::Input {
         schema: "ftx-compressed-thermal-history/2".into(),
+        adaptive: None,
         setup: initial,
         legs: holds
             .into_iter()

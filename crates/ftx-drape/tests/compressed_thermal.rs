@@ -1,6 +1,6 @@
 //! Independent RC and pressure/work answers; no measured textile or private wearer evidence.
 use ftx_drape::thermal::{
-    Boundary, DryThermalModel,
+    Boundary, DryThermalModel, adaptive,
     compression::{CompressedStack, Hold, Input, Setup, evaluate},
 };
 use ftx_pattern::{
@@ -56,6 +56,119 @@ fn near(a: f64, b: f64, tolerance: f64) {
 
 fn fingerprint(s: &CompressedStack) -> serde_json::Value {
     serde_json::json!({"compression": s.compression(), "temperature":s.temperatures(), "last":s.last()})
+}
+
+fn adaptive_options() -> adaptive::Options {
+    adaptive::Options {
+        absolute_temperature_tolerance_k: 1e-6,
+        absolute_heat_tolerance_j_m2: 1e-4,
+        relative_tolerance: 0.0,
+        min_step_s: 1e-5,
+        max_step_s: 10.0,
+        max_trials: 10_000,
+        max_cell_solves: 262_144,
+    }
+}
+
+#[test]
+fn adaptive_history_matches_analytic_rc_heat_and_retains_the_original_final_material() {
+    let mut initial = setup(1, 1);
+    initial.initial_temperature_c[0] = 0.0;
+    let mut input = Input {
+        schema: "ftx-compressed-thermal-history/1".into(),
+        setup: initial,
+        holds: vec![hold(0.015, 1), hold(0.010, 1)],
+        adaptive: None,
+    };
+    let legacy = evaluate(&input).unwrap();
+    assert!(legacy.steps.iter().all(|s| s.integration.is_none()));
+    assert!(
+        !serde_json::to_string(&legacy)
+            .unwrap()
+            .contains("\"integration\"")
+    );
+    input.adaptive = Some(adaptive_options());
+    let report = evaluate(&input).unwrap();
+    assert_eq!(
+        serde_json::to_value(&report.final_compression).unwrap(),
+        serde_json::to_value(&legacy.final_compression).unwrap()
+    );
+    let (mut temperature, mut work) = (0.0_f64, 0);
+    for (step, resistance) in report.steps.iter().zip([0.375_f64, 0.25]) {
+        // Exact one-cell continuous RC solution, independent of either time integrator.
+        let rate = 4.0 / (100.0 * resistance);
+        let decay = (-rate * 10.0).exp();
+        let temperature_integral = 200.0 + (temperature - 20.0) * (1.0 - decay) / rate;
+        let entering = 0.25 * (2.0 / resistance) * (400.0 - temperature_integral);
+        let leaving = 0.25 * (2.0 / resistance) * temperature_integral;
+        temperature = 20.0 + (temperature - 20.0) * decay;
+        near(step.temperature_c[0], temperature, 0.01);
+        near(step.inside_heat_j, entering, 0.25);
+        near(step.outside_heat_j, leaving, 0.25);
+        near(step.cumulative_heat_balance_error_j, 0.0, 1e-8);
+        near(step.reference_mass_kg, 0.025, 1e-14);
+        let integration = step.integration.as_ref().unwrap();
+        assert!(integration.max_accepted_error_ratio <= 1.0);
+        assert!(integration.rejected_trials > 0);
+        assert!(integration.accepted_substeps > 2);
+        assert_eq!(integration.cell_solves, integration.trials * 3);
+        assert_eq!(
+            integration.cumulative_cell_solves,
+            work + integration.cell_solves
+        );
+        work = integration.cumulative_cell_solves;
+    }
+    let first = &report.steps[0];
+    assert!((first.inside_heat_j - 2.5 * first.inside_flux_w_m2).abs() > 0.1);
+    assert!((first.temperature_c[0] - legacy.steps[0].temperature_c[0]).abs() > 1.0);
+    near(report.steps[1].cumulative_external_work_j, 0.625, 1e-12);
+
+    // A second hold cannot reset the actual attempted-work budget.
+    input.adaptive.as_mut().unwrap().max_cell_solves =
+        report.steps[0].integration.as_ref().unwrap().cell_solves;
+    assert_eq!(
+        evaluate(&input).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    input.adaptive.as_mut().unwrap().max_cell_solves = 262_145;
+    assert_eq!(
+        evaluate(&input).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
+fn adaptive_failure_rolls_back_physics_without_refunding_partial_attempts() {
+    let mut initial = setup(1, 1);
+    initial.initial_temperature_c[0] = 0.0;
+    let mut state = CompressedStack::new(&initial).unwrap();
+    let original = fingerprint(&state);
+    let mut options = adaptive_options();
+    options.max_cell_solves = 5;
+    let mut budget = adaptive::Budget::new(options).unwrap();
+    let h = hold(0.015, 1);
+    assert_eq!(
+        state.advance_adaptive(&h, &mut budget).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    assert_eq!(fingerprint(&state), original);
+    assert_eq!(budget.used()[1], 5);
+    assert!(state.advance_adaptive(&h, &mut budget).is_err());
+    assert_eq!(fingerprint(&state), original);
+    assert_eq!(budget.used()[1], 5);
+
+    let mut options = adaptive_options();
+    options.min_step_s = 10.0;
+    let mut budget = adaptive::Budget::new(options).unwrap();
+    assert_eq!(
+        state.advance_adaptive(&h, &mut budget).unwrap_err().code,
+        ftx_core::RefusalCode::NotConverged
+    );
+    assert_eq!(budget.used(), [1, 3]);
+    assert_eq!(fingerprint(&state), original);
+    let mut budget = adaptive::Budget::new(adaptive_options()).unwrap();
+    assert!(state.advance_adaptive(&h, &mut budget).is_ok());
+    assert_ne!(fingerprint(&state), original);
 }
 
 #[test]
@@ -276,6 +389,7 @@ fn thermal_storage_needs_explicit_pressure_invariance_and_transport() {
 fn history_is_deterministic_conservative_and_bounded_with_no_partial_success() {
     let mut input = Input {
         schema: "ftx-compressed-thermal-history/1".into(),
+        adaptive: None,
         setup: setup(2, 3),
         holds: (0..80)
             .map(|i| {

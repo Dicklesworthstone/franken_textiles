@@ -11,7 +11,7 @@ use ftx_pattern::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{Boundary, DryThermalModel, invalid, positive};
+use super::{Boundary, DryThermalModel, adaptive, invalid, positive};
 
 /// Explicit source-qualified branch reversals through the same material/thermal state machine.
 pub mod path;
@@ -94,9 +94,9 @@ pub struct StepReport {
     pub inside_flux_w_m2: f64,
     /// End-of-step implicit outer boundary flux, W/m², positive out of the stack.
     pub outside_flux_w_m2: f64,
-    /// Boundary heat for this hold, joules: dt * area * implicit inner flux.
+    /// Integrated heat entering this hold, J; adaptive mode sums accepted half steps.
     pub inside_heat_j: f64,
-    /// Boundary heat for this hold, joules: dt * area * implicit outer flux.
+    /// Integrated heat leaving this hold, J; final instantaneous flux is reported separately.
     pub outside_heat_j: f64,
     /// This hold's sensible stored-energy change, joules.
     pub stored_change_j: f64,
@@ -114,6 +114,9 @@ pub struct StepReport {
     pub cumulative_stored_change_j: f64,
     /// Cumulative sensible energy balance, not a complete thermomechanical energy balance.
     pub cumulative_heat_balance_error_j: f64,
+    /// Optional local time-error estimates and charged work, not a global accuracy bound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration: Option<adaptive::Report>,
 }
 
 /// Stateful local column. There are no public mutable fields or externally substitutable materials.
@@ -248,6 +251,27 @@ impl CompressedStack {
     /// Refused compression/thermal solve, unrepresentable time/energy, changed storage or more than
     /// 512 committed steps. Preparation and all ledgers commit together only after every check.
     pub fn advance(&mut self, hold: &Hold) -> Result<StepReport, Refusal> {
+        self.advance_inner(hold, None)
+    }
+
+    /// Advance a hold with the existing adaptive thermal integrator and a caller-owned budget.
+    /// Failed attempts retain charged work in `budget` but leave physical state unchanged.
+    ///
+    /// # Errors
+    /// Ordinary source/compression refusals, unmet local tolerances or exhausted adaptive work.
+    pub fn advance_adaptive(
+        &mut self,
+        hold: &Hold,
+        budget: &mut adaptive::Budget,
+    ) -> Result<StepReport, Refusal> {
+        self.advance_inner(hold, Some(budget))
+    }
+
+    fn advance_inner(
+        &mut self,
+        hold: &Hold,
+        budget: Option<&mut adaptive::Budget>,
+    ) -> Result<StepReport, Refusal> {
         if self.committed_steps == MAX_STEPS {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,
@@ -282,7 +306,26 @@ impl CompressedStack {
                 "compressed thermal material-cell storage or reference mass changed",
             ));
         }
-        let state = thermal.advance(&self.temperature, hold.seconds, hold.boundary())?;
+        let (state, integrated_heat, integration) = match budget {
+            Some(budget) => {
+                let next = thermal.advance_adaptive(
+                    &self.temperature,
+                    hold.seconds,
+                    hold.boundary(),
+                    budget,
+                )?;
+                (
+                    next.state,
+                    Some([next.inside_heat_j_m2, next.outside_heat_j_m2]),
+                    Some(next.integration),
+                )
+            }
+            None => (
+                thermal.advance(&self.temperature, hold.seconds, hold.boundary())?,
+                None,
+                None,
+            ),
+        };
         let area = request.reference_area_m2;
         let heat = |flux| {
             checked_product(
@@ -291,8 +334,16 @@ impl CompressedStack {
                 "heat",
             )
         };
-        let inside = heat(state.inside_flux_w_m2)?;
-        let outside = heat(state.outside_flux_w_m2)?;
+        let (inside, outside) = match integrated_heat {
+            Some([inside, outside]) => (
+                checked_product(inside, area, "integrated entering heat")?,
+                checked_product(outside, area, "integrated leaving heat")?,
+            ),
+            None => (
+                heat(state.inside_flux_w_m2)?,
+                heat(state.outside_flux_w_m2)?,
+            ),
+        };
         let stored = checked_product(state.stored_change_j_m2, area, "stored heat")?;
         let error = stored - (inside - outside);
         let prior = self.last.as_ref();
@@ -354,6 +405,7 @@ impl CompressedStack {
             cumulative_outside_heat_j: co,
             cumulative_stored_change_j: cs,
             cumulative_heat_balance_error_j: ce,
+            integration,
         };
         self.compression = next;
         self.temperature = state.temperature_c;
@@ -373,6 +425,25 @@ pub struct Input {
     pub setup: Setup,
     /// One to 512 prescribed holds. No branch reversal or hidden time interpolation.
     pub holds: Vec<Hold>,
+    /// Optional local time-error control; one work budget spans the complete history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive: Option<adaptive::Options>,
+}
+
+fn adaptive_budget(
+    options: Option<&adaptive::Options>,
+) -> Result<Option<adaptive::Budget>, Refusal> {
+    options
+        .map(|options| {
+            if options.max_cell_solves > 262_144 {
+                return Err(Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "adaptive compression history permits at most 262144 attempted cell solves",
+                ));
+            }
+            adaptive::Budget::new(options.clone())
+        })
+        .transpose()
 }
 
 /// Complete successful history. Any refused step returns an error instead of a partial success.
@@ -416,11 +487,15 @@ pub fn evaluate(input: &Input) -> Result<Report, Refusal> {
             "compressed thermal history needs 1..512 holds and at most 262144 cell-holds",
         ));
     }
+    let mut budget = adaptive_budget(input.adaptive.as_ref())?;
     let mut state = CompressedStack::new(&input.setup)?;
     let initial_compression = state.compression().clone();
     let mut steps = Vec::with_capacity(input.holds.len());
     for hold in &input.holds {
-        steps.push(state.advance(hold)?);
+        steps.push(match &mut budget {
+            Some(budget) => state.advance_adaptive(hold, budget)?,
+            None => state.advance(hold)?,
+        });
     }
     let input_sha256 = sha256_hex(&serde_json::to_vec(input).map_err(|e| invalid(e.to_string()))?);
     Ok(Report {

@@ -537,6 +537,20 @@ function compressionHistoryResult(parent, r) {
     "Temperatures follow the same material cells across qualified branch changes. A final material selection does not save this temperature state; keep the full history report.";
   parent.append(note);
   if (r.transitions) detail(parent, "Source-qualified branch transitions", r.transitions);
+  if (r.input?.adaptive) {
+    const integration = table(parent, "Adaptive thermal integration — local estimates and charged work",
+      ["Time (s)", "Accepted half steps", "Rejected trials", "Charged cell solves", "Cumulative cell solves", "Largest local error ratio"]);
+    for (const step of r.steps) {
+      const d = step.integration;
+      cells(integration, [metric(step.elapsed_s), metric(d.accepted_substeps), metric(d.rejected_trials),
+        metric(d.cell_solves), metric(d.cumulative_cell_solves), metric(d.max_accepted_error_ratio)]);
+    }
+    const scope = document.createElement("p");
+    scope.textContent = "Boundary heat sums actual accepted half steps. Local temperature and signed heat error estimates are not global accuracy or confidence bounds. " +
+      "Charged work includes rejected trials and continues across holds and branch changes. Spatial error and measured material qualification remain separate.";
+    parent.append(scope);
+    detail(parent, "Declared adaptive thermal policy", r.input.adaptive);
+  }
   return { selected_layer: r.chosen_layer_id, holds: r.steps.length, branch_transitions: r.transitions?.length || 0,
     input_sha256: r.input_sha256, reference_mass_kg: r.final_compression.reference_mass_kg,
     initial_preparation_work_j: r.initial_compression.external_work_j, no_claim: r.no_claim,

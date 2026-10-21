@@ -375,6 +375,16 @@ a moving body; an elastic's own mass or its friction in the casing; fabric param
 plan §11, research 07 §2.7). The §11.7 budgets are measured above, on one machine (native and node's
 wasm), not on a browser's.
 
+**Adaptive compressed thermal holds** (`thermal::compression`, `ftx-cp2.1`). Optional explicit
+time-integration tolerances reuse `thermal::adaptive` in both monotone and qualified cyclic histories.
+Actual accepted-half-step boundary heats enter the separate thermal ledger; final fluxes remain
+instantaneous. One request-wide budget charges attempted/rejected solves across holds and reversals,
+at most 262144 cell solves. Physical-state rollback does not refund an external adaptive budget.
+Omission preserves original fixed-step serialization/arithmetic and source qualification. Local
+temperature/heat error estimates are not global/spatial error bounds, empirical material evidence,
+mechanical heating, a recovery law or garment/comfort qualification. Tests: `compressed_thermal`
+and `compressed_thermal_path`; consumer contract: `docs/compressed-thermal-history.md`.
+
 **Explicit thermal coverage** (`thermal::surface::coverage`, plan §25.6 / `ftx-tmb`).
 `Coverage` composes the existing source-locked independent-sheet `Surface` into declared disjoint
 body-area fractions and inside-to-outside layers. It checks both body and cloth allocation budgets,

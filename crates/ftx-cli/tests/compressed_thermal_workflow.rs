@@ -330,3 +330,66 @@ fn missing_reversal_evidence_or_late_heat_failure_never_emits_a_partial_native_p
         assert_eq!(before, std::fs::read(dir.join("request.json")).unwrap());
     }
 }
+
+#[test]
+fn both_commands_run_adaptive_monotone_and_cyclic_histories_and_keep_one_work_budget() {
+    for (mut value, resistances) in [
+        (input(), [0.375_f64, 0.25]),
+        (cyclic_input(), [0.25_f64, 0.3]),
+    ] {
+        // Use two holds in the cyclic case, preserving its source-qualified reversal.
+        if value["schema"] == "ftx-compressed-thermal-history/2" {
+            value["legs"][1]["holds"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(1);
+        }
+        value["adaptive"] = json!({"absolute_temperature_tolerance_k":1e-6,
+            "absolute_heat_tolerance_j_m2":1e-4,"relative_tolerance":0.0,
+            "min_step_s":0.00001,"max_step_s":10.0,"max_trials":10000,"max_cell_solves":262144});
+        let dir = setup(&value);
+        let original = std::fs::read(dir.join("request.json")).unwrap();
+        let standalone = run(&dir, false, &["thermal-compression", "request.json"], 0);
+        let wrapped = run(&dir, true, &["thermal-compression", "request.json"], 0);
+        let report: Value = serde_json::from_slice(&standalone.stdout).unwrap();
+        let envelope: Value = serde_json::from_slice(&wrapped.stdout).unwrap();
+        assert_eq!(report, envelope["result"]);
+        let typed = ftx_drape::thermal::compression::evaluate_json(&value.to_string()).unwrap();
+        assert_eq!(report, serde_json::from_str::<Value>(&typed).unwrap());
+        let mut temperature = 0.0;
+        for (step, resistance) in report["steps"].as_array().unwrap().iter().zip(resistances) {
+            temperature = 20.0 + (temperature - 20.0) * (-40.0 / (100.0 * resistance)).exp();
+            assert!((step["temperature_c"][0].as_f64().unwrap() - temperature).abs() < 0.01);
+            assert!(
+                step["integration"]["max_accepted_error_ratio"]
+                    .as_f64()
+                    .unwrap()
+                    <= 1.0
+            );
+            assert!(
+                step["cumulative_heat_balance_error_j"]
+                    .as_f64()
+                    .unwrap()
+                    .abs()
+                    < 1e-8
+            );
+        }
+        assert_eq!(std::fs::read(dir.join("request.json")).unwrap(), original);
+        value["adaptive"]["max_cell_solves"] =
+            report["steps"][0]["integration"]["cell_solves"].clone();
+        let rejected = setup(&value);
+        assert!(
+            run(
+                &rejected,
+                false,
+                &["thermal-compression", "request.json"],
+                2
+            )
+            .stdout
+            .is_empty()
+        );
+        let out = run(&rejected, true, &["thermal-compression", "request.json"], 3);
+        let failure: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(failure["result"].is_null());
+    }
+}

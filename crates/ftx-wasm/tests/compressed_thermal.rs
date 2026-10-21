@@ -185,3 +185,59 @@ fn cyclic_api_rejects_unknown_versions_missing_links_and_cross_version_fields() 
         assert!(ftx_wasm::thermal::compression_history(&v.to_string()).is_err());
     }
 }
+
+#[test]
+fn adaptive_histories_reach_the_same_portable_authority_without_publishing_exhausted_paths() {
+    for mut value in [input(), cyclic_input()] {
+        value["setup"]["initial_temperature_c"] = json!([0.0, 0.0, 0.0, 0.0]);
+        let holds = if value["schema"] == "ftx-compressed-thermal-history/1" {
+            value["holds"].as_array_mut().unwrap()
+        } else {
+            value["legs"][0]["holds"].as_array_mut().unwrap()
+        };
+        holds[0]["inside_c"] = json!(40.0);
+        holds[0]["outside_c"] = json!(0.0);
+        // A second hold exercises late exhaustion in both versions.
+        if value["schema"] == "ftx-compressed-thermal-history/1" {
+            let repeated = value["holds"][0].clone();
+            value["holds"].as_array_mut().unwrap().push(repeated);
+        }
+        value["adaptive"] = json!({"absolute_temperature_tolerance_k":1e-6,
+            "absolute_heat_tolerance_j_m2":1e-4,"relative_tolerance":0.0,
+            "min_step_s":0.00001,"max_step_s":10.0,"max_trials":10000,"max_cell_solves":262144});
+        let raw = value.to_string();
+        let actual = ftx_wasm::thermal::compression_history(&raw).unwrap();
+        assert_eq!(
+            actual,
+            ftx_drape::thermal::compression::evaluate_json(&raw).unwrap()
+        );
+        let report: Value = serde_json::from_str(&actual).unwrap();
+        let mut work = 0;
+        for step in report["steps"].as_array().unwrap() {
+            let integration = &step["integration"];
+            assert!(integration["max_accepted_error_ratio"].as_f64().unwrap() <= 1.0);
+            work += integration["cell_solves"].as_u64().unwrap();
+            assert_eq!(integration["cumulative_cell_solves"], work);
+            assert!(
+                step["cumulative_heat_balance_error_j"]
+                    .as_f64()
+                    .unwrap()
+                    .abs()
+                    < 1e-8
+            );
+        }
+        assert!(report["steps"][0]["temperature_c"][0].as_f64().unwrap() > 0.0);
+        value["adaptive"]["max_cell_solves"] =
+            report["steps"][0]["integration"]["cell_solves"].clone();
+        assert_eq!(
+            ftx_wasm::thermal::compression_history(&value.to_string())
+                .unwrap_err()
+                .code,
+            ftx_core::RefusalCode::BudgetExceeded
+        );
+        assert_eq!(
+            raw,
+            serde_json::from_str::<Value>(&raw).unwrap().to_string()
+        );
+    }
+}

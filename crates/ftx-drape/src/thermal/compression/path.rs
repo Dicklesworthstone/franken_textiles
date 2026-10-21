@@ -8,7 +8,12 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::{material_compression::stack, materials::Evidence};
 use serde::{Deserialize, Serialize};
 
-use super::{CompressedStack, Hold, MAX_STEPS, Setup, StepReport, check_storage, invalid, model};
+use crate::thermal::adaptive;
+
+use super::{
+    CompressedStack, Hold, MAX_STEPS, Setup, StepReport, adaptive_budget, check_storage, invalid,
+    model,
+};
 
 /// Receipt for traversing from one acquired branch to another on the same specimen/history.
 /// A numerical intersection alone cannot establish that two independently acquired curves connect.
@@ -73,6 +78,29 @@ impl CompressedStack {
         &mut self,
         hold: &Hold,
         change: &BranchChange,
+    ) -> Result<BranchStep, Refusal> {
+        self.advance_on_inner(hold, change, None)
+    }
+
+    /// Commit a qualified reversal and adaptive hold without resetting the caller's work budget.
+    /// Failed attempts leave the active branch and physical state unchanged; work remains charged.
+    ///
+    /// # Errors
+    /// The same source/branch refusals as [`Self::advance_on`], or adaptive tolerance/work failure.
+    pub fn advance_on_adaptive(
+        &mut self,
+        hold: &Hold,
+        change: &BranchChange,
+        budget: &mut adaptive::Budget,
+    ) -> Result<BranchStep, Refusal> {
+        self.advance_on_inner(hold, change, Some(budget))
+    }
+
+    fn advance_on_inner(
+        &mut self,
+        hold: &Hold,
+        change: &BranchChange,
+        budget: Option<&mut adaptive::Budget>,
     ) -> Result<BranchStep, Refusal> {
         let old = &self.setup.stack;
         let new = &change.entry;
@@ -176,7 +204,10 @@ impl CompressedStack {
         let mut trial = self.clone();
         trial.setup.stack = new.clone();
         trial.compression = entry.clone();
-        let step = trial.advance(hold)?;
+        let step = match budget {
+            Some(budget) => trial.advance_adaptive(hold, budget)?,
+            None => trial.advance(hold)?,
+        };
         let report = BranchStep {
             previous_compression_sha256: self.compression.input_sha256.clone(),
             change: change.clone(),
@@ -209,6 +240,9 @@ pub struct Input {
     pub setup: Setup,
     /// One to 32 explicit legs, at most 512 holds and 262144 cell-holds in total.
     pub legs: Vec<Leg>,
+    /// Optional local time-error control; the same budget spans all legs and branch changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive: Option<adaptive::Options>,
 }
 
 /// One branch transition at its unambiguous global hold index. Retains the zero-work entry receipt.
@@ -271,6 +305,7 @@ pub fn evaluate(input: &Input) -> Result<Report, Refusal> {
             "compressed thermal path needs 1..32 nonempty legs, at most 512 total holds and 262144 cell-holds",
         ));
     }
+    let mut budget = adaptive_budget(input.adaptive.as_ref())?;
     let mut state = CompressedStack::new(&input.setup)?;
     let initial_compression = state.compression().clone();
     let mut steps = Vec::with_capacity(holds.expect("checked hold budget"));
@@ -278,14 +313,20 @@ pub fn evaluate(input: &Input) -> Result<Report, Refusal> {
     for leg in &input.legs {
         for (i, hold) in leg.holds.iter().enumerate() {
             if let Some(change) = leg.branch_change.as_ref().filter(|_| i == 0) {
-                let result = state.advance_on(hold, change)?;
+                let result = match &mut budget {
+                    Some(budget) => state.advance_on_adaptive(hold, change, budget)?,
+                    None => state.advance_on(hold, change)?,
+                };
                 steps.push(result.step.clone());
                 transitions.push(TransitionReport {
                     before_hold: steps.len() - 1,
                     result,
                 });
             } else {
-                steps.push(state.advance(hold)?);
+                steps.push(match &mut budget {
+                    Some(budget) => state.advance_adaptive(hold, budget)?,
+                    None => state.advance(hold)?,
+                });
             }
         }
     }

@@ -125,6 +125,36 @@ No branch switching or cyclic recovery is inferred. Further loading must follow 
 loading branch; an unloading history requires a qualified unloading branch and initial preload.
 A repeated endpoint gap is a legal thermal hold with zero incremental mechanical work.
 
+### Optional local error control
+
+Both history versions accept an optional top-level `adaptive` policy. Omission retains the original
+single backward-Euler step per hold and its exact serialized report. For example:
+
+```json
+"adaptive": {
+  "absolute_temperature_tolerance_k": 0.000001,
+  "absolute_heat_tolerance_j_m2": 0.0001,
+  "relative_tolerance": 0,
+  "min_step_s": 0.00001,
+  "max_step_s": 10,
+  "max_trials": 10000,
+  "max_cell_solves": 262144
+}
+```
+
+The existing thermal integrator compares one full backward-Euler step with two half steps. It keeps
+the actual half-step states and separately integrates each signed boundary heat. Final instantaneous
+flux multiplied by the entire hold duration is **not** that integral. Each reported hold retains its
+local error estimate, accepted substeps, rejected trials and charged cell solves. Temperature and both
+boundary-heat estimates must pass; these local estimates are not a global error bound or confidence
+interval. They do not control spatial error, source uncertainty or empirical accuracy.
+
+One budget spans the entire request, including branch changes. `max_cell_solves` cannot exceed the
+history's 262144-cell-work ceiling; rejected and partially completed trials remain charged. Minimum
+interval, domain or work exhaustion refuses the complete history instead of falling back to a coarse
+step. Direct stateful callers can share the same `adaptive::Budget` across adaptive advances/reversals:
+failed advances preserve physical state while retaining attempted work in that external budget.
+
 ## Reports and reuse
 
 `ftx-compressed-thermal-history-report/1` retains the typed input and its digest, initial compression,
