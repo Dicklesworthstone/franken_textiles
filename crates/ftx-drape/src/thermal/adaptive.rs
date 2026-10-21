@@ -11,22 +11,40 @@ use serde::{Deserialize, Serialize};
 
 use super::{Boundary, DryThermalModel, State, invalid, nonnegative, positive};
 
+/// Local step-doubling tolerances and aggregate work limits; no global error guarantee.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Options {
+    /// Positive absolute temperature-difference tolerance, K.
     pub absolute_temperature_tolerance_k: f64,
+    /// Positive absolute tolerance for each signed boundary heat, J/m².
     pub absolute_heat_tolerance_j_m2: f64,
+    /// Relative tolerance, 0..=0.1; temperature magnitudes use absolute kelvin.
     pub relative_tolerance: f64,
+    /// Minimum candidate interval, s. Its accepted half steps may be half this length.
     pub min_step_s: f64,
+    /// Maximum candidate interval, s; longer holds are subdivided.
     pub max_step_s: f64,
+    /// Maximum attempted coarse-versus-fine comparisons across this budget's holds.
     pub max_trials: usize,
+    /// Maximum charged cells across all attempted advances, including rejected trials.
     pub max_cell_solves: usize,
 }
 
 impl Options {
+    /// Validate finite tolerances, representable intervals and bounded work.
+    ///
+    /// # Errors
+    /// Invalid tolerance, interval ordering, underflowing half interval or work bounds.
     pub fn validate(&self) -> Result<(), Refusal> {
-        positive("absolute temperature tolerance", self.absolute_temperature_tolerance_k)?;
-        positive("absolute boundary heat tolerance", self.absolute_heat_tolerance_j_m2)?;
+        positive(
+            "absolute temperature tolerance",
+            self.absolute_temperature_tolerance_k,
+        )?;
+        positive(
+            "absolute boundary heat tolerance",
+            self.absolute_heat_tolerance_j_m2,
+        )?;
         nonnegative("relative thermal tolerance", self.relative_tolerance)?;
         positive("minimum thermal interval", self.min_step_s)?;
         positive("maximum thermal interval", self.max_step_s)?;
@@ -36,12 +54,15 @@ impl Options {
             || !(1..=100_000).contains(&self.max_trials)
             || !(1..=16_777_216).contains(&self.max_cell_solves)
         {
-            return Err(invalid("invalid adaptive thermal tolerances, interval or work bounds"));
+            return Err(invalid(
+                "invalid adaptive thermal tolerances, interval or work bounds",
+            ));
         }
         Ok(())
     }
 }
 
+/// Shared attempt accounting for one or more adaptive holds; failed attempts remain charged.
 #[derive(Clone, Debug)]
 pub struct Budget {
     options: Options,
@@ -50,19 +71,31 @@ pub struct Budget {
 }
 
 impl Budget {
+    /// Start an unused budget after validating its options.
+    ///
+    /// # Errors
+    /// The same invalid-option refusals as [`Options::validate`].
     pub fn new(options: Options) -> Result<Self, Refusal> {
         options.validate()?;
-        Ok(Self { options, trials: 0, cell_solves: 0 })
+        Ok(Self {
+            options,
+            trials: 0,
+            cell_solves: 0,
+        })
     }
 
     #[must_use]
+    /// Cumulative `[trial attempts, charged cell solves]`, including failed work.
     pub fn used(&self) -> [usize; 2] {
         [self.trials, self.cell_solves]
     }
 
     fn trial(&mut self) -> Result<(), Refusal> {
         if self.trials == self.options.max_trials {
-            return Err(Refusal::new(RefusalCode::BudgetExceeded, "adaptive thermal trial budget exhausted"));
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "adaptive thermal trial budget exhausted",
+            ));
         }
         self.trials += 1;
         Ok(())
@@ -86,24 +119,39 @@ impl Budget {
     }
 }
 
+/// Actual work and accepted local error estimates for a completed hold.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
+    /// Trial comparisons charged during this hold.
     pub trials: usize,
+    /// Comparisons rejected by local error or a nonlinear convergence failure.
     pub rejected_trials: usize,
+    /// Accepted physical half steps; two per accepted comparison.
     pub accepted_substeps: usize,
+    /// Cells charged to attempted advances during this hold.
     pub cell_solves: usize,
+    /// Shortest accepted physical half step, s.
     pub min_accepted_step_s: f64,
+    /// Longest accepted physical half step, s.
     pub max_accepted_step_s: f64,
+    /// Largest accepted normalized local error, at most one; not a global bound.
     pub max_accepted_error_ratio: f64,
+    /// Trial attempts charged across all holds using the shared budget.
     pub cumulative_trials: usize,
+    /// Cells charged across all holds using the shared budget.
     pub cumulative_cell_solves: usize,
 }
 
+/// Final temperatures and separately integrated signed boundary heat for a whole hold.
 #[derive(Clone, Debug)]
 pub struct IntegratedState {
+    /// Final half-step state with whole-hold storage/balance; fluxes remain final-step values.
     pub state: State,
+    /// Signed heat entering the inside boundary over the whole hold, J/m².
     pub inside_heat_j_m2: f64,
+    /// Signed heat leaving the outside boundary over the whole hold, J/m².
     pub outside_heat_j_m2: f64,
+    /// Local error and work accounting for this completed hold.
     pub integration: Report,
 }
 
@@ -120,7 +168,9 @@ fn ratio(a: f64, b: f64, absolute: f64, relative: f64, offset: f64) -> Result<f6
     let error = (a - b).abs();
     let value = error / tolerance;
     if !tolerance.is_finite() || !error.is_finite() || !value.is_finite() {
-        return Err(invalid("adaptive thermal error estimate is not representable"));
+        return Err(invalid(
+            "adaptive thermal error estimate is not representable",
+        ));
     }
     Ok(value)
 }
@@ -145,6 +195,13 @@ fn split(
 }
 
 impl DryThermalModel {
+    /// Integrate a constant-boundary hold with accepted backward-Euler half steps.
+    /// Inputs are temperatures in °C and duration in seconds; heat follows reference area.
+    /// No partial state is returned on refusal; attempted work stays charged to `budget`.
+    ///
+    /// # Errors
+    /// Invalid cells, temperatures, films or duration; exhausted work; unrepresentable steps/heat;
+    /// unattainable local tolerances; nonlinear or whole-hold conservation failure.
     pub fn advance_adaptive(
         &self,
         old: &[f64],
@@ -154,9 +211,14 @@ impl DryThermalModel {
     ) -> Result<IntegratedState, Refusal> {
         positive("thermal hold duration", seconds)?;
         if old.len() != self.cells() || seconds < budget.options.min_step_s {
-            return Err(invalid("adaptive hold needs matching cells and duration at least min_step_s"));
+            return Err(invalid(
+                "adaptive hold needs matching cells and duration at least min_step_s",
+            ));
         }
-        for &t in old.iter().chain([boundary.inside_c, boundary.outside_c].iter()) {
+        for &t in old
+            .iter()
+            .chain([boundary.inside_c, boundary.outside_c].iter())
+        {
             self.check_temperature(t)?;
         }
         nonnegative("inner film resistance", boundary.inside_resistance)?;
@@ -187,7 +249,10 @@ impl DryThermalModel {
             let mid = start + dt / 2.0;
             let (h1, h2) = (mid - start, end - mid);
             if h1 <= 0.0 || h2 <= 0.0 {
-                return Err(Refusal::new(RefusalCode::NotConverged, "thermal half-step time is not representable"));
+                return Err(Refusal::new(
+                    RefusalCode::NotConverged,
+                    "thermal half-step time is not representable",
+                ));
             }
             budget.trial()?;
             let trial = (|| {
@@ -210,8 +275,11 @@ impl DryThermalModel {
             let mut error: f64 = 0.0;
             for (&a, &b) in fine.temperature_c.iter().zip(&coarse.temperature_c) {
                 error = error.max(ratio(
-                    a, b, options.absolute_temperature_tolerance_k,
-                    options.relative_tolerance, 273.15,
+                    a,
+                    b,
+                    options.absolute_temperature_tolerance_k,
+                    options.relative_tolerance,
+                    273.15,
                 )?);
             }
             for (a, b) in [
@@ -219,8 +287,11 @@ impl DryThermalModel {
                 (qo, heat(dt, coarse.outside_flux_w_m2)?),
             ] {
                 error = error.max(ratio(
-                    a, b, options.absolute_heat_tolerance_j_m2,
-                    options.relative_tolerance, 0.0,
+                    a,
+                    b,
+                    options.absolute_heat_tolerance_j_m2,
+                    options.relative_tolerance,
+                    0.0,
                 )?);
             }
             if error > 1.0 {
@@ -229,9 +300,13 @@ impl DryThermalModel {
                 continue;
             }
             for (i, ((&a, &b), &c)) in next
-                .iter().zip(&first.temperature_c).zip(&fine.temperature_c).enumerate()
+                .iter()
+                .zip(&first.temperature_c)
+                .zip(&fine.temperature_c)
+                .enumerate()
             {
-                round += self.cell_capacity(i, a)?
+                round += self
+                    .cell_capacity(i, a)?
                     .max(self.cell_capacity(i, b)?)
                     .max(self.cell_capacity(i, c)?)
                     * (1.0 + a.abs() + b.abs() + c.abs());
@@ -239,7 +314,9 @@ impl DryThermalModel {
             inside += qi;
             outside += qo;
             if [inside, outside, round].iter().any(|v| !v.is_finite()) {
-                return Err(invalid("adaptive integrated heat or rounding bound overflows"));
+                return Err(invalid(
+                    "adaptive integrated heat or rounding bound overflows",
+                ));
             }
             report.accepted_substeps += 2;
             report.min_accepted_step_s = report.min_accepted_step_s.min(h1.min(h2));
@@ -248,16 +325,22 @@ impl DryThermalModel {
             next.clone_from(&fine.temperature_c);
             last = Some(fine);
         }
-        let stored = old.iter().zip(&next).enumerate().try_fold(0.0, |sum, (i, (&a, &b))| {
-            self.cell_heat(i, a, b).map(|q| sum + q)
-        })?;
+        let stored = old
+            .iter()
+            .zip(&next)
+            .enumerate()
+            .try_fold(0.0, |sum, (i, (&a, &b))| {
+                self.cell_heat(i, a, b).map(|q| sum + q)
+            })?;
         let error = stored - (inside - outside);
         let tolerance = 1024.0 * f64::EPSILON * round
-            + 1e-9 * (report.accepted_substeps as f64 + stored.abs() + inside.abs() + outside.abs());
+            + 1e-9
+                * (report.accepted_substeps as f64 + stored.abs() + inside.abs() + outside.abs());
         if [stored, error, tolerance].iter().any(|v| !v.is_finite()) || error.abs() > tolerance {
             return Err(invalid("adaptive whole-hold energy conservation failed"));
         }
-        let mut state = last.ok_or_else(|| invalid("adaptive hold has no accepted thermal state"))?;
+        let mut state =
+            last.ok_or_else(|| invalid("adaptive hold has no accepted thermal state"))?;
         state.stored_change_j_m2 = stored;
         state.balance_error_j_m2 = error;
         report.trials = budget.trials - before[0];
