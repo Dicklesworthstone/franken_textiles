@@ -76,3 +76,21 @@ selection assigned. Native adapter tests cover actual physics, immutable source 
 refusals; `check_materials_frontend.cjs` additionally executes the compiled WASM through the worker,
 with optional complete native calibration replay under `FTX_STRIP_REPLAY`. See
 `docs/clamped-strip-calibration.md` for the scope and executable synthetic acquisition.
+
+The same boundary accepts independent signed tangent intervals under `nonlinear`, separately from
+the existing fixed-shape `response_family`. The page displays every returned coefficient with its
+canonical descriptor and bound, and shows the declared fixed strain knots. Compiled-worker checks
+replay the accepted ordinary material on a refined held-out strip and optionally compare the complete
+native report and exact selection under `FTX_INTERVAL_STRIP_REPLAY`. These synthetic checks do not
+qualify a measured textile or supply absent bending, mass, contact or thermal evidence.
+
+**Joint-outfit material workbench.** `materials::outfit::prepare` and its wasm32 export
+`material_outfit_prepare(input)` use the production outfit composer to freeze an `ftx-outfit-drape/1`
+request into one ordinary pattern. The import retains exact request bytes, their SHA-256, exact
+composed pattern JSON and the source composition receipt. Whole-outfit, per-garment and per-piece
+material substitutions enter the existing binding, drape, cutting, purchasing and study consumers.
+The initial composition receipt remains explicitly scoped before substitutions; consumers retain
+their current pattern separately. Imported outfits require self-contact, enforced both by the page
+and the worker. Replaced imports invalidate dependent results and reject stale asynchronous replies.
+The workbench uses the ordinary composed-pattern drape route; it does not append the native
+`Prepared::drape` runtime garment-ownership report or claim successful physical dressing or fit.

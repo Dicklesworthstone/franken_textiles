@@ -468,6 +468,84 @@ test('material page protects newer pattern and selection edits against delayed r
   const loading = p.e.patternFile.onchange(); await p.load(); a.resolve('{"pieces":[{"id":"stale"}]}'); await loading;
   await p.e.bind.onclick(); assert.equal(JSON.parse(p.current().messages.at(-1).pattern).pieces[0].id, 'front');
 });
+function outfitImport() {
+  const request_json = ' {"schema":"ftx-outfit-drape/1","garments":[{"id":"inner"},{"id":"outer"}]}\n';
+  const pattern_json = '{"schema":"fabric-pattern/1","pieces":[{"id":"inner::band","x":-0.0},{"id":"outer::band","coefficient":1.0}]}';
+  const composition = {schema:'ftx-outfit-composition/1',composed_pattern_sha256:'initial-composed-lock',
+    garments:[{id:'inner',pieces:{band:'inner::band'}},{id:'outer',pieces:{band:'outer::band'}}]};
+  return {schema:'ftx-outfit-workbench/1',request_json,request_sha256:'original-file-lock',pattern_json,
+    composition,composition_json:JSON.stringify(composition),self_contact_required:true,
+    scope:'Original composition before subsequent material substitutions.'};
+}
+test('outfit worker retains exact sources across imports and substitutions and requires joint contact', async () => {
+  const imported = outfitImport(), called = [];
+  const w = await workerModule({bindings:{default:()=>Promise.resolve(),
+    material_outfit_prepare:input=>{called.push(['outfit',input]);return JSON.stringify(imported);},
+    material_bind:(p,c)=>{called.push(['bind',p,c]);return JSON.stringify({pattern_json:p});},
+    WebBody:class {constructor(){called.push(['body']);}free(){}},
+    fold_up:(_b,p)=>{called.push(['fold',p]);return {report:()=>'{"mass_kg":1.0}',viewer:()=>'<html></html>',free(){}};},
+    material_scenario_study:(_b,p)=>{called.push(['scenario',p]);return '{"manufacturing":{"alternatives":[]},"simulations":[]}';}
+  }});
+  const prepared = await w.send({type:'outfit',request:1,outfitRequest:imported.request_json});
+  assert.equal(prepared.type,'result',prepared.message);
+  assert.deepEqual(called[0],['outfit',imported.request_json]);
+  assert.equal(prepared.files.find(f=>f.name==='outfit-pattern.json').text,imported.pattern_json);
+  const outfit = {request_json:imported.request_json,composition_json:imported.composition_json};
+  const edited = imported.pattern_json.replace('1.0','2.0');
+  const rebound = await w.send({type:'bind',request:2,pattern:edited,changes:'{}',outfit});
+  assert.equal(rebound.files.find(f=>f.name==='outfit-pattern.json').text,edited);
+  assert.equal(rebound.files.find(f=>f.name==='outfit-request.json').text,imported.request_json);
+  assert.equal(rebound.files.find(f=>f.name==='outfit-composition.json').text,imported.composition_json);
+  const base = {pattern:edited,outfit,bytes:new ArrayBuffer(1),measurements:'{}',fit:'{}',studyRequest:'{}'};
+  const disabled = await w.send({...base,type:'fold',request:3,selfContactMm:0});
+  assert.equal(disabled.type,'error');assert.match(disabled.message,/require.*self-contact/);
+  assert.equal(called.some(c=>c[0]==='body'),false);
+  const folded = await w.send({...base,type:'fold',request:4,selfContactMm:2});
+  assert.equal(folded.type,'result',folded.message);
+  assert.equal(folded.files.find(f=>f.name==='outfit-pattern.json').text,edited);
+  const unsupported = await w.send({...base,type:'scenario',request:5,scenarioRequest:'{"options":{}}'});
+  assert.equal(unsupported.type,'error');assert.match(unsupported.message,/options.self_contact/);
+  assert.equal(called.some(c=>c[0]==='scenario'),false);
+  const supported = await w.send({...base,type:'scenario',request:6,scenarioRequest:'{"options":{"self_contact":{}}}'});
+  assert.equal(supported.type,'result',supported.message);
+  assert.deepEqual(called.find(c=>c[0]==='scenario'),['scenario',edited]);
+});
+test('outfit page imports namespaced pieces and binds exact composed JSON with its source receipt', async () => {
+  const p = await pageModule(), imported = outfitImport();
+  p.select('patternFile',imported.request_json);await p.e.patternFile.onchange();
+  assert.equal(p.current().messages.at(-1).type,'outfit');assert.equal(p.e.bind.disabled,true);
+  p.emit(imported,[{name:'outfit-request.json',text:imported.request_json,mime:'application/json'},
+    {name:'outfit-composition.json',text:imported.composition_json,mime:'application/json'}]);
+  assert.equal(p.e.selfContact.checked,true);assert.equal(p.e.selfContact.disabled,true);
+  assert.match(p.e.patternName.textContent,/2 garments/);
+  assert.deepEqual(p.e.target.children.slice(1).map(c=>c.value),['@outfit','@garment:0','@garment:1','inner::band','outer::band']);
+  await p.inspect('leather');p.e.target.value='@garment:1';p.e.assign.onclick();await p.e.bind.onclick();
+  const binding = p.current().messages.at(-1);
+  assert.equal(binding.pattern,imported.pattern_json);
+  assert.equal(JSON.parse(binding.changes).pieces['outer::band'].id,'leather');
+  assert.deepEqual(plain(binding.outfit),{request_json:imported.request_json,composition_json:imported.composition_json});
+  p.emit({pattern_json:imported.pattern_json,pattern_sha256:'changed-material-lock',pieces:[]});
+  p.select('studyRequest','{"schema":"ftx-material-study/1"}');await p.e.study.onclick();
+  const study = p.current().messages.at(-1);
+  assert.equal(study.pattern,imported.pattern_json);assert.equal(study.outfit.request_json,imported.request_json);
+  p.e.cancel.onclick();p.ready();await p.load();
+  assert.equal(p.e.selfContact.disabled,false);
+  assert.equal(section(p,'Imported joint outfit').hidden,true);
+  await p.e.bind.onclick();assert.equal(p.current().messages.at(-1).outfit,undefined);
+});
+test('replacing or refusing an outfit import cannot publish stale garments or retain an old binding', async () => {
+  const p = await pageModule(), imported = outfitImport();await p.load();await p.bind();
+  p.select('patternFile',imported.request_json);await p.e.patternFile.onchange();
+  assert.equal(p.e.fold.disabled,true);assert.equal(p.e.bind.disabled,true);
+  const old = p.current(), request = old.messages.at(-1).request;
+  await p.load();p.ready();old.emit({type:'result',request,result:imported,files:[]});
+  assert.doesNotMatch(p.e.patternName.textContent,/garments/);
+  await p.e.bind.onclick();assert.equal(JSON.parse(p.current().messages.at(-1).pattern).pieces[0].id,'front');
+  p.e.cancel.onclick();p.ready();
+  p.select('patternFile',imported.request_json);await p.e.patternFile.onchange();
+  p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'Missing pair evidence'});
+  assert.equal(p.e.bind.disabled,true);assert.equal(p.e.fold.disabled,true);assert.match(p.e.error.textContent,/pair evidence/);
+});
 test('catalog changes cannot publish another material inspection or silently enable estimates', async () => {
   const p = await pageModule(); await p.load(); p.e.selection.value = '{"id":"old"}'; await p.e.inspect.onclick();
   const old = p.current(), id = old.messages.at(-1).request;
@@ -749,6 +827,40 @@ test('nonlinear strip coefficients retain declared shape assumptions, physical u
     assert.match(visibleText(s),/Candidate nonlinear shape scales and coupling/);
     assert.match(visibleText(s),/No identified selection is available/);
   }
+});
+
+test('independent nonlinear strip intervals retain every tangent, declared knots and exact accepted selection', async () => {
+  const p=await pageModule();await p.load();
+  p.e.calibrationMode.value='clamped_strip';p.select('calibrationRequest');
+  await p.e.calibrate.onclick();
+  const report=stripCalibration('ACCEPTED',true),c=report.calibration;
+  c.input.parameter_bounds=[];
+  c.input.nonlinear={strain_knots:[[-0.1,0,0.05,0.2],[-0.1,0,0.2],[-0.2,0,0.2]],
+    tangent_bounds:[[[50,150],[200,400],[500,900]],[[40,120],[100,300]],[[20,40],[40,60]]],
+    coupling_bounds:[1,20]};
+  c.parameters=[100,300,700,80,200,30,50,10];
+  c.parameter_descriptors=['Warp <negative>','Warp low','Warp high','Weft negative','Weft positive',
+    'Shear negative','Shear positive','Normal coupling'].map((label,i)=>({id:`parameter_${i}`,label,unit:'N/m'}));
+  c.parameter_bounds=[...c.input.nonlinear.tangent_bounds.flat(),c.input.nonlinear.coupling_bounds];
+  const raw=JSON.stringify(report);
+  p.emit(report,[{name:'interval-calibration.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'Identified material behavior');
+  const coefficients=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Identified nonlinear sheet tangents'));
+  assert.equal(coefficients.children.length,10);
+  assert.deepEqual(plain(coefficients.children[2].children.map(n=>n.textContent)),
+    ['Warp <negative>','100','N/m','50','150']);
+  assert.deepEqual(plain(coefficients.children[9].children.map(n=>n.textContent)),
+    ['Normal coupling','10','N/m','1','20']);
+  assert.doesNotMatch(visibleText(coefficients),/Poisson/);
+  const knots=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Fixed strain knots'));
+  assert.deepEqual(plain(knots.children[2].children.map(n=>n.textContent)),
+    ['Warp / wale (E11)','-0.1, 0, 0.05, 0.2','3']);
+  assert.match(visibleText(s),/no compression branch or symmetry is inferred/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  assert.equal(p.e.selection.value,report.selection_json);assert.equal(p.e.assign.disabled,false);
+  const download=descendants(s).find(n=>n.download==='interval-calibration.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  p.e.calibrationRequest.handlers.change();assert.equal(s.hidden,true);assert.equal(p.live.size,0);
 });
 
 test('a refused replacement calibration leaves no previous selection or report available for assignment', async () => {
@@ -1140,27 +1252,38 @@ test('purchasing displays exact intraday evidence, excluded latest offers and da
   const scope = { currency: 'USD', region: 'US', quality: 'reviewed', terms: 'merchandise only',
     as_of: '2026-10-20', as_of_at: '2026-10-20T12:00:00.000000001Z' };
   const quote = { offer_id: '<literal supplier>', observed_on: '2026-10-20',
-    observed_at: '2026-10-20T12:00:00Z', valid_through_at: '2026-10-20T12:00:00.000000001Z', unit: 'linear_meter' };
+    observed_at: '2026-10-20T12:00:00Z', valid_through_at: '2026-10-20T12:00:00.000000001Z', unit: 'linear_meter',
+    maximum_continuous_quantity: 5 };
   const report = { complete_offer_coverage: false, complete_observed_quantity_coverage: false,
+    complete_continuous_length_limit_coverage: false,
     currency: 'USD', least_observed_independent_order_total: null, limits: ['Observed prices only'], roll_prices: [
-      { roll_index: 0, required_stock_area_m2: 0.5, sample: { scope,
-        offers: [{ quote, order_quantity: 0.5, order_cost: 7.25 }],
+      { roll_index: 0, required_stock_area_m2: 0.5, required_length_m: 0.5, sample: { scope,
+        offers: [{ quote, order_quantity: 0.5, order_cost: 7.25, within_observed_continuous_limit: true }],
         excluded_offers: [{ quote: { ...quote, offer_id: 'expired', valid_through_at: '2026-10-20T12:00:00Z' }, reason: 'expired' },
-          { quote: { ...quote, offer_id: 'limited' }, reason: 'insufficient_quantity', required_order_quantity: 1.5 }] } },
+          { quote: { ...quote, offer_id: 'limited' }, reason: 'insufficient_quantity', required_order_quantity: 1.5 },
+          { quote: { ...quote, offer_id: 'short-cut', maximum_continuous_quantity: 0.4 },
+            reason: 'insufficient_continuous_length', required_continuous_length_m: 0.5 }] } },
       { roll_index: 1, required_stock_area_m2: 1, sample: { scope: { ...scope, as_of_at: undefined }, offers: [],
         excluded_offers: [{ quote: { offer_id: 'daily', observed_on: '2026-10-20', valid_through: '2026-10-20' }, reason: 'unavailable' }] } }
     ] };
   p.emit(report, [{ name: 'quotes.json', text: quotes, mime: 'application/json' }]);
   const s = section(p, 'price'), tables = descendants(s).filter(n => n.tag === 'table');
   assert.deepEqual(plain(tables[0].children[2].children.map(n => n.textContent)),
-    ['<literal supplier>', '2026-10-20T12:00:00Z', '2026-10-20T12:00:00.000000001Z', 'Eligible', '0.5 linear_meter', '7.25']);
+    ['<literal supplier>', '2026-10-20T12:00:00Z', '2026-10-20T12:00:00.000000001Z', 'Eligible', '0.5 linear_meter', '7.25',
+      '5 linear_meter; within observed limit']);
   assert.equal(tables[0].children[3].children[3].textContent, 'Excluded: expired');
   assert.equal(tables[0].children[3].children[5].textContent, 'Unknown');
   assert.equal(tables[0].children[4].children[4].textContent, '1.5 linear_meter');
+  assert.equal(tables[0].children[5].children[3].textContent, 'Excluded: insufficient continuous length');
+  assert.equal(tables[0].children[5].children[6].textContent, '0.4 linear_meter');
   assert.equal(tables[1].children[2].children[1].textContent, '2026-10-20 (date only)');
+  assert.equal(tables[1].children[2].children[6].textContent, 'Not reported');
+  assert.match(visibleText(s), /one continuous 0.5 m cut/);
+  assert.match(visibleText(s), /not a guarantee of continuous inventory/);
   assert.match(visibleText(s), /Evaluated at 2026-10-20T12:00:00\.000000001Z UTC/);
   assert.match(visibleText(s), /Evaluated at 2026-10-20 \(date only\) UTC/);
   assert.equal(JSON.parse(s.children[1].textContent).least_observed_independent_order_total, null);
+  assert.equal(JSON.parse(s.children[1].textContent).complete_continuous_length_limit_coverage, false);
   assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
   const link = descendants(s).find(n => n.download === 'quotes.json');
   assert.equal(await p.blobs.get(link.href).text(), quotes);
@@ -1619,6 +1742,42 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     assert.equal(stripBinding.type,'result',stripBinding.message);
     assert.equal(stripBinding.result.geometry_changed,false);
     assert.equal(stripBinding.result.drape_materials_with_self_contact.ready,false);
+    const intervalRequest=fixture('synthetic-nonlinear-clamped-strip.json');
+    const intervals=await w.send({type:'calibrate',calibrationMode:'clamped_strip',
+      calibrationRequest:intervalRequest,allowEstimates:true});
+    assert.equal(intervals.type,'result',intervals.message);
+    const intervalCalibration=intervals.result.calibration;
+    assert.equal(intervalCalibration.accepted,true);
+    assert.equal(intervalCalibration.domain_replay_verified,true);
+    assert.equal(intervalCalibration.parameters.length,9);
+    assert.equal(intervalCalibration.parameter_descriptors.length,9);
+    assert.equal(intervalCalibration.parameter_bounds.length,9);
+    assert.ok(intervalCalibration.parameter_descriptors.every(d=>d.unit==='N/m'));
+    assert.deepEqual(intervalCalibration.reasons,[]);
+    assert.equal(intervals.files[1].text,intervals.result.selection_json);
+    assert.equal(intervals.files[2].text,intervalRequest);
+    assert.equal(intervals.result.material.capabilities.mechanical_coefficients.ready,false);
+    assert.deepEqual(JSON.parse(ftx.material_inspect(intervals.result.selection_json)),intervals.result.material);
+    if(process.env.FTX_INTERVAL_STRIP_REPLAY) {
+      const native=JSON.parse(fs.readFileSync(process.env.FTX_INTERVAL_STRIP_REPLAY,'utf8'));
+      assert.deepEqual(intervalCalibration,native.calibration);
+      assert.equal(intervals.result.selection_json,native.selection_json);
+    }
+    const intervalInput=JSON.parse(intervalRequest);
+    const heldOut=intervalInput.experiments.find(e=>e.partition==='check');
+    const refined={...heldOut.fixture,cells:heldOut.fixture.cells.map(n=>n*2)};
+    const intervalForward=JSON.parse(ftx.material_strip_experiment(
+      `{"schema":"ftx-strip-experiment/1","material":${intervals.result.selection_json},`+
+      `"fixture":${JSON.stringify(refined)},`+
+      `"extensions":${JSON.stringify(heldOut.observations.map(o=>o.extension_fraction))},`+
+      `"controls":${JSON.stringify(intervalInput.controls)}}`));
+    const predicted=intervalCalibration.predictions.filter(p=>p.experiment===heldOut.id);
+    assert.deepEqual(intervalForward.states,predicted.map(p=>p.state));
+    const intervalBinding=await w.send({type:'bind',pattern:fixture('synthetic-sewing-pattern.json'),
+      changes:`{"schema":"ftx-material-bindings/1","default":${intervals.result.selection_json}}`});
+    assert.equal(intervalBinding.type,'result',intervalBinding.message);
+    assert.equal(intervalBinding.result.geometry_changed,false);
+    assert.equal(intervalBinding.result.drape_materials_with_self_contact.ready,false);
     const unfinished={...stripInput,policy:{...stripInput.policy,max_iterations:1}};
     const unfinishedRaw=JSON.stringify(unfinished);
     const unfinishedReport=await w.send({type:'calibrate',calibrationMode:'clamped_strip',
@@ -2044,3 +2203,39 @@ test('plastic and relaxation heat display each domain source separately and pres
   assert.match(visibleText(s), /Body coverage \+ exposed cloth/);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
 });
+
+test('compiled WASM outfit import reaches exact material binding and complete assembly studies',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg = process.env.FTX_WASM_PKG ? path.resolve(process.env.FTX_WASM_PKG) : path.join(__dirname, '../web/pkg');
+    const ftx = await import(require('node:url').pathToFileURL(path.join(pkg, 'ftx_wasm.js')).href);
+    ftx.initSync({ module: fs.readFileSync(path.join(pkg, 'ftx_wasm_bg.wasm')) });
+    const w = await workerModule({ bindings: ftx });
+    const request = fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-joint-outfit.json'),'utf8');
+    const imported = await w.send({type:'outfit',request:1,outfitRequest:request});
+    assert.equal(imported.type,'result',imported.message);
+    assert.equal(imported.result.request_json,request);
+    const pattern = imported.result.pattern_json;
+    assert.deepEqual(JSON.parse(pattern).pieces.map(p=>p.id),['inner::band','outer::band']);
+    assert.equal(imported.files.find(f=>f.name==='outfit-pattern.json').text,pattern);
+    const outfit = {request_json:request,composition_json:imported.result.composition_json};
+    const heavy = JSON.parse(request).garments[0].pattern.fabric.material;
+    heavy.record.properties.areal_density.value = 0.4;
+    const changes = {schema:'ftx-material-bindings/1',default:heavy,pieces:{'inner::band':heavy,'outer::band':heavy}};
+    const bound = await w.send({type:'bind',request:2,pattern,changes:JSON.stringify(changes),outfit});
+    assert.equal(bound.type,'result',bound.message);assert.equal(bound.result.geometry_changed,false);
+    assert.equal(bound.result.drape_materials_with_self_contact.ready,true);
+    assert.equal(bound.files.find(f=>f.name==='outfit-request.json').text,request);
+    assert.equal(bound.files.find(f=>f.name==='outfit-pattern.json').text,bound.result.pattern_json);
+    const studyRequest = JSON.stringify({schema:'ftx-material-study/1',variants:[
+      {key:'light',changes:{schema:'ftx-material-bindings/1'}},{key:'heavy',changes}],
+      assembly_mass:{schema:'ftx-assembly-mass/1',inventory_complete:true,seam_allowance_mm:0,extras:[]}});
+    const study = await w.send({type:'study',request:3,pattern,studyRequest,outfit});
+    assert.equal(study.type,'result',study.message);
+    const byKey = Object.fromEntries(study.result.alternatives.map(a=>[a.key,a]));
+    assert.equal(byKey.light.assembly_mass.status,'available');
+    assert.equal(byKey.heavy.assembly_mass.status,'available');
+    assert.equal(byKey.heavy.metrics.assembly_mass_kg,2*byKey.light.metrics.assembly_mass_kg);
+    assert.equal(study.files.find(f=>f.name==='outfit-composition.json').text,outfit.composition_json);
+    const refused = await w.send({type:'scenario',request:4,pattern,outfit,scenarioRequest:'{"options":{}}'});
+    assert.equal(refused.type,'error');assert.match(refused.message,/options.self_contact/);
+  });

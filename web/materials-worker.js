@@ -109,7 +109,7 @@ Comparison covers admitted whole-item offers only. Unknown or excluded offers ar
 }
 function budget(msg) {
   let bytes = 0;
-  for (const value of Object.values(msg)) {
+  for (const value of [...Object.values(msg), ...Object.values(msg.outfit || {})]) {
     if (typeof value === "string") bytes += new TextEncoder().encode(value).byteLength;
   }
   if (bytes > 64 * 1024 * 1024) throw Error("Combined JSON inputs exceed 64 MiB.");
@@ -122,8 +122,22 @@ self.onmessage = async ({ data: msg }) => {
   active = msg.request;
   try {
     budget(msg);
+    if (msg.outfit) {
+      if (typeof msg.outfit.request_json !== "string" || typeof msg.outfit.composition_json !== "string") throw Error("The original outfit request and composition receipt are required.");
+      if (msg.type === "fold" && !(msg.selfContactMm > 0)) throw Error("Joint outfits require cloth-cloth self-contact.");
+      if (msg.type === "scenario" && !json(msg.scenarioRequest).options?.self_contact) throw Error("Joint outfit scenarios require explicit options.self_contact; no cross-garment contact is inferred.");
+    }
     let result, files = [], viewer = null, picture = null, raw, reportText = null;
     switch (msg.type) {
+      case "outfit": {
+        if (typeof ftx.material_outfit_prepare !== "function") throw Error("Rebuild web/pkg: missing joint outfit preparation.");
+        raw = ftx.material_outfit_prepare(msg.outfitRequest); result = json(raw);
+        if (typeof result.pattern_json !== "string" || typeof result.request_json !== "string" ||
+            typeof result.composition_json !== "string" || result.self_contact_required !== true) throw Error("Rebuild web/pkg: incomplete outfit source bridge.");
+        files = [file("outfit-request.json", result.request_json), file("outfit-pattern.json", result.pattern_json),
+          file("outfit-composition.json", result.composition_json)];
+        break;
+      }
       case "catalog": result = json(ftx.material_catalog(msg.query)); break;
       case "inspect": result = json(ftx.material_inspect(msg.selection)); break;
       case "pressure": {
@@ -335,6 +349,11 @@ self.onmessage = async ({ data: msg }) => {
     if (msg.type === "stock") {
       try { files.push(file("stock-review.html", stockReview(result), "text/html")); }
       catch (e) { files.push(file("stock-review-refusal.json", { message: String(e.message || e) })); }
+    }
+    if (msg.outfit) {
+      files.push(file("outfit-request.json", msg.outfit.request_json),
+        file("outfit-composition.json", msg.outfit.composition_json),
+        file("outfit-pattern.json", msg.type === "bind" ? result.pattern_json : msg.pattern));
     }
     postMessage({ type: "result", request: msg.request, op: msg.type, result, files, viewer, picture, reportText },
       files.filter(f => f.bytes).map(f => f.bytes.buffer));

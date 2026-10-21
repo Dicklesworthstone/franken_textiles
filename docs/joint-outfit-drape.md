@@ -103,6 +103,56 @@ contact fields. The core tests actually sew two independent bands, check their m
 then advance them against a moving body. Another test changes only cross-garment friction and verifies
 changed relative slip with identical geometry, mass, membrane response and initial motion.
 
+## Browser material workbench
+
+The material workbench accepts the same `ftx-outfit-drape/1` request in **Original pattern or joint
+outfit JSON**. Its WASM adapter calls the production outfit composer before publishing a source pattern.
+No JavaScript implementation of garment composition, material resolution or cloth physics is involved.
+After a successful import, the original request, initial composition receipt and exact composed pattern
+are downloadable as `outfit-request.json`, `outfit-composition.json` and `outfit-pattern.json`.
+
+Assignments can target every outfit piece, every source piece belonging to one garment, or one named
+piece. These choices produce ordinary material bindings on the composed pattern. The composer freezes
+each effective source-piece material, so changing only **Pattern default** deliberately preserves those
+explicit selections; choose a garment or the whole outfit to replace them. Matching interface evidence
+can be replaced in the same binding operation. Missing or stale contact evidence still refuses.
+
+The existing drape, fixed-pattern studies, motion/thermal scenarios, cutting, procurement and sewing
+controls consume that same pattern. Single-preview consumers use its current bound version; alternative
+studies always begin with the original composed version. The self-contact checkbox stays selected and
+locked for imported outfits. Scenario requests must include `options.self_contact`; the worker rejects
+an omitted contact configuration before constructing the body. Each production consumer still applies
+its own material, geometry, body and numerical checks.
+
+Every successful operation keeps the exact original request and initial composition receipt alongside
+the exact pattern it consumed or, for binding, produced. The initial receipt describes source ownership
+**before substitutions**: its composed-pattern hash is not relabeled as the hash of a changed material.
+The binding/study/drape outputs retain their own current source hashes and material evidence. Browser
+drape uses the ordinary composed-pattern path, so it does not append the native `Prepared::drape`
+per-garment runtime ownership annotation; retain the original composition mapping with those reports.
+Replacing the input or refusing an import withdraws the previous binding and downstream results.
+
+## Trims, closures and other attached mass
+
+Each source garment may include its ordinary `ftx-attached-mass/1` document. The composer preserves
+the source mass observation, uncertainty bounds, evidence policy, distribution fractions and physical
+vertex names. It prefixes group IDs and physical instance references with the garment ID, so two
+garments can both contain a `closure-set` without merging their mass. Mirrored instances and unfolded
+vertex names keep their existing meaning. The total group mass is distributed once across its targets.
+
+The original attachment document hash (`garments[].attached_mass.source_input_sha256`) and source-to-
+composed group correspondence (`garments[].attached_mass.groups`) are retained in the composition
+receipt. The actual cloth solver carries the added gravity and inertia through sewing, settling and
+subsequent body motion. `sim_report.json.outfit.garment_mass_kg` includes each garment's simulated
+cloth and attached mass; `garment_attached_mass_kg` separately reports the accessory contribution.
+The existing top-level `mass_kg` remains cloth-only, and `attached_mass` retains its own allocation
+and balance report. Replaying `outfit_pattern.json` reproduces the same mass allocation and dynamics.
+
+Missing mass evidence, unadmitted estimates, invalid targets or fractions, and more than 1024 groups
+or 65,536 targets across the combined outfit refuse. This models attached point/distributed mass;
+it supplies no rigid accessory geometry, contact shape or thermal property. See
+[attached-mass.md](attached-mass.md) for the unchanged source observation and targeting contract.
+
 ## Scope and limits
 
 This is a simultaneous start/sew/settle solve, not sequential dressing or a physical dressing robot.
@@ -127,7 +177,9 @@ their declarations for ordinary `ftx drape` and study replay; keep the same nume
 
 Unsupported root/fabric fields refuse rather than being discarded. Per-piece supported physics is retained, but no
 new garment-level closure, shared thermal boundary, inter-garment thermal coverage or per-garment force
-metric is inferred. No new interactive browser page or browser-runtime parity result is supplied here.
+metric is inferred. Browser consumers apply their existing thermal coverage and boundary contracts;
+importing an outfit does not create unmeasured thermal interfaces or establish browser/native numerical
+parity for arbitrary layered garments.
 
 Inputs are bounded to 64 MiB, 4096 source pieces/seams and the existing material/contact/meshing limits.
 Independent synthetic tests establish source isolation, contact causality and software propagation, not

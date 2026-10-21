@@ -3,17 +3,18 @@ const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "coverage", "cut", "stock", "price", "sew"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "calibrate",
-  "stripAcquisition", "stripExperiment", "stripFit"];
+  "stripAcquisition", "stripExperiment", "stripFit", "outfit"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
 let preparedBy = null;
-let sourceText = null;
+let sourceText = null, outfit = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
 let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
 const pieceChanges = new Map(), urls = new Map();
 const combinationGroups = new Map();
+const outfitTargets = new Map();
 const sections = new Map();
 for (const op of operations) {
   const section = document.createElement("div"); section.hidden = true;
@@ -21,7 +22,7 @@ for (const op of operations) {
     study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives",
     pressure: "Pressure-conditioned material", calibrate: "Identified material behavior",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
-    stripFit: "Clamped-strip identification" })[op] || op;
+    stripFit: "Clamped-strip identification", outfit: "Imported joint outfit" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
   section.append(title, summary, comparison, links); $("outputs").append(section);
@@ -49,6 +50,7 @@ function controls() {
   }
   $("exports").disabled ||= !has("measurements") || !has("fit");
   $("fold").disabled ||= !has("measurements") || !has("fit") || !has("body");
+  $("selfContact").disabled = !!outfit;
   $("cut").disabled ||= !has("cutOptions");
   $("stock").disabled ||= !has("stockRequest");
   $("price").disabled ||= !has("cutOptions") || !has("quotes") || !has("market");
@@ -136,26 +138,32 @@ function procurementResult(parent, r) {
     const sample = row.sample, scope = sample.scope;
     const note = document.createElement("p");
     note.textContent = `Roll ${row.roll_index + 1}: ${metric(row.required_stock_area_m2)} m² of stock. ` +
+      (row.required_length_m == null ? "" : `The marker requires one continuous ${metric(row.required_length_m)} m cut. `) +
       `Evaluated at ${scope.as_of_at || `${scope.as_of} (date only)`} UTC. ` +
       `Market: ${scope.currency}; ${scope.region}; ${scope.quality}; ${scope.terms}. ` +
-      "The report retains the latest observed offer and its exclusion; an older price is not substituted.";
+      "The report retains the latest observed offer and its exclusion; an older price is not substituted. " +
+      "A source continuous-cut limit is an upper limit, not a guarantee of continuous inventory.";
     parent.append(note);
     const t = table(parent, `Roll ${row.roll_index + 1} — latest supplier observations`,
-      ["Offer", "Observed (UTC)", "Valid through (UTC)", "Admission", "Order quantity", `Merchandise cost (${scope.currency})`]);
+      ["Offer", "Observed (UTC)", "Valid through (UTC)", "Admission", "Order quantity", `Merchandise cost (${scope.currency})`, "Source continuous-cut limit"]);
     const entries = [...sample.offers.map(offer => ({ offer, quote: offer.quote })),
       ...(sample.excluded_offers || []).map(excluded => ({ excluded, quote: excluded.quote }))];
     for (const { quote: q, offer, excluded } of entries) {
       const expiry = [q.valid_through_at, q.valid_through ? `${q.valid_through} (date limit)` : null].filter(Boolean).join("; ");
       const quantity = offer?.order_quantity ?? excluded?.required_order_quantity;
+      const continuity = q.maximum_continuous_quantity == null ? "Not reported" :
+        `${metric(q.maximum_continuous_quantity)} ${q.unit}` +
+        (offer?.within_observed_continuous_limit === true ? "; within observed limit" : "");
       cells(t, [q.offer_id, q.observed_at || `${q.observed_on} (date only)`, expiry || "Not reported",
         excluded ? `Excluded: ${excluded.reason.replaceAll("_", " ")}` : "Eligible",
-        typeof quantity === "number" ? `${metric(quantity)} ${q.unit}` : "Unknown", metric(offer?.order_cost)]);
+        typeof quantity === "number" ? `${metric(quantity)} ${q.unit}` : "Unknown", metric(offer?.order_cost), continuity]);
     }
-    if (!entries.length) cells(t, ["No observation in the requested market at this time", "Unknown", "Unknown", "No eligible offer", "Unknown", "Unknown"]);
+    if (!entries.length) cells(t, ["No observation in the requested market at this time", "Unknown", "Unknown", "No eligible offer", "Unknown", "Unknown", "Not reported"]);
     detail(parent, `Roll ${row.roll_index + 1}: selected order, source evidence and stock exclusions`, row);
   }
   return { complete_offer_coverage: r.complete_offer_coverage,
     complete_observed_quantity_coverage: r.complete_observed_quantity_coverage, currency: r.currency,
+    complete_continuous_length_limit_coverage: r.complete_continuous_length_limit_coverage,
     least_observed_independent_order_total: r.least_observed_independent_order_total, limits: r.limits };
 }
 function screening(parent, r) {
@@ -589,13 +597,14 @@ function permanentStretchResult(parent, r) {
       "Review the retained diagnostics and source histories. No identified selection is available to assign." };
 }
 function stripCalibrationResult(parent, r) {
-  const c = r.calibration, family = c.input.response_family;
+  const c = r.calibration, family = c.input.response_family, nonlinear = c.input.nonlinear;
   const quality = table(parent, "Clamped strip observations — independent partitions",
     ["Partition", "Observed channels", "Scaled RMS", "Scaled peak"]);
   for (const [name, q] of [["FIT", c.fit], ["CHECK", c.check]]) {
     cells(quality, [name, metric(q?.components), metric(q?.rms_scaled), metric(q?.peak_scaled)]);
   }
-  const parameterTitle = family ? "nonlinear shape scales and coupling" : "orthotropic sheet coefficients";
+  const parameterTitle = nonlinear ? "nonlinear sheet tangents and coupling" :
+    family ? "nonlinear shape scales and coupling" : "orthotropic sheet coefficients";
   const parameters = table(parent, `${c.accepted ? "Identified" : "Candidate"} ${parameterTitle}`,
     ["Coefficient", "Value", "Unit", "Search minimum", "Search maximum"]);
   const descriptors = c.parameter_descriptors ?? [
@@ -604,9 +613,23 @@ function stripCalibrationResult(parent, r) {
     {label:"Major Poisson ratio",unit:"1"},
     {label:"Shear stiffness",unit:"N/m"}
   ];
+  const parameterBounds = nonlinear ? c.parameter_bounds : c.input.parameter_bounds;
   for (const [i, descriptor] of descriptors.entries()) {
     cells(parameters, [descriptor.label, metric(c.parameters[i]), descriptor.unit,
-      ...c.input.parameter_bounds[i].map(metric)]);
+      ...parameterBounds[i].map(metric)]);
+  }
+  if (nonlinear) {
+    const knots = table(parent, "Declared nonlinear Green-strain intervals",
+      ["Material direction", "Fixed strain knots", "Independent tangent intervals"]);
+    for (const [i, axis] of ["Warp / wale (E11)", "Weft / course (E22)", "Engineering shear (2 E12)"].entries()) {
+      cells(knots, [axis, nonlinear.strain_knots[i].map(metric).join(", "),
+        metric(nonlinear.tangent_bounds[i].length)]);
+    }
+    const scope = document.createElement("p");
+    scope.textContent = "Every declared signed interval has its own fitted positive tangent. " +
+      "The fixed knots are caller-supplied model choices; no compression branch or symmetry is inferred. " +
+      "Accepted curves retain only the strain support established by FIT and verified by production replay.";
+    parent.append(scope);
   }
   if (family) {
     const scope = document.createElement("p");
@@ -655,7 +678,7 @@ function stripCalibrationResult(parent, r) {
     "Search bounds, force scales and local sensitivity are not confidence intervals or a global uniqueness proof.";
   parent.append(note);
   detail(parent, "Decision, complete source acquisitions, physical grip reactions, deformed widths and residuals", c);
-  return { response: "Finite clamped strip", status: c.accepted ? "ACCEPTED" : "NOT ACCEPTED",
+  return { response: nonlinear ? "Nonlinear interval clamped strip" : "Finite clamped strip", status: c.accepted ? "ACCEPTED" : "NOT ACCEPTED",
     held_out: c.check ? "Evaluated; inspect independent residuals and acceptance reasons" : "Not supplied",
     input_sha256: c.input_sha256, material_id: r.selection?.id,
     allow_estimates: r.selection?.allow_estimates,
@@ -805,6 +828,17 @@ function show(op, msg) {
     }
   } else if (op === "inspect") {
     preparedBy = null; inspectResult(r);
+  } else if (op === "outfit") {
+    outfit = { request_json: r.request_json, composition_json: r.composition_json };
+    installPattern(r.pattern_json, `${r.composition.garments.length} garments in one composed outfit`, r.composition.garments);
+    $("selfContact").checked = true;
+    const s = sections.get(op); s.section.hidden = false;
+    s.summary.textContent = text({ request_sha256: r.request_sha256,
+      composed_pattern_sha256: r.composition.composed_pattern_sha256,
+      garments: r.composition.garments.map(g => ({ id: g.id, pieces: g.pieces, attached_mass: g.attached_mass })),
+      scope: r.scope });
+    detail(s.comparison, "Original garment, piece, seam and accessory correspondence", r.composition);
+    for (const f of msg.files) link(op, s.links, f);
   } else if (op === "bind") {
     bound = r;
     const pre = document.createElement("pre"); pre.textContent = text({ pattern_sha256: r.pattern_sha256, geometry_changed: r.geometry_changed,
@@ -983,6 +1017,7 @@ async function execute(op) {
       if (op === "price") { msg.quotes = await read("quotes"); msg.market = await read("market"); }
       if (op === "sew") msg.options = await read("sewOptions");
     }
+    if (outfit && (op === "bind" || boundOperations.includes(op) || op === "study" || op === "scenario")) msg.outfit = outfit;
     if (pending?.id !== id) return;
     worker.postMessage(msg, msg.bytes ? [msg.bytes] : []);
   } catch (e) {
@@ -1011,26 +1046,50 @@ $("selectionFile").onchange = async () => {
     $("selection").value = data; controls(); }
   catch (e) { if (rev === selectionRead) error(String(e.message || e)); }
 };
+function installPattern(raw, label, garments = []) {
+  const data = JSON.parse(raw);
+  if (!Array.isArray(data.pieces) || data.pieces.length > 4096) throw Error("Pattern needs at most 4096 source pieces.");
+  source = data; sourceText = raw;
+  $("patternName").textContent = `${label}: ${data.pieces.length} source pieces. Original retained.`;
+  const group = (key, label, ids) => {
+    outfitTargets.set(key, ids);
+    const option = document.createElement("option"); option.value = key; option.textContent = label;
+    $("target").append(option);
+  };
+  if (garments.length) {
+    group("@outfit", "Every source piece in this outfit", data.pieces.map(p => p.id));
+    garments.forEach((garment, i) => group(`@garment:${i}`, `${garment.id} — every source piece`, Object.values(garment.pieces)));
+  }
+  for (const p of data.pieces) {
+    for (const target of ["target", "combinationPieces"]) {
+      const o = document.createElement("option"); o.value = p.id; o.textContent = p.id; $(target).append(o);
+    }
+  }
+}
 $("patternFile").onchange = async () => {
-  const rev = ++patternRead; source = null; sourceText = null; defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
+  const rev = ++patternRead; source = null; sourceText = null; outfit = null; defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
+  outfitTargets.clear();
   combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
-  invalidate(["bind", ...boundOperations, "study", "scenario"]); $("patternName").textContent = "No pattern loaded.";
+  invalidate(["bind", ...boundOperations, "study", "scenario", "outfit"]); $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
   base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
   try { const raw = await read("patternFile"), data = JSON.parse(raw); if (rev !== patternRead) return;
-    if (!Array.isArray(data.pieces) || data.pieces.length > 4096) throw Error("Pattern needs at most 4096 source pieces.");
-    source = data; sourceText = raw; $("patternName").textContent = `${$("patternFile").files[0].name}: ${data.pieces.length} source pieces. Original retained.`;
-    for (const p of data.pieces) {
-      for (const target of ["target", "combinationPieces"]) {
-        const o = document.createElement("option"); o.value = p.id; o.textContent = p.id; $(target).append(o);
-      }
+    if (data.schema === "ftx-outfit-drape/1") {
+      const id = ++sequence; pending = { id, op: "outfit" };
+      $("status").textContent = "Preparing source-qualified garments and contact pairs…";
+      controls(); worker.postMessage({ type: "outfit", request: id, outfitRequest: raw });
+      return;
     }
+    installPattern(raw, $("patternFile").files[0].name);
     controls();
   } catch (e) { if (rev === patternRead) { source = null; error(String(e.message || e)); controls(); } }
 };
 $("assign").onclick = () => {
   if (!inspected || !source || pending) return;
-  if ($("target").value === "") defaultChange = inspected; else pieceChanges.set($("target").value, inspected);
+  const target = $("target").value;
+  if (target === "") defaultChange = inspected;
+  else if (outfitTargets.has(target)) for (const id of outfitTargets.get(target)) pieceChanges.set(id, inspected);
+  else pieceChanges.set(target, inspected);
   edits(); invalidate(["bind", ...boundOperations]);
 };
 $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits(); invalidate(["bind", ...boundOperations]); };

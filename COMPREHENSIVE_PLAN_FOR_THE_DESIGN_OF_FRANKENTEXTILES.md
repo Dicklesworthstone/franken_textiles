@@ -2403,6 +2403,32 @@ and the executable example are in
 
 ---
 
+### 25.42 Joint-outfit material workbench and nonlinear characterization display
+
+**Delivered software (`ftx-oi1`).** The browser material workbench imports an ordinary
+`ftx-outfit-drape/1` request through the production WASM composer, retaining exact source bytes,
+the initial composition receipt and the exact composed pattern. Material assignments can target
+the whole outfit, one garment or one source piece. Existing binding, drape, cutting, purchasing,
+sewing and material studies consume that composition; outfit imports require self-contact in both
+the page and worker. Source-qualified attached mass and independent elastic casings retain their
+existing composed-pattern behavior. Replaced requests invalidate dependent results.
+
+The original composition receipt remains scoped before substitutions. Current bound patterns and
+downstream reports retain their own source identities. The browser uses ordinary composed-pattern
+drape and does not append the native outfit wrapper's runtime garment-ownership annotation. It
+does not infer a dressing sequence, physical fit, missing material interfaces or new thermal boundaries.
+
+Independent nonlinear interval results display every coefficient's descriptor, unit and search bounds
+alongside the declared fixed strain knots. Purchasing displays the actual marker length and each
+supplier's observed continuous-cut limit independently of total stock, retaining unknowns and exclusions.
+All 71 frontend/compiled-worker checks pass with zero skips: the actual WASM interval report and frozen
+selection equal native output, a held-out refined strip replays through the ordinary material authority,
+and an outfit material substitution doubles computed assembly mass without changing geometry. Two
+native outfit-adapter tests additionally check actual joint-solver propagation and source refusals.
+These are software integration results; the measured-material and garment acceptance gates remain open.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

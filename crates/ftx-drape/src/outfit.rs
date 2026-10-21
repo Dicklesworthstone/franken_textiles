@@ -217,7 +217,10 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
         // elastic enable switch. The source cut/overlap remains unchanged in the source receipt.
         let casings = crate::scene::elastic_casings(&pattern, 1.0)?;
         if original["meta"]["solved"].get("elastic_cut_mm").is_some() && casings.is_empty() {
-            return Err(invalid(format!("{}: legacy casing cannot resolve to one positive-length waistband", garment.id)));
+            return Err(invalid(format!(
+                "{}: legacy casing cannot resolve to one positive-length waistband",
+                garment.id
+            )));
         }
         for casing in casings {
             elastic_casings.push(json!({
