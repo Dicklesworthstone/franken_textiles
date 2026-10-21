@@ -632,6 +632,12 @@ fn add_run_fields(
             "holds": grip >= weight,
             "ea_n": elastics[scene.elastic_rings[group.rings.start].start].ea * n,
         });
+        if let Some(band) = &group.casing.material {
+            row["band_material"] = json!(band);
+            row["ea_basis"] = json!(
+                "source-qualified finished band; split across casing rings, not multiplied by ring count"
+            );
+        }
         if explicit {
             row["instance"] = json!(group.casing.instance);
             row["load_instances"] = json!(group.casing.load_instances);

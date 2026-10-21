@@ -455,3 +455,136 @@ fn joint_scenario_requires_contact_before_attempting_body_loading() {
         assert!(text.contains("explicit cloth-cloth self-contact"), "{text}");
     }
 }
+
+fn elastic_band_outfit() -> Value {
+    let mut request = input();
+    let band: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/materials/synthetic-elastic-band.json"
+    ))
+    .unwrap();
+    for (i, g) in request["garments"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
+        let radius = [180.0, 183.0][i];
+        let width = std::f64::consts::TAU * radius;
+        let piece = &mut g["pattern"]["pieces"][0];
+        piece["vertices"] = json!({"a":[0,0],"b":[width,0],"c":[width,20],"d":[0,20]});
+        piece["edges"][1]["id"] = json!("end_r");
+        piece["edges"][3]["id"] = json!("end_l");
+        piece["placement"]["x0"] = json!(width / 2.0);
+        let mut band = band.clone();
+        band["record"]["properties"]["axial_stiffness"]["value"] = json!([15.0, 23.0][i]);
+        g["pattern"]["seams"] =
+            json!([{"id":"join","a":"band/end_r","b":"band/end_l","reverse":true}]);
+        g["pattern"]["meta"] = json!({"solved":{"elastic_casings":[{
+            "instance":"band","relaxed_m":width*0.99/1000.0,"load_instances":["band"],
+            "elastic_material":band}]}});
+    }
+    request
+}
+
+fn elastic_band_command(dir: &Path, pattern: &str, output: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(dir)
+        .args([
+            "drape",
+            pattern,
+            "--measurements",
+            "measurements.json",
+            "--body-fit",
+            "fit.json",
+            "--model",
+            "model.ftxbody",
+            "--sew",
+            "3",
+            "--drape",
+            "3",
+            "--spacing-mm",
+            "80",
+            "--self-contact-mm",
+            "2",
+            "--elastic-ea",
+            "1",
+            "--out",
+            output,
+            "--json",
+        ])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn elastic_bands_keep_independent_materials_in_cli_outputs_and_exact_composed_replay() {
+    let dir = joint_setup();
+    let input = elastic_band_outfit();
+    save(&dir.join("outfit.json"), &input);
+    let original = std::fs::read(dir.join("outfit.json")).unwrap();
+    let out = elastic_band_command(&dir, "outfit.json", "elastic");
+    assert!(
+        matches!(out.status.code(), Some(0 | 2)),
+        "{} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report = read(&dir.join("elastic/sim_report.json"));
+    let pattern = read(&dir.join("elastic/outfit_pattern.json"));
+    for (i, row) in report["elastics"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(row["ea_n"], json!([15.0, 23.0][i])); // global option was 1, not an override
+        assert!(row["band_material"]["snapshot"]["sha256"].is_string());
+        assert_eq!(
+            row["band_material"]["snapshot"]["sha256"],
+            pattern["meta"]["solved"]["elastic_casings"][i]["elastic_material"]["expected_sha256"]
+        );
+        assert_eq!(
+            pattern["pieces"][i]["vertices"],
+            input["garments"][i]["pattern"]["pieces"][0]["vertices"]
+        );
+    }
+    let replay = elastic_band_command(&dir, "elastic/outfit_pattern.json", "replay-elastic");
+    assert_eq!(
+        out.status.code(),
+        replay.status.code(),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    let replay_report = read(&dir.join("replay-elastic/sim_report.json"));
+    assert_eq!(report["elastics"], replay_report["elastics"]);
+    for artifact in ["fold.pc2", "garment.obj", "body.obj"] {
+        assert_eq!(
+            std::fs::read(dir.join("elastic").join(artifact)).unwrap(),
+            std::fs::read(dir.join("replay-elastic").join(artifact)).unwrap()
+        );
+    }
+    assert_eq!(original, std::fs::read(dir.join("outfit.json")).unwrap());
+    assert_eq!(
+        original,
+        std::fs::read(dir.join("elastic/outfit_request.json")).unwrap()
+    );
+}
+
+#[test]
+fn elastic_bands_with_missing_or_unadmitted_stiffness_fail_before_body_loading() {
+    let dir = joint_setup();
+    std::fs::write(
+        dir.join("model.ftxbody"),
+        b"bad model must not mask elastic evidence refusal",
+    )
+    .unwrap();
+    for (case, field, value) in [
+        ("denied", "allow_estimates", json!(false)),
+        ("unknown", "record", Value::Null),
+    ] {
+        let mut input = elastic_band_outfit();
+        input["garments"][0]["pattern"]["meta"]["solved"]["elastic_casings"][0]["elastic_material"]
+            [field] = value;
+        save(&dir.join("outfit.json"), &input);
+        let out = elastic_band_command(&dir, "outfit.json", case);
+        assert!(!out.status.success());
+        assert!(!dir.join(case).exists());
+        let text = String::from_utf8_lossy(&out.stderr);
+        assert!(!text.contains("model magic"), "{text}");
+    }
+}

@@ -7,6 +7,9 @@ use ftx_drape::{Body, PartFrame};
 use ftx_pattern::textile_import::resolve_fabric;
 use serde_json::{Value, json};
 
+#[path = "outfit/material_bands.rs"]
+mod material_bands;
+
 fn sheet() -> Value {
     let raw: Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/materials/synthetic-friction-sliding.json"
