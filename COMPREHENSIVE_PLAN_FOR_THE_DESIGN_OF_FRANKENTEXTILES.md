@@ -2202,6 +2202,46 @@ remain open under `ftx-cp2`, `ftx-tmc` and the specimen/garment acceptance gates
 
 ---
 
+### 25.36 Finite-strip characterization through native material consumers
+
+`ftx materials strip-experiment` and `calibrate-strip`, plus their `ftx-materials` counterparts,
+now expose the shared finite-strip forward experiment and inverse material authority. Actual
+clamped geometry and free interior deformation determine force and midpoint chord width. The
+fitter requires independent held-out acquisitions, stationary bounded searches, local sensitivity,
+mesh refinement and production replay inside its FIT-only strain support before publishing an
+ordinary source-locked estimated material. Existing characterized domains constrain every refit
+candidate and cannot be widened by replacement, probes or CHECK data. Output estimate admission
+changes the recorded consumption policy, never the fitted physics.
+
+The native consumer increment (`ftx-ki2`) preserves complete receipts, exact selection JSON,
+independent missing-property readiness and ordinary binding. A rejected model retains diagnostics
+without a selection; work exhaustion and physical solve failures refuse. The executable synthetic
+fixture exercises actual forward/inverse behavior but leaves absent bending, contact, thickness
+and thermal evidence unavailable. See
+[clamped-strip-calibration.md](docs/clamped-strip-calibration.md) for requests and replay commands.
+
+The retained Sperl 2022 acquisitions now include all nine original transverse-contraction
+CSVs for SJ1, SJ3 and DKIN8: **66 observations and 1,736 original bytes**, with archive paths,
+SHA-256 identities and the existing source metadata and MIT notice. The paper defines the
+reported quantity as one minus current width divided by the 60 mm reference width. The
+fixture preserves its dimensionless values, exact nodes and original line endings.
+
+The source does not identify an exact width station or edge statistic, nor transverse
+loading/unloading labels or timestamps. Those gaps remain explicit. A finite-strip inverse
+experiment must declare and retain its width observation operator and mechanical assumptions;
+these measurements are neither local strain nor a directly measured Poisson ratio. The
+existing catalog scalars, material identities and supported capabilities remain unchanged.
+
+The matched acquisition data supports the finite-strip inverse-characterization
+gate `ftx-ki1`. Directional force histories alone do not guarantee that four constitutive
+coefficients can be distinguished. The shared inverse consumer checks parameter sensitivity,
+freezes fitting decisions before held-out evaluation and rejects an inadequate law. Source
+hysteresis, unknown timing, independent coupons and matched bending/contact/thermal evidence
+retain their separate acceptance requirements. See
+[measured-knit-strips.md](docs/measured-knit-strips.md) for the retained observations and scope.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -14,6 +14,7 @@ mod scenario;
 mod screen;
 mod sewing_selection;
 mod stock;
+mod strip;
 mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
@@ -27,20 +28,35 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         };
         return sewing_selection::run(pattern, request);
     }
+    if action == "strip-experiment" {
+        known_options(args, "materials", &[])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials strip-experiment REQUEST.json",
+            ));
+        };
+        let result = strip::experiment(path)?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if matches!(
         action,
-        "calibrate-nonlinear" | "calibrate-relaxation" | "calibrate-membrane-plasticity"
+        "calibrate-nonlinear"
+            | "calibrate-relaxation"
+            | "calibrate-membrane-plasticity"
+            | "calibrate-strip"
     ) {
         known_options(args, "materials", &["allow-estimates"])?;
         let [path] = &args.positional[2..] else {
             return Err(bad_input(
-                "usage: ftx materials calibrate-nonlinear SWATCHES.json | calibrate-relaxation HISTORIES.json | calibrate-membrane-plasticity HISTORIES.json [--allow-estimates]",
+                "usage: ftx materials calibrate-nonlinear SWATCHES.json | calibrate-relaxation HISTORIES.json | calibrate-membrane-plasticity HISTORIES.json | calibrate-strip ACQUISITION.json [--allow-estimates]",
             ));
         };
         let allow = args.options.contains_key("allow-estimates");
         let result = match action {
             "calibrate-relaxation" => relaxation::run(path, allow)?,
             "calibrate-membrane-plasticity" => membrane_plasticity::run(path, allow)?,
+            "calibrate-strip" => strip::run(path, allow)?,
             _ => nonlinear::run(path, allow)?,
         };
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;

@@ -458,3 +458,9 @@ virtual-work check under nonuniform contraction. `tests/strip_identification.rs`
 coefficient recovery, held-out isolation, mesh refusal, bounded work and fitted-domain replay. These
 establish mechanics/software properties for the declared model, not real-knit adequacy, global
 uniqueness, confidence intervals, missing downstream material properties or garment validation.
+
+Replacement identification retains any prior fitted Green-strain domain. It constrains every
+candidate, probe, coarse/refined FIT/CHECK evaluation and final replay; published FIT support is
+intersected with that prior authority and includes the pristine reference. A refit cannot silently
+widen previously characterized response. `strip_identification_limits` checks both refused narrow
+support and accepted replacement with identical actual states under original and published domains.

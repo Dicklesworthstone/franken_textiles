@@ -10,7 +10,8 @@ Primary sources:
 - [Author project and dataset](https://mslab.es/projects/YarnLevelFabrics/)
 - [Paper, DOI 10.1145/3528223.3530167](https://doi.org/10.1145/3528223.3530167), §4.3 and Figure 4
 - [Original dataset archive](https://mslab.es/projects/YarnLevelFabrics/dataset/dataset.zip),
-  `README.md`, `data/fabrics.json`, and `data/{specimen}/stretch-{direction}.csv`
+  `README.md`, `data/fabrics.json`, `data/{specimen}/stretch-{direction}.csv`, and
+  `data/{specimen}/poisson-{direction}.csv`
 
 ## Specimens and usable observations
 
@@ -86,6 +87,59 @@ and condition. Without it SJ3 and DKIN8 remain incomparable. Source-reported bou
 are absent, so a `reported_bounds` request cannot rank them. No estimate consent is
 needed for these exact reported observations.
 
+## Matched transverse acquisitions for finite-strip identification
+
+The same source archive also provides nine `poisson-{direction}.csv` acquisitions for
+these exact fabric codenames. The existing source fixture retains all **66 original
+rows** (1,736 CSV bytes) under `transverse_curves`, with the same specimen/direction,
+archive-entry, SHA-256 and original CSV fields as the force acquisitions, plus each
+transverse file's retrieval date. The original units and license README is retained
+under `transverse_readme` with its own hash and retrieval date. Original `fabrics.json`
+links each file to its fabric and cut direction. No transverse law or additional
+catalog scalar is inferred from this retention.
+
+Their two columns are `elongation,compression`, both dimensionless fractions. Paper
+§4.3 defines the reported compression as `c = 1 - w / w0`, where `w0 = 60 mm` and `w`
+is the deformed swatch width. The following values are rounded for display; the fixture
+preserves all original decimal strings and line endings.
+
+| Specimen | Direction | Rows | Last grip extension | Compression at 20% | Compression at 40% |
+| --- | --- | ---: | ---: | ---: | ---: |
+| SJ1 | Warp | 6 | 91.4% | 0.009692 | 0.044539 |
+| SJ1 | Weft | 10 | 161.8% | 0.027712 | 0.034851 |
+| SJ1 | Bias | 7 | 112.4% | 0.092863 | 0.193365 |
+| SJ3 | Warp | 7 | 112.2% | 0.017545 | 0.069127 |
+| SJ3 | Weft | 8 | 135.2% | 0.057209 | 0.109497 |
+| SJ3 | Bias | 7 | 115.6% | 0.097683 | 0.187596 |
+| DKIN8 | Warp | 7 | 104.8% | 0.017299 | 0.040780 |
+| DKIN8 | Weft | 7 | 101.0% | 0.000162 | 0.000442 |
+| DKIN8 | Bias | 7 | 102.2% | 0.043747 | 0.089512 |
+
+These files do **not** supply a loading/unloading tag, timestamps, an exact width
+measurement station, an edge statistic or the measurement algorithm. The paper's
+identification uses loading, but that does not turn an absent CSV tag into a recorded
+branch. A finite-strip consumer must explicitly declare its width observation operator
+and any assumed branch mapping; midpoint width, minimum width, average width and local
+transverse strain are not interchangeable. The acquisition parser's
+`TransverseCurve.measurement_scope` preserves this ambiguity alongside the measurements.
+The canonical strip calibrator's optional `mid_width` specifically denotes distance
+between opposite side material points at the reference mid-gauge. The source's reported
+compression cannot automatically be mapped to that operator: Figure 4 depicts width near
+the center but does not establish which image locations or material points are sampled,
+particularly for bias cuts. There is no interpolation or silent match between neighboring
+force and compression nodes. The retained terminal extensions can exceed the paper's
+stated 5 N working range and are not automatically qualified for use.
+
+Paper §5.1, equations (1)–(2), fits both force and transverse compression using finite
+swatch equilibrium and six parameters: four orthotropic StVK coefficients plus two
+area-preservation terms. The existing four-coefficient orthotropic sheet law is a
+different, more restricted model. Three directional force curves alone do not establish
+that all its coefficients are identifiable: in the small-strain limit their three axial
+slopes supply at most three independent scalar observables. Finite-strain sensitivity
+and the additional transverse channel must be assessed under the declared model and
+observation operator, with held-out states and residuals. Retaining these measurements
+does not publish a fitted constitutive law or establish independent-coupon agreement.
+
 ## Physical limits and source retention
 
 Temperature, relative humidity, conditioning duration, displacement rate, replicate
@@ -98,16 +152,27 @@ deformation gradient, and dividing grip force by strip width does not supply the
 biaxial constitutive characterization. These records have no membrane law, shear modulus,
 bending rigidity, viscoelastic recovery law, thermal resistance or validated garment fit.
 Mechanics and thermal capability requests therefore remain unavailable. A future inverse
-solver must model the actual test geometry and boundary conditions before identifying a law.
+identification of these records must qualify the actual test geometry, boundary conditions,
+observation operator and accepted model. The generic finite-strip inverse is available
+through `ftx materials calibrate-strip` and `material_calibrate_strip`; it models ideal
+grips and planar elastic equilibrium, and evaluates identifiability, refinement and
+held-out checks before publishing estimated coefficients. Its synthetic numerical recovery
+tests do not establish that the four-parameter model fits these production knits. These
+primary catalog records remain unfitted.
 
 `crates/ftx-pattern/src/material_catalog/knit-strip-measurements.json` retains the original
-nine stretch CSV byte strings, the full original `fabrics.json`, individual SHA-256 hashes,
-archive paths, retrieval date and complete source MIT license/copyright notice. CSV line
-endings, signed values and loading/unloading tags are preserved. The upstream metadata
+nine stretch and nine transverse CSV byte strings, the full original `fabrics.json`,
+the original units/license README, individual SHA-256 hashes, archive paths, recorded
+retrieval dates and complete source MIT license/copyright notice. CSV line endings,
+signed values and the stretch files'
+loading/unloading tags are preserved. No branch tag is invented for transverse files.
+The upstream metadata
 SHA-256 is `258e3cc2a40ba40d1e0152f80b1fb08c67d14c08db10efbc2ec385669887a6d4`.
 The source archive was read in bounded ZIP ranges; photographs and geometry are not bundled.
 
 Normal catalog construction uses compact transcriptions. Tests independently reconstruct
 all three records from the retained original source files, verify their hashes and exact
-loading rows, and compare the complete records. The source fixture is excluded from the
-normal native/browser catalog binary.
+loading rows, and compare the complete records. Separate checks preserve all transverse
+source bytes, metadata links and 66 observation nodes without changing the existing
+catalog records. The source fixture is excluded from the normal native/browser catalog
+binary.

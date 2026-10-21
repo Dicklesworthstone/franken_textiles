@@ -77,6 +77,15 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 - `ftx materials list|show|validate|fit|thermal ... [--json]`: inspects and validates the material
   catalogue, fits fabric parameters to cantilever/stretch tests, and computes dry/evaporative thermal
   resistance (`docs/material-catalog.md`, `docs/material-calibration.md`, `docs/material-thermal.md`).
+- `ftx materials strip-experiment REQUEST.json [--json]` and
+  `calibrate-strip ACQUISITION.json [--allow-estimates] [--json]` expose the shared finite-strip
+  forward and inverse experiment. The companion `ftx-materials` accepts the same commands.
+  Actual constrained equilibria supply grip reactions and midpoint chord widths; the inverse
+  retains independent FIT/CHECK, mesh-refinement, source and strain-domain gates. Output estimate
+  admission is separate from acquisition admission. Rejected acceptance gates preserve diagnostics
+  without a selection; exhausted work and failed physical solves return structured refusals.
+  Accepted coefficients remain partial materials when bending/contact or other properties are absent.
+  Exact frozen selections feed ordinary material binding. See `docs/clamped-strip-calibration.md`.
 - `ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]`:
   the same fitted body (fitted on the drape pose, then posed as asked) as `body.obj` (the closed skin)
   and `body.json` (`ftx-body/1`: the fit as `drape` reports it, plus the measurements' SHA-256, the pose,

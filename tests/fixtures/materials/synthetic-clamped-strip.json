@@ -1,0 +1,249 @@
+{
+  "schema": "ftx-strip-calibration/1",
+  "material": {
+    "id": "synthetic-strip-4coefficient",
+    "name": "Synthetic finite-strip inverse numerical test (not physical textile data)",
+    "form": "woven",
+    "composition": [],
+    "composition_complete": false,
+    "structure": {
+      "scope": "synthetic numerical recovery test"
+    },
+    "properties": {
+      "areal_density": {
+        "value": 0.2,
+        "unit": "kg/m2",
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Explicit synthetic areal mass, retained independently of static force identification",
+        "conditions": {
+          "conditioning": "synthetic numerical test; no physical coupon",
+          "provenance": "numerical synthetic acquisition",
+          "specimen_id": "synthetic-strip-4coefficient"
+        },
+        "bounds": null
+      }
+    },
+    "sources": {
+      "check-warp": {
+        "reference": "test:synthetic-strip-limits/check-warp",
+        "accessed_on": "2026-10-21",
+        "note": "Numerical synthetic acquisition; not a measured coupon or empirical independence claim"
+      },
+      "fit-bias": {
+        "reference": "test:synthetic-strip-limits/fit-bias",
+        "accessed_on": "2026-10-21",
+        "note": "Numerical synthetic acquisition; not a measured coupon or empirical independence claim"
+      },
+      "fit-warp": {
+        "reference": "test:synthetic-strip-limits/fit-warp",
+        "accessed_on": "2026-10-21",
+        "note": "Numerical synthetic acquisition; not a measured coupon or empirical independence claim"
+      },
+      "fit-weft": {
+        "reference": "test:synthetic-strip-limits/fit-weft",
+        "accessed_on": "2026-10-21",
+        "note": "Numerical synthetic acquisition; not a measured coupon or empirical independence claim"
+      },
+      "synthetic": {
+        "reference": "local:synthetic-clamped-strip-4coefficient",
+        "accessed_on": "2026-10-21",
+        "note": "Explicit synthetic constitutive values [warp 300 N/m, weft 180 N/m, major Poisson 0.2, shear 70 N/m] generate actual finite-strip force and midpoint chord-width observations. Independent source IDs denote fresh numerical acquisitions, not physical validation. Areal mass 0.2 kg/m2 is an independent synthetic observation and does not enter these zero-gravity static equilibria."
+      }
+    }
+  },
+  "method": "Synthetic independent planar ideal-grip elastic states; 100 mm free gauge, 60 mm width, explicit midpoint side-point chord width. No physical coupon, source metrology, history or empirical validation is inferred.",
+  "conditions": {
+    "conditioning": "synthetic numerical test; no physical coupon",
+    "provenance": "numerical synthetic acquisition",
+    "specimen_id": "synthetic-strip-4coefficient"
+  },
+  "fitted_on": "2026-10-21",
+  "experiments": [
+    {
+      "id": "fit-warp",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          0.0,
+          1.0
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "fit-warp",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-warp-0",
+          "extension_fraction": 0.04,
+          "force_n": 0.7745423000660752,
+          "scale_n": 0.1,
+          "mid_width": {
+            "value_m": 0.05957613108953275,
+            "scale_m": 0.001
+          }
+        },
+        {
+          "id": "fit-warp-1",
+          "extension_fraction": 0.08,
+          "force_n": 1.6407326996483929,
+          "scale_n": 0.1,
+          "mid_width": {
+            "value_m": 0.059150160037965874,
+            "scale_m": 0.001
+          }
+        }
+      ]
+    },
+    {
+      "id": "fit-weft",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          1.0,
+          0.0
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "fit-weft",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-weft-0",
+          "extension_fraction": 0.04,
+          "force_n": 0.4643862789723161,
+          "scale_n": 0.1,
+          "mid_width": {
+            "value_m": 0.05972988993539152,
+            "scale_m": 0.001
+          }
+        },
+        {
+          "id": "fit-weft-1",
+          "extension_fraction": 0.08,
+          "force_n": 0.9835359227079762,
+          "scale_n": 0.1,
+          "mid_width": {
+            "value_m": 0.05945216695772838,
+            "scale_m": 0.001
+          }
+        }
+      ]
+    },
+    {
+      "id": "fit-bias",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          0.7071067811865476,
+          0.7071067811865476
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "fit-bias",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-bias-0",
+          "extension_fraction": 0.04,
+          "force_n": 0.5099243134144433,
+          "scale_n": 0.1,
+          "mid_width": {
+            "value_m": 0.05934385094601911,
+            "scale_m": 0.001
+          }
+        },
+        {
+          "id": "fit-bias-1",
+          "extension_fraction": 0.08,
+          "force_n": 1.0806432943375526,
+          "scale_n": 0.1,
+          "mid_width": {
+            "value_m": 0.058665390874882,
+            "scale_m": 0.001
+          }
+        }
+      ]
+    },
+    {
+      "id": "check-warp",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          0.0,
+          1.0
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "check-warp",
+      "evidence": "estimate",
+      "partition": "check",
+      "observations": [
+        {
+          "id": "check-warp-0",
+          "extension_fraction": 0.03,
+          "force_n": 0.5724551598588142,
+          "scale_n": 0.1,
+          "mid_width": {
+            "value_m": 0.05968235605493728,
+            "scale_m": 0.001
+          }
+        }
+      ]
+    }
+  ],
+  "parameter_bounds": [
+    [
+      200.0,
+      400.0
+    ],
+    [
+      100.0,
+      260.0
+    ],
+    [
+      0.05,
+      0.35
+    ],
+    [
+      40.0,
+      100.0
+    ]
+  ],
+  "admit_planar_elastic_model": true,
+  "allow_estimated_observations": true,
+  "replace_existing": false,
+  "allow_estimates": true,
+  "controls": {
+    "tolerance_m": 1e-09,
+    "force_tolerance_n": 1e-06,
+    "max_newton": 100
+  },
+  "policy": {
+    "max_rms_scaled": 1.0,
+    "max_peak_scaled": 1.0,
+    "max_mesh_scaled": 1.0,
+    "min_excitation_pivot": 0.0001,
+    "max_iterations": 40,
+    "max_forward_solves": 8000
+  }
+}

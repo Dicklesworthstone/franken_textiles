@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, linalg::lstsq, receipt::sha256_hex};
 use ftx_pattern::{
-    material_calibration::Partition,
+    material_calibration::{Partition, fitted_domain},
     material_catalog::Selection,
     material_response::StrainDomain,
     materials::{Evidence, Form, Material, Quantity, Source},
@@ -13,7 +13,7 @@ use ftx_pattern::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::experiment::{Controls, Fixture, SCOPE, State, invalid, solve, solve_law};
+use super::experiment::{Controls, Fixture, SCOPE, State, invalid, solve_law};
 use crate::Membrane;
 
 const KEYS: [&str; 4] = [
@@ -213,6 +213,8 @@ pub struct Report {
 struct Budget {
     used: usize,
     limit: usize,
+    // Replacing coefficients does not erase the original specimen's characterized support.
+    inherited_domain: Option<StrainDomain>,
 }
 
 impl Budget {
@@ -235,7 +237,26 @@ impl Budget {
         controls: &Controls,
     ) -> Result<State, Refusal> {
         self.admit()?;
-        solve(fixture, parameters, extension, controls)
+        let [warp, weft, nu, shear] = parameters;
+        solve_law(
+            fixture,
+            Membrane::orthotropic(warp, weft, nu, shear, 1.0),
+            None,
+            self.inherited_domain,
+            extension,
+            controls,
+        )
+    }
+
+    fn within_inherited_domain(&self, domain: StrainDomain) -> Result<StrainDomain, Refusal> {
+        let Some(inherited) = self.inherited_domain else {
+            return Ok(domain);
+        };
+        let prior = inherited.ranges();
+        let fitted = domain.ranges();
+        StrainDomain::new(std::array::from_fn(|i| {
+            [prior[i][0].max(fitted[i][0]), prior[i][1].min(fitted[i][1])]
+        }))
     }
 
     fn replay(
@@ -252,7 +273,7 @@ impl Budget {
             fixture,
             Membrane::orthotropic(warp, weft, nu, shear, 1.0),
             None,
-            Some(domain),
+            Some(self.within_inherited_domain(domain)?),
             extension,
             controls,
         )
@@ -620,9 +641,16 @@ fn quality(values: &[f64]) -> Quality {
 /// Invalid acquisition/source/model input, exhausted aggregate work, or any failed forward solve.
 pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     validate(input)?;
+    let inherited_domain = fitted_domain(&input.material)?;
+    if inherited_domain.is_some_and(|domain| !domain.contains([0.0; 3])) {
+        return Err(invalid(
+            "the inherited material domain must admit the strip's undeformed reference; replacing coefficients cannot widen it",
+        ));
+    }
     let mut budget = Budget {
         used: 0,
         limit: input.policy.max_forward_solves,
+        inherited_domain,
     };
     let mut starts = Vec::new();
     let mut coordinates = Vec::new();
@@ -665,8 +693,9 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     let mut fit_errors = Vec::new();
     let mut check_errors = Vec::new();
     let mut mesh_peak = 0.0_f64;
-    // The zero-strain reference is explicitly included by a solved undeformed state per FIT cut.
-    let mut ranges = [[f64::INFINITY, f64::NEG_INFINITY]; 3];
+    // Preserve exact zero as well as the actually solved rest state (which may contain roundoff).
+    // Every objective, probe, coarse/refined state and CHECK already obeys inherited support.
+    let mut ranges = [[0.0_f64; 2]; 3];
     for experiment in &input.experiments {
         let mut refined = experiment.fixture.clone();
         refined.cells.iter_mut().for_each(|n| *n *= 2);
@@ -723,6 +752,9 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             });
         }
     }
+    ranges = budget
+        .within_inherited_domain(StrainDomain::new(ranges)?)?
+        .ranges();
     let fit = quality(&fit_errors);
     let check = (!check_errors.is_empty()).then(|| quality(&check_errors));
     if predictions
