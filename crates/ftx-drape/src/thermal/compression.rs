@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{Boundary, DryThermalModel, invalid, positive};
 
+/// Explicit source-qualified branch reversals through the same material/thermal state machine.
+pub mod path;
+
 /// Maximum committed steps in one local compression/thermal history.
 pub const MAX_STEPS: usize = 512;
 /// Maximum through-thickness cells; the area and material discretization stay fixed.
@@ -153,6 +156,26 @@ fn checked_product(a: f64, b: f64, label: &str) -> Result<f64, Refusal> {
     Ok(v)
 }
 
+fn check_storage(input: &stack::Input) -> Result<(), Refusal> {
+    for layer in &input.layers {
+        for key in ["areal_density", "specific_heat"] {
+            if !layer.preparation.invariants.contains_key(key)
+                || layer
+                    .preparation
+                    .samples
+                    .iter()
+                    .any(|s| s.properties.contains_key(key))
+            {
+                return Err(invalid(format!(
+                    "{}: compressed thermal storage needs independently qualified pressure-invariant {key}; sampled storage is unsupported",
+                    layer.id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl CompressedStack {
     /// Prepare the given initial gap and attach the caller's initial temperatures.
     /// No heat evolution or mechanical heating is inferred during initial preparation.
@@ -172,22 +195,7 @@ impl CompressedStack {
                 "compressed thermal setup needs 1..64 cells per layer, at most 1024 cells, matching initial temperatures and explicit thermal evidence",
             ));
         }
-        for layer in &setup.stack.layers {
-            for key in ["areal_density", "specific_heat"] {
-                if !layer.preparation.invariants.contains_key(key)
-                    || layer
-                        .preparation
-                        .samples
-                        .iter()
-                        .any(|s| s.properties.contains_key(key))
-                {
-                    return Err(invalid(format!(
-                        "{}: compressed thermal storage needs independently qualified pressure-invariant {key}; sampled storage is unsupported",
-                        layer.id
-                    )));
-                }
-            }
-        }
+        check_storage(&setup.stack)?;
         let compression = stack::close(&setup.stack)?;
         let thermal = model(
             &compression,
