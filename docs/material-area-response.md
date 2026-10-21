@@ -113,6 +113,22 @@ Identified coefficients are estimates with their acquisition receipt; search int
 published as uncertainty bounds. Preserved coefficients retain their original evidence. Both modes
 use the existing native, portable and browser strip-calibration entry points and frozen selections.
 
+The [complete synthetic inverse request](../examples/area-response/identify.json) supplies three FIT
+directions and a separate numerical CHECK acquisition, modest net coupling, explicit midpoint widths
+and a 4 × 6 mesh. It was captured from the accepted numerical experiment, not from a physical textile
+or a parity oracle. It demonstrates recovery of `[1.1, 0.9, 1.2, -80, 31, 19]` in the reported parameter
+order. Run it through either native command or upload it to the existing browser strip-fit input:
+
+```sh
+ftx --json materials calibrate-strip examples/area-response/identify.json --allow-estimates
+ftx-materials calibrate-strip examples/area-response/identify.json --allow-estimates
+```
+
+The first three coordinates are dimensionless shape scales; the last three are N/m. Successful
+publication still leaves bending, contact, mass and thermal observations absent. Stronger coupling,
+knotted shapes or other acquisitions can fail refinement or strict domain replay and remain rejected;
+this example does not establish convergence for every admissible request.
+
 Numerical recovery of invented coefficients is software evidence. Published shell parameters fitted
 using all cut directions cannot be relabeled as an independent bias CHECK prior. Matched acquired
 transverse/biaxial observations, independent coupons and bending/contact qualification remain under

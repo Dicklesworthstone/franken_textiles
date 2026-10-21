@@ -10,6 +10,32 @@ use serde_json::{Value, json};
 
 const INPUT: &str = include_str!("../../../tests/fixtures/materials/synthetic-clamped-strip.json");
 
+#[test]
+fn both_commands_identify_the_joint_area_example_without_claiming_complete_garment_physics() {
+    let workspace = Workspace::new();
+    fs::write(
+        workspace.0.join("acquisition.json"),
+        include_str!("../../../examples/area-response/identify.json"),
+    )
+    .unwrap();
+    let primary = workspace.identify(true, true);
+    let companion = workspace.identify(false, true);
+    assert_eq!(primary["calibration"], companion["calibration"]);
+    let report = &primary["calibration"];
+    assert_eq!(report["accepted"], true, "{report}");
+    assert_eq!(report["domain_replay_verified"], true);
+    let parameters = report["parameters"].as_array().unwrap();
+    assert_eq!(parameters.len(), 6);
+    for (actual, known) in parameters.iter().zip([1.1, 0.9, 1.2, -80.0, 31.0, 19.0]) {
+        assert!((actual.as_f64().unwrap() - known).abs() < 1e-3);
+    }
+    assert_eq!(primary["selection_json"], companion["selection_json"]);
+    assert_eq!(primary["selection"], report["selection"]);
+    assert_eq!(primary["simulation_ready"], false);
+    assert_eq!(primary["fit_claim"], false);
+    assert_eq!(primary["empirical_validation_claim"], false);
+}
+
 struct Workspace(PathBuf);
 
 impl Workspace {

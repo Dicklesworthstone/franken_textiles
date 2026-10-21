@@ -7,6 +7,7 @@
 // --outfit-proof checks public-prior drafted garment composition with synthetic materials, without a model.
 // --compression-proof checks real history controls, heat/work answers and final material binding.
 // --purchasing-proof checks bounded marker previews and combined whole-order purchasing.
+// --area-proof DIR checks six-parameter area fitting against native-input.json/native-report.json.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -24,7 +25,10 @@ const stripProof = stripIndex < 0 ? null : path.resolve(process.argv[stripIndex 
 const outfitProof = process.argv.includes('--outfit-proof');
 const compressionProof = process.argv.includes('--compression-proof');
 const purchasingProof = process.argv.includes('--purchasing-proof');
-assert.ok([stripProof,outfitProof,compressionProof,purchasingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+const areaIndex = process.argv.indexOf('--area-proof');
+if (areaIndex >= 0 && !process.argv[areaIndex + 1]) throw Error('--area-proof requires a native capture directory');
+const areaProof = areaIndex < 0 ? null : path.resolve(process.argv[areaIndex + 1]);
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -49,7 +53,7 @@ const server = http.createServer((req, res) => {
 });
 (async () => {
   assert.ok(fs.existsSync(path.join(web, 'pkg/ftx_wasm_bg.wasm')), 'Build web/pkg first');
-  if (!stripProof && !outfitProof && !compressionProof && !purchasingProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
+  if (!stripProof && !outfitProof && !compressionProof && !purchasingProof && !areaProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
@@ -74,6 +78,47 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (areaProof) {
+      const raw=fs.readFileSync(path.join(areaProof,'native-input.json'),'utf8');
+      const expected=JSON.parse(fs.readFileSync(path.join(areaProof,'native-report.json'),'utf8'));
+      assert.equal(raw,fs.readFileSync(path.join(root,'examples/area-response/identify.json'),'utf8'));
+      assert.deepEqual(JSON.parse(raw),expected.input); assert.equal(expected.accepted,true);
+      const original=load('synthetic-stock-pattern.json'); await input('patternFile',original);
+      await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      await page.locator('details').filter({has:page.locator('#stripFit')}).evaluate(e=>{e.open=true;});
+      await page.setInputFiles('#stripFitRequest',{name:'joint-area.json',mimeType:'application/json',buffer:Buffer.from(raw)});
+      assert.equal(await run('stripFit'),'');
+      const resultRaw=await download('strip-calibration-report.json'),result=JSON.parse(resultRaw);
+      assert.deepEqual(result.calibration,expected);
+      assert.equal(await download('strip-calibration-input.json'),raw);
+      assert.equal(await download('strip-calibrated-selection.json'),expected.selection_json);
+      assert.equal(await page.inputValue('#selection'),expected.selection_json);
+      const t=page.locator('table').filter({has:page.locator('caption',{hasText:'Identified directional and physical-area coefficients'})});
+      assert.equal(await t.count(),1); assert.equal(await t.locator('tr').count(),7);
+      for (const [i,d] of expected.parameter_descriptors.entries())
+        assert.deepEqual(await t.locator('tr').nth(i+1).locator('td').allTextContents(),
+          [d.label,expected.parameters[i],d.unit,...expected.parameter_bounds[i]].map(String));
+      fs.writeFileSync(path.join(work,'area-input.json'),raw,{flag:'wx'});
+      fs.writeFileSync(path.join(work,'area-report.json'),resultRaw,{flag:'wx'});
+      await page.locator('#outputs').screenshot({path:path.join(work,'area-accepted.png')});
+      const unfinished=JSON.parse(raw); unfinished.policy.max_iterations=1;
+      await input('stripFitRequest',unfinished);
+      assert.equal(await page.locator('a[download="strip-calibrated-selection.json"]').count(),0);
+      assert.equal(await run('stripFit'),'');
+      const rejected=JSON.parse(await download('strip-calibration-report.json'));
+      assert.equal(rejected.calibration.accepted,false); assert.equal(rejected.selection,null);
+      assert.equal(await page.isDisabled('#assign'),true);
+      await page.setInputFiles('#stripFitRequest',{name:'joint-area.json',mimeType:'application/json',buffer:Buffer.from(raw)});
+      assert.equal(await run('stripFit'),'');
+      assert.deepEqual(JSON.parse(await download('strip-calibration-report.json')).calibration,expected);
+      const bound=await assign(result.selection);
+      assert.equal(bound.fabric.material.expected_sha256,result.selection.expected_sha256);
+      assert.deepEqual(bound.pieces,original.pieces); assert.deepEqual(bound.seams,original.seams);
+      fs.writeFileSync(path.join(work,'area-bound-pattern.json'),await download('pattern.json'),{flag:'wx'});
+      assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m=>m==='GET'));
+      console.log('PASS: actual Chromium matches the complete native joint-area report, displays all six authoritative bounds, retains exact inputs/selection, binds without geometry changes and withdraws rejected selections. Synthetic software evidence only; no empirical textile/fit claim. Artifacts:',work);
+      return;
+    }
     if (purchasingProof) {
       const pattern=load('synthetic-stock-pattern.json'); pattern.pieces=pattern.pieces.slice(0,1);
       pattern.pieces[0].vertices={a:[0,0],b:[40,0],c:[40,100],d:[0,100]};

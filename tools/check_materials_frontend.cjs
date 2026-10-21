@@ -991,6 +991,34 @@ test('nonlinear strip coefficients retain declared shape assumptions, physical u
   }
 });
 
+test('joint area strip calibration displays all six native bounds through both fit controls', async () => {
+  for (const dedicated of [false,true]) {
+    const p=await pageModule();await p.load();
+    p.e.calibrationMode.value='clamped_strip';p.e.calibrationEstimates.checked=true;
+    const operation=dedicated?'stripFit':'calibrate',input=dedicated?'stripFitRequest':'calibrationRequest';
+    p.select(input);await p.e[operation].onclick();
+    const result=nonlinearStripCalibration(),c=result.calibration;
+    c.input.area_response={mode:'identify',parameter_bounds:[[10,50],[5,35]]};
+    c.parameters.push(31,19);
+    c.parameter_descriptors.push({id:'area_quadratic',label:'Physical-area quadratic coefficient',unit:'N/m'},
+      {id:'area_log_squared',label:'Physical-area log-squared coefficient',unit:'N/m'});
+    c.parameter_bounds=[...c.input.parameter_bounds,...c.input.area_response.parameter_bounds];
+    const raw=' '+JSON.stringify(result)+'\n';
+    p.emit(result,[{name:'joint-area.json',text:raw,mime:'application/json'}]);
+    const s=section(p,dedicated?'Clamped-strip identification':'Identified material behavior');
+    const coefficients=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes('Physical-area quadratic coefficient'));
+    assert.deepEqual(plain(coefficients.children.slice(-2).map(n=>n.children.map(v=>v.textContent))),[
+      ['Physical-area quadratic coefficient','31','N/m','10','50'],
+      ['Physical-area log-squared coefficient','19','N/m','5','35']]);
+    assert.equal(coefficients.children.length,8);
+    assert.equal(p.e.selection.value,result.selection_json);
+    assert.equal(p.e.assign.disabled,false);
+    const download=descendants(s).find(n=>n.download==='joint-area.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    p.e[input].handlers.change();assert.equal(s.hidden,true);assert.equal(p.e.assign.disabled,true);
+  }
+});
+
 test('independent nonlinear strip intervals retain every tangent, declared knots and exact accepted selection', async () => {
   const p=await pageModule();await p.load();
   p.e.calibrationMode.value='clamped_strip';p.select('calibrationRequest');

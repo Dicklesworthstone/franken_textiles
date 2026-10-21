@@ -1902,3 +1902,236 @@ unrelated untracked paths remain untouched. All seven reservations are released 
 During closeout another actor committed the three owned checker/guide paths as `b5d0164`;
 their hashes still match the tested files and no Rust source changed. The remaining scoped
 commit records only Bead closure/progress and these completed evidence notes.
+
+### Joint directional and physical-area identification — ftx-ai1
+
+The existing strip fitter can now explicitly preserve a qualified area law or jointly identify
+its two coefficients with directional response. It uses the production `area_green_strain/1`
+compiler and the existing bounded optimizer, excitation, aggregate-work, FIT/CHECK, refinement
+and published-domain replay gates. Omission still refuses to discard an existing area law.
+Preservation retains the original quantities and requires independent estimate consent;
+known fitted/CHECK priors and mismatched specimen/conditioning refuse. Identified quantities
+remain estimates. Neither search bounds nor sensitivity establish confidence or uniqueness.
+
+The runnable [synthetic request](../examples/area-response/identify.json) reaches both native
+commands, the portable adapter and the actual browser worker. A browser defect found during
+integration read only four input bounds for a six-coordinate result. The page now displays
+the complete native bounds, without calculating or fitting material values in JavaScript.
+An unchanged-page regression fails with `Cannot read properties of undefined (reading 'map')`;
+the fixed page displays all six values and invalidates rejected or stale selections.
+
+This is software capability, **not qualified empirical textile response**. The final invented
+specimen was redesigned after earlier new trial cases failed. The stronger-coupling and
+knotted cases are not claimed as passing, and the original nonlinear regressions, tolerances,
+work limits and publication gates were not weakened. Matched independent source observations,
+bending/contact and garment qualification remain open in `ftx-ki4` and the material parents.
+
+Detailed TODO, maintained in comments 95–97 on `ftx-ai1` and continued here through handoff:
+
+- [x] Read complete current AGENTS/README; refresh history, ready/in-progress Beads, plan §25.44,
+      area specification, fitter, production compiler, contracts and actual consumer dispatch.
+- [x] Preserve incoming vapor, partial-seam, finished-band/casing and adaptive-thermal work;
+      resolve only duplicate issue rows in the merge, without deleting another actor's records.
+- [x] Add explicit preserve/identify policy, qualified template, nonnegative finite coefficient
+      bounds, matched source conditions and independent estimate admission.
+- [x] Reuse fixed starts, all-trial production compilation, joint Jacobian/excitation and complete
+      solve accounting. Add no second optimizer, engine, crate, dependency or runtime language.
+- [x] Clip only the directional base to FIT support, then attach the exact physical-area law;
+      keep the declared J domain and verify the actual published frozen selection.
+- [x] Recover six invented coefficients and separately recover directionality with unchanged
+      fixed-area JSON; check provenance, conditions, descriptors and physical units.
+- [x] Exercise CHECK isolation, insufficient excitation, wrong/missing source policy, malformed
+      bounds, narrow J domain, complete budget exhaustion and stale material hash rejection.
+- [x] Repair the two old Rust constructors with `area_response: None`; retain old assertions.
+- [x] Supply the runnable synthetic example and direct primary CLI, companion CLI and portable
+      consumer regressions, including absent garment mechanics and false empirical/fit claims.
+- [x] Reproduce the old browser bound-table crash; repair the consumer and exercise both fit
+      controls, source text, complete bounds, exact downloads and stale-output withdrawal.
+- [x] Build the final wasm remotely; compare raw worker/local hashes, preserve the previous
+      owned bundle and install all matching bindgen outputs before browser execution.
+- [x] Replay the complete native report through installed wasm and real Chromium, including
+      rejected fit, exact frozen selection, actual material binding and unchanged pattern geometry.
+- [x] Run the full compiled frontend suite and the existing purchasing/compression browser paths.
+- [x] Run root formatting and strict remote all-target Clippy. Document/format the incoming
+      adaptive thermal API only where its missing docs and formatting block those same gates.
+- [ ] Finish the already-running complete remote workspace suite and record its actual denominator.
+- [ ] Complete staged UBS/direct review, original-acceptance fresh solo verification, Bead closure,
+      flush, scoped `main` handoff and release all owned reservations.
+
+Evidence is retained under `out/ftx-ai1-20261021/`. The accepted focused native release run
+(`checks/balanced-native-vmi.log`) executes **12 tests, 12 passed, none ignored or filtered**,
+on `vmi1227854`, from base `4515104970cdf5187fdac69c56738ea484e5c840` plus the six explicit
+fitter/test/example overlays, fingerprint
+`01f7b4402c383c8d5f18e66f2455ebaaf03b9188efcf3a167b10ea07b2d941f8`.
+The command after the strict RCH source selector is:
+
+```sh
+cargo test --locked --release -j1 -p ftx-drape --test strip_nonlinear_identification -- --nocapture
+```
+
+The captured request SHA-256 is
+`78ce3a79070bc049db3e45f4ec841dfbaf9738b9fbc1d1aa440066946d1e7bf2`;
+the complete native report SHA-256 is
+`17aa1b7300742296b644740e4e6c9b8e36a6f7879cee6f73ff69210cff919d69`.
+The committed request bytes match the capture. These files are candidate-generated **synthetic
+numerical experiments**, not regenerated parity oracles or independent physical observations.
+Recovered values are `[1.100000098420041, 0.9000001486494853, 1.1999999073360128,
+-79.99995791667646, 30.999949250367553, 19.000040311961058]`, within `1e-3` of the invented
+values `[1.1, 0.9, 1.2, -80, 31, 19]`. The first three are dimensionless and the last three N/m.
+The independently declared area domain remains `[0.65, 1.45]`.
+
+The positive denominator is 24 FIT channels and 2 numerical CHECK channels, with scaled
+RMS/peak **0.1030223361 / 0.3741875429** and **0.0056248752 / 0.0069821923**, respectively.
+The doubled-mesh peak change is **0.3741878967** against limit 1, the normalized excitation
+pivot is **0.0032339595** against minimum 0.0001, all three starts are stationary, and total
+forward work is **2,539 / 8,000**. Published-domain replay is verified. These residuals are
+not replaced by a single accuracy or fit percentage; no performance claim follows from runtime.
+
+Final Rust checks bind one bounded refresh at base
+`3f9fb8334629d18a0bb578107ef8604b4190cb36`, tree
+`628845d07988e373583120b34020b3c9eaaeacd6`, plus exact named overlays. RCH's reported tree is
+the base tree; the overlay fingerprint, not that tree alone, identifies the compiled source.
+`checks/clippy-final-consumers.log` passes on `ovh-b` with fingerprint
+`71be9a84c7f64986ba7512cad902a5c6a6411463313a9ee49f34d653d4c02037`:
+
+```sh
+cargo clippy --locked -j1 --all-targets -- -D warnings
+cargo test --locked --workspace -j1
+cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm
+```
+
+The workspace command is still running at this checkpoint, not a pass yet. Its frozen overlay
+fingerprint is `4f0640b20c564b32a97e6500e1ba7b32b26ffb065ce6c2c488d25acbdacc058b`.
+Clippy/workspace explicitly forward `CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0`
+to avoid the earlier linker pressure failure; debug assertions and all test criteria remain on.
+The workspace capture precedes the final whitespace-only formatting of three existing thermal
+assertions; final Clippy and root rustfmt include that formatting. Numerical fitter bytes match
+the delivery hash list throughout the final runs; the incoming thermal implementation is unrelated
+to this fitter's positive numerical result.
+Every Cargo command requires remote execution and the specified downloader user agent; no local
+compilation follows the failed laptop SBH gate (42,929,545,216 free bytes, 1.0742385% free).
+The exact source selector/overlay list and forwarded environments are in each retained RCH log.
+
+The final wasm build passes on `ovh-b` (`checks/wasm-ovh.log`), overlay fingerprint
+`7bfbdd5b678dec4960987ecae1f0b8271ef60864ec7f4b5cec62012a8a498dd3`.
+Raw module SHA-256 `4c64550f92fcd1affb0af70c15f99ce4d0f3210e4d7f9f042daf81e125f4b85b`
+matches the worker artifact. After bindgen, installed JS SHA-256 is
+`a8e35801cb08c76750d1005b14dfd24d2ad9ca24177746cab0c6980025d24aa8`
+and installed wasm SHA-256 is
+`863235164d2a08a92025542a3117a524b848b3d0a29efb95e3372a473106fd57`.
+`delivery-sha256.txt` binds 20 numerical, adapter, example, UI, checker and bundle paths;
+all 20 match after delivery checks. The ignored previous bundle is preserved.
+
+`FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs`
+passes **86/86, zero skipped**, observed exit 0. Direct installed-WASM execution deep-compares
+the entire captured native calibration, every prediction and work counter and the exact frozen
+selection, observed exit 0. Actual Chromium `tools/check_materials_web.cjs --area-proof
+out/ftx-ai1-20261021` also exits 0: native report equality, six bounds/units, exact raw input and
+selection downloads, rejected-fit withdrawal, and explicit inspection/assignment/binding with
+unchanged pieces and seams. It makes no external or non-GET request and logs no console errors.
+Retained browser artifacts are in
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-Vh4Or9/`;
+the equivalent first successful run's `area-accepted.png` was visually inspected. Existing
+`--purchasing-proof` and `--compression-proof` branches pass against the same installed bundle;
+their reports are retained in `checks/browser-purchasing-final.log` and
+`checks/browser-compression-final.log`. Browser commands use `FTX_PLAYWRIGHT_MODULE=playwright-core`
+and `NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules`.
+
+Failed attempts remain failures: initial new knotted/strongly-coupled synthetic cases recovered
+coefficients but failed refinement; a refined acquisition failed Newton; the smooth positive-coupling
+case stalled at strict published-domain replay. A 300-Newton-iteration probe did not solve that
+plateau and was reverted to 100. The final example deliberately uses a smooth base and modest net
+coupling. All original policies and old nonlinear tests remain. Two missing optional initializers
+caused compile failures before repair. Remote pressure/source admission, an unavailable runtime,
+a worker lacking wasm std and a linker bus error caused other failures; none counted as passes or
+triggered local fallback, fleet cleanup or gate changes. A redundant portable replay hit exclusive
+artifact creation (`EEXIST`): its logging pipeline's zero status was not the test's exit status.
+The log was inspected, that retry is uncredited, and direct execution without artifact rewrites
+subsequently passed. One DCG-rejected inline probe did not execute; a hand-authored ignored probe
+used the ordinary policy. An accidental full-tree UBS launch after automatic commit emptied the
+staged list was stopped by its own validated process group; it is not a scanner pass.
+
+Automatic commits `a51ac28`, `5482158` and `fce40b5` captured this continuation's unfinished source
+and subsequent repairs while verification was ongoing. The automatic actor is not an independent
+verifier. Its history and unrelated incoming work were preserved; source/artifact hashes establish
+which bytes were tested. This handoff uses fresh solo re-execution, not independent review.
+DSR release/quality, G5, real Anny garment acceptance and empirical material/fit/performance proof
+are not claimed by this bounded work.
+
+The guarded, nonempty staged `ubs` invocation exits **2 / partial** (`checks/staged-ubs-final.log`):
+7 source files, 1 critical, 878 warnings and 1,409 informational findings. The critical is the
+**unchanged** CLI negative-test `Command::new(binary)`: `binary` comes exclusively from a literal
+two-element array of Cargo's compile-time `CARGO_BIN_EXE_ftx` and `CARGO_BIN_EXE_ftx-materials`,
+not user input. The same loop is present at the frozen pre-change base. No suppression or code
+rewrite was made to appease it. JavaScript taint analysis exceeds its existing work limit in
+`tools/check_materials_web.cjs`; this is an incomplete scan, not a clean staged pass. Direct review
+of the changed code covers fixed temporary artifact names, source text nodes, native bounds,
+download revocation, loopback path checks and explicit process arguments. The earlier focused
+six-file numerical Rust scan completes with 0 critical, 373 warnings and 180 informational.
+The separate production page/worker scan completes, exit **0**, with 0 critical, 30 warnings
+and 287 informational (`checks/production-js-ubs.log`); it does not replace the partial staged scan.
+
+Bounded fresh-solo worksheets for this one continuation:
+
+- **Creation:** this existing report/TODO is PROCESS. Consumer: the user who explicitly requested
+  a granular TODO, comprehensive reality check and task execution. Gate: this item's truthful
+  handoff. Observed defect: valid six-coordinate native results crash the old browser renderer;
+  failed refinement/replay can otherwise be mistaken for accepted identification. Retire the
+  active TODO at this handoff; historical notes persist only here and in the Bead. The integrity
+  exception is not needed. Opportunity cost: the oldest ready material-characterization work
+  remains `ftx-tm2`; a full extra hour of reporting would be less useful, so record only this
+  bounded result and stop adding apparatus. Verdict: minimum legitimate operator-requested gate.
+- **Real work:** actual last-eight-commit history, recent closes and all 29 open items were read;
+  `ftx-ai1` is additionally in progress. Core purpose: patterns that demonstrably sew together
+  and fit a specific body, with usable manufacturing files. Across 19 owned maintained paths:
+  USER 7 (fitter modules, public contract/guide, runnable example, page), ENABLER 9 (direct tests,
+  existing example driver/checkers and lint-blocking API docs), PROCESS 3 (Beads, plan, report),
+  UNKNOWN 0; the four ignored bundle files deliver matching runtime bytes. Incoming implementation
+  commits are their author's work, not capability credited here. Q1: demo the accepted example,
+  all six coefficients, exact selection, rejected-fit withdrawal and binding in the real browser.
+  Q2: without PROCESS the same capability works, but the requested tracking/evidence is absent.
+  Q3: the existing numerical compiler, native/portable tests and real page exercised every ENABLER;
+  no speculative framework was added. Q4: the oldest open G5 task and highest-priority empirical
+  material gap stay open; this ready software leaf removes the existing fitter's area-law blocker
+  without claiming the missing measurements. Q5: solo, no pane or close-count comparison. Q6:
+  no acceptance moved into a new issue; the old plan's refusal description was updated alongside
+  real implementation. Verdict: useful product increment, with empirical and release work open.
+- **Honesty 1:** No (checked: original tests, controls, publication/refinement thresholds and
+  fixed fixture/oracle/configuration paths; original assertions remain, no ignores/deletions).
+  The changed new synthetic generating case is disclosed above, rather than passed off as the
+  failed original experiment. **2–3:** No (checked: production solver generates explicitly labeled
+  numerical observations; native/wasm/browser execute real consumers; DOM doubles test display
+  only; no reference oracle or golden was regenerated).
+- **4:** Yes, new tests and both existing checkers changed with the feature. Separate RH-1 review
+  found the old assertions/default prerequisites unchanged; the new focused browser branch reads
+  exact native captures instead of requiring an unused native executable. The old page fails the
+  new regression, and a one-iteration real fit remains rejected. A 300-iteration diagnostic was
+  reverted; no retained threshold/timeout/retry relaxation or suppression. API comments/formatting
+  fix the incoming strict-lint blocker without changing thermal math. **5:** No (checked: no
+  production fixture, source ID or environment special case; all numerical paths share the same
+  compiler/optimizer). **6:** No (checked: focused 12 and frontend 86 denominators, zero skips).
+- **7:** No (checked: observed execution/results and retained logs; the portable EEXIST retry's
+  pipeline zero is explicitly uncredited, followed by direct exit-0 replay). **8:** No (checked:
+  synthetic recovery/replay is labeled software evidence; numerical CHECK is not independent
+  empirical validation). **9–10:** No (checked: prior failed cases, rejected remote jobs, partial
+  staged UBS, false-positive critical and pipeline mistake are recorded; stderr was retained).
+  **11:** pending original-acceptance re-execution and closure; empirical parents stay open.
+  **12:** No (checked: plan/contract edits describe the added optional API and no technical
+  acceptance was weakened; all original solver gates remain).
+- **13–17:** not applicable: no delegation, child agents or swarm. Concurrent commits are not
+  independent evidence and agreement earns no verification credit. **18:** Yes, the final invented
+  positive specimen was chosen after earlier candidates failed. Correction: retain those failures,
+  identify the changed generating model, keep old tests and gates, and limit the claim to this
+  supplied numerical example. RH-2/RH-15 countermeasure: report residuals and all failed candidate
+  classes; never promote a selected synthetic case to empirical or universal convergence proof.
+  The full-suite denominators were fixed before their final execution, not selected from passing
+  tests. Older-session mining is not repeated for this bounded continuation; these answers cover
+  this work item and the actual examined history, not a new audit of all older sessions.
+- **19:** explain the redesigned toy specimen, unsuccessful 300-iteration probe, automatic commits
+  of unfinished source, stopped accidental UBS process, DCG refusal and masked EEXIST retry before
+  presenting success; all are retained above. **20:** strongest evidence is complete native versus
+  installed-WASM/actual-Chromium report equality, known six-coefficient recovery, exact published
+  production replay and the rejected-fit negative. A skeptic can rerun the committed request and
+  retained commands. Disposition: RH-1 checker edits and post-result synthetic-case selection were
+  reviewed separately, disclosed and bounded; no universal/physical claim or gate weakening.
+  Fresh solo verification is not an independent verifier.

@@ -12,6 +12,42 @@ const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
 
 #[test]
+fn portable_joint_area_identification_keeps_six_coordinates_and_the_frozen_area_law() {
+    let raw = include_str!("../../../examples/area-response/identify.json");
+    let result: Value =
+        serde_json::from_str(&materials::calibrate_strip(raw, true).unwrap()).unwrap();
+    let report = &result["calibration"];
+    assert_eq!(report["accepted"], true, "{report}");
+    assert_eq!(report["domain_replay_verified"], true);
+    let parameters = report["parameters"].as_array().unwrap();
+    assert_eq!(parameters.len(), 6);
+    for (actual, known) in parameters.iter().zip([1.1, 0.9, 1.2, -80.0, 31.0, 19.0]) {
+        assert!((actual.as_f64().unwrap() - known).abs() < 1e-3);
+    }
+    let selected: Selection =
+        serde_json::from_str(result["selection_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&selected).unwrap(),
+        report["selection"]
+    );
+    let resolved = textile_import::catalog()
+        .unwrap()
+        .resolve(&selected)
+        .unwrap();
+    assert_eq!(
+        resolved
+            .membrane_response()
+            .unwrap()
+            .unwrap()
+            .area_ratio_range(),
+        Some([0.65, 1.45])
+    );
+    assert!(resolved.mechanics().is_err());
+    assert_eq!(result["fit_claim"], false);
+    assert_eq!(result["empirical_validation_claim"], false);
+}
+
+#[test]
 fn accepted_strip_api_freezes_the_source_estimate_without_fabricating_missing_physics() {
     // Exactly one accepted inverse run; all following checks reuse its frozen selection.
     // The API argument, rather than the serialized output-consumption policy, controls consent.

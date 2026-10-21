@@ -674,7 +674,9 @@ function stripCalibrationResult(parent, r) {
   for (const [name, q] of [["FIT", c.fit], ["CHECK", c.check]]) {
     cells(quality, [name, metric(q?.components), metric(q?.rms_scaled), metric(q?.peak_scaled)]);
   }
-  const parameterTitle = nonlinear ? "nonlinear sheet tangents and coupling" :
+  const area = c.input.area_response;
+  const parameterTitle = area?.mode === "identify" ? "directional and physical-area coefficients" :
+    nonlinear ? "nonlinear sheet tangents and coupling" :
     family ? "nonlinear shape scales and coupling" : "orthotropic sheet coefficients";
   const parameters = table(parent, `${c.accepted ? "Identified" : "Candidate"} ${parameterTitle}`,
     ["Coefficient", "Value", "Unit", "Search minimum", "Search maximum"]);
@@ -684,7 +686,7 @@ function stripCalibrationResult(parent, r) {
     {label:"Major Poisson ratio",unit:"1"},
     {label:"Shear stiffness",unit:"N/m"}
   ];
-  const parameterBounds = nonlinear ? c.parameter_bounds : c.input.parameter_bounds;
+  const parameterBounds = c.parameter_bounds?.length ? c.parameter_bounds : c.input.parameter_bounds;
   for (const [i, descriptor] of descriptors.entries()) {
     cells(parameters, [descriptor.label, metric(c.parameters[i]), descriptor.unit,
       ...parameterBounds[i].map(metric)]);
@@ -705,10 +707,21 @@ function stripCalibrationResult(parent, r) {
   if (family) {
     const scope = document.createElement("p");
     scope.textContent = "The warp, weft and shear curve shapes and strain knots were supplied by the request. " +
-      "The fit identifies only three dimensionless shape scales and signed normal coupling in N/m. " +
+      "The fit identifies three dimensionless shape scales and signed normal coupling in N/m" +
+      (area?.mode === "identify" ? ", jointly with the two physical-area coefficients. " : ". ") +
       "It does not identify the curve shapes or impose area preservation. Shape evidence, acquisition observations and fitted outputs require their separate permissions.";
     parent.append(scope);
     detail(parent, "Declared nonlinear response shapes and source evidence", family);
+  }
+  if (area) {
+    const scope = document.createElement("p");
+    scope.textContent = area.mode === "identify" ?
+      "The physical-area coefficients participate in the same joint fit, excitation and work limits. " +
+        "Their declared J domain and FIT-only strain support remain authoritative; search bounds are not confidence intervals." :
+      "The physical-area coefficients, J domain and source evidence remain fixed while directionality is identified.";
+    parent.append(scope);
+    const model = c.input.material?.membrane_response?.area_response;
+    if (model) detail(parent, "Declared physical-area model and source conditions", model);
   }
   const geometry = table(parent, "Actual strip geometry and declared width comparison",
     ["Experiment", "Partition", "Width (m)", "Free gauge (m)", "Warp axis [across, along]", "Authored mesh cells", "Width observation"]);
