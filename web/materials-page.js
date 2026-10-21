@@ -518,6 +518,24 @@ function inspectResult(r, selectionJson) {
   }
   $("capabilities").append(table);
 }
+function compressionHistoryResult(parent, r) {
+  const t = table(parent, "Compression and heat history — chronological holds", ["Time (s)", "Pressure (Pa)",
+    "Gap (m)", "Cell temperatures (°C)", "Cumulative external work (J)", "Cumulative entering heat (J)",
+    "Cumulative leaving heat (J)", "Stored energy change (J)", "Heat balance error (J)"]);
+  for (const step of r.steps) cells(t, [metric(step.elapsed_s), metric(step.pressure_pa), metric(step.thickness_m),
+    step.temperature_c.map(metric).join(", "), metric(step.cumulative_external_work_j),
+    metric(step.cumulative_inside_heat_j), metric(step.cumulative_outside_heat_j),
+    metric(step.cumulative_stored_change_j), metric(step.cumulative_heat_balance_error_j)]);
+  const note = document.createElement("p");
+  note.textContent = "External mechanical work is separate from sensible heat; no work-to-heat conversion is inferred. " +
+    "Temperatures follow the same material cells across qualified branch changes. A final material selection does not save this temperature state; keep the full history report.";
+  parent.append(note);
+  if (r.transitions) detail(parent, "Source-qualified branch transitions", r.transitions);
+  return { selected_layer: r.chosen_layer_id, holds: r.steps.length, branch_transitions: r.transitions?.length || 0,
+    input_sha256: r.input_sha256, reference_mass_kg: r.final_compression.reference_mass_kg,
+    initial_preparation_work_j: r.initial_compression.external_work_j, no_claim: r.no_claim,
+    next: "Review the final selected layer's capabilities, then assign it above. Download all final layers and the complete history below." };
+}
 function sewingResult(parent, r) {
   const plan = r.plan, order = plan?.ordering;
   if (order) {
@@ -872,6 +890,7 @@ function show(op, msg) {
           stock_mass_kg: m.stock_mass_kg, mass_unavailable: m.mass_unavailable })), limitations: r.limitations } :
       op === "sew" ? sewingResult(s.comparison, r) :
       op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } :
+      op === "pressure" && ["ftx-compressed-thermal-history-report/1", "ftx-compressed-thermal-history-report/2"].includes(r.schema) ? compressionHistoryResult(s.comparison, r) :
       op === "pressure" && r.schema === "ftx-compression-stack-report/1" ? {
         selected_layer: r.chosen_layer_id, pressure_pa: r.pressure_pa,
         common_pressure_range_pa: r.common_pressure_range_pa, requested_gap_m: r.input.gap_m,

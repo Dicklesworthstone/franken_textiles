@@ -141,23 +141,28 @@ self.onmessage = async ({ data: msg }) => {
       case "catalog": result = json(ftx.material_catalog(msg.query)); break;
       case "inspect": result = json(ftx.material_inspect(msg.selection)); break;
       case "pressure": {
-        if (json(msg.compressionRequest).schema === "ftx-compression-stack/1") {
+        const schema = json(msg.compressionRequest).schema;
+        const history = ["ftx-compressed-thermal-history/1", "ftx-compressed-thermal-history/2"].includes(schema);
+        if (history || schema === "ftx-compression-stack/1") {
           if (typeof msg.compressionLayer !== "string" || !msg.compressionLayer.trim()) throw Error("Name the stack layer to inspect and assign; no layer is selected automatically.");
-          if (typeof ftx.material_compression_stack !== "function") throw Error("Rebuild web/pkg: missing compression-stack engine.");
-          raw = ftx.material_compression_stack(msg.compressionRequest); result = json(raw);
-          const chosen = result.layers.find(layer => layer.id === msg.compressionLayer);
+          const prepare = history ? ftx.thermal_compression_history : ftx.material_compression_stack;
+          if (typeof prepare !== "function") throw Error("Rebuild web/pkg: missing compression stack/history engine.");
+          raw = prepare(msg.compressionRequest); result = json(raw);
+          const layers = history ? result.final_compression.layers : result.layers;
+          const chosen = layers.find(layer => layer.id === msg.compressionLayer);
           if (!chosen) throw Error("The requested stack layer ID is not in this result.");
-          if (result.layers.some(layer => typeof layer.conditioned?.selection_json !== "string")) throw Error("Rebuild web/pkg: missing frozen stack selections.");
+          if (layers.some(layer => typeof layer.conditioned?.selection_json !== "string")) throw Error("Rebuild web/pkg: missing frozen stack selections.");
           // Keep the exact Rust selection bytes. Layer IDs are display text, never download paths.
           result.chosen_layer_id = chosen.id;
           result.selection = chosen.conditioned.selection;
           result.selection_json = chosen.conditioned.selection_json;
           result.inspection = json(ftx.material_inspect(result.selection_json));
-          files = [file("compression-stack-report.json", raw), file("compression-request.json", msg.compressionRequest),
-            ...result.layers.map((layer, i) => file(`compression-layer-${i + 1}-selection.json`, layer.conditioned.selection_json))];
+          files = [file(history ? "compression-thermal-report.json" : "compression-stack-report.json", raw),
+            file("compression-request.json", msg.compressionRequest),
+            ...layers.map((layer, i) => file(`compression-layer-${i + 1}-selection.json`, layer.conditioned.selection_json))];
           break;
         }
-        if (msg.compressionLayer) throw Error("A layer ID is only valid for a compression-stack request.");
+        if (msg.compressionLayer) throw Error("A layer ID is only valid for a compression stack or heat history.");
         raw = ftx.material_pressure_condition(msg.compressionRequest); result = json(raw);
         if (typeof result.selection_json !== "string") throw Error("Rebuild web/pkg: missing pressure-conditioned selection bridge.");
         result.inspection = json(ftx.material_inspect(result.selection_json));

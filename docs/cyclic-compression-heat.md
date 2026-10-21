@@ -13,8 +13,9 @@ ftx-materials thermal-compression cycle.json
 Both commands accept the original version-1 single-branch requests unchanged. Their exit codes
 remain 0 for success, 3 for unified-command refusal and 2 for standalone-command refusal. The
 shared file-free `ftx_wasm::thermal::compression_history` and its existing WebAssembly export
-`thermal_compression_history` accept both versions. No new browser page is required by this API;
-this addition does not itself add workbench controls for thermal histories.
+`thermal_compression_history` accept both versions. The existing material workbench's
+**Compression and heat histories** control runs either version, displays chronological results and
+assigns an explicitly selected final layer. See the [browser workflow](compressed-thermal-history.md#browser-workbench).
 
 ## What a branch change means
 

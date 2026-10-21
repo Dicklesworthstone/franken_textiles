@@ -248,6 +248,32 @@ test('pressure conditioning preserves exact request and frozen selection through
   assert.equal(result.result.inspection.selection.id, 'compressed');
 });
 
+test('compression histories use the shared heat API and preserve every final layer selection', async () => {
+  for (const version of [1, 2]) {
+    const request = ` {"schema":"ftx-compressed-thermal-history/${version}","source_value":-0.0}\n`;
+    const selections = ['{"id":"inner","value":-0.0}', '{"id":"outer","coefficient":1.0}'];
+    const raw = JSON.stringify({schema:`ftx-compressed-thermal-history-report/${version}`,
+      final_compression:{layers:selections.map((s,i)=>({id:['inner','outer'][i],
+        conditioned:{selection:JSON.parse(s),selection_json:s}}))},steps:[]});
+    const calls = [], w = await workerModule({bindings:{default:()=>Promise.resolve(),
+      thermal_compression_history:r=>{calls.push(r);return raw;},
+      material_inspect:s=>JSON.stringify({selection:JSON.parse(s)})}});
+    const result = await w.send({type:'pressure',compressionRequest:request,compressionLayer:'outer',request:27});
+    assert.equal(result.type,'result',result.message); assert.equal(result.request,27);
+    assert.deepEqual(calls,[request]);
+    assert.equal(result.result.chosen_layer_id,'outer');
+    assert.equal(result.result.selection_json,selections[1]);
+    assert.equal(result.result.inspection.selection.id,'outer');
+    assert.deepEqual(plain(result.files.map(f=>f.name)),['compression-thermal-report.json','compression-request.json',
+      'compression-layer-1-selection.json','compression-layer-2-selection.json']);
+    assert.deepEqual(plain(result.files.map(f=>f.text)),[raw,request,...selections]);
+    assert.equal((await w.send({type:'pressure',compressionRequest:request})).type,'error');
+    assert.equal(calls.length,1);
+    const bad = await w.send({type:'pressure',compressionRequest:request,compressionLayer:'missing'});
+    assert.equal(bad.type,'error'); assert.equal(bad.files,undefined);
+  }
+});
+
 test('calibration worker routes all shared engines with explicit consent and lossless reusable selections', async () => {
   const w = await workerModule(), input = '{"coefficient":1.0,"origin":-0.0}';
   for (const mode of ['nonlinear','relaxation','membrane_plasticity','clamped_strip']) for (const allowEstimates of [false,true]) {
@@ -657,6 +683,38 @@ test('a newer selection cancels a delayed pressure request before it can replace
   assert.equal(old.messages.filter(m => m.type === 'pressure').length, 0);
   assert.equal(JSON.parse(p.e.selection.value).id, 'newer-material');
   assert.equal(p.e.assign.disabled, true);
+});
+
+test('heat histories display chronological ledgers and withdraw final selections when inputs change', async () => {
+  const p = await pageModule(); await p.load();
+  const request = '{"schema":"ftx-compressed-thermal-history/2","source":-0.0}';
+  p.select('compressionRequest',request); p.e.compressionRequest.handlers.change();
+  p.e.compressionLayer.value='outer'; await p.e.pressure.onclick();
+  assert.equal(p.current().messages.at(-1).compressionRequest,request);
+  assert.equal(p.current().messages.at(-1).compressionLayer,'outer');
+  const selection='{"id":"final-outer","expected_sha256":"locked","value":-0.0}';
+  const report={schema:'ftx-compressed-thermal-history-report/2',chosen_layer_id:'outer',
+    selection:JSON.parse(selection),selection_json:selection,inspection:{snapshot:{id:'final-outer'},capabilities:{}},
+    initial_compression:{external_work_j:0},final_compression:{reference_mass_kg:0.025},
+    transitions:[{before_hold:1,source:'<literal source>'}],no_claim:'Synthetic display test only',
+    steps:[10,20].map((elapsed_s,i)=>({elapsed_s,pressure_pa:i?0:500,thickness_m:i?0.02:0.01,
+      temperature_c:[12+i,14+i],cumulative_external_work_j:i?0:0.625,cumulative_inside_heat_j:20+i,
+      cumulative_outside_heat_j:5+i,cumulative_stored_change_j:15,cumulative_heat_balance_error_j:0}))};
+  const raw=JSON.stringify(report);
+  p.emit(report,[{name:'compression-thermal-report.json',text:raw,mime:'application/json'},
+    {name:'compression-request.json',text:request,mime:'application/json'}]);
+  const s=section(p,'Pressure-conditioned material'), t=descendants(s).find(n=>n.tag==='table');
+  assert.equal(t.children.length,4);
+  assert.deepEqual(plain(t.children[3].children.map(n=>n.textContent)),['20','0','0.02','13, 15','0','21','6','15','0']);
+  assert.match(visibleText(s),/External mechanical work is separate from sensible heat/);
+  assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,false);
+  const link=descendants(s).find(n=>n.download==='compression-request.json');
+  assert.equal(await p.blobs.get(link.href).text(),request);
+  p.e.assign.onclick(); await p.e.bind.onclick();
+  assert.ok(p.current().messages.at(-1).changes.includes(selection));
+  p.emit({pattern:{},pattern_json:'{}',pieces:[],pattern_sha256:'bound'});
+  p.e.compressionLayer.value='inner'; p.e.compressionLayer.handlers.input();
+  assert.equal(s.hidden,true); assert.equal(p.e.assign.disabled,true); assert.equal(p.live.size,0);
 });
 
 test('identified swatches show independent errors, retain their source across pattern loading and bind without numeric mutation', async () => {

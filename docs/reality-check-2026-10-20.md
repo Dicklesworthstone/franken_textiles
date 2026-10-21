@@ -1610,3 +1610,31 @@ Bounded worksheets for this work item (fresh solo review, not independent verifi
   and passing with the 16-line decoder connection, plus source/output preservation and exact
   decoded-pixel score agreement. Disposition: no acceptance weakening or fabricated result found
   in this checked window; all remaining unverified physical claims stay open.
+
+### Compression/heat histories in the material workbench — ftx-8rq
+
+The existing browser pressure control sends every non-stack request to the single-pressure
+preparer. It cannot reach the already implemented compression/heat history solver. Native/shared
+version-2 dispatch arrived concurrently in `9ab36b0`; this work connects its browser consumer.
+The original `ftx-cp2` empirical and contact-coupling acceptance remains open.
+
+- [x] Read complete AGENTS/README, triage live Beads and inspect the actual shared/worker/page APIs.
+- [x] Claim `ftx-8rq` and reserve only the affected paths.
+- [ ] Add and observe a positive worker regression fail against the original routing.
+- [ ] Dispatch both history versions through the shared engine, keeping explicit layer selection.
+- [ ] Display chronological heat/work results and retain exact request/report/final-selection downloads.
+- [ ] Preserve pressure/stack behavior, stale withdrawal, cancellation and refusal atomicity.
+- [ ] Build the frozen current Rust source remotely and install its verified matching browser bundle.
+- [ ] Run focused native/shared tests, complete compiled frontend checks and actual Chromium history/binding checks.
+- [ ] Review the exact diff and source hashes; run staged UBS and complete the bounded solo worksheets.
+- [ ] Close/sync only this software feature, commit owned changes and release reservations.
+
+Creation worksheet: PROCESS for this requested TODO/evidence only. Consumer: the user reviewing
+this specific workbench history delivery. Gate: their explicit detailed-TODO request and a
+reviewable `ftx-8rq` handoff. Observed defect: history JSON is routed to the wrong preparer, while
+the shared history implementation already exists. Retirement: this work item's completed handoff;
+no recurring ledger or new framework. The integrity exception is not needed (its Q1–Q4 do not
+apply). Highest-priority ready work remains matched material characterization, which needs
+independent observations; another hour of reporting would not supply them. Verdict: minimum
+requested tracking, then product code and direct tests. Runtime history/report/selection files are
+FEATURE because the existing material inspector and binder consume them.

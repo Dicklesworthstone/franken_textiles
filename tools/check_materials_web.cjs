@@ -5,6 +5,7 @@
 // Optional CHROMIUM_EXECUTABLE chooses an already installed Chromium binary.
 // --strip-proof DIR runs only strip browser checks against retained native reports (manifest.json).
 // --outfit-proof checks public-prior drafted garment composition with synthetic materials, without a model.
+// --compression-proof checks real history controls, heat/work answers and final material binding.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -20,7 +21,8 @@ const stripIndex = process.argv.indexOf('--strip-proof');
 if (stripIndex >= 0 && !process.argv[stripIndex + 1]) throw Error('--strip-proof requires a native report directory');
 const stripProof = stripIndex < 0 ? null : path.resolve(process.argv[stripIndex + 1]);
 const outfitProof = process.argv.includes('--outfit-proof');
-assert.ok(!(stripProof && outfitProof), 'Choose one focused browser check');
+const compressionProof = process.argv.includes('--compression-proof');
+assert.ok([stripProof,outfitProof,compressionProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -45,7 +47,7 @@ const server = http.createServer((req, res) => {
 });
 (async () => {
   assert.ok(fs.existsSync(path.join(web, 'pkg/ftx_wasm_bg.wasm')), 'Build web/pkg first');
-  if (!stripProof && !outfitProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
+  if (!stripProof && !outfitProof && !compressionProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
@@ -70,6 +72,95 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (compressionProof) {
+      const preparation=load('synthetic-compression.json'); preparation.pressure_pa=0;
+      // Only this invented specimen has branch-independent reference observations. Real source
+      // restrictions must never be removed to obtain acceptance.
+      for (const q of Object.values(preparation.material.properties)) delete q.conditions.loading_branch;
+      const stack={schema:'ftx-compression-stack/1',gap_m:0.020,reference_area_m2:0.25,
+        direction:'loading',allow_estimates:true,layers:[{id:'layer',preparation}]};
+      const entry=structuredClone(stack); entry.gap_m=0.010; entry.direction='unloading';
+      const p=entry.layers[0].preparation; p.pressure_pa=500; p.loading_branch='unloading-after-500';
+      for (const sample of p.samples) for (const q of Object.values(sample.properties)) q.conditions.loading_branch=p.loading_branch;
+      for (const q of Object.values(p.invariants)) q.conditions.loading_branch=p.loading_branch;
+      const change={entry,transitions:{layer:{source:'synthetic',evidence:'estimate',
+        method:'Invented matched reversible branch pair after a 500 Pa peak; software verification only',
+        conditions:{specimen:p.specimen,conditioning:p.conditioning,from_loading_branch:'loading',
+          to_loading_branch:p.loading_branch,pressure_pa:'500'}}}};
+      const hold=gap_m=>({seconds:10,gap_m,interface_resistance_m2_k_w:[],inside_c:40,outside_c:0,
+        inside_resistance_m2_k_w:0,outside_resistance_m2_k_w:0});
+      const setup={stack,cells_per_layer:1,initial_temperature_c:[0],
+        thermal_evidence:'Synthetic constant storage and explicit reservoirs/films; no work-to-heat conversion'};
+      const cycle={schema:'ftx-compressed-thermal-history/2',setup,
+        legs:[{holds:[hold(0.010)]},{branch_change:change,holds:[hold(0.020)]}]};
+      const pattern=load('synthetic-stock-pattern.json'); await input('patternFile',pattern);
+      await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      await page.fill('#compressionLayer','layer');
+      const upload=async request=>{
+        const raw=' '+JSON.stringify(request).replace('"reference_area_m2":0.25','"reference_area_m2":0.2500')+'\n';
+        await page.setInputFiles('#compressionRequest',{name:'history.json',mimeType:'application/json',buffer:Buffer.from(raw)});
+        return raw;
+      };
+      await upload({...stack,gap_m:0.015}); assert.equal(await run('pressure'),'');
+      const preparedStack=JSON.parse(await download('compression-stack-report.json'));
+      assert.equal(preparedStack.schema,'ftx-compression-stack-report/1');
+      assert.ok(Math.abs(preparedStack.pressure_pa-250)<1e-9);
+      assert.equal(await download('compression-layer-1-selection.json'),preparedStack.layers[0].conditioned.selection_json);
+      let selected;
+      for (const version of [1,2]) {
+        const request=version===1?{schema:'ftx-compressed-thermal-history/1',setup,holds:[hold(0.010)]}:cycle;
+        const original=await upload(request); assert.equal(await run('pressure'),'');
+        const raw=await download('compression-thermal-report.json'), report=JSON.parse(raw);
+        assert.equal(await page.locator('a[download="compression-stack-report.json"]').count(),0);
+        assert.equal(report.schema,`ftx-compressed-thermal-history-report/${version}`);
+        assert.equal(report.steps.length,version); assert.equal(await download('compression-request.json'),original);
+        const t=page.locator('table').filter({has:page.locator('caption',{hasText:'Compression and heat history — chronological holds'})});
+        assert.equal(await t.locator('tr').count(),version+1);
+        let temperature=0;
+        for (const [i,step] of report.steps.entries()) {
+          const resistance=[0.25,0.5][i];
+          temperature=(10*temperature+2/resistance*40)/(10+4/resistance);
+          assert.ok(Math.abs(step.temperature_c[0]-temperature)<1e-10);
+          assert.ok(Math.abs(step.cumulative_stored_change_j-25*temperature)<1e-9);
+          assert.ok(Math.abs(step.cumulative_heat_balance_error_j)<1e-9);
+          assert.ok(Math.abs(step.cumulative_external_work_j-[0.625,0][i])<1e-10);
+          assert.equal(step.elapsed_s,(i+1)*10); assert.equal(step.reference_mass_kg,0.025);
+          assert.equal(await t.locator('tr').nth(i+1).locator('td').nth(3).textContent(),String(step.temperature_c[0]));
+        }
+        if(version===2) {assert.equal(report.transitions.length,1);assert.equal(report.transitions[0].before_hold,1);}
+        selected=report.final_compression.layers[0].conditioned.selection_json;
+        assert.equal(await download('compression-layer-1-selection.json'),selected);
+        assert.equal(await page.inputValue('#selection'),selected);
+        assert.match(await page.textContent('#outputs'),/External mechanical work is separate from sensible heat/);
+        fs.writeFileSync(path.join(work,`history-v${version}-request.json`),original,{flag:'wx'});
+        fs.writeFileSync(path.join(work,`history-v${version}-report.json`),raw,{flag:'wx'});
+      }
+      await page.click('#assign'); assert.equal(await run('bind'),'');
+      const bound=JSON.parse(await download('pattern.json'));
+      assert.deepEqual(bound.pieces,pattern.pieces);
+      assert.equal(bound.fabric.material.expected_sha256,JSON.parse(selected).expected_sha256);
+      fs.writeFileSync(path.join(work,'history-bound-pattern.json'),await download('pattern.json'),{flag:'wx'});
+      await page.screenshot({path:path.join(work,'compression-history.png'),fullPage:true});
+      await page.fill('#compressionLayer','missing');
+      assert.equal(await page.locator('a[download="compression-thermal-report.json"]').count(),0);
+      assert.equal(await page.isDisabled('#assign'),true);
+      assert.match(await run('pressure'),/layer ID/);
+      await page.fill('#compressionLayer','layer');
+      for (const mutate of [
+        r=>{r.legs[1].branch_change.transitions={};},
+        r=>{r.legs[1].holds[0].outside_c=-300;},
+        r=>{r.legs[1].branch_change.heat_fraction=0.9;}
+      ]) {
+        const bad=structuredClone(cycle); mutate(bad); await upload(bad);
+        assert.notEqual(await run('pressure'),'');
+        assert.equal(await page.locator('a[download="compression-thermal-report.json"]').count(),0);
+        assert.equal(await page.locator('a[download="compression-layer-1-selection.json"]').count(),0);
+        assert.equal(await page.isDisabled('#assign'),true);
+      }
+      assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m=>m==='GET'));
+      console.log('PASS: real Chromium runs both compression/heat history versions, matches independent one-cell heat/work answers, retains exact source and final selections, binds without geometry changes, withdraws stale results and refuses missing links/late heat/unknown fields. Synthetic software evidence, no measured textile/contact/fit claim. Artifacts:',work);
+      return;
+    }
     if (outfitProof) {
       const drafts = JSON.parse(fs.readFileSync(path.join(root,'tests/fixtures/oracle/pattern/drafts.json'),'utf8')).cases;
       const request = load('synthetic-joint-outfit.json'), fabric = request.garments[0].pattern.fabric;

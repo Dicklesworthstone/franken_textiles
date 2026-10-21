@@ -178,6 +178,26 @@ Rust: `ftx_drape::thermal::compression::{CompressedStack, evaluate}`. Shared fil
 Tests: `ftx-drape/tests/compressed_thermal.rs`, `ftx-cli/tests/compressed_thermal_workflow.rs`, and
 `ftx-wasm/tests/compressed_thermal.rs`.
 
+## Browser workbench
+
+Open `web/materials.html` and use **Compression and heat histories**. Choose the original history
+JSON and enter the exact final stack layer ID to inspect. The same control accepts single-pressure
+and stack-clearance requests; histories use the shared native/wasm solver, with no alternate heat
+or compression model in JavaScript.
+
+Version 1 supplies one monotone branch. Version 2 supplies explicit legs and source-qualified branch
+transitions as described in the [cyclic-history guide](cyclic-compression-heat.md). The table shows
+every hold's elapsed time, pressure, gap, cell temperatures and separate cumulative work/heat ledgers.
+Preparation work is reported separately.
+The final selected layer enters the ordinary material inspector and pattern assignment control.
+Every final layer's exact selection JSON, the complete history report and the unchanged original
+request are downloadable. A final selection carries material state, not the temperature history.
+
+Changing the request or layer ID withdraws the prepared result and invalidates dependent outputs;
+cancelled or superseded work cannot publish a replacement. A refused history publishes no partial
+report or final selection. Files stay in the tab. Numerical conservation and synthetic examples
+do not establish measured textile response, real garment pressure or fit.
+
 This does not model moisture, evaporation, lateral spreading, pressure-dependent interfacial contact,
 continuous squeeze dynamics, compression heating, changing heat capacity, garment pressure fields,
 physiology or measured garment performance. Computational acceptance is not a real-textile,

@@ -37,16 +37,20 @@ small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{wid
 <p class="note">Estimates stay disabled unless this selection explicitly sets <code>allow_estimates</code> to <code>true</code>. A digest-locked selection cannot be edited in place; author a new selection deliberately.</p>
 <button id="inspect" data-command="inspect">Inspect sources &amp; capabilities</button>
 <div id="capabilities"></div><details><summary>Original observations, normalized units and sources</summary><pre id="detail"></pre></details>
-<h3>Prepare a compressed material state</h3>
-<label>Source-qualified pressure or compression-stack JSON <input id="compressionRequest" type="file" accept=".json,application/json"></label>
-<label>Stack layer ID to inspect and assign (leave empty for a prescribed-pressure request) <input id="compressionLayer" type="text" maxlength="4096" placeholder="outer"></label>
-<button id="pressure" data-command="pressure" disabled>Prepare from pressure or stack clearance</button>
+<h3>Compression and heat histories</h3>
+<label>Source-qualified pressure, stack or compression/heat history JSON <input id="compressionRequest" type="file" accept=".json,application/json"></label>
+<label>Final stack layer ID to inspect and assign (leave empty for a prescribed-pressure request) <input id="compressionLayer" type="text" maxlength="4096" placeholder="outer"></label>
+<button id="pressure" data-command="pressure" disabled>Prepare compression or run heat history</button>
 <p class="note">The request supplies its exact specimen, loading branch, pressure observations and target pressure in pascals.
 Interpolation requires explicit consent. Properties without pressure qualification remain unavailable.
 Alternatively, <code>ftx-compression-stack/1</code> supplies layer branches, a known initial pressure, clearance and fixed reference area:
 it solves common normal pressure between rigid parallel faces and reports signed work, not generated heat.
 Enter the exact layer ID to select; every layer's frozen selection is available for download.
-Neither operation solves 3D garment contact or qualifies presser-foot clearance.</p>
+Heat histories (<code>ftx-compressed-thermal-history/1</code> or <code>/2</code>) retain cell temperatures
+across prescribed gap changes and thermal holds. Version 2 also requires explicit source-qualified
+links for loading/unloading branch changes. Review chronological heat and external work separately,
+and keep the full report with its original input; a final selection alone is not saved heat state.
+These local column calculations do not solve 3D garment contact or qualify presser-foot clearance.</p>
 <h3>Identify behavior from swatch measurements</h3>
 <label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch and shear</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option><option value="clamped_strip">Clamped strip forces and transverse widths</option></select></label>
 <label>Source-bearing swatch or complete history JSON <input id="calibrationRequest" type="file" accept=".json,application/json"></label>
