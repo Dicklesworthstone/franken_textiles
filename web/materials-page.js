@@ -2,8 +2,9 @@
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "coverage", "cut", "stock", "price", "sew"];
-const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "calibrate"];
-const selectionOperations = ["inspect", "pressure", "calibrate"];
+const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "calibrate",
+  "stripAcquisition", "stripExperiment", "stripFit"];
+const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
 let preparedBy = null;
@@ -18,7 +19,9 @@ for (const op of operations) {
   const section = document.createElement("div"); section.hidden = true;
   const title = document.createElement("h3"); title.textContent = ({ screen: "Source-qualified screening",
     study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives",
-    pressure: "Pressure-conditioned material", calibrate: "Identified material behavior" })[op] || op;
+    pressure: "Pressure-conditioned material", calibrate: "Identified material behavior",
+    stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
+    stripFit: "Clamped-strip identification" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
   section.append(title, summary, comparison, links); $("outputs").append(section);
@@ -38,6 +41,7 @@ function controls() {
   $("screen").disabled ||= !has("screenRequest");
   $("pressure").disabled ||= !has("compressionRequest");
   $("calibrate").disabled ||= !has("calibrationRequest");
+  for (const op of ["stripAcquisition", "stripExperiment", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
   $("study").disabled ||= !source || !has("studyRequest");
   $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || (!has("scenarioBody") && !has("measurements"));
   if ($("combinationMode").checked && !combinationGroups.size) {
@@ -255,17 +259,23 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       metric(h?.physical_stored_change_j ?? h?.stored_change_j), metric(h?.balance_error_j),
       name === "transient_surface" ? "Not applicable" : metric(h?.signed_remap_residual_j)]);
     detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
-    const plastic = h?.plastic_dissipation_heat;
-    if (plastic) {
+    const channels = [
+      ["plastic_dissipation_heat", "Plastic yield", "plastic_dissipation_j", "initial_plastic_dissipation_j"],
+      ["relaxation_dissipation_heat", "Maxwell dashpots", "viscous_dissipation_j", "initial_viscous_dissipation_j"]
+    ].filter(([field]) => h?.[field]);
+    if (channels.length) {
       const domain = name === "transient_surface" ? "independent-sheet heat" : "coverage and exposed-cloth heat";
-      const work = table(parent, `${key}: plastic work supplied to ${domain}`, ["Plastic work since motion start (J)",
-        "Supplied material heat (J)", "Unconverted work (J)", "Initial plastic work excluded (J)"]);
-      cells(work, [metric(plastic.plastic_dissipation_j), metric(plastic.supplied_heat_j),
-        metric(plastic.unconverted_dissipation_j), metric(plastic.initial_plastic_dissipation_j)]);
+      const work = table(parent, `${key}: material work supplied to ${domain}`, ["Physical source", "Work since motion start (J)",
+        "Supplied material heat (J)", "Unconverted work (J)", "Initial work excluded (J)"]);
+      for (const [field, label, total, initial] of channels) {
+        const source = h[field];
+        cells(work, [label, metric(source[total]), metric(source.supplied_heat_j),
+          metric(source.unconverted_dissipation_j), metric(source[initial])]);
+      }
       const scope = document.createElement("p");
-      scope.textContent = "The energy residual is physical stored change minus net boundary energy minus supplied plastic heat. " +
-        "Work already accumulated in the initial drape is excluded. " +
-        (plastic.distribution === "uniform_reference_thickness" && plastic.temporal_distribution === "uniform_over_accepted_interval" ?
+      scope.textContent = "The energy residual is physical stored change minus net boundary energy minus the sum of qualified source heat. " +
+        "Each source needs its own material conversion evidence. Work already accumulated in the initial drape, reversible storage and numerical loss are excluded. " +
+        (channels.every(([field]) => h[field].distribution === "uniform_reference_thickness" && h[field].temporal_distribution === "uniform_over_accepted_interval") ?
           "Converted heat is distributed uniformly through each sheet's reference thickness and over its accepted motion interval. " :
           "Inspect the retained report for the declared heat distribution. ") +
         (name === "transient_coverage" ? "Source heat follows covered and exposed reference material; bare body receives none. " : "") +
@@ -440,6 +450,21 @@ function comparison(op, r) {
         metric(m.finite_stock_external_cut_area_m2), metric(m.used_stock_mass_kg)]);
       const plan = available(row.finite_stock);
       if (plan) detail(parent, `${row.key}: physical stock, defects and allocated pieces (display only)`, plan);
+    }
+  }
+  if (study.alternatives.some(row => row.sewing_selection && row.sewing_selection.status !== "not_requested")) {
+    const selection = table(parent, "Material-specific sewing recipe search", ["Alternative", "Status", "Chosen recipes",
+      "Trials evaluated", "Search complete", "Budget exhausted", "Listed optimum proved", "Unresolved trials"]);
+    for (const row of study.alternatives) {
+      const plan = available(row.sewing_selection);
+      const choices = plan?.selected_choices ? Object.entries(plan.selected_choices)
+        .map(([operation, recipe]) => `${operation}: ${recipe}`).join("; ") :
+        plan ? "No listed recipe selected" : "Unavailable";
+      cells(selection, [row.key, state(row.sewing_selection), choices, metric(plan?.trials?.length),
+        plan ? String(plan.search_complete) : "Unknown", plan ? String(plan.budget_exhausted) : "Unknown",
+        plan ? String(plan.optimality_proven) : "Unknown", metric(plan?.unresolved_trials)]);
+      detail(parent, `${row.key}: sewing recipe choices, work limits and refusals (display only)`,
+        plan || { refusal: row.sewing_selection?.refusal });
     }
   }
   assemblyMassComparison(parent, study.alternatives);
@@ -725,6 +750,40 @@ function calibrationResult(parent, r) {
     error_budgets: { max_rms_scaled: c.input.max_rms_scaled, max_peak_scaled: c.input.max_peak_scaled },
     next: "Review capabilities, then assign the identified selection above and bind the pattern." };
 }
+function stripResult(parent, op, r) {
+  if (op === "stripAcquisition") {
+    const curves = table(parent, "Original complete force acquisitions", ["Specimen", "Cut direction", "Original rows", "Archive entry", "Source SHA-256"]);
+    for (const curve of r.curves) {
+      cells(curves, [curve.specimen, curve.direction, metric(curve.observations.length), curve.entry, curve.sha256]);
+      detail(parent, `${curve.specimen} / ${curve.direction}: original loading and unloading observations`, curve);
+    }
+    if (r.transverse_curves?.length) {
+      const transverse = table(parent, "Original transverse acquisitions", ["Specimen", "Cut direction", "Original rows", "Archive entry", "Source SHA-256"]);
+      for (const curve of r.transverse_curves) {
+        cells(transverse, [curve.specimen, curve.direction, metric(curve.observations.length), curve.entry, curve.sha256]);
+        detail(parent, `${curve.specimen} / ${curve.direction}: original transverse observations and measurement scope`, curve);
+      }
+      const note = document.createElement("p");
+      note.textContent = "Transverse compression fractions retain the original source channels. Exact spatial sampling and loading/unloading tags are not reported; equivalence to the solver's mid-gauge width is unverified. These values are not converted to widths, local strains or Poisson ratios.";
+      parent.append(note);
+    }
+    if (r.transverse_readme) detail(parent, "Original acquisition README, source identity and fractional units", r.transverse_readme);
+    detail(parent, "Source protocol, declared conditions and unverified model assumptions", r.protocol);
+    detail(parent, "Original specimen metadata and license", { metadata_json: r.metadata_json, license: r.license });
+    return { acquisition_sha256: r.acquisition_sha256, archive_url: r.archive_url, retrieved_on: r.retrieved_on,
+      free_gauge_length_m: r.protocol.free_gauge_length_m, reference_width_m: r.protocol.reference_width_m,
+      next: "Review the complete source curves and protocol before authoring a separate experiment or calibration request. Grip extension does not establish local membrane strain or transverse deformation." };
+  }
+  if (op === "stripExperiment") {
+    const states = table(parent, "Production-solver grip reactions", ["Grip extension fraction", "Moving-grip force (N)",
+      "Fixed-grip force (N)", "Free-force residual (N)", "Grip imbalance (N)", "Mid-gauge width (m)", "Strain energy (J)"]);
+    for (const state of r.states) cells(states, [state.extension_fraction, state.force_n, state.fixed_grip_force_n,
+      state.free_force_residual_n, state.grip_balance_residual_n, state.mid_width_m, state.energy_j].map(metric));
+    detail(parent, "Frozen request, nonuniform element strains and equilibrium positions", r);
+    return { input_sha256: r.input_sha256, fixture: r.input.fixture, controls: r.input.controls, model_scope: r.model_scope };
+  }
+  return stripCalibrationResult(parent, r);
+}
 function show(op, msg) {
   const r = msg.result;
   if (op === "catalog") {
@@ -743,9 +802,9 @@ function show(op, msg) {
     $("boundSummary").replaceChildren(pre);
     for (const f of msg.files) link(op, $("bindFiles"), f);
   } else {
-    if (op === "pressure" || op === "calibrate") {
+    if (op === "pressure" || op === "calibrate" || op === "stripFit") {
       ++selectionRead; preparedBy = op;
-      if (typeof r.selection_json === "string") {
+      if (typeof r.selection_json === "string" && (op !== "stripFit" || r.calibration?.accepted === true)) {
         $("selection").value = r.selection_json;
         inspectResult(op === "pressure" ? r.inspection : r.material, r.selection_json);
       } else {
@@ -758,6 +817,7 @@ function show(op, msg) {
     const s = sections.get(op); s.section.hidden = false;
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
       op === "calibrate" ? calibrationResult(s.comparison, r) :
+      ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, rolls: r.rolls.map(x => ({ material: x.material?.authored?.id,
         width_m: x.width_m, length_m: x.length_m, stock_mass_kg: x.stock_mass_kg, utilization: x.utilization })), limitations: r.limitations } :
@@ -883,6 +943,7 @@ async function execute(op) {
       msg.allowEstimates = $("calibrationEstimates").checked;
       msg.calibrationRequest = await read("calibrationRequest");
     }
+    else if (["stripAcquisition", "stripExperiment", "stripFit"].includes(op)) msg.stripRequest = await read(`${op}Request`);
     else if (op === "screen") msg.screenRequest = await read("screenRequest");
     else if (op === "study" || op === "scenario") {
       if (!sourceText) throw Error("Load the original pattern first.");
@@ -1012,7 +1073,7 @@ $("interfacesFile").onchange = async () => {
   }
 };
 for (const [id, operation] of [["compressionRequest", "pressure"], ["compressionLayer", "pressure"], ["calibrationRequest", "calibrate"],
-  ["calibrationMode", "calibrate"], ["calibrationEstimates", "calibrate"]]) {
+  ["calibrationMode", "calibrate"], ["calibrationEstimates", "calibrate"], ["stripFitRequest", "stripFit"]]) {
   $(id).addEventListener(id === "compressionLayer" ? "input" : "change", () => {
     if (preparedBy === operation) {
       ++selectionRead; preparedBy = null; inspected = null;
@@ -1024,6 +1085,7 @@ for (const [id, operation] of [["compressionRequest", "pressure"], ["compression
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","coverage","scenario"], fit:["exports","fold","heat","coverage"],
   body:["fold","heat","coverage","scenario"], selfContact:["fold","heat","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"],
+  stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
   $(id).addEventListener("change", () => invalidate(id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : keys));
 }

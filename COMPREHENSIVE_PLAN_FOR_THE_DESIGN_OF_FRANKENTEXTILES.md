@@ -2166,7 +2166,7 @@ accessory thermal/contact properties remain future work. See
 
 ### 25.34 Material substitution chooses qualified sewing recipes
 
-The material study now accepts the existing finite `ftx-sewing-selection/1` request as
+The material study now accepts the existing finite `ftx-sewing-selection/1` or timed `/2` request as
 `sewing_selection`, mutually exclusive with fixed `sewing` options. Every frozen material
 alternative reruns the production selector against its own exact material identities. The
 selected needle/thread/stitch/feed recipe supplies the ordinary sewing plan and comparison
@@ -2259,6 +2259,63 @@ worker checks compare the complete synthetic fit and exact selection with native
 exercise forward replay, ordinary pattern binding, missing mechanics and refused replacement.
 This delivers the interactive characterization-to-assignment path; it does not supply a missing
 source width-measurement operator or establish measured-knit and garment accuracy under `ftx-ki1`.
+
+---
+
+### 25.38 Source acquisitions drive actual clamped-strip identification
+
+**Delivered experiment and identification software (`ftx-kf1`, continuing `ftx-ki1`).** The
+existing production membrane and Newton solver now evaluate finite strips with the actual free
+gauge, width, material direction, fully fixed grip edges and free in-plane interior contraction.
+Forces are sums of grip reactions in newtons; prescribed grip extension is a boundary condition,
+never an assertion of homogeneous fabric strain. Source-frozen scalar or tabulated forward laws
+retain their estimate, form and strain-domain authority. The concurrently delivered continuation
+path API remains available; inverse experiments initialize each declared elastic state independently.
+The explicit model is planar, quasistatic and memoryless. It does not identify slip, out-of-plane
+wrinkling, rate, hysteresis, bending or contact from force/extension observations.
+
+Bounded identification fits warp/weft stiffness, major Poisson ratio and shear stiffness through
+these equilibria. Three deterministic bounded starts use FIT acquisitions only. Publication requires
+stationarity, interior coefficients, independent local sensitivity, no discovered equivalent separated
+minima, independent CHECK acquisitions, declared force/width residual limits, doubled-mesh agreement
+and actual forward replay with the final FIT-only strain bounds enforced. Renamed source keys,
+changed meshes and antipodal material axes cannot turn the same acquisition into independent CHECK
+evidence. CHECK observations cannot select coefficients or enlarge their eventual domain. Candidate
+evaluations, finite differences, refinement and replay share one work budget. Failed completed fits
+retain diagnostic reports with no material or selection; invalid or exhausted operations refuse.
+Coefficients remain model estimates and unrelated properties remain unknown.
+When replacing a previously characterized law, its inherited strain domain constrains every trial,
+probe and replay, and the final domain is their intersection. An exploratory probe outside prior
+support can refuse replacement even when the existing frozen selection itself replays.
+
+**Retained source extension (`ftx-ka1`).** The Sperl et al. dataset adapter now exposes the complete
+nine force histories for SJ1, SJ3 and DKIN8 and nine newly acquired original transverse-contraction
+CSVs. Original source bytes, archive entries, independent SHA-256 pins, signed observations,
+loading/unloading branches, full metadata and the MIT notice/README are retained. The adapter verifies
+the source's 100 mm free gauge and 60 mm width without inventing rate, conditioning, replicate or
+uncertainty data. Transverse compression remains the reported dimensionless observation. Its spatial
+sampling and branch correspondence are not established, so it is not automatically converted into a
+solver's material-midpoint width or a Poisson ratio.
+
+`ftx materials` and `ftx-materials` expose `strip-acquisition`, `strip-experiment` and
+`calibrate-strip`; shared WASM exports drive the same browser workbench. Exact input text and reports
+are downloadable. Only accepted results expose an assignable frozen `selection_json`, preserving the
+Rust serialization and caller's explicit estimate policy. The workbench displays candidate bounds,
+FIT/CHECK residuals, excitation, refinement, source rows and rejection reasons; stale requests cannot
+publish a selection. Reusable synthetic and real-source preparation examples are described in
+[clamped-strip-identification.md](docs/clamped-strip-identification.md).
+
+**Observed result and highest-priority continuation (`ftx-ki4`).** The synthetic example recovers
+its four declared coefficients and passes frozen replay. The independently held-out numerical cases
+test the software; they are not physical specimens. A reproducible SJ1 attempt using exact 10/20/30%
+warp/weft loading observations as FIT and the bias cut as CHECK completes with no published law:
+the candidate reaches parameter bounds, the starts do not reach stationarity, force residuals exceed
+their budgets and CHECK strains escape the FIT-only domain. This failed bounded attempt is not a
+global impossibility proof. Extend identification through the shared nonlinear material authority,
+qualify an area-preserving response where justified and resolve the transverse measurement operator;
+do not weaken acceptance gates or invent local strains to make a card pass. Matched independent
+bending/contact characterization, specimen uncertainty and the fixed-pattern linen/leather/knit
+garment gate remain open under `ftx-tm2` and `ftx-tm8`.
 
 ---
 

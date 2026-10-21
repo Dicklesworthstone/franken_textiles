@@ -157,6 +157,28 @@ pub fn material_compression_stack(request: &str) -> Result<String, wasm_bindgen:
     compression_stack(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Inspect complete retained strip acquisitions without converting grip extension to local strain.
+/// Original source text reaches the shared parser without a numerical JSON round trip.
+///
+/// # Errors
+/// Input over the adapter's 64 MiB budget or parser's 2 MiB source budget, invalid identities,
+/// unsupported acquisition schema or altered source data.
+pub fn strip_acquisition(request: &str) -> Result<String, Refusal> {
+    budget(&[request])?;
+    serde_json::to_string(&ftx_pattern::material_catalog::knit_strips::parse_acquisition(request)?)
+        .map_err(invalid)
+}
+
+/// Browser inspection of original source curves through the same parser as both native commands.
+///
+/// # Errors
+/// Same refusals as [`strip_acquisition`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_strip_acquisition(request: &str) -> Result<String, wasm_bindgen::JsError> {
+    strip_acquisition(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Identify the production nonlinear material law from source-bearing nominal swatch forces.
 /// Observation consent in the input and admission of the fitted estimates are independent.
 ///

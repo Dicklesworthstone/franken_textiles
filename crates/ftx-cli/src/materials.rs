@@ -19,6 +19,17 @@ mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if action == "strip-acquisition" {
+        known_options(args, "materials", &[])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials strip-acquisition ACQUISITION.json [--json]",
+            ));
+        };
+        let result = strip::acquisition(path)?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if action == "sew-select" {
         known_options(args, "materials", &[])?;
         let [pattern, request] = &args.positional[2..] else {

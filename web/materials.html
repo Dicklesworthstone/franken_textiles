@@ -71,6 +71,25 @@ search ranges. FIT chooses the coefficients before held-out CHECK replay. Unexci
 searches and failed checks retain a report without an assignable selection.</p>
 <p class="note">Review fit and held-out errors below, then assign the exact identified selection in section 2.
 Download the complete report, original input and frozen selection for reuse. No specimen data leaves this tab.</p>
+<details><summary>Clamped-strip acquisitions and inverse identification</summary>
+<label>Retained source acquisition JSON <input id="stripAcquisitionRequest" type="file" accept=".json,application/json"></label>
+<button id="stripAcquisition" data-command="stripAcquisition" disabled>Inspect complete strip acquisitions</button>
+<p class="note">Inspect the retained loading/unloading curves, source hashes, protocol and original metadata.
+Optional original transverse observations retain their source README and unresolved spatial sampling.
+Grip extension, total force and transverse compression fractions remain their original measured channels; no local strain,
+solver width or Poisson ratio is inferred.</p>
+<label>Forward strip request JSON (<code>ftx-strip-experiment/1</code>) <input id="stripExperimentRequest" type="file" accept=".json,application/json"></label>
+<button id="stripExperiment" data-command="stripExperiment" disabled>Simulate the declared strip experiment</button>
+<label>Inverse strip request JSON (<code>ftx-strip-calibration/1</code>) <input id="stripFitRequest" type="file" accept=".json,application/json"></label>
+<button id="stripFit" data-command="stripFit" disabled>Identify a candidate from grip measurements</button>
+<p class="note">Each request supplies its specimen, gauge, width, material-axis orientation and numerical controls.
+Identification also requires complete FIT/CHECK acquisitions, explicit parameter bounds and model/error budgets.
+This dedicated control uses the request's <code>allow_estimates</code> value to admit fitted outputs, defaulting to false;
+<code>allow_estimated_observations</code> remains separate. The response selector above uses its own output-admission checkbox.
+Review candidate coefficients, held-out residuals, local sensitivity, mesh changes and any rejection reasons below.
+Only an accepted result publishes a frozen selection for section 2. These planar ideal-grip calculations do not identify
+wrinkling, grip slip, bending, rate dependence or hysteresis.</p>
+</details>
 </section>
 <section><h2>2. Bind the same pattern</h2>
 <label>Original pattern JSON <input id="patternFile" type="file" accept=".json,application/json"></label>
@@ -179,6 +198,9 @@ the computed Pareto alternatives, exclusions and protocol-incomparable pairs sep
 For <code>assembly_mass_kg</code>, <code>basis: "reported_bounds"</code> uses complete reported mass endpoints at fixed authored
 geometry and inventory. Limits must contain the whole range, and overlapping or touching ranges remain unresolved.
 Missing bounds exclude an alternative while its nominal mass remains visible. Other computed metrics currently require the nominal basis.</p>
+<p class="note">Optional <code>sewing_selection</code> accepts an existing <code>ftx-sewing-selection/1</code> request instead of
+<code>sewing</code>. Each material alternative searches its own source-qualified recipe choices; the report retains trials, work limits
+and the selected plan. If no listed recipe qualifies, sewing remains unavailable for that alternative.</p>
 </div><div>
 <h3>Fresh body, drape and heat study</h3>
 <label>Scenario request JSON (<code>ftx-drape-scenario/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
@@ -205,8 +227,10 @@ Optional <code>motion.transient_surface</code> and <code>motion.transient_covera
 They require sourced heat capacity plus their own initial temperatures, interval films and budgets. Coverage also requires exact body/layer assignments
 and explicit exposed-cloth conditions. The results separately report physical stored heat, signed boundary energy and remap error;
 these histories are not interchangeable with each other or steady power snapshots. A heat refusal preserves successful mechanics.
-Either thermal history can request <code>plastic_dissipation_heat: "uniform_reference_thickness"</code> when its materials supply
-qualified conversion observations. Accepted work follows the material through covered and exposed regions; initial forming work and bare body are excluded.
+Either thermal history can request <code>plastic_dissipation_heat: "uniform_reference_thickness"</code> and/or
+<code>relaxation_dissipation_heat: "uniform_reference_thickness"</code> when its materials supply independent conversion observations
+for permanent yielding or Maxwell dashpot work. Accepted work follows the material through covered and exposed regions; each source keeps
+its own work ledger and their heat is summed once. Initial forming work, reversible storage, numerical loss and bare body are excluded.
 Motion heat objectives use <code>transient_surface_</code> or <code>transient_coverage_</code> with <code>inside_energy_j</code>,
 <code>net_boundary_energy_j</code>, <code>final_min_temperature_c</code> or <code>final_max_temperature_c</code>.
 Use <code>min_sample_temperature_c</code> or <code>max_sample_temperature_c</code> for extrema across the initial state and retained sample endpoints;
