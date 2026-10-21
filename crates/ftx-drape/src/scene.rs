@@ -207,8 +207,15 @@ pub struct ElasticGroup {
     pub casing: ElasticCasing,
     /// This casing's consecutive ranges in `Scene::elastic_rings`.
     pub rings: std::ops::Range<usize>,
-    /// Unique welded vertices of the declared garment, in fixed solver order.
+    /// Unique welded vertices touched by the load domain, in fixed solver order. A seam vertex can
+    /// also carry other instances' mass; summing its entire mass is NOT this domain's weight.
     pub loaded_vertices: Vec<usize>,
+    /// Retained source-triangle mass in the declared load domain, kg, excluding accessory shares.
+    pub loaded_cloth_mass_kg: f64,
+    /// Accessory mass allocated to declared source instances, kg, even at shared seam vertices.
+    pub loaded_attached_mass_kg: f64,
+    /// Sum of this domain's actual nodal mass contributions, kg. Welding does not expand the scope.
+    pub loaded_mass_kg: f64,
 }
 
 impl Scene {
@@ -373,8 +380,17 @@ pub fn elastic_casings(pattern: &Pattern, ea: f64) -> Result<Vec<ElasticCasing>,
             ));
         }
         for id in &entry.load_instances {
-            if pattern.instance(id).is_none() || !loads.insert(id) {
+            let target = pattern
+                .instance(id)
+                .ok_or_else(|| bad("casing load_instances must be known and unique".into()))?;
+            if !loads.insert(id) {
                 return Err(bad("casing load_instances must be known and unique".into()));
+            }
+            let piece = &pattern.raw()["pieces"][target.piece_index];
+            if piece["sim"] == false || !truthy(&piece["placement"]) {
+                return Err(bad(
+                    "explicit casing loads must name active placed instances".into(),
+                ));
             }
         }
         if !loads.contains(&entry.instance) {
@@ -829,6 +845,7 @@ fn build_scene_inner(
         model.set_membrane_responses(&tri_responses)?;
     }
     model.check_membrane_domains(&x)?;
+    crate::attached_mass::bind(pattern, &mesh, &weld, &mut model)?;
     let mut elastic_rings = Vec::new();
     let mut elastic_groups = Vec::new();
     for e in elastics {
@@ -846,13 +863,48 @@ fn build_scene_inner(
             .filter(|(_, owner)| owners.contains(&mesh.instances[**owner]))
             .map(|(v, _)| weld[v])
             .collect();
+        // Reassemble ONLY the admitted sources into nodal order, with exactly the same elementary
+        // mass shares as the solver. Summing whole welded vertices would borrow neighboring panels
+        // and accessories. Retained elements exclude any triangles collapsed by welding.
+        let mut loaded_mass = vec![0.0; model.mass.len()];
+        for (t, element) in model.membranes.iter().enumerate() {
+            let owner = triangle_owner[t];
+            if owners.contains(&mesh.instances[owner]) {
+                let density = instance_fabrics
+                    .as_ref()
+                    .map_or(fabric.areal_kg_m2, |field| field[owner].areal_kg_m2);
+                for &v in &element.v {
+                    loaded_mass[v] += density * element.area / 3.0;
+                }
+            }
+        }
+        let loaded_cloth_mass_kg = loaded_mass.iter().sum();
+        let mut loaded_attached_mass_kg = 0.0;
+        if let Some(attachments) = model.attached_mass_report()? {
+            for group in &attachments.groups {
+                for target in &group.targets {
+                    if owners.contains(&target.instance) {
+                        loaded_mass[target.solver_vertex] += target.mass_kg;
+                        loaded_attached_mass_kg += target.mass_kg;
+                    }
+                }
+            }
+        }
+        let loaded_mass_kg: f64 = loaded_mass.iter().sum();
+        if !loaded_mass_kg.is_finite() || loaded_mass_kg <= 0.0 {
+            return Err(bad(
+                "casing load has no positive finite simulated mass".into()
+            ));
+        }
         elastic_groups.push(ElasticGroup {
             casing: e.clone(),
             rings: first..elastic_rings.len(),
             loaded_vertices: loaded_vertices.into_iter().collect(),
+            loaded_cloth_mass_kg,
+            loaded_attached_mass_kg,
+            loaded_mass_kg,
         });
     }
-    crate::attached_mass::bind(pattern, &mesh, &weld, &mut model)?;
     let body = Body::new(skin_vertices.to_vec(), skin_triangles.to_vec(), 5e-3)?;
     let untangled = untangle(&mut x, &tris, &body, &tree)?;
     model.check_membrane_domains(&x)?;

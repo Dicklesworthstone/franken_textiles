@@ -613,14 +613,10 @@ fn add_run_fields(
         let length = rings.iter().map(|r| r.1).sum::<f64>() / n;
         let tension: f64 = rings.iter().map(|r| r.2).sum();
         let stretch = (length / relaxed - 1.0) * 100.0;
-        // KAT 4's law: a ring of tension T holds up to 2πμT, here against the whole garment's weight
+        // KAT 4's ideal-ring estimate, compared with the declared source mass, not all mass on
+        // shared seam degrees of freedom. This does not solve actual inter-panel load transfer.
         let grip = 2.0 * std::f64::consts::PI * mu * tension;
-        let weight = group
-            .loaded_vertices
-            .iter()
-            .map(|&v| scene.solver.model.mass[v])
-            .sum::<f64>()
-            * GRAVITY;
+        let weight = group.loaded_mass_kg * GRAVITY;
         let mut row = json!({
             "relaxed_mm": round(relaxed * 1000.0, 1),
             "length_mm": round(length * 1000.0, 1),
@@ -641,6 +637,12 @@ fn add_run_fields(
         if explicit {
             row["instance"] = json!(group.casing.instance);
             row["load_instances"] = json!(group.casing.load_instances);
+            row["load_mass"] = json!({
+                "cloth_kg":group.loaded_cloth_mass_kg,
+                "attached_kg":group.loaded_attached_mass_kg,
+                "inertial_kg":group.loaded_mass_kg,
+                "basis":"retained source-triangle nodal shares and source-target accessory allocations; no borrowing across seam welds"
+            });
             row["friction_mu"] = json!(mu);
             row["grip_basis"] = json!(
                 "independent ideal ring estimate using this casing/body friction and declared garment's simulated inertia; not integrated contact traction or combined support capacity"
