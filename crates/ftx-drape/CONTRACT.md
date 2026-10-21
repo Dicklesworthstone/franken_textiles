@@ -250,8 +250,28 @@ identity to the rotation onto its k = 0 roll, centroid on a raised path) then th
 frames. Rotations use Horn's quaternion method with the deterministic Jacobi solver where the reference
 uses numpy's SVD Kabsch. Written as `fold.pc2` (float32 point cache), `mesh_map.json`, seam and strain
 colours, and the `fabric-fold-viewer/1` payload embedded in `assets/fold_viewer_template.html` (the
-skill's page, unchanged; SHA-256 `7de25b18…a878`). The page's verdict line shows the run's own gating
+skill's page with offline module packaging). The page's verdict line shows the run's own gating
 and advisory flags from `metrics`.
+
+**Offline viewer dependency.** `viewer_html` embeds the existing Three.js 0.160.0 renderer and
+OrbitControls as base64 data-URL imports, with the complete MIT notice in each HTML file. The
+template requires exactly one payload, renderer, controls and license marker. It is shared by
+native draping, `ftx viewer` and browser fold-up; numerical payloads and controls are unchanged.
+No JavaScript loader API or external resource is used by this view. The unmodified primary-source
+files live in `assets/three-r160/`, pinned to the upstream `mrdoob/three.js` **r160** tag:
+
+| File | Primary source | SHA-256 |
+|---|---|---|
+| `three.module.min.js` (670,681 bytes) | [build](https://raw.githubusercontent.com/mrdoob/three.js/r160/build/three.module.min.js) | `3e690ac7d180b0aadf0891bea39eec643e29e2d3e75c99b18689518665f69ba6` |
+| `OrbitControls.js` (29,868 bytes) | [controls](https://raw.githubusercontent.com/mrdoob/three.js/r160/examples/jsm/controls/OrbitControls.js) | `5a44a9e86a2a0fb11933eed69bc2cd33c76a496854c1aed6ed776efa87d7b064` |
+| `LICENSE` (1,081 bytes) | [notice](https://raw.githubusercontent.com/mrdoob/three.js/r160/LICENSE) | `852e0e8699169bf9f6fdc6bda3e682d078dcbc738b5d33e74df594721bff271d` |
+
+Used APIs remain buffer geometry/attributes, meshes, lights, camera, WebGL renderer and orbit
+controls. The module closure is those two files: OrbitControls imports only `three`; the core module
+has no imports. This removes demonstrated offline failure without adding a crate or changing the
+renderer version. `tools/check_web.cjs --viewer HTML` executes offline file rendering, frame changes
+and controls. Native/WASM build outcomes and actual artifact execution are recorded in the reality-check
+follow-through; this dependency change is not numerical or empirical cloth evidence.
 
 **Metrics and flags** (`metrics.rs`; spec 04 §6). From the baked frames, the wrapped start and the true
 body: seam gaps after sewing and at the end, seam strain; ring strain, contact and clearance at each
