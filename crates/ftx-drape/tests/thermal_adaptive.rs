@@ -301,9 +301,18 @@ fn work_and_minimum_interval_refusals_never_mutate_inputs_or_refund_attempts() {
     assert_eq!(old, [0.0]);
     assert_eq!(m.snapshot(), original);
     let mut budget = Budget::new(options(0.01)).unwrap();
-    assert!(m.advance_adaptive(&[f64::NAN], 10.0, boundary(), &mut budget).is_err());
-    assert!(m.advance_adaptive(&[], 10.0, boundary(), &mut budget).is_err());
-    assert!(m.advance_adaptive(&old, f64::INFINITY, boundary(), &mut budget).is_err());
+    assert!(
+        m.advance_adaptive(&[f64::NAN], 10.0, boundary(), &mut budget)
+            .is_err()
+    );
+    assert!(
+        m.advance_adaptive(&[], 10.0, boundary(), &mut budget)
+            .is_err()
+    );
+    assert!(
+        m.advance_adaptive(&old, f64::INFINITY, boundary(), &mut budget)
+            .is_err()
+    );
     assert_eq!(budget.used(), [0, 0]);
 }
 

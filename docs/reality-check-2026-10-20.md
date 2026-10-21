@@ -1954,8 +1954,8 @@ Detailed TODO, maintained in comments 95–97 on `ftx-ai1` and continued here th
 - [x] Run the full compiled frontend suite and the existing purchasing/compression browser paths.
 - [x] Run root formatting and strict remote all-target Clippy. Document/format the incoming
       adaptive thermal API only where its missing docs and formatting block those same gates.
-- [ ] Finish the already-running complete remote workspace suite and record its actual denominator.
-- [ ] Complete staged UBS/direct review, original-acceptance fresh solo verification, Bead closure,
+- [x] Finish the complete remote workspace suite and record its actual denominator.
+- [x] Complete staged UBS/direct review, original-acceptance fresh solo verification, Bead closure,
       flush, scoped `main` handoff and release all owned reservations.
 
 Evidence is retained under `out/ftx-ai1-20261021/`. The accepted focused native release run
@@ -2000,8 +2000,15 @@ cargo test --locked --workspace -j1
 cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm
 ```
 
-The workspace command is still running at this checkpoint, not a pass yet. Its frozen overlay
-fingerprint is `4f0640b20c564b32a97e6500e1ba7b32b26ffb065ce6c2c488d25acbdacc058b`.
+The workspace command completes with observed exit **0** on `vmi1227854`: **1,896 passed,
+0 failed, 29 ignored, 0 filtered**, across 264 Rust result blocks (including empty doc-test blocks).
+The 29 existing ignores comprise 16 external-Anny/model lanes, 9 optional OpenCV lanes and
+4 release-only physics lanes. They did not run and are not added to the pass count. The 12 strip
+tests pass in both this debug lane and the focused release lane; the primary/companion CLI suite
+passes 3/3 and the portable strip suite 5/5, including the new positive six-coordinate examples.
+Do not add those focused counts to the workspace total: the workspace already contains them.
+Its frozen overlay fingerprint is
+`4f0640b20c564b32a97e6500e1ba7b32b26ffb065ce6c2c488d25acbdacc058b`.
 Clippy/workspace explicitly forward `CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0`
 to avoid the earlier linker pressure failure; debug assertions and all test criteria remain on.
 The workspace capture precedes the final whitespace-only formatting of three existing thermal
@@ -2070,6 +2077,10 @@ download revocation, loopback path checks and explicit process arguments. The ea
 six-file numerical Rust scan completes with 0 critical, 373 warnings and 180 informational.
 The separate production page/worker scan completes, exit **0**, with 0 critical, 30 warnings
 and 287 informational (`checks/production-js-ubs.log`); it does not replace the partial staged scan.
+After the automatic commits, the remaining staged handoff scans one Rust test file, exit **0**,
+0 critical, 97 warnings and 18 informational (`checks/handoff-staged-ubs.log`). Its three changed
+assertions are whitespace-only. This smaller completed scan does not replace the earlier partial
+JavaScript scan or conceal its fixed-Cargo-binary false positive.
 
 Bounded fresh-solo worksheets for this one continuation:
 
@@ -2115,7 +2126,9 @@ Bounded fresh-solo worksheets for this one continuation:
   synthetic recovery/replay is labeled software evidence; numerical CHECK is not independent
   empirical validation). **9–10:** No (checked: prior failed cases, rejected remote jobs, partial
   staged UBS, false-positive critical and pipeline mistake are recorded; stderr was retained).
-  **11:** pending original-acceptance re-execution and closure; empirical parents stay open.
+  **11:** No (checked: original positive software acceptance re-executes in release, complete
+  debug workspace, both CLI commands, portable adapter and installed wasm/Chromium before
+  closure; empirical acceptance remains on its original parent issues, without a new follow-up).
   **12:** No (checked: plan/contract edits describe the added optional API and no technical
   acceptance was weakened; all original solver gates remain).
 - **13–17:** not applicable: no delegation, child agents or swarm. Concurrent commits are not
@@ -2135,3 +2148,14 @@ Bounded fresh-solo worksheets for this one continuation:
   retained commands. Disposition: RH-1 checker edits and post-result synthetic-case selection were
   reviewed separately, disclosed and bounded; no universal/physical claim or gate weakening.
   Fresh solo verification is not an independent verifier.
+
+At closeout, automatic commits `afe83e6` and `8d10757` captured the remaining area-consumer work,
+this report's earlier in-progress checkpoint and the adaptive API documentation/formatting.
+Their titles do not establish verification or new thermal algorithm work by this continuation.
+All 20 delivery hashes still match after the completed tests. Concurrent band-study changes
+`5c350db` and `6edc3cf` are outside the frozen validation snapshot; **the workspace result and
+installed bundle are claims about the named source snapshot, not every later shared-main change**.
+Those changes were preserved without restarting the entire validation cycle. The remaining scoped
+handoff records final evidence/TODO and Bead status, plus the three thermal-assert formatting changes.
+`ftx-ai1` closes only the delivered software capability; `ftx-ki4`, empirical material/garment tasks
+and G5 stay open. The two unrelated untracked paths remain untouched.
