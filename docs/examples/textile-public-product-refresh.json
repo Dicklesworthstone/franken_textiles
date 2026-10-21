@@ -64,6 +64,8 @@
       "sku": "INS-2.5-Clim-AP",
       "quantity": 1,
       "unit": "linear_yard",
+      "maximum_continuous_quantity": 5,
+      "continuous_cut_text": "standard max continuous cut for all insulation is 5 yds",
       "minimum_quantity": 1,
       "order_increment": 1,
       "currency": "USD",

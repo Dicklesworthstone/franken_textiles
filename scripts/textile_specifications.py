@@ -138,7 +138,8 @@ def _facts(entry, source, receipt, public_sources=()):
     else:
         raise ValueError("unknown retained source adapter")
     return {"adapter": adapter, "source": entry.get("source_url", entry.get("product_url")),
-            "binding": {k: entry[k] for k in prices.FIELDS + ("material_sha256",) if k in entry},
+            "binding": {k: entry[k] for k in prices.FIELDS + tuple(sorted(prices.OPTIONAL_FIELDS))
+                        if k in entry},
             "selected": selected}
 
 

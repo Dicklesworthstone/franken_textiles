@@ -44,6 +44,30 @@ def jsonld_fixture():
 
 
 class SpecificationTests(unittest.TestCase):
+    def test_reviewed_continuous_limit_changes_require_new_source_review(self):
+        e, p = locked(), product()
+        fragment = "Maximum continuous cut: 5 yards."
+        e.update(maximum_continuous_quantity=5, continuous_cut_text=fragment)
+        e["required_description_text"].append(fragment)
+        p["description"] += fragment
+        old, evidence = snapshot(e, raw(p))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, data in evidence.items():
+                (root / name).write_bytes(data)
+            self.assertEqual(s.replay(old, root), old)
+        # Even an edited numeric interpretation with identical source bytes changes the binding.
+        e["maximum_continuous_quantity"] = 3
+        new, _ = snapshot(e, raw(p))
+        review = s.compare(old, new)
+        self.assertFalse(review["quote_publication_allowed"])
+        self.assertIn("/binding/maximum_continuous_quantity",
+                      [x["path"] for x in review["offers"][0]["changes"]])
+        del e["maximum_continuous_quantity"]
+        del e["continuous_cut_text"]
+        unknown, _ = snapshot(e, raw(p))
+        self.assertFalse(s.compare(old, unknown)["quote_publication_allowed"])
+
     def test_public_product_replays_corroborating_sources_and_separates_stock_from_specification(self):
         p, public = public_product()
         e = locked(public_entry())

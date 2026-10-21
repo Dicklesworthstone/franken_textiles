@@ -302,6 +302,8 @@ fn price_inventory(
             requirement: identity.gross_area_m2,
             basis: Basis::Area,
             require_observed_quantity: market.require_observed_quantity,
+            continuous_length_m: None,
+            require_observed_continuous_length: market.require_observed_continuous_length,
         };
         // Validate even an empty/unbound market through the same clock/scope authority.
         let empty = QuoteBook {

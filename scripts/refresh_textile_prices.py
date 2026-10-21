@@ -33,7 +33,7 @@ SCHEMA = "ftx-textile-quotes/1"
 INTRADAY_SCHEMA = "ftx-textile-quotes/2"
 FIELDS = ("offer_id", "material_id", "supplier", "sku", "quantity", "unit",
           "minimum_quantity", "order_increment", "currency", "region", "quality", "terms")
-OPTIONAL_FIELDS = {"material_sha256"}
+OPTIONAL_FIELDS = {"material_sha256", "maximum_continuous_quantity", "continuous_cut_text"}
 
 
 def load(raw: bytes, *, object_only=True):
@@ -240,11 +240,32 @@ def validate_basis(entry: dict) -> None:
     if "material_sha256" in entry and (not isinstance(entry["material_sha256"], str)
             or not re.fullmatch(r"[0-9a-fA-F]{64}", entry["material_sha256"])):
         raise ValueError("material_sha256 must be the reviewed exact material snapshot hash")
+    maximum = entry.get("maximum_continuous_quantity")
+    if "maximum_continuous_quantity" in entry:
+        if (type(maximum) not in (int, float) or not math.isfinite(maximum) or maximum <= 0
+                or entry["unit"] not in ("linear_yard", "linear_meter")):
+            raise ValueError("maximum_continuous_quantity needs a positive finite linear sale quantity")
+        if entry.get("adapter") == "csv_v1":
+            if (not isinstance(entry.get("columns"), dict)
+                    or "maximum_continuous_quantity" not in entry["columns"]
+                    or "continuous_cut_text" in entry):
+                raise ValueError("CSV continuous-cut limits need an explicit source column")
+        else:
+            fragment = entry.get("continuous_cut_text")
+            if (not isinstance(fragment, str) or not fragment.strip()
+                    or not isinstance(entry.get("required_description_text"), list)
+                    or fragment not in entry.get("required_description_text", [])):
+                raise ValueError("continuous-cut limits need their exact reviewed description fragment")
+    elif ("continuous_cut_text" in entry
+            or (isinstance(entry.get("columns"), dict)
+                and "maximum_continuous_quantity" in entry["columns"])):
+        raise ValueError("continuous-cut source mapping requires its reviewed maximum quantity")
     dt.date.fromisoformat(entry["basis_reviewed_on"])
 
 
 def quote_basis(entry: dict) -> dict:
-    return {key: entry[key] for key in (*FIELDS, *sorted(OPTIONAL_FIELDS)) if key in entry}
+    return {key: entry[key] for key in (*FIELDS, *sorted(OPTIONAL_FIELDS - {"continuous_cut_text"}))
+            if key in entry}
 
 
 def observation_time(entry: dict, observed: dt.datetime) -> dt.datetime:
@@ -478,7 +499,8 @@ def validate_csv(entry: dict) -> None:
     if origin(entry["source_url"]) != origin(entry["basis_source"]):
         raise ValueError("CSV and selling-basis evidence must share the supplier origin")
     columns = entry["columns"]
-    if (not isinstance(columns, dict) or set(columns) - {"available_quantity"} != CSV_FIELDS
+    if (not isinstance(columns, dict)
+            or set(columns) - {"available_quantity", "maximum_continuous_quantity"} != CSV_FIELDS
             or any(not isinstance(c, str) or not c.strip() for c in columns.values())
             or len(set(columns.values())) != len(columns)):
         raise ValueError("CSV needs distinct, explicit column names for every observed field")
@@ -536,7 +558,10 @@ def extract_csv(entry: dict, source_raw: bytes, observed: dt.datetime, *, intrad
     for key in ("sku", "currency", "unit"):
         if row[columns[key]] != entry[key]:
             raise ValueError(f"CSV {key} changed from the reviewed selling basis")
-    for key in ("quantity", "minimum_quantity", "order_increment"):
+    checked_quantities = ("quantity", "minimum_quantity", "order_increment")
+    if "maximum_continuous_quantity" in columns:
+        checked_quantities += ("maximum_continuous_quantity",)
+    for key in checked_quantities:
         if decimal_number(row[columns[key]]) != Decimal(str(entry[key])):
             raise ValueError(f"CSV {key} changed from the reviewed selling basis")
     stock = row[columns["available"]]

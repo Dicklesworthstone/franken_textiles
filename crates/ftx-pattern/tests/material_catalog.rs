@@ -272,6 +272,55 @@ fn supplier_variants_preserve_distinct_construction_without_inventing_stiffness(
 }
 
 #[test]
+fn observed_apex_offer_retains_its_five_yard_continuous_limit_independently_of_inventory() {
+    use ftx_pattern::material_cost::{Basis, ExclusionReason, QuoteBook, Scope};
+    let book: QuoteBook = serde_json::from_str(include_str!(
+        "../../../docs/examples/textile-continuous-cut-quotes-2026-10-21.json"
+    ))
+    .unwrap();
+    assert_eq!(book.quotes.len(), 1);
+    let q = &book.quotes[0];
+    assert_eq!(q.maximum_continuous_quantity, Some(5.0));
+    let material = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: q.material_id.clone(),
+            ..Selection::default()
+        })
+        .unwrap();
+    assert_eq!(q.material_sha256.as_deref(), Some(material.sha256()));
+    let width = material.material().require("width", "m", false).unwrap();
+    let mut scope = Scope {
+        currency: q.currency.clone(),
+        region: q.region.clone(),
+        quality: q.quality.clone(),
+        terms: q.terms.clone(),
+        as_of: q.observed_on.clone(),
+        as_of_at: q.observed_at.clone(),
+        max_age_days: 0,
+        requirement: width * 5.0,
+        basis: Basis::Area,
+        require_observed_quantity: true,
+        continuous_length_m: Some(5.0),
+        require_observed_continuous_length: true,
+    };
+    let too_long = book.evaluate(&material, &scope).unwrap();
+    assert!(too_long.offers.is_empty());
+    assert_eq!(
+        too_long.excluded_offers[0].reason,
+        ExclusionReason::InsufficientContinuousLength
+    );
+    scope.continuous_length_m = Some(4.572);
+    scope.requirement = width * 4.572;
+    let admitted = book.evaluate(&material, &scope).unwrap();
+    assert_eq!(
+        admitted.offers[0].within_observed_continuous_limit,
+        Some(true)
+    );
+    assert_eq!(admitted.offers[0].quote.source_sha256, q.source_sha256);
+}
+
+#[test]
 fn observed_supplier_offers_reach_shared_price_capacity_and_revision_consumers() {
     use ftx_pattern::material_cost::{Basis, ExclusionReason, QuoteBook, Scope};
     let catalog = Catalog::builtin().unwrap();
@@ -299,6 +348,8 @@ fn observed_supplier_offers_reach_shared_price_capacity_and_revision_consumers()
             requirement: 1.0,
             basis: Basis::Area,
             require_observed_quantity: false,
+            continuous_length_m: None,
+            require_observed_continuous_length: false,
         };
         let sample = book.evaluate(&resolved, &scope).unwrap();
         assert_eq!(sample.offers.len(), 1);

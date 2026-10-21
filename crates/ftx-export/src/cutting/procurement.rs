@@ -33,6 +33,10 @@ pub struct Market {
     /// Require source-observed capacity for each complete minimum/increment-rounded order.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_observed_quantity: bool,
+    /// Require a source-stated maximum uninterrupted cut for every actual roll marker.
+    /// This is independent of total stock and does not establish guaranteed continuous inventory.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_observed_continuous_length: bool,
 }
 
 /// Price each marker's gross stock area, then sum the least observed independent whole-order costs.
@@ -51,6 +55,7 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
     let mut priced = Vec::new();
     let mut complete = true;
     let mut observed_quantity = true;
+    let mut continuous_limit = true;
     let mut total = 0.0;
     for (index, roll) in plan.rolls.iter().enumerate() {
         let scope = Scope {
@@ -64,6 +69,8 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             requirement: roll.stock_area_m2,
             basis: Basis::Area,
             require_observed_quantity: market.require_observed_quantity,
+            continuous_length_m: Some(roll.length_m),
+            require_observed_continuous_length: market.require_observed_continuous_length,
         };
         let sample = book.evaluate(&roll.material, &scope)?;
         let cheapest = sample.offers.iter().min_by(|a, b| {
@@ -73,6 +80,7 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
         });
         if let Some(offer) = cheapest {
             observed_quantity &= offer.quantity_sufficiency_observed;
+            continuous_limit &= offer.within_observed_continuous_limit == Some(true);
             total += offer.order_cost;
             if !total.is_finite() {
                 return Err(Refusal::new(
@@ -83,10 +91,15 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
         } else {
             complete = false;
             observed_quantity = false;
+            continuous_limit = false;
         }
         priced.push(
             json!({"roll_index":index,"material_sha256":roll.material.sha256(),
             "required_length_m":roll.length_m,"required_stock_area_m2":roll.stock_area_m2,
+            "continuity":if cheapest.is_none() {"no_eligible_offer"}
+                else if cheapest.is_some_and(|offer| offer.within_observed_continuous_limit == Some(true)) {
+                    "within_observed_limit"
+                } else {"source_limit_unknown"},
             "least_observed_order":cheapest,"sample":sample}),
         );
     }
@@ -94,10 +107,13 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
         json!({"schema":"ftx-cut-procurement/1","cut_plan":plan,"roll_prices":priced,
         "complete_offer_coverage":complete,"currency":market.currency,
         "complete_observed_quantity_coverage":observed_quantity,
+        "complete_continuous_length_limit_coverage":continuous_limit,
         "least_observed_independent_order_total":if complete {Some(total)} else {None},
         "limits":["Each material snapshot is ordered independently; no supplier bundle/shipping optimization.",
             "Offers are dated observations, not reserved stock or checkout guarantees.",
             "An offer without available_quantity has unknown capacity; require_observed_quantity excludes it when quantified stock is required.",
+            "Each actual marker needs one uninterrupted full-width segment; no marker or cutter is split to fit a supplier limit.",
+            "A source maximum continuous cut is an upper limit, not guaranteed continuous inventory; unknown limits stay explicit unless require_observed_continuous_length excludes them.",
             "The total is the sum of observed minimum whole-order costs, not a market percentile or an optimal nesting claim.",
             "Different material snapshots are not pooled even when their product IDs coincide."]}),
     )

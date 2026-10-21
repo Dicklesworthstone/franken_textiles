@@ -1,8 +1,15 @@
 # Material-driven roll cutting and purchasing
 
-`ftx-materials cut-plan` uses the same source-piece material selectors as the drape, but applies the
+`ftx materials cut-plan` uses the same source-piece material selectors as the drape, but applies the
 properties needed for cutting and purchasing: a stock form, sourced width and explicit grain. A material
 without measured elasticity can be laid out and priced without inventing a constitutive law.
+
+```sh
+cargo run -p ftx-cli --bin ftx -- materials cut-plan pattern.json cut-options.json --json
+cargo run -p ftx-cli --bin ftx -- materials cut-price pattern.json cut-options.json quotes.json market.json --json
+```
+
+The companion executable exposes the same planner, purchasing evaluator and SVG preview:
 
 ```sh
 cargo run -p ftx-cli --bin ftx-materials -- cut-plan pattern.json cut-options.json
@@ -12,7 +19,8 @@ cargo run -p ftx-cli --bin ftx-materials -- cut-price pattern.json cut-options.j
 
 The SVG destination must be a new path. The index selects a roll in the returned `rolls` array; each
 exact material snapshot has its own roll. Commands read locally and do not fetch prices, reserve goods,
-change a pattern, or operate a machine. JSON errors are printed on stderr with a nonzero exit status.
+change a pattern, or operate a machine. The primary command uses the usual `ftx-cli/1` JSON envelope;
+the companion emits its result directly and prints JSON refusals on stderr with a nonzero exit status.
 
 ## Inputs
 
@@ -83,6 +91,54 @@ minimum/increment-rounded quantity and merchandise cost. `least_observed_indepen
 present only when every roll has an eligible offer; otherwise it is null. It is a sum of the lowest
 observed whole-order costs per snapshot, not the sum of percentiles or a representative market estimate.
 Different snapshots, even sharing a product ID, are conservatively ordered separately.
+
+## Qualifying one uninterrupted cut per marker
+
+Every roll marker requires one uninterrupted full-width segment of its reported `length_m`, including
+end margins and layout gaps. `cut-price` passes that computed length into the canonical quote
+evaluator alongside gross area. A supplier's `available_quantity` describes total stock; it does not
+establish that the marker fits into a single piece. The separate optional quote field
+`maximum_continuous_quantity` records a source-stated upper limit in the original linear sale unit.
+For example, a five-yard maximum excludes a five-metre marker even if total inventory is hundreds of
+yards. The planner does not split the marker or any cut piece to satisfy that limit.
+
+Known limits are always enforced. To also exclude sources whose continuous-cut limit is unknown,
+set `require_observed_continuous_length` in the roll market. This complete example additionally
+requires observed total stock for each rounded order; its market labels must match your actual quotes:
+
+```json
+{
+  "currency": "USD",
+  "region": "US",
+  "quality": "first-quality",
+  "terms": "merchandise-ex-tax-shipping",
+  "as_of": "2026-10-21",
+  "as_of_at": "2026-10-21T16:00:00Z",
+  "max_age_days": 7,
+  "require_observed_quantity": true,
+  "require_observed_continuous_length": true
+}
+```
+
+Use `as_of_at` for a version-2 book and omit it for version 1. Do not add `continuous_length_m` or a
+quantity to this market: both requirements come from the actual marker. The continuity policy applies
+to roll purchasing; finite hide/remnant purchasing has no uninterrupted roll segment to qualify.
+
+Omitting the policy or setting it to `false` preserves price comparison when the source limit is
+unknown, while making that uncertainty explicit. Each `roll_prices[].continuity` is
+`within_observed_limit`, `source_limit_unknown`, or `no_eligible_offer`.
+`complete_continuous_length_limit_coverage` describes the selected least-cost orders independently
+of `complete_observed_quantity_coverage`. Accepted known-limit offers carry
+`within_observed_continuous_limit: true`; unknown limits omit that field. Neither a known upper
+limit nor adequate total stock guarantees an uninterrupted piece is actually available.
+
+Excluded observations retain `insufficient_continuous_length` or `unknown_continuous_length`, the
+required length in metres, and the original quote/source hashes. If any roll has no eligible offer,
+the total remains null. The latest observation controls: a newer shorter or missing limit cannot
+revive an older permissive one. Native commands, WASM purchasing and material studies share these
+checks. See [the refresh guide](textile-price-refresh.md#source-qualified-continuous-cut-limits) for
+source qualification and the dated APEX observation, whose catalog form remains fill rather than
+supported roll-cutting stock.
 
 ## Shape-aware nesting
 

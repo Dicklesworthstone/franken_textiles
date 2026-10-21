@@ -431,6 +431,7 @@ fn fixed_jacket_pattern_substitutes_linen_leather_and_performance_knit_without_s
                 valid_through_at: None,
                 available: true,
                 available_quantity: None,
+                maximum_continuous_quantity: None,
                 source: "s1".into(),
                 source_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     .into(),
@@ -456,6 +457,7 @@ fn fixed_jacket_pattern_substitutes_linen_leather_and_performance_knit_without_s
                 valid_through_at: None,
                 available: true,
                 available_quantity: None,
+                maximum_continuous_quantity: None,
                 source: "s1".into(),
                 source_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     .into(),
@@ -473,6 +475,8 @@ fn fixed_jacket_pattern_substitutes_linen_leather_and_performance_knit_without_s
         as_of_at: None,
         max_age_days: 30,
         require_observed_quantity: false,
+        continuous_length_m: None,
+        require_observed_continuous_length: false,
     };
     let cost_linen = quotes.evaluate(&res_linen, &scope).unwrap();
     let cost_leather = quotes.evaluate(&res_leather, &scope).unwrap();

@@ -83,6 +83,33 @@ def csv_raw(rows=None, delimiter=","):
 
 
 class PublicProductTests(unittest.TestCase):
+    def test_continuous_cut_limit_requires_checked_source_text_and_preserves_linear_units(self):
+        p, public = public_product()
+        e = public_entry()
+        fragment = "Maximum continuous cut: 5 yards."
+        e.update(maximum_continuous_quantity=5, continuous_cut_text=fragment)
+        e["required_description_text"].append(fragment)
+        p["description"] += fragment
+        public["product"]["body_html"] = p["description"]
+        q, receipt = r.extract_public_product(e, raw(p), raw(public), raw(public), NOW)
+        self.assertEqual(q["maximum_continuous_quantity"], 5)  # Not five half-yard packages.
+        self.assertEqual(q["available_quantity"], 10)
+        self.assertEqual(receipt["manifest_entry"]["continuous_cut_text"], fragment)
+        self.assertNotIn("continuous_cut_text", q)
+        revised = copy.deepcopy(public)
+        revised["product"]["body_html"] = p["description"].replace("5 yards", "3 yards")
+        with self.assertRaises(ValueError):
+            r.extract_public_product(e, raw(p), raw(revised), raw(revised), NOW)
+        for key, value in (("maximum_continuous_quantity", 0), ("maximum_continuous_quantity", True),
+                           ("maximum_continuous_quantity", float("inf")), ("unit", "square_meter"),
+                           ("continuous_cut_text", "Unchecked text")):
+            invalid = dict(e); invalid[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                r.validate_public_product(invalid)
+        missing = dict(e); del missing["maximum_continuous_quantity"]
+        with self.assertRaises(ValueError):
+            r.validate_public_product(missing)
+
     def test_exact_offer_retains_capacity_sale_units_expiry_and_source_bytes(self):
         p, public = public_product()
         q, receipt = r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW,
@@ -317,6 +344,24 @@ class RefreshTests(unittest.TestCase):
 
 
 class CsvRefreshTests(unittest.TestCase):
+    def test_continuous_cut_column_is_checked_and_cannot_be_inferred_from_inventory(self):
+        e = csv_entry()
+        e["maximum_continuous_quantity"] = 5
+        e["columns"]["maximum_continuous_quantity"] = "MAX_CUT_YD"
+        e["columns"]["available_quantity"] = "TOTAL_YD"
+        row = dict(SKU="TEST-42", PRICE="12.99", CURRENCY="USD", AVAILABLE="yes",
+                   QUANTITY="0.5", UNIT="linear_yard", MINIMUM_QUANTITY="1.0", ORDER_INCREMENT="0.5",
+                   MARKET="US", SIZE="yardage", MAX_CUT_YD="5", TOTAL_YD="200")
+        q, _ = r.extract_csv(e, csv_raw([row]), NOW)
+        self.assertEqual(q["maximum_continuous_quantity"], 5)
+        self.assertEqual(q["available_quantity"], 200)
+        row["MAX_CUT_YD"] = "3"
+        with self.assertRaisesRegex(ValueError, "maximum_continuous_quantity changed"):
+            r.extract_csv(e, csv_raw([row]), NOW)
+        del e["maximum_continuous_quantity"]
+        with self.assertRaises(ValueError):
+            r.validate_csv(e)
+
     def test_exact_offer_and_original_bytes_reach_existing_quote_contract(self):
         data = csv_raw()
         q, receipt = r.extract_csv(csv_entry(), data, NOW)
