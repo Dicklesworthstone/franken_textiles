@@ -1173,16 +1173,19 @@ audit requested by the user. The existing checker remains a regression for this 
 - [ ] Record exact results/limits and the three bounded no-ceremony worksheets; scan the staged patch,
   update/sync Beads, commit scoped changes on main and release reservations.
 
-Delivered locally: the ignored `web/pkg` now contains the merged release module, including all 52 MIT
+Initial local delivery: the ignored `web/pkg` received the merged release module, including all 52 MIT
 raw source records and the finite-strip/acquisition exports. Production implementation came from the
 incoming commits, not this checker change. Frozen Rust source is `af0fba3bc11e85b5c45e14e732177e484f9c1000`;
 later `6ce1d80` was an external actor committing the initial checker/report while this work continued.
-No Rust code or numerical acceptance rule changed after the frozen build.
+No Rust code or numerical acceptance rule changed through `06633bb`. The later concurrent merge and
+its final verification are recorded below; do not attribute the broad suite to that newer source.
 
 Strict-remote commands (each preceded by `RCH_REQUIRE_REMOTE=1 RCH_ENV_ALLOWLIST=CARGO_HTTP_USER_AGENT`
 and `CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0'`):
 
-- `rch exec --base af0fba3 --clean-overlay --no-overlay -- cargo test --locked -j1` — running on `hz3`.
+- `rch exec --base af0fba3 --clean-overlay --no-overlay -- cargo test --locked -j1` — passed on `hz3`:
+  **1,767 passed, zero failed, 29 ignored**, across 248 completed test/doc targets; exit zero and final
+  source receipt observed. Optional ignored cases are not passes.
 - `rch exec --base af0fba3 --clean-overlay --no-overlay -- cargo clippy --locked -j1 --all-targets -- -D warnings`
   — passed on `vmi1152480`.
 - `rch exec --base af0fba3 --clean-overlay --no-overlay -- cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm`
@@ -1275,3 +1278,12 @@ Bounded fresh-solo worksheets (this integration/delivery block):
   selection and current artifact fingerprint. Fresh solo re-execution is not independent lab or peer
   verification. Disposition: no fabricated evidence or relaxed physical gate found; scanner coverage
   remains incomplete and is not reported as a pass.
+
+Final source refresh: the concurrent `f69b419dc8aea1a92939814023baef77ceca282a` merge adds nonlinear
+strip identification and source-qualified garment weights (about 1,880 changed Rust/UI lines).
+The final source barrier detected this before closure. It is incoming product work, not new process
+infrastructure authored here. The smaller adequate recheck is a matching release bundle, all-target
+lint, the eight affected native integration targets, compiled-worker checks and actual browser
+scalar/nonlinear routes, rather than another full workspace run. The completed broad suite above
+remains attached exclusively to `af0fba3`. `f69b419` all-target Clippy already passes; its focused
+native tests, release build and final matching browser comparisons are pending.
