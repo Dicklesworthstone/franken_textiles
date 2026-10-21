@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ClothModel, Membrane, SolveReport, Solver, grid};
 
+mod experiment;
+/// Bounded identification from independent source-bearing clamped-strip experiments.
+pub mod fit;
+/// Independent-equilibrium experiment report; `Report` remains the continuation-path report.
+pub use experiment::Report as ExperimentReport;
+pub use experiment::{Controls, Fixture, Request, State, evaluate, solve};
+
 /// Undeformed free gauge; grip lengths outside the gauge are not simulated.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

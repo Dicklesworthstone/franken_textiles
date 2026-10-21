@@ -42,6 +42,7 @@ pub fn fitted_domain(material: &Material) -> Result<Option<StrainDomain>, Refusa
                     source
                         .reference
                         .starts_with("local:ftx-swatch-calibration/")
+                        || source.reference.starts_with("local:ftx-strip-calibration/")
                 })
         })
     });

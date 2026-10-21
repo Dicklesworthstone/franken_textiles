@@ -435,3 +435,26 @@ covered stencil within the existing allocation tolerance can avoid a nonexistent
 Weights are not inflated; area and material-local enthalpy residuals remain reported. A reduced
 real-geometry regression checks nonuniform variable-capacity heat and changed depth resolution;
 finite missing wedges and empty microscopic stencils still refuse.
+
+**Clamped-strip experiments and inverse identification** (`strip`, `strip::fit`).
+The production membrane and static Newton solver model declared full-width ideal grips, prescribed
+axial separation, free in-plane interior displacement and a planar constraint. Reactions are total
+newtons; grip extension is never substituted for an element strain. Scalar and tabulated forward
+laws retain source/estimate admission, material form and characterized domains. No mass, bending,
+friction, slip, rate or out-of-plane behavior is identified by this experiment.
+
+`ftx-strip-calibration/1` fits the four scalar orthotropic coefficients through three deterministic
+bounded local searches. Whole acquisitions belong to FIT or CHECK; CHECK never selects coefficients,
+minima or strain bounds. Publication requires stationary starts, interior coefficients, independent
+local sensitivity, no discovered equivalent separated minima, held-out residuals, doubled-mesh
+agreement and actual production replay inside the final FIT-only domain. Every attempted forward
+solve, including sensitivities, rejected candidates, refinement and domain replay, consumes one
+aggregate budget. Failed gates preserve candidate diagnostics with null material/selection; malformed
+inputs, exhausted work and failed forward solves refuse. Returned coefficients remain estimates with
+an explicit selection admission policy and exact `selection_json` for source-stable browser reuse.
+
+`tests/strip_experiment.rs` includes independent analytical Green-strain force/energy answers and a
+virtual-work check under nonuniform contraction. `tests/strip_identification.rs` checks synthetic
+coefficient recovery, held-out isolation, mesh refusal, bounded work and fitted-domain replay. These
+establish mechanics/software properties for the declared model, not real-knit adequacy, global
+uniqueness, confidence intervals, missing downstream material properties or garment validation.
