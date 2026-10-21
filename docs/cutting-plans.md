@@ -17,8 +17,9 @@ cargo run -p ftx-cli --bin ftx-materials -- cut-svg pattern.json cut-options.jso
 cargo run -p ftx-cli --bin ftx-materials -- cut-price pattern.json cut-options.json quotes.json market.json
 ```
 
-The SVG destination must be a new path. The index selects a roll in the returned `rolls` array; each
-exact material snapshot has its own roll. Commands read locally and do not fetch prices, reserve goods,
+The SVG destination must be a new path. The index selects a marker in the returned `rolls` array;
+an exact material snapshot can have several markers when a length limit is requested. Commands read
+locally and do not fetch prices, reserve goods,
 change a pattern, or operate a machine. The primary command uses the usual `ftx-cli/1` JSON envelope;
 the companion emits its result directly and prints JSON refusals on stderr with a nonzero exit status.
 
@@ -81,26 +82,107 @@ transforms, internal cut paths and drills are retained.
 Pieces are sorted by decreasing bounding-box height/width with deterministic identity tie-breaks, and
 placed in the first shelf with room. This is a bounded, non-overlapping rectangular-envelope layout,
 **not optimal polygon nesting**. Optional shape-aware compaction is described below. It reports each placement and each material's nominal stock width,
-required length, gross stock area, summed outer-piece area and utilization. Gross stock mass is optional:
+plus each marker's required length, gross stock area, summed outer-piece area and utilization. Gross stock mass is optional:
 missing/unapproved density is a diagnostic, not zero mass and not a reason to block width-based planning.
 
 `cut-price` evaluates every material's **gross stock area = width × required roll length**, not merely
 summed piece area. Thus waste, margins and shelf gaps reach the purchase requirement automatically.
 Linear prices are converted using that same resolved width. Each reported offer includes its
 minimum/increment-rounded quantity and merchandise cost. `least_observed_independent_order_total` is
-present only when every roll has an eligible offer; otherwise it is null. It is a sum of the lowest
+present only when every material has an eligible whole-order offer; otherwise it is null. It is a sum
+of the lowest
 observed whole-order costs per snapshot, not the sum of percentiles or a representative market estimate.
 Different snapshots, even sharing a product ID, are conservatively ordered separately.
+
+## Bounded marker lengths and multiple cuts
+
+Add `maximum_marker_length_m` when each marker must fit a declared cutting-table or continuous-cut
+length. This is an explicit job constraint; it does not infer a supplier limit or guarantee available
+stock. For example, this options file requests three complete garment sets with each marker no longer
+than 2.5 metres, including its end margins:
+
+```json
+{
+  "copies": 3,
+  "gap_mm": 5,
+  "edge_margin_mm": 10,
+  "end_margin_mm": 20,
+  "seam_allowance_mm": 8,
+  "maximum_marker_length_m": 2.5
+}
+```
+
+The existing commands consume this same `cut-options.json`:
+
+```sh
+cargo run -p ftx-cli --bin ftx -- materials cut-plan pattern.json cut-options.json --json
+cargo run -p ftx-cli --bin ftx -- materials cut-price pattern.json cut-options.json quotes.json market.json --json
+```
+
+Inspect the returned `rolls` array. If it contains a second marker, render that marker with its zero-based
+index and a new destination:
+
+```sh
+cargo run -p ftx-cli --bin ftx-materials -- cut-svg pattern.json cut-options.json 1 second-marker.svg
+```
+
+The planner assigns **whole physical cut instances** to deterministic first-fit shelves across
+separate markers. Copies, mirrors, on-fold expansion, notches, internal cuts, drills and material hashes
+retain their ordinary meaning. A piece whose cutter height plus both end margins exceeds the limit
+refuses; the planner does not split the piece, insert a seam or divide its area into nominal purchases.
+Every new marker has its own end margins, so splitting can increase total required stock. Optional
+polygon compaction runs within each assigned marker and preserves its limit. Marker count and total
+length are heuristic; the search does not claim a globally optimal partition or move pieces between
+markers during compaction. The existing 4,096-instance job limit still applies.
+
+Supplying the option produces `ftx-roll-cut-plan/2`, even if everything fits on one marker. Omitting
+it preserves `ftx-roll-cut-plan/1`, one unbounded marker per exact material, and the previous options
+serialization.
+
+### One purchasing order for all markers of the same material
+
+When an exact material occupies several markers, `cut-price` evaluates their **summed gross stock area**
+as one whole order through the existing quote authority. Minimum quantities, order increments and
+observed total stock apply once to that total. The **longest actual marker** determines the separate
+continuous-cut upper-limit check. A source's stock cannot be counted independently for each marker.
+For example, two 0.12 m markers require 0.24 m in total. A whole-order increment of 0.05 m rounds that
+requirement to 0.25 m; an offer with only 0.20 m observed stock is insufficient even though either
+individual marker would fit. A 0.12 m continuous-cut upper limit can admit both requested marker lengths
+without implying that a 0.25 m uninterrupted piece is available.
+
+If any material has multiple markers, the purchasing report uses `ftx-cut-procurement/2`:
+
+| Field | Meaning |
+|---|---|
+| `material_orders[]` | One price sample and selected whole order per exact material snapshot |
+| `material_orders[].roll_indices` | Indices of all markers supplied by that order |
+| `material_orders[].marker_lengths_m` | Actual requested marker lengths, including their margins |
+| `material_orders[].required_length_m` / `required_stock_area_m2` | Summed length and gross area for the material |
+| `material_orders[].required_continuous_length_m` | Longest actual marker, used for the source upper-limit check |
+| `roll_prices[].material_order_index` | Link from each marker's geometry requirements to its purchasing order |
+
+`least_observed_order` and `sample` appear only on `material_orders` in this version; marker rows do
+not repeat order costs. The top-level `least_observed_independent_order_total` sums the selected material
+orders once and remains null if any required material lacks an eligible whole-order offer. When every
+material has only one marker, procurement retains `/1` with its existing per-marker order and sample
+fields, including when a marker-length limit was supplied but did not require partitioning.
+
+Quote minimums and increments describe the **whole order**, not an unreported per-cut charging rule.
+The marker list is a requested segmentation. Neither sufficient total stock nor a continuous-cut upper
+limit establishes that the supplier can or will deliver that segmentation; no purchase or reservation
+is executed.
 
 ## Qualifying one uninterrupted cut per marker
 
 Every roll marker requires one uninterrupted full-width segment of its reported `length_m`, including
-end margins and layout gaps. `cut-price` passes that computed length into the canonical quote
-evaluator alongside gross area. A supplier's `available_quantity` describes total stock; it does not
+end margins and layout gaps. `cut-price` passes the longest actual marker for each material into the
+canonical quote evaluator alongside that material's total gross area. A supplier's `available_quantity`
+describes total stock; it does not
 establish that the marker fits into a single piece. The separate optional quote field
 `maximum_continuous_quantity` records a source-stated upper limit in the original linear sale unit.
 For example, a five-yard maximum excludes a five-metre marker even if total inventory is hundreds of
-yards. The planner does not split the marker or any cut piece to satisfy that limit.
+yards. Procurement never changes the computed layout or divides a cut piece to satisfy that limit.
+Request bounded marker planning explicitly as described above when separate markers are appropriate.
 
 Known limits are always enforced. To also exclude sources whose continuous-cut limit is unknown,
 set `require_observed_continuous_length` in the roll market. This complete example additionally

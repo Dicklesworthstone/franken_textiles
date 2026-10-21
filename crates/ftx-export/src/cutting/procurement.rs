@@ -1,6 +1,8 @@
 //! A computed marker's source-locked stock requirements feed the existing dated quote evaluator.
 //! Pure library boundary shared by CLI and potential browser consumers; no I/O or checkout action.
 
+use std::collections::BTreeMap;
+
 use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_cost::{Basis, QuoteBook, Scope};
 use serde::{Deserialize, Serialize};
@@ -39,7 +41,7 @@ pub struct Market {
     pub require_observed_continuous_length: bool,
 }
 
-/// Price each marker's gross stock area, then sum the least observed independent whole-order costs.
+/// Price each exact material's gross stock area in one whole order, including all of its markers.
 /// An empty offer sample for ANY material makes the total unknown, never zero or a partial total.
 /// This composes the existing `QuoteBook` policies; it does not reimplement quote/currency logic.
 ///
@@ -52,12 +54,53 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             "cannot price an empty cut plan",
         ));
     }
+    let mut groups: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, roll) in plan.rolls.iter().enumerate() {
+        if !roll.length_m.is_finite()
+            || roll.length_m <= 0.0
+            || !roll.stock_area_m2.is_finite()
+            || roll.stock_area_m2 <= 0.0
+        {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "cannot price nonpositive or nonfinite marker requirements",
+            ));
+        }
+        groups
+            .entry(roll.material.sha256())
+            .or_default()
+            .push(index);
+    }
+    let multiple = groups.values().any(|indices| indices.len() > 1);
     let mut priced = Vec::new();
+    let mut orders = Vec::new();
     let mut complete = true;
     let mut observed_quantity = true;
     let mut continuous_limit = true;
     let mut total = 0.0;
-    for (index, roll) in plan.rolls.iter().enumerate() {
+    for indices in groups.values() {
+        let roll = &plan.rolls[indices[0]];
+        let mut area = 0.0;
+        let mut length = 0.0;
+        let mut longest = 0.0_f64;
+        for &index in indices {
+            let marker = &plan.rolls[index];
+            if marker.width_m != roll.width_m {
+                return Err(Refusal::new(
+                    RefusalCode::InvalidDocument,
+                    "markers of one material snapshot must retain the same stock width",
+                ));
+            }
+            area += marker.stock_area_m2;
+            length += marker.length_m;
+            longest = longest.max(marker.length_m);
+        }
+        if !area.is_finite() || !length.is_finite() {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "whole-material marker requirements overflow",
+            ));
+        }
         let scope = Scope {
             currency: market.currency.clone(),
             region: market.region.clone(),
@@ -66,10 +109,10 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             as_of: market.as_of.clone(),
             as_of_at: market.as_of_at.clone(),
             max_age_days: market.max_age_days,
-            requirement: roll.stock_area_m2,
+            requirement: area,
             basis: Basis::Area,
             require_observed_quantity: market.require_observed_quantity,
-            continuous_length_m: Some(roll.length_m),
+            continuous_length_m: Some(longest),
             require_observed_continuous_length: market.require_observed_continuous_length,
         };
         let sample = book.evaluate(&roll.material, &scope)?;
@@ -93,18 +136,43 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             observed_quantity = false;
             continuous_limit = false;
         }
-        priced.push(
-            json!({"roll_index":index,"material_sha256":roll.material.sha256(),
+        let continuity = if cheapest.is_none() {
+            "no_eligible_offer"
+        } else if cheapest.is_some_and(|offer| offer.within_observed_continuous_limit == Some(true))
+        {
+            "within_observed_limit"
+        } else {
+            "source_limit_unknown"
+        };
+        if multiple {
+            let order_index = orders.len();
+            for &index in indices {
+                let marker = &plan.rolls[index];
+                // Costs belong to the whole order. Repeating them in marker rows would silently
+                // double-count minimum quantities, increments and the same finite source stock.
+                priced.push(json!({"roll_index":index,"material_sha256":roll.material.sha256(),
+                    "required_length_m":marker.length_m,"required_stock_area_m2":marker.stock_area_m2,
+                    "continuity":continuity,"material_order_index":order_index}));
+            }
+            orders.push(json!({"material_order_index":order_index,"material_sha256":roll.material.sha256(),
+                "roll_indices":indices,"required_length_m":length,"required_stock_area_m2":area,
+                "required_continuous_length_m":longest,
+                "marker_lengths_m":indices.iter().map(|&i| plan.rolls[i].length_m).collect::<Vec<_>>(),
+                "continuity":continuity,"least_observed_order":cheapest,"sample":sample}));
+        } else {
+            priced.push(
+                json!({"roll_index":indices[0],"material_sha256":roll.material.sha256(),
             "required_length_m":roll.length_m,"required_stock_area_m2":roll.stock_area_m2,
             "continuity":if cheapest.is_none() {"no_eligible_offer"}
                 else if cheapest.is_some_and(|offer| offer.within_observed_continuous_limit == Some(true)) {
                     "within_observed_limit"
                 } else {"source_limit_unknown"},
             "least_observed_order":cheapest,"sample":sample}),
-        );
+            );
+        }
     }
-    Ok(
-        json!({"schema":"ftx-cut-procurement/1","cut_plan":plan,"roll_prices":priced,
+    priced.sort_by_key(|row| row["roll_index"].as_u64());
+    let mut result = json!({"schema":if multiple {"ftx-cut-procurement/2"} else {"ftx-cut-procurement/1"},"cut_plan":plan,"roll_prices":priced,
         "complete_offer_coverage":complete,"currency":market.currency,
         "complete_observed_quantity_coverage":observed_quantity,
         "complete_continuous_length_limit_coverage":continuous_limit,
@@ -115,6 +183,15 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             "Each actual marker needs one uninterrupted full-width segment; no marker or cutter is split to fit a supplier limit.",
             "A source maximum continuous cut is an upper limit, not guaranteed continuous inventory; unknown limits stay explicit unless require_observed_continuous_length excludes them.",
             "The total is the sum of observed minimum whole-order costs, not a market percentile or an optimal nesting claim.",
-            "Different material snapshots are not pooled even when their product IDs coincide."]}),
-    )
+            "Different material snapshots are not pooled even when their product IDs coincide."]});
+    if multiple {
+        result["material_orders"] = json!(orders);
+        result["limits"].as_array_mut().unwrap().push(json!(
+            "Markers of the same exact snapshot share one whole order: minimum, increment and observed total stock are checked once against their summed gross area. The longest actual marker determines the continuous-cut upper-limit check; individual pieces are never divided."
+        ));
+        result["limits"].as_array_mut().unwrap().push(json!(
+            "The quote's minimum and increment describe the whole order, not a per-cut charging rule. Marker lengths are a requested segmentation, not evidence that a supplier can or will deliver those cuts."
+        ));
+    }
+    Ok(result)
 }

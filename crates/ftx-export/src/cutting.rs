@@ -32,6 +32,11 @@ pub struct CutOptions {
     /// Optional export seam allowance override; otherwise the existing export hierarchy is used.
     #[serde(default)]
     pub seam_allowance_mm: Option<f64>,
+    /// Explicit maximum length of each complete marker, including both end margins, in metres.
+    /// Whole physical instances are assigned to separate markers when necessary; none are split.
+    /// This job limit does not establish a supplier's available continuous stock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_marker_length_m: Option<f64>,
     /// Optional shape-aware placement search; omission retains the original one-way shelf layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nesting: Option<nesting::NestingOptions>,
@@ -63,7 +68,7 @@ pub struct CutPlacement {
     pub transform: [[f64; 3]; 2],
 }
 
-/// A separate roll marker for each exact material snapshot, never pooled merely by display name.
+/// One continuous marker of an exact material snapshot, never pooled merely by display name.
 #[derive(Clone, Debug, Serialize)]
 pub struct RollMarker {
     /// Full, source-preserving material snapshot shared with the physics and quote consumers.
@@ -92,13 +97,13 @@ pub struct RollMarker {
 /// A reproducible manufacturing geometry/BOM result. It does not authorize a cutter or sewing robot.
 #[derive(Clone, Debug, Serialize)]
 pub struct CutPlan {
-    /// `ftx-roll-cut-plan/1`.
+    /// `/1` for one unbounded marker per material, `/2` for an explicit marker-length limit.
     pub schema: &'static str,
     /// Hash of the source pattern document, including material declarations and geometry.
     pub pattern_sha256: String,
     /// Caller-selected allowances and garment quantity.
     pub options: CutOptions,
-    /// Hash-ordered material-specific rolls.
+    /// Hash-ordered material-specific markers; one material may occupy several bounded markers.
     pub rolls: Vec<RollMarker>,
     /// Fixed planning assumptions and unsupported process effects.
     pub limitations: Vec<&'static str>,
@@ -169,6 +174,12 @@ impl CutOptions {
         {
             if !x.is_finite() || x < 0.0 {
                 return Err(bad("cut allowances must be finite and nonnegative"));
+            }
+        }
+        if let Some(limit) = self.maximum_marker_length_m {
+            positive("maximum marker length", limit)?;
+            if 2.0 * self.end_margin_mm * 0.001 >= limit {
+                return Err(bad("maximum marker length must exceed both end margins"));
             }
         }
         Ok(())
@@ -306,8 +317,15 @@ struct Shelf {
     right: f64,
 }
 
+#[derive(Default)]
+struct MarkerParts {
+    shelves: Vec<Shelf>,
+    placements: Vec<CutPlacement>,
+    total_area: f64,
+}
+
 impl CutPlan {
-    /// Derive real cut-instance requirements and a grain-constrained marker per selected material.
+    /// Derive real cut-instance requirements and grain-constrained markers per selected material.
     /// Mirror pairs and on-fold unfolding use `Ctx::geom`, exactly as the cutter export does.
     /// `sim:false`, absent body placements and simulation-only scaling never remove/change cut parts.
     /// Grain points up the roll unless nesting explicitly permits its exact material's half-turn.
@@ -385,22 +403,33 @@ impl CutPlan {
         }
         let mut rolls = Vec::with_capacity(groups.len());
         for (_, (material, shapes)) in groups {
-            rolls.push(pack(material, &shapes, options)?);
+            rolls.extend(pack(material, &shapes, options)?);
         }
         let pattern_sha256 = sha256_hex(&serde_json::to_vec(raw).map_err(|e| bad(e.to_string()))?);
         Ok(Self {
-            schema: "ftx-roll-cut-plan/1",
+            schema: if options.maximum_marker_length_m.is_some() {
+                "ftx-roll-cut-plan/2"
+            } else {
+                "ftx-roll-cut-plan/1"
+            },
             pattern_sha256,
             options: options.clone(),
             rolls,
-            limitations: vec![
-                "Single-ply rectangular roll stock; on-fold pieces are physically unfolded.",
-                "One-way explicit grain unless its material snapshot permits a half-turn; shelf baseline with optional bounded polygon compaction, never a global optimality claim.",
-                "No defect maps, pattern-repeat matching, shrinkage, finish/machine qualification or automatic layer generation.",
-                "External cut area includes interior holes; offcuts are neither reused nor claimed recoverable.",
-                "Nominal source width/density and caller margins; source uncertainty is retained, not propagated into a fit or safety guarantee.",
-                "Planning geometry only: no device execution, sewing order, tool compensation or process-safety authorization.",
-            ],
+            limitations: {
+                let mut limits = vec![
+                    "Single-ply rectangular roll stock; on-fold pieces are physically unfolded.",
+                    "One-way explicit grain unless its material snapshot permits a half-turn; shelf baseline with optional bounded polygon compaction, never a global optimality claim.",
+                    "No defect maps, pattern-repeat matching, shrinkage, finish/machine qualification or automatic layer generation.",
+                    "External cut area includes interior holes; offcuts are neither reused nor claimed recoverable.",
+                    "Nominal source width/density and caller margins; source uncertainty is retained, not propagated into a fit or safety guarantee.",
+                    "Planning geometry only: no device execution, sewing order, tool compensation or process-safety authorization.",
+                ];
+                if options.maximum_marker_length_m.is_some() {
+                    limits.push("Whole cut instances are assigned by bounded first-fit shelves; marker count and total length are heuristic, not globally optimal. Compaction stays within each assigned marker.");
+                    limits.push("The requested marker-length limit is a planning constraint, not observed continuous stock or a supplier fulfillment guarantee.");
+                }
+                limits
+            },
         })
     }
 }
@@ -409,7 +438,7 @@ fn pack(
     material: ResolvedMaterial,
     shapes: &[Shape],
     options: &CutOptions,
-) -> Result<RollMarker, Refusal> {
+) -> Result<Vec<RollMarker>, Refusal> {
     let width_m = positive(
         "stock width",
         material
@@ -434,9 +463,9 @@ fn pack(
             .then_with(|| a.geom.iid.cmp(&b.geom.iid))
             .then(ac.cmp(&bc))
     });
-    let mut shelves: Vec<Shelf> = Vec::new();
-    let mut placements = Vec::with_capacity(order.len());
-    let mut total_area = 0.0;
+    // At most 4096 physical instances bound the first-fit search and the number of markers.
+    // Without a length limit every new shelf enters the first marker, preserving the legacy order.
+    let mut markers: Vec<MarkerParts> = Vec::new();
     for (i, copy) in order {
         let shape = &shapes[i];
         let w = shape.bounds[2] - shape.bounds[0];
@@ -448,35 +477,80 @@ fn pack(
                 material.material().id
             )));
         }
-        let shelf = shelves
-            .iter()
-            .position(|s| h <= s.height && s.right + options.gap_mm + w <= usable);
-        let (x, y) = match shelf {
-            Some(k) => {
-                let s = &mut shelves[k];
-                let x = s.right + options.gap_mm;
-                s.right = x + w;
-                (x, s.y)
+        let fits_length = |y: f64| {
+            options
+                .maximum_marker_length_m
+                .is_none_or(|limit| (y + h + 2.0 * options.end_margin_mm) * 0.001 <= limit)
+        };
+        if !fits_length(0.0) {
+            return Err(bad(format!(
+                "{}: whole cutter height {h} mm plus both end margins exceeds the maximum marker length; cutting a piece into segments is not permitted",
+                shape.geom.iid
+            )));
+        }
+        let mut slot = None;
+        for (index, marker) in markers.iter_mut().enumerate() {
+            if let Some(shelf) = marker
+                .shelves
+                .iter_mut()
+                .find(|s| h <= s.height && s.right + options.gap_mm + w <= usable)
+            {
+                let x = shelf.right + options.gap_mm;
+                shelf.right = x + w;
+                slot = Some((index, x, shelf.y));
+                break;
             }
-            None => {
-                let y = shelves
-                    .last()
-                    .map_or(0.0, |s| s.y + s.height + options.gap_mm);
-                shelves.push(Shelf {
+            let y = marker
+                .shelves
+                .last()
+                .map_or(0.0, |s| s.y + s.height + options.gap_mm);
+            if fits_length(y) {
+                marker.shelves.push(Shelf {
                     y,
                     height: h,
                     right: w,
                 });
-                (0.0, y)
+                slot = Some((index, 0.0, y));
+                break;
             }
-        };
+        }
+        let (index, x, y) = slot.unwrap_or_else(|| {
+            let index = markers.len();
+            markers.push(MarkerParts {
+                shelves: vec![Shelf {
+                    y: 0.0,
+                    height: h,
+                    right: w,
+                }],
+                ..MarkerParts::default()
+            });
+            (index, 0.0, 0.0)
+        });
         let offset = Vec2::new(
             options.edge_margin_mm + x - shape.bounds[0],
             options.end_margin_mm + y - shape.bounds[1],
         );
-        placements.push(place(shape, copy, offset)?);
-        total_area += shape.area;
+        markers[index].placements.push(place(shape, copy, offset)?);
+        markers[index].total_area += shape.area;
     }
+    markers
+        .into_iter()
+        .map(|parts| finish_marker(material.clone(), parts, options, width_m, width_mm))
+        .collect()
+}
+
+fn finish_marker(
+    material: ResolvedMaterial,
+    parts: MarkerParts,
+    options: &CutOptions,
+    width_m: f64,
+    width_mm: f64,
+) -> Result<RollMarker, Refusal> {
+    let MarkerParts {
+        shelves,
+        mut placements,
+        total_area,
+    } = parts;
     placements.sort_by(|a, b| a.instance.cmp(&b.instance).then(a.copy.cmp(&b.copy)));
     let baseline_length_m = positive(
         "marker length",
@@ -503,6 +577,12 @@ fn pack(
         })
         .transpose()?;
     let length_m = nesting.as_ref().map_or(baseline_length_m, |r| r.length_m);
+    if options
+        .maximum_marker_length_m
+        .is_some_and(|limit| length_m > limit)
+    {
+        return Err(bad("computed marker exceeds its maximum length"));
+    }
     let stock_area_m2 = positive("gross stock area", width_m * length_m)?;
     let utilization = positive("marker utilization", total_area / stock_area_m2)?;
     if !total_area.is_finite() || utilization > 1.0 + 1e-10 {

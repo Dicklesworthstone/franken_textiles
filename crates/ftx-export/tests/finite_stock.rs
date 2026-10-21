@@ -199,6 +199,7 @@ fn hides_without_roll_width_use_real_boundary_defects_and_source_evidence() {
         end_margin_mm: 2.,
         seam_allowance_mm: None,
         nesting: None,
+        maximum_marker_length_m: None,
     };
     assert!(CutPlan::build(&p, &roll).is_err()); // supported via finite stock, not a fake roll
     assert_eq!(v(&plan), v(&r.build(&p).unwrap()));
