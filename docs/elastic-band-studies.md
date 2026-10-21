@@ -52,6 +52,51 @@ studies preserve them in each alternative's `frozen_changes`, alongside sheet an
 Applying those changes again to the original pattern reproduces the exact bound `pattern_json`.
 Every alternative begins with the original source, not the preceding alternative's band or history.
 
+## Comparing and replaying alternatives
+
+For a source pattern with an existing `inner::waistband` casing, construct a study from your
+source-bearing band selections (the bundled band is synthetic, not a commercial recommendation):
+
+```sh
+python3 - <<'PY'
+import json
+with open('SOFT-BAND.json') as f:
+    soft = json.load(f)
+with open('FIRM-BAND.json') as f:
+    firm = json.load(f)
+variants = [
+    {'key': key, 'changes': {'schema': 'ftx-material-bindings/1',
+                            'elastic_casings': {'inner::waistband': selection}}}
+    for key, selection in [('soft', soft), ('firm', firm)]
+]
+with open('band-study.json', 'x') as f:
+    json.dump({'schema': 'ftx-material-study/1', 'variants': variants,
+               'cutting': {'copies': 1, 'gap_mm': 2.0,
+                           'edge_margin_mm': 0.0, 'end_margin_mm': 0.0}}, f)
+PY
+cargo run -p ftx-cli --bin ftx -- materials study \
+  COMPOSED-PATTERN.json band-study.json --json > band-results.json
+```
+
+The study above requests cutting as an independent consumer; it needs the same admitted sheet
+width and grain evidence as any cutting plan. It does not model band purchasing. To compare actual
+motion and grip reports, use the same study document in `materials scenario-study` with a complete
+scenario and body model, as described in `joint-outfit-studies.md`. These names and inputs must
+refer to the actual composed pattern; neither command guesses a waistband or a body placement.
+
+Each available row retains both `binding.result.pattern_json` and `frozen_changes`. Save the former
+string unchanged to replay ordinary drape, or submit the latter to `bind-changes` against the
+original source. A denied band is a refused study alternative, not a zero-stiffness candidate;
+other alternatives remain independent. With no band edits, existing fallback behavior is retained.
+
+The native integration tests exercise both command binaries, create-only binding, exact saved
+selections and repeated study replay. The actual joint-solver test changes only one inner band's
+coefficient from 6 to 24 N while keeping an outer 9 N band, cloth, geometry and contact fields fixed.
+It verifies the fourfold constitutive force at identical coordinates, changed joint motion, exact
+frozen simulation replay and body-motion continuation. These are synthetic numerical tests, not
+measured textile or garment-retention validation. The file-free browser adapters use the same
+binding/study implementation; native adapter tests are not actual browser execution evidence.
+
 The finished-band coefficient feeds the existing casing rings. No nonlinear band response, band
 mass, contact surface, procurement cost, heat capacity or uncertainty propagation is inferred from
 axial stiffness. Manufacturing results based only on unchanged sheet geometry remain unchanged;
