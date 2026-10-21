@@ -1149,3 +1149,24 @@ The first exact staged UBS run exits zero: four Rust files, zero critical, 373 w
 Changed-code review finds test assertions/unwraps, bounded constant-table lookup and retained metadata
 allocations; no true defect established and no suppression used. The final exact staged scan retains
 its separate output in `checks/staged-ubs-final.log`. All logs/source data remain local and ignored.
+
+### Integrated browser delivery — ftx-onn.5
+
+Creation gate: the consumer is the existing material workbench user; the immediate gap is that its
+release bundle predates the finite-strip/acquisition routes. Refreshing the bundle and exercising the
+existing Chromium checker is the smallest direct delivery. This existing report and Bead supply the
+granular TODO explicitly requested by the user; no additional tracking framework is needed.
+
+- [x] Read complete AGENTS/README, current source state, relevant contracts and plan sections.
+- [x] Integrate incoming joint-outfit and source-acquisition work on main, preserving local material
+  data work and unique Beads. An external actor completed both merge commits; credit its code separately.
+- [x] Claim `ftx-onn.5`; retain empirical `ftx-ki1`, `ftx-md1` and parent G5 acceptance as open.
+- [ ] Finish strict-remote merged native tests, all-target Clippy and release WASM build.
+- [ ] Capture actual native strip results and source/binary identities from the same committed source.
+- [ ] Back up existing ignored browser bundle; refresh it from the matching release artifact.
+- [ ] Exercise real Chromium acquisition, both estimate policies, exact downloads, accepted assignment,
+  retained unaccepted diagnostics, work-budget refusal and stale-result withdrawal.
+- [ ] Run compiled-WASM worker regressions and the existing browser round smoke checks.
+- [ ] Review observed output and failures with a fresh solo pass; fix concrete defects if found.
+- [ ] Record exact results/limits and the three bounded no-ceremony worksheets; scan the staged patch,
+  update/sync Beads, commit scoped changes on main and release reservations.

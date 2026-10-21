@@ -3,16 +3,21 @@
 // tools/build_web.sh && cargo build -p ftx-cli
 // NODE_PATH=$(npm root -g) node tools/check_materials_web.cjs --native target/debug/ftx-materials
 // Optional CHROMIUM_EXECUTABLE chooses an already installed Chromium binary.
-const { chromium } = require('playwright');
+// --strip-proof DIR runs only strip browser checks against retained native reports (manifest.json).
+const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const root = path.resolve(__dirname, '..'), web = path.join(root, 'web');
 const index = process.argv.indexOf('--native');
 const native = path.resolve(index < 0 ? path.join(root, 'target/debug/ftx-materials') : process.argv[index + 1]);
+const stripIndex = process.argv.indexOf('--strip-proof');
+if (stripIndex >= 0 && !process.argv[stripIndex + 1]) throw Error('--strip-proof requires a native report directory');
+const stripProof = stripIndex < 0 ? null : path.resolve(process.argv[stripIndex + 1]);
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -37,19 +42,20 @@ const server = http.createServer((req, res) => {
 });
 (async () => {
   assert.ok(fs.existsSync(path.join(web, 'pkg/ftx_wasm_bg.wasm')), 'Build web/pkg first');
-  assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
+  if (!stripProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
-  const page = await browser.newPage({ viewport:{width:1280,height:900} }), errors = [], external = [], methods = [];
+  const page = await browser.newPage({ viewport:{width:1280,height:900},
+    userAgent:'OpenAI File Downloader, XaiImageApiFetch/1.0' }), errors = [], external = [], methods = [];
   page.on('pageerror', e => errors.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('request', r => { methods.push(r.method()); if (!r.url().startsWith(origin) && !r.url().startsWith('blob:')) external.push(r.url()); });
   const input = async (id, value) => page.setInputFiles('#'+id, { name:id+'.json', mimeType:'application/json', buffer:Buffer.from(JSON.stringify(value)) });
-  const run = async id => {
+  const run = async (id, timeout = 120000) => {
     await page.click('#'+id);
     const op = id === 'search' ? 'catalog' : id;
-    await page.waitForFunction(op => new RegExp(`^${op} (complete|refused)`).test(document.getElementById('status').textContent), op, { timeout:120000 });
+    await page.waitForFunction(op => new RegExp(`^${op} (complete|refused)`).test(document.getElementById('status').textContent), op, { timeout });
     return await page.locator('#error').isVisible() ? page.textContent('#error') : '';
   };
   const download = name => page.locator(`a[download="${name}"]`).evaluate(async a => await (await fetch(a.href)).text());
@@ -61,6 +67,99 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (stripProof) {
+      const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+      const manifest = JSON.parse(fs.readFileSync(path.join(stripProof,'manifest.json'),'utf8'));
+      assert.match(manifest.source_commit,/^[a-f0-9]{40}$/);
+      assert.match(manifest.binary_sha256,/^[a-f0-9]{64}$/);
+      for (const [file, digest] of Object.entries(manifest.inputs))
+        assert.equal(sha(fs.readFileSync(path.join(root,file))),digest,`Changed native input: ${file}`);
+      const reference = name => {
+        const raw = fs.readFileSync(path.join(stripProof,name));
+        assert.equal(sha(raw),manifest.reports[name],`Changed native report: ${name}`);
+        return JSON.parse(raw);
+      };
+      const retain = (name, raw) => fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+      const acquisition = path.join(root,'crates/ftx-pattern/src/material_catalog/knit-strip-measurements.json');
+      await page.locator('details').filter({has:page.locator('#stripAcquisition')}).evaluate(e => {e.open=true;});
+      await page.setInputFiles('#stripAcquisitionRequest',acquisition);
+      assert.equal(await run('stripAcquisition'),'');
+      const acquiredRaw = await download('strip-acquisition-report.json'), acquired = JSON.parse(acquiredRaw);
+      assert.deepEqual(acquired,reference('acquisition.json'));
+      assert.equal(await download('strip-acquisition-input.json'),fs.readFileSync(acquisition,'utf8'));
+      assert.equal(acquired.curves.length,9); assert.equal(acquired.curves[0].observations.length,916);
+      assert.equal(acquired.curves[0].observations.at(-1).branch,'unloading');
+      assert.equal(acquired.transverse_curves.length,9); assert.equal(acquired.selection,undefined);
+      assert.match(await page.locator('#outputs').textContent(),/not converted to widths, local strains or Poisson ratios/);
+      retain('acquisition.json',acquiredRaw);
+      await page.setInputFiles('#patternFile',fixture('synthetic-sewing-pattern.json'));
+      await page.waitForFunction(() => document.getElementById('patternName').textContent.includes('Original retained'));
+      await page.selectOption('#calibrationMode','clamped_strip');
+      await page.setInputFiles('#calibrationRequest',fixture('synthetic-clamped-strip.json'));
+      for (const admission of [false,true]) {
+        await page.setChecked('#calibrationEstimates',admission);
+        assert.equal(await page.isDisabled('#assign'),true);
+        assert.equal(await page.locator('a[download="material-calibration.json"]').count(),0);
+        assert.equal(await run('calibrate',600000),'');
+        const raw = await download('material-calibration.json'), report = JSON.parse(raw);
+        const expected = reference(admission ? 'admitted.json' : 'denied.json');
+        for (const field of ['calibration','selection','selection_json']) assert.deepEqual(report[field],expected[field],field);
+        assert.equal(report.calibration.accepted,true); assert.equal(report.calibration.domain_replay_verified,true);
+        assert.equal(report.calibration.fit.components,12); assert.equal(report.calibration.check.components,2);
+        assert.equal(report.selection.allow_estimates,admission);
+        assert.equal(report.material.capabilities.mechanical_coefficients.ready,false);
+        assert.equal(await download('calibration-input.json'),fs.readFileSync(fixture('synthetic-clamped-strip.json'),'utf8'));
+        assert.equal(await download('calibrated-selection.json'),report.selection_json);
+        assert.equal(await page.inputValue('#selection'),report.selection_json);
+        for (const caption of ['Clamped strip observations — independent partitions',
+          'Identified orthotropic sheet coefficients','Actual strip geometry and declared width comparison',
+          'Actual refined strip predictions and observation residuals'])
+          assert.equal(await page.locator('caption').filter({hasText:caption}).count(),1);
+        const observed = page.locator('table').filter({has:page.locator('caption',{
+          hasText:'Clamped strip observations — independent partitions'})});
+        for (const [i,key] of ['fit','check'].entries()) {
+          const q = report.calibration[key];
+          assert.deepEqual(await observed.locator('tr').nth(i+1).locator('td').allTextContents(),
+            [key.toUpperCase(),q.components,q.rms_scaled,q.peak_scaled].map(String));
+        }
+        await page.click('#assign'); assert.equal(await run('bind'),'');
+        const bound = JSON.parse(await download('pattern.json')), original = load('synthetic-sewing-pattern.json');
+        assert.deepEqual(bound.pieces,original.pieces); assert.deepEqual(bound.seams,original.seams);
+        assert.equal(bound.fabric.material.expected_sha256,report.selection.expected_sha256);
+        const binding = JSON.parse(await download('material-bindings.json'));
+        assert.equal(binding.geometry_changed,false); assert.equal(binding.drape_materials_with_self_contact.ready,false);
+        retain(`accepted-${admission}.json`,raw); retain(`pattern-${admission}.json`,await download('pattern.json'));
+      }
+      await page.screenshot({path:path.join(work,'accepted.png'),fullPage:true});
+      const unfinished = load('synthetic-clamped-strip.json'); unfinished.policy.max_iterations=1;
+      await input('calibrationRequest',unfinished);
+      assert.equal(await page.isDisabled('#assign'),true);
+      assert.equal(await page.locator('a[download="calibrated-selection.json"]').count(),0);
+      assert.equal(await run('calibrate',600000),'');
+      const unfinishedRaw = await download('material-calibration.json'), rejected = JSON.parse(unfinishedRaw);
+      assert.equal(rejected.calibration.accepted,false); assert.ok(rejected.calibration.reasons.length>0);
+      assert.ok(rejected.calibration.starts.length>0); assert.equal(rejected.selection_json,null);
+      assert.equal(await page.isDisabled('#assign'),true);
+      assert.equal(await page.locator('a[download="calibrated-selection.json"]').count(),0);
+      assert.match(await page.locator('#outputs').textContent(),/NOT ACCEPTED/);
+      retain('unaccepted.json',unfinishedRaw);
+      await page.screenshot({path:path.join(work,'unaccepted.png'),fullPage:true});
+      const exhausted = load('synthetic-clamped-strip.json'); exhausted.policy.max_forward_solves=1;
+      await input('calibrationRequest',exhausted);
+      assert.equal(await page.locator('a[download="material-calibration.json"]').count(),0);
+      assert.match(await run('calibrate',600000),/budget/i);
+      assert.equal(await page.isDisabled('#assign'),true);
+      assert.equal(await page.locator('a[download="calibrated-selection.json"]').count(),0);
+      assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
+      const fingerprint = {native:manifest,browser:browser.version(),node:process.version,files:{}};
+      for (const file of ['web/pkg/ftx_wasm_bg.wasm','web/pkg/ftx_wasm.js','web/materials-page.js',
+        'web/materials-worker.js','web/materials.html','tools/check_materials_web.cjs'])
+        fingerprint.files[file]=sha(fs.readFileSync(path.join(root,file)));
+      retain('fingerprint.json',JSON.stringify(fingerprint,null,2));
+      console.log('PASS: real Chromium source acquisitions, complete native strip equality under both estimate policies, exact downloads, frozen pattern binding, unaccepted diagnostics, budget refusal and stale-result withdrawal.');
+      console.log('Strip-only lane; no measured textile, garment fit, benchmark or full workbench claim. Artifacts:',work);
+      return;
+    }
     await page.fill('#query','cotton'); assert.equal(await run('search'), '');
     assert.ok(await page.locator('#catalog option').count() > 0);
     await page.fill('#selection', JSON.stringify({id:'fsri/hfm/cotton-sheet/dry/220330-r1',allow_estimates:true}));
