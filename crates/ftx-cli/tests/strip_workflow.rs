@@ -19,6 +19,8 @@ const INVERSE: &str =
     include_str!("../../../examples/strip-identification/synthetic-calibration.json");
 const NONLINEAR: &str =
     include_str!("../../../examples/strip-identification/synthetic-nonlinear-calibration.json");
+const INDEPENDENT_INTERVALS: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-nonlinear-clamped-strip.json");
 
 fn workspace() -> PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -424,6 +426,108 @@ fn nonlinear_strip_commands_keep_shape_observation_and_output_policies_independe
     assert_eq!(
         fs::read(dir.join("nonlinear.json")).unwrap(),
         NONLINEAR.as_bytes()
+    );
+}
+
+#[test]
+fn independent_interval_strip_commands_match_core_and_replay_exact_selection() {
+    let dir = workspace();
+    write(&dir, "intervals.json", INDEPENDENT_INTERVALS.as_bytes());
+    let input: strip::fit::Input = serde_json::from_str(INDEPENDENT_INTERVALS).unwrap();
+    let core = strip::fit::calibrate(&input).unwrap();
+    assert!(core.accepted, "{:?}", core.reasons);
+    assert!(core.domain_replay_verified);
+    assert_eq!(core.parameters.len(), 9);
+    assert!(core.input.response_family.is_none());
+    assert!(core.input.parameter_bounds.is_empty());
+    let model = core.input.nonlinear.as_ref().unwrap();
+    let bounds: Vec<_> = model
+        .tangent_bounds
+        .iter()
+        .flatten()
+        .copied()
+        .chain([model.coupling_bounds])
+        .collect();
+    assert_eq!(core.parameter_bounds, bounds);
+    let descriptors = core.parameter_descriptors.as_ref().unwrap();
+    assert_eq!(descriptors.len(), 9);
+    assert_eq!(descriptors[0].id, "warp_tangent_0");
+    assert_eq!(descriptors[8].id, "normal_coupling");
+    assert!(descriptors.iter().all(|parameter| parameter.unit == "N/m"));
+
+    let raw_selection = core.selection_json.as_deref().unwrap();
+    let selection: Selection = serde_json::from_str(raw_selection).unwrap();
+    let resolved = ftx_pattern::textile_import::catalog()
+        .unwrap()
+        .resolve(&selection)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_string(&resolved.frozen_selection()).unwrap(),
+        raw_selection
+    );
+    assert!(resolved.membrane_response().unwrap().is_some());
+    assert!(resolved.material().properties.is_empty());
+    assert!(resolved.mechanics().is_err());
+
+    let acquired = input
+        .experiments
+        .iter()
+        .find(|experiment| {
+            experiment.partition == ftx_pattern::material_calibration::Partition::Check
+        })
+        .unwrap();
+    let mut fixture = acquired.fixture.clone();
+    fixture.cells.iter_mut().for_each(|cells| *cells *= 2);
+    let forward = Request {
+        schema: "ftx-strip-experiment/1".into(),
+        material: selection,
+        fixture,
+        extensions: acquired
+            .observations
+            .iter()
+            .map(|observation| observation.extension_fraction)
+            .collect(),
+        controls: input.controls.clone(),
+    };
+    write(
+        &dir,
+        "interval-replay.json",
+        &serde_json::to_vec(&forward).unwrap(),
+    );
+    let forward_core = strip::evaluate(&forward).unwrap();
+    for (observation, state) in acquired.observations.iter().zip(&forward_core.states) {
+        let prediction = core
+            .predictions
+            .iter()
+            .find(|prediction| {
+                prediction.experiment == acquired.id && prediction.observation == observation.id
+            })
+            .unwrap();
+        assert!((state.force_n - prediction.state.force_n).abs() < 1e-7);
+        assert!((state.mid_width_m - prediction.state.mid_width_m).abs() < 1e-9);
+    }
+    for unified in [false, true] {
+        let report = success(
+            &run(
+                &dir,
+                unified,
+                &["calibrate-strip", "intervals.json", "--allow-estimates"],
+            ),
+            unified,
+        );
+        assert_eq!(report["calibration"], serde_json::to_value(&core).unwrap());
+        assert_eq!(report["selection_json"], raw_selection);
+        assert_eq!(report["simulation_ready"], false);
+        assert_eq!(report["fit_claim"], false);
+        let replay = success(
+            &run(&dir, unified, &["strip-experiment", "interval-replay.json"]),
+            unified,
+        );
+        assert_eq!(replay, serde_json::to_value(&forward_core).unwrap());
+    }
+    assert_eq!(
+        fs::read(dir.join("intervals.json")).unwrap(),
+        INDEPENDENT_INTERVALS.as_bytes()
     );
 }
 
