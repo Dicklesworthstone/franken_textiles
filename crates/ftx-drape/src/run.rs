@@ -17,7 +17,7 @@ use crate::garment::build_garment;
 use crate::metrics::{MIN_FRAMES, MetricsInput, metrics};
 use crate::nearest::NearestTree;
 use crate::scene::{
-    Fabric, PartFrames, PhaseReport, Scene, casing_at_cut_length, elastic_casing, run_phase,
+    Fabric, PartFrames, PhaseReport, Scene, casings_at_cut_length, elastic_casings, run_phase,
 };
 use crate::start::{edge_strain, face_edges};
 
@@ -226,14 +226,11 @@ pub fn drape(
     let opts = &material.options;
     let fabric = material.fabric;
     // an elastic casing is simulated at its cut length and drawn up by its elastic
-    let elastic = elastic_casing(pattern, opts.elastic_ea);
+    let elastics = elastic_casings(pattern, opts.elastic_ea)?;
     let simulated;
-    let pattern = match &elastic {
-        Some(c) => {
-            simulated = casing_at_cut_length(pattern, c);
-            &simulated
-        }
-        None => pattern,
+    let pattern = if elastics.is_empty() { pattern } else {
+        simulated = casings_at_cut_length(pattern, &elastics);
+        &simulated
     };
     let mesh = build_garment(pattern, opts.spacing)?;
     if mesh.verts2d.is_empty() {
@@ -250,7 +247,7 @@ pub fn drape(
         body.collision.0,
         body.collision.1,
         &material,
-        elastic.as_ref(),
+        &elastics,
     )?;
     if let Some(p) = opts.self_contact {
         scene.solver = scene.solver.with_self_contact(p)?;
@@ -326,14 +323,13 @@ pub fn drape(
             arm_deg: body.arm_deg,
         },
     );
-    let casing_mu = elastic
-        .as_ref()
-        .and_then(|e| {
+    let casing_mu: Vec<_> = elastics.iter().map(|e| {
+        (|| {
             let piece = pattern.instance(&e.instance)?.piece_index;
             let field = material.contact_materials.as_ref()?;
             Some(field.surfaces[field.piece_ids[piece]].friction_body)
-        })
-        .unwrap_or(opts.contact.mu);
+        })().unwrap_or(opts.contact.mu)
+    }).collect();
     add_run_fields(
         &mut report,
         &scene,
@@ -341,7 +337,7 @@ pub fn drape(
         opts,
         body.arm_deg,
         pattern,
-        casing_mu,
+        &casing_mu,
     );
     add_numerical_report(&mut report, &sew, &drape, opts);
     report["material"] = material.report;
@@ -380,7 +376,7 @@ pub fn drape(
                 "maximum broad-phase envelope; see material.records for physical sheet thicknesses"
             );
             if !report["elastic"].is_null() {
-                report["elastic"]["friction_mu"] = json!(casing_mu);
+                report["elastic"]["friction_mu"] = json!(casing_mu[0]);
                 report["elastic"]["grip_basis"] = json!(
                     "ideal ring estimate using casing/body friction; not integrated heterogeneous contact traction"
                 );
@@ -501,7 +497,7 @@ fn add_run_fields(
     opts: &DrapeOptions,
     arm_deg: f64,
     pattern: &Pattern,
-    casing_mu: f64,
+    casing_mu: &[f64],
 ) {
     let mesh = &scene.mesh;
     let area: f64 = mesh
@@ -588,12 +584,13 @@ fn add_run_fields(
         self_contact_report(scene.solver.contact.as_ref(), &scene.solver.x),
     );
     let elastics = &scene.solver.model.elastics;
-    if !scene.elastic_rings.is_empty() {
+    let mut casing_reports = Vec::new();
+    let explicit = pattern.raw()["meta"]["solved"].get("elastic_casings").is_some();
+    for (group, &mu) in scene.elastic_groups.iter().zip(casing_mu) {
         // FrankenTextiles: the casing's elastic at the end (the reference has none). Its rings (fold and
         // seam line) pull in parallel: the elastic's tension is their sum and it lies between them.
         let x = &scene.solver.x;
-        let rings: Vec<(f64, f64, f64)> = scene
-            .elastic_rings
+        let rings: Vec<(f64, f64, f64)> = scene.elastic_rings[group.rings.clone()]
             .iter()
             .map(|r| {
                 let seg = &elastics[r.clone()];
@@ -609,11 +606,9 @@ fn add_run_fields(
         let tension: f64 = rings.iter().map(|r| r.2).sum();
         let stretch = (length / relaxed - 1.0) * 100.0;
         // KAT 4's law: a ring of tension T holds up to 2πμT, here against the whole garment's weight
-        let grip = 2.0 * std::f64::consts::PI * casing_mu * tension;
-        let weight = scene.solver.model.mass.iter().sum::<f64>() * GRAVITY;
-        o.insert(
-            "elastic".into(),
-            json!({
+        let grip = 2.0 * std::f64::consts::PI * mu * tension;
+        let weight = group.loaded_vertices.iter().map(|&v| scene.solver.model.mass[v]).sum::<f64>() * GRAVITY;
+        let mut row = json!({
                 "relaxed_mm": round(relaxed * 1000.0, 1),
                 "length_mm": round(length * 1000.0, 1),
                 "rings_mm": rings.iter().map(|r| round(r.1 * 1000.0, 1)).collect::<Vec<_>>(),
@@ -622,22 +617,34 @@ fn add_run_fields(
                 "grip_n": round(grip, 3),
                 "weight_n": round(weight, 3),
                 "holds": grip >= weight,
-                "ea_n": elastics[0].ea * n,
-            }),
-        );
+                "ea_n": elastics[scene.elastic_rings[group.rings.start].start].ea * n,
+            });
+        if explicit {
+            row["instance"] = json!(group.casing.instance);
+            row["load_instances"] = json!(group.casing.load_instances);
+            row["friction_mu"] = json!(mu);
+            row["grip_basis"] = json!("independent ideal ring estimate using this casing/body friction and declared garment's simulated inertia; not integrated contact traction or combined support capacity");
+            casing_reports.push(row);
+        } else {
+            o.insert("elastic".into(), row);
+        }
         if grip < weight {
             // advisory, as the flat `elastic_hold` row already judges the elastic
             if let Some(flags) = o.get_mut("flags").and_then(Value::as_array_mut) {
-                flags.push(json!(format!(
+                let message = format!(
                     "the elastic does not grip: {} % against its relaxed length on the body, its friction \
                      holds {} N of the garment's {} N, so the waistband rests on the body instead (shorten \
                      the elastic)",
                     ftx_core::py::fixed(stretch, 1),
                     ftx_core::py::fixed(grip, 2),
                     ftx_core::py::fixed(weight, 2)
-                )));
+                );
+                flags.push(json!(if explicit { format!("{}: {message}", group.casing.instance) } else { message }));
             }
         }
+    }
+    if explicit && !casing_reports.is_empty() {
+        o.insert("elastics".into(), json!(casing_reports));
     }
 }
 

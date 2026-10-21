@@ -6,13 +6,13 @@
 //! membrane's warp). Welding keeps every triangle's own rest coordinates (`ClothModel::from_triangles`),
 //! so a seam joining sides of different lengths (ease, gathers) is strained, not rewritten.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_body::BodyFrames;
 use ftx_core::np::linspace;
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, det};
 use ftx_pattern::{Pattern, truthy};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cloth::{ClothModel, SheetMaterial, SolveReport, Solver};
@@ -196,6 +196,16 @@ pub struct Scene {
     pub solver: Solver,
     /// The casing elastic's rings (fold, seam line) as ranges of the model's `elastics`; empty without one.
     pub elastic_rings: Vec<std::ops::Range<usize>>,
+    /// Independent casing ownership and load domains; ring ranges index `elastic_rings`.
+    pub elastic_groups: Vec<ElasticGroup>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ElasticGroup {
+    pub casing: ElasticCasing,
+    pub rings: std::ops::Range<usize>,
+    /// Unique welded vertices of the declared garment, in fixed solver order.
+    pub loaded_vertices: Vec<usize>,
 }
 
 impl Scene {
@@ -220,6 +230,9 @@ pub struct ElasticCasing {
     pub length: f64,
     /// Axial stiffness EA (N).
     pub ea: f64,
+    /// Physical instances whose simulated inertia is compared with this casing's ideal-ring grip.
+    /// This comparison does not infer load transfer between independent garments or casings.
+    pub load_instances: Vec<String>,
 }
 
 /// The elastic casing of a drafted pattern: the piece with role `waistband` (one instance), the relaxed
@@ -252,19 +265,89 @@ pub fn elastic_casing(pattern: &Pattern, ea: f64) -> Option<ElasticCasing> {
         instance,
         length,
         ea,
+        load_instances: pattern.instances.iter().map(|i| i.id.clone()).collect(),
     })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeclaredCasing {
+    instance: String,
+    relaxed_m: f64,
+    load_instances: Vec<String>,
+}
+
+/// Resolve source-preserving, explicitly scoped casings or the original single-waistband convention.
+/// Explicit declarations are validated even when EA is zero; disabled elastics do not shrink casings.
+///
+/// # Errors
+/// Ambiguous legacy/explicit declarations, duplicate or inactive casings, invalid lengths or load scopes.
+pub fn elastic_casings(pattern: &Pattern, ea: f64) -> Result<Vec<ElasticCasing>, Refusal> {
+    let solved = &pattern.raw()["meta"]["solved"];
+    let Some(raw) = solved.get("elastic_casings") else {
+        return Ok(elastic_casing(pattern, ea).into_iter().collect());
+    };
+    if solved.get("elastic_cut_mm").is_some() {
+        return Err(bad("explicit casings cannot also declare legacy elastic_cut_mm".into()));
+    }
+    let entries = raw.as_array().ok_or_else(|| bad("elastic_casings must be a list".into()))?;
+    if entries.is_empty() || entries.len() > 64 {
+        return Err(bad("elastic_casings needs 1..64 independent casings".into()));
+    }
+    Refusal::finite("elastic stiffness", ea)?;
+    if ea < 0.0 { return Err(bad("elastic stiffness must be nonnegative".into())); }
+    let mut seen = BTreeSet::new();
+    let mut casings = Vec::new();
+    for entry in entries {
+        let entry: DeclaredCasing = serde_json::from_value(entry.clone()).map_err(|e| bad(e.to_string()))?;
+        let instance = pattern.instance(&entry.instance)
+            .ok_or_else(|| bad(format!("unknown casing instance {}", entry.instance)))?;
+        let piece = &pattern.raw()["pieces"][instance.piece_index];
+        if !seen.insert(entry.instance.clone()) || piece["sim"] == false || !truthy(&piece["placement"]) {
+            return Err(bad("casings must name distinct active placed instances".into()));
+        }
+        if !entry.relaxed_m.is_finite() || entry.relaxed_m <= 0.0 {
+            return Err(bad("casing relaxed_m must be finite and positive".into()));
+        }
+        let mut loads = BTreeSet::new();
+        if entry.load_instances.is_empty() || entry.load_instances.len() > pattern.instances.len() {
+            return Err(bad("casing needs a bounded nonempty load_instances list".into()));
+        }
+        for id in &entry.load_instances {
+            if pattern.instance(id).is_none() || !loads.insert(id) {
+                return Err(bad("casing load_instances must be known and unique".into()));
+            }
+        }
+        if !loads.contains(&entry.instance) {
+            return Err(bad("casing load_instances must include its own instance".into()));
+        }
+        if ea > 0.0 {
+            casings.push(ElasticCasing {
+                instance: entry.instance, length: entry.relaxed_m, ea, load_instances: entry.load_instances,
+            });
+        }
+    }
+    Ok(casings)
 }
 
 /// `pattern` with the casing piece simulated at its cut length (its `sim_scale` along the band set to 1):
 /// the elastic, not a shrunken casing, draws it to the waist.
 #[must_use]
 pub fn casing_at_cut_length(pattern: &Pattern, casing: &ElasticCasing) -> Pattern {
+    casings_at_cut_length(pattern, std::slice::from_ref(casing))
+}
+
+/// Restore every declared casing's cut geometry without changing other simulated piece scales.
+#[must_use]
+pub fn casings_at_cut_length(pattern: &Pattern, casings: &[ElasticCasing]) -> Pattern {
     let mut raw = pattern.raw().clone();
-    let piece = pattern.instance(&casing.instance).map(|i| i.piece_index);
-    if let Some(sc) = piece.and_then(|p| raw["pieces"][p].get_mut("sim_scale"))
-        && let Some(x) = sc.get_mut(0)
-    {
-        *x = Value::from(1.0);
+    for casing in casings {
+        let piece = pattern.instance(&casing.instance).map(|i| i.piece_index);
+        if let Some(sc) = piece.and_then(|p| raw["pieces"][p].get_mut("sim_scale"))
+            && let Some(x) = sc.get_mut(0)
+        {
+            *x = Value::from(1.0);
+        }
     }
     Pattern::new(raw)
 }
@@ -379,7 +462,7 @@ pub fn build_scene(
         fabric,
         compression,
         contact,
-        elastic,
+        elastic.map(std::slice::from_ref).unwrap_or(&[]),
         None,
         None,
         None,
@@ -394,7 +477,7 @@ pub(crate) fn build_scene_resolved(
     skin_vertices: &[Vec3],
     skin_triangles: &[[usize; 3]],
     material: &crate::material::MaterialInputs,
-    elastic: Option<&ElasticCasing>,
+    elastics: &[ElasticCasing],
 ) -> Result<Scene, Refusal> {
     let mut scene = build_scene_inner(
         pattern,
@@ -405,7 +488,7 @@ pub(crate) fn build_scene_resolved(
         material.fabric,
         material.options.compression,
         material.options.contact,
-        elastic,
+        elastics,
         material.piece_fabrics.as_deref(),
         material.response.as_ref(),
         material.piece_responses.as_deref(),
@@ -495,7 +578,7 @@ fn build_scene_inner(
     fabric: Fabric,
     compression: f64,
     contact: ContactParams,
-    elastic: Option<&ElasticCasing>,
+    elastics: &[ElasticCasing],
     piece_fabrics: Option<&[Fabric]>,
     response: Option<&ftx_pattern::material_response::CompiledMembrane>,
     piece_responses: Option<&[Option<ftx_pattern::material_response::CompiledMembrane>]>,
@@ -537,7 +620,14 @@ fn build_scene_inner(
                     .collect::<Result<_, Refusal>>()
             })
             .transpose()?;
-    let casing = elastic.and_then(|e| mesh.instances.iter().position(|i| *i == e.instance));
+    let mut casing_instances = BTreeSet::new();
+    for casing in elastics {
+        let owner = mesh.instances.iter().position(|i| *i == casing.instance)
+            .ok_or_else(|| bad(format!("casing {} has no simulated mesh", casing.instance)))?;
+        if !casing_instances.insert(owner) {
+            return Err(bad("duplicate casing mesh instance".into()));
+        }
+    }
     let places = placements(pattern, &mesh, frames)?;
     let wrapped = wrapped_positions(&mesh, &places);
     let tree = NearestTree::new(skin_vertices.to_vec(), skin_triangles.to_vec())?;
@@ -616,7 +706,7 @@ fn build_scene_inner(
         } else if let Some(law) = response {
             tri_responses.push(Some(law.clone()));
         }
-        if casing == Some(mesh.owner[f[0]]) {
+        if casing_instances.contains(&mesh.owner[f[0]]) {
             // a casing at its cut length, drawn up by its elastic: gathered all through
             tri_compression.push(low);
         } else {
@@ -646,12 +736,22 @@ fn build_scene_inner(
     }
     model.check_membrane_domains(&x)?;
     let mut elastic_rings = Vec::new();
-    if let Some(e) = elastic {
+    let mut elastic_groups = Vec::new();
+    for e in elastics {
+        let first = elastic_rings.len();
         for ring in elastic_rings_of(&mesh, &weld, e)? {
             let at = model.elastics.len();
             model.elastics.extend(ring);
             elastic_rings.push(at..model.elastics.len());
         }
+        let owners: BTreeSet<_> = e.load_instances.iter().collect();
+        let loaded_vertices: BTreeSet<_> = mesh.owner.iter().enumerate()
+            .filter(|(_, owner)| owners.contains(&mesh.instances[**owner]))
+            .map(|(v, _)| weld[v]).collect();
+        elastic_groups.push(ElasticGroup {
+            casing: e.clone(), rings: first..elastic_rings.len(),
+            loaded_vertices: loaded_vertices.into_iter().collect(),
+        });
     }
     crate::attached_mass::bind(pattern, &mesh, &weld, &mut model)?;
     let body = Body::new(skin_vertices.to_vec(), skin_triangles.to_vec(), 5e-3)?;
@@ -722,6 +822,7 @@ fn build_scene_inner(
         target_thickness: contact.thickness,
         solver,
         elastic_rings,
+        elastic_groups,
     })
 }
 

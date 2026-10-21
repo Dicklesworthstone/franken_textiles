@@ -153,7 +153,7 @@ fn collect_attached_mass(
 /// No garment is moved, scaled, assigned invented friction, or sewn to another garment.
 ///
 /// # Errors
-/// Invalid/oversized inputs, unsupported implicit casing or root extensions, missing placement/material
+/// Invalid/oversized inputs, unresolvable casings or root extensions, missing placement/material
 /// evidence, unknown seam references, conflicting contact sources, or missing unlike-sheet friction.
 pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusal> {
     check_options(options)?;
@@ -169,6 +169,7 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
     let mut sources = Vec::new();
     let mut interfaces = BTreeMap::new();
     let mut attached_groups = Vec::new();
+    let mut elastic_casings = Vec::new();
     let mut instance_garment = BTreeMap::new();
     let mut default = None;
     for (index, garment) in input.garments.iter().enumerate() {
@@ -207,16 +208,24 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
                 garment.id
             )));
         }
-        if original["meta"]["solved"].get("elastic_cut_mm").is_some() {
-            return Err(invalid(format!(
-                "{}: implicit elastic casings need multi-casing assembly; not silently omitted",
-                garment.id
-            )));
-        }
         let pattern = Pattern::new(original.clone());
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
             return Err(invalid(format!("{}: {}", garment.id, errors.join("; "))));
+        }
+        // Freeze the same relaxed length as the standalone garment, independently of the run's
+        // elastic enable switch. The source cut/overlap remains unchanged in the source receipt.
+        let casings = crate::scene::elastic_casings(&pattern, 1.0)?;
+        if original["meta"]["solved"].get("elastic_cut_mm").is_some() && casings.is_empty() {
+            return Err(invalid(format!("{}: legacy casing cannot resolve to one positive-length waistband", garment.id)));
+        }
+        for casing in casings {
+            elastic_casings.push(json!({
+                "instance":format!("{}::{}", garment.id, casing.instance),
+                "relaxed_m":casing.length,
+                "load_instances":casing.load_instances.iter()
+                    .map(|id| format!("{}::{id}", garment.id)).collect::<Vec<_>>()
+            }));
         }
         let source_pieces = original["pieces"]
             .as_array()
@@ -326,6 +335,9 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
     if !attached_groups.is_empty() {
         raw["attached_mass"] = json!({"schema":"ftx-attached-mass/1","groups":attached_groups});
     }
+    if !elastic_casings.is_empty() {
+        raw["meta"] = json!({"solved":{"elastic_casings":elastic_casings}});
+    }
     let composed_sha256 = digest(&raw)?;
     let pattern = Pattern::new(raw);
     let errors = pattern.structure_errors();
@@ -334,6 +346,7 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
     }
     // Reuse the shared combined group/target budgets and validate every transformed physical name.
     Attachments::from_pattern(&pattern)?;
+    crate::scene::elastic_casings(&pattern, options.elastic_ea)?;
     // One authority checks grain, constitutive domains, evidence, pair coverage and contact thickness.
     crate::material::resolve(&pattern, options)?;
     Ok(Prepared {

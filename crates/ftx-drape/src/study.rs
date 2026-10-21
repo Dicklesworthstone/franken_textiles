@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::{
     animation::{FOLD_FRAMES, ZIP_FRAMES},
     run::{DrapeBody, DrapeOptions, drape},
-    scene::{casing_at_cut_length, elastic_casing},
+    scene::{casings_at_cut_length, elastic_casings},
     thermal::{
         steady::{coverage::request as coverage, request::SurfaceConditions},
         surface::projection::Settings,
@@ -239,8 +239,8 @@ impl<'a, 'body> Session<'a, 'body> {
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
         }
-        let simulated = elastic_casing(pattern, self.scenario.options.elastic_ea)
-            .map(|c| casing_at_cut_length(pattern, &c));
+        let casings = elastic_casings(pattern, self.scenario.options.elastic_ea)?;
+        let simulated = (!casings.is_empty()).then(|| casings_at_cut_length(pattern, &casings));
         let points = mesh_bound(
             simulated.as_ref().unwrap_or(pattern),
             self.scenario.options.spacing,
