@@ -36,6 +36,18 @@ Python's `str(KeyError)`; `Value` prints as is).
 
 **Determinism class.** Fixed-order f64 arithmetic over `ftx-core`; bit-identical across targets.
 
+**MIT source-row material data** (`material_catalog::mit`). Existing summary IDs stay unchanged;
+`mit.raw-2013.NNa` etc. retain 52 lettered workbook rows for the same 30 fabrics. Four published
+quantities per row retain original units and source conditions; `lb/in3` normalizes to `kg/m3`
+using the exact international pound/inch. Source formula area weights are not independent mass
+observations; ordinal bending confidence is metadata, never uncertainty or a weight. Unknown gauge
+pressure, conditioning, sample direction, coupon width and replicate independence stay unknown.
+`reported_thickness` normalizes to metres for inspection; it does not supply contact/sewing's
+qualified `thickness`, because the archive does not establish an uncompressed state.
+Specimen EI in `N*m2` never becomes sheet rigidity in `N*m`. Existing catalog/frozen selection,
+mass accounting and condition filters consume these facts; mechanics and heat still refuse missing
+inputs. Source hashes, discrepancies and retention boundary: `docs/mit-fabric-measurements.md`.
+
 **Retained extra mass** (`material_mass`). One shared source-qualified total-group `Extra` observation
 feeds assembly accounting and optional `attached_mass` dynamics. Explicit physical instance/boundary
 vertex targets allocate fractions summing to one; mirrors are never inferred and mass is not multiplied

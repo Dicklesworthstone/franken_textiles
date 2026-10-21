@@ -1,5 +1,5 @@
 //! Both native binding commands use actual source-qualified material/contact authority.
-//! These specimens and sliding forces are synthetic; no measured garment claim is made.
+//! Geometry/sliding forces are synthetic; the MIT source rows do not establish measured garment fit.
 
 use ftx_drape::{material, run::DrapeOptions};
 use ftx_pattern::{
@@ -286,4 +286,77 @@ fn unadmitted_pair_estimates_keep_binding_available_and_mechanical_readiness_fal
     }
     assert_eq!(fs::read(dir.join("pattern.json")).unwrap(), pattern_bytes);
     assert_eq!(fs::read(dir.join("changes.json")).unwrap(), changes_bytes);
+}
+
+#[test]
+fn raw_linen_rows_bind_with_mass_and_thickness_without_inventing_drape_readiness() {
+    let pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+    ))
+    .unwrap();
+    let dir = workspace();
+    write(&dir, "pattern.json", &serde_json::to_vec(&pattern).unwrap());
+    let changes = json!({"schema":"ftx-material-bindings/1","default":{"id":"mit.raw-2013.08a"}});
+    write(&dir, "changes.json", &serde_json::to_vec(&changes).unwrap());
+    let expected = serde_json::from_value::<Changes>(changes)
+        .unwrap()
+        .apply(&Pattern::new(pattern.clone()))
+        .unwrap();
+    let catalog = textile_import::catalog().unwrap();
+    let mut hashes = Vec::new();
+    for unified in [false, true] {
+        let result = success(
+            &run(&dir, unified, &format!("linen-{unified}.json")),
+            unified,
+        );
+        for (field, value) in expected.as_object().unwrap() {
+            assert_eq!(&result[field], value);
+        }
+        let frozen =
+            serde_json::from_value(result["pattern"]["fabric"]["material"].clone()).unwrap();
+        let material = catalog.resolve(&frozen).unwrap();
+        hashes.push(material.sha256().to_string());
+        assert!(
+            (material
+                .material()
+                .require("reported_thickness", "m", false)
+                .unwrap()
+                - 0.000_215_9)
+                .abs()
+                < 1e-18
+        );
+        assert!(
+            material.authored().sources["workbook"]
+                .note
+                .contains("94f71fbd0dbd67b108f0472f73a5b1c048b2917d3403f7863c981faaa84575c1")
+        );
+        let bound = Pattern::new(result["pattern"].clone());
+        assert_eq!(bound.raw()["seams"], pattern["seams"]);
+        // Real existing assembly accounting consumes mass without demanding nonexistent mechanics.
+        let inventory: ftx_export::assembly_mass::Request = serde_json::from_value(json!({
+            "schema":"ftx-assembly-mass/1", "inventory_complete":true, "extras":[], "seam_allowance_mm":0.0
+        })).unwrap();
+        let mass = inventory.evaluate(&bound).unwrap();
+        assert!(
+            (mass.assembly_mass.kg.unwrap()
+                - 0.004 * material.material().properties["areal_density"].value)
+                .abs()
+                < 1e-15
+        );
+        assert!(mass.assembly_mass.reported_bounds_kg.is_none());
+        assert!(!mass.physical_validation_claim);
+        let sewing: ftx_export::sewing::SewOptions = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/materials/synthetic-sewing-options.json"
+        ))
+        .unwrap();
+        assert!(ftx_export::sewing::SewPlan::build(&bound, &sewing).is_err());
+        for field in [
+            "drape_materials_without_self_contact",
+            "drape_materials_with_self_contact",
+        ] {
+            assert_eq!(result[field]["ready"], false);
+            assert!(result[field].get("value").is_none());
+        }
+    }
+    assert_eq!(hashes[0], hashes[1]);
 }

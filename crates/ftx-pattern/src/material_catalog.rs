@@ -60,7 +60,7 @@ fn invalid(message: impl Into<String>) -> Refusal {
 pub fn property_unit(key: &str) -> Option<&'static str> {
     Some(match key {
         "areal_density" => "kg/m2",
-        "thickness" | "width" | "fiber_diameter" | "staple_length" => "m",
+        "thickness" | "reported_thickness" | "width" | "fiber_diameter" | "staple_length" => "m",
         "bulk_density" => "kg/m3",
         "warp_stiffness"
         | "weft_stiffness"
@@ -140,6 +140,7 @@ fn factor(unit: &str, expected: &str) -> Option<f64> {
         ("um", "m") => 1e-6,
         ("in", "m") => 0.0254,
         ("g/cm3", "kg/m3") => 1000.0,
+        ("lb/in3", "kg/m3") => 0.453_592_37 / (0.0254 * 0.0254 * 0.0254),
         ("kN/m", "N/m") | ("kN", "N") => 1000.0,
         ("mN*m", "N*m") => 0.001,
         ("lbf*in2", "N*m2") => 4.448_221_615_260_5 * 0.0254 * 0.0254,
@@ -205,6 +206,7 @@ impl Catalog {
         catalog.materials.extend(hfm.materials);
         catalog.materials.extend(nist::records());
         catalog.materials.extend(mit::records());
+        catalog.materials.extend(mit::raw_records());
         catalog.materials.extend(leather::records());
         catalog.materials.extend(loaded_insulation::records());
         catalog.materials.extend(neoprene::records());

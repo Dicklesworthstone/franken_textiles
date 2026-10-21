@@ -1043,3 +1043,109 @@ a limitation. No partial-acceptance flag, suppression, scanner edit or pre-commi
 The complete output is `checks/staged-ubs.log`. Node syntax and `git diff --check` pass. This block
 changes no Rust source; its actual release WASM build and 74-test compiled frontend lane are recorded
 above. It does not rerun the full native suite or substitute for the unavailable DSR tool gate.
+
+### Raw material-data continuation — `ftx-md1`
+
+Creation worksheet (2026-10-21): this requested TODO is PROCESS; the user consumes it to review
+the source-data delivery. The explicit request supplies its gate, and the observed gap is raw
+thickness/density absent from the summary-only catalog. It retires to completed handoff history;
+no integrity exception is needed (its four questions are inapplicable). Highest ready action is
+admitting source facts to the existing consumer; an hour of extra reporting would deliver less.
+Verdict: keep this minimum list and implement. Runtime catalog records are FEATURE, not process.
+
+- [x] Refresh full AGENTS/README, live Beads, source contracts and prior acquisition notes.
+- [x] Retrieve the primary archive/page with the required user agent; inspect workbook and README.
+- [x] Preserve every source row's ID, original values/units and ordinal bending confidence.
+- [x] Add source-row records through the existing catalog without overwriting summary observations.
+- [x] Normalize density units; preserve absent direction/conditioning/geometry and correlated values.
+- [x] Check all rows against the source workbook and disclose summary discrepancies.
+- [x] Exercise frozen replay and real consumer availability/refusals; add direct regressions.
+- [x] Run scoped tests, formatting, Clippy and WASM remotely; no local compilation while disk gate fails.
+- [x] Fresh solo re-verification, bounded honesty disposition, Bead update/flush and scoped scan;
+  final commit/reservation-release receipts are in the session output.
+
+`ftx-md1` is in progress; its full geometry/uncertainty/physical-validation acceptance stays open.
+No branches, new framework, new crate or source archive redistribution. Local `sbh check --need 20G`
+returns 1 (5.19% free versus an 8.06% threshold); heavy Cargo work must remain strict-remote.
+
+Delivered source facts: **52 lettered rows for the existing 30 MIT fabrics**, 208 published scalars,
+through ordinary `Catalog::builtin`, normalized/frozen selections and the actual native binder.
+Summary records are byte-unchanged. `reported_thickness` preserves unknown gauge pressure instead
+of supplying qualified sewing/contact thickness; assembly accounting can consume source area weight.
+The real two-binary regression checks binding equality, source retention, nominal mass and refusal
+of unsupported sewing/drape. No new physics law, generic-fiber substitution or independent measurement
+claim. Workbook/summary discrepancies remain separate in `docs/mit-fabric-measurements.md`.
+
+Evidence: ignored `out/ftx-md1-20261021/` retains the exact public ZIP/page, complete build/test/scanner
+logs and actual compiled-WASM inspections. The ZIP and workbook hashes are recorded in the material
+sources and guide; the source archive/media are not added to Git. An initial scratch reader entered
+an AppleDouble resource fork and failed; selecting the exact workbook member fixed the inspection.
+All 52 rows were checked against worksheet XML, then **208/208 original values/units** and every ordinal
+confidence label checked again against actual compiled-WASM output. All **52 persisted frozen JSON
+selections** replay without changed identities; qualified-thickness/mechanics/heat capabilities refuse.
+This is fresh solo source/runtime verification, **not independent laboratory verification** or browser
+DOM proof. Current `web/pkg` release outputs are preserved; the new WASM was exercised separately.
+
+Frozen source for the broad suite is base `190e3d4eebba77a006845147fb6e697b71443286` plus four explicit
+overlays: `crates/ftx-pattern/src/material_catalog.rs`, its `material_catalog/mit.rs`,
+`crates/ftx-pattern/tests/material_catalog.rs` and `crates/ftx-cli/tests/material_binding_workflow.rs`.
+Overlay `a9286cd2fae172b7232a605da2cb72320acd37b240463f6bbdb3156d5b4e5130` passes strict-remote
+`cargo test --locked -j1` on `ts1`: **1,748 passed, zero failed, 29 ignored**, across 244 completed
+test/doc targets. Asset/optional ignored cases are not passes. All-target Clippy with `-D warnings`
+also passes on `vmi1149989`; WASM builds on `vmi1293453`. No local Rust compilation or GH Actions ran.
+
+A final provenance sentence distinguishes source formula results from literal cells with unspecified
+measurement independence. No number, unit, gate or algorithm changes. Final source overlay is
+`54cc3b29bb0d937293ebce09479047da4302e14cb45cb835b4ac94eeb096faf0`; its five MIT unit tests pass
+on `vmi1227854`, and its WASM rebuild passes on `vmi1293453`. Final actual raw WASM SHA-256:
+`24e1b2bd19266d0688d57405571537a1cf42dadb32a4473ba05e6754b5a990a2`.
+`wasm-inspections-final.json` SHA-256:
+`0ae0d8e23d780a842605097d7d6f043f3d4450a8535ebec06db4dc19752849ec`.
+The final runtime/source comparison and 52 frozen replays above use these final bytes. The full
+workspace result belongs to the prior overlay; focused CLI and all-target lint rechecks bind the
+final wording separately. Earlier four-pass/one-fail unit run used catalog-wide discovery but expected
+only two rows; explicit linen candidates fix that test setup without weakening the condition refusal.
+The first lint run rejected excessive-precision spellings; shorter equivalent literals retain every
+source IEEE-754 value, checked against XML. No suppression or source value alteration.
+
+Bounded fresh-solo worksheets (this source-data block only):
+
+- Real work: actual diff/Beads were examined. README purpose is patterns that sew together and fit a
+  specific body, with usable manufacturing files. USER 1 (source facts available to existing consumers),
+  ENABLER 1 (direct source/binder/runtime regressions), PROCESS 2 (requested TODO/Bead), UNKNOWN 0.
+  Q1: demo `materials show mit.raw-2013.08a` and the real binder/mass test. Q2: omitting PROCESS changes
+  tracking, not runtime. Q3: native binding/mass and 52 compiled-WASM inspections consume this now.
+  Q4: oldest user-facing item is `ftx-onn`; missing matched empirical data justifies this upstream
+  acquisition instead of more optional solver breadth. Q5: no swarm, so pane comparisons do not apply.
+  Q6: no plan edits or follow-up laundering; `ftx-md1` remains incomplete. Verdict: bounded delivery;
+  stop reporting and hand off, without a new framework or a false physical-validation close.
+- Honesty 1: No (checked: original checks retained; catalog count 169→221 and original-summary namespace
+  filter reflect added records; new tests cover all 52). 2: No (checked: facts from the pinned public
+  workbook, actual binaries/WASM; synthetic geometry labelled). 3: No (checked: no oracle/golden edits).
+  4: Direct tests and unit normalization accompany data; no suppressed rule, widened tolerance, skipped
+  test or guard bypass. Test-setup correction and equivalent literal spellings are disclosed above.
+  5: No (checked: complete 52-row denominator and consumer refusals retained). 6: No (checked: actual
+  suite counts, five unit tests, both binaries and 52 runtime replays). 7: No (checked: observed exits,
+  full logs, exact overlays/artifact hashes). 8: No (checked: primary published facts are not independent
+  lab tests, physical fit, native/WASM parity of all workloads or a new browser delivery).
+  9: No (checked: failed setup/lint, source discrepancies, ignored tests and unknown conditions disclosed).
+  10: No (checked: cited commands retain stderr). 11: No (checked: original `ftx-md1` remains in progress;
+  no full empirical criterion is closed). 12: No (checked: no technical plan/spec relaxation).
+  13–17: Not applicable because this block is solo, without delegated results or peer agreement.
+  18: No (checked: all 52 source rows fixed before execution; no confidence weighting or cherry-picked
+  fabric result). Older-session mining is outside this bounded continuation; earlier CASS limitations
+  are already disclosed. 19: Explain the larger rustfmt table, failed scratch reader/test setup/lint
+  and qualification boundary found before any sewing claim. 20: strongest evidence is direct
+  source-XML comparison against actual compiled output plus frozen re-execution, reproducible locally.
+  Disposition: no weakened gate or fabricated result found in this pass; source disagreements/unknown
+  pressure are encoded as separate observations/unavailable capability (RH-1/RH-2), not hidden repairs.
+
+Final-wording workflow tests pass **5/5** on `vmi1156319`, and matching all-target Clippy with
+`-D warnings` passes on `ts1`. Formatting and diff checks pass. The full workspace suite was not
+repeated after the single provenance-sentence change; the matching catalog/binder/lint/WASM/runtime
+checks above cover that final source identity. `br sync --flush-only` reports nothing left to export;
+`ftx-md1` stays **in progress**, with the unresolved source/geometry/experimental acceptance recorded.
+The first exact staged UBS run exits zero: four Rust files, zero critical, 373 warnings, 126 info.
+Changed-code review finds test assertions/unwraps, bounded constant-table lookup and retained metadata
+allocations; no true defect established and no suppression used. The final exact staged scan retains
+its separate output in `checks/staged-ubs-final.log`. All logs/source data remain local and ignored.
