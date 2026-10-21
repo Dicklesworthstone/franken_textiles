@@ -73,6 +73,87 @@ the base directional contribution. It is stored elastic energy, not a plastic or
 source. Identification without an explicit area policy refuses a material carrying this response;
 it cannot silently discard it or claim to have identified the two additional coefficients.
 
+## Identify an area law from homogeneous swatches
+
+`materials calibrate-nonlinear` jointly identifies directional knot resultants, normal coupling and
+the two area coefficients when its `ftx-nonlinear-swatch-calibration/1` input includes:
+
+```json
+"area_response": {
+  "model": "area_green_strain/1",
+  "area_ratio_range": [0.7, 1.5]
+}
+```
+
+Supply full, measured deformation gradients and whichever nominal force-resultant channels were
+actually observed. Grip extension alone is not a homogeneous deformation gradient. The nonlinear
+swatch fitter uses the same work-conjugate force definition and analytical area basis as the
+production material. It fits all coefficients together and refuses insufficient independent
+excitation, negative/invalid area coefficients, unstable directional response or excessive FIT or
+held-out CHECK residuals. This mode requires explicit shared `specimen`, matching `specimen_id`, and
+`conditioning` values; it does not infer a construction from the specimen's fiber composition.
+
+The declared area interval limits admissible data. The published `fitted_area_ratio_range` is limited
+to actual FIT area ratios, including the undeformed reference and intersecting prior qualification.
+CHECK observations cannot extend that domain. Directional Green-strain domains are likewise bounded
+by FIT data. Every fitted coefficient remains a source-bearing estimate even when the acquisition
+observations were measured. Input estimate admission and output estimate consumption are separate
+decisions.
+
+The runnable [synthetic swatch example](../examples/area-identification/swatch.json) uses six FIT
+deformations and one held-out CHECK deformation. All four nominal force components are supplied.
+Its forces were calculated independently as `P = F S`, with compression/tension warp slopes
+200/350 N/m, compression/tension weft slopes 150/250 N/m, negative/positive engineering-shear slopes
+70/90 N/m, coupling 20 N/m, quadratic coefficient 40 N/m and log-squared coefficient 15 N/m.
+The example declares three zero interior knots; all nine unknown coefficients are independently
+excited. Its FIT area ratios cover approximately 0.748331 to 1.449138. These numbers are synthetic
+software observations, not measurements of a fabric or validation of a garment.
+
+```sh
+cargo build --locked -p ftx-cli --bin ftx-materials
+
+target/debug/ftx-materials calibrate-nonlinear examples/area-identification/swatch.json \
+  --allow-estimates > /tmp/area-swatch-identification.json
+```
+
+The output contains the complete calibration report, an ordinary frozen `selection`, and its exact
+portable `selection_json`. `ftx materials calibrate-nonlinear ... --allow-estimates --json` provides
+the same result inside the primary CLI envelope. The WASM `material_calibrate_nonlinear` entry point
+calls the shared identification engine and publishes that same selection.
+
+Use the identified material immediately in a membrane-only finite-strip experiment, without editing
+the material compiler or solver:
+
+```sh
+python3 - <<'PY'
+import json
+
+with open("/tmp/area-swatch-identification.json") as source:
+    identified = json.load(source)
+request = {
+    "schema": "ftx-strip-experiment/1",
+    "material": identified["selection"],
+    "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [0, 1],
+        "cells": [2, 4],
+    },
+    "extensions": [0, 0.02],
+}
+with open("/tmp/area-identified-strip-input.json", "x") as output:
+    json.dump(request, output, indent=2)
+    output.write("\n")
+PY
+
+target/debug/ftx-materials strip-experiment /tmp/area-identified-strip-input.json
+```
+
+The material's source and domain declarations travel with its frozen selection. Editing a coefficient
+without updating its content identity refuses at resolution. Forward replay uses the report's exact
+`input`; neither native nor WASM callers fit again during replay. The example deliberately supplies no
+mass, bending, thickness, friction or thermal evidence, so full garment mechanics remain unavailable.
+
 ## Identify directionality with a physical-area law
 
 The existing `ftx-strip-calibration/1` request accepts an optional top-level `area_response` policy
@@ -107,8 +188,12 @@ column-normalized excitation, stationarity, equivalent-minimum, CHECK and double
 to the entire joint vector. Weak excitation returns diagnostics without a material selection.
 
 Every trial uses the production area compiler and physical Green-strain/J domain. Publication clips
-the directional law to FIT-only local strain support and retains the original J interval. It then
-replays the complete published response, including its area term, through ordinary production solves.
+the directional law to FIT-only local strain support. Identify mode also clips its J interval to the
+actual coarse and refined FIT element states, including the undeformed reference, intersected with
+the inherited area domain. CHECK cannot enlarge either support. The report retains these exact bounds
+as `fitted_area_ratio_range`, and all six fitted components share their source and domain metadata.
+Preserve mode retains the independent coefficients and original J interval unchanged. Both modes
+replay the complete published response, including its area term, through ordinary production solves.
 Identified coefficients are estimates with their acquisition receipt; search intervals are not
 published as uncertainty bounds. Preserved coefficients retain their original evidence. Both modes
 use the existing native, portable and browser strip-calibration entry points and frozen selections.

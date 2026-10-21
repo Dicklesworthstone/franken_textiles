@@ -86,8 +86,10 @@ impl Prepared {
                     || sources.get(&curve.source).is_some_and(|source| {
                         [
                             "local:ftx-strip-calibration/",
+                            "local:ftx-strip-area-calibration/",
                             "local:ftx-swatch-calibration/",
                             "local:ftx-nonlinear-swatch-calibration/",
+                            "local:ftx-nonlinear-swatch-area-calibration/",
                         ]
                         .iter()
                         .any(|prefix| source.reference.starts_with(prefix))
@@ -181,6 +183,8 @@ impl Prepared {
         source: &str,
         conditions: &BTreeMap<String, String>,
     ) -> Result<TabulatedMembrane, Refusal> {
+        // Crop the separable curves with the separable law. An area contribution in these
+        // endpoint stresses would be stored in the curves and then counted a second time.
         let compiled = self.compile(parameters)?;
         let mut response = self.response(parameters);
         for (axis, curve) in [&mut response.warp, &mut response.weft, &mut response.shear]

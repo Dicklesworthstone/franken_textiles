@@ -1,12 +1,13 @@
 //! Area coordinates for the existing inverse experiment, evaluated by the production compiler.
 
+use std::collections::BTreeMap;
+
 use ftx_core::Refusal;
 use ftx_pattern::{
     material_response::{AreaResponse, TabulatedMembrane},
     materials::{Evidence, Source},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 use super::{family::ParameterDescriptor, invalid};
 
@@ -35,6 +36,10 @@ impl Area {
         }
     }
 
+    pub(super) fn identifies(&self) -> bool {
+        matches!(self, Self::Identify { .. })
+    }
+
     pub(super) fn validate(
         &self,
         template: &AreaResponse,
@@ -43,10 +48,17 @@ impl Area {
         check_sources: &[&str],
     ) -> Result<(), Refusal> {
         if conditions.len() > 60
-            || template
-                .conditions
-                .iter()
-                .any(|(k, v)| conditions.get(k) != Some(v))
+            || template.conditions.iter().any(|(k, v)| {
+                !(self.identifies()
+                    && [
+                        "fitted_green_strain_range",
+                        "fitted_area_ratio_range",
+                        "held_out_checks",
+                        "fixture_model",
+                    ]
+                    .contains(&k.as_str()))
+                    && conditions.get(k) != Some(v)
+            })
         {
             return Err(invalid(
                 "area identification must retain the original matched specimen/conditioning and room for FIT-domain metadata",
@@ -57,12 +69,15 @@ impl Area {
                 for q in [&template.quadratic, &template.log_squared] {
                     let reference = sources.get(&q.source).map(|s| s.reference.as_str());
                     if q.conditions.contains_key("fitted_green_strain_range")
+                        || q.conditions.contains_key("fitted_area_ratio_range")
                         || reference.is_some_and(|reference| {
                             check_sources.contains(&reference)
                                 || [
                                     "local:ftx-strip-calibration/",
+                                    "local:ftx-strip-area-calibration/",
                                     "local:ftx-swatch-calibration/",
                                     "local:ftx-nonlinear-swatch-calibration/",
+                                    "local:ftx-nonlinear-swatch-area-calibration/",
                                 ]
                                 .iter()
                                 .any(|prefix| reference.starts_with(prefix))
@@ -91,9 +106,10 @@ impl Area {
                         || lo >= hi
                         || !(hi - lo).is_finite()
                 }) || parameter_bounds.iter().all(|p| p[0] == 0.0)
+                    || !(2.0 * (parameter_bounds[0][1] + parameter_bounds[1][1])).is_finite()
                 {
                     return Err(invalid(
-                        "area bounds must be finite nonnegative nonempty N/m intervals; the entire box must retain a positive reference area tangent",
+                        "area bounds must be finite nonnegative nonempty N/m intervals; the entire box must retain a positive representable reference area tangent",
                     ));
                 }
             }
@@ -108,14 +124,26 @@ impl Area {
         parameters: &[f64],
         source: &str,
         conditions: &BTreeMap<String, String>,
+        fitted_range: Option<[f64; 2]>,
     ) -> Result<(), Refusal> {
         let mut area = template.clone();
-        if matches!(self, Self::Identify { .. }) {
+        if self.identifies() {
             if parameters.len() != 2 {
                 return Err(invalid(
                     "area identification requires two coefficient coordinates",
                 ));
             }
+            if let Some(range) = fitted_range {
+                if range[0] < template.area_ratio_range[0]
+                    || range[1] > template.area_ratio_range[1]
+                {
+                    return Err(invalid(
+                        "identified area support cannot widen the original J domain",
+                    ));
+                }
+                area.area_ratio_range = range;
+            }
+            area.conditions = conditions.clone();
             for (q, &value) in [&mut area.quadratic, &mut area.log_squared]
                 .into_iter()
                 .zip(parameters)
@@ -155,7 +183,7 @@ impl Area {
                 " Physical-area coefficients, J domain and original evidence are preserved, not identified by this fit."
             }
             Self::Identify { .. } => {
-                " Two physical-area coefficients are jointly identified within the declared J domain and FIT-only strain support. Local excitation is not global uniqueness or empirical textile qualification."
+                " Two physical-area coefficients are jointly identified within the original J domain and actual FIT-only physical-area/strain support. Local excitation is not global uniqueness or empirical textile qualification."
             }
         }
     }

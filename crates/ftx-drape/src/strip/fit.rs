@@ -204,7 +204,7 @@ pub struct Report {
     /// Physical meaning of nonlinear family parameters; absent for legacy scalar reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameter_descriptors: Option<Vec<family::ParameterDescriptor>>,
-    /// Independent interval bounds in parameter order; scalar/shape bounds remain in input.
+    /// Independent interval or joint area-family bounds in parameter order; legacy bounds stay in input.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parameter_bounds: Vec<[f64; 2]>,
     /// Whether every publication gate passed.
@@ -234,6 +234,10 @@ pub struct Report {
     pub domain_replay_verified: bool,
     /// Local FIT element strain envelope including the explicitly simulated undeformed state.
     pub fitted_green_strain_range: [[f64; 2]; 3],
+    /// Actual coarse/refined FIT element J envelope including the undeformed reference.
+    /// Absent for legacy separable models; CHECK observations cannot enlarge this support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitted_area_ratio_range: Option<[f64; 2]>,
     /// Prediction for every input observation, in stable input order.
     pub predictions: Vec<Prediction>,
     /// Explicit modeling limits; no empirical garment or global-optimum claim.
@@ -303,6 +307,7 @@ impl Budget<'_> {
                 &parameters[base.len()..],
                 &source,
                 &self.input.conditions,
+                None,
             )?;
         }
         let response = response
@@ -319,14 +324,23 @@ impl Budget<'_> {
             Some(response) => response.reference_moduli()?,
             None => four(parameters)?,
         };
-        solve_law(
+        let state = solve_law(
             fixture,
             Membrane::orthotropic(warp, weft, nu, shear, 1.0),
             response.as_ref(),
             self.inherited_domain,
             extension,
             controls,
-        )
+        );
+        state.map_err(|mut refusal| {
+            if self.input.area_response.is_some() {
+                refusal.message = format!(
+                    "area-strip solve {} at extension {extension}, cells {:?}, warp axis {:?}: {}",
+                    self.used, fixture.cells, fixture.warp_axis, refusal.message,
+                );
+            }
+            refusal
+        })
     }
 
     fn within_inherited_domain(&self, domain: StrainDomain) -> Result<StrainDomain, Refusal> {
@@ -403,15 +417,20 @@ fn physical<const N: usize>(input: &Input, p: [f64; N]) -> [f64; N] {
 fn validate(input: &Input) -> Result<(), Refusal> {
     input.material.validate()?;
     input.controls.validate()?;
-    if input.area_response.is_none()
-        && input
-            .material
-            .membrane_response
-            .as_ref()
-            .is_some_and(|response| response.area_response.is_some())
+    if input
+        .material
+        .membrane_response
+        .as_ref()
+        .is_some_and(|response| response.area_response.is_some())
+        && input.area_response.is_none()
     {
         return Err(invalid(
             "strip identification currently fits separable membrane laws and cannot identify or discard an existing area response; use an area-capable characterization model",
+        ));
+    }
+    if input.response_family.is_some() && input.nonlinear.is_some() {
+        return Err(invalid(
+            "response_family and independent nonlinear intervals are mutually exclusive",
         ));
     }
     if let Some(mode) = &input.area_response {
@@ -438,11 +457,6 @@ fn validate(input: &Input) -> Result<(), Refusal> {
             &input.material.sources,
             &check_sources,
         )?;
-    }
-    if input.response_family.is_some() && input.nonlinear.is_some() {
-        return Err(invalid(
-            "response_family and independent nonlinear intervals are mutually exclusive",
-        ));
     }
     let policy = &input.policy;
     if input.schema != "ftx-strip-calibration/1"
@@ -638,6 +652,13 @@ fn validate(input: &Input) -> Result<(), Refusal> {
 struct Evaluation {
     residuals: Vec<f64>,
     sse: f64,
+}
+
+fn observe_area(range: &mut Option<[f64; 2]>, state: &State) {
+    if let (Some(range), Some(actual)) = (range, state.area_ratio_range) {
+        range[0] = range[0].min(actual[0]);
+        range[1] = range[1].max(actual[1]);
+    }
 }
 
 fn evaluate<const N: usize>(
@@ -852,6 +873,12 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
 }
 
 fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
+    let prior_response = input
+        .material
+        .membrane_response
+        .as_ref()
+        .map(|response| response.compile(&input.material.sources, true))
+        .transpose()?;
     let family = input
         .response_family
         .as_ref()
@@ -868,12 +895,6 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
         })
         .transpose()?;
     let mut inherited_domain = fitted_domain(&input.material)?;
-    let prior_response = input
-        .material
-        .membrane_response
-        .as_ref()
-        .map(|response| response.compile(&input.material.sources, true))
-        .transpose()?;
     for domain in [
         prior_response
             .as_ref()
@@ -955,11 +976,25 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     // Preserve exact zero as well as the actually solved rest state (which may contain roundoff).
     // Every objective, probe, coarse/refined state and CHECK already obeys inherited support.
     let mut ranges = [[0.0_f64; 2]; 3];
+    let mut area_range = input
+        .area_response
+        .as_ref()
+        .filter(|mode| mode.identifies())
+        .map(|_| [1.0_f64; 2]);
     for experiment in &input.experiments {
         let mut refined = experiment.fixture.clone();
         refined.cells.iter_mut().for_each(|n| *n *= 2);
         if experiment.partition == Partition::Fit {
+            if area_range.is_some() {
+                let zero = budget.solve(&experiment.fixture, &parameters, 0.0, &input.controls)?;
+                observe_area(&mut area_range, &zero);
+                for (range, actual) in ranges.iter_mut().zip(zero.green_strain_range) {
+                    range[0] = range[0].min(actual[0]);
+                    range[1] = range[1].max(actual[1]);
+                }
+            }
             let zero = budget.solve(&refined, &parameters, 0.0, &input.controls)?;
+            observe_area(&mut area_range, &zero);
             for (range, actual) in ranges.iter_mut().zip(zero.green_strain_range) {
                 range[0] = range[0].min(actual[0]);
                 range[1] = range[1].max(actual[1]);
@@ -996,6 +1031,14 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
                     mesh_peak.max((state.mid_width_m - coarse.mid_width_m).abs() / width.scale_m);
             }
             if experiment.partition == Partition::Fit {
+                observe_area(&mut area_range, &coarse);
+                observe_area(&mut area_range, &state);
+                if area_range.is_some() {
+                    for (range, actual) in ranges.iter_mut().zip(coarse.green_strain_range) {
+                        range[0] = range[0].min(actual[0]);
+                        range[1] = range[1].max(actual[1]);
+                    }
+                }
                 for (range, actual) in ranges.iter_mut().zip(state.green_strain_range) {
                     range[0] = range[0].min(actual[0]);
                     range[1] = range[1].max(actual[1]);
@@ -1014,6 +1057,14 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     ranges = budget
         .within_inherited_domain(StrainDomain::new(ranges)?)?
         .ranges();
+    if let Some(range) = &mut area_range {
+        let support = area_template(input)?.area_ratio_range;
+        range[0] = range[0].max(support[0]);
+        range[1] = range[1].min(support[1]);
+        if range[0] >= range[1] {
+            reasons.push("FIT states do not characterize a nonempty physical-area interval".into());
+        }
+    }
     let mut fit = quality(&fit_errors);
     let mut check = (!check_errors.is_empty()).then(|| quality(&check_errors));
     if predictions
@@ -1038,6 +1089,18 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
                 .into(),
         );
     }
+    if let Some(fitted) = area_range
+        && predictions
+            .iter()
+            .filter(|p| p.partition == Partition::Check)
+            .any(|p| {
+                p.state
+                    .area_ratio_range
+                    .is_some_and(|actual| actual[0] < fitted[0] || actual[1] > fitted[1])
+            })
+    {
+        reasons.push("held-out CHECK states escape the FIT-only physical-area domain; CHECK data cannot enlarge J support".into());
+    }
     for (name, q) in [("FIT", Some(&fit)), ("CHECK", check.as_ref())] {
         if let Some(q) = q
             && (!q.rms_scaled.is_finite()
@@ -1059,7 +1122,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     let digest = sha256_hex(&serde_json::to_vec(input).map_err(invalid)?);
     let mut nonlinear_material = None;
     if reasons.is_empty() && (budget.family.is_some() || input.nonlinear.is_some()) {
-        match publish(input, &digest, &parameters, ranges, budget.family.as_ref()) {
+        match publish(input, &digest, &parameters, ranges, area_range, budget.family.as_ref()) {
             Ok(material) => nonlinear_material = Some(material),
             Err(refusal) => reasons.push(format!(
                 "nonlinear FIT-support publication failed: {}; no material or missing branch was invented",
@@ -1180,7 +1243,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     let material = if reasons.is_empty() {
         Some(match nonlinear_material {
             Some(material) => material,
-            None => publish(input, &digest, &parameters, ranges, None)?,
+            None => publish(input, &digest, &parameters, ranges, area_range, None)?,
         })
     } else {
         None
@@ -1240,9 +1303,20 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
         mesh_change_peak_scaled: mesh_peak,
         domain_replay_verified,
         fitted_green_strain_range: ranges,
+        fitted_area_ratio_range: area_range,
         predictions,
         model_scope: {
-            let mut scope = if input.nonlinear.is_some() {
+            let mut scope = if input.area_response.is_some() {
+                if input.nonlinear.is_some() {
+                    format!(
+                        "{SCOPE} Independent signed piecewise-linear interval tangents and constant normal coupling are identified at declared fixed Green-strain knots. Knot positions, symmetry, missing branches and history are not identified."
+                    )
+                } else {
+                    format!(
+                        "{SCOPE} Conditional on caller-declared signed piecewise-linear shapes; three dimensionless amplitudes and constant normal coupling are identified. Knots, relative shape and unobserved branches are not identified."
+                    )
+                }
+            } else if input.nonlinear.is_some() {
                 format!(
                     "{SCOPE} Independent signed piecewise-linear interval tangents and constant normal coupling are identified at declared fixed Green-strain knots. Knot positions, symmetry, missing branches, history and area-preserving behavior are not identified."
                 )
@@ -1266,6 +1340,7 @@ fn publish(
     digest: &str,
     parameters: &[f64],
     ranges: [[f64; 2]; 3],
+    area_range: Option<[f64; 2]>,
     family: Option<&family::Prepared>,
 ) -> Result<Material, Refusal> {
     let mut material = input.material.clone();
@@ -1273,7 +1348,12 @@ fn publish(
     if material.sources.contains_key(&source) {
         return Err(invalid("strip receipt source identity already exists"));
     }
-    material.sources.insert(source.clone(), Source { reference: format!("local:ftx-strip-calibration/{digest}"), accessed_on: input.fitted_on.clone(), note: format!("Inverse production-membrane clamped-strip model; complete acquisitions, assumptions, sensitivity and mesh checks retained in ftx-strip-calibration-report/1 input {digest}. {}", input.method) });
+    let source_family = if area_range.is_some() {
+        "local:ftx-strip-area-calibration"
+    } else {
+        "local:ftx-strip-calibration"
+    };
+    material.sources.insert(source.clone(), Source { reference: format!("{source_family}/{digest}"), accessed_on: input.fitted_on.clone(), note: format!("Inverse production-membrane clamped-strip model; complete acquisitions, assumptions, sensitivity and mesh checks retained in ftx-strip-calibration-report/1 input {digest}. {}", input.method) });
     let mut conditions = input.conditions.clone();
     conditions.insert(
         "fitted_green_strain_range".into(),
@@ -1281,6 +1361,12 @@ fn publish(
     );
     conditions.insert("held_out_checks".into(), "true".into());
     conditions.insert("fixture_model".into(), SCOPE.into());
+    if let Some(range) = area_range {
+        conditions.insert(
+            "fitted_area_ratio_range".into(),
+            serde_json::to_string(&range).map_err(invalid)?,
+        );
+    }
     if let Some(family) = family {
         material.membrane_response = Some(family.publish(
             four(base_parameters(input, parameters))?,
@@ -1313,7 +1399,9 @@ fn publish(
             &parameters[base_parameters(input, parameters).len()..],
             &source,
             &conditions,
+            area_range,
         )?;
+        response.coupling.method = "Signed constant normal coupling identified with directional response under the explicit physical-area policy; all coefficients remain model estimates.".into();
     }
     material.validate()?;
     Ok(material)

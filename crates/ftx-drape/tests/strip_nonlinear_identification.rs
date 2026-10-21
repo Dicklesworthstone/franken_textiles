@@ -294,11 +294,22 @@ fn jointly_identifies_physical_area_and_directionality_with_exact_published_repl
         .area_response
         .as_ref()
         .unwrap();
-    assert_eq!(area.area_ratio_range, [0.65, 1.45]);
+    assert_eq!(Some(area.area_ratio_range), report.fitted_area_ratio_range);
+    assert!(area.area_ratio_range[0] > 0.65 && area.area_ratio_range[1] < 1.45);
     assert_eq!(area.quadratic.evidence, Evidence::Estimate);
     assert_eq!(area.quadratic.bounds, None);
     assert!(area.quadratic.source.starts_with("strip-"));
-    assert_eq!(area.conditions, report.input.conditions);
+    assert!(
+        report
+            .input
+            .conditions
+            .iter()
+            .all(|(key, value)| area.conditions.get(key) == Some(value))
+    );
+    assert_eq!(
+        area.conditions["fitted_area_ratio_range"],
+        serde_json::to_string(&area.area_ratio_range).unwrap()
+    );
     for experiment in &report.input.experiments {
         let mut fixture = experiment.fixture.clone();
         fixture.cells.iter_mut().for_each(|n| *n *= 2);

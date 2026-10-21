@@ -2544,6 +2544,58 @@ See [material-sewing-plans.md](docs/material-sewing-plans.md#partial-seam-operat
 
 ---
 
+### 25.47 Joint area and directional identification from homogeneous swatches
+
+**Delivered software (`ftx-ai2`).** The existing nonlinear swatch workflow can jointly identify
+directional knot resultants, normal coupling and both physical-area coefficients from complete
+deformation gradients and observed nominal-force channels. Its two additional design columns come
+from the production constitutive evaluator. The existing deterministic least-squares and normalized
+excitation gate apply to the complete parameter vector; unsupported branches, negative coefficients,
+unstable base laws and excessive FIT or independent CHECK residuals refuse without projection.
+
+An explicit area-model request declares admissible J bounds and matching specimen/conditioning.
+Only FIT observations determine the published strain and physical-area domains; J includes the
+undeformed reference, and neither CHECK observations nor replacement permission widen inherited
+support. Existing area applicability conditions, including additional temperature or treatment
+qualifiers, survive replacement. The three curves, coupling and two area quantities share one fitted
+source and exact domain metadata. Removing the area object or mixing their sources/domains refuses.
+
+The ordinary material, frozen selection, native commands and file-free WASM adapter carry this law
+directly into the production finite-strip experiment. A seven-state independent analytic example
+identifies nine unknowns, recovering synthetic area coefficients 40 and 15 N/m with six FIT states
+and one independent CHECK state. Focused tests cover known answers, held-out isolation, physical
+support, replacement, estimate admission, source retention and actual forward replay. Other mechanics
+remain absent unless separately characterized; this result supplies no bending, mass, contact or
+thermal properties and does not establish an empirical textile or garment fit. The measured-material
+gate remains under `ftx-ki4`; bounded clamped-strip identification continues under `ftx-ai1`.
+See [material-area-response.md](docs/material-area-response.md) and the executable
+[swatch request](examples/area-identification/swatch.json).
+
+---
+
+### 25.48 Physical-area support from the actual inverse strip experiment
+
+**Delivered software (`ftx-ai3`, extending `ftx-ai1`).** Joint area identification now observes
+physical J at every production triangle in the accepted coarse and refined FIT states. The published
+interval contains the explicitly simulated reference and intersects inherited source qualification.
+It is independent of the separate directional strain extrema; box corners are not acquisitions.
+CHECK states cannot widen either domain. Publication and ordinary frozen-law replay use this exact
+support, and all six identified components retain one source and matching fitted-area metadata.
+
+The existing Preserve/Identify API and both declared-shape and independent-interval modes remain.
+Preserve mode keeps independently qualified area observations and their original interval unchanged.
+Identification never uses preserved CHECK acquisitions as a fixed prior. Bounds retain a positive
+representable area tangent throughout the complete search box; mesh, stationarity, excitation,
+aggregate work and independent residual gates remain authoritative.
+
+The canonical synthetic strip request recovers the six coordinates `[1.1, 0.9, 1.2, -80, 31, 19]`,
+passes refinement and replays the exact published selection. Three focused support tests and the
+twelve restored upstream nonlinear tests cover recovery, CHECK isolation, source/domain erasure,
+unchanged preserved evidence and full solve accounting. These are numerical software checks;
+independent acquired textiles, transverse operators, bending/contact and garment fit remain open.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

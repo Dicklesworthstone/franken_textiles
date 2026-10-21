@@ -73,6 +73,10 @@ pub struct State {
     pub energy_j: f64,
     /// Observed elementwise [E_warp,E_weft,2E_warp_weft] bounds, not grip strains.
     pub green_strain_range: [[f64; 2]; 3],
+    /// Actual physical element area-ratio bounds when the selected law has an area response.
+    /// Omitted for legacy separable laws; this is not a box-corner estimate from strain extrema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_ratio_range: Option<[f64; 2]>,
     /// Accepted positions in strip coordinates, metres, row-major mesh order.
     pub positions_m: Vec<[f64; 3]>,
     /// Number of Newton iterations used by the actual production solver.
@@ -242,6 +246,9 @@ pub(super) fn solve_law(
         ));
     }
     let mut ranges = [[f64::INFINITY, f64::NEG_INFINITY]; 3];
+    let mut area_range = response
+        .and_then(CompiledMembrane::area_ratio_range)
+        .map(|_| [f64::INFINITY, f64::NEG_INFINITY]);
     for element in &solver.model.membranes {
         let [a, b, c] = element.v.map(|i| solver.x[i]);
         if (b - a).cross(c - a).z <= 0.0 {
@@ -249,7 +256,14 @@ pub(super) fn solve_law(
                 "clamped strip developed an inverted or degenerate planar element",
             ));
         }
-        for (range, value) in ranges.iter_mut().zip(element.strain(&solver.x)) {
+        let strain = element.strain(&solver.x);
+        if let Some(range) = &mut area_range {
+            let value = ftx_pattern::material_response::physical_area_ratio(strain)
+                .ok_or_else(|| invalid("strip developed an invalid physical area metric"))?;
+            range[0] = range[0].min(value);
+            range[1] = range[1].max(value);
+        }
+        for (range, value) in ranges.iter_mut().zip(strain) {
             range[0] = range[0].min(value);
             range[1] = range[1].max(value);
         }
@@ -269,6 +283,7 @@ pub(super) fn solve_law(
         mid_width_m: width,
         energy_j: energy,
         green_strain_range: ranges,
+        area_ratio_range: area_range,
         positions_m: solver.x.iter().map(|p| [p.x, p.y, p.z]).collect(),
         newton_iterations: numerical.iterations,
     })
