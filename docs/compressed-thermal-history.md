@@ -9,6 +9,10 @@ This is a one-way sequence: a quasi-static gap change, followed by a hold at tha
 not a continuously moving squeeze, a recovery law, or a garment contact-pressure simulation.
 Mechanical branch work is reported separately and is **not converted into generated heat**.
 
+This page documents the original version-1 single-branch request. The same commands now also accept
+version 2 for [explicit source-qualified load/unload/reload paths](cyclic-compression-heat.md),
+preserving temperature and work histories across validated branch reversals rather than restarting.
+
 ## Runnable numerical example
 
 From the repository root, compose a request from the existing synthetic compression fixture:

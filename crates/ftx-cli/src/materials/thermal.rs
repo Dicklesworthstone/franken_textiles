@@ -29,9 +29,8 @@ fn invalid(e: serde_json::Error) -> Refusal {
 }
 
 pub(crate) fn compression_history(path: &str) -> Result<Value, Refusal> {
-    let input: ftx_drape::thermal::compression::Input =
-        serde_json::from_str(&read(path, MAX_INPUT)?).map_err(invalid)?;
-    serde_json::to_value(ftx_drape::thermal::compression::evaluate(&input)?).map_err(invalid)
+    let report = ftx_drape::thermal::compression::evaluate_json(&read(path, MAX_INPUT)?)?;
+    serde_json::from_str(&report).map_err(invalid)
 }
 
 pub(crate) fn stack(path: &str) -> Result<Value, Refusal> {
