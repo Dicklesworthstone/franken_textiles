@@ -313,8 +313,7 @@ fn coincident_garment_starts_refuse_instead_of_inventing_layer_offsets() {
     );
 }
 
-#[test]
-fn two_sewn_bands_weld_independently_and_continue_on_the_same_moving_body() {
+fn bands() -> Input {
     let mut input = input();
     for (i, g) in input.garments.iter_mut().enumerate() {
         let radius = if i == 0 { 40.0 } else { 44.0 };
@@ -333,6 +332,12 @@ fn two_sewn_bands_weld_independently_and_continue_on_the_same_moving_body() {
             {"id":"left","a":"back/right","b":"front/left"}
         ]);
     }
+    input
+}
+
+#[test]
+fn two_sewn_bands_weld_independently_and_continue_on_the_same_moving_body() {
+    let input = bands();
     let opts = DrapeOptions {
         spacing: 24.0,
         ..options()
@@ -402,5 +407,232 @@ fn shared_interface_evidence_is_coalesced_but_conflicting_sources_are_not_overwr
             .unwrap()
             .message
             .contains("duplicate")
+    );
+}
+
+fn attachment(mass: f64, targets: Value) -> Value {
+    json!({"schema":"ftx-attached-mass/1","groups":[{
+        "extra":{"id":"ornament","mass":{"value":mass,"unit":"kg","source":"test",
+            "evidence":"estimate","method":"Synthetic total accessory-group mass",
+            "bounds":[mass*0.9,mass*1.1],"conditions":{"purpose":"software regression"}},
+            "sources":{"test":{"reference":"test:outfit-mass","accessed_on":"2026-10-21",
+                "note":"Synthetic, not a measured accessory or attachment-strength qualification"}},
+            "allow_estimates":true},"targets":targets}]})
+}
+
+#[test]
+fn accessory_evidence_and_mirrored_folded_targets_survive_namespacing_exactly() {
+    let mut input = input();
+    for (i, g) in input.garments.iter_mut().enumerate() {
+        g.pattern["pieces"][0]["cut"]["qty"] = json!(2);
+        let mut folded = g.pattern["pieces"][0].clone();
+        folded["id"] = json!("fold");
+        folded["cut"] = json!({"qty":1,"on_fold":"left"});
+        g.pattern["pieces"].as_array_mut().unwrap().push(folded);
+        g.pattern["attached_mass"] = attachment(
+            0.003 * (i + 1) as f64,
+            json!([{"instance":"panel.R","vertex":"b","fraction":0.25},
+                {"instance":"panel.L","vertex":"b","fraction":0.25},
+                {"instance":"fold","vertex":"b.L","fraction":0.5}]),
+        );
+    }
+    let original = serde_json::to_vec(&input).unwrap();
+    let prepared = prepare(&input, &options()).unwrap();
+    for (i, g) in input.garments.iter().enumerate() {
+        let raw = &g.pattern["attached_mass"];
+        let mut expected = raw["groups"][0].clone();
+        let id = format!("{}::ornament", g.id);
+        expected["extra"]["id"] = json!(id);
+        for target in expected["targets"].as_array_mut().unwrap() {
+            target["instance"] = json!(format!(
+                "{}::{}",
+                g.id,
+                target["instance"].as_str().unwrap()
+            ));
+        }
+        assert_eq!(
+            prepared.pattern().raw()["attached_mass"]["groups"][i],
+            expected
+        );
+        let mapping = &prepared.receipt()["garments"][i]["attached_mass"];
+        assert_eq!(mapping["groups"]["ornament"], id);
+        assert_eq!(
+            mapping["source_input_sha256"],
+            ftx_core::receipt::sha256_hex(&serde_json::to_vec(raw).unwrap())
+        );
+    }
+    assert_eq!(original, serde_json::to_vec(&input).unwrap());
+}
+
+#[test]
+fn joint_sewn_accessories_change_inertia_once_and_survive_motion() {
+    let mut input = bands();
+    let opts = DrapeOptions {
+        spacing: 24.0,
+        ..options()
+    };
+    let skin = skin();
+    let plain = prepare(&input, &opts)
+        .unwrap()
+        .drape(&json!({}), &body(&skin), &opts, |_| {})
+        .unwrap();
+    for (g, mass) in input.garments.iter_mut().zip([0.003, 0.002]) {
+        g.pattern["attached_mass"] = attachment(
+            mass,
+            json!([{"instance":"front","vertex":"b","fraction":0.25},
+                {"instance":"back","vertex":"a","fraction":0.75}]),
+        );
+    }
+    let prepared = prepare(&input, &opts).unwrap();
+    let mut loaded = prepared
+        .drape(&json!({}), &body(&skin), &opts, |_| {})
+        .unwrap();
+    assert_eq!(plain.scene.mesh.faces, loaded.scene.mesh.faces);
+    assert_eq!(plain.scene.mesh.verts2d, loaded.scene.mesh.verts2d);
+    assert_eq!(plain.scene.weld, loaded.scene.weld);
+    assert_eq!(plain.scene.start.relaxed, loaded.scene.start.relaxed);
+    assert_eq!(
+        plain.scene.solver.model.membranes,
+        loaded.scene.solver.model.membranes
+    );
+    assert_eq!(plain.report["mass_kg"], loaded.report["mass_kg"]); // sheet-only legacy metric
+    assert_ne!(plain.scene.solver.x, loaded.scene.solver.x);
+    let report = loaded
+        .scene
+        .solver
+        .model
+        .attached_mass_report()
+        .unwrap()
+        .unwrap();
+    assert!((report.attached_mass_kg - 0.005).abs() < 1e-15);
+    assert!(report.mass_balance_residual_kg.abs() < 1e-15);
+    let mut added = vec![0.0; loaded.scene.solver.model.mass.len()];
+    for (i, (group, mass)) in report.groups.iter().zip([0.003, 0.002]).enumerate() {
+        assert_eq!(group.id, format!("{}::ornament", input.garments[i].id));
+        assert_eq!(
+            group.targets[0].solver_vertex,
+            group.targets[1].solver_vertex
+        );
+        assert_ne!(group.targets[0].mesh_vertex, group.targets[1].mesh_vertex);
+        added[group.targets[0].solver_vertex] += mass; // ONE group, not mass per target
+        assert_eq!(loaded.report["outfit"]["garment_attached_mass_kg"][i], mass);
+        let inertial = loaded.report["outfit"]["garment_mass_kg"][i]
+            .as_f64()
+            .unwrap();
+        let cloth = plain.report["outfit"]["garment_mass_kg"][i]
+            .as_f64()
+            .unwrap();
+        assert!((inertial - cloth - mass).abs() < 1e-15);
+    }
+    assert_ne!(
+        report.groups[0].targets[0].solver_vertex,
+        report.groups[1].targets[0].solver_vertex
+    );
+    for ((&base, &with), &extra) in plain
+        .scene
+        .solver
+        .model
+        .mass
+        .iter()
+        .zip(&loaded.scene.solver.model.mass)
+        .zip(&added)
+    {
+        assert!((with - base - extra).abs() < 1e-15);
+    }
+    let before = serde_json::to_value(report).unwrap();
+    let mass = loaded.scene.solver.model.mass.clone();
+    let target: Vec<_> = skin
+        .vertices
+        .iter()
+        .map(|p| *p + Vec3::new(0., 0., 0.00001))
+        .collect();
+    ftx_drape::motion::advance_body(&mut loaded.scene.solver, &target, 0.001, Default::default())
+        .unwrap();
+    assert_eq!(mass, loaded.scene.solver.model.mass);
+    assert_eq!(
+        before,
+        serde_json::to_value(
+            loaded
+                .scene
+                .solver
+                .model
+                .attached_mass_report()
+                .unwrap()
+                .unwrap()
+        )
+        .unwrap()
+    );
+    loaded
+        .scene
+        .solver
+        .contact
+        .as_ref()
+        .unwrap()
+        .audit_self_contact(&loaded.scene.solver.x)
+        .unwrap();
+}
+
+#[test]
+fn invalid_or_inactive_accessories_refuse_before_simulation_instead_of_disappearing() {
+    let mut good = input();
+    good.garments[0].pattern["attached_mass"] = attachment(
+        0.003,
+        json!([{"instance":"panel","vertex":"b","fraction":1}]),
+    );
+    for change in [
+        (|p: &mut Value| p["attached_mass"]["groups"][0]["extra"]["allow_estimates"] = json!(false))
+            as fn(&mut Value),
+        |p| p["attached_mass"]["groups"][0]["extra"]["mass"] = Value::Null,
+        |p| p["attached_mass"]["groups"][0]["targets"][0]["fraction"] = json!(0.5),
+        |p| p["attached_mass"]["groups"][0]["targets"][0]["instance"] = json!("outer::panel"),
+        |p| p["attached_mass"]["groups"][0]["targets"][0]["vertex"] = json!("absent"),
+        |p| p["attached_mass"]["groups"][0]["extra"]["mass"]["source"] = json!("absent"),
+        |p| {
+            let mut other = p["pieces"][0].clone();
+            other["id"] = json!("active");
+            p["pieces"].as_array_mut().unwrap().push(other);
+            p["pieces"][0]["sim"] = json!(false);
+        },
+    ] {
+        let mut bad = good.clone();
+        change(&mut bad.garments[0].pattern);
+        assert!(prepare(&bad, &options()).is_err());
+    }
+    assert!(prepare(&good, &options()).is_ok());
+}
+
+#[test]
+fn attachment_limits_are_outfit_wide_and_empty_groups_leave_physics_unchanged() {
+    let mut input = input();
+    let baseline = prepare(&input, &options()).unwrap();
+    input.garments[0].pattern["attached_mass"] =
+        json!({"schema":"ftx-attached-mass/1","groups":[]});
+    assert_eq!(
+        baseline.pattern().raw(),
+        prepare(&input, &options()).unwrap().pattern().raw()
+    );
+    for garment in &mut input.garments {
+        let mut attached = attachment(
+            0.003,
+            json!([{"instance":"panel","vertex":"a","fraction":1}]),
+        );
+        let first = attached["groups"][0].clone();
+        attached["groups"] = Value::Array(
+            (0..513)
+                .map(|i| {
+                    let mut group = first.clone();
+                    group["extra"]["id"] = json!(format!("weight-{i}"));
+                    group
+                })
+                .collect(),
+        );
+        garment.pattern["attached_mass"] = attached;
+    }
+    assert!(
+        prepare(&input, &options())
+            .err()
+            .unwrap()
+            .message
+            .contains("1024 groups")
     );
 }
