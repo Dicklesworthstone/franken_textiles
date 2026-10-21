@@ -1336,7 +1336,23 @@ handoff. Original empirical material and G5 gates remain open.
 - [x] Restore every active casing's cut geometry and existing independent two-ring mechanics.
 - [x] Keep grip estimates separate, using each casing's material friction and declared garment inertia.
 - [x] Connect the ordinary replay and study mesh-budget path; retain EA-zero and legacy behavior.
-- [ ] Run actual two-casing/replay/attached-mass and drafted-trouser composition regressions; fix defects.
+- [x] Run actual two-casing/replay/attached-mass and drafted-trouser composition regressions; fix defects.
 - [ ] Run narrow legacy regressions, formatting, all-target lint, full native tests and wasm build remotely.
+- [ ] Preserve the previous ignored browser bundle, deliver the matching release and run existing
+  compiled-worker/drafting smoke checks; do not claim new-case browser parity from compilation alone.
 - [ ] Fresh solo recheck; record exact source/results/limits and bounded worksheets; scan and commit
   scoped changes, close/sync the Bead and release reservations.
+
+Focused native result: **43 passed, zero failed, one ignored** across `outfit`, `attached_mass`,
+`material_scenario` and `kat`. This includes 16 outfit tests: independent active/slack casings,
+their separate body friction and actual simulated/attached weight, source immutability, saved-pattern
+replay, valid disabled mechanics, retained intersection refusal, legacy singular-report normalization
+and real drafted jacket/trouser composition with explicitly synthetic material data. No oracle changed.
+Source is base `34cf0eb722e82e9fede9863ac72d24bb4142d8a8` plus the five exact source/test overlays;
+fingerprint `fabfca43150edd9133ef00183c291bf4f5e34e48d7f0bdd61b49200ceba185b6`, tree
+`f957cb40ce1ccccc6722bda9148210e4d8b7fdf0`. Logs are ignored under `out/ftx-99t-20261021/checks/`.
+Three failed iterations are retained: the initial synthetic elastic was slack rather than taut;
+the disabled test's shortened geometry intersected (that refusal is now asserted, with a separately
+valid disabled start); and a legacy-report comparison wrongly expected the new explicit friction field.
+The final test preserves legacy absence and independently checks the explicit coefficient instead.
+Positive force assertions, contact checks, rest/mass arithmetic and solver budgets were not relaxed.
