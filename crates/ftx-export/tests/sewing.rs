@@ -598,3 +598,219 @@ fn setup_optimum_matches_exhaustive_permutations_with_crossed_components() {
         assert_eq!(r.selected_changes.total_changes, expected);
     }
 }
+
+fn timed_setup(label: &str) -> Value {
+    json!({"needle":format!("needle-{label}"),"thread":format!("thread-{label}")})
+}
+
+fn timed_job() -> Value {
+    let mut job = setup_job();
+    for (pass, label) in job["passes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(["X", "Y", "Z", "X"])
+    {
+        pass["needle"] = timed_setup(label)["needle"].clone();
+        pass["thread"] = timed_setup(label)["thread"].clone();
+    }
+    let mut rows = Vec::new();
+    for from in ["X", "Y", "Z"] {
+        for to in ["X", "Y", "Z"] {
+            if from != to {
+                rows.push(json!({"from":timed_setup(from),"to":timed_setup(to),
+                    "milliseconds":if from != "X" && to != "X" {100000} else {1000}}));
+            }
+        }
+    }
+    job["ordering"] = json!({"objective":"minimize_setup_time","max_search_nodes":20000,
+        "initial_setup":timed_setup("X"),"setup_times":{
+            "machine":"synthetic-machine","source":{"reference":"test:setup-time",
+                "accessed_on":"2026-10-20","note":"Synthetic, not measured machine times"},
+            "method":"Synthetic directed complete-setup duration table", "conditions":{"scope":"test"},
+            "evidence":"estimate","allow_estimates":true,"transitions":rows}});
+    job
+}
+
+#[test]
+fn timed_order_can_prefer_more_changes_and_preserves_the_actual_program() {
+    let job = timed_job();
+    let p = pattern();
+    let timed = plan(p.clone(), job.clone()).unwrap();
+    assert_eq!(timed.schema, "ftx-sewing-plan/9");
+    let report = timed.ordering.as_ref().unwrap();
+    assert_eq!(report.selected_order, ["A", "B", "D", "C"]);
+    assert_eq!(report.selected_changes.total_changes, 6);
+    assert_eq!(report.lower_bound_total_changes, 4); // time minimization is not count minimization
+    let time = report.timing.as_ref().unwrap();
+    assert_eq!(time.baseline_setup_milliseconds, 102000);
+    assert_eq!(time.selected_setup_milliseconds, 3000);
+    assert_eq!(time.lower_bound_setup_milliseconds, 3000);
+    assert_eq!(time.feed_and_setup_seconds, 19.0); // 16 feed, 3 setup; not 3 seconds total
+    assert!(report.optimality_proven);
+
+    let mut counts = job.clone();
+    counts["ordering"] = json!({"objective":"minimize_setup_changes", "max_search_nodes":20000,
+        "initial_setup":timed_setup("X")});
+    let counts = plan(p.clone(), counts).unwrap();
+    assert_eq!(
+        counts
+            .ordering
+            .as_ref()
+            .unwrap()
+            .selected_changes
+            .total_changes,
+        4
+    );
+    for op in &timed.seams {
+        let same = counts
+            .seams
+            .iter()
+            .find(|old| old.pass.id == op.pass.id)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(op).unwrap(),
+            serde_json::to_value(same).unwrap()
+        );
+    }
+    let program = ftx_export::sewing::program::SewProgram::build(
+        &Pattern::new(p),
+        &serde_json::from_value(job).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&program.plan).unwrap(),
+        serde_json::to_value(timed).unwrap()
+    );
+    assert_eq!(program.stitches.len(), 160);
+    assert!(!program.plan.hardware_execution_authorized);
+}
+
+#[test]
+fn directed_time_search_matches_independent_permutations_with_dependencies_and_zero_times() {
+    fn permutations(v: &mut [usize], index: usize, out: &mut Vec<Vec<usize>>) {
+        if index == v.len() {
+            out.push(v.to_vec());
+            return;
+        }
+        for next in index..v.len() {
+            v.swap(index, next);
+            permutations(v, index + 1, out);
+            v.swap(index, next);
+        }
+    }
+    let mut orders = Vec::new();
+    permutations(&mut [0, 1, 2, 3], 0, &mut orders);
+    let labels = ["X", "Y", "Z", "X"];
+    for seed in 0..12 {
+        let mut job = timed_job();
+        let rows = job["ordering"]["setup_times"]["transitions"]
+            .as_array_mut()
+            .unwrap();
+        for (i, row) in rows.iter_mut().enumerate() {
+            row["milliseconds"] = json!(((i + 1) * 17 + seed * 7) % 13 * 1000);
+        }
+        let rows = rows.clone();
+        if seed % 2 == 0 {
+            job["passes"][1]["after"] = json!(["C"]);
+        }
+        let duration = |order: &[usize]| {
+            let mut from = timed_setup("X");
+            let mut sum = 0;
+            for &i in order {
+                let to = timed_setup(labels[i]);
+                if from != to {
+                    sum += rows
+                        .iter()
+                        .find(|r| r["from"] == from && r["to"] == to)
+                        .unwrap()["milliseconds"]
+                        .as_u64()
+                        .unwrap();
+                }
+                from = to;
+            }
+            sum
+        };
+        let feasible: Vec<_> = orders
+            .iter()
+            .filter(|o| {
+                seed % 2 != 0 || o.iter().position(|i| *i == 2) < o.iter().position(|i| *i == 1)
+            })
+            .collect();
+        let best = feasible.iter().map(|o| duration(o)).min().unwrap();
+        let result = plan(pattern(), job.clone()).unwrap();
+        let r = result.ordering.unwrap();
+        assert_eq!(
+            r.timing.as_ref().unwrap().selected_setup_milliseconds as u64,
+            best
+        );
+        assert!(r.optimality_proven);
+        job["passes"].as_array_mut().unwrap().reverse();
+        job["ordering"]["setup_times"]["transitions"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+        let repeat = plan(pattern(), job).unwrap().ordering.unwrap();
+        assert_eq!(
+            serde_json::to_value(r).unwrap(),
+            serde_json::to_value(repeat).unwrap()
+        );
+    }
+}
+
+#[test]
+fn time_budget_retains_a_complete_incumbent_and_a_sound_bound() {
+    let mut job = timed_job();
+    job["ordering"]["max_search_nodes"] = json!(1);
+    let result = plan(pattern(), job).unwrap().ordering.unwrap();
+    assert_eq!(result.selected_order, result.baseline_order);
+    assert_eq!(result.search_nodes, 1);
+    assert!(result.budget_exhausted && !result.optimality_proven);
+    let time = result.timing.unwrap();
+    assert_eq!(time.selected_setup_milliseconds, 102000);
+    assert!(time.lower_bound_setup_milliseconds <= 3000);
+}
+
+#[test]
+fn source_timing_never_defaults_missing_transitions_machine_or_permission() {
+    for change in 0..9 {
+        let mut job = timed_job();
+        let policy = &mut job["ordering"];
+        match change {
+            0 => {
+                policy.as_object_mut().unwrap().remove("initial_setup");
+            }
+            1 => {
+                policy["setup_times"]["transitions"]
+                    .as_array_mut()
+                    .unwrap()
+                    .pop();
+            }
+            2 => policy["setup_times"]["machine"] = json!("other-machine"),
+            3 => policy["setup_times"]["allow_estimates"] = json!(false),
+            4 => policy["setup_times"]["source"]["reference"] = json!(" "),
+            5 => {
+                let row = policy["setup_times"]["transitions"][0].clone();
+                policy["setup_times"]["transitions"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(row);
+            }
+            6 => policy["setup_times"]["transitions"][0]["milliseconds"] = json!(86400001),
+            7 => policy["objective"] = json!("minimize_setup_changes"),
+            _ => {
+                policy.as_object_mut().unwrap().remove("setup_times");
+            }
+        }
+        assert!(plan(pattern(), job).is_err(), "case {change}");
+    }
+    let mut same = timed_job();
+    for pass in same["passes"].as_array_mut().unwrap() {
+        pass["needle"] = timed_setup("X")["needle"].clone();
+        pass["thread"] = timed_setup("X")["thread"].clone();
+    }
+    same["ordering"]["setup_times"]["transitions"] = json!([]);
+    let r = plan(pattern(), same).unwrap().ordering.unwrap();
+    assert_eq!(r.timing.unwrap().selected_setup_milliseconds, 0);
+    assert!(r.optimality_proven);
+}
