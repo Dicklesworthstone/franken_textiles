@@ -36,6 +36,7 @@ pub mod scene;
 pub mod sparse;
 pub mod start;
 pub mod stepping;
+pub mod strip;
 pub mod study;
 pub mod thermal;
 pub mod two_start;
