@@ -491,10 +491,14 @@ impl Request {
                 .sewing
                 .as_ref()
                 .is_some_and(|s| s.passes.len().saturating_mul(variants.len()) > 4096)
-            || self
-                .assembly_mass
-                .as_ref()
-                .is_some_and(|m| m.extras.len().saturating_mul(variants.len()) > 4096)
+            || self.assembly_mass.as_ref().is_some_and(|m| {
+                // Invalid attachment inventories remain independent per-row mass refusals.
+                // Retain the existing explicit-extra budget when no merged work can run.
+                m.merged_inventory_count(pattern)
+                    .unwrap_or(m.extras.len())
+                    .saturating_mul(variants.len())
+                    > 4096
+            })
         {
             return Err(budget(
                 "material study exceeds aggregate instance/pass/extra inventory budget",

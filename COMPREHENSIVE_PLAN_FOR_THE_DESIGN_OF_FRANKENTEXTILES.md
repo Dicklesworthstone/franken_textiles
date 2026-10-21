@@ -2127,6 +2127,43 @@ than treating grip extension as uniform textile strain. See
 
 ---
 
+### 25.33 Source-qualified accessory mass in cloth dynamics
+
+**Retained trims, closures and ornaments (`ftx-am1`).** Optional `pattern.attached_mass` supplies
+the total source-qualified mass of each extra group and its explicit fractions at named physical
+instance/boundary vertices. The existing mass-evidence authority now lives in `ftx-pattern` and is
+shared by assembly accounting and drape. Estimate consent, units, sources, conditions and reported
+bounds retain their ordinary meaning. Unknown mass stays unknown in accounting and cannot drive
+a physical point attachment.
+
+The source corners resolve through the actual simulation mesh and seam weld map. Mirrored instances
+are explicit; welded aliases accumulate their declared shares without multiplying the group total.
+After sheet materials and seam welds are established, the shares augment the existing lumped mass
+vector, so sewing, draping, static solves, elastic-grip weight and prescribed motion all consume the
+same gravity and inertia. Material substitution rebuilds sheet properties and reapplies the original
+extra groups. Stale edits to mass or retained reference topology refuse before accepted evolution.
+
+Complete assembly accounting merges pattern groups and request extras by exact typed source
+identity. Identical repeated observations count once; conflicting observations refuse independently.
+Aggregate studies charge the merged distinct inventory, with no duplicate charge or source-only
+budget bypass. `inventory_complete` remains an explicit caller declaration. Simulated cloth mass,
+attached group mass, total inertial mass and full cut-assembly mass remain separately reported.
+
+The drape receipt retains original attachment inputs and hashes, source masses, allocation residuals
+and original/welded vertex mappings. Native commands, file-free WASM and the browser workbench expose
+the same results and independent refusals. Cloth thermal storage continues to use characterized sheet
+materials and reference triangle areas; point masses do not imply accessory heat capacity, geometry,
+contact shape, stiffness or fastener strength.
+
+Independent synthetic checks cover static force balance, implicit inertia, mirrored/welded targets,
+material substitution, unchanged sheet heat storage, stale-state refusal and transactional motion.
+Actual native/WASM scenario studies recompute changed sheet response while retaining attached source
+identity. Physical costume/fastener validation, rigid accessory dynamics and separately characterized
+accessory thermal/contact properties remain future work. See
+[attached-mass.md](docs/attached-mass.md) for the complete input and receipt contract.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

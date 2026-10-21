@@ -41,6 +41,13 @@ cutting/mass allowances must match; missing complete mass never becomes a winnin
 instance, extra-group and polygon work limits apply before returning a study frontier. Tests:
 `assembly_mass`, `material_study`; native/WASM adapters use the same evaluator.
 
+Pattern-owned `attached_mass` extras share the `ftx-pattern::material_mass::Extra` authority, re-exported
+at the existing path. Their source observations merge once with request extras by ID; identical
+complete observations share one contribution and conflicting observations refuse. Optional
+`attached_inventory` preserves the pattern groups/targets while `request` stays the original inventory
+request. Inventory completeness is still explicit, and unknown mass stays unknown. No attachment
+keeps the existing output shape. See `docs/attached-mass.md` and `tests/assembly_mass.rs`.
+
 **Material-study comparison** (`material_study::comparison`, plan §25.10). Optional explicit
 objectives/constraints consume actual cutting/sewing/dated procurement results on the same
 unchanged pattern and shared process inputs. Canonical metric names fix m², kg, seconds, counts or

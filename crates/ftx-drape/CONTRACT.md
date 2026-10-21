@@ -20,6 +20,17 @@ legacy window-mean definition; they do not override the numerical gate. Neither 
 static stress equilibrium, material-history relaxation or real-person fit. Historical timings and
 verdicts below predate this stricter acceptance boundary and require fresh production-model checks.
 
+**Attached trim/accessory mass** (`attached_mass`). Optional source-qualified total groups bind named
+physical pattern corners through the actual seam weld map. Explicit shares add once to sheet masses,
+entering both gravitational load and implicit inertia in sewn drape, static solves and prescribed
+motion. The receipt separates simulated cloth, attached and total inertial mass and retains exact
+source/target mappings and arithmetic residuals. Sheet thermal storage remains source/reference-area
+based; no accessory geometry, thermal properties, contact or attachment strength is inferred. Stale
+inertia/reference/topology refuses before accepted state or receipt publication. Absent/empty input
+preserves the existing path and wire output. Contract: `docs/attached-mass.md`; tests:
+`tests/attached_mass.rs` (independent static/dynamic balances, welded/mirrored mapping, substitution,
+thermal separation, deterministic replay and motion rollback).
+
 **Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
 body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
 and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform interval films are

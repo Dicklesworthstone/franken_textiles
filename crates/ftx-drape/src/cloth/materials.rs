@@ -116,8 +116,14 @@ impl ClothModel {
     /// afterward. No factor or old material coefficient is silently reused.
     ///
     /// # Errors
-    /// Invalid/mismatched materials, mass underflow/overflow, or unrepresentable bending coefficients.
+    /// Invalid/mismatched materials, existing panel/attachment bindings, mass underflow/overflow,
+    /// or unrepresentable bending coefficients.
     pub fn set_materials(&mut self, materials: &[SheetMaterial]) -> Result<(), Refusal> {
+        if self.attached_mass.is_some() {
+            return Err(bad(
+                "rebuild the scene to replace sheet materials with source-bound attached mass",
+            ));
+        }
         if self.panel_bending.is_some() {
             return Err(bad(
                 "rebuild the cloth model to replace materials bound to panel bending",

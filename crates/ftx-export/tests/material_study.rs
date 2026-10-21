@@ -696,6 +696,107 @@ fn aggregate_extra_inventory_is_admitted_before_any_study_evaluation() {
     );
 }
 
+fn attached_inventory_study(group_count: usize) -> (Pattern, Request) {
+    let mut source: Value = serde_json::from_str(PATTERN).unwrap();
+    let template = mass_request().extras[0].clone();
+    let groups: Vec<Value> = (0..group_count)
+        .map(|i| {
+            let mut extra = template.clone();
+            extra.id = format!("attached-group-{i}");
+            json!({"extra":extra,
+                "targets":[{"instance":"front","vertex":"a","fraction":1.0}]})
+        })
+        .collect();
+    source["attached_mass"] = json!({"schema":"ftx-attached-mass/1","groups":groups});
+    let mut request = request();
+    let template = request.variants[0].clone();
+    request.variants = (0..32)
+        .map(|i| {
+            let mut variant = template.clone();
+            variant.key = format!("variant-{i}");
+            variant
+        })
+        .collect();
+    request.sewing = None;
+    request.purchasing = None;
+    request.assembly_mass = Some(mass_request());
+    request.assembly_mass.as_mut().unwrap().extras.clear();
+    (Pattern::new(source), request)
+}
+
+#[test]
+fn source_attachment_inventory_is_budgeted_before_any_study_callback() {
+    let (source, request) = attached_inventory_study(129);
+    let original = source.raw().clone();
+    let mut callbacks = 0;
+    let refusal = request
+        .evaluate_with(&source, &json!({"test":"attachment budget"}), |_, _| {
+            callbacks += 1;
+            Ok(())
+        })
+        .unwrap_err();
+    // 129 source-only groups * 32 alternatives = 4,128, above the 4,096 study limit.
+    assert_eq!(refusal.code, ftx_core::RefusalCode::BudgetExceeded);
+    assert!(refusal.message.contains("extra inventory budget"));
+    assert_eq!(callbacks, 0);
+    assert_eq!(source.raw(), &original);
+}
+
+#[test]
+fn identical_source_and_request_extras_share_the_exact_study_budget_and_mass() {
+    let (source, mut request) = attached_inventory_study(128);
+    let original = source.raw().clone();
+    request.assembly_mass.as_mut().unwrap().extras = source.raw()["attached_mass"]["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|group| serde_json::from_value(group["extra"].clone()).unwrap())
+        .collect();
+    // 128 distinct observations * 32 alternatives exactly fills the 4,096 study budget.
+    // The same 128 observations in both inventories must not be charged twice.
+    let report = evaluate(&request, &source);
+    let alternatives = report["alternatives"].as_array().unwrap();
+    assert_eq!(alternatives.len(), 32);
+    for alternative in alternatives {
+        assert_eq!(alternative["cutting"]["status"], "available");
+        assert_eq!(alternative["assembly_mass"]["status"], "available");
+        let mass = &alternative["assembly_mass"]["result"];
+        assert_eq!(mass["extras"].as_array().unwrap().len(), 128);
+        let sheet = mass["sheet_mass"]["kg"].as_f64().unwrap();
+        let total = mass["assembly_mass"]["kg"].as_f64().unwrap();
+        assert!((total - sheet - 128.0 * 0.02).abs() < 1e-12);
+    }
+    assert_eq!(source.raw(), &original);
+}
+
+#[test]
+fn attachment_inventory_conflicts_refuse_mass_without_erasing_valid_cutting() {
+    let (source, mut request) = attached_inventory_study(1);
+    let original = source.raw().clone();
+    request.variants.truncate(2);
+    let mut extra: ftx_export::assembly_mass::Extra =
+        serde_json::from_value(source.raw()["attached_mass"]["groups"][0]["extra"].clone())
+            .unwrap();
+    extra.mass.as_mut().unwrap().value = 0.03;
+    request.assembly_mass.as_mut().unwrap().extras.push(extra);
+    let report = evaluate(&request, &source);
+    let alternatives = report["alternatives"].as_array().unwrap();
+    assert_eq!(alternatives.len(), 2);
+    for alternative in alternatives {
+        assert_eq!(alternative["binding"]["status"], "available");
+        assert_eq!(alternative["cutting"]["status"], "available");
+        assert_eq!(alternative["assembly_mass"]["status"], "refused");
+        assert!(
+            alternative["assembly_mass"]["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("conflicts")
+        );
+        assert!(alternative["metrics"]["assembly_mass_kg"].is_null());
+    }
+    assert_eq!(source.raw(), &original);
+}
+
 fn reported_mass_study() -> Request {
     let mut r = request();
     r.cutting = None;

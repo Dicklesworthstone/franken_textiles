@@ -976,6 +976,30 @@ test('scenario comparisons join keys, preserve signed values, and distinguish ga
   d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /unsettled/); assert.match(visibleText(d), /body-lock/);
 });
 
+test('scenario attachment reports preserve physical mass scopes, source targets and independent refusals', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  await p.e.scenario.onclick();
+  const report = scenarioReport();
+  const result = report.simulations.find(row => row.key === 'A').evaluation.result;
+  result.drape.attached_mass = { schema:'ftx-attached-mass-report/1', input_sha256:'attachment-source-lock',
+    cloth_mass_kg:0.2, attached_mass_kg:0.03, total_inertial_mass_kg:0.23, mass_balance_residual_kg:0,
+    input:{groups:[{extra:{id:'synthetic-closure',sources:{test:{reference:'test:<literal-source>'}}}}]},
+    groups:[{id:'synthetic-closure',mass_kg:0.03,targets:[{instance:'front.R',vertex:'hem',solver_vertex:4,fraction:1}]}] };
+  result.metrics.cloth_mass_kg = 0.2;
+  p.emit(report);
+  const s = section(p,'Fresh drape and heat alternatives');
+  const t = descendants(s).find(n => n.tag === 'table' && n.children[0]?.textContent === 'Attached accessory mass — gravity and inertia');
+  assert.deepEqual(plain(t.children[2].children.map(n => n.textContent)),['A','Available','0.2','0.03','0.23','0']);
+  assert.deepEqual(plain(t.children[3].children.map(n => n.textContent)),['B','Refused: missing mechanics','Unknown','Unknown','Unknown','Unknown']);
+  const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('A: attached mass sources'));
+  d.open = true; d.handlers.toggle();
+  assert.match(visibleText(d),/attachment-source-lock/); assert.match(visibleText(d),/test:<literal-source>/);
+  assert.match(visibleText(d),/front.R/); assert.match(visibleText(s),/Cloth thermal storage/);
+  p.e.studyRequest.handlers.change(); assert.equal(p.live.size,0); assert.equal(s.hidden,true);
+  await p.e.scenario.onclick(); p.emit(scenarioReport());
+  assert.doesNotMatch(visibleText(section(p,'Fresh drape and heat alternatives')),/Attached accessory mass/);
+});
+
 test('finite-stock studies expose used inventory and independent refusal without inventing mass', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   await p.e.study.onclick();
@@ -1441,6 +1465,21 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     }
     assert.equal(mass.files[2].text, massRequest);
     assert.equal((await w.send({ type: 'study', pattern, studyRequest: massRequest })).files[0].text, mass.files[0].text);
+    const attachedSource = JSON.parse(pattern);
+    const attachedExtra = {...massOnly.assembly_mass.extras[0],mass:{...massOnly.assembly_mass.extras[0].mass,conditions:{}}};
+    attachedSource.attached_mass = {schema:'ftx-attached-mass/1',groups:[{extra:attachedExtra,
+      targets:[{instance:'front',vertex:'a',fraction:1}]}]};
+    const attachedPattern = JSON.stringify(attachedSource);
+    const attached = await w.send({type:'study',pattern:attachedPattern,studyRequest:massRequest});
+    assert.equal(attached.type,'result',attached.message);
+    assert.equal(attached.files[0].text,ftx.material_study(attachedPattern,massRequest));
+    for (const [i,row] of attached.result.alternatives.entries()) {
+      assert.equal(row.assembly_mass.status,'available');
+      assert.equal(row.assembly_mass.result.extras.length,1);
+      assert.deepEqual(row.assembly_mass.result.attached_inventory,attachedSource.attached_mass);
+      assert.deepEqual(row.assembly_mass.result.assembly_mass,mass.result.alternatives[i].assembly_mass.result.assembly_mass);
+      assert.deepEqual(row.binding.result.pattern.attached_mass,attachedSource.attached_mass);
+    }
     massOnly.assembly_mass.extras[0].mass = null;
     const unknown = await w.send({ type: 'study', pattern, studyRequest: JSON.stringify(massOnly) });
     assert.equal(unknown.type, 'result', unknown.message);
