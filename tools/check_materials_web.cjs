@@ -145,6 +145,22 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.inputValue('#selection'),dedicated.selection_json);
       assert.equal(await page.isDisabled('#assign'),false);
       retain('dedicated-strip.json',dedicatedRaw);
+      const nonlinearInput = path.join(root,'examples/strip-identification/synthetic-nonlinear-calibration.json');
+      await page.setInputFiles('#stripFitRequest',nonlinearInput);
+      assert.equal(await run('stripFit'),'');
+      const nonlinearRaw = await download('strip-calibration-report.json'), nonlinear = JSON.parse(nonlinearRaw);
+      for (const field of ['calibration','selection','selection_json'])
+        assert.deepEqual(nonlinear[field],reference('nonlinear.json')[field],`Nonlinear strip ${field}`);
+      assert.equal(nonlinear.calibration.accepted,true);
+      assert.equal(await download('strip-calibration-input.json'),fs.readFileSync(nonlinearInput,'utf8'));
+      assert.equal(await download('strip-calibrated-selection.json'),nonlinear.selection_json);
+      const coefficients = page.locator('table').filter({has:page.locator('caption',{
+        hasText:'Identified nonlinear shape scales and coupling'})});
+      for (const [i,d] of nonlinear.calibration.parameter_descriptors.entries())
+        assert.deepEqual(await coefficients.locator('tr').nth(i+1).locator('td').allTextContents(),
+          [d.label,nonlinear.calibration.parameters[i],d.unit,...nonlinear.calibration.input.parameter_bounds[i]].map(String));
+      assert.match(await page.locator('#outputs').textContent(),/does not identify the curve shapes or impose area preservation/);
+      retain('nonlinear-strip.json',nonlinearRaw);
       await page.screenshot({path:path.join(work,'accepted.png'),fullPage:true});
       const unfinished = load('synthetic-clamped-strip.json'); unfinished.policy.max_iterations=1;
       await input('stripFitRequest',unfinished);
