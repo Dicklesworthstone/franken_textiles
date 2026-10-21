@@ -1341,6 +1341,8 @@ handoff. Original empirical material and G5 gates remain open.
 - [ ] Complete the matching release wasm build remotely.
 - [ ] Preserve the previous ignored browser bundle, deliver the matching release and run existing
   compiled-worker/drafting smoke checks; do not claim new-case browser parity from compilation alone.
+- [ ] Rebuild and recheck the concurrently landed outfit API/nonlinear fitter so current frontend
+  positive tests consume the same source version as their wasm module.
 - [ ] Fresh solo recheck; record exact source/results/limits and bounded worksheets; scan and commit
   scoped changes, close/sync the Bead and release reservations.
 
@@ -1410,3 +1412,17 @@ true defect found in those changed paths. This is not an exhaustive resolution o
 No suppression or scanner-source modification. Complete stdout/stderr remains in the check logs.
 Concurrent commits `75fa814` (purchasing limits) and `e46cf60` (additional CLI outfit tests) landed
 after the frozen base; these native results do not claim to verify those incoming changes.
+
+The first release wasm build also passed on `vmi1149989`, with raw SHA-256
+`d6526acff2637538b7df8c27e425474717fe65a83437dbae14bfc72d69524073` independently checked against the
+remote artifact, and bindgen output `8728c6799b6ff1f94482995e23aa10512d75f32225d3f39bb885c306182d355f`.
+All four earlier browser outputs were preserved in `previous-bundle/`. Actual Chromium drafting
+smoke passes for bolero, trousers and fez, including refusal checks and no console errors. However,
+the current compiled frontend suite is **69 passed, two failed**, not green: concurrent `1716dc3`
+and `0906571` added joint outfit preparation and independent nonlinear tangent identification after
+that frozen build. Their unchanged positive tests correctly refuse the older module's missing API
+and unknown `nonlinear` field. The failed log is retained. This triggers the smaller adequate source
+refresh: base `2957e2546b3c411321215c104e9832bff630879a` plus the same five casing overlays,
+matching release wasm, all-target lint and twelve affected native integration targets. No assertion
+is removed and no unknown field is ignored. The first lint attempt on the requested warm worker
+refused with RCH-I003/no free slots and no local fallback; retry uses ordinary remote admission.
