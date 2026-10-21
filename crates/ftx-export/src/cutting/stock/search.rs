@@ -10,14 +10,17 @@ use super::{
     CutPlacement, Marker, Options, Work, bad, checked, half_turn, locate_next, place, same_material,
 };
 
-/// Explicit stock-use objective. Neither option infers purchase price or reusable-offcut value.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+/// Explicit stock-use objective. Purchase cost requires qualified whole-item quotes; no objective
+/// infers reusable-offcut value or manufacturing/handling costs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Objective {
     /// Minimize the number of distinct physical stock items receiving new cuts.
     MinimizeStockCount,
     /// Minimize whole polygon area of stock items receiving new cuts, counted once per item.
     MinimizeGrossArea,
+    /// Minimize admitted whole-item order costs, counting each physical item once.
+    MinimizePurchaseCost,
 }
 
 /// Stock use for a complete checked layout, in stable inventory order.
@@ -27,6 +30,9 @@ pub struct Usage {
     pub stock_count: usize,
     /// Sum of whole original stock polygon areas, including defects and prior cuts, in m².
     pub gross_area_m2: f64,
+    /// Sum of admitted whole-item costs in `purchasing.currency`; present only for cost optimization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purchase_cost: Option<f64>,
 }
 
 impl Objective {
@@ -34,6 +40,10 @@ impl Objective {
         match self {
             Self::MinimizeStockCount => proposed.stock_count < incumbent.stock_count,
             Self::MinimizeGrossArea => proposed.gross_area_m2 < incumbent.gross_area_m2,
+            Self::MinimizePurchaseCost => proposed
+                .purchase_cost
+                .zip(incumbent.purchase_cost)
+                .is_some_and(|(a, b)| a < b),
         }
     }
 }
@@ -79,19 +89,31 @@ pub(super) struct Allocation {
 // Adding an item can only increase either objective. The hypothetical item need not fit: ignoring
 // geometry gives a valid lower bound, never an acceptance shortcut. Sum in stock order just as the
 // final plan does, including when comparing partially allocated inventories.
-fn usage(markers: &[Marker], add: Option<usize>) -> Result<Usage, Refusal> {
+fn usage(
+    markers: &[Marker],
+    add: Option<usize>,
+    costs: Option<&[Option<f64>]>,
+) -> Result<Usage, Refusal> {
     let mut use_ = Usage {
         stock_count: 0,
         gross_area_m2: 0.0,
+        purchase_cost: costs.map(|_| 0.0),
     };
     for (i, marker) in markers.iter().enumerate() {
         if !marker.placements.is_empty() || add == Some(i) {
             use_.stock_count += 1;
             use_.gross_area_m2 += marker.gross_area_m2;
+            if let Some(costs) = costs {
+                let cost = costs[i].ok_or_else(|| bad("unpriced stock entered cost search"))?;
+                *use_.purchase_cost.as_mut().expect("cost accumulator") += cost;
+            }
         }
     }
     if !use_.gross_area_m2.is_finite() {
         return Err(bad("finite-stock objective area overflows"));
+    }
+    if use_.purchase_cost.is_some_and(|v| !v.is_finite()) {
+        return Err(bad("finite-stock purchase objective overflows"));
     }
     Ok(use_)
 }
@@ -227,12 +249,21 @@ impl Frame {
         options: &Options,
         work: &mut Work,
         bound: Option<(Objective, Usage)>,
+        costs: Option<&[Option<f64>]>,
     ) -> Result<Option<(usize, CutPlacement)>, Refusal> {
         while let Some(marker) = markers.get(self.stock) {
             checked(work.tick())?;
+            // Missing/stale/unqualified prices are not a free-stock fallback. This exclusion applies
+            // even before the first complete candidate exists, not only during bound pruning.
+            if costs.is_some_and(|c| c[self.stock].is_none()) {
+                self.stock += 1;
+                self.reversed = false;
+                self.cursor = Cursor::default();
+                continue;
+            }
             let worth_opening = if let Some((objective, incumbent)) = bound {
                 checked(work.spend(markers.len()))?;
-                objective.improves(usage(markers, Some(self.stock))?, incumbent)
+                objective.improves(usage(markers, Some(self.stock), costs)?, incumbent)
             } else {
                 true
             };
@@ -280,7 +311,17 @@ pub(super) fn allocate(
     options: &Options,
     limit: usize,
     work: &mut Work,
+    costs: Option<&[Option<f64>]>,
 ) -> Result<Allocation, Refusal> {
+    if (options.optimize == Some(Objective::MinimizePurchaseCost)) != costs.is_some()
+        || costs.is_some_and(|c| {
+            c.len() != markers.len() || c.iter().flatten().any(|v| !v.is_finite() || *v <= 0.0)
+        })
+    {
+        return Err(bad(
+            "purchase optimization requires admitted positive per-item costs",
+        ));
+    }
     let mut frames = Vec::new();
     let mut decisions: Vec<Decision> = Vec::new();
     let mut undone = 0;
@@ -300,7 +341,7 @@ pub(super) fn allocate(
                     optimization: None,
                 });
             };
-            let selected = usage(markers, None)?;
+            let selected = usage(markers, None, costs)?;
             p.complete += 1;
             p.baseline.get_or_insert(selected);
             if p.best
@@ -330,7 +371,7 @@ pub(super) fn allocate(
                 if frames.len() == depth {
                     frames.push(Frame::new(task, work)?);
                 }
-                frames[depth].next(task, markers, options, work, bound)
+                frames[depth].next(task, markers, options, work, bound, costs)
             })();
             match next {
                 Ok(Some((stock, placement))) => {

@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     CutPlacement, bad, bbox, cut_shape,
     geometry::{Work, clear, enclosed, simple},
-    grain_reversal, half_turn, place, positive, relocate,
+    grain_reversal, half_turn, place, positive,
+    procurement::finite,
+    relocate,
 };
 use crate::{Ctx, ExportOptions, layout::rotation};
 
@@ -104,6 +106,10 @@ pub struct Request {
     pub stocks: Vec<Stock>,
     /// Explicit search, allowance and spacing policy.
     pub options: Options,
+    /// Exact-stock dated offer inputs, required only for `minimize_purchase_cost`.
+    /// Uses the existing purchasing authority. Missing/invalid item prices exclude that inventory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<finite::Request>,
 }
 
 /// Validated stock and complete allocations in a local +y cutting-axis frame.
@@ -159,6 +165,8 @@ pub struct Plan {
     backtracks_used: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     optimization: Option<search::Optimization>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    purchasing: Option<finite::PriceBasis>,
     optimality_claim: bool,
     hardware_execution_authorized: bool,
     limitations: Vec<&'static str>,
@@ -324,6 +332,11 @@ impl Request {
                 "finite-stock optimize requires an explicit backtrack_limit",
             ));
         }
+        if (o.optimize == Some(search::Objective::MinimizePurchaseCost)) != self.pricing.is_some() {
+            return Err(bad(
+                "minimize_purchase_cost requires pricing; other objectives must omit pricing",
+            ));
+        }
         for v in [o.gap_mm, o.boundary_margin_mm, o.zone_margin_mm]
             .into_iter()
             .chain(o.seam_allowance_mm)
@@ -397,6 +410,19 @@ impl Request {
             stock.material = material.frozen_selection();
             markers.push(marker(stock, material, &mut work)?);
         }
+        // Resolve all candidate offers once, before geometry search. A first-fit allocation is not
+        // required: its chosen stock might have no admissible price while another layout does.
+        let mut purchasing = self
+            .pricing
+            .as_ref()
+            .map(|p| finite::assess_inventory(&frozen.stocks, &markers, p))
+            .transpose()?;
+        let costs = purchasing.as_ref().map(|p| {
+            p.stocks
+                .iter()
+                .map(|s| s.least_observed_order_cost)
+                .collect::<Vec<_>>()
+        });
         let mut materials = Vec::new();
         for i in 0..pieces.len() {
             let m = resolve_fabric(piece_fabric(pattern, i)?)?
@@ -409,6 +435,19 @@ impl Request {
                 )));
             }
             materials.push(m);
+        }
+        if let Some(costs) = &costs {
+            for (i, material) in materials.iter().enumerate() {
+                if !markers
+                    .iter()
+                    .zip(costs)
+                    .any(|(m, c)| c.is_some() && same_material(&m.material, material))
+                {
+                    return Err(bad(format!(
+                        "no admitted priced stock matches piece {i}; qualify exact-stock offers (unknown prices are not zero)",
+                    )));
+                }
+            }
         }
         for (i, piece) in pieces.iter().enumerate() {
             if let Some(zone) = piece["id"].as_str().and_then(|id| o.piece_zones.get(id))
@@ -482,7 +521,8 @@ impl Request {
                     }
                 })
                 .collect::<Vec<_>>();
-            let result = search::allocate(&tasks, &mut markers, o, limit, &mut work)?;
+            let result =
+                search::allocate(&tasks, &mut markers, o, limit, &mut work, costs.as_deref())?;
             optimization = result.optimization;
             Some(result.undone)
         } else {
@@ -547,6 +587,14 @@ impl Request {
         }
         positive("used stock area", gross)?;
         positive("allocated cut area", cut)?;
+        if let Some(purchasing) = &mut purchasing {
+            purchasing.select(&markers)?;
+            if optimization.as_ref().and_then(|o| o.selected.purchase_cost)
+                != purchasing.least_observed_independent_order_total
+            {
+                return Err(bad("stock search and purchasing totals disagree"));
+            }
+        }
         Ok(Plan {
             schema: "ftx-finite-stock-plan/1",
             pattern_sha256: hash(raw)?,
@@ -560,11 +608,14 @@ impl Request {
             candidates: work.candidates,
             backtracks_used,
             optimization,
+            purchasing,
             optimality_claim: false,
             hardware_execution_authorized: false,
             limitations: vec![
                 "Finite single-ply stock; authored defects/axis and frozen material identity, not a hide scan or measured property acquisition.",
-                if o.optimize.is_some() {
+                if o.optimize == Some(search::Objective::MinimizePurchaseCost) {
+                    "Bounded whole-item purchase-cost minimization among admitted offers only; unknown prices are excluded, not proved worse. Proof is conditional on the declared lattice, orientations and dated independent-order terms, not a market-wide optimum."
+                } else if o.optimize.is_some() {
                     "Bounded stock-use minimization retains a complete incumbent; proof is conditional on the declared lattice and admitted orientations, not continuous-space optimality or purchase cost."
                 } else if o.backtrack_limit.is_some() {
                     "Bounded depth-first reconsideration of stock, lattice and explicitly permitted half-turn choices; first complete checked layout, not a minimum-waste or globally optimal solution."
@@ -743,6 +794,13 @@ fn axis_steps(lo: f64, hi: f64, step: f64, limit: usize) -> Result<usize, Refusa
     Ok(count as usize)
 }
 impl Plan {
+    /// Dated candidate prices and the selected whole-item total, only for cost-directed jobs.
+    /// Geometry and quote evidence remain immutable; this is not an inventory reservation.
+    #[must_use]
+    pub fn purchasing(&self) -> Option<&finite::PriceBasis> {
+        self.purchasing.as_ref()
+    }
+
     /// Complete allocations; callers cannot mutate the geometry underlying a preview.
     #[must_use]
     pub fn markers(&self) -> &[Marker] {

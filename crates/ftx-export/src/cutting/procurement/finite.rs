@@ -7,7 +7,10 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::material_cost::{Basis, ExcludedOffer, Offer, Quote, QuoteBook, SaleUnit, Scope};
 use serde::{Deserialize, Serialize};
 
-use super::{super::stock::Plan, Market};
+use super::{
+    super::stock::{Marker, Plan, Stock},
+    Market,
+};
 
 /// Explicit association of supplier offer histories with one physical stock snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,7 +65,7 @@ pub struct StockExclusion {
 }
 
 /// A source history whose canonical evaluation failed; independent alternatives remain available.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SourceRefusal {
     /// Offer history in the retained quote book.
     pub offer_id: String,
@@ -71,7 +74,7 @@ pub struct SourceRefusal {
 }
 
 /// Purchasing result for a physical item, including independent missing-data diagnostics.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct StockPrice {
     /// Identity and geometry basis from the checked allocation.
     pub identity: Identity,
@@ -87,8 +90,45 @@ pub struct StockPrice {
     pub stock_exclusions: Vec<StockExclusion>,
     /// Chosen offer ID; equal costs retain the lexicographically first ID.
     pub least_observed_offer_id: Option<String>,
-    /// Cheapest whole-item cost; unused and unpriced stock remain None, not zero-priced offers.
+    /// Cheapest whole-item cost; unpriced stock remains None, never a zero-priced offer.
+    /// Ordinary procurement omits unused prices; optimization assesses all candidate items.
     pub least_observed_order_cost: Option<f64>,
+}
+
+/// Quote-qualified candidate inventory for purchase-cost optimization. Each stock is evaluated once
+/// before geometry search; only items with admitted offers may receive new cuts.
+#[derive(Clone, Debug, Serialize)]
+pub struct PriceBasis {
+    /// Missing offers are excluded from the comparison, not proved more expensive or infeasible.
+    pub comparison_scope: &'static str,
+    /// Digest of the exact pricing inputs retained in the stock request, including as-of time.
+    pub pricing_sha256: String,
+    /// Common quote currency; no conversion, shipping model or implicit rounding is introduced.
+    pub currency: String,
+    /// All candidate prices and exclusion diagnostics; `identity.used` describes the selected layout.
+    pub stocks: Vec<StockPrice>,
+    /// Whole-item costs of the final used inventory, counted once per physical item.
+    pub least_observed_independent_order_total: Option<f64>,
+    /// Whether every selected offer has observed capacity for the entire indivisible item.
+    pub complete_observed_quantity_coverage: bool,
+}
+
+impl PriceBasis {
+    pub(crate) fn select(&mut self, markers: &[Marker]) -> Result<(), Refusal> {
+        if self.stocks.len() != markers.len() {
+            return Err(invalid("price basis lost physical stock correspondence"));
+        }
+        for (row, marker) in self.stocks.iter_mut().zip(markers) {
+            row.identity.used = !marker.placements.is_empty();
+        }
+        let (complete, observed, total) = summarize(&self.stocks)?;
+        if !complete {
+            return Err(invalid("selected layout contains an unpriced stock item"));
+        }
+        self.least_observed_independent_order_total = Some(total);
+        self.complete_observed_quantity_coverage = observed;
+        Ok(())
+    }
 }
 
 /// Complete price coverage is independent of successful geometric allocation.
@@ -130,10 +170,16 @@ fn digest(value: &impl Serialize) -> Result<String, Refusal> {
 /// # Errors
 /// Serialization failure. No source inputs or inventory are modified.
 pub fn identities(plan: &Plan) -> Result<Vec<Identity>, Refusal> {
-    plan.request()
-        .stocks
+    inventory_identities(&plan.request().stocks, plan.markers())
+}
+
+fn inventory_identities(stocks: &[Stock], markers: &[Marker]) -> Result<Vec<Identity>, Refusal> {
+    if stocks.len() != markers.len() {
+        return Err(invalid("stock identities lost inventory correspondence"));
+    }
+    stocks
         .iter()
-        .zip(plan.markers())
+        .zip(markers)
         .enumerate()
         .map(|(i, (stock, marker))| {
             Ok(Identity {
@@ -156,6 +202,43 @@ pub fn identities(plan: &Plan) -> Result<Vec<Identity>, Refusal> {
 /// Invalid history/scope/bindings, overflow, or more than 128 bindings, 4096 links or 16384 quotes.
 /// Ordinary missing prices and stale stock locks remain per-item incomplete outcomes.
 pub fn evaluate(plan: &Plan, request: &Request) -> Result<Report, Refusal> {
+    let stocks = price_inventory(&plan.request().stocks, plan.markers(), request, false)?;
+    let (complete, observed, total) = summarize(&stocks)?;
+    Ok(Report {
+        schema: "ftx-finite-stock-procurement/1",
+        plan_sha256: digest(plan)?,
+        pricing_sha256: digest(request)?,
+        request: request.clone(),
+        stocks,
+        complete_offer_coverage: complete,
+        complete_observed_quantity_coverage: observed,
+        currency: request.market.currency.clone(),
+        least_observed_independent_order_total: complete.then_some(total),
+        execution_authorized: false,
+    })
+}
+
+pub(crate) fn assess_inventory(
+    stocks: &[Stock],
+    markers: &[Marker],
+    request: &Request,
+) -> Result<PriceBasis, Refusal> {
+    Ok(PriceBasis {
+        comparison_scope: "admitted_whole_item_offers_only",
+        pricing_sha256: digest(request)?,
+        currency: request.market.currency.clone(),
+        stocks: price_inventory(stocks, markers, request, true)?,
+        least_observed_independent_order_total: None,
+        complete_observed_quantity_coverage: false,
+    })
+}
+
+fn price_inventory(
+    inventory: &[Stock],
+    markers: &[Marker],
+    request: &Request,
+    include_unused: bool,
+) -> Result<Vec<StockPrice>, Refusal> {
     if request.schema != "ftx-finite-stock-pricing/1" {
         return Err(invalid("unsupported finite-stock pricing schema"));
     }
@@ -173,7 +256,7 @@ pub fn evaluate(plan: &Plan, request: &Request) -> Result<Report, Refusal> {
         ));
     }
     request.quotes.validate()?;
-    let ids = identities(plan)?;
+    let ids = inventory_identities(inventory, markers)?;
     let stock_ids: BTreeSet<_> = ids.iter().map(|i| i.stock_id.as_str()).collect();
     let quoted_ids: BTreeSet<_> = request
         .quotes
@@ -206,9 +289,8 @@ pub fn evaluate(plan: &Plan, request: &Request) -> Result<Report, Refusal> {
     }
     let market = &request.market;
     let mut stocks = Vec::new();
-    let (mut complete, mut observed, mut total) = (true, true, 0.0);
     for identity in ids {
-        let marker = &plan.markers()[identity.stock_index];
+        let marker = &markers[identity.stock_index];
         let scope = Scope {
             currency: market.currency.clone(),
             region: market.region.clone(),
@@ -237,7 +319,7 @@ pub fn evaluate(plan: &Plan, request: &Request) -> Result<Report, Refusal> {
             least_observed_offer_id: None,
             least_observed_order_cost: None,
         };
-        if row.identity.used {
+        if row.identity.used || include_unused {
             match bindings.get(row.identity.stock_id.as_str()) {
                 None => {
                     row.binding_refusal =
@@ -316,28 +398,33 @@ pub fn evaluate(plan: &Plan, request: &Request) -> Result<Report, Refusal> {
             }) {
                 row.least_observed_offer_id = Some(offer.quote.offer_id.clone());
                 row.least_observed_order_cost = Some(offer.order_cost);
+            }
+        }
+        stocks.push(row);
+    }
+    Ok(stocks)
+}
+
+fn summarize(stocks: &[StockPrice]) -> Result<(bool, bool, f64), Refusal> {
+    let (mut complete, mut observed, mut total) = (true, true, 0.0);
+    for row in stocks.iter().filter(|r| r.identity.used) {
+        match row
+            .offers
+            .iter()
+            .find(|o| Some(o.quote.offer_id.as_str()) == row.least_observed_offer_id.as_deref())
+        {
+            Some(offer) => {
                 observed &= offer.quantity_sufficiency_observed;
                 total += offer.order_cost;
                 if !total.is_finite() {
                     return Err(invalid("whole-stock order total overflows"));
                 }
-            } else {
+            }
+            None => {
                 complete = false;
                 observed = false;
             }
         }
-        stocks.push(row);
     }
-    Ok(Report {
-        schema: "ftx-finite-stock-procurement/1",
-        plan_sha256: digest(plan)?,
-        pricing_sha256: digest(request)?,
-        request: request.clone(),
-        stocks,
-        complete_offer_coverage: complete,
-        complete_observed_quantity_coverage: observed,
-        currency: market.currency.clone(),
-        least_observed_independent_order_total: complete.then_some(total),
-        execution_authorized: false,
-    })
+    Ok((complete, observed, total))
 }

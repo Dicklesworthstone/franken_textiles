@@ -525,6 +525,7 @@ fn bounded_objectives_match_independent_exhaustive_rectangle_answers() {
                     Objective::MinimizeGrossArea => assert!(
                         (v["used_gross_area_m2"].as_f64().unwrap() - expected.1).abs() < 1e-14
                     ),
+                    Objective::MinimizePurchaseCost => unreachable!("not an area/count case"),
                 }
             }
         }
