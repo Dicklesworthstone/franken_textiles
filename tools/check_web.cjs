@@ -25,6 +25,17 @@ let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
 
 async function offlineViewer(browser, file) {
+  const html = fs.readFileSync(file, "utf8");
+  const imports = JSON.parse(html.split('<script type="importmap">')[1].split('</script>')[0]).imports;
+  for (const [name, digest] of [
+    ["three", "3e690ac7d180b0aadf0891bea39eec643e29e2d3e75c99b18689518665f69ba6"],
+    ["three/addons/controls/OrbitControls.js", "5a44a9e86a2a0fb11933eed69bc2cd33c76a496854c1aed6ed776efa87d7b064"],
+  ]) {
+    const prefix = "data:text/javascript;base64,";
+    if (!imports[name].startsWith(prefix)) throw Error(`${name} is not embedded in the viewer`);
+    check(sha(Buffer.from(imports[name].slice(prefix.length), "base64")) === digest, `${name} matches its pinned upstream bytes`);
+  }
+  check(html.includes(fs.readFileSync(path.join(root, "assets/three-r160/LICENSE"), "utf8")), "the complete renderer license is distributed with the viewer");
   const context = await browser.newContext({ offline: true, userAgent, reducedMotion: "reduce" });
   const page = await context.newPage(), errors = [], external = [];
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "ftx-offline-viewer-"));
@@ -34,6 +45,7 @@ async function offlineViewer(browser, file) {
     await page.goto(pathToFileURL(path.resolve(file)).href);
     await page.waitForFunction(() => document.body.dataset.ready, null, { timeout: 20000 });
     check(await page.getAttribute("body", "data-ready") === "1", "offline viewer initializes from file://");
+    if (await page.getAttribute("body", "data-ready") !== "1") throw Error(await page.textContent("#error"));
     check(await page.locator("#stage canvas").count() === 1, "the production renderer creates its canvas");
     const frames = await page.evaluate(() => window.__fold.frames);
     check(frames > 1, "the viewer contains multiple retained frames");
@@ -50,6 +62,11 @@ async function offlineViewer(browser, file) {
     await page.uncheck("#showBody");
     await page.click("#play");
     check(await page.textContent("#play") === "Pause", "playback resumes through the normal control");
+    const blob = await page.evaluate(html => URL.createObjectURL(new Blob([html], { type: "text/html" })), html);
+    await page.goto(blob);
+    await page.waitForFunction(() => document.body.dataset.ready, null, { timeout: 20000 });
+    check(await page.getAttribute("body", "data-ready") === "1" && await page.locator("#stage canvas").count() === 1,
+      "the same HTML also renders as an offline blob preview");
     check(external.length === 0, `no HTTP(S) requests (${external.length})`);
     check(errors.length === 0, `no page errors${errors.length ? ": " + errors.join(" | ") : ""}`);
     console.log(`viewer sha256 ${sha(fs.readFileSync(file))}; screenshots in ${work}`);
@@ -63,7 +80,7 @@ async function offlineViewer(browser, file) {
     process.exit(failed ? 1 : 0);
   }
   const port = 20000 + Math.floor(Math.random() * 20000);
-  const srv = spawn("python3", ["-m", "http.server", String(port), "-d", path.join(root, "web")], { stdio: "ignore" });
+  const srv = spawn("python3", ["-m", "http.server", String(port), "-d", path.join(root, "web")], { stdio: ["ignore", "ignore", "inherit"] });
   await new Promise((r) => setTimeout(r, 1200));
   const browser = await chromium.launch();
   const page = await browser.newPage({ userAgent });
@@ -122,7 +139,7 @@ async function offlineViewer(browser, file) {
         fs.writeFileSync(viewerFile, viewer, { flag: "wx" });
         await offlineViewer(browser, viewerFile);
         execFileSync(ftx, ["drape", "pattern.json", "--measurements", "measurements.json", "--fit", "fit_spec.json",
-          "--self-contact-mm", "2", "--model", model, "--out", "native"], { cwd: dir, stdio: "ignore" });
+          "--self-contact-mm", "2", "--model", model, "--out", "native"], { cwd: dir, stdio: ["ignore", "pipe", "inherit"] });
         const native = fs.readFileSync(path.join(dir, "native/fold_viewer.html"));
         check(sha(viewer) === sha(native), `${program} fold-up equals ftx drape's, byte for byte (${sha(native).slice(0, 12)})`);
       }
