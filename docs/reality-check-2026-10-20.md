@@ -1426,3 +1426,14 @@ refresh: base `2957e2546b3c411321215c104e9832bff630879a` plus the same five casi
 matching release wasm, all-target lint and twelve affected native integration targets. No assertion
 is removed and no unknown field is ignored. The first lint attempt on the requested warm worker
 refused with RCH-I003/no free slots and no local fallback; retry uses ordinary remote admission.
+
+On the refreshed `2957e25` source, **130 tests passed, zero failed/ignored across 13 affected targets**
+on `ts1`: CLI accepted-body/outfit, cutting and strip workflows; drape outfit and three identification
+targets; pattern material catalog; export cutting; wasm materials, outfit and strip consumers.
+All-target Clippy also passes on `vmi1264463`. Both terminal receipts retain the five-file fingerprint
+above and base tree `492eb694694e7e295c90cd49e60a9d4b402b1644`. Current Rust/Cargo, frontend and checker
+sources equal this refreshed base. The requested warm wasm worker queued the build; only that owned
+waiting process was terminated (exit 143, queue entry verified removed) before retrying with ordinary
+remote scheduling. No executing peer job was canceled and no local compilation was allowed.
+The three corrected test assumptions above are guarded against RH-1/RH-5 by retained positive
+force/analytic-mass/source/replay assertions, and against RH-2 by explicit synthetic/fit boundaries.
