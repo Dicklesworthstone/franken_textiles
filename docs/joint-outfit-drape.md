@@ -110,9 +110,22 @@ The command accepts one shared fit specification on the composed, namespaced pat
 independent source fit verdicts or infer source-specific body landmarks. Existing whole-run numerical
 acceptance is not evidence of fit on a real person, nor of plausible initial layering.
 
-The current composer refuses implicit `meta.solved.elastic_cut_mm` casings and root extensions such as
-`attached_mass`: their multi-garment transformations have not been implemented. It refuses unsupported
-root/fabric fields rather than discarding them. Per-piece supported material physics is retained, but no
+The composer preserves drafted `meta.solved.elastic_cut_mm` casings. Each source cut-minus-overlap
+length is retained in metres under the composed pattern's `meta.solved.elastic_casings`, alongside its
+namespaced physical instance and `load_instances`. Source vertices, scale declarations and original
+metadata remain unchanged; the ordinary run restores active casings to cut geometry as it does for a
+standalone garment. Multiple casings use independent pairs of existing tension-only rings. The caller's
+existing `elastic_ea` option applies to each; its default remains an assumption, not characterized elastic.
+With EA zero, rings and cut-geometry restoration are disabled. Invalid authored geometry still refuses.
+
+Explicit-casing reports use `elastics`, with one row per physical casing. Each ideal-ring estimate uses
+that casing's material/body friction and its declared garment's simulated inertia, including supported
+source-qualified `attached_mass`. It never compares every casing against the entire outfit's weight or
+sums their grip capacities. Actual load sharing between casings/garments is not inferred. The original
+standalone legacy convention retains its singular `elastic` report. Saved composed patterns retain
+their declarations for ordinary `ftx drape` and study replay; keep the same numerical/elastic options.
+
+Unsupported root/fabric fields refuse rather than being discarded. Per-piece supported physics is retained, but no
 new garment-level closure, shared thermal boundary, inter-garment thermal coverage or per-garment force
 metric is inferred. No new interactive browser page or browser-runtime parity result is supplied here.
 
