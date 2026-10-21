@@ -33,6 +33,13 @@ pub(crate) fn compression_history(path: &str) -> Result<Value, Refusal> {
     serde_json::from_str(&report).map_err(invalid)
 }
 
+pub(crate) fn vapor(path: &str) -> Result<Value, Refusal> {
+    let request: ftx_pattern::material_vapor::Request =
+        serde_json::from_str(&read(path, MAX_INPUT)?).map_err(invalid)?;
+    serde_json::to_value(request.evaluate(&ftx_pattern::textile_import::catalog()?)?)
+        .map_err(invalid)
+}
+
 pub(crate) fn stack(path: &str) -> Result<Value, Refusal> {
     let request: Request = serde_json::from_str(&read(path, MAX_INPUT)?).map_err(invalid)?;
     request.evaluate(&ftx_pattern::textile_import::catalog()?)

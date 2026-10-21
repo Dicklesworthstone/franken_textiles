@@ -25,6 +25,37 @@ pub fn thermal_compression_history(input: &str) -> Result<String, wasm_bindgen::
     compression_history(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Evaluate a source-qualified, constant-resistance vapor stack under explicit boundary pressures.
+/// Returned heat and mass flows are potentials; moisture availability and wearer physiology are not
+/// inferred. This is the same source-resolving calculation as `ftx materials thermal-vapor`.
+///
+/// # Errors
+/// Input over 64 MiB, invalid JSON/schema, missing or unadmitted resistance observations, unsupported
+/// pressure direction, mixed protocols without admission, or any nonfinite result.
+pub fn vapor(input: &str) -> Result<String, Refusal> {
+    if input.len() > 64 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "vapor input exceeds 64 MiB",
+        ));
+    }
+    let invalid = |e: serde_json::Error| Refusal::new(RefusalCode::InvalidDocument, e.to_string());
+    let request: ftx_pattern::material_vapor::Request =
+        serde_json::from_str(input).map_err(invalid)?;
+    let result = request.evaluate(&ftx_pattern::textile_import::catalog()?)?;
+    serde_json::to_string(&result).map_err(invalid)
+}
+
+/// Browser binding for source-qualified potential vapor exchange with exact frozen replay inputs.
+///
+/// # Errors
+/// The same input, evidence, protocol and arithmetic refusals as [`vapor`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn thermal_vapor(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    vapor(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Evaluate `ftx-thermal-steady/1` JSON and return the shared source-locked result as JSON text.
 /// Input is neither uploaded nor edited; missing heat capacity is not replaced with a default.
 ///

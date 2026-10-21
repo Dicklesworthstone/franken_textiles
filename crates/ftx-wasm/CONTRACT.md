@@ -60,6 +60,12 @@ Obsolete synchronous solver work may finish in the worker, but its result is not
 **Error model.** `page` returns the reference's message as a `String` for a request it refuses, and a
 refusal's message for a draft or export the library refuses; `web` turns them into `JsError`s.
 
+**Potential vapor transport.** `thermal::vapor` and wasm32 `thermal_vapor(input)` delegate the
+bounded `ftx-vapor-stack/1` request to `ftx_pattern::material_vapor`. They preserve canonical Ret
+observations, source/evidence refusals, explicit boundaries and exact frozen replay JSON. Their
+potential heat/water outputs do not establish sweat supply, comfort or coupled dry/wet histories.
+See `docs/vapor-resistance.md`.
+
 **Finite-strip characterization.** `materials::strip_experiment` and `calibrate_strip` expose
 the shared `strip::evaluate` and `strip::fit` authorities without filesystem access. Their wasm32
 exports are `material_strip_experiment(input)` and `material_calibrate_strip(input, allow_estimates)`.

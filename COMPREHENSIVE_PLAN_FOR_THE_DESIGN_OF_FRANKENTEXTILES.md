@@ -2487,6 +2487,30 @@ The model, commands, source citation and executable examples are documented in
 
 ---
 
+### 25.45 Potential vapor transfer from canonical source observations
+
+**Delivered software (`ftx-vp1`).** The canonical material authority now resolves measured
+`vapor_resistance` into a bounded, common-area series network. Explicit inside/outside vapor
+pressures, boundary-film resistances, area and caller-supplied latent heat determine conditional
+potential heat and mass transfer. The report retains every material's source-qualified Ret, method,
+conditions, evidence and content lock, plus layer/film pressure drops and exact frozen replay JSON.
+The native primary/companion commands and file-free WASM boundary share this one implementation.
+
+The existing ten measured bovine-leather groups can now drive this consumer without fabricated
+mechanics or heat storage. Their 35°C air, 40% RH and 1 m/s source conditions remain visible;
+reported SD/CV is not an uncertainty interval. Exact required method/condition filters, independent
+estimate admission and explicit mixed-protocol consent remain enforced. Source observations are
+separate from the assumed fixed-resistance, isothermal network; adding measured layers does not
+make the assembled network a measured specimen.
+
+Analytical layer/film balances, equal-pressure and material-substitution cases, finite arithmetic,
+source refusals and exact native/portable offline replay verify this software path. Water supply,
+actual sweat evaporation, condensation, moisture storage, temperature/humidity dependence, dry/wet
+energy coupling and garment comfort remain open under `ftx-tm5` and `ftx-tmc`. See
+[vapor-resistance.md](docs/vapor-resistance.md) for the request, equations and source references.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
