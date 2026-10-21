@@ -1,11 +1,13 @@
 //! Material-following continuation of an already sewn drape, not independent pose restarts.
+#[cfg(test)]
+use crate::motion::advance_body;
 use ftx_core::{Refusal, Vec3, intersection::validate_mesh};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{Scenario, budget, coverage_at, hash, heat, invalid, omitted, outcome};
 use crate::{
-    motion::{MotionOptions, advance_body, advance_body_with_dissipation},
+    motion::{DissipationCapture, MotionOptions, advance_body_with_work},
     run::{DrapeBody, DrapeRun},
     start::{edge_strain, face_edges},
 };
@@ -235,17 +237,22 @@ fn evaluate_path(
         .transient_coverage
         .as_ref()
         .map(|policy| policy.start(run, body.collision, request.keyframes.len(), heat_budget));
-    let capture_dissipation = surface_heat
+    let mut capture = surface_heat
         .as_ref()
-        .is_some_and(|h| h.as_ref().is_ok_and(|h| h.needs_dissipation()))
-        || coverage_heat
-            .as_ref()
-            .is_some_and(|h| h.as_ref().is_ok_and(|h| h.needs_dissipation()));
-    let history_scalars = if capture_dissipation {
-        run.scene.solver.model.membranes.len()
-    } else {
-        0
-    };
+        .and_then(|h| h.as_ref().ok())
+        .map_or(DissipationCapture::default(), |h| h.dissipation_capture());
+    capture.plastic |= coverage_heat
+        .as_ref()
+        .is_some_and(|h| h.as_ref().is_ok_and(|h| h.needs_dissipation()));
+    let channels = usize::from(capture.plastic) + usize::from(capture.relaxation);
+    let history_scalars = run
+        .scene
+        .solver
+        .model
+        .membranes
+        .len()
+        .checked_mul(channels)
+        .ok_or_else(|| budget("motion dissipation count overflow"))?;
     let count = geometry_count
         .checked_add(history_scalars)
         .ok_or_else(|| budget("motion history count overflow"))?;
@@ -256,9 +263,13 @@ fn evaluate_path(
         .ok_or_else(|| {
             budget("motion sample budget cannot retain initial and final body/cloth/history")
         })?;
-    if capture_dissipation {
+    if capture.plastic {
         initial_sample["membrane_plastic_dissipation_j"] =
             json!(run.scene.solver.membrane_plastic_dissipation_j()?);
+    }
+    if capture.relaxation {
+        initial_sample["membrane_relaxation_dissipation_j"] =
+            json!(run.scene.solver.membrane_relaxation_dissipation_j()?);
     }
     let faces: Vec<_> = run
         .scene
@@ -300,12 +311,7 @@ fn evaluate_path(
             i + 1,
             request.keyframes.len()
         ));
-        let advance = if capture_dissipation {
-            advance_body_with_dissipation
-        } else {
-            advance_body
-        };
-        let report = advance(
+        let report = advance_body_with_work(
             &mut run.scene.solver,
             &path.vertices[i],
             frame.time_s - previous_time,
@@ -315,6 +321,7 @@ fn evaluate_path(
                 max_pairs: request.max_pairs,
                 max_sample_vertices: remaining_vertices,
             },
+            capture,
         )?;
         remaining_trials -= report.trials;
         remaining_vertices -= report.samples.len() * count;
@@ -339,6 +346,7 @@ fn evaluate_path(
                     i,
                     samples.len(),
                     sample.membrane_plastic_dissipation_j.as_deref(),
+                    sample.membrane_relaxation_dissipation_j.as_deref(),
                 )
             {
                 surface_heat = Some(Err(refusal));
@@ -363,6 +371,9 @@ fn evaluate_path(
                     "factorizations":sample.solve.factorizations,"ccd_limited":sample.solve.ccd_limited}});
             if let Some(dissipation) = sample.membrane_plastic_dissipation_j {
                 retained["membrane_plastic_dissipation_j"] = json!(dissipation);
+            }
+            if let Some(dissipation) = sample.membrane_relaxation_dissipation_j {
+                retained["membrane_relaxation_dissipation_j"] = json!(dissipation);
             }
             samples.push(retained);
         }
@@ -410,7 +421,7 @@ fn evaluate_path(
     if let Some(history) = initial_permanent_history {
         result["initial_membrane_plasticity_history"] = history;
     }
-    if capture_dissipation {
+    if channels != 0 {
         result["retained_dissipation_scalars"] = json!(
             (result["samples"]
                 .as_array()

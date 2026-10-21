@@ -14,6 +14,8 @@ const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
 const OPTIONS: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-pressure-options.json");
+const CLEARANCE: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-sewing-clearance-options.json");
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct Workspace(PathBuf);
@@ -54,6 +56,112 @@ impl Workspace {
     }
 }
 const PLAN: &[&str] = &["sew-plan", "pattern.json", "options.json"];
+
+#[test]
+fn actual_clearance_commands_replay_inferred_force_work_and_unchanged_stitch_geometry() {
+    let w = Workspace::new();
+    let original = w.json(PLAN);
+    fs::write(w.0.join("options.json"), CLEARANCE).unwrap();
+    let plan = w.json(PLAN);
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let options: SewOptions = serde_json::from_str(CLEARANCE).unwrap();
+    assert_eq!(plan, w.json(PLAN));
+    assert_eq!(
+        plan,
+        serde_json::to_value(SewPlan::build(&pattern, &options).unwrap()).unwrap()
+    );
+    assert_eq!(plan["schema"], "ftx-sewing-plan/8");
+    assert_eq!(
+        plan["seams"][0]["stations"],
+        original["seams"][0]["stations"]
+    );
+    assert_eq!(plan["seams"][0]["stack_mm"], 0.8);
+    assert_eq!(
+        plan["seams"][0]["qualification_id"],
+        "synthetic-clearance-process"
+    );
+    let foot = &plan["seams"][0]["presser_foot"];
+    for (actual, expected) in [
+        (&foot["pressure_pa"], 250.0),
+        (&foot["nominal_stack_mm"], 0.6),
+        (&foot["stack_mm"], 0.66),
+        (&foot["closure"]["normal_force_n"], 0.05),
+        (&foot["closure"]["external_work_j"], 0.000005),
+    ] {
+        assert!((actual.as_f64().unwrap() - expected).abs() < 1e-12);
+    }
+    let program = w.json(&["sew-stitches", "pattern.json", "options.json"]);
+    assert_eq!(program["plan"], plan);
+    assert_eq!(
+        program,
+        serde_json::to_value(SewProgram::build(&pattern, &options).unwrap()).unwrap()
+    );
+    assert_eq!(program["stitches"].as_array().unwrap().len(), 40);
+    let svg_args = &[
+        "sew-svg",
+        "pattern.json",
+        "options.json",
+        "side",
+        "clearance.svg",
+    ];
+    w.json(svg_args);
+    let svg = fs::read_to_string(w.0.join("clearance.svg")).unwrap();
+    assert_eq!(
+        svg,
+        ftx_export::sewing::preview::svg(&pattern, &options, "side").unwrap()
+    );
+    assert!(svg.contains("Inferred pressure 250 Pa"));
+    assert!(svg.contains("Gap 0.6 mm | reference area 200 mm2 | normal force 0.05 N"));
+    assert!(svg.contains("Signed external branch work 0.000005 J"));
+    assert!(svg.contains(foot["closure"]["input_sha256"].as_str().unwrap()));
+    assert!(!svg.contains("Prescribed independent-ply pressure"));
+    assert_eq!(w.run(svg_args).status.code(), Some(2));
+    assert_eq!(fs::read_to_string(w.0.join("clearance.svg")).unwrap(), svg);
+    assert_eq!(
+        fs::read_to_string(w.0.join("pattern.json")).unwrap(),
+        PATTERN
+    );
+    assert_eq!(
+        fs::read_to_string(w.0.join("options.json")).unwrap(),
+        CLEARANCE
+    );
+}
+
+#[test]
+fn force_and_control_mode_refusals_never_publish_partial_clearance_outputs() {
+    let w = Workspace::new();
+    for kind in 0..4 {
+        let mut options: Value = serde_json::from_str(CLEARANCE).unwrap();
+        match kind {
+            0 => options["machine"]["presser_foot"]["normal_force_n"] = json!([0.001, 0.04]),
+            1 => options["passes"][0]["presser_foot"]["pressure_pa"] = json!(250),
+            2 => {
+                options["qualifications"][0]["presser_foot"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("clearance");
+            }
+            _ => options["passes"][0]["presser_foot"]["clearance"]["gap_mm"] = json!(0.3),
+        }
+        w.write("options.json", &options);
+        for args in [
+            PLAN,
+            &["sew-stitches", "pattern.json", "options.json"],
+            &[
+                "sew-svg",
+                "pattern.json",
+                "options.json",
+                "side",
+                "refused.svg",
+            ],
+        ] {
+            let out = w.run(args);
+            assert_eq!(out.status.code(), Some(2), "case {kind}");
+            assert!(out.stdout.is_empty());
+        }
+        assert!(!w.0.join("refused.svg").exists());
+    }
+}
 
 #[test]
 fn real_commands_retain_loaded_and_unloaded_stacks_and_the_same_source_identity() {

@@ -8,6 +8,57 @@ const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
 const OPTIONS: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-pressure-options.json");
+const CLEARANCE: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-sewing-clearance-options.json");
+
+#[test]
+fn clearance_browser_boundary_uses_the_same_inverse_and_exact_source_receipts() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let options: SewOptions = serde_json::from_str(CLEARANCE).unwrap();
+    let plan: Value = serde_json::from_str(&sew_plan(PATTERN, CLEARANCE).unwrap()).unwrap();
+    assert_eq!(
+        plan,
+        serde_json::to_value(SewPlan::build(&pattern, &options).unwrap()).unwrap()
+    );
+    assert_eq!(plan["schema"], "ftx-sewing-plan/8");
+    let program: Value = serde_json::from_str(&sew_stitches(PATTERN, CLEARANCE).unwrap()).unwrap();
+    assert_eq!(program["plan"], plan);
+    let closure = &plan["seams"][0]["presser_foot"]["closure"];
+    assert!((closure["normal_force_n"].as_f64().unwrap() - 0.05).abs() < 1e-12);
+    let svg = sew_svg(PATTERN, CLEARANCE, "side").unwrap();
+    assert_eq!(
+        svg,
+        ftx_export::sewing::preview::svg(&pattern, &options, "side").unwrap()
+    );
+    assert!(svg.contains(closure["input_sha256"].as_str().unwrap()));
+    assert!(svg.contains("Inferred pressure 250 Pa"));
+}
+
+#[test]
+fn clearance_browser_boundary_does_not_drop_force_limits_or_source_locks() {
+    for stale in [false, true] {
+        let mut o: Value = serde_json::from_str(CLEARANCE).unwrap();
+        if stale {
+            let profile = o["passes"][0]["presser_foot"]["materials"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap();
+            profile["material"]["name"] = json!("A different synthetic specimen");
+        } else {
+            o["machine"]["presser_foot"]["normal_force_n"] = json!([0.001, 0.04]);
+        }
+        let o = o.to_string();
+        for result in [
+            sew_plan(PATTERN, &o),
+            sew_stitches(PATTERN, &o),
+            sew_svg(PATTERN, &o, "side"),
+        ] {
+            assert!(result.is_err());
+        }
+    }
+}
 
 #[test]
 fn browser_adapters_share_loaded_stack_receipts_and_preserve_qualification() {

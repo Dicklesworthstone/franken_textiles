@@ -2061,6 +2061,72 @@ garment acceptance remain open. See [material-scenario-studies.md](docs/material
 
 ---
 
+### 25.31 Complete material combinations through garment consumers
+
+**Independent shell, lining and trim choices (`ftx-mc1`, supports `ftx-ms2`).** The existing
+`ftx-material-study/1` request accepts `combinations` as an alternative to explicit variants or
+scalar screening. One to eight named groups each select a material for the pattern default or a
+disjoint set of source pieces. The complete Cartesian product is limited to 32 alternatives and
+refuses before source resolution when over budget; no surrogate score or hidden pruning removes
+a candidate. Default replacement preserves explicit piece assignments, and named assignments
+retain their ordinary precedence.
+
+Every alternative goes through the same source binding, mass, cutting, finite-stock, sewing,
+purchasing and optional fresh drape/thermal scenario consumers as a manually authored variant.
+Each result retains its group choices, complete source-locked assignments and independent consumer
+refusals. The existing comparison policy ranks only supported actual outputs. A supplied pool of
+qualified pair-friction observations is validated completely, then selects only pairs used by
+that alternative's exact material hashes. Missing unlike-material observations remain unavailable;
+no averaging or material-family friction rule is introduced.
+
+The browser workbench can capture inspected selections into these named groups, display the
+combination count, load an optional interface pool and run ordinary manufacturing or scenario
+studies. It retains original JSON numbers and source locks, clears stale results after choice,
+policy or pattern changes, and downloads the complete generated request for replay. Native CLI
+and file-free WASM use the same request and production evaluators.
+
+This delivers finite heterogeneous design search, not unbounded global optimization or empirical
+garment accuracy. Large design spaces, alternative geometry/process variables and independently
+measured matched material/garment acceptance remain under `ftx-ms2` and `ftx-tm2`/`ftx-tm8`.
+See [material-screening-and-studies.md](docs/material-screening-and-studies.md) for a complete
+catalog-backed two-by-two example and the interface/assignment contract.
+
+---
+
+### 25.32 Measured performance-knit strip observations
+
+**Matched production specimens (`ftx-kn1`, supports `ftx-tm2`).** Three records from the
+MIT-licensed Sperl et al. SIGGRAPH 2022 dataset add polyester/spandex single jerseys SJ1/SJ3 and
+the polyester/Celliant-polyester/spandex interlock DKIN8. They retain reported yarn mass fractions,
+yarn identities, counts and finishes, three areal masses, three specimen-gauge observations and
+18 directional grip-force values. The built-in catalog now contains **169 records**.
+
+For each specimen and warp/weft/bias cut, the force attributes retain exact author-reported loading
+rows at 10% and 30% grip extension on a 100 mm free-gauge by 60 mm-wide clamped strip. The source's
+upstream processing, conditioning, rate and uncertainty remain unspecified where not supplied.
+No interpolation, smoothing or conversion into a homogeneous deformation gradient is performed.
+The original nine CSV byte strings, full metadata, archive paths, source hashes and complete MIT
+notice are retained for test-time reconstruction; normal native/WASM catalog construction uses
+compact transcriptions without bundling the source fixture into the application binary.
+
+The ordinary screener can now choose minimum measured areal mass subject to a qualified directional
+grip-force constraint. For example, weft force at 30% of at least 2 N selects SJ3 among these three
+when the caller explicitly permits comparison across specimen identities. Missing source bounds
+remain unavailable. Unspecified gauge pressure prevents promoting specimen thickness to canonical
+unloaded clearance. These observations do not supply thermal, homogeneous membrane, shear or bending
+laws, and do not make a knit solver-ready by inference.
+
+**Next critical acquisition consumer (`ftx-ki1`).** Implement an inverse characterization path that
+models the actual clamped strip geometry, orientations, grip motion and transverse freedom before
+fitting constitutive parameters. Retain loading/unloading history and upstream processing scope;
+separate fitting from held-out tests and quantify identifiability before publishing a frozen law.
+Matched independent bending/contact and thermal observations remain separate requirements. This is
+the path from the retained force observations to defensible automatic garment substitution, rather
+than treating grip extension as uniform textile strain. See
+[measured-knit-strips.md](docs/measured-knit-strips.md) for sources, all values and a screening request.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

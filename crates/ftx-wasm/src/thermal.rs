@@ -3,6 +3,36 @@
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::thermal::steady::request::{Request, SurfaceConditions};
 
+/// Evaluate qualified clearance changes followed by dry thermal holds, retaining material heat
+/// state, mass and source-locked final selections. Mechanical work is not injected as heat.
+/// This is the same local operation as `ftx materials thermal-compression`.
+///
+/// # Errors
+/// Input over 64 MiB, invalid evidence/schema, exceeded work limits or any refused hold. No partial
+/// history or replacement selection is returned, and the caller's input is never edited.
+pub fn compression_history(input: &str) -> Result<String, Refusal> {
+    if input.len() > 64 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "compressed thermal input exceeds 64 MiB",
+        ));
+    }
+    let invalid = |e: serde_json::Error| Refusal::new(RefusalCode::InvalidDocument, e.to_string());
+    let request: ftx_drape::thermal::compression::Input =
+        serde_json::from_str(input).map_err(invalid)?;
+    serde_json::to_string(&ftx_drape::thermal::compression::evaluate(&request)?).map_err(invalid)
+}
+
+/// Browser binding for the same transactional compression/heat history as [`compression_history`].
+///
+/// # Errors
+/// The same source, model, budget and arithmetic refusals as [`compression_history`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn thermal_compression_history(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    compression_history(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Evaluate `ftx-thermal-steady/1` JSON and return the shared source-locked result as JSON text.
 /// Input is neither uploaded nor edited; missing heat capacity is not replaced with a default.
 ///

@@ -137,8 +137,28 @@ No binding step is required. Refused consumers remain visible; missing prices, m
 <p class="note">The request declares units, constraints, objectives, nominal or reported-bound comparison and estimate consent.
 Its scalar frontier is not a garment ranking. Original observations and protocols remain inspectable for excluded candidates too.</p>
 <label>Study request JSON (<code>ftx-material-study/1</code>) <input id="studyRequest" type="file" accept=".json,application/json"></label>
+<details><summary>Build combinations of shell, lining, cuffs and other material choices</summary>
+<p>Inspect a material in section 1, select the source pieces that share a choice, and add it to a named group.
+Add more choices to that group, then create groups for other pieces. Every combination runs through the requested consumers.</p>
+<label><input id="combinationMode" type="checkbox"> Use the material choices below</label>
+<p class="note">In this mode, the study file supplies the schema, process inputs and comparison policy.
+It must omit <code>variants</code>, <code>screened</code> and <code>combinations</code>. The downloaded request includes the exact frozen choices.</p>
+<label>Group name <input id="combinationGroup" type="text" placeholder="shell"></label>
+<label>Choice name <input id="combinationChoice" type="text" placeholder="lightweight knit"></label>
+<label>Assignment <select id="combinationScope"><option value="pieces">Selected source pieces</option>
+<option value="default">Pattern default (preserve explicit piece choices)</option></select></label>
+<label>Source pieces (select all that share this group) <select id="combinationPieces" multiple size="5"></select></label>
+<button id="addCombination" disabled>Add or replace choice with inspected material</button>
+<button id="clearCombinations" disabled>Clear material choices</button>
+<p id="combinationCount">No material choices added.</p>
+<div id="combinationGroups"></div>
+<label>Optional qualified interface pool JSON <input id="combinationInterfaces" type="file" accept=".json,application/json"></label>
+<p class="note">The pool uses the existing interface records and exact material hashes. Each combination selects its matching pairs;
+missing friction evidence stays missing. Omitting the pool preserves the original pattern's interfaces. An empty list clears them.
+Up to eight groups may target disjoint source pieces, with at most one default group. Up to 32 complete combinations are evaluated.</p>
+</details>
 <button id="study" data-command="study" disabled>Compare manufacturing alternatives</button>
-<p class="note">The study request contains explicit <code>variants</code> or a <code>screened</code> request, and its own shared roll cutting,
+<p class="note">The study request contains explicit <code>variants</code>, a <code>screened</code> request, or grouped <code>combinations</code>, and its own shared roll cutting,
 finite-stock, sewing, declared assembly mass and dated purchasing inputs. Add <code>finite_stock</code> with an <code>ftx-finite-stock-request/1</code>
 inventory to compare actual hides or remnants, including defects and prior cuts. Every alternative uses the same original inventory;
 one alternative does not consume another's stock. Roll and finite-stock results remain independent, and purchasing uses roll markers.

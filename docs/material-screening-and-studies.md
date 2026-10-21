@@ -100,6 +100,87 @@ lining/cuff materials. Named-piece substitution changes only those source IDs. I
 layer stacks, remaps instance IDs, changes grainlines, rewrites pair friction or changes geometry.
 Every candidate begins from the SAME original pattern; substitutions never accumulate across rows.
 
+### Heterogeneous material combinations
+
+`combinations` is a third alternative source, exclusive with `variants` and `screened`. It evaluates
+the complete Cartesian product of material choices on independently declared targets. For example,
+a shell, lining and cuff can each have their own choices; the ordinary manufacturing and scenario
+consumers then recompute every resulting assignment before the existing comparison selects its
+Pareto frontier. A material's scalar screening score cannot silently discard a better mixed design.
+
+This complete request works with the supplied synthetic two-piece pattern. Its source-bearing
+insulation selections support cutting and mass comparison; no missing mechanics are inferred:
+
+```json
+{
+  "schema": "ftx-material-study/1",
+  "combinations": {
+    "groups": [
+      {
+        "key": "front-insulation",
+        "target": {"scope": "pieces", "ids": ["front"]},
+        "choices": [
+          {"key": "C100", "selection": {"id": "3m_thinsulate_c100_2020"}},
+          {"key": "C200", "selection": {"id": "3m_thinsulate_c200_2020"}}
+        ]
+      },
+      {
+        "key": "back-insulation",
+        "target": {"scope": "pieces", "ids": ["back"]},
+        "choices": [
+          {"key": "C100", "selection": {"id": "3m_thinsulate_c100_2020"}},
+          {"key": "C200", "selection": {"id": "3m_thinsulate_c200_2020"}}
+        ]
+      }
+    ]
+  },
+  "cutting": {"copies": 1, "gap_mm": 2, "edge_margin_mm": 5, "end_margin_mm": 10},
+  "assembly_mass": {
+    "schema": "ftx-assembly-mass/1",
+    "inventory_complete": true,
+    "extras": []
+  },
+  "comparison": {
+    "basis": "nominal",
+    "objectives": [
+      {"metric": "assembly_mass_kg", "direction": "minimize"},
+      {"metric": "stock_area_m2", "direction": "minimize"}
+    ]
+  }
+}
+```
+
+There must be one to eight groups, with one to 32 choices per group and at most **32 complete
+combinations**. A larger product refuses before resolving selections or running consumers; it is
+never truncated. Group keys are unique, choice keys are unique within each group, and each key is
+nonempty and at most 256 UTF-8 bytes. Keys identify choices independently of material IDs, so two
+specimen lots or explicit overrides may share one material ID. Named-piece targets must be disjoint,
+nonempty and refer to existing source IDs. One optional `default` group uses ordinary default
+substitution: existing explicitly assigned pieces remain unchanged. A named-piece group deliberately
+overrides its target even when a default group is also present.
+
+Groups and choices are evaluated in sorted-key order. Each generated row retains a `choices` map
+from group key to selected choice key; its unambiguous row `key` is the JSON serialization of that
+sorted map. The usual `frozen_changes` contains complete resolved material records and exact
+`expected_sha256` locks, including unchanged effective assignments. It replays through the ordinary
+binder and can be used as an explicit manual variant. Missing selections refuse only combinations
+that use them; unavailable cutting, sewing, thermal or other consumers remain separate outcomes.
+
+Heterogeneous contact still needs qualified pair evidence. Optional `combinations.interfaces` is a
+pool of the **existing** `fabric.interfaces` records, with exact lowercase SHA-256 material hashes, friction observations,
+sources and estimate-consent policy. Every pool record is validated even when unused, and duplicate
+or same-material pairs refuse. Each combination selects exactly the pool entries whose two hashes
+occur among its effective physical piece assignments, then submits that complete selected table to
+the normal atomic binder. No pair coefficient or estimate consent is inferred. The resulting table
+is retained in that row's `frozen_changes.interfaces`. Omitting the pool preserves the original
+authored table; an empty pool explicitly clears it. Missing or stale pair evidence is handled by
+the ordinary mechanical consumer, without erasing independent mass/cutting results.
+
+The generated frontier is conditional on these supplied choices, process/scenario inputs and
+comparison policy. Exhausting a finite choice set does not establish a global textile-design optimum
+or experimentally validated garment fit. Native `study`/`scenario-study` and their existing WASM
+entry points consume the same request.
+
 Each row independently reports binding, roll cutting, finite stock, sewing, requested assembly mass
 and purchasing as `available`, `refused` or `not_requested`. `available` purchasing can still have
 `complete_offer_coverage: false`: its total

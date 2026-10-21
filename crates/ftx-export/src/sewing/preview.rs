@@ -141,11 +141,10 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
         .iter()
         .map(|(lo, hi)| hi.y - lo.y)
         .fold(0.0, f64::max);
-    let foot_height = if seam.presser_foot.is_some() {
-        10.0
-    } else {
-        0.0
-    };
+    let foot_height = seam
+        .presser_foot
+        .as_ref()
+        .map_or(0.0, |f| if f.closure.is_some() { 20.0 } else { 10.0 });
     let height = body_height + 68.0 + 5.0 * seam.runs.len() as f64 + foot_height;
     let (ws, hs) = (fnum(width, 6), fnum(height, 6));
     let mut metadata = json!({"schema":"ftx-sewing-preview/1","pattern_sha256":plan.pattern_sha256,
@@ -157,6 +156,20 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
             "checked_loaded_stack_mm":foot.stack_mm,"layers":foot.layers,
             "acquisition_sha256":foot.materials.iter().map(|(h,r)| (h,&r.input_sha256))
                 .collect::<std::collections::BTreeMap<_,_>>()});
+        if let Some(closure) = &foot.closure {
+            metadata["presser_foot"]["closure"] = json!({
+                "input_sha256":closure.input_sha256,
+                "gap_mm":closure.input.gap_m*1000.0,
+                "reference_area_mm2":closure.input.reference_area_m2*1e6,
+                "direction":closure.input.direction,
+                "initial_pressure_pa":closure.initial_pressure_pa,
+                "normal_force_n":closure.normal_force_n,
+                "external_work_j":closure.external_work_j,
+                "closure_residual_m":closure.closure_residual_m,
+                "layer_acquisition_sha256":closure.layers.iter()
+                    .map(|layer| (&layer.id,&layer.conditioned.input_sha256))
+                    .collect::<std::collections::BTreeMap<_,_>>()});
+        }
     }
     let mut out = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{ws}mm\" height=\"{hs}mm\" viewBox=\"0 0 {ws} {hs}\">\n<title>Sewing operation: {}</title>\n<desc>Independent pattern frames. Planning review only, not a cutter file or robot trajectory. No physical seam qualification. Exterior clearance excludes notch incisions.</desc>\n<metadata>{}</metadata>\n<rect width=\"{ws}\" height=\"{hs}\" fill=\"white\"/>\n<defs><marker id=\"travel\" markerWidth=\"4\" markerHeight=\"4\" refX=\"4\" refY=\"2\" orient=\"auto\" markerUnits=\"userSpaceOnUse\"><path d=\"M0 0 L4 2 L0 4 Z\" fill=\"#087f8c\"/></marker></defs>\n<g font-family=\"sans-serif\" font-size=\"3\" fill=\"black\">\n<text x=\"5\" y=\"6\">Planning review only - NOT machine instructions</text>\n<text x=\"5\" y=\"12\">Black: exterior cut. Gray dash: original seam. Teal: stitch path; arrow: main pass.</text>\n<text x=\"5\" y=\"18\">Red dots: needle stations; red dash: between-stitch chords. Views are separate local frames.</text>\n",
@@ -201,9 +214,17 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
     }
     if let Some(foot) = &seam.presser_foot {
         let fy = y + 5.0 * (seam.runs.len().max(1) + 1) as f64;
-        out.push_str(&format!("<text class=\"loaded-stack\" x=\"5\" y=\"{}\">Foot pressure {} Pa | loaded nominal {} mm | checked stack {} mm (upper bounds where supplied)</text>\n<text x=\"5\" y=\"{}\">Prescribed independent-ply pressure; no contact/recovery model or machine setting.</text>\n",
-            fnum(fy,6), fnum(foot.pressure_pa,6), fnum(foot.nominal_stack_mm,6),
-            fnum(foot.stack_mm,6), fnum(fy+5.0,6)));
+        if let Some(closure) = &foot.closure {
+            out.push_str(&format!("<text class=\"loaded-stack\" x=\"5\" y=\"{}\">Inferred pressure {} Pa | loaded nominal {} mm | checked stack {} mm</text>\n<text class=\"clearance-force\" x=\"5\" y=\"{}\">Gap {} mm | reference area {} mm2 | normal force {} N</text>\n<text class=\"closure-work\" x=\"5\" y=\"{}\">Signed external branch work {} J; NOT identified as heat or dissipated energy.</text>\n<text x=\"5\" y=\"{}\">Central-value rigid-face inverse; no pressure uncertainty or machine authorization.</text>\n",
+                fnum(fy,6), fnum(foot.pressure_pa,6), fnum(foot.nominal_stack_mm,6),
+                fnum(foot.stack_mm,6), fnum(fy+5.0,6), fnum(closure.input.gap_m*1000.0,6),
+                fnum(closure.input.reference_area_m2*1e6,6), fnum(closure.normal_force_n,6),
+                fnum(fy+10.0,6), fnum(closure.external_work_j,12), fnum(fy+15.0,6)));
+        } else {
+            out.push_str(&format!("<text class=\"loaded-stack\" x=\"5\" y=\"{}\">Foot pressure {} Pa | loaded nominal {} mm | checked stack {} mm (upper bounds where supplied)</text>\n<text x=\"5\" y=\"{}\">Prescribed independent-ply pressure; no contact/recovery model or machine setting.</text>\n",
+                fnum(fy,6), fnum(foot.pressure_pa,6), fnum(foot.nominal_stack_mm,6),
+                fnum(foot.stack_mm,6), fnum(fy+5.0,6)));
+        }
     }
     out.push_str("</g>\n</svg>\n");
     Ok(out)

@@ -9,6 +9,125 @@ const PATTERN: &str =
 const STOCK: &str = include_str!("../../../tests/fixtures/materials/synthetic-stock-request.json");
 
 #[test]
+fn file_free_study_expands_complete_heterogeneous_choices_without_pruning_refusals() {
+    let source: Value = serde_json::from_str(PATTERN).unwrap();
+    let hide = source["fabric"]["material"].clone();
+    let mut roll = hide.clone();
+    roll["record"]["form"] = json!("woven");
+    roll["record"]["properties"]["width"] = json!({"value":0.1,"unit":"m",
+        "evidence":"estimate","source":"test","method":"Synthetic roll width"});
+    let choices = json!([{"key":"hide","selection":hide},{"key":"roll","selection":roll}]);
+    let input = json!({"schema":"ftx-material-study/1","combinations":{"groups":[
+        {"key":"main","target":{"scope":"default"},"choices":choices},
+        {"key":"pocket","target":{"scope":"pieces","ids":["pocket"]},"choices":choices}]},
+        "finite_stock":serde_json::from_str::<Value>(STOCK).unwrap(),
+        "cutting":{"copies":1,"gap_mm":2.0,"edge_margin_mm":2.0,"end_margin_mm":2.0}});
+    let typed: Request = serde_json::from_value(input.clone()).unwrap();
+    let expected = serde_json::to_value(typed.evaluate(&Pattern::new(source)).unwrap()).unwrap();
+    let raw = input.to_string();
+    let report_text = materials::study(PATTERN, &raw).unwrap();
+    let result: Value = serde_json::from_str(&report_text).unwrap();
+    assert_eq!(result, expected);
+    assert_eq!(report_text, materials::study(PATTERN, &raw).unwrap());
+    let rows = result["alternatives"].as_array().unwrap();
+    assert_eq!(rows.len(), 4);
+    assert!(
+        rows.iter()
+            .all(|row| row["choices"].as_object().unwrap().len() == 2)
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row["finite_stock"]["status"] == "available")
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row["cutting"]["status"] == "available")
+    );
+    assert!(rows.iter().any(|row| row["cutting"]["status"] == "refused"));
+    let mut excessive = input;
+    excessive["combinations"]["groups"][0]["choices"] = Value::Array(
+        (0..17)
+            .map(|i| json!({"key":format!("choice-{i}"),"selection":{"id":"missing"}}))
+            .collect(),
+    );
+    let refusal = materials::study(PATTERN, &excessive.to_string()).unwrap_err();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::BudgetExceeded);
+}
+
+#[test]
+fn generated_interface_choices_reach_the_real_self_contact_material_authority() {
+    let mut source: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+    ))
+    .unwrap();
+    let mechanics: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let a = mechanics["fabric"]["material"].clone();
+    let mut b = a.clone();
+    b["id"] = json!("synthetic-second-sheet");
+    b["record"]["id"] = json!("synthetic-second-sheet");
+    b["record"]["properties"]["areal_density"]["value"] = json!(0.4);
+    source["fabric"]["material"] = a.clone();
+    let catalog = ftx_pattern::textile_import::catalog().unwrap();
+    let hash = |raw: &Value| {
+        catalog
+            .resolve(&serde_json::from_value(raw.clone()).unwrap())
+            .unwrap()
+            .sha256()
+            .to_owned()
+    };
+    let choices = json!([{"key":"a","selection":a},{"key":"b","selection":b}]);
+    let pair = json!({"materials":[hash(&a),hash(&b)],
+        "friction":{"value":0.18,"unit":"1","evidence":"estimate","source":"test",
+            "method":"Synthetic pair friction for software integration"},
+        "sources":{"test":{"reference":"test:combination-pair","accessed_on":"2026-10-20",
+            "note":"Synthetic values only"}},"allow_estimates":true});
+    let mut input = json!({"schema":"ftx-material-study/1","combinations":{"groups":[
+        {"key":"front","target":{"scope":"pieces","ids":["front"]},"choices":choices},
+        {"key":"back","target":{"scope":"pieces","ids":["back"]},"choices":choices}],
+        "interfaces":[pair]},"cutting":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0.0,"end_margin_mm":0.0}});
+    let options = ftx_drape::run::DrapeOptions {
+        self_contact: Some(ftx_drape::run::DrapeOptions::default().contact),
+        ..ftx_drape::run::DrapeOptions::default()
+    };
+    for supplied in [true, false] {
+        if !supplied {
+            input["combinations"]["interfaces"] = json!([]);
+        }
+        let result: Value = serde_json::from_str(
+            &materials::study(&source.to_string(), &input.to_string()).unwrap(),
+        )
+        .unwrap();
+        for row in result["alternatives"].as_array().unwrap() {
+            let mixed = row["choices"]["front"] != row["choices"]["back"];
+            let bound = Pattern::new(row["binding"]["result"]["pattern"].clone());
+            let resolved = ftx_drape::material::resolve(&bound, &options);
+            if mixed && !supplied {
+                assert!(
+                    resolved
+                        .err()
+                        .expect("missing pair evidence must refuse")
+                        .message
+                        .contains("pairwise friction")
+                );
+            } else {
+                let report = resolved.unwrap().report;
+                if mixed {
+                    assert_eq!(report["self_friction_matrix"][0][1], 0.18);
+                    assert_eq!(report["self_friction_matrix"][1][0], 0.18);
+                }
+                assert_eq!(
+                    report["interfaces"].as_array().unwrap().len(),
+                    usize::from(mixed)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn file_free_stock_study_preserves_production_plans_and_independent_source_refusals() {
     let source: Value = serde_json::from_str(PATTERN).unwrap();
     let hide = source["fabric"]["material"].clone();
