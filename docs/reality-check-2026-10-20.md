@@ -1163,14 +1163,14 @@ audit requested by the user. The existing checker remains a regression for this 
 - [x] Integrate incoming joint-outfit and source-acquisition work on main, preserving local material
   data work and unique Beads. An external actor completed both merge commits; credit its code separately.
 - [x] Claim `ftx-onn.5`; retain empirical `ftx-ki1`, `ftx-md1` and parent G5 acceptance as open.
-- [ ] Finish strict-remote merged native tests, all-target Clippy and release WASM build.
+- [x] Finish strict-remote merged native tests, all-target Clippy and release WASM build.
 - [x] Capture actual native strip results and source/binary identities from the same committed source.
 - [x] Back up existing ignored browser bundle; refresh it from the matching release artifact.
 - [x] Exercise real Chromium acquisition, both estimate policies, exact downloads, accepted assignment,
   retained unaccepted diagnostics, work-budget refusal and stale-result withdrawal.
 - [x] Run compiled-WASM worker regressions and the existing browser round smoke checks.
 - [x] Review observed output and failures with a fresh solo pass; fix concrete defects if found.
-- [ ] Record exact results/limits and the three bounded no-ceremony worksheets; scan the staged patch,
+- [x] Record exact results/limits and the three bounded no-ceremony worksheets; scan the staged patch,
   update/sync Beads, commit scoped changes on main and release reservations.
 
 Initial local delivery: the ignored `web/pkg` received the merged release module, including all 52 MIT
@@ -1285,5 +1285,40 @@ The final source barrier detected this before closure. It is incoming product wo
 infrastructure authored here. The smaller adequate recheck is a matching release bundle, all-target
 lint, the eight affected native integration targets, compiled-worker checks and actual browser
 scalar/nonlinear routes, rather than another full workspace run. The completed broad suite above
-remains attached exclusively to `af0fba3`. `f69b419` all-target Clippy already passes; its focused
-native tests, release build and final matching browser comparisons are pending.
+remains attached exclusively to `af0fba3`. Final `f69b419` results: **47 passed, zero failed/ignored**
+across those eight targets on `vmi1152480`; all-target Clippy passes; release WASM builds on
+`vmi1156319`. Each strict-remote command uses the same base/clean/no-overlay and HTTP user-agent
+environment shown above. The exact changed-target test command is:
+
+```sh
+rch exec --base f69b419 --clean-overlay --no-overlay -- cargo test --locked -j1 -p ftx-cli -p ftx-drape -p ftx-wasm -p ftx-pattern --test strip_workflow --test clamped_strip_calibration_workflow --test clamped_strip_calibration --test strip_consumers --test outfit --test strip_identification --test strip_nonlinear_identification --test nonlinear_calibration
+```
+
+The matching source tree is `4a468f2f57cfa883b6aad60965517c40b5416134`. Final raw WASM SHA-256 is
+`ba1db4eeb221d27e41b82a9ca74e1085da79c2573394684885b2a4613a1c5a27`; installed browser WASM is
+`a0407a8bef1ff9b6d762d15dce887f2bf84db780fcfc43c7679b45a21259eed4`. Glue/type declarations stay
+identical to the first delivery. All four previous `af0fba3` outputs are preserved in ignored
+`out/ftx-integrated-browser-20261021/af0fba3-bundle/` before replacement. Final native executable
+SHA-256 `11ab965ec38410758fcf1bd9f171b8d12d7f039bfe71dc1c2a813e277b4c34ee` is stable across four
+zero-exit captures: both scalar policies, original acquisitions and the admitted nonlinear fixture.
+Inputs equal the committed `f69b419` bytes. Full reports and stderr are retained in `final-native-proof/`.
+
+The existing Chromium checker additionally compares the complete nonlinear calibration/selection,
+literal original input, parameter labels/units/bounds and declared-shape assumptions against those
+actual native outputs. Its recovered scales/coupling are `[1.1, 0.9, 1.2000000000000002, 40]`, with
+844 forward solves, FIT RMS 0.1930405006569015, CHECK RMS 0.07168921967067417 and verified domain replay.
+These are synthetic software checks, not newly measured response shapes or textile adequacy.
+Latest browser proof/screenshots: `/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-nduAo5`.
+The final **66/66 compiled-WASM frontend checks** also compare the scalar report to the matching native
+capture using `FTX_STRIP_REPLAY=out/ftx-integrated-browser-20261021/final-native-proof/admitted.json`.
+The main browser smoke checks pass again against this final bundle. Formatting and diff checks pass.
+Final hash verification confirms that every tested UI/driver/bundle file is unchanged, and Rust/Cargo
+sources still equal `f69b419`; later `1220952` records the added real nonlinear browser check.
+
+Final staged UBS again exits 2: **zero critical, 31 warning, 82 informational**, with the same incomplete
+command-taint analysis. The new warning is fail-fast parsing of the retained nonlinear test report;
+no suppression or scanner-source change. This remains a disclosed coverage limitation, not a pass.
+The fresh-solo verification above supports closing this browser-delivery slice only. The complete
+workspace suite was not repeated after the second concurrent feature merge; its affected targets,
+lint, release artifact and real browser route were rechecked instead. `ftx-ki1`, `ftx-ki4`, `ftx-md1`
+and G5 keep their original unresolved empirical/physical acceptance requirements.
