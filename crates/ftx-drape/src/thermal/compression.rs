@@ -433,3 +433,36 @@ pub fn evaluate(input: &Input) -> Result<Report, Refusal> {
         no_claim: "One-way quasi-static rigid-face compression followed by dry constant-property thermal holds, at fixed reference area and pressure-invariant mass/heat capacity. Interface/film resistances are explicitly prescribed, not inferred from pressure. Mechanical work is retained separately, not converted to heat or split into recovery/dissipation. No continuous squeeze dynamics, branch switching, recovery time, thermomechanical feedback, moisture, garment contact field, empirical textile validation or comfort claim.",
     })
 }
+
+/// Bounded JSON boundary shared by native and WebAssembly callers. Version 1 retains its original
+/// single-branch contract; version 2 adds explicit acquired-branch legs without guessing reversals.
+///
+/// # Errors
+/// More than 64 MiB, invalid/unsupported schema or fields, or any refused setup, transition or hold.
+/// No partial report is serialized and original frozen selection strings are retained exactly.
+pub fn evaluate_json(input: &str) -> Result<String, Refusal> {
+    if input.len() > 64 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "compressed thermal input exceeds 64 MiB",
+        ));
+    }
+    // The header selects a parser; the full strict typed parse below still rejects unknown fields.
+    #[derive(Deserialize)]
+    struct Header {
+        schema: String,
+    }
+    let parse_error = |e: serde_json::Error| invalid(e.to_string());
+    let header: Header = serde_json::from_str(input).map_err(parse_error)?;
+    match header.schema.as_str() {
+        "ftx-compressed-thermal-history/1" => {
+            let input: Input = serde_json::from_str(input).map_err(parse_error)?;
+            serde_json::to_string(&evaluate(&input)?).map_err(parse_error)
+        }
+        "ftx-compressed-thermal-history/2" => {
+            let input: path::Input = serde_json::from_str(input).map_err(parse_error)?;
+            serde_json::to_string(&path::evaluate(&input)?).map_err(parse_error)
+        }
+        _ => Err(invalid("expected ftx-compressed-thermal-history/1 or /2")),
+    }
+}

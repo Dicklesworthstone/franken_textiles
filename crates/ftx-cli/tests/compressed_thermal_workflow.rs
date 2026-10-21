@@ -173,3 +173,160 @@ fn late_failure_or_unknown_options_cannot_publish_a_partial_success() {
         run(&d, true, &["thermal-compression", "request.json"], 3);
     }
 }
+
+fn cyclic_input() -> Value {
+    let mut value = input();
+    value["schema"] = json!("ftx-compressed-thermal-history/2");
+    // Explicit synthetic, branch-independent reference observations. Never remove a real source's
+    // branch restriction to obtain acceptance: the engine retains and checks all supplied conditions.
+    let p = &mut value["setup"]["stack"]["layers"][0]["preparation"];
+    for q in p["material"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        q["conditions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("loading_branch");
+    }
+    let mut entry = value["setup"]["stack"].clone();
+    entry["gap_m"] = json!(0.010);
+    entry["direction"] = json!("unloading");
+    let p = &mut entry["layers"][0]["preparation"];
+    p["pressure_pa"] = json!(500.0);
+    p["loading_branch"] = json!("unloading-after-500");
+    let mut mid = p["samples"][0].clone();
+    mid["pressure_pa"] = json!(250.0);
+    mid["properties"]["thickness"]["value"] = json!(12.0);
+    mid["properties"]["thickness"]
+        .as_object_mut()
+        .unwrap()
+        .remove("bounds");
+    mid["properties"]["thermal_resistance"]["value"] = json!(0.3);
+    for q in mid["properties"].as_object_mut().unwrap().values_mut() {
+        q["conditions"]["pressure_pa"] = json!("250");
+    }
+    p["samples"].as_array_mut().unwrap().insert(1, mid);
+    for row in p["samples"].as_array_mut().unwrap() {
+        for q in row["properties"].as_object_mut().unwrap().values_mut() {
+            q["conditions"]["loading_branch"] = json!("unloading-after-500");
+        }
+    }
+    for q in p["invariants"].as_object_mut().unwrap().values_mut() {
+        q["conditions"]["loading_branch"] = json!("unloading-after-500");
+    }
+    let link = json!({"source":"synthetic","evidence":"estimate","method":"Invented full cycle after a 500 Pa peak, for software verification only",
+        "conditions":{"specimen":p["specimen"],"conditioning":p["conditioning"],
+            "from_loading_branch":"loading","to_loading_branch":"unloading-after-500","pressure_pa":"500"}});
+    let mut first = value["holds"][0].clone();
+    first["gap_m"] = json!(0.010);
+    let mut middle = first.clone();
+    middle["gap_m"] = json!(0.012);
+    let mut last = first.clone();
+    last["gap_m"] = json!(0.020);
+    value.as_object_mut().unwrap().remove("holds");
+    value["legs"] = json!([
+        {"holds":[first]},
+        {"branch_change":{"entry":entry,"transitions":{"synthetic-layer":link}},"holds":[middle,last]}
+    ]);
+    value
+}
+
+#[test]
+fn both_native_commands_run_a_cyclic_path_and_reuse_its_final_selection() {
+    let original = cyclic_input();
+    let dir = setup(&original);
+    let source = std::fs::read(dir.join("request.json")).unwrap();
+    let output = run(&dir, false, &["thermal-compression", "request.json"], 0);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let output = run(&dir, true, &["thermal-compression", "request.json"], 0);
+    let wrapped: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(wrapped["result"], report);
+    assert_eq!(report["schema"], "ftx-compressed-thermal-history-report/2");
+    let typed: ftx_drape::thermal::compression::path::Input =
+        serde_json::from_value(original).unwrap();
+    assert_eq!(
+        report,
+        serde_json::to_value(ftx_drape::thermal::compression::path::evaluate(&typed).unwrap())
+            .unwrap()
+    );
+    let last = &report["steps"][2];
+    assert!((last["cumulative_external_work_j"].as_f64().unwrap() - 0.1875).abs() < 1e-12);
+    assert_eq!(last["elapsed_s"], 30.0);
+    assert!(
+        last["temperature_c"][0].as_f64().unwrap()
+            > report["steps"][1]["temperature_c"][0].as_f64().unwrap()
+    );
+    assert_eq!(report["transitions"][0]["before_hold"], 1);
+    assert_eq!(
+        report["transitions"][0]["result"]["entry_compression"]["external_work_j"],
+        0.0
+    );
+    let selection = report["final_compression"]["layers"][0]["conditioned"]["selection_json"]
+        .as_str()
+        .unwrap();
+    std::fs::write(dir.join("cyclic-selection.json"), selection).unwrap();
+    std::fs::write(
+        dir.join("pattern.json"),
+        include_bytes!("../../../tests/fixtures/materials/synthetic-stock-pattern.json"),
+    )
+    .unwrap();
+    run(
+        &dir,
+        false,
+        &[
+            "bind",
+            "pattern.json",
+            "cyclic-selection.json",
+            "bound.json",
+        ],
+        0,
+    );
+    let resolved = run(&dir, false, &["resolve", "bound.json"], 0);
+    let resolved: Value = serde_json::from_slice(&resolved.stdout).unwrap();
+    assert!(resolved.to_string().contains("synthetic/compression-sheet"));
+    run(
+        &dir,
+        false,
+        &[
+            "bind",
+            "pattern.json",
+            "cyclic-selection.json",
+            "bound.json",
+        ],
+        2,
+    );
+    assert_eq!(source, std::fs::read(dir.join("request.json")).unwrap());
+    assert_eq!(
+        selection,
+        std::fs::read_to_string(dir.join("cyclic-selection.json")).unwrap()
+    );
+}
+
+#[test]
+fn missing_reversal_evidence_or_late_heat_failure_never_emits_a_partial_native_path() {
+    for mutate in [
+        |v: &mut Value| v["legs"][1]["branch_change"]["transitions"] = json!({}),
+        |v: &mut Value| {
+            v["legs"][1]["branch_change"]["entry"]["layers"][0]["preparation"]["material"]["id"] =
+                json!("substituted")
+        },
+        |v: &mut Value| v["legs"][1]["holds"][1]["outside_c"] = json!(-300.0),
+        |v: &mut Value| v["holds"] = json!([]),
+    ] {
+        let mut value = cyclic_input();
+        mutate(&mut value);
+        let dir = setup(&value);
+        let before = std::fs::read(dir.join("request.json")).unwrap();
+        assert!(
+            run(&dir, false, &["thermal-compression", "request.json"], 2)
+                .stdout
+                .is_empty()
+        );
+        let refused = run(&dir, true, &["thermal-compression", "request.json"], 3);
+        let envelope: Value = serde_json::from_slice(&refused.stdout).unwrap();
+        assert!(envelope["result"].is_null());
+        assert_eq!(before, std::fs::read(dir.join("request.json")).unwrap());
+    }
+}

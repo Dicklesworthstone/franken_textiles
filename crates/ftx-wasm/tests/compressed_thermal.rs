@@ -80,3 +80,108 @@ fn schema_source_and_late_hold_refusals_cross_the_same_api_without_partial_outpu
         assert!(ftx_wasm::thermal::compression_history(&v.to_string()).is_err());
     }
 }
+
+fn cyclic_input() -> Value {
+    let mut value = input();
+    value["schema"] = json!("ftx-compressed-thermal-history/2");
+    for layer in value["setup"]["stack"]["layers"].as_array_mut().unwrap() {
+        for q in layer["preparation"]["material"]["properties"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            q["conditions"]
+                .as_object_mut()
+                .unwrap()
+                .remove("loading_branch");
+        }
+    }
+    let mut entry = value["setup"]["stack"].clone();
+    entry["gap_m"] = json!(0.020);
+    entry["direction"] = json!("unloading");
+    let mut transitions = serde_json::Map::new();
+    for layer in entry["layers"].as_array_mut().unwrap() {
+        let id = layer["id"].as_str().unwrap().to_string();
+        let p = &mut layer["preparation"];
+        p["pressure_pa"] = json!(500.0);
+        p["loading_branch"] = json!("unloading");
+        for row in p["samples"].as_array_mut().unwrap() {
+            for q in row["properties"].as_object_mut().unwrap().values_mut() {
+                q["conditions"]["loading_branch"] = json!("unloading");
+            }
+        }
+        for q in p["invariants"].as_object_mut().unwrap().values_mut() {
+            q["conditions"]["loading_branch"] = json!("unloading");
+        }
+        transitions.insert(
+            id,
+            json!({"source":"synthetic","evidence":"estimate",
+            "method":"Synthetic reversible branch pair for API equality only",
+            "conditions":{"specimen":p["specimen"],"conditioning":p["conditioning"],
+            "from_loading_branch":"loading","to_loading_branch":"unloading","pressure_pa":"500"}}),
+        );
+    }
+    let mut load = value["holds"][0].clone();
+    load["gap_m"] = json!(0.020);
+    let mut unload = load.clone();
+    unload["gap_m"] = json!(0.040);
+    value.as_object_mut().unwrap().remove("holds");
+    value["legs"] = json!([{"holds":[load]},
+        {"branch_change":{"entry":entry,"transitions":transitions},"holds":[unload]}]);
+    value
+}
+
+#[test]
+fn cyclic_shared_api_is_identical_to_the_typed_engine_without_a_temperature_restart() {
+    let input = cyclic_input();
+    let text = input.to_string();
+    let actual = ftx_wasm::thermal::compression_history(&text).unwrap();
+    let typed = serde_json::from_str(&text).unwrap();
+    let expected = ftx_drape::thermal::compression::path::evaluate(&typed).unwrap();
+    assert_eq!(actual, serde_json::to_string(&expected).unwrap());
+    let report: Value = serde_json::from_str(&actual).unwrap();
+    assert_eq!(report["schema"], "ftx-compressed-thermal-history-report/2");
+    assert_eq!(
+        report["steps"][1]["temperature_c"],
+        json!([20.0, 20.0, 20.0, 20.0])
+    );
+    assert_eq!(report["steps"][1]["cumulative_external_work_j"], 0.0);
+    assert_eq!(report["steps"][1]["cumulative_stored_change_j"], 0.0);
+    assert_eq!(report["steps"][1]["elapsed_s"], 20.0);
+    for (i, l) in report["final_compression"]["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let selected = l["conditioned"]["selection_json"].as_str().unwrap();
+        let resolved = Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: vec![],
+        }
+        .resolve(&serde_json::from_str(selected).unwrap())
+        .unwrap();
+        assert_eq!(
+            resolved.sha256(),
+            report["steps"][1]["layer_material_sha256"][i]
+        );
+    }
+    assert_eq!(text, input.to_string());
+}
+
+#[test]
+fn cyclic_api_rejects_unknown_versions_missing_links_and_cross_version_fields() {
+    for mutate in [
+        |v: &mut Value| v["schema"] = json!("ftx-compressed-thermal-history/3"),
+        |v: &mut Value| v["schema"] = json!("ftx-compressed-thermal-history/1"),
+        |v: &mut Value| v["holds"] = json!([]),
+        |v: &mut Value| {
+            v["legs"][1]["branch_change"]["transitions"]["a"]["source"] = json!("missing")
+        },
+        |v: &mut Value| v["legs"][1]["holds"][0]["seconds"] = json!(-1.0),
+    ] {
+        let mut v = cyclic_input();
+        mutate(&mut v);
+        assert!(ftx_wasm::thermal::compression_history(&v.to_string()).is_err());
+    }
+}
