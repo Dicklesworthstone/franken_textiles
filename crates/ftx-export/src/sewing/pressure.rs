@@ -20,6 +20,39 @@ pub const CLEARANCE_MODEL: &str = "independent_ply_clearance/1";
 const MAX_LAYERS: usize = 128;
 const MAX_OBSERVATIONS: usize = 65_536;
 
+/// Which inverse result must lie inside the independent machine and process envelopes.
+/// Reported bounds are conditional intervals, not a statistical or physical safety certificate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PressureForceBasis {
+    /// Existing central-value checks; does not establish robustness to thickness uncertainty.
+    #[default]
+    Nominal,
+    /// Require complete, domain-supported reported thickness bounds through the inverse.
+    ReportedBounds,
+}
+
+impl PressureForceBasis {
+    fn is_nominal(&self) -> bool {
+        *self == Self::Nominal
+    }
+
+    fn ranges(self, closure: &stack::Report) -> Option<stack::ReportedBounds> {
+        match self {
+            Self::Nominal => Some(stack::ReportedBounds {
+                pressure_pa: [closure.pressure_pa; 2],
+                normal_force_n: [closure.normal_force_n; 2],
+            }),
+            Self::ReportedBounds => closure.reported_bounds.clone(),
+        }
+    }
+}
+
+fn interval_within(values: [f64; 2], limits: [f64; 2]) -> bool {
+    // The same arithmetic tolerance as the existing scalar gate, never an added process margin.
+    values.iter().all(|&v| within(v, limits))
+}
+
 /// Additional machine envelope under the foot, separate from the existing unloaded entry limit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -78,6 +111,11 @@ pub struct Clearance {
     pub direction: Direction,
     /// Separate permission for model-inferred pressure/work; never relaxes sheet evidence policy.
     pub allow_estimates: bool,
+    /// Opt into checking the complete pressure/force range from reported thickness bounds.
+    /// Missing or domain-limited bounds refuse; they never fall back to nominal values.
+    /// Other quantities (loaded ply geometry, work and heat) remain nominal-state calculations.
+    #[serde(default, skip_serializing_if = "PressureForceBasis::is_nominal")]
+    pub pressure_force_basis: PressureForceBasis,
 }
 
 /// Independent process evidence for geometry-controlled closure. Pressure-only recipes do not match.
@@ -132,11 +170,14 @@ impl Qualification {
             && self.conditioning == receipt.conditioning
             && self.loading_branch == receipt.loading_branch
             && match (&self.clearance, &receipt.closure) {
-                (None, None) => true,
+                (None, None) => receipt.pressure_force_basis.is_nominal(),
                 (Some(q), Some(r)) => {
                     within(r.input.gap_m * 1000.0, q.gap_mm)
                         && within(r.input.reference_area_m2 * 1e6, q.reference_area_mm2)
-                        && within(r.normal_force_n, q.normal_force_n)
+                        && receipt.pressure_force_basis.ranges(r).is_some_and(|b| {
+                            interval_within(b.pressure_pa, self.pressure_pa)
+                                && interval_within(b.normal_force_n, q.normal_force_n)
+                        })
                         && r.input.direction == q.direction
                 }
                 _ => false,
@@ -168,6 +209,10 @@ pub struct Receipt {
     pub model: &'static str,
     /// Common applied pressure, Pa.
     pub pressure_pa: f64,
+    /// Decision basis for pressure/force gates; omission retains the existing nominal contract.
+    /// The closure receipt contains the actual interval and its qualification limitations.
+    #[serde(skip_serializing_if = "PressureForceBasis::is_nominal")]
+    pub pressure_force_basis: PressureForceBasis,
     /// Retained acquisition conditioning.
     pub conditioning: String,
     /// Retained characterized branch.
@@ -323,6 +368,7 @@ impl Request {
         let mut receipt = Receipt {
             model: MODEL,
             pressure_pa: self.pressure_pa.expect("validated prescribed pressure"),
+            pressure_force_basis: PressureForceBasis::Nominal,
             conditioning: self.conditioning.clone(),
             loading_branch: self.loading_branch.clone(),
             nominal_stack_mm: 0.0,
@@ -383,19 +429,31 @@ impl Request {
                 })
                 .collect(),
         })?;
-        if !within(closed.pressure_pa, limits.pressure_pa)
-            || !within(
-                closed.normal_force_n,
+        let checked = clearance
+            .pressure_force_basis
+            .ranges(&closed)
+            .ok_or_else(|| {
+                bad(format!(
+                    "clearance pressure/force reported bounds are unavailable: {}",
+                    closed.bounds_unavailable.join("; ")
+                ))
+            })?;
+        if !interval_within(checked.pressure_pa, limits.pressure_pa)
+            || !interval_within(
+                checked.normal_force_n,
                 limits.normal_force_n.expect("validated force limits"),
             )
         {
-            return Err(bad(
-                "inferred foot pressure or normal force exceeds the machine envelope",
-            ));
+            return Err(bad(if clearance.pressure_force_basis.is_nominal() {
+                "inferred foot pressure or normal force exceeds the machine envelope"
+            } else {
+                "inferred foot pressure or normal force reported bounds exceed the machine envelope"
+            }));
         }
         let mut receipt = Receipt {
             model: CLEARANCE_MODEL,
             pressure_pa: closed.pressure_pa,
+            pressure_force_basis: clearance.pressure_force_basis,
             conditioning: self.conditioning.clone(),
             loading_branch: self.loading_branch.clone(),
             nominal_stack_mm: 0.0,

@@ -318,3 +318,101 @@ fn pressure_refusals_have_no_partial_plan_or_preview_and_old_outputs_are_preserv
     assert_eq!(w.run(svg_args).status.code(), Some(2));
     assert_eq!(fs::read(w.0.join("review.svg")).unwrap(), before);
 }
+
+#[test]
+fn reported_bounds_commands_retain_policy_and_refuse_incomplete_or_outside_ranges() {
+    let w = Workspace::new();
+    let mut options: Value = serde_json::from_str(CLEARANCE).unwrap();
+    // These are synthetic qualification windows, not edits to any actual process evidence.
+    options["qualifications"][0]["presser_foot"]["pressure_pa"] = json!([100, 400]);
+    options["qualifications"][0]["presser_foot"]["clearance"]["normal_force_n"] =
+        json!([0.02, 0.08]);
+    w.write("options.json", &options);
+    let nominal = w.json(PLAN);
+    options["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] =
+        json!("reported_bounds");
+    w.write("options.json", &options);
+    let plan = w.json(PLAN);
+    let foot = &plan["seams"][0]["presser_foot"];
+    assert_eq!(foot["pressure_force_basis"], "reported_bounds");
+    assert_eq!(
+        foot["closure"],
+        nominal["seams"][0]["presser_foot"]["closure"]
+    );
+    assert_eq!(
+        plan["seams"][0]["stations"],
+        nominal["seams"][0]["stations"]
+    );
+    let program = w.json(&["sew-stitches", "pattern.json", "options.json"]);
+    assert_eq!(program["plan"], plan);
+    w.json(&[
+        "sew-svg",
+        "pattern.json",
+        "options.json",
+        "side",
+        "bounds.svg",
+    ]);
+    let saved = fs::read(w.0.join("bounds.svg")).unwrap();
+    let svg = String::from_utf8(saved.clone()).unwrap();
+    assert!(svg.contains("force 0.033333 to 0.063636 N"));
+    assert!(svg.contains("NOT confidence intervals"));
+    assert_eq!(
+        svg,
+        ftx_export::sewing::preview::svg(
+            &Pattern::from_json(PATTERN).unwrap(),
+            &serde_json::from_value(options.clone()).unwrap(),
+            "side"
+        )
+        .unwrap()
+    );
+    for kind in 0..3 {
+        let mut bad = options.clone();
+        match kind {
+            0 => bad["machine"]["presser_foot"]["normal_force_n"] = json!([0.001, 0.06]),
+            1 => bad["qualifications"][0]["presser_foot"]["pressure_pa"] = json!([200, 300]),
+            _ => {
+                for source in bad["passes"][0]["presser_foot"]["materials"]
+                    .as_object_mut()
+                    .unwrap()
+                    .values_mut()
+                {
+                    source["samples"][1]["properties"]["thickness"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("bounds");
+                }
+            }
+        }
+        w.write("options.json", &bad);
+        let input_bytes = fs::read(w.0.join("options.json")).unwrap();
+        for args in [
+            PLAN,
+            &["sew-stitches", "pattern.json", "options.json"],
+            &[
+                "sew-svg",
+                "pattern.json",
+                "options.json",
+                "side",
+                "refused-bounds.svg",
+            ],
+            &[
+                "sew-svg",
+                "pattern.json",
+                "options.json",
+                "side",
+                "bounds.svg",
+            ],
+        ] {
+            let out = w.run(args);
+            assert_eq!(out.status.code(), Some(2), "case {kind}");
+            assert!(out.stdout.is_empty());
+        }
+        assert_eq!(fs::read(w.0.join("options.json")).unwrap(), input_bytes);
+        assert_eq!(fs::read(w.0.join("bounds.svg")).unwrap(), saved);
+        assert!(!w.0.join("refused-bounds.svg").exists());
+    }
+    assert_eq!(
+        fs::read_to_string(w.0.join("pattern.json")).unwrap(),
+        PATTERN
+    );
+}

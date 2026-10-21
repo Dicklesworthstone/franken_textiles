@@ -107,3 +107,62 @@ fn browser_adapters_refuse_loaded_limits_without_falling_back_to_uncompressed_re
         );
     }
 }
+
+#[test]
+fn shared_boundary_does_not_downgrade_reported_bound_admission() {
+    let mut o: Value = serde_json::from_str(CLEARANCE).unwrap();
+    o["qualifications"][0]["presser_foot"]["pressure_pa"] = json!([100, 400]);
+    o["qualifications"][0]["presser_foot"]["clearance"]["normal_force_n"] = json!([0.02, 0.08]);
+    let nominal: Value = serde_json::from_str(&sew_plan(PATTERN, &o.to_string()).unwrap()).unwrap();
+    o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] = json!("reported_bounds");
+    let text = o.to_string();
+    let plan: Value = serde_json::from_str(&sew_plan(PATTERN, &text).unwrap()).unwrap();
+    let native = SewPlan::build(
+        &Pattern::from_json(PATTERN).unwrap(),
+        &serde_json::from_value(o.clone()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plan, serde_json::to_value(native).unwrap());
+    assert_eq!(
+        plan["seams"][0]["presser_foot"]["pressure_force_basis"],
+        "reported_bounds"
+    );
+    assert_eq!(
+        plan["seams"][0]["presser_foot"]["closure"],
+        nominal["seams"][0]["presser_foot"]["closure"]
+    );
+    let program: Value = serde_json::from_str(&sew_stitches(PATTERN, &text).unwrap()).unwrap();
+    assert_eq!(program["plan"], plan);
+    assert!(
+        sew_svg(PATTERN, &text, "side")
+            .unwrap()
+            .contains("NOT confidence intervals")
+    );
+    for kind in 0..3 {
+        let mut bad = o.clone();
+        match kind {
+            0 => bad["machine"]["presser_foot"]["normal_force_n"] = json!([0.04, 0.2]),
+            1 => bad["qualifications"][0]["presser_foot"]["pressure_pa"] = json!([100, 300]),
+            _ => {
+                for source in bad["passes"][0]["presser_foot"]["materials"]
+                    .as_object_mut()
+                    .unwrap()
+                    .values_mut()
+                {
+                    source["samples"][0]["properties"]["thickness"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("bounds");
+                }
+            }
+        }
+        let text = bad.to_string();
+        for output in [
+            sew_plan(PATTERN, &text),
+            sew_stitches(PATTERN, &text),
+            sew_svg(PATTERN, &text, "side"),
+        ] {
+            assert!(output.is_err(), "case {kind}");
+        }
+    }
+}

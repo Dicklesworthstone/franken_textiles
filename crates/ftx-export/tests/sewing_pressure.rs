@@ -680,3 +680,265 @@ fn request_roundtrip_retains_original_compression_observations() {
         serde_json::to_value(input).unwrap()
     );
 }
+
+#[test]
+fn reported_bound_policy_checks_both_ends_of_machine_force_and_pressure() {
+    let p = pattern();
+    let original = clearance(&p, options(), 0.6, 200.0);
+    let baseline = plan(&p, &original).unwrap();
+    let baseline_foot = baseline.seams[0].presser_foot.as_ref().unwrap();
+    let b = baseline_foot
+        .closure
+        .as_ref()
+        .unwrap()
+        .reported_bounds
+        .as_ref()
+        .unwrap();
+    close(b.pressure_pa[0], 500.0 / 3.0);
+    close(b.pressure_pa[1], 3500.0 / 11.0);
+    close(b.normal_force_n[0], 1.0 / 30.0);
+    close(b.normal_force_n[1], 7.0 / 110.0);
+    for (field, envelope) in [
+        ("pressure_pa", json!([200.0, 1000.0])),
+        ("pressure_pa", json!([100.0, 300.0])),
+        ("normal_force_n", json!([0.04, 0.2])),
+        ("normal_force_n", json!([0.001, 0.06])),
+    ] {
+        let mut o = original.clone();
+        o["machine"]["presser_foot"][field] = envelope;
+        assert!(plan(&p, &o).is_ok(), "nominal {field}");
+        o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] =
+            json!("reported_bounds");
+        let e = plan(&p, &o).unwrap_err();
+        assert!(
+            e.message
+                .contains("reported bounds exceed the machine envelope"),
+            "{e}"
+        );
+    }
+    let mut o = original;
+    o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] = json!("reported_bounds");
+    o["machine"]["presser_foot"]["pressure_pa"] = json!(b.pressure_pa);
+    o["machine"]["presser_foot"]["normal_force_n"] = json!(b.normal_force_n);
+    let bounded = plan(&p, &o).unwrap();
+    let foot = bounded.seams[0].presser_foot.as_ref().unwrap();
+    assert_eq!(
+        foot.pressure_force_basis,
+        ftx_export::sewing::pressure::PressureForceBasis::ReportedBounds
+    );
+    // Decision policy never alters the inverse input, material source identity, work or geometry.
+    assert_eq!(
+        serde_json::to_value(&foot.closure).unwrap(),
+        serde_json::to_value(&baseline_foot.closure).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&foot.layers).unwrap(),
+        serde_json::to_value(&baseline_foot.layers).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&bounded.seams[0].stations).unwrap(),
+        serde_json::to_value(&baseline.seams[0].stations).unwrap()
+    );
+    assert_eq!(
+        bounded.materials.keys().collect::<Vec<_>>(),
+        baseline.materials.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        serde_json::to_value(&bounded).unwrap(),
+        serde_json::to_value(plan(&p, &o).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn pressure_and_force_ranges_must_also_fit_independent_process_qualification() {
+    let p = pattern();
+    let original = clearance(&p, options(), 0.6, 200.0);
+    let baseline = plan(&p, &original).unwrap();
+    let hash = baseline.materials.keys().next().unwrap();
+    let mut o = original.clone();
+    o["require_qualification"] = json!(true);
+    o["qualifications"] = json!([{"id":"synthetic-interval-process","materials":[hash,hash],
+        "machine":o["machine"]["id"],"needle":o["passes"][0]["needle"],"thread":o["passes"][0]["thread"],
+        "stitch_mm":[0.5,5],"feed_b_over_a":[0.5,2],"stack_mm":[0.7,0.9],
+        "stitches_per_minute":[500,700],"allow_reverse":false,"evidence":"estimate","allow_estimates":true,
+        "source":{"reference":"test:interval-coupon","accessed_on":"2026-10-20","note":"Synthetic process only"},
+        "method":"Synthetic pressure and force qualification envelopes",
+        "presser_foot":{"pressure_pa":[100,400],"loaded_stack_mm":[0.6,0.7],
+            "conditioning":"synthetic dry","loading_branch":"first loading",
+            "clearance":{"gap_mm":[0.59,0.61],"reference_area_mm2":[190,210],
+                "normal_force_n":[0.02,0.08],"direction":"loading"}}}]);
+    let admitted = o.clone();
+    for (pressure, force) in [
+        (json!([200, 400]), json!([0.02, 0.08])),
+        (json!([100, 300]), json!([0.02, 0.08])),
+        (json!([100, 400]), json!([0.04, 0.08])),
+        (json!([100, 400]), json!([0.02, 0.06])),
+    ] {
+        o = admitted.clone();
+        o["qualifications"][0]["presser_foot"]["pressure_pa"] = pressure;
+        o["qualifications"][0]["presser_foot"]["clearance"]["normal_force_n"] = force;
+        assert!(plan(&p, &o).is_ok());
+        o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] =
+            json!("reported_bounds");
+        let e = plan(&p, &o).unwrap_err();
+        assert!(e.message.contains("qualified"), "{e}");
+    }
+    o = admitted;
+    o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] = json!("reported_bounds");
+    assert_eq!(
+        plan(&p, &o).unwrap().seams[0].qualification_id.as_deref(),
+        Some("synthetic-interval-process")
+    );
+    // Pressure-only process evidence still cannot qualify clearance-controlled operation.
+    o["qualifications"][0]["presser_foot"]
+        .as_object_mut()
+        .unwrap()
+        .remove("clearance");
+    assert!(plan(&p, &o).unwrap_err().message.contains("qualified"));
+}
+
+#[test]
+fn missing_or_truncated_inverse_bounds_cannot_satisfy_reported_bounds_policy() {
+    let p = pattern();
+    let original = clearance(&p, options(), 0.6, 200.0);
+    for kind in 0..2 {
+        let mut o = original.clone();
+        if kind == 0 {
+            for material in o["passes"][0]["presser_foot"]["materials"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+            {
+                material["samples"][1]["properties"]["thickness"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("bounds");
+            }
+        } else {
+            // The central 25 Pa solution exists but some reported branches cannot close this gap
+            // without travelling below the known zero preload. Do not clip that interval to zero.
+            o["passes"][0]["presser_foot"]["clearance"]["gap_mm"] = json!(0.78);
+            o["machine"]["presser_foot"]["pressure_pa"] = json!([1, 1000]);
+            o["machine"]["presser_foot"]["max_loaded_stack_mm"] = json!(1.0);
+        }
+        let nominal = plan(&p, &o).unwrap();
+        assert!(
+            nominal.seams[0]
+                .presser_foot
+                .as_ref()
+                .unwrap()
+                .closure
+                .as_ref()
+                .unwrap()
+                .reported_bounds
+                .is_none()
+        );
+        o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] =
+            json!("reported_bounds");
+        let e = plan(&p, &o).unwrap_err();
+        assert!(e.message.contains("reported bounds are unavailable"), "{e}");
+        assert!(
+            SewProgram::build(
+                &Pattern::new(p.clone()),
+                &serde_json::from_value(o).unwrap()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn reported_bounds_preview_labels_policy_without_changing_nominal_source_receipts() {
+    let p = pattern();
+    let mut o = clearance(&p, options(), 0.6, 200.0);
+    let nominal_options: SewOptions = serde_json::from_value(o.clone()).unwrap();
+    assert!(
+        serde_json::to_value(&nominal_options).unwrap()["passes"][0]["presser_foot"]["clearance"]
+            .get("pressure_force_basis")
+            .is_none()
+    );
+    let nominal = plan(&p, &o).unwrap();
+    assert!(
+        serde_json::to_value(&nominal).unwrap()["seams"][0]["presser_foot"]
+            .get("pressure_force_basis")
+            .is_none()
+    );
+    o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] = json!("reported_bounds");
+    let opts: SewOptions = serde_json::from_value(o.clone()).unwrap();
+    let plan = plan(&p, &o).unwrap();
+    let operation = plan.seams[0].pass.operation_id();
+    let svg = ftx_export::sewing::preview::svg(&Pattern::new(p.clone()), &opts, operation).unwrap();
+    assert!(svg.contains("Checked pressure range 166.666667 to 318.181818 Pa"));
+    assert!(svg.contains("force 0.033333 to 0.063636 N"));
+    assert!(svg.contains("NOT confidence intervals"));
+    assert!(svg.contains("reported_bounds"));
+    assert!(svg.contains("pressure_force_basis"));
+    let program = SewProgram::build(&Pattern::new(p.clone()), &opts).unwrap();
+    assert_eq!(
+        serde_json::to_value(&program.plan).unwrap(),
+        serde_json::to_value(plan).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(program.stitches).unwrap(),
+        serde_json::to_value(
+            SewProgram::build(&Pattern::new(p), &nominal_options)
+                .unwrap()
+                .stitches
+        )
+        .unwrap()
+    );
+    o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] = json!("reported_bound");
+    assert!(serde_json::from_value::<SewOptions>(o).is_err());
+}
+
+#[test]
+fn recipe_search_preserves_reported_bound_policy_and_requires_a_covering_recipe() {
+    let p = pattern();
+    let mut o: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-clearance-options.json"
+    ))
+    .unwrap();
+    o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] = json!("reported_bounds");
+    let mut q = o["qualifications"][0].clone();
+    q["id"] = json!("synthetic-range-covered");
+    q["needle"] = json!("synthetic-range-needle");
+    q["presser_foot"]["pressure_pa"] = json!([100, 400]);
+    q["presser_foot"]["clearance"]["normal_force_n"] = json!([0.02, 0.08]);
+    o["qualifications"].as_array_mut().unwrap().push(q);
+    let mut request = json!({"schema":"ftx-sewing-selection/1","objective":"minimize_feed_seconds",
+        "max_plan_evaluations":2,"options":o,"alternatives":[{"operation":"side","recipes":[{
+            "id":"range-covered","needle":"synthetic-range-needle","thread":o["passes"][0]["thread"],
+            "max_stitch_mm":2.5,"stitches_per_minute":600}]}]});
+    let job: Value = serde_json::from_str(
+        &ftx_export::sewing_selection::select_json(&p.to_string(), &request.to_string()).unwrap(),
+    )
+    .unwrap();
+    assert!(job["report"]["trials"][0]["refusal"].is_object());
+    assert_eq!(job["report"]["selected_choices"]["side"], "range-covered");
+    let selected: SewOptions =
+        serde_json::from_str(job["selected_options_json"].as_str().unwrap()).unwrap();
+    let replay = SewProgram::build(&Pattern::new(p.clone()), &selected).unwrap();
+    assert_eq!(
+        serde_json::to_value(replay.plan).unwrap(),
+        job["report"]["selected_plan"]
+    );
+    assert_eq!(
+        serde_json::to_value(&selected).unwrap()["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"],
+        "reported_bounds"
+    );
+    // Neither speed/pitch search nor a source-matched recipe can bypass a machine range refusal.
+    request["options"]["machine"]["presser_foot"]["normal_force_n"] = json!([0.001, 0.06]);
+    let denied: Value = serde_json::from_str(
+        &ftx_export::sewing_selection::select_json(&p.to_string(), &request.to_string()).unwrap(),
+    )
+    .unwrap();
+    assert!(denied["selected_options_json"].is_null());
+    assert!(denied["report"]["selected_plan"].is_null());
+    assert!(
+        denied["report"]["trials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["refusal"].is_object())
+    );
+}

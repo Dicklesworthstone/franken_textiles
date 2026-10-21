@@ -138,6 +138,8 @@ Supplying both a prescribed operation pressure and clearance is an error.
 
 The machine must additionally declare a positive ordered `presser_foot.normal_force_n` interval.
 Both the inferred final pressure and final force must lie inside the machine's separate envelopes.
+By default these are nominal-value checks. The opt-in reported-bound policy below instead checks
+the complete available pressure/force enclosure against both machine and process envelopes.
 This force limit applies to clearance mode; prescribed-pressure mode has no reference area and does not
 claim a computed force. The final **checked** loaded thickness must still pass `max_loaded_stack_mm`;
 neither a small central gap nor estimated compression bypasses unloaded entry or reported upper bounds.
@@ -162,15 +164,75 @@ The inverse supports at most **32 actual plies**, and repeated plies count repea
 they return no partial output on a force, source, geometry or qualification refusal. There is no
 separate browser calculation or new hardware command.
 
-**Central observations determine the inverse.** Thickness bounds are evaluated at that inferred
-pressure but are not propagated to pressure, force or work uncertainty. The checked thickness may
-therefore exceed the requested central gap; it is retained for the loaded-stack envelope, not claimed
-as a second compatible physical configuration. Final force/pressure ranges are final-state checks,
+**Central observations determine the nominal inverse.** Complete thickness bounds additionally give
+the conditional pressure/force enclosure described below; work remains nominal. The checked thickness
+is still evaluated at nominal pressure and may exceed the requested central gap; it is retained for
+the loaded-stack envelope, not claimed as a second compatible physical configuration. Final force/pressure ranges are final-state checks,
 not limits for every point of the traverse. The area is supplied, not inferred from a foot shape or
 needle path. These fixed-area, independent-ply, quasi-static assumptions do not model local pressure
 fields, lateral expansion, buckling, dwell, rate-dependent recovery or branch switching. Signed
 external work is neither a stored-energy nor a dissipation/heat split. No contact solution, uncertainty
 qualification, seam-quality validation or machine authorization follows from successful closure.
+
+### Require the reported pressure/force range to fit
+
+Add `"pressure_force_basis": "reported_bounds"` inside an operation's `presser_foot.clearance`.
+The omitted/default value is `"nominal"`, preserving existing central-value admission. The stricter
+policy changes **only pressure and force limit checks**; it does not change stitches, model coefficients,
+source selections, central work or loaded-thickness arithmetic. Prescribed-pressure mode has no
+inverse or area, so it cannot select this clearance-only policy.
+
+The shared [stack inverse](compression-stacks.md#reported-thickness-bounds-through-the-inverse)
+constructs monotone thickness envelopes using all source knots and all physical plies, including
+repeated folds. Every acquired thickness needs reported bounds. Both ends of the resulting pressure
+range must fit `machine.presser_foot.pressure_pa`, and both force endpoints must fit
+`machine.presser_foot.normal_force_n`. A required process qualification must independently cover both
+pressure endpoints and both `presser_foot.clearance.normal_force_n` endpoints. Existing arithmetic
+tolerance is unchanged; no extra machine or process margin is introduced.
+
+Missing bounds, ranges requiring extrapolation or travel against the declared direction, and
+unrepresentable interval arithmetic **refuse the operation**. There is no nominal fallback and no
+automatic widening of a process qualification. The receipt records `pressure_force_basis` plus
+`closure.reported_bounds`; the SVG shows the checked ranges and their conditional meaning. Recipe
+selection retains the same policy in every trial and in the replayable selected options. It can
+choose an independently qualified recipe covering the range, but cannot bypass a machine envelope.
+
+For the synthetic two-ply clearance fixture, the nominal **250 Pa / 0.05 N** result has conditional
+bounds of **166.6666667–318.1818182 Pa / 0.0333333333–0.0636363636 N**. Its existing synthetic process
+window of 200–300 Pa / 0.04–0.06 N therefore passes nominally but **fails** with reported-bound
+admission. These bounds are neither measurements nor confidence intervals. Shared source plies do
+not become independent samples that shrink the range.
+
+The following exercises a **separate, invented wider qualification**, not an instruction to change
+actual source evidence or machine limits. Run from the repository root:
+
+```sh
+bounds_demo=$(mktemp -d)
+python3 - "$bounds_demo/options.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+o = json.loads(Path("tests/fixtures/materials/synthetic-sewing-clearance-options.json").read_text())
+o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] = "reported_bounds"
+q = o["qualifications"][0]
+q["id"] = "synthetic-wider-range-for-software-check"
+q["method"] = "Invented wider process window, not measured qualification"
+q["presser_foot"]["pressure_pa"] = [100, 400]
+q["presser_foot"]["clearance"]["normal_force_n"] = [0.02, 0.08]
+with Path(sys.argv[1]).open("x") as output:
+    json.dump(o, output, indent=2)
+PY
+cargo run --locked -p ftx-cli --bin ftx-materials -- sew-plan \
+  tests/fixtures/materials/synthetic-sewing-pattern.json "$bounds_demo/options.json"
+cargo run --locked -p ftx-cli --bin ftx-materials -- sew-svg \
+  tests/fixtures/materials/synthetic-sewing-pattern.json "$bounds_demo/options.json" \
+  side "$bounds_demo/review.svg"
+```
+
+The enclosure assumes exact gap, area, pressure knots and preload plus the qualified monotone
+piecewise-linear law. It does not propagate those inputs' uncertainty, systematic calibration error,
+work/heat uncertainty, or spatial contact pressure. Passing it is not hardware authorization or a
+physical seam-quality result. It adds a conditional range check, not a full uncertainty model.
 
 ## Limits and remaining acceptance
 

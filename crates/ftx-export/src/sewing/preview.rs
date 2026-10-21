@@ -4,7 +4,7 @@ use ftx_core::{Refusal, RefusalCode, Vec2, curve::EDGE_DENSE};
 use ftx_pattern::Pattern;
 use serde_json::json;
 
-use super::{SewOptions, SewPlan, bad};
+use super::{SewOptions, SewPlan, bad, pressure::PressureForceBasis};
 use crate::{Ctx, ExportOptions, fnum, outline::cut_outline, xml_escape};
 
 fn path(points: &[Vec2], closed: bool) -> String {
@@ -141,10 +141,15 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
         .iter()
         .map(|(lo, hi)| hi.y - lo.y)
         .fold(0.0, f64::max);
-    let foot_height = seam
-        .presser_foot
-        .as_ref()
-        .map_or(0.0, |f| if f.closure.is_some() { 20.0 } else { 10.0 });
+    let foot_height = seam.presser_foot.as_ref().map_or(0.0, |f| {
+        if f.pressure_force_basis == PressureForceBasis::ReportedBounds {
+            30.0
+        } else if f.closure.is_some() {
+            20.0
+        } else {
+            10.0
+        }
+    });
     let height = body_height + 68.0 + 5.0 * seam.runs.len() as f64 + foot_height;
     let (ws, hs) = (fnum(width, 6), fnum(height, 6));
     let mut metadata = json!({"schema":"ftx-sewing-preview/1","pattern_sha256":plan.pattern_sha256,
@@ -169,6 +174,11 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
                 "layer_acquisition_sha256":closure.layers.iter()
                     .map(|layer| (&layer.id,&layer.conditioned.input_sha256))
                     .collect::<std::collections::BTreeMap<_,_>>()});
+            if foot.pressure_force_basis == PressureForceBasis::ReportedBounds {
+                metadata["presser_foot"]["pressure_force_basis"] = json!(foot.pressure_force_basis);
+                metadata["presser_foot"]["closure"]["reported_bounds"] =
+                    json!(closure.reported_bounds);
+            }
         }
     }
     let mut out = format!(
@@ -215,11 +225,22 @@ pub fn svg(pattern: &Pattern, options: &SewOptions, operation: &str) -> Result<S
     if let Some(foot) = &seam.presser_foot {
         let fy = y + 5.0 * (seam.runs.len().max(1) + 1) as f64;
         if let Some(closure) = &foot.closure {
-            out.push_str(&format!("<text class=\"loaded-stack\" x=\"5\" y=\"{}\">Inferred pressure {} Pa | loaded nominal {} mm | checked stack {} mm</text>\n<text class=\"clearance-force\" x=\"5\" y=\"{}\">Gap {} mm | reference area {} mm2 | normal force {} N</text>\n<text class=\"closure-work\" x=\"5\" y=\"{}\">Signed external branch work {} J; NOT identified as heat or dissipated energy.</text>\n<text x=\"5\" y=\"{}\">Central-value rigid-face inverse; no pressure uncertainty or machine authorization.</text>\n",
+            out.push_str(&format!("<text class=\"loaded-stack\" x=\"5\" y=\"{}\">Inferred pressure {} Pa | loaded nominal {} mm | checked stack {} mm</text>\n<text class=\"clearance-force\" x=\"5\" y=\"{}\">Gap {} mm | reference area {} mm2 | normal force {} N</text>\n<text class=\"closure-work\" x=\"5\" y=\"{}\">Signed external branch work {} J; NOT identified as heat or dissipated energy.</text>\n",
                 fnum(fy,6), fnum(foot.pressure_pa,6), fnum(foot.nominal_stack_mm,6),
                 fnum(foot.stack_mm,6), fnum(fy+5.0,6), fnum(closure.input.gap_m*1000.0,6),
                 fnum(closure.input.reference_area_m2*1e6,6), fnum(closure.normal_force_n,6),
-                fnum(fy+10.0,6), fnum(closure.external_work_j,12), fnum(fy+15.0,6)));
+                fnum(fy+10.0,6), fnum(closure.external_work_j,12)));
+            if foot.pressure_force_basis == PressureForceBasis::ReportedBounds {
+                let b = closure.reported_bounds.as_ref().ok_or_else(|| {
+                    bad("reported-bounds preview requires the admitted pressure/force interval")
+                })?;
+                out.push_str(&format!("<text class=\"pressure-bounds\" x=\"5\" y=\"{}\">Checked pressure range {} to {} Pa | force {} to {} N</text>\n<text x=\"5\" y=\"{}\">Reported thickness bounds; fixed gap, area and preload; NOT confidence intervals.</text>\n<text x=\"5\" y=\"{}\">Only pressure/force gates use these ranges. No machine authorization.</text>\n",
+                    fnum(fy+15.0,6), fnum(b.pressure_pa[0],6), fnum(b.pressure_pa[1],6),
+                    fnum(b.normal_force_n[0],6), fnum(b.normal_force_n[1],6),
+                    fnum(fy+20.0,6), fnum(fy+25.0,6)));
+            } else {
+                out.push_str(&format!("<text x=\"5\" y=\"{}\">Nominal pressure/force checks; no robust-bound admission or machine authorization.</text>\n",fnum(fy+15.0,6)));
+            }
         } else {
             out.push_str(&format!("<text class=\"loaded-stack\" x=\"5\" y=\"{}\">Foot pressure {} Pa | loaded nominal {} mm | checked stack {} mm (upper bounds where supplied)</text>\n<text x=\"5\" y=\"{}\">Prescribed independent-ply pressure; no contact/recovery model or machine setting.</text>\n",
                 fnum(fy,6), fnum(foot.pressure_pa,6), fnum(foot.nominal_stack_mm,6),
