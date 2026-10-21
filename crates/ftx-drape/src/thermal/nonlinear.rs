@@ -275,7 +275,8 @@ impl Variable {
                 self.check(*t)?;
             }
         }
-        Err(invalid(
+        Err(Refusal::new(
+            ftx_core::RefusalCode::NotConverged,
             "nonlinear thermal solve did not converge within 256 damped iterations; reduce the time step or review the characterization",
         ))
     }

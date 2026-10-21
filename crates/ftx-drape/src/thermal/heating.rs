@@ -76,7 +76,11 @@ impl DryThermalModel {
         }
     }
 
-    fn cell_capacity(&self, cell: usize, temperature: f64) -> Result<f64, Refusal> {
+    pub(in crate::thermal) fn cell_capacity(
+        &self,
+        cell: usize,
+        temperature: f64,
+    ) -> Result<f64, Refusal> {
         match &self.variable {
             Some(variable) => variable.capacity(cell, temperature),
             None => Ok(self.capacity[cell]),
