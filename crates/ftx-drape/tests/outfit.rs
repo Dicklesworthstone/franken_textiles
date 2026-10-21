@@ -456,12 +456,77 @@ fn independent_casings_drive_joint_physics_and_replay_without_merging_grip_or_lo
         elastic_ea: 0.0,
         ..opts
     };
-    let no_elastic = prepared
+    // The authored .9 scale no longer closes this synthetic fixed-radius band when no elastic
+    // restores its cut geometry. Keep that refusal; do not untangle it or bypass contact checks.
+    assert_eq!(
+        prepared
+            .drape(&json!({}), &body(&skin), &disabled, |_| {})
+            .err()
+            .unwrap()
+            .code,
+        ftx_core::RefusalCode::IntersectingStart
+    );
+    let mut cut_geometry = input.clone();
+    for garment in &mut cut_geometry.garments {
+        garment.pattern["pieces"][0]["sim_scale"] = json!([1, 1]);
+    }
+    let no_elastic = prepare(&cut_geometry, &disabled)
+        .unwrap()
         .drape(&json!({}), &body(&skin), &disabled, |_| {})
         .unwrap();
     assert!(no_elastic.scene.solver.model.elastics.is_empty());
     assert!(no_elastic.scene.elastic_groups.is_empty());
     assert_ne!(run.scene.solver.x, no_elastic.scene.solver.x);
+}
+
+#[test]
+fn legacy_single_casing_retains_its_physics_and_singular_report() {
+    let input = casing_outfit();
+    let pattern = ftx_pattern::Pattern::new(input.garments[0].pattern.clone());
+    let opts = DrapeOptions {
+        spacing: 24.0,
+        ..options()
+    };
+    let skin = skin();
+    let legacy = ftx_drape::run::drape(&pattern, &json!({}), &body(&skin), &opts, |_| {}).unwrap();
+    assert!(legacy.report["elastic"]["tension_n"].as_f64().unwrap() > 0.0);
+    assert!(legacy.report.get("elastics").is_none());
+    let c = ftx_drape::scene::elastic_casing(&pattern, opts.elastic_ea).unwrap();
+    let mut explicit = pattern.raw().clone();
+    explicit["meta"]["solved"] = json!({"elastic_casings":[{
+        "instance":c.instance,"relaxed_m":c.length,"load_instances":c.load_instances}]});
+    let normalized = ftx_drape::run::drape(
+        &ftx_pattern::Pattern::new(explicit),
+        &json!({}),
+        &body(&skin),
+        &opts,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(legacy.scene.solver.x, normalized.scene.solver.x);
+    assert_eq!(
+        legacy.scene.solver.model.elastics,
+        normalized.scene.solver.model.elastics
+    );
+    for field in [
+        "relaxed_mm",
+        "length_mm",
+        "rings_mm",
+        "stretch_pct",
+        "tension_n",
+        "grip_n",
+        "weight_n",
+        "holds",
+        "ea_n",
+    ] {
+        assert_eq!(
+            legacy.report["elastic"][field], normalized.report["elastics"][0][field],
+            "{field}"
+        );
+    }
+    // The uniform legacy report did not expose this additional field; preserve its wire shape.
+    assert!(legacy.report["elastic"].get("friction_mu").is_none());
+    assert_eq!(normalized.report["elastics"][0]["friction_mu"], 0.12);
 }
 
 #[test]
