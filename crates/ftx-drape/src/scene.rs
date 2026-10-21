@@ -201,8 +201,11 @@ pub struct Scene {
 }
 
 #[derive(Clone, Debug)]
+/// Independent ring ranges and the physical mass domain used only for the casing's grip estimate.
 pub struct ElasticGroup {
+    /// Resolved source instance and relaxed length.
     pub casing: ElasticCasing,
+    /// This casing's consecutive ranges in `Scene::elastic_rings`.
     pub rings: std::ops::Range<usize>,
     /// Unique welded vertices of the declared garment, in fixed solver order.
     pub loaded_vertices: Vec<usize>,
@@ -288,30 +291,45 @@ pub fn elastic_casings(pattern: &Pattern, ea: f64) -> Result<Vec<ElasticCasing>,
         return Ok(elastic_casing(pattern, ea).into_iter().collect());
     };
     if solved.get("elastic_cut_mm").is_some() {
-        return Err(bad("explicit casings cannot also declare legacy elastic_cut_mm".into()));
+        return Err(bad(
+            "explicit casings cannot also declare legacy elastic_cut_mm".into(),
+        ));
     }
-    let entries = raw.as_array().ok_or_else(|| bad("elastic_casings must be a list".into()))?;
+    let entries = raw
+        .as_array()
+        .ok_or_else(|| bad("elastic_casings must be a list".into()))?;
     if entries.is_empty() || entries.len() > 64 {
         return Err(bad("elastic_casings needs 1..64 independent casings".into()));
     }
     Refusal::finite("elastic stiffness", ea)?;
-    if ea < 0.0 { return Err(bad("elastic stiffness must be nonnegative".into())); }
+    if ea < 0.0 {
+        return Err(bad("elastic stiffness must be nonnegative".into()));
+    }
     let mut seen = BTreeSet::new();
     let mut casings = Vec::new();
     for entry in entries {
-        let entry: DeclaredCasing = serde_json::from_value(entry.clone()).map_err(|e| bad(e.to_string()))?;
-        let instance = pattern.instance(&entry.instance)
+        let entry: DeclaredCasing =
+            serde_json::from_value(entry.clone()).map_err(|e| bad(e.to_string()))?;
+        let instance = pattern
+            .instance(&entry.instance)
             .ok_or_else(|| bad(format!("unknown casing instance {}", entry.instance)))?;
         let piece = &pattern.raw()["pieces"][instance.piece_index];
-        if !seen.insert(entry.instance.clone()) || piece["sim"] == false || !truthy(&piece["placement"]) {
-            return Err(bad("casings must name distinct active placed instances".into()));
+        if !seen.insert(entry.instance.clone())
+            || piece["sim"] == false
+            || !truthy(&piece["placement"])
+        {
+            return Err(bad(
+                "casings must name distinct active placed instances".into()
+            ));
         }
         if !entry.relaxed_m.is_finite() || entry.relaxed_m <= 0.0 {
             return Err(bad("casing relaxed_m must be finite and positive".into()));
         }
         let mut loads = BTreeSet::new();
         if entry.load_instances.is_empty() || entry.load_instances.len() > pattern.instances.len() {
-            return Err(bad("casing needs a bounded nonempty load_instances list".into()));
+            return Err(bad(
+                "casing needs a bounded nonempty load_instances list".into()
+            ));
         }
         for id in &entry.load_instances {
             if pattern.instance(id).is_none() || !loads.insert(id) {
@@ -319,11 +337,16 @@ pub fn elastic_casings(pattern: &Pattern, ea: f64) -> Result<Vec<ElasticCasing>,
             }
         }
         if !loads.contains(&entry.instance) {
-            return Err(bad("casing load_instances must include its own instance".into()));
+            return Err(bad(
+                "casing load_instances must include its own instance".into()
+            ));
         }
         if ea > 0.0 {
             casings.push(ElasticCasing {
-                instance: entry.instance, length: entry.relaxed_m, ea, load_instances: entry.load_instances,
+                instance: entry.instance,
+                length: entry.relaxed_m,
+                ea,
+                load_instances: entry.load_instances,
             });
         }
     }
@@ -622,7 +645,28 @@ fn build_scene_inner(
             .transpose()?;
     let mut casing_instances = BTreeSet::new();
     for casing in elastics {
-        let owner = mesh.instances.iter().position(|i| *i == casing.instance)
+        if !casing.length.is_finite()
+            || casing.length <= 0.0
+            || !casing.ea.is_finite()
+            || casing.ea <= 0.0
+        {
+            return Err(bad(
+                "active casing needs positive finite relaxed length and stiffness".into(),
+            ));
+        }
+        let loads: BTreeSet<_> = casing.load_instances.iter().collect();
+        if loads.len() != casing.load_instances.len()
+            || !loads.contains(&casing.instance)
+            || loads.iter().any(|id| pattern.instance(id).is_none())
+        {
+            return Err(bad(
+                "casing load scope must contain its target and unique known instances".into(),
+            ));
+        }
+        let owner = mesh
+            .instances
+            .iter()
+            .position(|i| *i == casing.instance)
             .ok_or_else(|| bad(format!("casing {} has no simulated mesh", casing.instance)))?;
         if !casing_instances.insert(owner) {
             return Err(bad("duplicate casing mesh instance".into()));
@@ -745,11 +789,16 @@ fn build_scene_inner(
             elastic_rings.push(at..model.elastics.len());
         }
         let owners: BTreeSet<_> = e.load_instances.iter().collect();
-        let loaded_vertices: BTreeSet<_> = mesh.owner.iter().enumerate()
+        let loaded_vertices: BTreeSet<_> = mesh
+            .owner
+            .iter()
+            .enumerate()
             .filter(|(_, owner)| owners.contains(&mesh.instances[**owner]))
-            .map(|(v, _)| weld[v]).collect();
+            .map(|(v, _)| weld[v])
+            .collect();
         elastic_groups.push(ElasticGroup {
-            casing: e.clone(), rings: first..elastic_rings.len(),
+            casing: e.clone(),
+            rings: first..elastic_rings.len(),
             loaded_vertices: loaded_vertices.into_iter().collect(),
         });
     }
