@@ -1337,7 +1337,8 @@ handoff. Original empirical material and G5 gates remain open.
 - [x] Keep grip estimates separate, using each casing's material friction and declared garment inertia.
 - [x] Connect the ordinary replay and study mesh-budget path; retain EA-zero and legacy behavior.
 - [x] Run actual two-casing/replay/attached-mass and drafted-trouser composition regressions; fix defects.
-- [ ] Run narrow legacy regressions, formatting, all-target lint, full native tests and wasm build remotely.
+- [x] Run narrow legacy regressions, formatting, all-target lint and full native tests remotely.
+- [ ] Complete the matching release wasm build remotely.
 - [ ] Preserve the previous ignored browser bundle, deliver the matching release and run existing
   compiled-worker/drafting smoke checks; do not claim new-case browser parity from compilation alone.
 - [ ] Fresh solo recheck; record exact source/results/limits and bounded worksheets; scan and commit
@@ -1391,3 +1392,21 @@ Bounded fresh-solo review, 2026-10-21 (`ftx-99t`, nine feature/source/test/docs/
   strongest evidence is the re-executable two-casing solve with analytic scoped mass, nonzero/zero
   tension, exact source rest lengths and equal saved-pattern replay. Disposition: those assumptions
   were corrected in place and disclosed; no acceptance relaxation or fabricated evidence found.
+
+Broad native verification completed on `ts1`: **1,786 passed, zero failed, 29 ignored across 249
+test targets** with `cargo test --locked -j1`; terminal exit zero and strict-remote receipt observed.
+The ignored asset/long-running cases remain unverified, not passed. All-target Clippy passes on
+`vmi1167313` with `cargo clippy --locked -j1 --all-targets -- -D warnings`. Both use the exact
+base/overlay fingerprint above. Current five overlay files also match SHA-256 checks taken directly
+from the running remote source directory; `source-sha256.txt` preserves the local comparison.
+`cargo fmt --check` and `git diff --check` pass locally. The laptop's `sbh check --need 20G` failed
+its free-space policy, so no Rust compilation was run locally. No DSR or GitHub Actions run is claimed.
+
+UBS completed with exit zero for all five changed Rust files: **zero critical, 722 warnings, 102
+informational findings**. The staged scan also exited zero. Reviewed the new production indexing
+against validated casing/group/ring/load ownership and the existing closed-ring check, as well as
+scanner categories for test unwraps/assertions, clones and bounded namespacing allocations; no new
+true defect found in those changed paths. This is not an exhaustive resolution of 722 warnings.
+No suppression or scanner-source modification. Complete stdout/stderr remains in the check logs.
+Concurrent commits `75fa814` (purchasing limits) and `e46cf60` (additional CLI outfit tests) landed
+after the frozen base; these native results do not claim to verify those incoming changes.
