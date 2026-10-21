@@ -518,15 +518,50 @@ pub fn viewer_payload(
 }
 
 /// The viewer page: `template` with the payload in place of `/*__FOLD_DATA__*/null` (every `</` written
-/// `<\/`) and the title (`Zouave Bolero Fold-up`).
+/// `<\/`), the title (`Zouave Bolero Fold-up`) and the pinned offline renderer and its MIT notice.
 ///
 /// # Errors
-/// When the template has no placeholder.
+/// When a required template placeholder is absent or duplicated.
 pub fn viewer_html(template: &str, payload: &Value) -> Result<String, String> {
     const MARKER: &str = "/*__FOLD_DATA__*/null";
-    if !template.contains(MARKER) {
-        return Err("the viewer template has no /*__FOLD_DATA__*/null placeholder".into());
+    const THREE: &str = "__FTX_THREE_MODULE__";
+    const ORBIT: &str = "__FTX_ORBIT_CONTROLS__";
+    const LICENSE: &str = "__FTX_VIEWER_LICENSE__";
+    for marker in [MARKER, THREE, ORBIT, LICENSE] {
+        if template.matches(marker).count() != 1 {
+            return Err(format!(
+                "the viewer template needs exactly one {marker} placeholder"
+            ));
+        }
     }
+    // Data URLs keep both file:// downloads and blob: browser previews independent of a server.
+    // Replace only the template: a user's title or flag text is never treated as a module marker.
+    let template = template
+        .replacen(
+            THREE,
+            &format!(
+                "data:text/javascript;base64,{}",
+                b64(include_bytes!(
+                    "../../../assets/three-r160/three.module.min.js"
+                ))
+            ),
+            1,
+        )
+        .replacen(
+            ORBIT,
+            &format!(
+                "data:text/javascript;base64,{}",
+                b64(include_bytes!(
+                    "../../../assets/three-r160/OrbitControls.js"
+                ))
+            ),
+            1,
+        )
+        .replacen(
+            LICENSE,
+            include_str!("../../../assets/three-r160/LICENSE"),
+            1,
+        );
     let data = payload.to_string().replace("</", "<\\/");
     let title = payload["title"].as_str().unwrap_or("");
     let mut name = String::new();
@@ -680,5 +715,52 @@ mod tests {
         assert_eq!(b64(b"fo"), "Zm8=");
         assert_eq!(b64(b"foo"), "Zm9v");
         assert_eq!(b64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn viewer_embeds_offline_modules_without_reinterpreting_payload_text() {
+        let template = include_str!("../../../assets/fold_viewer_template.html");
+        let payload = json!({"title":"__FTX_THREE_MODULE__ </script><&\" (test)","schema":"fabric-fold-viewer/1"});
+        let html = viewer_html(template, &payload).unwrap();
+        let imports: Value = serde_json::from_str(
+            html.split("<script type=\"importmap\">")
+                .nth(1)
+                .unwrap()
+                .split("</script>")
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        for name in ["three", "three/addons/controls/OrbitControls.js"] {
+            assert!(
+                imports["imports"][name]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("data:text/javascript;base64,")
+            );
+        }
+        assert_eq!(imports["imports"].as_object().unwrap().len(), 2);
+        assert!(html.contains(include_str!("../../../assets/three-r160/LICENSE")));
+        assert!(!html.contains("https://cdn.jsdelivr.net/"));
+        assert!(!html.contains("__FTX_ORBIT_CONTROLS__"));
+        assert!(!html.contains("__FTX_VIEWER_LICENSE__"));
+        assert!(html.contains(&payload.to_string().replace("</", "<\\/")));
+        assert!(html.contains(
+            "<title>__FTX_THREE_MODULE__ &lt;/script&gt;&lt;&amp;&quot; Fold-up</title>"
+        ));
+    }
+
+    #[test]
+    fn viewer_refuses_missing_or_duplicated_template_markers() {
+        let template = include_str!("../../../assets/fold_viewer_template.html");
+        for marker in [
+            "/*__FOLD_DATA__*/null",
+            "__FTX_THREE_MODULE__",
+            "__FTX_ORBIT_CONTROLS__",
+            "__FTX_VIEWER_LICENSE__",
+        ] {
+            assert!(viewer_html(&template.replace(marker, ""), &json!({})).is_err());
+            assert!(viewer_html(&format!("{template}{marker}"), &json!({})).is_err());
+        }
     }
 }

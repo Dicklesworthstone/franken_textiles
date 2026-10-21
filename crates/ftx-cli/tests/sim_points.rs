@@ -208,6 +208,9 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
     let html = std::fs::read_to_string(dir.join("sim/fold_viewer.html")).unwrap();
     assert!(html.contains("\"schema\":\"fabric-fold-viewer/1\""));
     assert!(html.contains("<title>SYNTHETIC Fold-up</title>"));
+    assert!(html.contains("data:text/javascript;base64,"));
+    assert!(html.contains("Copyright © 2010-2023 three.js authors"));
+    assert!(!html.contains("https://cdn.jsdelivr.net/"));
 
     // Custom --out path also works.
     let out_custom = Command::new(env!("CARGO_BIN_EXE_ftx"))
