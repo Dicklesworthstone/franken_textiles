@@ -158,8 +158,6 @@ fn baseline() -> &'static Report {
 
 fn area_input() -> Input {
     let mut input = input();
-    // More Newton work for the refined joint model; retain both existing acceptance tolerances.
-    input.controls.max_newton = 300;
     input
         .conditions
         .insert("specimen".into(), "invented-area-coupon".into());
@@ -168,6 +166,11 @@ fn area_input() -> Input {
         "synthetic numerical observations only".into(),
     );
     let family = input.response_family.as_mut().unwrap();
+    // This generating base coupling offsets part of the positive area coupling, keeping the
+    // invented specimen's contraction modest. It is still fitted, never supplied as a prior.
+    input.parameter_bounds[3] = [-105.0, -55.0];
+    input.material.sources.get_mut("shape").unwrap().note =
+        "Synthetic area-identification shape assumptions; generating normal coupling -80 N/m and area coefficients [31,19] N/m. No empirical prior or independent textile claim.".into();
     // Linear directional stresses isolate the two nonlinear J signatures without knot crossings
     // in the synthetic acquisition. The original signed-shape tests remain unchanged.
     for (curve, slope) in [&mut family.warp, &mut family.weft, &mut family.shear]
@@ -193,7 +196,7 @@ fn area_input() -> Input {
         warp: family.warp.clone(),
         weft: family.weft.clone(),
         shear: family.shear.clone(),
-        coupling: quantity(PARAMETERS[3]),
+        coupling: quantity(-80.0),
         area_response: Some(AreaResponse {
             model: AREA_MODEL.into(),
             quadratic: quantity(31.0),
@@ -273,7 +276,7 @@ fn jointly_identifies_physical_area_and_directionality_with_exact_published_repl
     for (actual, known) in report
         .parameters
         .iter()
-        .zip([1.1, 0.9, 1.2, 40.0, 31.0, 19.0])
+        .zip([1.1, 0.9, 1.2, -80.0, 31.0, 19.0])
     {
         assert!((actual - known).abs() < 1e-3, "{actual} != {known}");
     }
@@ -349,7 +352,7 @@ fn fixed_area_evidence_is_preserved_while_directional_coefficients_are_identifie
     .unwrap();
     let report = calibrate(&input).unwrap();
     assert!(report.accepted, "{:?}", report.reasons);
-    for (actual, known) in report.parameters.iter().zip(PARAMETERS) {
+    for (actual, known) in report.parameters.iter().zip([1.1, 0.9, 1.2, -80.0]) {
         assert!((actual - known).abs() < 1e-4, "{actual} != {known}");
     }
     assert_eq!(report.parameters.len(), 4);
