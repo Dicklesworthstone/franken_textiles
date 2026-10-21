@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ftx_export::pyjson::PyJson;
 use serde_json::Value;
@@ -29,11 +30,17 @@ fn base64(s: &str) -> Vec<u8> {
 }
 
 fn scratch() -> PathBuf {
+    // macOS clocks tick in microseconds: parallel tests need the counter too
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("ftx-trace-cli-{}-{stamp}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-trace-cli-{}-{stamp}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir(&dir).unwrap();
     dir
 }

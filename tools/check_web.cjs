@@ -3,29 +3,70 @@
 //
 //   tools/build_web.sh && cargo build --release -p ftx-cli
 //   NODE_PATH=$(npm root -g) node tools/check_web.cjs [--model PATH.ftxbody] [--ftx target/release/ftx]
+//   node tools/check_web.cjs --viewer /path/to/fold_viewer.html   # offline file:// rendering and controls
 //
 // Needs Playwright with its Chromium (npm i -g playwright && npx playwright install chromium).
-const { chromium } = require("playwright");
+const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const { spawn, execFileSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { pathToFileURL } = require("url");
 
 const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : null; };
 const root = path.resolve(__dirname, "..");
 const model = arg("--model");
+const standalone = arg("--viewer");
+const userAgent = "OpenAI File Downloader, XaiImageApiFetch/1.0";
 const ftx = arg("--ftx") || path.join(root, "target/release/ftx");
 const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
 
+async function offlineViewer(browser, file) {
+  const context = await browser.newContext({ offline: true, userAgent, reducedMotion: "reduce" });
+  const page = await context.newPage(), errors = [], external = [];
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "ftx-offline-viewer-"));
+  page.on("pageerror", e => errors.push(String(e)));
+  page.on("request", r => { if (/^https?:/.test(r.url())) external.push(r.url()); });
+  try {
+    await page.goto(pathToFileURL(path.resolve(file)).href);
+    await page.waitForFunction(() => document.body.dataset.ready, null, { timeout: 20000 });
+    check(await page.getAttribute("body", "data-ready") === "1", "offline viewer initializes from file://");
+    check(await page.locator("#stage canvas").count() === 1, "the production renderer creates its canvas");
+    const frames = await page.evaluate(() => window.__fold.frames);
+    check(frames > 1, "the viewer contains multiple retained frames");
+    const slider = page.locator("#frame"), canvas = page.locator("#stage canvas");
+    await slider.focus(); await slider.press("Home");
+    check(/Flat pattern/.test(await page.textContent("#phase")), "Home selects the board frame");
+    const board = await canvas.screenshot({ path: path.join(work, "board.png") });
+    await slider.press("End");
+    check(/Draped/.test(await page.textContent("#phase")), "End selects the draped frame");
+    check(await page.textContent("#count") === `${frames} / ${frames}`, "the frame counter reaches the final retained frame");
+    const draped = await canvas.screenshot({ path: path.join(work, "draped.png") });
+    check(sha(board) !== sha(draped), "different retained geometry changes the rendered pixels");
+    await page.check("input[name=colour][value=strain_rgb]");
+    await page.uncheck("#showBody");
+    await page.click("#play");
+    check(await page.textContent("#play") === "Pause", "playback resumes through the normal control");
+    check(external.length === 0, `no HTTP(S) requests (${external.length})`);
+    check(errors.length === 0, `no page errors${errors.length ? ": " + errors.join(" | ") : ""}`);
+    console.log(`viewer sha256 ${sha(fs.readFileSync(file))}; screenshots in ${work}`);
+  } finally { await context.close(); }
+}
+
 (async () => {
+  if (standalone) {
+    const browser = await chromium.launch();
+    try { await offlineViewer(browser, standalone); } finally { await browser.close(); }
+    process.exit(failed ? 1 : 0);
+  }
   const port = 20000 + Math.floor(Math.random() * 20000);
   const srv = spawn("python3", ["-m", "http.server", String(port), "-d", path.join(root, "web")], { stdio: "ignore" });
   await new Promise((r) => setTimeout(r, 1200));
   const browser = await chromium.launch();
-  const page = await browser.newPage();
+  const page = await browser.newPage({ userAgent });
   const errors = [];
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -77,6 +118,9 @@ const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if
         check(!err && /no gating flag/.test(await page.textContent("#foldSummary")), `${program} folds up in the page (${s} s), settled, no gating flag`);
         if (err) continue;
         const viewer = await bytes("a[download='fold_viewer.html']");
+        const viewerFile = path.join(dir, "browser_fold_viewer.html");
+        fs.writeFileSync(viewerFile, viewer, { flag: "wx" });
+        await offlineViewer(browser, viewerFile);
         execFileSync(ftx, ["drape", "pattern.json", "--measurements", "measurements.json", "--fit", "fit_spec.json",
           "--self-contact-mm", "2", "--model", model, "--out", "native"], { cwd: dir, stdio: "ignore" });
         const native = fs.readFileSync(path.join(dir, "native/fold_viewer.html"));

@@ -51,7 +51,12 @@ stock. `sim:false`, simulation-only scaling and missing body placements never di
 }
 ```
 
-`quotes.json` is the existing `ftx-textile-quotes/1` observation book. It can come from the source adapter
+`quotes.json` is a `ftx-textile-quotes/1` calendar-date observation book or a `/2` intraday book. For
+version 2 add `as_of_at: "2026-10-14T12:00:00Z"` to the market above, with the same UTC date as `as_of`.
+Every version-2 quote must retain its actual `observed_at`; date-only records are not assigned midnight.
+The newest eligible-time observation controls the whole rounded order, including later stock loss or
+expiry. See [textile-price-refresh.md](textile-price-refresh.md#intraday-histories-through-the-existing-procurement-and-study-consumers)
+for timestamp precision and inclusive expiry. The book can come from the source adapter
 in `textile-price-refresh.md`. Dates, availability, exact material/SKU, currency, region, quality, terms,
 minimum quantities, sale quantities and order increments retain that evaluator's checks. No synthetic
 or stale quote becomes a live supplier observation. A `requirement` field in this market file is rejected:
@@ -59,14 +64,15 @@ the command derives requirements from the actual cut plan.
 
 ## What is planned
 
-The planner uses the external cutter polygon, including seam allowances and outward notch tabs. It
-rotates all directed grainlines to +y along the roll, preserving one-way nap direction rather than
-silently choosing a 180-degree reversal or a crossgrain rotation to fit. Missing/generated/default grain
-is insufficient. All material-frame transforms, internal cut paths and drills are retained.
+The planner uses the external cutter polygon, including seam allowances and outward notch tabs. Its
+initial shelf layout rotates all directed grainlines to +y along the roll. Optional nesting permits
+180-degree reversal only for explicitly selected material snapshots, as described below; crossgrain
+rotation remains unsupported. Missing/generated/default grain is insufficient. All material-frame
+transforms, internal cut paths and drills are retained.
 
 Pieces are sorted by decreasing bounding-box height/width with deterministic identity tie-breaks, and
 placed in the first shelf with room. This is a bounded, non-overlapping rectangular-envelope layout,
-**not optimal polygon nesting**. It reports each placement and each material's nominal stock width,
+**not optimal polygon nesting**. Optional shape-aware compaction is described below. It reports each placement and each material's nominal stock width,
 required length, gross stock area, summed outer-piece area and utilization. Gross stock mass is optional:
 missing/unapproved density is a diagnostic, not zero mass and not a reason to block width-based planning.
 
@@ -77,6 +83,48 @@ minimum/increment-rounded quantity and merchandise cost. `least_observed_indepen
 present only when every roll has an eligible offer; otherwise it is null. It is a sum of the lowest
 observed whole-order costs per snapshot, not the sum of percentiles or a representative market estimate.
 Different snapshots, even sharing a product ID, are conservatively ordered separately.
+
+## Shape-aware nesting
+
+Add `"nesting": {"passes": 3, "work_limit": 1000000}` to the same cut options to search for better
+placements using actual cutter outlines, including concavities and outward notch tabs. Omitting
+`nesting` retains the shelf algorithm. An empty nesting object requests the defaults shown above.
+This is a bounded bottom-left compaction heuristic, not an optimal no-fit-polygon solver.
+By default it preserves each directed grainline. It always preserves mirror identity, cut path,
+internal path, drill diameters and the mapping from the original instance.
+Interior cut holes are still occupied: the planner does not put another piece inside a hole.
+
+For fabric whose nap and print direction permit a half-turn, add
+`"grain_reversal_materials": ["<exact resolved material SHA-256>"]` inside `nesting`.
+Use the canonical material resolver's `sha256` or the preceding plan's `rolls[].material.sha256`.
+Each listed snapshot must be unique and actually used by the job; stale permissions after a
+material or finish change refuse. Product/fiber names never grant reversal. Other materials retain
+one-way grain, and no reflection or crossgrain rotation is introduced. With permission, each move
+compares the original and 180-degree orientations and selects the lowest checked position, then
+the leftmost; ties keep the current direction. A half-turn must still improve the position.
+This bounded search may miss an arrangement requiring an initial move upward or an in-place turn.
+
+Reversed placements have `grain_reversed: true`, a grainline directed toward -y, and the complete
+half-turn in their affine transform. The SVG labels their groups with
+`data-grain-reversed="true"` and draws the transformed grain arrow. Full-resolution clearance
+checks apply to both directions. The reversal-enabled search identifies itself as
+`bounded_polygon_compaction/2`; the default translation search retains `/1`.
+
+The complete shelf marker is the initial feasible solution. Each proposed relocation lowers the
+piece's bottom edge, or moves it left at the same height, without increasing its top. Exact orientation
+predicates reject segment crossings/contact; full-resolution edge distances and containment tests
+check the requested Euclidean outline gap. No outline simplification is used for clearance checks.
+Up to 16 vertices per outline generate candidate anchors; at most 256 coordinates per axis are retained.
+This can miss good placements, but cannot justify accepting an unchecked one. New contact between
+overlapping polygon bounds is conservatively rejected even with a zero requested gap.
+
+The per-roll `nesting` report states the shelf baseline, final length and savings, accepted moves,
+work consumed, and whether the search budget was exhausted. Budget exhaustion retains the last
+fully checked, complete layout, never partially placed garment copies. `passes` is in 1..8 and
+`work_limit` in 1..20000000 per roll; work includes anchor pairs, candidate vertices, broad-phase
+pairs, and edge/containment checks. It is not a runtime or optimality guarantee. Prices, gross mass,
+utilization and SVG preview all consume the resulting marker rather than the old shelf requirements.
+The numerical gap checks are not a kerf, workholding, fabric-distortion or machine-safety guarantee.
 
 ## Scope and limits
 

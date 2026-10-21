@@ -8,6 +8,15 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod knit_strips;
+mod leather;
+mod loaded_insulation;
+mod mit;
+mod neoprene;
+mod nist;
+mod thermal_apparel;
+mod wet_denim;
+
 /// A selection for `fabric.material`. A frozen record makes custom/edited patterns self-contained.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,8 +62,33 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         "areal_density" => "kg/m2",
         "thickness" | "width" | "fiber_diameter" | "staple_length" => "m",
         "bulk_density" => "kg/m3",
-        "warp_stiffness" | "weft_stiffness" | "shear_stiffness" => "N/m",
-        "bending_rigidity" | "bending_warp" | "bending_weft" => "N*m",
+        "warp_stiffness"
+        | "weft_stiffness"
+        | "shear_stiffness"
+        | "membrane_yield_warp"
+        | "membrane_yield_weft"
+        | "membrane_yield_shear"
+        | "membrane_hardening_warp"
+        | "membrane_hardening_weft"
+        | "membrane_hardening_shear" => "N/m",
+        "bending_rigidity"
+        | "bending_warp"
+        | "bending_weft"
+        | "bending_coupling"
+        | "bending_twist"
+        | "bending_hardening_warp"
+        | "bending_hardening_weft"
+        | "bending_hardening_twist" => "N*m",
+        "specimen_flexural_rigidity" => "N*m2",
+        "preferred_curvature_warp" | "preferred_curvature_weft" | "preferred_curvature_twist" => {
+            "1/m"
+        }
+        "bending_curvature_limit_warp"
+        | "bending_curvature_limit_weft"
+        | "bending_curvature_limit_twist"
+        | "bending_accumulation_limit_warp"
+        | "bending_accumulation_limit_weft"
+        | "bending_accumulation_limit_twist" => "1/m",
         "poisson_warp_weft"
         | "friction_skin"
         | "friction_self"
@@ -65,6 +99,14 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         | "shrinkage_weft"
         | "porosity"
         | "emissivity"
+        | "membrane_strain_limit_warp"
+        | "membrane_strain_limit_weft"
+        | "membrane_strain_limit_shear"
+        | "membrane_accumulation_limit_warp"
+        | "membrane_accumulation_limit_weft"
+        | "membrane_accumulation_limit_shear"
+        | "membrane_plastic_heat_fraction"
+        | "membrane_relaxation_heat_fraction"
         | "limiting_oxygen_index" => "1",
         "thermal_conductivity" => "W/(m*K)",
         "thermal_resistance" => "m2*K/W",
@@ -75,7 +117,10 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         | "breaking_force_weft"
         | "tear_force"
         | "cut_force"
-        | "needle_penetration_force" => "N",
+        | "needle_penetration_force"
+        | "bending_yield_warp"
+        | "bending_yield_weft"
+        | "bending_yield_twist" => "N",
         "abrasion_cycles" => "cycles",
         "yarn_linear_density" => "kg/m",
         "thread_density_warp" | "thread_density_weft" | "twist" => "1/m",
@@ -97,6 +142,7 @@ fn factor(unit: &str, expected: &str) -> Option<f64> {
         ("g/cm3", "kg/m3") => 1000.0,
         ("kN/m", "N/m") | ("kN", "N") => 1000.0,
         ("mN*m", "N*m") => 0.001,
+        ("lbf*in2", "N*m2") => 4.448_221_615_260_5 * 0.0254 * 0.0254,
         ("%", "1") => 0.01,
         ("clo", "m2*K/W") => 0.155,
         ("tog", "m2*K/W") => 0.1,
@@ -104,6 +150,7 @@ fn factor(unit: &str, expected: &str) -> Option<f64> {
         ("denier", "kg/m") => 1e-3 / 9000.0,
         ("1/in", "1/m") => 1.0 / 0.0254,
         ("1/cm", "1/m") => 100.0,
+        ("1/mm", "1/m") => 1000.0,
         _ => return None,
     })
 }
@@ -152,6 +199,26 @@ impl Catalog {
         let mut catalog = Self::from_json(include_str!("material_catalog/catalog.json"))?;
         let insulation = Self::from_json(include_str!("material_catalog/insulation.json"))?;
         catalog.materials.extend(insulation.materials);
+        let measured = Self::from_json(include_str!("material_catalog/thermal-measurements.json"))?;
+        catalog.materials.extend(measured.materials);
+        let hfm = Self::from_json(include_str!("material_catalog/hfm-runs.json"))?;
+        catalog.materials.extend(hfm.materials);
+        catalog.materials.extend(nist::records());
+        catalog.materials.extend(mit::records());
+        catalog.materials.extend(leather::records());
+        catalog.materials.extend(loaded_insulation::records());
+        catalog.materials.extend(neoprene::records());
+        catalog.materials.extend(wet_denim::records());
+        catalog.materials.extend(thermal_apparel::records());
+        catalog.materials.extend(knit_strips::records());
+        let woven = Self::from_json(include_str!("material_catalog/woven-measurements.json"))?;
+        catalog.materials.extend(woven.materials);
+        let supplier = Self::from_json(include_str!("material_catalog/supplier-apparel.json"))?;
+        catalog.materials.extend(supplier.materials);
+        let mechanical = Self::from_json(include_str!(
+            "material_catalog/mechanical-measurements.json"
+        ))?;
+        catalog.materials.extend(mechanical.materials);
         catalog.validate()?;
         Ok(catalog)
     }

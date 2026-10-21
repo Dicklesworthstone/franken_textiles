@@ -10,44 +10,117 @@ use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::{material, run::DrapeOptions};
 use ftx_pattern::Pattern;
 use ftx_pattern::material_calibration::{Input as CalibrationInput, calibrate};
-use ftx_pattern::material_catalog::Selection;
+use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
 use ftx_pattern::material_cost::{QuoteBook, Scope};
 use ftx_pattern::materials::ThermalStack;
 use ftx_pattern::textile_import::{catalog, resolve_fabric};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+#[path = "../materials/stock.rs"]
+mod finite_stock;
+#[path = "../materials/nonlinear.rs"]
+mod nonlinear_calibration;
+#[path = "../materials/scenario.rs"]
+mod scenarios;
+#[path = "../materials/screen.rs"]
+mod screening;
+#[path = "../materials/thermal.rs"]
+mod steady_workbench;
+#[path = "material_workbench/coverage.rs"]
+mod thermal_coverage;
+#[path = "material_workbench/motion.rs"]
+mod thermal_motion;
+#[path = "material_workbench/projection.rs"]
+mod thermal_projection;
 #[path = "material_workbench/surface.rs"]
 mod thermal_surface;
 #[path = "material_workbench/thermal.rs"]
 mod thermal_transient;
 
+#[path = "material_workbench/bending.rs"]
+mod bending_calibration;
 #[path = "material_workbench/cutting.rs"]
 mod cutting;
+#[path = "material_workbench/friction.rs"]
+mod friction_calibration;
+#[path = "material_workbench/membrane_plasticity.rs"]
+mod membrane_plasticity_calibration;
+#[path = "material_workbench/relaxation.rs"]
+mod relaxation_calibration;
 
 const USAGE: &str = "ftx-materials catalog [SEARCH]
-ftx-materials show ID
+ftx-materials screen REQUEST.json
+ftx-materials study PATTERN.json REQUEST.json
+ftx-materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody
+ftx-materials stock-plan PATTERN.json STOCK.json
+ftx-materials stock-identities PATTERN.json STOCK.json
+ftx-materials stock-price PATTERN.json STOCK.json PRICING.json
+ftx-materials stock-residual PATTERN.json STOCK.json
+ftx-materials stock-svg PATTERN.json STOCK.json STOCK-INDEX NEW.svg
+ftx-materials show ID [--allow-estimates]
 ftx-materials resolve PATTERN.json
 ftx-materials bind PATTERN.json SELECTION.json NEW-PATTERN.json
+ftx-materials bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json
 ftx-materials price PATTERN.json QUOTES.json SCOPE.json
 ftx-materials thermal STACK.json
+ftx-materials thermal-at ID TEMPERATURE-C [--allow-estimates]
+ftx-materials pressure-condition REQUEST.json
+ftx-materials compression-stack REQUEST.json
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
+ftx-materials calibrate-nonlinear SWATCHES.json [--allow-estimates]
+ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
+ftx-materials calibrate-membrane-plasticity HISTORIES.json [--allow-estimates]
+ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
+ftx-materials calibrate-friction SLIDING.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
+ftx-materials thermal-compression HISTORY.json
+ftx-materials thermal-steady STACK.json
+ftx-materials thermal-steady-surface SIM_REPORT.json CONDITIONS.json
+ftx-materials thermal-steady-coverage REQUEST.json
+ftx-materials thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json
 ftx-materials thermal-surface SIM_REPORT.json CONDITIONS.json
+ftx-materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json
+ftx-materials thermal-map SIM_REPORT.json BODY.obj PROJECTION.json
+ftx-materials thermal-motion MOTION.json
 ftx-materials cut-plan PATTERN.json OPTIONS.json
 ftx-materials cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json
 ftx-materials cut-svg PATTERN.json OPTIONS.json ROLL-INDEX NEW.svg
+ftx-materials sew-plan PATTERN.json OPTIONS.json
+ftx-materials sew-stitches PATTERN.json OPTIONS.json
+ftx-materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg
 
-JSON output. `show` includes a portable selection and missing-property coverage.
+JSON output. `show` includes a portable selection, missing-property coverage and separate steady/transient readiness.
 `resolve` invokes the actual drape resolver without meshing; missing mechanics refuse.
 `bind` preserves geometry and embeds a locked selection; its output path must not exist.
+`bind-changes` atomically replaces named/default selections and optional exact pair-friction evidence, with separate mechanical readiness; its output path must not exist.
 `price` is a dated offer sample, not a checkout or a worldwide market price.
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
+`thermal-compression` retains material heat state across qualified gap changes and thermal holds; mechanical work is not converted to heat.
+`thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
+`pressure-condition` prepares a frozen material at a declared normal pressure from qualified observations; it does not infer contact pressure.
+`compression-stack` infers common pressure from a rigid-face stack clearance and qualified branches, returning one frozen selection per layer; it is not a garment-contact or recovery simulation.
+`thermal-steady` solves source-qualified conduction without requiring mass or heat capacity; its frozen request replays offline.
+`thermal-steady-surface` evaluates source-locked drape triangles without requiring heat storage; no inferred body coverage.
+`thermal-steady-coverage` recomputes layered body coverage and heat directly from retained drape materials, without invented storage.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
+`calibrate-nonlinear` identifies signed nonlinear membrane curves from nominal forces without extrapolating.
+`calibrate-membrane-plasticity` identifies permanent stretch and hardening from source-qualified loading cycles; unresolved fits retain their report without publishing a selection.
+`calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
+`calibrate-friction` identifies explicit pair/self/body kinetic coefficients from corrected steady sliding forces.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
+`thermal-coverage` couples mapped layers and bare body areas; generated geometry receipts are replayed.
+`thermal-map` derives coverage polygons from actual cloth and body geometry under a local-normal closure.
+`thermal-motion` evolves a timed sequence of verified maps, conservatively remaps heat, and can resume saved states.
 `cut-plan` derives material-specific roll requirements from real cut instances and sourced width.
+`stock-plan` allocates every cutter to finite hide/remnant polygons, with defect exclusions and exact material matching.
+`stock-residual` emits the next frozen request with accepted cuts retained as occupied physical stock.
+`stock-svg` writes a new finite-stock review; stock boundaries/defects are not machine cut paths.
 `cut-price` prices gross marker stock, including layout waste; missing offers remain unknown.
 `cut-svg` writes a new source-locked planning preview, not device execution code.
+`sew-plan` checks material thickness, allowances, local feed and multi-pass/reverse/backtack order.
+`sew-stitches` expands all directed stitch travel in paired pattern frames; neither command authorizes hardware.
+`sew-svg` writes a new operation preview with source/offset paths and needle stations; never a machine file.
 Fitted coefficients are estimates: --allow-estimates explicitly admits them to simulation.";
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -99,6 +172,15 @@ fn selected(raw: &Value) -> Result<ftx_pattern::material_catalog::ResolvedMateri
         .ok_or_else(|| invalid("pattern has no explicit material selection"))
 }
 
+fn simulation_readiness(material: &ResolvedMaterial) -> Result<(), Refusal> {
+    material.mechanics()?;
+    material.membrane_relaxation()?;
+    material.membrane_plasticity()?;
+    material.bending_response()?;
+    material.bending_plasticity()?;
+    Ok(())
+}
+
 fn bind(raw: Value, selection: &Selection, out: &str) -> Result<Value, Refusal> {
     let pattern = Pattern::new(raw);
     let errors = pattern.structure_errors();
@@ -139,7 +221,7 @@ fn bind(raw: Value, selection: &Selection, out: &str) -> Result<Value, Refusal> 
     file.write_all(&bytes).map_err(|e| io(out, e))?;
     Ok(json!({"out":out,"material_sha256":snapshot.sha256(),
         "missing_mechanics":snapshot.material().missing_mechanics(),
-        "simulation_ready":snapshot.mechanics().is_ok(),"geometry_changed":false}))
+        "simulation_ready":simulation_readiness(&snapshot).is_ok(),"geometry_changed":false}))
 }
 
 #[derive(Deserialize)]
@@ -161,7 +243,7 @@ fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
         allow_estimates,
         ..Selection::default()
     })?;
-    let mechanics = snapshot.mechanics();
+    let mechanics = simulation_readiness(&snapshot);
     Ok(
         json!({"calibration":report,"selection":snapshot.frozen_selection(),
         "simulation_ready":mechanics.is_ok(),"mechanics_refusal":mechanics.err(),
@@ -172,13 +254,96 @@ fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
 fn run(args: &[String]) -> Result<Value, Refusal> {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        ["calibrate-nonlinear", path] => nonlinear_calibration::run(path, false),
+        ["calibrate-nonlinear", path, "--allow-estimates"] => {
+            nonlinear_calibration::run(path, true)
+        }
+        ["calibrate-friction", path] => friction_calibration::run(path, false),
+        ["calibrate-friction", path, "--allow-estimates"] => friction_calibration::run(path, true),
+        ["screen", path] => screening::run(path),
+        ["pressure-condition", path] => screening::pressure_condition(path),
+        ["compression-stack", path] => screening::compression_stack(path),
+        ["study", pattern, request] => screening::study(pattern, request),
+        [
+            "scenario-study",
+            pattern,
+            request,
+            scenario,
+            measurements,
+            model,
+        ] => scenarios::run(pattern, request, scenario, measurements, model),
+        ["stock-plan", pattern, request] => finite_stock::plan(pattern, request),
+        ["stock-identities", pattern, request] => finite_stock::identities(pattern, request),
+        ["stock-price", pattern, request, pricing] => {
+            finite_stock::price(pattern, request, pricing)
+        }
+        ["stock-residual", pattern, request] => finite_stock::residual(pattern, request),
+        ["stock-svg", pattern, request, index, out] => {
+            finite_stock::preview(pattern, request, index, out)
+        }
+        ["thermal-at", id, t] => thermal_transient::point(id, t, false),
+        ["thermal-at", id, t, "--allow-estimates"] => thermal_transient::point(id, t, true),
+        ["calibrate-bending", path] => bending_calibration::run(path, false),
+        ["calibrate-bending", path, "--allow-estimates"] => bending_calibration::run(path, true),
+        ["calibrate-membrane-plasticity", path] => {
+            membrane_plasticity_calibration::run(path, false)
+        }
+        ["calibrate-membrane-plasticity", path, "--allow-estimates"] => {
+            membrane_plasticity_calibration::run(path, true)
+        }
+        ["calibrate-relaxation", path] => relaxation_calibration::run(path, false),
+        ["calibrate-relaxation", path, "--allow-estimates"] => {
+            relaxation_calibration::run(path, true)
+        }
         ["cut-plan", pattern, options] => cutting::plan(pattern, options),
+        ["sew-plan", pattern, options] => {
+            let pattern = Pattern::new(read::<Value>(pattern)?);
+            let options = read::<ftx_export::sewing::SewOptions>(options)?;
+            serde_json::to_value(ftx_export::sewing::SewPlan::build(&pattern, &options)?)
+                .map_err(|e| invalid(e.to_string()))
+        }
+        ["sew-stitches", pattern, options] => {
+            let pattern = Pattern::new(read::<Value>(pattern)?);
+            let options = read::<ftx_export::sewing::SewOptions>(options)?;
+            serde_json::to_value(ftx_export::sewing::program::SewProgram::build(
+                &pattern, &options,
+            )?)
+            .map_err(|e| invalid(e.to_string()))
+        }
+        ["sew-svg", pattern, options, operation, out] => {
+            let pattern = Pattern::new(read::<Value>(pattern)?);
+            let options = read::<ftx_export::sewing::SewOptions>(options)?;
+            let svg = ftx_export::sewing::preview::svg(&pattern, &options, operation)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(out)
+                .map_err(|e| io(out, e))?;
+            file.write_all(svg.as_bytes()).map_err(|e| io(out, e))?;
+            Ok(json!({"out":out,"operation":operation,
+                "svg_sha256":ftx_core::receipt::sha256_hex(svg.as_bytes()),
+                "hardware_execution_authorized":false}))
+        }
         ["cut-price", pattern, options, quotes, market] => {
             cutting::price(pattern, options, quotes, market)
         }
         ["cut-svg", pattern, options, index, out] => cutting::preview(pattern, options, index, out),
         ["thermal-surface", report, conditions] => thermal_surface::run(report, conditions),
+        ["thermal-coverage", report, mapping, conditions] => {
+            thermal_coverage::run(report, mapping, conditions)
+        }
+        ["thermal-map", report, body, settings] => thermal_projection::run(report, body, settings),
+        ["thermal-motion", schedule] => thermal_motion::run(schedule),
         ["thermal-transient", path] => thermal_transient::run(path),
+        ["thermal-compression", path] => steady_workbench::compression_history(path),
+        ["thermal-steady", path] => steady_workbench::stack(path),
+        ["thermal-steady-surface", report, conditions] => {
+            steady_workbench::surface(report, conditions)
+        }
+        ["thermal-steady-coverage", path] => steady_workbench::coverage_request(path),
+        ["thermal-steady-coverage", report, map, conditions] => {
+            steady_workbench::coverage(report, map, conditions)
+        }
         ["calibrate", path] => calibration(path, false),
         ["calibrate", path, "--allow-estimates"] => calibration(path, true),
         ["catalog"] | ["catalog", _] => {
@@ -193,15 +358,31 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             });
             serde_json::to_value(db).map_err(|e| invalid(e.to_string()))
         }
-        ["show", id] => {
+        ["show", id] | ["show", id, "--allow-estimates"] => {
             let snapshot = catalog()?.resolve(&Selection {
                 id: (*id).into(),
+                allow_estimates: words.len() == 3,
                 ..Selection::default()
             })?;
+            let steady = ftx_pattern::material_thermal::ConductionLaw::from_material(
+                snapshot.material(),
+                snapshot.allows_estimates(),
+            )
+            .map(|law| law.domain());
+            let transient = ftx_pattern::material_thermal::ThermalLaw::from_material(
+                snapshot.material(),
+                snapshot.allows_estimates(),
+            )
+            .map(|law| law.domain());
+            let readiness = |result: Result<Option<[f64; 2]>, Refusal>| match result {
+                Ok(domain) => json!({"ready":true,"temperature_domain_c":domain}),
+                Err(refusal) => json!({"ready":false,"refusal":refusal}),
+            };
             Ok(
                 json!({"snapshot":snapshot,"selection":snapshot.frozen_selection(),
                 "missing_mechanics":snapshot.material().missing_mechanics(),
-                "simulation_ready":snapshot.mechanics().is_ok()}),
+                "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
+                "simulation_ready":simulation_readiness(&snapshot).is_ok()}),
             )
         }
         ["resolve", path] => {
@@ -209,6 +390,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             Ok(material::resolve(&pattern, &DrapeOptions::default())?.report)
         }
         ["bind", pattern, selection, out] => bind(read(pattern)?, &read(selection)?, out),
+        ["bind-changes", pattern, changes, out] => screening::bind_changes(pattern, changes, out),
         ["price", pattern, quotes, scope] => {
             let m = selected(&read(pattern)?)?;
             let result = read::<QuoteBook>(quotes)?.evaluate(&m, &read::<Scope>(scope)?)?;
@@ -315,7 +497,21 @@ mod tests {
     #[test]
     fn discovery_and_real_drape_refusals_are_exposed() {
         let rows = run(&["catalog".into(), "bamboo".into()]).unwrap();
-        assert_eq!(rows["materials"].as_array().unwrap().len(), 2);
+        let ids: Vec<_> = rows["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect();
+        for id in [
+            "fiber/bamboo-viscose",
+            "nf_bamboo_viscose_jersey_240",
+            "blackbird/FT4148999",
+        ] {
+            assert!(ids.contains(&id), "missing bamboo search result: {id}");
+        }
+        assert!(!ids.contains(&"fs_il019_natural"));
+        assert_eq!(run(&["catalog".into(), "BAMBOO".into()]).unwrap(), rows);
         let shown = run(&["show".into(), "fs_il019_natural".into()]).unwrap();
         assert_eq!(shown["simulation_ready"], false);
         assert!(

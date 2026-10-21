@@ -413,6 +413,7 @@ fn fixed_jacket_pattern_substitutes_linen_leather_and_performance_knit_without_s
             Quote {
                 offer_id: "linen_offer".into(),
                 material_id: "synthetic_jacket_linen".into(),
+                material_sha256: None,
                 supplier: "mill_a".into(),
                 sku: "LIN-142".into(),
                 price: 20.0,
@@ -425,8 +426,11 @@ fn fixed_jacket_pattern_substitutes_linen_leather_and_performance_knit_without_s
                 quality: "first-quality".into(),
                 terms: "merchandise-ex-tax-shipping".into(),
                 observed_on: "2026-10-14".into(),
+                observed_at: None,
                 valid_through: None,
+                valid_through_at: None,
                 available: true,
+                available_quantity: None,
                 source: "s1".into(),
                 source_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     .into(),
@@ -434,6 +438,7 @@ fn fixed_jacket_pattern_substitutes_linen_leather_and_performance_knit_without_s
             Quote {
                 offer_id: "leather_offer".into(),
                 material_id: "synthetic_jacket_cowhide".into(),
+                material_sha256: None,
                 supplier: "tannery_b".into(),
                 sku: "HIDE-110".into(),
                 price: 20.0,
@@ -446,8 +451,11 @@ fn fixed_jacket_pattern_substitutes_linen_leather_and_performance_knit_without_s
                 quality: "first-quality".into(),
                 terms: "merchandise-ex-tax-shipping".into(),
                 observed_on: "2026-10-14".into(),
+                observed_at: None,
                 valid_through: None,
+                valid_through_at: None,
                 available: true,
+                available_quantity: None,
                 source: "s1".into(),
                 source_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     .into(),
@@ -462,7 +470,9 @@ fn fixed_jacket_pattern_substitutes_linen_leather_and_performance_knit_without_s
         quality: "first-quality".into(),
         terms: "merchandise-ex-tax-shipping".into(),
         as_of: "2026-10-14".into(),
+        as_of_at: None,
         max_age_days: 30,
+        require_observed_quantity: false,
     };
     let cost_linen = quotes.evaluate(&res_linen, &scope).unwrap();
     let cost_leather = quotes.evaluate(&res_leather, &scope).unwrap();

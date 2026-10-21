@@ -4,7 +4,7 @@ use ftx_drape::material::resolve;
 use ftx_drape::run::{DrapeBody, DrapeOptions, DrapeRun, drape};
 use ftx_drape::scene::{PartFrames, build_scene};
 use ftx_drape::{Body, PartFrame, build_garment};
-use ftx_pattern::Pattern;
+use ftx_pattern::{Pattern, material_binding::Changes};
 use serde_json::{Value, json};
 
 fn sheet(scale: f64) -> Value {
@@ -29,6 +29,123 @@ fn sheet(scale: f64) -> Value {
     json!({"id":"test-sheet", "allow_estimates":true, "record":{
         "id":"test-sheet", "name":"Synthetic sheet", "form":"woven", "properties":properties,
         "sources":{"test":{"reference":"test:piece-materials","note":"Synthetic inputs", "accessed_on":"2026-10-13"}}}})
+}
+
+fn panel_sheet(warp: f64, weft: f64) -> Value {
+    let mut m = sheet(1.0);
+    m["record"]["structure"] = json!({"bending_model":ftx_pattern::material_bending::MODEL});
+    for (key, value) in [
+        ("bending_warp", warp),
+        ("bending_weft", weft),
+        ("bending_coupling", 1e-5),
+        ("bending_twist", 2e-5),
+    ] {
+        m["record"]["properties"][key] = json!({"value":value,"unit":"N*m","source":"test",
+            "evidence":"estimate","method":"Synthetic orthotropic panel bending coefficient"});
+    }
+    m
+}
+
+#[test]
+fn panel_bending_selection_reaches_sewn_dynamics_with_fixed_geometry_and_membrane() {
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = panel_sheet(2e-4, 5e-5);
+    let p = Pattern::new(raw.clone());
+    let opts = DrapeOptions {
+        spacing: 8.0,
+        ..options()
+    };
+    let a = run(&p, opts);
+    raw["fabric"]["material"] = panel_sheet(5e-5, 2e-4);
+    let b = run(&Pattern::new(raw), opts);
+    assert_eq!(a.scene.mesh.verts2d, b.scene.mesh.verts2d);
+    assert_eq!(a.scene.mesh.faces, b.scene.mesh.faces);
+    assert_eq!(a.scene.weld, b.scene.weld);
+    assert_eq!(a.scene.start.relaxed, b.scene.start.relaxed);
+    assert_eq!(a.scene.solver.model.mass, b.scene.solver.model.mass);
+    assert_eq!(
+        a.scene.solver.model.membranes,
+        b.scene.solver.model.membranes
+    );
+    assert_eq!(a.scene.solver.model.membrane, b.scene.solver.model.membrane);
+    assert_ne!(a.scene.solver.x, b.scene.solver.x);
+    let m = &a.scene.solver.model;
+    assert_eq!(m.panel_bending_patches().len(), m.membranes.len());
+    assert_eq!(a.report["panel_bending"]["patch_count"], m.membranes.len());
+    assert!(
+        a.report["panel_bending"]["active_scalar_hinges"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert_ne!(
+        a.report["material"]["record_sha256"],
+        b.report["material"]["record_sha256"]
+    );
+    let repeat = run(&p, opts);
+    assert_eq!(repeat.scene.solver.x, a.scene.solver.x);
+    assert_eq!(repeat.report, a.report);
+}
+
+#[test]
+fn only_selected_source_panels_get_patches_and_scalar_seams_are_retained() {
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = panel_sheet(2e-4, 5e-5);
+    raw["pieces"][1]["fabric"] = json!({"material":sheet(1.0)});
+    let r = run(
+        &Pattern::new(raw),
+        DrapeOptions {
+            spacing: 8.0,
+            ..options()
+        },
+    );
+    let m = &r.scene.solver.model;
+    assert!(m.is_heterogeneous()); // only bending differs
+    assert!(m.panel_bending_patches().len() < m.membranes.len());
+    assert!(!m.panel_bending_patches().is_empty());
+    for &i in m.panel_bending_triangles() {
+        assert_eq!(r.scene.triangle_owner[i], 0);
+    }
+    assert_eq!(r.report["material"]["panel_bending_piece_count"], 1);
+    let weld = &r.scene.weld;
+    let ownership: Vec<_> = (0..m.mass.len())
+        .map(|v| {
+            r.scene
+                .mesh
+                .owner
+                .iter()
+                .zip(weld)
+                .filter_map(|(&o, &w)| (w == v).then_some(o))
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .collect();
+    // Curvature support on the selected front may include seam vertices, but no interior back vertex.
+    for p in m.panel_bending_patches() {
+        for &v in &p.v {
+            assert!(ownership[v].contains(&0));
+        }
+    }
+}
+
+#[test]
+fn tensor_default_and_same_explicit_piece_selection_are_identical_with_self_contact() {
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = panel_sheet(2e-4, 5e-5);
+    let opts = DrapeOptions {
+        spacing: 8.0,
+        self_contact: Some(DrapeOptions::default().contact),
+        ..options()
+    };
+    let a = run(&Pattern::new(raw.clone()), opts);
+    raw["pieces"][1]["fabric"] = raw["fabric"].clone();
+    let b = run(&Pattern::new(raw), opts);
+    assert_eq!(a.scene.solver.x, b.scene.solver.x);
+    assert_eq!(a.scene.solver.v, b.scene.solver.v);
+    assert_eq!(a.fold.frames, b.fold.frames);
+    assert_eq!(
+        a.scene.solver.model.panel_bending_triangles(),
+        b.scene.solver.model.panel_bending_triangles()
+    );
 }
 
 fn band() -> Pattern {
@@ -321,6 +438,162 @@ fn interface_pattern(raw: Value, mu: f64) -> Pattern {
     Pattern::new(raw)
 }
 
+fn interface_substitution() -> (Pattern, Changes) {
+    let source = interface_pattern(assigned(2.0).raw().clone(), 0.12);
+    let mut replacement = assigned(2.0).raw().clone();
+    replacement["fabric"]["material"] = sheet(3.0);
+    let replacement = interface_pattern(replacement, 0.18);
+    let changes = serde_json::from_value(json!({
+        "schema":"ftx-material-bindings/1", "default":sheet(3.0),
+        "interfaces":replacement.raw()["fabric"]["interfaces"]
+    }))
+    .unwrap();
+    (source, changes)
+}
+
+fn interface_scenario() -> ftx_drape::study::Scenario {
+    serde_json::from_value(json!({
+        "schema":"ftx-drape-scenario/1", "fit_spec":{},
+        "options":DrapeOptions { self_contact:Some(options().contact), ..options() },
+        "max_mesh_points":4096, "max_vertex_frames":1000000
+    }))
+    .unwrap()
+}
+
+#[test]
+fn atomic_material_and_pair_replacement_reaches_sewn_drape_and_scenario() {
+    let (source, changes) = interface_substitution();
+    let original = source.raw().clone();
+    let receipt = changes.apply(&source).unwrap();
+    let selected = Pattern::from_json(receipt["pattern_json"].as_str().unwrap()).unwrap();
+    assert_eq!(selected.raw(), &receipt["pattern"]);
+    assert_eq!(receipt["geometry_changed"], false);
+    assert_eq!(selected.raw()["seams"], original["seams"]);
+    for (before, after) in original["pieces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(selected.raw()["pieces"].as_array().unwrap())
+    {
+        for (key, value) in before.as_object().unwrap() {
+            if key != "fabric" {
+                assert_eq!(after[key], *value, "piece geometry/metadata {key}");
+            }
+        }
+    }
+
+    let scenario = interface_scenario();
+    let before = run(&source, scenario.options);
+    let after = run(&selected, scenario.options);
+    assert_eq!(before.scene.mesh.verts2d, after.scene.mesh.verts2d);
+    assert_eq!(before.scene.mesh.faces, after.scene.mesh.faces);
+    assert_eq!(before.scene.weld, after.scene.weld);
+    assert_eq!(before.scene.start.relaxed, after.scene.start.relaxed);
+    assert!(after.scene.weld.len() > after.scene.solver.model.mass.len());
+    let ratio = after.scene.solver.model.mass.iter().sum::<f64>()
+        / before.scene.solver.model.mass.iter().sum::<f64>();
+    assert!((ratio - 5.0 / 3.0).abs() < 1e-12);
+    assert_ne!(before.scene.solver.x, after.scene.solver.x);
+    let material = &after.report["material"];
+    assert_ne!(
+        before.report["material"]["pieces"][0]["record_sha256"],
+        material["pieces"][0]["record_sha256"]
+    );
+    assert_eq!(
+        before.report["material"]["pieces"][1]["record_sha256"],
+        material["pieces"][1]["record_sha256"]
+    );
+    let order = material["contact_material_order"].as_array().unwrap();
+    let ids: Vec<_> = material["pieces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| order.iter().position(|h| *h == p["record_sha256"]).unwrap())
+        .collect();
+    assert_eq!(material["self_friction_matrix"][ids[0]][ids[1]], 0.18);
+    assert_eq!(material["self_friction_matrix"][ids[1]][ids[0]], 0.18);
+    for field in ["friction", "sources", "allow_estimates"] {
+        assert_eq!(
+            material["interfaces"][0][field],
+            receipt["pattern"]["fabric"]["interfaces"][0][field]
+        );
+    }
+    assert!(
+        after
+            .scene
+            .solver
+            .contact
+            .as_ref()
+            .unwrap()
+            .has_surface_materials()
+    );
+
+    let form = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let result = ftx_drape::study::Session::new(&scenario, &body)
+        .unwrap()
+        .evaluate(&selected, |_| {})
+        .unwrap();
+    assert_eq!(result["drape"], after.report);
+    assert_eq!(result["positions_m"], json!(after.scene.solver.x));
+    assert_eq!(changes.apply(&source).unwrap(), receipt);
+    assert_eq!(source.raw(), &original);
+}
+
+#[test]
+fn material_substitution_never_reuses_stale_or_unadmitted_pair_friction() {
+    let (source, changes) = interface_substitution();
+    let original = source.raw().clone();
+    let scenario = interface_scenario();
+    let form = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    for (mode, expected) in [
+        (0, "unassigned or stale"),
+        (1, "pairwise friction"),
+        (2, "own explicit consent"),
+    ] {
+        let mut candidate = changes.clone();
+        match mode {
+            0 => candidate.interfaces = None,
+            1 => candidate.interfaces = Some(vec![]),
+            _ => candidate.interfaces.as_mut().unwrap()[0]["allow_estimates"] = json!(false),
+        }
+        // All three operations are useful for non-contact consumers and remain bindable.
+        let bound = candidate.apply(&source).unwrap();
+        if mode == 0 {
+            assert_eq!(
+                bound["pattern"]["fabric"]["interfaces"],
+                original["fabric"]["interfaces"]
+            );
+        }
+        let mut started = false;
+        let refusal = ftx_drape::study::Session::new(&scenario, &body)
+            .unwrap()
+            .evaluate(&Pattern::new(bound["pattern"].clone()), |_| started = true)
+            .unwrap_err();
+        assert_eq!(refusal.code, ftx_core::RefusalCode::InvalidDocument);
+        assert!(refusal.message.contains(expected), "{}", refusal.message);
+        assert!(
+            !started,
+            "invalid contact evidence must refuse before solver work"
+        );
+    }
+    let mut stale = changes;
+    stale.interfaces.as_mut().unwrap()[0]["materials"][0] = json!("0".repeat(64));
+    assert!(stale.apply(&source).is_err());
+    assert_eq!(source.raw(), &original);
+}
+
 #[test]
 fn piece_surface_field_reaches_contact_and_survives_checked_body_motion() {
     let mut raw = assigned(2.0).raw().clone();
@@ -537,3 +810,6 @@ fn explicit_cross_friction_changes_slip_on_the_assembled_two_sheet_model() {
         "{no_friction} vs {friction}"
     );
 }
+
+#[path = "piece_materials/friction_acquisition.rs"]
+mod friction_acquisition;

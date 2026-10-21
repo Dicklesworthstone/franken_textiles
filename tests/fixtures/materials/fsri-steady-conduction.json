@@ -1,0 +1,12 @@
+{
+  "schema": "ftx-thermal-steady/1",
+  "layers": [
+    {"id": "fsri/hfm/cotton-sheet/dry/220330-r1", "allow_estimates": true}
+  ],
+  "interface_resistance_m2_k_w": [],
+  "area_m2": 0.01,
+  "inside_c": 60.0,
+  "outside_c": 20.0,
+  "inside_resistance_m2_k_w": 0.01,
+  "outside_resistance_m2_k_w": 0.02
+}

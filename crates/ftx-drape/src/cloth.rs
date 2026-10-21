@@ -9,7 +9,8 @@
 //! solve minimises `Ψ − Σ mᵢ g·xᵢ` the same way. Units: metres, kilograms, seconds.
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3};
-use ftx_pattern::material_response::CompiledMembrane;
+use ftx_pattern::material_response::{CompiledMembrane, StrainDomain};
+use serde::Serialize;
 
 use crate::contact::{Body, Contact, ContactParams, Intersection};
 use crate::eigen::{project_psd, project_psd_translation_free};
@@ -22,6 +23,10 @@ type EdgeUses = std::collections::BTreeMap<(usize, usize), Vec<(usize, usize, us
 
 mod materials;
 pub use materials::SheetMaterial;
+mod bending;
+mod membrane_plasticity;
+mod plasticity;
+mod relaxation;
 
 /// The cloth: flat rest geometry, elements, lumped masses and material.
 #[derive(Clone, Debug)]
@@ -34,6 +39,8 @@ pub struct ClothModel {
     pub hinges: Vec<Hinge>,
     /// Lumped vertex masses (kg).
     pub mass: Vec<f64>,
+    // Optional source-bound point masses, applied once after sheet assembly and seam welding.
+    pub(crate) attached_mass: Option<crate::attached_mass::Binding>,
     /// Membrane material.
     pub membrane: Membrane,
     /// Compression factor of each membrane element, per direction (`membrane.compression` unless set by
@@ -49,9 +56,13 @@ pub struct ClothModel {
     // Nonlinear laws are immutable source-bound constitutive responses; None entries use the
     // corresponding linear/reference-tangent material above.
     element_responses: Option<Vec<Option<CompiledMembrane>>>,
+    // Scalar calibration bounds survive source resolution and grain-frame scene assembly.
+    element_domains: Option<Vec<Option<StrainDomain>>>,
     hinge_bending: Option<Vec<f64>>,
     // Each hinge's adjacent triangles and their shares of the existing bending integration area.
     hinge_support: Vec<[(usize, f64); 2]>,
+    // Optional panel curvature replaces interior scalar hinges, never the explicit seam hinges.
+    panel_bending: Option<bending::PanelField>,
 }
 
 impl ClothModel {
@@ -206,13 +217,16 @@ impl ClothModel {
             membranes,
             hinges,
             mass,
+            attached_mass: None,
             membrane,
             bending,
             elastics: Vec::new(),
             element_materials: None,
             element_responses: None,
+            element_domains: None,
             hinge_bending: None,
             hinge_support,
+            panel_bending: None,
         })
     }
 
@@ -257,6 +271,13 @@ impl ClothModel {
     /// Effective bending coefficient of hinge `h` (N·m), including unlike adjacent sheets.
     #[must_use]
     pub fn hinge_rigidity(&self, h: usize) -> f64 {
+        if self
+            .panel_bending
+            .as_ref()
+            .is_some_and(|p| p.replaced_hinges[h])
+        {
+            return 0.0;
+        }
         self.hinge_bending.as_ref().map_or(self.bending, |b| b[h])
     }
 
@@ -264,6 +285,7 @@ impl ClothModel {
     #[must_use]
     pub fn is_heterogeneous(&self) -> bool {
         self.element_materials.is_some()
+            || self.panel_bending.as_ref().is_some_and(|p| p.heterogeneous)
     }
 
     /// Bind one optional characterized nonlinear response to each membrane triangle.
@@ -297,13 +319,56 @@ impl ClothModel {
             .and_then(Option::as_ref)
     }
 
-    /// Refuse a physical state outside any source-declared nonlinear strain domain.
+    /// Bind the optional physical domain of each fitted scalar membrane.
+    ///
+    /// # Errors
+    /// Unless there is exactly one domain slot per membrane triangle.
+    pub fn set_membrane_domains(
+        &mut self,
+        domains: &[Option<StrainDomain>],
+    ) -> Result<(), Refusal> {
+        if domains.len() != self.membranes.len() {
+            return Err(Refusal::new(
+                RefusalCode::InvalidDocument,
+                "one fitted domain slot per membrane triangle is required",
+            ));
+        }
+        self.element_domains = domains
+            .iter()
+            .any(Option::is_some)
+            .then(|| domains.to_vec());
+        Ok(())
+    }
+
+    /// Optional source-fitted scalar domain of one membrane element.
+    #[must_use]
+    pub fn membrane_domain(&self, e: usize) -> Option<StrainDomain> {
+        self.element_domains
+            .as_ref()
+            .and_then(|domains| domains.get(e))
+            .copied()
+            .flatten()
+    }
+
+    /// Refuse a physical state outside any fitted scalar or nonlinear strain domain.
     /// Numerical compression/gather softening never widens this domain.
     ///
     /// # Errors
     /// First element whose raw material-frame Green strain leaves its characterized box.
     pub fn check_membrane_domains(&self, x: &[Vec3]) -> Result<(), Refusal> {
         for (i, e) in self.membranes.iter().enumerate() {
+            if let Some(domain) = self.membrane_domain(i) {
+                let strain = e.strain(x);
+                if !domain.contains(strain) {
+                    return Err(Refusal::new(
+                        RefusalCode::OutOfRange,
+                        format!(
+                            "membrane element {i}: physical Green strain {strain:?} is outside fitted ranges {:?}",
+                            domain.ranges()
+                        ),
+                    ));
+                }
+            }
             if let Some(law) = self.membrane_response(i) {
                 let strain = e.strain(x);
                 if !law.contains(strain) {
@@ -323,30 +388,48 @@ impl ClothModel {
     /// Elastic energy Ψ (membrane + bending + elastics) at positions `x`.
     #[must_use]
     pub fn elastic_energy(&self, x: &[Vec3]) -> f64 {
-        let m: f64 = self
-            .membranes
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                self.membrane_response(i).map_or_else(
-                    || e.energy(x, &self.material(i)),
-                    |law| e.response_energy(x, law, &self.material(i)),
-                )
-            })
-            .sum();
-        let b: f64 = self
+        if self.check_membrane_domains(x).is_err() {
+            return f64::NAN;
+        }
+        self.elastic_energy_with_fields(x, None, None)
+    }
+
+    // History fields supply WHOLE contributions, avoiding subtraction of large elastic energies
+    // or double-counting yielded material. Memoryless summation stays bit-identical.
+    fn elastic_energy_with_fields(
+        &self,
+        x: &[Vec3],
+        panels: Option<f64>,
+        membranes: Option<f64>,
+    ) -> f64 {
+        let m: f64 = membranes.unwrap_or_else(|| {
+            self.membranes
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    self.membrane_response(i).map_or_else(
+                        || e.energy(x, &self.material(i)),
+                        |law| e.response_energy(x, law, &self.material(i)),
+                    )
+                })
+                .sum()
+        });
+        let mut b: f64 = self
             .hinges
             .iter()
             .enumerate()
             .map(|(i, h)| h.energy(x, self.hinge_rigidity(i)))
             .sum();
+        if let Some(field) = &self.panel_bending {
+            b += panels.unwrap_or_else(|| field.patches.iter().map(|p| p.energy(x)).sum::<f64>());
+        }
         let t: f64 = self.elastics.iter().map(|e| e.energy(x)).sum();
         m + b + t
     }
 }
 
 /// What one minimisation did.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct SolveReport {
     /// Newton iterations taken.
     pub iterations: usize,
@@ -404,7 +487,7 @@ pub struct Solver {
     pub gravity: Vec3,
     /// Newton tolerance on the step: ‖p‖∞/h for a time step, ‖p‖∞ for a static solve (m).
     pub tol: f64,
-    /// Newton iteration cap per solve.
+    /// Newton iteration cap per solve (300 by default for linearly converging contact modes).
     pub max_newton: usize,
     /// Contact with a static body and/or other cloth surfaces, if enabled.
     pub contact: Option<Contact>,
@@ -421,9 +504,16 @@ pub struct Solver {
     /// With self-contact: the free-DOF pattern of every element, elastic and mass block (and the
     /// membrane, hinge and elastic counts it was built for), which each assembly extends by its
     /// contact couplings.
-    element_pattern: Option<(Csr, [usize; 3])>,
+    element_pattern: Option<(Csr, [usize; 4])>,
+    cached_panel_count: usize,
     /// The last positive-definite factorization, the preconditioner for [`Solver::pcg_iters`].
     precond: Option<LdltFactor>,
+    // Per-triangle, accepted physical memory; trial evaluations never mutate it.
+    relaxation: Option<relaxation::Field>,
+    // Per-source-panel permanent curvature. Accepted together with all other material memory.
+    plasticity: Option<plasticity::Field>,
+    // Permanent raw Green strain; replaces selected membrane energies and derivatives.
+    membrane_plasticity: Option<membrane_plasticity::Field>,
 }
 
 /// The relative residual an inexact Newton direction is solved to.
@@ -475,13 +565,14 @@ impl Solver {
                 }
             }
         }
+        let cached_panel_count = model.panel_bending_patches().len();
         Self {
             v: vec![Vec3::ZERO; n],
             model,
             x,
             gravity,
             tol: 1e-6,
-            max_newton: 100,
+            max_newton: 300,
             contact: None,
             friction_rounds: 1,
             pcg_iters: 0,
@@ -490,7 +581,11 @@ impl Solver {
             symbolic: None,
             pattern: None,
             element_pattern: None,
+            cached_panel_count,
             precond: None,
+            relaxation: None,
+            plasticity: None,
+            membrane_plasticity: None,
         }
     }
 
@@ -611,14 +706,19 @@ impl Solver {
             .is_some_and(|c| c.self_contact_params().is_some())
     }
 
-    fn element_counts(&self) -> [usize; 3] {
+    fn element_counts(&self) -> [usize; 4] {
         let m = &self.model;
-        [m.membranes.len(), m.hinges.len(), m.elastics.len()]
+        [
+            m.membranes.len(),
+            m.hinges.len(),
+            m.elastics.len(),
+            m.panel_bending_patches().len(),
+        ]
     }
 
     /// The positions [`Solver::assemble`] pushes before any contact block: every pair of free DOFs of
     /// each membrane, hinge and elastic, and each free DOF's mass.
-    fn element_blocks_pattern(&self) -> (Csr, [usize; 3]) {
+    fn element_blocks_pattern(&self) -> (Csr, [usize; 4]) {
         let mut coo = Coo::new(self.nfree, self.nfree);
         let mut block = |vs: &[usize]| {
             let dofs: Vec<usize> = vs
@@ -633,6 +733,10 @@ impl Solver {
         };
         self.model.membranes.iter().for_each(|e| block(&e.v));
         self.model.hinges.iter().for_each(|h| block(&h.v));
+        self.model
+            .panel_bending_patches()
+            .iter()
+            .for_each(|p| block(&p.v));
         self.model.elastics.iter().for_each(|e| block(&e.v));
         for f in self.free.iter().flatten() {
             coo.push(*f, *f, 0.0);
@@ -656,7 +760,21 @@ impl Solver {
     /// The potential: incremental (`Some((x̃, h))`) or static (`None`, gravity as potential).
     fn potential(&self, x: &[Vec3], inertia: Option<(&[Vec3], f64)>) -> Result<f64, Refusal> {
         self.model.check_membrane_domains(x)?;
-        let mut e = self.model.elastic_energy(x);
+        self.model.check_panel_bending_domains(x)?;
+        let panels = self
+            .plasticity
+            .as_ref()
+            .map(|field| field.energy(&self.model, x, inertia.is_some()))
+            .transpose()?;
+        let membranes = self
+            .membrane_plasticity
+            .as_ref()
+            .map(|field| field.energy(&self.model, x, inertia.is_some()))
+            .transpose()?;
+        let mut e = self.model.elastic_energy_with_fields(x, panels, membranes);
+        if let Some(field) = &self.relaxation {
+            e += field.energy(x, inertia.map(|(_, h)| h))?;
+        }
         match inertia {
             Some((xt, h)) => {
                 for (i, m) in self.model.mass.iter().enumerate() {
@@ -749,15 +867,43 @@ impl Solver {
             }
         };
         for (i, e) in self.model.membranes.iter().enumerate() {
-            let mut l = self.model.membrane_response(i).map_or_else(
-                || e.local(x, &self.model.material(i)),
-                |law| e.response_local(x, law, &self.model.material(i)),
-            );
+            let mut l = self
+                .membrane_plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, x, inertia.is_some()))
+                .unwrap_or_else(|| {
+                    self.model.membrane_response(i).map_or_else(
+                        || e.local(x, &self.model.material(i)),
+                        |law| e.response_local(x, law, &self.model.material(i)),
+                    )
+                });
+            if let Some(extra) = self
+                .relaxation
+                .as_ref()
+                .and_then(|field| field.local(i, x, inertia.map(|(_, h)| h)))
+            {
+                l.energy += extra.energy;
+                for (a, b) in l.grad.iter_mut().zip(extra.grad) {
+                    *a += b;
+                }
+                for (a, b) in l.hess.iter_mut().zip(extra.hess) {
+                    *a += b;
+                }
+                l.psd &= extra.psd;
+            }
             scatter(&e.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for (i, h) in self.model.hinges.iter().enumerate() {
             let mut l = h.local(x, self.model.hinge_rigidity(i));
             scatter(&h.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
+        }
+        for (i, p) in self.model.panel_bending_patches().iter().enumerate() {
+            let mut l = self
+                .plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, x, inertia.is_some()))
+                .unwrap_or_else(|| p.local(x));
+            scatter(&p.v, &l.grad, &mut l.hess, l.psd, &mut sink, &mut g);
         }
         for e in &self.model.elastics {
             let mut l = e.local(x);
@@ -827,6 +973,10 @@ impl Solver {
             };
             self.model.membranes.iter().for_each(|e| link(&e.v));
             self.model.hinges.iter().for_each(|h| link(&h.v));
+            self.model
+                .panel_bending_patches()
+                .iter()
+                .for_each(|p| link(&p.v));
             if self.dynamic_contact() {
                 // Order the actual contact graph too, not only the rest-mesh adjacency.
                 let mut vertex = vec![0; self.nfree];
@@ -887,6 +1037,14 @@ impl Solver {
 
     /// Projected Newton on the potential from the current positions.
     fn minimize(&mut self, inertia: Option<(&[Vec3], f64)>) -> Result<SolveReport, Refusal> {
+        let count = self.model.panel_bending_patches().len();
+        if count != self.cached_panel_count {
+            self.symbolic = None;
+            self.pattern = None;
+            self.precond = None;
+            self.element_pattern = None;
+            self.cached_panel_count = count;
+        }
         let mut rep = SolveReport {
             energy_start: self.potential(&self.x, inertia)?,
             ..SolveReport::default()
@@ -920,6 +1078,12 @@ impl Solver {
             }
             // Singular even after projection: steepest descent.
             let mut p = p.unwrap_or_else(|| g.iter().map(|v| -v).collect());
+            if g.iter().chain(&p).any(|v| !v.is_finite()) {
+                return Err(Refusal::new(
+                    RefusalCode::NonFinite,
+                    "Newton gradient or direction is non-finite",
+                ));
+            }
             let mut slope: f64 = g.iter().zip(&p).map(|(a, b)| a * b).sum();
             if slope.is_nan() || slope >= 0.0 {
                 p = g.iter().map(|v| -v).collect();
@@ -971,6 +1135,15 @@ impl Solver {
         if !rep.converged {
             let (g, _) = self.assemble(&self.x, inertia, false);
             rep.residual = g.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            return Err(Refusal::new(
+                RefusalCode::NotConverged,
+                format!(
+                    "Newton did not converge after {} iterations (residual {} N, last correction {} m, {} failed line searches)",
+                    rep.iterations, rep.residual, rep.last_step, rep.line_search_failures
+                ),
+            )
+            .repair("increase the Newton iteration budget or reduce the time step")
+            .repair("check the material domain and the garment start state"));
         }
         Ok(rep)
     }
@@ -1023,7 +1196,8 @@ impl Solver {
     ///
     /// # Errors
     /// [`RefusalCode::OutOfRange`] for a non-positive step; [`RefusalCode::NonFinite`] when the state
-    /// becomes non-finite; a failed symbolic analysis.
+    /// becomes non-finite; [`RefusalCode::NotConverged`] for a stalled solve. Refusals preserve
+    /// positions, velocity, contact lag and linear-solver caches.
     pub fn step(&mut self, h: f64) -> Result<SolveReport, Refusal> {
         self.step_at_body(h, None)
     }
@@ -1035,6 +1209,27 @@ impl Solver {
         h: f64,
         body_start: Option<&[Vec3]>,
     ) -> Result<SolveReport, Refusal> {
+        self.model.check_attached_mass()?;
+        if self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
+            return self.relaxing_step(h, body_start);
+        }
+        let mut trial = self.clone();
+        let report = trial.step_inner(h, body_start)?;
+        if trial.v.iter().any(|v| !v.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "the cloth velocity became non-finite",
+            ));
+        }
+        *self = trial;
+        Ok(report)
+    }
+
+    fn step_inner(&mut self, h: f64, body_start: Option<&[Vec3]>) -> Result<SolveReport, Refusal> {
+        self.model.check_panel_bending_domains(&self.x)?;
         if !h.is_finite() || h <= 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -1134,6 +1329,29 @@ impl Solver {
         quiet: usize,
         max_steps: usize,
     ) -> Result<SettleReport, Refusal> {
+        if !h0.is_finite()
+            || h0 <= 0.0
+            || !h_max.is_finite()
+            || h_max < h0
+            || !v_tol.is_finite()
+            || v_tol <= 0.0
+            || quiet == 0
+            || max_steps < quiet
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "settling needs finite positive time/speed limits, h_max >= h0, and a nonzero quiet window within the step budget",
+            ));
+        }
+        if self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "speed-only settling cannot certify material history; use explicit time steps and inspect stress and irreversible strain/curvature",
+            ));
+        }
         let mut rep = SettleReport {
             h: h0,
             ..SettleReport::default()
@@ -1163,36 +1381,106 @@ impl Solver {
     /// # Errors
     /// As [`Solver::step`].
     pub fn static_solve(&mut self) -> Result<SolveReport, Refusal> {
-        self.audit_self_contact()?;
-        let x0 = self.x.clone();
-        let rep = match self.minimize(None) {
-            Ok(rep) => rep,
-            Err(e) => {
-                self.x = x0;
-                return Err(e);
-            }
-        };
-        if self.x.iter().any(|p| !p.is_finite()) {
-            self.x = x0;
+        self.model.check_attached_mass()?;
+        if self.relaxation.is_some()
+            || self.plasticity.is_some()
+            || self.membrane_plasticity.is_some()
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "a static solve cannot choose a material-history duration or irreversible loading path; use explicit time steps",
+            ));
+        }
+        let mut trial = self.clone();
+        trial.audit_self_contact()?;
+        let rep = trial.minimize(None)?;
+        if trial.x.iter().any(|p| !p.is_finite()) {
             return Err(Refusal::new(
                 RefusalCode::NonFinite,
                 "the cloth state became non-finite",
             ));
         }
-        if let Err(e) = self.audit_self_contact() {
-            self.x = x0;
-            return Err(e);
-        }
-        self.v = vec![Vec3::ZERO; self.x.len()];
+        trial.audit_self_contact()?;
+        trial.v.fill(Vec3::ZERO);
+        *self = trial;
         Ok(rep)
     }
 
-    /// Internal elastic force on each vertex (−∂Ψ/∂x), e.g. reactions at constrained DOFs.
+    /// Internal force from accepted material storage (−∂Ψ/∂x), including history-dependent
+    /// reactions. Invalid or stale history returns non-finite forces; use the checked accessor
+    /// when the refusal reason is needed.
     #[must_use]
     pub fn elastic_forces(&self) -> Vec<Vec3> {
+        self.checked_elastic_forces()
+            .unwrap_or_else(|_| vec![Vec3::new(f64::NAN, f64::NAN, f64::NAN); self.x.len()])
+    }
+
+    /// Internal reactions from the frozen accepted material state, without advancing history.
+    ///
+    /// # Errors
+    /// Stale material/reference ownership, invalid geometry or a non-finite stored response.
+    pub fn checked_elastic_forces(&self) -> Result<Vec<Vec3>, Refusal> {
+        if self.x.len() != self.model.rest.len()
+            || self.model.compression.len() != self.model.membranes.len()
+            || self.x.iter().any(|p| !p.is_finite())
+            || self
+                .model
+                .membranes
+                .iter()
+                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+            || self
+                .model
+                .hinges
+                .iter()
+                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+            || self
+                .model
+                .panel_bending_patches()
+                .iter()
+                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+            || self
+                .model
+                .elastics
+                .iter()
+                .any(|e| e.v.iter().any(|i| *i >= self.x.len()))
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "material reactions require matching finite cloth geometry",
+            ));
+        }
+        self.model.check_membrane_domains(&self.x)?;
+        self.model.check_panel_bending_domains(&self.x)?;
+        if let Some(field) = &self.membrane_plasticity {
+            field.check(&self.model, &self.x)?;
+        }
+        if let Some(field) = &self.relaxation {
+            field.check(&self.model, &self.x)?;
+        }
+        if let Some(field) = &self.plasticity {
+            field.check(&self.model, &self.x)?;
+        }
         let mut f = vec![Vec3::ZERO; self.x.len()];
         for (i, e) in self.model.membranes.iter().enumerate() {
-            let l = e.local(&self.x, &self.model.material(i));
+            let mut l = self
+                .membrane_plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x, false))
+                .unwrap_or_else(|| {
+                    self.model.membrane_response(i).map_or_else(
+                        || e.local(&self.x, &self.model.material(i)),
+                        |law| e.response_local(&self.x, law, &self.model.material(i)),
+                    )
+                });
+            if let Some(extra) = self
+                .relaxation
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x, None))
+            {
+                for (a, b) in l.grad.iter_mut().zip(extra.grad) {
+                    *a += b;
+                }
+            }
             for (a, &vi) in e.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
@@ -1203,13 +1491,29 @@ impl Solver {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
         }
+        for (i, p) in self.model.panel_bending_patches().iter().enumerate() {
+            let l = self
+                .plasticity
+                .as_ref()
+                .and_then(|field| field.local(i, &self.x, false))
+                .unwrap_or_else(|| p.local(&self.x));
+            for (a, &vi) in p.v.iter().enumerate() {
+                f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
+            }
+        }
         for e in &self.model.elastics {
             let l = e.local(&self.x);
             for (a, &vi) in e.v.iter().enumerate() {
                 f[vi] -= Vec3::new(l.grad[3 * a], l.grad[3 * a + 1], l.grad[3 * a + 2]);
             }
         }
-        f
+        if f.iter().any(|force| !force.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "stored material reactions are non-finite",
+            ));
+        }
+        Ok(f)
     }
 }
 
@@ -1419,6 +1723,102 @@ mod self_contact_tests {
         }
         assert!(s.x[..3].iter().all(|p| p.z == 0.0));
         assert!(s.v.iter().all(|v| *v == Vec3::ZERO));
+    }
+
+    #[test]
+    fn failed_line_search_preserves_the_characterized_state() {
+        let rest = vec![Vec2::ZERO, Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)];
+        let x: Vec<_> = rest.iter().map(|p| Vec3::new(p.x, p.y, 0.0)).collect();
+        let mut model = ClothModel::new(
+            rest,
+            &[[0, 1, 2]],
+            Membrane::orthotropic(1000.0, 1000.0, 0.0, 100.0, 0.05),
+            0.0,
+            0.2,
+        )
+        .unwrap();
+        // Zero shear is the upper characterized boundary. Gravity pulls the sole free x DOF
+        // into positive shear: every shortened line-search trial still leaves that domain.
+        model
+            .set_membrane_domains(&[Some(
+                StrainDomain::new([[-0.1, 0.1], [-0.1, 0.1], [-0.1, 0.0]]).unwrap(),
+            )])
+            .unwrap();
+        let mut s = Solver::new(
+            model,
+            x,
+            &[[true; 3], [true; 3], [false, true, true]],
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        let before = format!("{s:?}");
+        let error = s.static_solve().unwrap_err();
+        assert_eq!(error.code, RefusalCode::NotConverged);
+        assert!(
+            error.message.contains("1 failed line searches"),
+            "{error:?}"
+        );
+        assert_eq!(format!("{s:?}"), before);
+    }
+
+    #[test]
+    fn unconverged_step_preserves_contact_and_caches_then_replays() {
+        let mut s = layers(false);
+        for (i, v) in s.v.iter_mut().enumerate() {
+            v.z = if i < 3 { 0.3 } else { -0.3 };
+        }
+        s.max_newton = 1;
+        let mut control = s.clone();
+        let before = format!("{s:?}");
+        let refusal = s.step(0.002).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::NotConverged);
+        assert!(refusal.message.contains("residual"));
+        assert_eq!(format!("{s:?}"), before);
+
+        s.max_newton = 200;
+        control.max_newton = 200;
+        let report = s.step(0.002).unwrap();
+        assert!(report.converged);
+        assert_eq!(report, control.step(0.002).unwrap());
+        assert_eq!(s.x, control.x);
+        assert_eq!(s.v, control.v);
+    }
+
+    #[test]
+    fn unconverged_static_solve_preserves_velocity_and_caches() {
+        let mut s = layers(true);
+        s.gravity.z = -9.81;
+        s.v[3].z = 0.1;
+        s.max_newton = 1;
+        let before = format!("{s:?}");
+        assert_eq!(
+            s.static_solve().unwrap_err().code,
+            RefusalCode::NotConverged
+        );
+        assert_eq!(format!("{s:?}"), before);
+    }
+
+    #[test]
+    fn settling_requires_a_real_finite_quiet_window() {
+        let mut s = layers(false);
+        let before = format!("{s:?}");
+        for (h0, h_max, speed, quiet, budget) in [
+            (0.001, 0.01, 1e-3, 0, 3),
+            (0.001, 0.01, 1e-3, 3, 2),
+            (0.001, 0.0001, 1e-3, 3, 3),
+            (0.001, f64::INFINITY, 1e-3, 3, 3),
+            (0.001, 0.01, f64::NAN, 3, 3),
+            (0.001, 0.01, 0.0, 3, 3),
+        ] {
+            assert_eq!(
+                s.settle(h0, h_max, speed, quiet, budget).unwrap_err().code,
+                RefusalCode::OutOfRange
+            );
+            assert_eq!(format!("{s:?}"), before);
+        }
+        let report = s.settle(0.001, 0.01, 1e-3, 3, 3).unwrap();
+        assert!(report.settled);
+        assert_eq!(report.steps, 3);
+        assert_eq!(report.max_speed, 0.0);
     }
 
     #[test]

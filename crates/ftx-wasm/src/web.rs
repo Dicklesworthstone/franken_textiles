@@ -93,6 +93,7 @@ extern "C" {
 #[wasm_bindgen]
 pub struct WebBody {
     inner: ftx_body::AnnyModel,
+    source_sha256: String,
 }
 
 #[wasm_bindgen]
@@ -104,9 +105,37 @@ impl WebBody {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: &[u8]) -> Result<WebBody, JsError> {
         fold::load_body(bytes)
-            .map(|inner| WebBody { inner })
+            .map(|inner| WebBody {
+                inner,
+                source_sha256: ftx_core::receipt::sha256_hex(bytes),
+            })
             .map_err(|e| JsError::new(&e))
     }
+}
+
+/// Recompute manufacturing, fresh drapes and requested heat consumers for each material alternative.
+/// Fits this source-identified body only once; no earlier material's state is reused.
+///
+/// # Errors
+/// Malformed/excessive input; per-consumer refusals are retained in a successful study envelope.
+#[wasm_bindgen]
+pub fn material_scenario_study(
+    body: &WebBody,
+    pattern: &str,
+    request: &str,
+    scenario: &str,
+    measurements: &str,
+) -> Result<String, JsError> {
+    crate::materials::scenario::on_model(
+        &body.inner,
+        &body.source_sha256,
+        pattern,
+        request,
+        scenario,
+        measurements,
+        ftx_progress,
+    )
+    .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// A finished fold-up: the fit report and the viewer page.
@@ -156,4 +185,50 @@ pub fn fold_up(
     )
     .map(|inner| WebFold { inner })
     .map_err(|e| JsError::new(&e))
+}
+
+/// Local source-locked sewing plan, including explicit multi-pass, reverse-feed and backtack recipes.
+///
+/// # Errors
+/// Invalid inputs, missing material data or a refused machine/geometry/operation constraint.
+#[wasm_bindgen]
+pub fn sew_plan(pattern: &str, options: &str) -> Result<String, JsError> {
+    crate::manufacturing::sew_plan(pattern, options).map_err(|e| JsError::new(&e.message))
+}
+
+/// Expand every directed stitch interval in paired source-pattern mm frames, not robot coordinates.
+///
+/// # Errors
+/// Any sewing input/planning refusal; no partial output or hardware execution permission is returned.
+#[wasm_bindgen]
+pub fn sew_stitches(pattern: &str, options: &str) -> Result<String, JsError> {
+    crate::manufacturing::sew_stitches(pattern, options).map_err(|e| JsError::new(&e.message))
+}
+
+/// SVG review of one operation in independent pattern frames; no machine registration is implied.
+///
+/// # Errors
+/// Any sewing input/planning refusal, unknown operation or bounded preview failure.
+#[wasm_bindgen]
+pub fn sew_svg(pattern: &str, options: &str, operation: &str) -> Result<String, JsError> {
+    crate::manufacturing::sew_svg(pattern, options, operation).map_err(|e| JsError::new(&e.message))
+}
+
+/// Source-qualified steady textile conduction, with the native workbench's exact request schema.
+/// No files, network access, missing heat storage or comfort rating are introduced.
+///
+/// # Errors
+/// Oversized/invalid JSON, incomplete transport, denied evidence or a failed bounded thermal solve.
+#[wasm_bindgen]
+pub fn thermal_steady(request: &str) -> Result<String, JsError> {
+    crate::thermal::steady(request).map_err(|e| JsError::new(&e.message))
+}
+
+/// Steady heat fields on retained drape geometry, without inventing absent heat storage.
+///
+/// # Errors
+/// Invalid, oversized, changed or unsupported inputs, or a bounded steady solver refusal.
+#[wasm_bindgen]
+pub fn thermal_steady_surface(report: &str, conditions: &str) -> Result<String, JsError> {
+    crate::thermal::steady_surface(report, conditions).map_err(|e| JsError::new(&e.message))
 }

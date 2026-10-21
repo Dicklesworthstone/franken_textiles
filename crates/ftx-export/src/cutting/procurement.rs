@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 
 use super::CutPlan;
 
+/// Source-locked purchasing of individually identified hides and remnants, not fungible roll area.
+pub mod finite;
+
 /// Comparable market scope; purchase quantities are derived from the marker rather than guessed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,8 +25,14 @@ pub struct Market {
     pub terms: String,
     /// Reproducible as-of date, YYYY-MM-DD, not the wall clock.
     pub as_of: String,
+    /// Required for version-2 quotes: UTC evaluation instant, with the same date as `as_of`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of_at: Option<String>,
     /// Maximum permissible observation age in calendar days.
     pub max_age_days: u32,
+    /// Require source-observed capacity for each complete minimum/increment-rounded order.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_observed_quantity: bool,
 }
 
 /// Price each marker's gross stock area, then sum the least observed independent whole-order costs.
@@ -41,6 +50,7 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
     }
     let mut priced = Vec::new();
     let mut complete = true;
+    let mut observed_quantity = true;
     let mut total = 0.0;
     for (index, roll) in plan.rolls.iter().enumerate() {
         let scope = Scope {
@@ -49,9 +59,11 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             quality: market.quality.clone(),
             terms: market.terms.clone(),
             as_of: market.as_of.clone(),
+            as_of_at: market.as_of_at.clone(),
             max_age_days: market.max_age_days,
             requirement: roll.stock_area_m2,
             basis: Basis::Area,
+            require_observed_quantity: market.require_observed_quantity,
         };
         let sample = book.evaluate(&roll.material, &scope)?;
         let cheapest = sample.offers.iter().min_by(|a, b| {
@@ -60,6 +72,7 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
                 .then_with(|| a.quote.offer_id.cmp(&b.quote.offer_id))
         });
         if let Some(offer) = cheapest {
+            observed_quantity &= offer.quantity_sufficiency_observed;
             total += offer.order_cost;
             if !total.is_finite() {
                 return Err(Refusal::new(
@@ -69,6 +82,7 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
             }
         } else {
             complete = false;
+            observed_quantity = false;
         }
         priced.push(
             json!({"roll_index":index,"material_sha256":roll.material.sha256(),
@@ -79,9 +93,11 @@ pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Val
     Ok(
         json!({"schema":"ftx-cut-procurement/1","cut_plan":plan,"roll_prices":priced,
         "complete_offer_coverage":complete,"currency":market.currency,
+        "complete_observed_quantity_coverage":observed_quantity,
         "least_observed_independent_order_total":if complete {Some(total)} else {None},
         "limits":["Each material snapshot is ordered independently; no supplier bundle/shipping optimization.",
             "Offers are dated observations, not reserved stock or checkout guarantees.",
+            "An offer without available_quantity has unknown capacity; require_observed_quantity excludes it when quantified stock is required.",
             "The total is the sum of observed minimum whole-order costs, not a market percentile or an optimal nesting claim.",
             "Different material snapshots are not pooled even when their product IDs coincide."]}),
     )

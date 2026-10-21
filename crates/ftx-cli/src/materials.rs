@@ -5,10 +5,133 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
+#[path = "bin/material_workbench/membrane_plasticity.rs"]
+mod membrane_plasticity;
+mod nonlinear;
+#[path = "bin/material_workbench/relaxation.rs"]
+mod relaxation;
+mod scenario;
+mod screen;
+mod sewing_selection;
+mod stock;
+mod thermal;
+
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
+    let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if action == "sew-select" {
+        known_options(args, "materials", &[])?;
+        let [pattern, request] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials sew-select PATTERN.json REQUEST.json [--json]",
+            ));
+        };
+        return sewing_selection::run(pattern, request);
+    }
+    if matches!(
+        action,
+        "calibrate-nonlinear" | "calibrate-relaxation" | "calibrate-membrane-plasticity"
+    ) {
+        known_options(args, "materials", &["allow-estimates"])?;
+        let [path] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials calibrate-nonlinear SWATCHES.json | calibrate-relaxation HISTORIES.json | calibrate-membrane-plasticity HISTORIES.json [--allow-estimates]",
+            ));
+        };
+        let allow = args.options.contains_key("allow-estimates");
+        let result = match action {
+            "calibrate-relaxation" => relaxation::run(path, allow)?,
+            "calibrate-membrane-plasticity" => membrane_plasticity::run(path, allow)?,
+            _ => nonlinear::run(path, allow)?,
+        };
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if action == "scenario-study" {
+        known_options(args, "materials", &[])?;
+        let [pattern, request, scenario, measurements, model] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody",
+            ));
+        };
+        let result = scenario::run(pattern, request, scenario, measurements, model)?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if matches!(
+        action,
+        "stock-plan" | "stock-residual" | "stock-svg" | "stock-identities" | "stock-price"
+    ) {
+        known_options(args, "materials", &[])?;
+        let result = match (action, &args.positional[2..]) {
+            ("stock-plan", [pattern, request]) => stock::plan(pattern, request)?,
+            ("stock-identities", [pattern, request]) => stock::identities(pattern, request)?,
+            ("stock-price", [pattern, request, pricing]) => {
+                stock::price(pattern, request, pricing)?
+            }
+            ("stock-residual", [pattern, request]) => stock::residual(pattern, request)?,
+            ("stock-svg", [pattern, request, index, out]) => {
+                stock::preview(pattern, request, index, out)?
+            }
+            _ => {
+                return Err(bad_input(
+                    "usage: ftx materials stock-plan|stock-identities|stock-residual PATTERN.json STOCK.json | stock-price PATTERN.json STOCK.json PRICING.json | stock-svg PATTERN.json STOCK.json INDEX NEW.svg",
+                ));
+            }
+        };
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if matches!(
+        action,
+        "screen" | "study" | "pressure-condition" | "compression-stack" | "bind-changes"
+    ) {
+        known_options(args, "materials", &[])?;
+        let result = match (action, &args.positional[2..]) {
+            ("screen", [path]) => screen::run(path)?,
+            ("pressure-condition", [path]) => screen::pressure_condition(path)?,
+            ("compression-stack", [path]) => screen::compression_stack(path)?,
+            ("bind-changes", [pattern, changes, out]) => {
+                screen::bind_changes(pattern, changes, out)?
+            }
+            ("study", [pattern, request]) => screen::study(pattern, request)?,
+            _ => {
+                return Err(bad_input(
+                    "usage: ftx materials screen REQUEST.json | study PATTERN.json REQUEST.json | pressure-condition REQUEST.json | compression-stack REQUEST.json | bind-changes PATTERN.json CHANGES.json NEW-PATTERN.json",
+                ));
+            }
+        };
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
+    if matches!(
+        action,
+        "thermal-compression"
+            | "thermal-steady"
+            | "thermal-steady-surface"
+            | "thermal-steady-coverage"
+    ) {
+        known_options(args, "materials", &[])?;
+        let result = match (action, &args.positional[2..]) {
+            ("thermal-compression", [path]) => thermal::compression_history(path)?,
+            ("thermal-steady", [path]) => thermal::stack(path)?,
+            ("thermal-steady-surface", [report, conditions]) => {
+                thermal::surface(report, conditions)?
+            }
+            ("thermal-steady-coverage", [path]) => thermal::coverage_request(path)?,
+            ("thermal-steady-coverage", [report, map, conditions]) => {
+                thermal::coverage(report, map, conditions)?
+            }
+            _ => {
+                return Err(bad_input(
+                    "usage: ftx materials thermal-compression HISTORY.json | thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
+                ));
+            }
+        };
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     known_options(args, "materials", &["allow-estimates"])?;
     let catalog = textile_import::catalog()?;
-    let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
     match action {
         "list" => {
             if args.positional.len() > 2 {
@@ -103,9 +226,24 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
                 json!({"schema":"ftx-material-selection/1", "selection":selected.frozen_selection(),
                     "mechanics_missing":missing, "sha256":selected.sha256()})
             } else {
+                let steady = ftx_pattern::material_thermal::ConductionLaw::from_material(
+                    selected.material(),
+                    selected.allows_estimates(),
+                )
+                .map(|law| law.domain());
+                let transient = ftx_pattern::material_thermal::ThermalLaw::from_material(
+                    selected.material(),
+                    selected.allows_estimates(),
+                )
+                .map(|law| law.domain());
+                let readiness = |result: Result<Option<[f64; 2]>, Refusal>| match result {
+                    Ok(domain) => json!({"ready":true,"temperature_domain_c":domain}),
+                    Err(refusal) => json!({"ready":false,"refusal":refusal}),
+                };
                 json!({"schema":"ftx-material-detail/1", "material":selected.material(),
                     "mechanics_missing":missing, "sha256":selected.sha256(),
                     "mechanics_ready":selected.mechanics().is_ok(),
+                    "steady_conduction":readiness(steady),"transient_thermal":readiness(transient),
                     "thermal_ready":selected.thermal_resistance().is_ok()})
             };
             let text = serde_json::to_string_pretty(&result)
@@ -113,7 +251,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             Ok((result, 0, text))
         }
         _ => Err(bad_input(
-            "usage: ftx materials [list|show ID|freeze ID|compare ID ID]",
+            "usage: ftx materials [list|show ID|freeze ID|compare ID ID|thermal-steady STACK.json|thermal-steady-surface SIM_REPORT.json CONDITIONS.json|thermal-steady-coverage REQUEST.json]",
         )),
     }
 }

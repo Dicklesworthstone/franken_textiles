@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Material workbench · FrankenTextiles</title>
+<style>
+:root{color-scheme:light;--ink:#172c36;--accent:#145b68;--line:#cbd9dc;--paper:#f3f6f5}
+*{box-sizing:border-box}body{margin:0;font:16px/1.55 system-ui,sans-serif;background:var(--paper);color:var(--ink)}
+main{max-width:1180px;margin:auto;padding:28px}h1{margin:.2em 0;font-size:2.1rem}h2{font-size:1.25rem}h3{font-size:1.05rem}
+a{color:var(--accent)}header{margin-bottom:24px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+section{background:white;border:1px solid var(--line);padding:20px;border-radius:10px;margin:16px 0}
+label{display:block;margin:12px 0}input,select,textarea,button{font:inherit;max-width:100%}input[type=file]{display:block;width:100%}
+select,textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius:4px}textarea{font-family:monospace;font-size:13px}
+button{background:var(--accent);color:white;border:0;border-radius:5px;padding:9px 15px;cursor:pointer;margin:5px 5px 5px 0}button:disabled{opacity:.45;cursor:default}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;background:var(--paper);padding:12px;font-size:13px}
+small,.note{color:#425c66}#error{color:#a32222}#status{font-weight:600}table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:7px;text-align:left;border-bottom:1px solid var(--line)}
+.links a{display:inline-block;margin:8px 16px 8px 0}iframe{width:100%;height:520px;border:1px solid var(--line)}img{max-width:100%;max-height:440px}
+.comparison{overflow-x:auto}.comparison table{margin:16px 0}.comparison caption{text-align:left;font-weight:600;margin:8px 0}.comparison td{vertical-align:top;min-width:110px;overflow-wrap:anywhere}.comparison details{margin:8px 0}
+.motion-views{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:860px}.motion-views figure{margin:0}.motion-views canvas{display:block;width:100%;height:auto;background:var(--paper);border:1px solid var(--line)}.comparison input[type=range]{display:block;width:100%;max-width:840px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}main{padding:14px}}
+</style>
+</head>
+<body><main>
+<header><a href="index.html">Drafting &amp; fitting</a> · <a href="trace.html">Pattern tracing</a>
+<h1>Material workbench</h1>
+<p>Keep the pattern. Change the material. Recompute from one frozen source of truth.</p>
+<p class="note">Your selected files stay in this tab, not in browser storage or on a server. The fold-up viewer loads its existing Three.js library from a CDN. A catalog entry is not necessarily fully characterized. Calculated drape, heat and process plans are not measured fit, warmth ratings or hardware authorization.</p>
+<p id="status" role="status">Loading local engine…</p><p id="error" role="alert" hidden></p>
+<button id="cancel" disabled>Cancel current operation</button></header>
+<div class="grid">
+<section><h2>1. Inspect materials</h2>
+<label>Search the built-in catalog <input id="query" type="search" placeholder="linen, wool, leather, knit…"></label>
+<button id="search" data-command="catalog">Search</button>
+<label>Catalog record <select id="catalog" size="7" aria-label="Catalog records"></select></label>
+<label>Or load a source-bearing selection JSON <input id="selectionFile" type="file" accept=".json,application/json"></label>
+<label>Selection to inspect <textarea id="selection" rows="5" spellcheck="false">{"id":"fs/il019-dusty-lotus-softened","allow_estimates":false}</textarea></label>
+<p class="note">Estimates stay disabled unless this selection explicitly sets <code>allow_estimates</code> to <code>true</code>. A digest-locked selection cannot be edited in place; author a new selection deliberately.</p>
+<button id="inspect" data-command="inspect">Inspect sources &amp; capabilities</button>
+<div id="capabilities"></div><details><summary>Original observations, normalized units and sources</summary><pre id="detail"></pre></details>
+<h3>Prepare a compressed material state</h3>
+<label>Source-qualified pressure or compression-stack JSON <input id="compressionRequest" type="file" accept=".json,application/json"></label>
+<label>Stack layer ID to inspect and assign (leave empty for a prescribed-pressure request) <input id="compressionLayer" type="text" maxlength="4096" placeholder="outer"></label>
+<button id="pressure" data-command="pressure" disabled>Prepare from pressure or stack clearance</button>
+<p class="note">The request supplies its exact specimen, loading branch, pressure observations and target pressure in pascals.
+Interpolation requires explicit consent. Properties without pressure qualification remain unavailable.
+Alternatively, <code>ftx-compression-stack/1</code> supplies layer branches, a known initial pressure, clearance and fixed reference area:
+it solves common normal pressure between rigid parallel faces and reports signed work, not generated heat.
+Enter the exact layer ID to select; every layer's frozen selection is available for download.
+Neither operation solves 3D garment contact or qualifies presser-foot clearance.</p>
+<h3>Identify behavior from swatch measurements</h3>
+<label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch and shear</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option></select></label>
+<label>Source-bearing swatch or complete history JSON <input id="calibrationRequest" type="file" accept=".json,application/json"></label>
+<label><input id="calibrationEstimates" type="checkbox"> Admit the fitted estimates to this material selection</label>
+<button id="calibrate" data-command="calibrate" disabled>Identify material behavior</button>
+<p class="note">The request owns the specimen, acquisition method, conditioning, fit/check partitions and error budgets.
+Nonlinear swatches use <code>ftx-nonlinear-swatch-calibration/1</code>; timed histories use <code>ftx-relaxation-calibration/1</code>.
+A timed request declares its independent equilibrium response. Directional recovery uses either supplied
+<code>orthotropic.times_seconds</code> or 1–3 nonoverlapping <code>orthotropic.time_bounds_seconds</code> windows
+within which times are identified. Supply only one of these; the report distinguishes fixed times from a bounded search.
+Proportional recovery uses its separate top-level time bounds.
+Estimated input observations and replacement of an existing law
+require separate consent in the file. The checkbox only admits the fitted output estimates; missing mass, bending or contact data stay missing.</p>
+<p class="note">For permanent stretch, upload <code>ftx-membrane-plasticity-calibration/1</code> with complete
+source-qualified loading/unloading cycles, raw Green strains and second-Piola sheet loads.
+Supply independently characterized elasticity, total/accumulated strain limits and explicit yield/hardening
+search ranges. FIT chooses the coefficients before held-out CHECK replay. Unexcited directions, incomplete
+searches and failed checks retain a report without an assignable selection.</p>
+<p class="note">Review fit and held-out errors below, then assign the exact identified selection in section 2.
+Download the complete report, original input and frozen selection for reuse. No specimen data leaves this tab.</p>
+</section>
+<section><h2>2. Bind the same pattern</h2>
+<label>Original pattern JSON <input id="patternFile" type="file" accept=".json,application/json"></label>
+<p id="patternName">No pattern loaded. Export pattern.json from the drafting page or load an existing pattern.</p>
+<label>Assign the inspected selection to <select id="target"><option value="">Pattern default (preserve explicit piece choices)</option></select></label>
+<button id="assign" disabled>Assign inspected material</button><button id="reset" disabled>Clear pending assignments</button>
+<pre id="edits">No pending substitutions.</pre>
+<p class="note">Source-piece assignments affect all mirrored/cut instances of that piece. Roles, grain and seams stay fixed.
+When swapping contacting textiles, supply the matching measured or explicitly admitted fitted interface evidence below.</p>
+<label>Replacement material-pair friction evidence (optional JSON list)
+<input id="interfacesFile" type="file" accept=".json,application/json"></label>
+<p class="note">A supplied list replaces the complete interface table in the same operation as the material assignments.
+Each pair must identify the exact selected material snapshots and retain its sources and independent estimate consent.
+An empty list <code>[]</code> explicitly removes all pairs; omitting a replacement preserves the original evidence.</p>
+<button id="clearInterfaces" type="button" disabled>Keep original interfaces</button>
+<p id="interfacesSummary">Keep the original pattern's interface evidence.</p>
+<button id="bind" data-command="bind" disabled>Freeze selections &amp; bind</button>
+<div id="boundSummary"></div><div id="bindFiles" class="links"></div>
+</section></div>
+<section><h2>3. Recompute supported consumers</h2>
+<p>All operations below use the current bound pattern. Each checks its own missing-data and geometry constraints; changing inputs withdraws affected outputs immediately.</p>
+<div class="grid"><div>
+<h3>Fit, exports and mechanical drape</h3>
+<label>Measurements JSON <input id="measurements" type="file" accept=".json,application/json"></label>
+<label>Fit specification JSON <input id="fit" type="file" accept=".json,application/json"></label>
+<button id="exports" data-command="exports" disabled>Validate &amp; regenerate exports</button>
+<label>Local converted body model (.ftxbody) <input id="body" type="file" accept=".ftxbody"></label>
+<label><input id="selfContact" type="checkbox" checked> Enable cloth self-contact (requires unlike-material pair evidence)</label>
+<button id="fold" data-command="fold" disabled>Re-drape on this body</button>
+</div><div>
+<h3>Cutting, purchasing and sewing</h3>
+<label>Roll-planning options JSON <input id="cutOptions" type="file" accept=".json,application/json"></label>
+<button id="cut" data-command="cut" disabled>Plan rolls &amp; preview</button>
+<label>Finite hides / remnants with defect maps JSON <input id="stockRequest" type="file" accept=".json,application/json"></label>
+<button id="stock" data-command="stock" disabled>Allocate finite stock &amp; preview</button>
+<p class="note">Use <code>ftx-finite-stock-request/1</code> for individually identified hides or remnants. Supply the actual boundary, exclusions and preferred cutting axis; each item must match the bound material. No roll width is invented.</p>
+<label>Dated quote book JSON <input id="quotes" type="file" accept=".json,application/json"></label>
+<label>Comparable market scope JSON <input id="market" type="file" accept=".json,application/json"></label>
+<button id="price" data-command="price" disabled>Compare whole-order costs</button>
+<p class="note">For observations within a day, use <code>ftx-textile-quotes/2</code> with source <code>observed_at</code> instants
+and supply an explicit <code>as_of_at</code> in the market scope. Times use UTC with up to nine fractional-second digits;
+the retained <code>observed_on</code> and <code>as_of</code> dates must match them. Version-1 books keep date-only behavior.
+The latest observation at the requested time controls availability and expiry; an older offer cannot fill a gap.</p>
+<label>Sewing recipe and machine limits JSON <input id="sewOptions" type="file" accept=".json,application/json"></label>
+<button id="sew" data-command="sew" disabled>Evaluate sewing &amp; stitch paths</button>
+<p class="note">To reduce needle and thread changes, add <code>ordering</code> to the recipe with
+<code>objective: "minimize_setup_changes"</code> and an explicit <code>max_search_nodes</code>.
+The bounded planner preserves declared predecessors and every stitch pass. The result shows the
+original and selected change counts and whether the minimum was proven. Supply an optional
+<code>initial_setup</code> with exact needle and thread identities to include the first change.</p>
+</div></div>
+<h3>Thermal exchange on this drape</h3>
+<p class="note">Run a fresh drape above first. These conditions use the existing native JSON schemas; no air-gap, body-layer or environmental data is inferred by the page.</p>
+<div class="grid"><div><label>Steady surface conditions JSON <input id="heatConditions" type="file" accept=".json,application/json"></label>
+<button id="heat" data-command="heat" disabled>Evaluate independent sheet heat</button></div>
+<div><label>Body geometry / instance layer map JSON <input id="map" type="file" accept=".json,application/json"></label>
+<label>Coverage conditions JSON <input id="coverageConditions" type="file" accept=".json,application/json"></label>
+<button id="coverage" data-command="coverage" disabled>Recompute layered body coverage</button></div></div>
+</section>
+<section><h2>4. Compare material alternatives on the original pattern</h2>
+<p>Run a source-qualified shortlist, then compare real manufacturing and simulation outcomes side by side.
+Every alternative starts from the <strong>original pattern loaded in section 2</strong>, not its current bound preview.
+No binding step is required. Refused consumers remain visible; missing prices, mass or heat never become zero.</p>
+<div class="grid"><div>
+<h3>Screen and compare manufacturing</h3>
+<label>Screening request JSON (<code>ftx-material-screen/1</code>) <input id="screenRequest" type="file" accept=".json,application/json"></label>
+<button id="screen" data-command="screen" disabled>Screen source-qualified materials</button>
+<p class="note">The request declares units, constraints, objectives, nominal or reported-bound comparison and estimate consent.
+Its scalar frontier is not a garment ranking. Original observations and protocols remain inspectable for excluded candidates too.</p>
+<label>Study request JSON (<code>ftx-material-study/1</code>) <input id="studyRequest" type="file" accept=".json,application/json"></label>
+<details><summary>Build combinations of shell, lining, cuffs and other material choices</summary>
+<p>Inspect a material in section 1, select the source pieces that share a choice, and add it to a named group.
+Add more choices to that group, then create groups for other pieces. Every combination runs through the requested consumers.</p>
+<label><input id="combinationMode" type="checkbox"> Use the material choices below</label>
+<p class="note">In this mode, the study file supplies the schema, process inputs and comparison policy.
+It must omit <code>variants</code>, <code>screened</code> and <code>combinations</code>. The downloaded request includes the exact frozen choices.</p>
+<label>Group name <input id="combinationGroup" type="text" placeholder="shell"></label>
+<label>Choice name <input id="combinationChoice" type="text" placeholder="lightweight knit"></label>
+<label>Assignment <select id="combinationScope"><option value="pieces">Selected source pieces</option>
+<option value="default">Pattern default (preserve explicit piece choices)</option></select></label>
+<label>Source pieces (select all that share this group) <select id="combinationPieces" multiple size="5"></select></label>
+<button id="addCombination" disabled>Add or replace choice with inspected material</button>
+<button id="clearCombinations" disabled>Clear material choices</button>
+<p id="combinationCount">No material choices added.</p>
+<div id="combinationGroups"></div>
+<label>Optional qualified interface pool JSON <input id="combinationInterfaces" type="file" accept=".json,application/json"></label>
+<p class="note">The pool uses the existing interface records and exact material hashes. Each combination selects its matching pairs;
+missing friction evidence stays missing. Omitting the pool preserves the original pattern's interfaces. An empty list clears them.
+Up to eight groups may target disjoint source pieces, with at most one default group. Up to 32 complete combinations are evaluated.</p>
+</details>
+<button id="study" data-command="study" disabled>Compare manufacturing alternatives</button>
+<p class="note">The study request contains explicit <code>variants</code>, a <code>screened</code> request, or grouped <code>combinations</code>, and its own shared roll cutting,
+finite-stock, sewing, declared assembly mass and dated purchasing inputs. Add <code>finite_stock</code> with an <code>ftx-finite-stock-request/1</code>
+inventory to compare actual hides or remnants, including defects and prior cuts. Every alternative uses the same original inventory;
+one alternative does not consume another's stock. Roll and finite-stock results remain independent, and purchasing uses roll markers.
+The study does not use the single-preview process files above. Up to 32 alternatives;
+scalar-frontier pruning requires explicit consent. Download source-locked alternative patterns from the results.</p>
+<p class="note">For retained assembly mass, add <code>assembly_mass</code> with schema <code>ftx-assembly-mass/1</code>,
+an explicit <code>inventory_complete</code> declaration and sourced <code>extras</code> masses. It counts every physical cut piece,
+including unsimulated lining, plus retained thread, closures and other declared extras. A mass-only study needs no roll width or body.
+Use <code>assembly_mass_kg</code> as the objective; missing components leave the total unknown. This is one pre-finishing assembly,
+not stock waste, a simulated subset or a weighed finished garment. Mass and every requested roll or finite-stock cutter must use the same seam allowance.</p>
+<p class="note">Add an optional <code>comparison</code> to the study request with explicit <code>basis: "nominal"</code>,
+<code>objectives</code>, inclusive <code>constraints</code> and <code>required_consumers</code>. The shared Rust engine reports
+the computed Pareto alternatives, exclusions and protocol-incomparable pairs separately from scalar screening.
+For <code>assembly_mass_kg</code>, <code>basis: "reported_bounds"</code> uses complete reported mass endpoints at fixed authored
+geometry and inventory. Limits must contain the whole range, and overlapping or touching ranges remain unresolved.
+Missing bounds exclude an alternative while its nominal mass remains visible. Other computed metrics currently require the nominal basis.</p>
+</div><div>
+<h3>Fresh body, drape and heat study</h3>
+<label>Scenario request JSON (<code>ftx-drape-scenario/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
+<label>Optional body-source request JSON (<code>ftx-scenario-body/1</code>) <input id="scenarioBody" type="file" accept=".json,application/json"></label>
+<button id="scenario" data-command="scenario" disabled>Recompute drape &amp; heat for every alternative</button>
+<p class="note">Uses the same study request and the <strong>local body model</strong> selected in section 3.
+Without a body-source request it fits the section-3 measurements at 35°. A body-source request instead owns the
+measurements, optional <code>accepted_body_fit</code> report and <code>arm_abduction_deg</code> (0–180°, default 35°).
+Accepted shapes must match the exact model and are never refitted; optional tapes report residuals only.
+Clear this file to return to section-3 measurements. A malformed request refuses rather than falling back.
+The scenario itself owns the fit specification, numerical options, surface conditions and body-coverage policy;
+the single-preview fit, self-contact checkbox and thermal files above do not override it. Shape selection runs once;
+the chosen standing straight-arm pose does not change that shape. Each alternative gets a fresh production drape and
+current-geometry heat evaluation. Without a <code>motion</code> request this remains a static pose.</p>
+<p class="note">Optional <code>motion</code> in the scenario (<code>ftx-drape-motion/1</code>) continues that same sewn cloth through
+declared time/arm-angle keyframes, preserving velocities and material history. It uses the selected shape without refitting.
+Each interval follows checked linear body-vertex chords, not a certified anatomical joint path. The report retains every accepted
+adaptive substep, maximum panel-edge strain and independent steady endpoint heat.
+Expand a successful result to inspect exact retained body/cloth samples from front or side at their recorded physical times.
+The sample slider uses one fixed metric scale across the trajectory and both views; it does not interpolate missing states.
+Failed motion publishes no partial trajectory; initial static results stay separate. Choose <code>motion_max_absolute_edge_strain_pct</code> to compare the maximum strain across the complete trajectory.
+Requiring <code>motion</code>, <code>transient_surface</code> or <code>transient_coverage</code> excludes incomplete histories from the computed frontier.
+Optional <code>motion.transient_surface</code> and <code>motion.transient_coverage</code> carry temperatures through every accepted sample.
+They require sourced heat capacity plus their own initial temperatures, interval films and budgets. Coverage also requires exact body/layer assignments
+and explicit exposed-cloth conditions. The results separately report physical stored heat, signed boundary energy and remap error;
+these histories are not interchangeable with each other or steady power snapshots. A heat refusal preserves successful mechanics.
+Either thermal history can request <code>plastic_dissipation_heat: "uniform_reference_thickness"</code> when its materials supply
+qualified conversion observations. Accepted work follows the material through covered and exposed regions; initial forming work and bare body are excluded.
+Motion heat objectives use <code>transient_surface_</code> or <code>transient_coverage_</code> with <code>inside_energy_j</code>,
+<code>net_boundary_energy_j</code>, <code>final_min_temperature_c</code> or <code>final_max_temperature_c</code>.
+Use <code>min_sample_temperature_c</code> or <code>max_sample_temperature_c</code> for extrema across the initial state and retained sample endpoints;
+these differ from the final endpoint temperature and are not continuous-time bounds.
+Select minimize or maximize explicitly: signed energy can reverse with the environment. Internal sources and boundary exchange contribute separately to stored heat.
+No two-way thermomechanical, body self-intersection, seated/squat or empirical ride-up claim is made.</p>
+<p class="note">Scenario comparisons require a settled initial drape with clear gating. Static heat, strain and simulated-cloth-mass objectives describe
+that initial frame. Motion objectives additionally require complete, converged continuation; the final moving state need not be at rest.
+Signed surface power and body-coverage power have different bases and are not interchangeable.
+There is no hidden weighted score, whole-wearer warmth rating or global garment winner.</p>
+<p>Changing either request, measurements, body or original pattern withdraws affected results. Cancel terminates the worker,
+including synchronous simulation. Raw reports and exact input JSON are downloadable; keep the source-identified body model locally for replay.</p>
+</div></div>
+</section>
+<section><h2>Current results</h2><pre id="progress" aria-live="polite"></pre>
+<div id="outputs"></div><iframe id="viewer" title="Current material drape" sandbox="allow-scripts" hidden></iframe>
+<img id="marker" alt="First material roll preview" hidden>
+<img id="stockMarker" alt="First allocated finite-stock item with defect exclusions" hidden></section>
+</main><script type="module" src="materials-page.js"></script></body></html>

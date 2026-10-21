@@ -253,3 +253,159 @@ fn resized_clicks_and_outlier_rejection_use_one_consistent_lens_frame() {
     r["corners"].as_array_mut().unwrap().reverse();
     assert_eq!(analyze_reference(&r).unwrap().report(), scale.report());
 }
+
+fn uncertainty(
+    k: Intrinsics,
+    multiplier: f64,
+) -> ftx_measure::photo::intrinsics::IntrinsicUncertainty {
+    use ftx_measure::photo::intrinsics::{CornerNoise, IntrinsicUncertainty};
+    let std = [2.0, 2.0, 1.0, 1.0, 0.03, 0.05, 0.07, 0.001, 0.001];
+    let mut covariance = [[0.; 9]; 9];
+    for i in 0..9 {
+        covariance[i][i] = (std[i] * multiplier).powi(2);
+    }
+    covariance[4][5] = -0.8 * std[4] * std[5] * multiplier * multiplier;
+    covariance[5][4] = covariance[4][5];
+    IntrinsicUncertainty {
+        schema: "ftx-intrinsic-uncertainty/1",
+        parameters: ["fx", "fy", "cx", "cy", "k1", "k2", "k3", "p1", "p2"],
+        intrinsics: k,
+        covariance,
+        standard_deviations: std.map(|s| s * multiplier),
+        corner_noise: CornerNoise {
+            model: "independent_isotropic".into(),
+            sigma_px: 0.2 * multiplier,
+            evidence: "Synthetic covariance; no real camera calibration".into(),
+        },
+        calibration_independence_evidence: None,
+        fit_corners: 220,
+        nuisance_parameters: 30,
+        residual_degrees_of_freedom: 401,
+        no_claim: "Synthetic covariance for regression tests",
+    }
+}
+
+#[test]
+fn full_lens_covariance_reaches_length_and_angle_sigma_without_changing_geometry() {
+    let k = lens();
+    let scale = analyze_reference(&reference(&k)).unwrap();
+    let options = PhotoOptions::default();
+    let original = measure_photo(&scale, &points(&k), &options).unwrap();
+    let a = scale
+        .clone()
+        .with_lens_uncertainty(
+            &uncertainty(k, 1.),
+            "Independent synthetic camera acquisition",
+        )
+        .unwrap();
+    let b = scale
+        .with_lens_uncertainty(
+            &uncertainty(k, 2.),
+            "Independent synthetic camera acquisition",
+        )
+        .unwrap();
+    let (a, b) = (
+        measure_photo(&a, &points(&k), &options).unwrap(),
+        measure_photo(&b, &points(&k), &options).unwrap(),
+    );
+    for (i, value, terms, sigma) in [
+        (0, "value_mm", "sigma_terms_mm", "sigma_mm"),
+        (1, "value_deg", "sigma_terms_deg", "sigma_deg"),
+    ] {
+        assert_eq!(original["records"][i][value], a["records"][i][value]);
+        assert_eq!(a["records"][i][value], b["records"][i][value]);
+        for key in ["click", "homography"] {
+            assert_eq!(
+                original["records"][i][terms][key],
+                a["records"][i][terms][key]
+            );
+        }
+        let su = a["records"][i][terms]["intrinsics"].as_f64().unwrap();
+        let sv = b["records"][i][terms]["intrinsics"].as_f64().unwrap();
+        assert!(su > 0.001, "{a}");
+        assert!((sv - 2. * su).abs() < 0.002, "{a} / {b}");
+        assert!(
+            a["records"][i][sigma].as_f64().unwrap()
+                >= original["records"][i][sigma].as_f64().unwrap()
+        );
+        assert_eq!(a["records"][i]["provenance"], "PHOTO_ESTIMATED");
+    }
+    let notes = a["photo"]["notes"].to_string();
+    assert!(!notes.contains("Intrinsics are assumed exact"));
+    assert!(a["photo"]["intrinsic_uncertainty"]["calibration"]["covariance"].is_array());
+}
+
+#[test]
+fn intrinsic_cross_covariance_matters_and_invalid_covariances_refuse() {
+    let k = lens();
+    let scale = analyze_reference(&reference(&k)).unwrap();
+    let a = uncertainty(k, 1.);
+    let mut b = a.clone();
+    b.covariance[4][5] *= -1.;
+    b.covariance[5][4] *= -1.;
+    let sigma = |c| {
+        let s = scale
+            .clone()
+            .with_lens_uncertainty(c, "Independent synthetic calibration")
+            .unwrap();
+        measure_photo(&s,&points(&k),&PhotoOptions::default()).unwrap()["records"][0]["sigma_terms_mm"]["intrinsics"].as_f64().unwrap()
+    };
+    assert!((sigma(&a) - sigma(&b)).abs() > 0.01);
+    assert!(scale.clone().with_lens_uncertainty(&a, " ").is_err());
+    for mode in 0..5 {
+        let mut bad = a.clone();
+        match mode {
+            0 => bad.covariance[0][1] = 1.,
+            1 => bad.covariance[0][0] = f64::NAN,
+            2 => {
+                bad.covariance[4][5] = 100.;
+                bad.covariance[5][4] = 100.;
+            }
+            3 => bad.intrinsics.focal_px.x += 1.,
+            _ => bad.standard_deviations[0] = 0.,
+        }
+        assert!(
+            scale
+                .clone()
+                .with_lens_uncertainty(&bad, "Independent synthetic calibration")
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn homography_refitting_cancels_pinhole_intrinsic_gauge_and_horizontal_angle_keeps_sigma() {
+    let mut k = lens();
+    k.distortion = Distortion::default();
+    let mut u = uncertainty(k, 1.);
+    // A pure pinhole homography absorbs changed fx/fy/cx/cy. Their uncertainty must not be
+    // propagated with a spuriously fixed homography. Tiny positive coefficient noise remains.
+    let std: [f64; 9] = [100., 100., 100., 100., 1e-10, 1e-10, 1e-10, 1e-10, 1e-10];
+    u.standard_deviations = std;
+    u.covariance = [[0.; 9]; 9];
+    for (i, s) in std.iter().enumerate() {
+        u.covariance[i][i] = s * s;
+    }
+    let s = analyze_reference(&reference(&k))
+        .unwrap()
+        .with_lens_uncertainty(&u, "Independent synthetic camera")
+        .unwrap();
+    let r = measure_photo(&s, &points(&k), &PhotoOptions::default()).unwrap();
+    assert_eq!(r["records"][0]["sigma_terms_mm"]["intrinsics"], 0.);
+    assert_eq!(r["records"][1]["sigma_terms_deg"]["intrinsics"], 0.);
+    let k = lens();
+    let s = analyze_reference(&reference(&k))
+        .unwrap()
+        .with_lens_uncertainty(&uncertainty(k, 1.), "Independent camera")
+        .unwrap();
+    let p = json!({"shoulder_slope_deg":[pixel(&k,[30.,20.]),pixel(&k,[230.,20.])]});
+    let r = measure_photo(&s, &p, &PhotoOptions::default()).unwrap();
+    assert_eq!(r["records"][0]["value_deg"], 0.);
+    assert!(
+        r["records"][0]["sigma_terms_deg"]["intrinsics"]
+            .as_f64()
+            .unwrap()
+            > 0.001,
+        "{r}"
+    );
+}

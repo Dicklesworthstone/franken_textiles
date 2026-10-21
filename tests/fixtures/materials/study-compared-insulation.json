@@ -1,0 +1,25 @@
+{
+  "schema": "ftx-material-study/1",
+  "screened": {
+    "request": {
+      "schema": "ftx-material-screen/1",
+      "basis": "nominal",
+      "query": "thinsulate",
+      "forms": ["nonwoven"],
+      "constraints": [
+        {"attribute": {"key": "areal_density", "unit": "kg/m2"}, "maximum": 0.3}
+      ]
+    },
+    "target": {"scope": "default"},
+    "frontier_only": false
+  },
+  "cutting": {"copies": 1, "gap_mm": 2.0, "edge_margin_mm": 5.0, "end_margin_mm": 10.0},
+  "comparison": {
+    "basis": "nominal",
+    "objectives": [
+      {"metric": "stock_mass_kg", "direction": "minimize"},
+      {"metric": "stock_area_m2", "direction": "minimize"}
+    ],
+    "allow_mixed_protocols": false
+  }
+}

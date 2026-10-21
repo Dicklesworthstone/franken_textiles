@@ -1,0 +1,92 @@
+{
+  "schema": "ftx-thermal-steady/1",
+  "layers": [{
+    "id": "synthetic-asymmetric-optical-sheet",
+    "allow_estimates": true,
+    "record": {
+      "id": "synthetic-asymmetric-optical-sheet",
+      "name": "Synthetic opposite optical faces; NOT a measured textile",
+      "form": "woven",
+      "properties": {
+        "thermal_resistance": {
+          "value": 0.4,
+          "unit": "m2*K/W",
+          "evidence": "estimate",
+          "source": "synthetic",
+          "method": "Declared synthetic resistance for a numerical example",
+          "conditions": {"specimen": "synthetic-asymmetric-coupon", "conditioning": "synthetic-dry"}
+        },
+        "finish_emissivity": {
+          "value": 0.2,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "synthetic",
+          "method": "Synthetic optical coefficient, not empirical evidence",
+          "conditions": {
+            "face": "finish",
+            "specimen": "synthetic-asymmetric-coupon",
+            "conditioning": "synthetic-dry",
+            "spectral_basis": "total_hemispherical",
+            "temperature_min_c": "-80",
+            "temperature_max_c": "80"
+          }
+        },
+        "reverse_emissivity": {
+          "value": 0.8,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "synthetic",
+          "method": "Synthetic opposite-face optical coefficient, not empirical evidence",
+          "conditions": {
+            "face": "reverse",
+            "specimen": "synthetic-asymmetric-coupon",
+            "conditioning": "synthetic-dry",
+            "spectral_basis": "total_hemispherical",
+            "temperature_min_c": "-80",
+            "temperature_max_c": "80"
+          }
+        }
+      },
+      "optical_faces": {
+        "positive": {"face": "finish", "emissivity_property": "finish_emissivity"},
+        "negative": {"face": "reverse", "emissivity_property": "reverse_emissivity"},
+        "source": "synthetic",
+        "evidence": "estimate",
+        "method": "Explicit synthetic assignment to the canonical source-sheet normal",
+        "specimen": "synthetic-asymmetric-coupon",
+        "conditioning": "synthetic-dry"
+      },
+      "sources": {
+        "synthetic": {
+          "reference": "test:asymmetric-exterior-example",
+          "accessed_on": "2026-10-19",
+          "note": "Artificial coefficients and orientation for software demonstrations only"
+        }
+      }
+    }
+  }],
+  "interface_resistance_m2_k_w": [],
+  "area_m2": 0.5,
+  "inside_c": 35.0,
+  "outside_c": 5.0,
+  "inside_resistance_m2_k_w": 0.1,
+  "outside_resistance_m2_k_w": 0.0,
+  "exterior_exchange": {
+    "air_c": 5.0,
+    "convection_w_m2_k": 3.0,
+    "surface_temperature_range_c": [-80.0, 80.0],
+    "convection_source": {
+      "reference": "test:asymmetric-exterior-environment",
+      "accessed_on": "2026-10-19",
+      "note": "Synthetic prescribed coefficient, not a measured wind correlation"
+    },
+    "convection_evidence": "estimate",
+    "convection_conditions": "Synthetic independent column; canonical positive side faces the exterior",
+    "allow_estimates": true,
+    "radiation": {
+      "ambient_c": -10.0,
+      "automatic_material_face": true,
+      "allow_opaque_gray_approximation": true
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "machine": {
+    "id": "example-configuration-not-a-qualified-machine",
+    "stitch_mm": [0.5, 5.0],
+    "feed_b_over_a": [0.5, 2.0],
+    "max_stack_mm": 3.0,
+    "max_stitches_per_minute": 1000.0
+  },
+  "seam_tolerance_mm": 0.5,
+  "passes": [{
+    "seam": "side",
+    "max_stitch_mm": 2.5,
+    "plies": [1, 1],
+    "minimum_allowance_mm": 6.0,
+    "stitches_per_minute": 600.0,
+    "needle": "operator-selected-needle",
+    "thread": "operator-selected-thread",
+    "after": []
+  }]
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "ftx-steady-surface-conditions/1",
+  "boundaries": [
+    {
+      "inside_c": 30.0,
+      "outside_c": 0.0,
+      "inside_resistance_m2_k_w": 0.1,
+      "outside_resistance_m2_k_w": 0.2
+    }
+  ]
+}

@@ -2,7 +2,9 @@
 
 `ftx_drape::motion::advance_body` continues an existing `Solver` while its collider
 moves to a supplied vertex array. This is the moving-contact numerical slice of
-plan sections 9.5 and 11.4, not yet a pose-ramp option on `ftx drape` or the browser.
+plan sections 9.5 and 11.4. Material scenario studies expose it through the native
+commands, model-backed WASM adapter and material workbench; the ordinary `ftx drape`
+command remains a separate static path.
 The array uses **metres, the same world frame, vertex order and topology** as
 `solver.contact.body`. A `scene::Scene` exposes this solver as `scene.solver`.
 Do not replace the collider by editing its public vertex array: that leaves its
@@ -32,6 +34,10 @@ may be nonuniform because the integrator subdivides difficult intervals. Preserv
 all accepted samples and their timestamps. Drawing one chord between only the
 first and last states, or assigning a uniform PC2 rate to adaptive samples, changes
 the checked motion. The ordinary static fold-up viewer has no moving-body track.
+The material workbench's motion inspector selects exact retained samples, displays
+their physical timestamps and uses one fixed metric scale across the trajectory.
+See `docs/material-scenario-studies.md` for source-model endpoint requests and the
+independent motion, steady-heat and transient-heat consumers.
 
 ## What runs
 

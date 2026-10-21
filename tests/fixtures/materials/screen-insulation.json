@@ -1,0 +1,15 @@
+{
+  "schema": "ftx-material-screen/1",
+  "basis": "nominal",
+  "query": "thinsulate",
+  "forms": ["nonwoven", "fill"],
+  "constraints": [
+    {"attribute": {"key": "areal_density", "unit": "kg/m2"}, "maximum": 0.3},
+    {"attribute": {"key": "thickness", "unit": "m"}, "maximum": 0.02}
+  ],
+  "objectives": [
+    {"attribute": {"key": "areal_density", "unit": "kg/m2"}, "direction": "minimize"},
+    {"attribute": {"key": "thermal_resistance", "unit": "m2*K/W"}, "direction": "maximize"}
+  ],
+  "required_capabilities": ["steady_conduction"]
+}

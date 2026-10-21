@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod all;
+pub mod assembly_mass;
 pub mod checks;
 pub mod ctx;
 pub mod cutter;
@@ -16,11 +17,14 @@ pub mod gc;
 pub mod geom;
 pub mod hpgl;
 pub mod layout;
+pub mod material_study;
 pub mod outline;
 pub mod pdf;
 pub mod pole;
 pub mod preview;
 pub mod pyjson;
+pub mod sewing;
+pub mod sewing_selection;
 pub mod svg;
 pub mod text;
 pub mod union;

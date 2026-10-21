@@ -2,16 +2,23 @@
 
 The photo commands turn **a reference sheet and landmark clicks** into `fabric-measurements/1`
 records for the existing fusion and readiness commands. They run locally without uploading
-images. Supply an oriented PNG and a calibration-sheet sidecar for ChArUco detection, an
-oriented PNG for plain-paper detection, or explicit reference coordinates. None of these
-paths infers body landmarks, applies EXIF orientation, or establishes fit.
+images. Supply a photo (an oriented PNG or a phone's JPEG) and a calibration-sheet sidecar for
+ChArUco detection, a photo for plain-paper detection, or explicit reference coordinates. None of
+these paths infers body landmarks or establishes fit.
 
-## Detect plain paper directly from a PNG
+## Detect plain paper directly from a photo
 
-Show a whole, flat Letter or A4 sheet on a darker background. Apply the photograph's orientation
-before export, then click landmarks on that same image. Use an opaque 8-bit grayscale or RGB PNG,
-without EXIF metadata. JPEG/HEIC/WebP, transparency, palette/16-bit images and animation require
-conversion first; the command refuses them rather than silently changing measurement pixels.
+Show a whole, flat Letter or A4 sheet on a darker background, then click landmarks on the image as
+it is displayed. A JPEG is used as a phone writes it: its EXIF orientation is applied once by an
+exact pixel permutation (as Pillow's `ImageOps.exif_transpose`), so clicks are in the displayed
+frame, and `image_input` records the orientation, the stored size and the stored-to-displayed
+pixel map. A multi-picture (MPF) file, such as a phone's HDR photo with its gain map, is measured
+on its primary image, the one `cv2.imread` and Pillow show. The JPEG must be one complete 8-bit
+frame: damaged or cut data, incomplete progressive scans, other trailing payloads and an XMP
+orientation beside EXIF are refused.
+A PNG must be already oriented, opaque 8-bit grayscale or RGB, without EXIF metadata. HEIC/WebP,
+transparency, palette/16-bit images and animation require conversion first; the command refuses
+them rather than silently changing measurement pixels.
 
 ```bash
 ftx measure photo-scale --image oriented.png --paper letter --out scale.json --json
@@ -27,13 +34,13 @@ coordinate documents specify their own paper. An image is limited to 16 million 
 is silently resized. Ordinary malformed inputs and rejected calibrations return exit 3.
 
 The report retains detected corners, straight-edge support, blur and perspective diagnostics.
-`image_input` records the image path, SHA-256, dimensions and stored-pixel orientation convention,
-not the image itself. Measurement uses the unrounded calibration and bootstraps detected edge
+`image_input` records the image path, SHA-256, dimensions, encoding and orientation, not the
+image itself. Measurement uses the unrounded calibration and bootstraps detected edge
 samples, rather than treating detected corners as manual clicks. Review warnings and the detected
 outline: a bright rectangle is not proof of nominal paper size, and scale applies only in the
 sheet's plane. A failed detector can emit a diagnostic scale report, never measurement records.
 
-## Detect a ChArUco calibration board directly from a PNG
+## Detect a ChArUco calibration board directly from a photo
 
 Generate the board and keep its JSON sidecar with the printed sheet. Print at **100% / Actual
 size**, disable fit-to-page, and verify both the 100 mm and 4 in bars with a ruler. A good
@@ -46,13 +53,15 @@ ftx measure calib-sheet --paper letter --out calibration --json
 ```
 
 This creates `calib-sheet-letter.png`, `.pdf` and `.json` in a new directory. Photograph
-**one** flat board, then export the oriented, opaque PNG under the same pixel restrictions
-as the plain-paper path. The sidecar describes the physical board, not the dimensions or
+**one** flat board and use the JPEG, or an oriented, opaque PNG, under the same restrictions as
+the plain-paper path. The sidecar describes the physical board, not the dimensions or
 position of that board in the photograph.
 
-The optional detector uses a local Python environment with OpenCV. Nothing is downloaded or
-installed implicitly by `ftx`; the measurement library itself has no Python/OpenCV dependency.
-The tested dependency can be installed in a separate environment:
+By default a pure-Rust detector (`ftx_measure::photo::detect_charuco`, receipt backend
+`rust_charuco`) identifies the markers and refines the chessboard corners; it needs no Python or
+OpenCV. The optional OpenCV detector uses a local Python environment instead. Nothing is
+downloaded or installed implicitly by `ftx`; the measurement library itself has no Python/OpenCV
+dependency. The tested OpenCV dependency can be installed in a separate environment:
 
 ```bash
 python3 -m venv .venv-charuco
@@ -69,7 +78,7 @@ ftx measure measure-photo --image oriented.png \
   --out photo-measurements.json --json
 ```
 
-`--detector-python` defaults to `python3`; it names an executable, not a shell command.
+`--detector-python` selects the OpenCV adapter; it names an executable, not a shell command.
 `--sheet` selects ChArUco detection and requires `--image`. It cannot be combined with
 `--paper` or `--reference`; `--detector-python` is only valid with `--sheet`. Without
 `--sheet`, the existing plain-paper behavior is unchanged and does not start Python.
@@ -100,8 +109,15 @@ six-corner scale can fail the measurement bootstrap stability gate described bel
 The adapter has a 30-second execution deadline, a 64 KiB request-header limit and a 256 KiB
 limit on each output stream, in addition to the photo budgets above. Budget exhaustion is a
 refusal, not permission to drop corners, resize the image or reuse a previous calibration.
-OpenCV remains an optional external detector as permitted by plan section 10.1 / `ftx-0eq`;
-this is not a native Rust ChArUco detector or a browser image-detection implementation.
+OpenCV remains an optional external detector as permitted by plan section 10.1 / `ftx-0eq`.
+
+The two detectors were compared on 100 synthetic 12 MP phone photos of the printed Letter sheet
+(tilts to 35°, uneven light, blur σ 0.3–2 px, noise, a JPEG round trip, some partly covered; the
+sheet's diagonal 12–70 % of the short side): the native detector scaled all 100 and OpenCV 5.0
+scaled 98, with median corner errors of 0.10–0.16 px against OpenCV's 0.08–0.11 px and no corner
+misidentified or more than 3 px off. A small sheet matters: in a full-body photo its markers can
+be 25 pixels wide, and the native search goes finer until it finds two of them. These are
+synthetic images, not a claim about real photographs.
 
 ## Plain Letter or A4 paper
 
@@ -185,16 +201,20 @@ calibration for your camera.** Supply a calibration measured for the exact lens,
 zoom, crop/stabilization geometry, resolution and already-applied rotation of your image.
 `calibration_evidence` identifies that calibration and its assumptions; it is not validated
 by matching an identifier. This command consumes intrinsics, it does not estimate them.
-The existing `calibrate-camera` command estimates a zero-distortion pinhole only and does
-not provide a Brown-distortion calibration.
+`calibrate-camera` defaults to zero-distortion pinhole calibration. Its explicit
+`brown5_zero_skew` model also fits all five Brown coefficients from coordinate observations
+or ChArUco photographs; see `docs/camera-calibration.md` for the stronger view, corner,
+held-out and non-folding-domain requirements.
 
-For pinhole images, `--lens` also accepts the saved `ftx-camera-calibration/1` report
+For either calibrated model, `--lens` also accepts the saved `ftx-camera-calibration/1` report
 from `ftx measure calibrate-camera`. It re-runs calibration from the retained observations
 and held-out assignments, requires an accepted solution, and verifies the stored intrinsics
 against the recomputed values. Failed/altered reports and CLI envelopes are refused. There
 is no need to transcribe the matrix into a second file; the original report and its hash are
-retained with `lens_input.recomputed: true`. This does not upgrade the pinhole model to a
-Brown-distortion fit or establish that physical lens settings stayed unchanged.
+retained with `lens_input.recomputed: true`. Replay uses the original declared model; it
+never upgrades a pinhole calibration to Brown or establishes that physical lens settings
+stayed unchanged. Fitted Brown parameters have no covariance unless the calibration requests
+an explicit noise model; the opt-in uncertainty workflow below retains that model on reuse.
 
 ```bash
 ftx measure calibrate-camera camera-views.json --out camera.json --json
@@ -260,11 +280,57 @@ refer to the rectified plane. Scale variation samples the board centre and outer
 not a guaranteed maximum over its interior. `lens_input` retains the complete lens document,
 its byte hash and the capture assertions in both scale and measurement reports.
 
-**Uncertainty remains conditional on the supplied lens calibration.** Its focal-length,
-principal-point and distortion-coefficient uncertainty is not estimated by the corner
-bootstrap. The report states this explicitly, and records remain `PHOTO_ESTIMATED`. Lens
+**Without a declared calibration-noise model, uncertainty remains conditional on the supplied
+lens calibration.** Its focal-length, principal-point and distortion-coefficient uncertainty
+is not estimated by the photo-corner bootstrap. The report states this explicitly, and records remain `PHOTO_ESTIMATED`. Lens
 correction does not solve print scaling, depth differences, nonplanar surfaces or landmark
 placement. Unknown calibration accuracy still needs independent ruler/tape checks.
+
+## Include conditional lens-calibration uncertainty
+
+A Brown calibration with `--corner-noise noise.json` (the shared uncertainty API), or inline
+`distortion_fit.corner_noise`, produces the full nine-parameter covariance described in
+`camera-calibration.md`. Both use the same numerical estimator. When the saved report is used with `--lens`,
+the CLI recomputes and verifies the covariance alongside the lens. It then **requires** an
+independence assertion for the measurement photograph; it never silently discards the covariance:
+
+```bash
+ftx measure measure-photo --image independent-photo.png \
+  --sheet calibration/calib-sheet-letter.json \
+  --lens camera.json --lens-id YOUR_LENS_ID --rotation-cw-deg 0 \
+  --independent-calibration-evidence "Describe this separate acquisition and why its pixel noise is independent" \
+  --points points.json --out measurements.json --json
+```
+
+Known calibration-image reuse is refused by both encoded-byte and decoded-pixel hashes, including
+renamed/re-encoded copies. Imported-coordinate acquisition cannot be matched to pixels here: the
+caller must justify independence. Metadata and evidence strings cannot prove physical independence.
+An evidence option without a supported, verified covariance report is refused, not treated as a
+substitute for that report. Plain sheets and raw `ftx-photo-lens/1` files do not acquire covariance
+implicitly. Use the measured noise model that is actually justified, not this guide's example sigma.
+
+Propagation uses the **full** covariance, including parameter correlations. For each of nine
+Cholesky directions, it rectifies the same original inlier pixels and refits their measurement
+homography before differentiating the measured span. Keeping that homography fixed would double
+count a calibration change it can absorb (notably pinhole focal length and principal point).
+Inlier IDs are fixed at the accepted fit; covariance does not re-run RANSAC to select better data.
+Two central-difference step sizes must agree. Invalid lens domains, rank loss, projective horizons,
+invalid covariance or unstable derivatives refuse the entire measurement, not individual terms.
+
+The additional one-sigma term appears as `sigma_terms_mm.intrinsics` or
+`sigma_terms_deg.intrinsics` and is combined in quadrature with the existing homography, click,
+depth/level terms. The nominal measurement and the existing terms are unchanged. Correlated lens
+error is propagated jointly through **both endpoints**, including for horizontal angles; a
+zero rounded term can legitimately result when a pinhole change is absorbed by the refitted
+homography. `photo.intrinsic_uncertainty` retains covariance, noise assumptions and independence
+evidence. Library callers use `PhotoScale::with_lens_uncertainty` on a usable ChArUco scale.
+
+This is a **local, first-order, conditional** uncertainty estimate. It does not include print
+scale, board flatness, correlated detector error, camera drift, nonlinear tail probabilities or
+shared calibration/photo noise. The finite-difference checks are local numerical checks, not
+validation of a full confidence region. Multiple measurements using one lens share calibration
+error; this feature does not turn them into statistically independent readings or teach the fusion
+engine a general cross-record covariance. Provenance remains `PHOTO_ESTIMATED`.
 
 ## Imported ChArUco detections
 

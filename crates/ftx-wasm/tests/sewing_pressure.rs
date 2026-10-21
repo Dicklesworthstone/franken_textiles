@@ -1,0 +1,168 @@
+//! File-free browser adapters retain the native source-qualified pressure result. Synthetic only.
+use ftx_export::sewing::{SewOptions, SewPlan, program::SewProgram};
+use ftx_pattern::Pattern;
+use ftx_wasm::manufacturing::{sew_plan, sew_stitches, sew_svg};
+use serde_json::{Value, json};
+
+const PATTERN: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+const OPTIONS: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-sewing-pressure-options.json");
+const CLEARANCE: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-sewing-clearance-options.json");
+
+#[test]
+fn clearance_browser_boundary_uses_the_same_inverse_and_exact_source_receipts() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let options: SewOptions = serde_json::from_str(CLEARANCE).unwrap();
+    let plan: Value = serde_json::from_str(&sew_plan(PATTERN, CLEARANCE).unwrap()).unwrap();
+    assert_eq!(
+        plan,
+        serde_json::to_value(SewPlan::build(&pattern, &options).unwrap()).unwrap()
+    );
+    assert_eq!(plan["schema"], "ftx-sewing-plan/8");
+    let program: Value = serde_json::from_str(&sew_stitches(PATTERN, CLEARANCE).unwrap()).unwrap();
+    assert_eq!(program["plan"], plan);
+    let closure = &plan["seams"][0]["presser_foot"]["closure"];
+    assert!((closure["normal_force_n"].as_f64().unwrap() - 0.05).abs() < 1e-12);
+    let svg = sew_svg(PATTERN, CLEARANCE, "side").unwrap();
+    assert_eq!(
+        svg,
+        ftx_export::sewing::preview::svg(&pattern, &options, "side").unwrap()
+    );
+    assert!(svg.contains(closure["input_sha256"].as_str().unwrap()));
+    assert!(svg.contains("Inferred pressure 250 Pa"));
+}
+
+#[test]
+fn clearance_browser_boundary_does_not_drop_force_limits_or_source_locks() {
+    for stale in [false, true] {
+        let mut o: Value = serde_json::from_str(CLEARANCE).unwrap();
+        if stale {
+            let profile = o["passes"][0]["presser_foot"]["materials"]
+                .as_object_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap();
+            profile["material"]["name"] = json!("A different synthetic specimen");
+        } else {
+            o["machine"]["presser_foot"]["normal_force_n"] = json!([0.001, 0.04]);
+        }
+        let o = o.to_string();
+        for result in [
+            sew_plan(PATTERN, &o),
+            sew_stitches(PATTERN, &o),
+            sew_svg(PATTERN, &o, "side"),
+        ] {
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[test]
+fn browser_adapters_share_loaded_stack_receipts_and_preserve_qualification() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let options: SewOptions = serde_json::from_str(OPTIONS).unwrap();
+    let plan: Value = serde_json::from_str(&sew_plan(PATTERN, OPTIONS).unwrap()).unwrap();
+    assert_eq!(
+        plan,
+        serde_json::to_value(SewPlan::build(&pattern, &options).unwrap()).unwrap()
+    );
+    let program: Value = serde_json::from_str(&sew_stitches(PATTERN, OPTIONS).unwrap()).unwrap();
+    assert_eq!(
+        program,
+        serde_json::to_value(SewProgram::build(&pattern, &options).unwrap()).unwrap()
+    );
+    assert_eq!(program["plan"], plan);
+    assert_eq!(plan["schema"], "ftx-sewing-plan/7");
+    assert_eq!(plan["seams"][0]["presser_foot"]["stack_mm"], 0.44);
+    assert_eq!(
+        plan["seams"][0]["qualification_id"],
+        "synthetic-pressure-process"
+    );
+    let preview = sew_svg(PATTERN, OPTIONS, "side").unwrap();
+    assert_eq!(
+        preview,
+        ftx_export::sewing::preview::svg(&pattern, &options, "side").unwrap()
+    );
+    assert!(preview.contains("Foot pressure 500 Pa"));
+}
+
+#[test]
+fn browser_adapters_refuse_loaded_limits_without_falling_back_to_uncompressed_review() {
+    let mut options: Value = serde_json::from_str(OPTIONS).unwrap();
+    options["machine"]["presser_foot"]["max_loaded_stack_mm"] = json!(0.42);
+    let options = options.to_string();
+    for refusal in [
+        sew_plan(PATTERN, &options),
+        sew_stitches(PATTERN, &options),
+        sew_svg(PATTERN, &options, "side"),
+    ] {
+        assert!(
+            refusal
+                .unwrap_err()
+                .message
+                .contains("loaded machine limit")
+        );
+    }
+}
+
+#[test]
+fn shared_boundary_does_not_downgrade_reported_bound_admission() {
+    let mut o: Value = serde_json::from_str(CLEARANCE).unwrap();
+    o["qualifications"][0]["presser_foot"]["pressure_pa"] = json!([100, 400]);
+    o["qualifications"][0]["presser_foot"]["clearance"]["normal_force_n"] = json!([0.02, 0.08]);
+    let nominal: Value = serde_json::from_str(&sew_plan(PATTERN, &o.to_string()).unwrap()).unwrap();
+    o["passes"][0]["presser_foot"]["clearance"]["pressure_force_basis"] = json!("reported_bounds");
+    let text = o.to_string();
+    let plan: Value = serde_json::from_str(&sew_plan(PATTERN, &text).unwrap()).unwrap();
+    let native = SewPlan::build(
+        &Pattern::from_json(PATTERN).unwrap(),
+        &serde_json::from_value(o.clone()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plan, serde_json::to_value(native).unwrap());
+    assert_eq!(
+        plan["seams"][0]["presser_foot"]["pressure_force_basis"],
+        "reported_bounds"
+    );
+    assert_eq!(
+        plan["seams"][0]["presser_foot"]["closure"],
+        nominal["seams"][0]["presser_foot"]["closure"]
+    );
+    let program: Value = serde_json::from_str(&sew_stitches(PATTERN, &text).unwrap()).unwrap();
+    assert_eq!(program["plan"], plan);
+    assert!(
+        sew_svg(PATTERN, &text, "side")
+            .unwrap()
+            .contains("NOT confidence intervals")
+    );
+    for kind in 0..3 {
+        let mut bad = o.clone();
+        match kind {
+            0 => bad["machine"]["presser_foot"]["normal_force_n"] = json!([0.04, 0.2]),
+            1 => bad["qualifications"][0]["presser_foot"]["pressure_pa"] = json!([100, 300]),
+            _ => {
+                for source in bad["passes"][0]["presser_foot"]["materials"]
+                    .as_object_mut()
+                    .unwrap()
+                    .values_mut()
+                {
+                    source["samples"][0]["properties"]["thickness"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("bounds");
+                }
+            }
+        }
+        let text = bad.to_string();
+        for output in [
+            sew_plan(PATTERN, &text),
+            sew_stitches(PATTERN, &text),
+            sew_svg(PATTERN, &text, "side"),
+        ] {
+            assert!(output.is_err(), "case {kind}");
+        }
+    }
+}

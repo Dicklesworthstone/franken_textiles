@@ -834,6 +834,14 @@ A port replaces this file with a portable scene record holding the same content 
   - Test hooks: `window.__fold = {frames, setFrame, pause}`; `body.dataset.ready` = `"1"` or `"error"`.
 - Sizes: ~2.8 MB (jacket), ~4.8 MB (trousers).
 
+**Rust packaging exception `viewer-offline-r160`.** The reference's import map above needs
+jsdelivr even when the HTML is opened locally. An offline Chromium run of its generated page
+requests both CDN modules and never creates a canvas. Rust embeds the same pinned Three.js
+0.160.0 and OrbitControls modules, plus their MIT notice, as data-URL imports in each generated
+page. The payload, axes, playback and controls remain as specified; HTML bytes and sizes change.
+The upstream modules and hashes are recorded in `ftx-drape/CONTRACT.md`. Offline rendering and
+controls must pass through `tools/check_web.cjs --viewer HTML` without HTTP(S) requests.
+
 ### 9.8 `sim-points`
 
 - **Input:** `mesh_map.json` and `fold.pc2`. Final = mean of the last 15 frames × 1000 (mm).

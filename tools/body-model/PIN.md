@@ -18,3 +18,27 @@ committed. Moving the pin means new parity fixtures and keeping the old results.
 Fixtures from this pin: `capture_anny_reference.py` (forward model, 16 cases) and `capture_anny_poses.py`
 (drape poses, nappy and skin shell, 10 cases), both into `tests/fixtures/oracle/body/`. Re-running
 `capture_anny_poses.py` gave identical bytes.
+
+## Reproduced conversion environment (2026-10-20, `ftx-eju`)
+
+The unchanged converter reproduced every pinned array and label hash on macOS 27.0.1 arm64 with
+Python 3.12.12, `torch==2.14.1`, `numpy==2.5.4`, `roma==1.6.1`, `trimesh==5.1.1` and
+`safetensors==0.8.0`, using the wheel above and pure Torch LBS. The resulting `.ftxbody` is
+152,042,752 bytes with SHA-256
+`8f0bb151ba19975437147d239b7ff237642a7fa63659a6fac49fa23c299a0915`.
+Keep the converter's RECORD, array/label and sparse-reconstruction checks enabled. Conversion is a
+build-time operation; the admitted file can then be copied to native/WASM consumers outside Git.
+
+A fresh Linux/Python 3.14 build with Torch 2.13.0 and NumPy 2.4.3 passed package RECORD checks but
+failed nine array hashes, including faces. Selected vertices across all sixteen reference cases
+differed by at most 8.89e-16 m; that limited diagnostic does not admit different arrays or topology.
+Pinning Anny alone is therefore insufficient to reproduce the byte-exact converted asset on every
+host. This is not permission to widen hashes, skip checks or move the oracle pin.
+
+The topology difference is twelve triangle rows from six quad diagonals. Upstream
+`anny/utils/mesh_utils.py::_split_quad` chooses the smaller diagonal using a strict floating-point
+comparison. The two template arrays differ by at most 5.56e-17 m. Evaluating both arrays on the
+same Torch 2.14.1 runtime changes all six choices: the admitted template's diagonal differences
+are -6.94e-18 to -1.22e-17 m, whereas the Linux template gives ties and selects the other diagonal.
+Thus small coordinate differences can change topology; selected forward-vertex agreement alone
+cannot justify admitting that conversion. Use the reproduced environment and full hash checks.

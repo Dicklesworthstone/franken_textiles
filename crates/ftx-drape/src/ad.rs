@@ -316,6 +316,7 @@ impl<const N: usize> Dual2<N> {
     /// Natural logarithm via first-order dual chain rule (`d ln x = 1/x` differentiated by `Dual<N>`).
     #[must_use]
     pub fn ln(&self) -> Self {
+        // det-ok: Dual::ln, which takes its value from det::ln
         self.chain(self.v.ln(), Dual::constant(1.0) / self.v)
     }
 

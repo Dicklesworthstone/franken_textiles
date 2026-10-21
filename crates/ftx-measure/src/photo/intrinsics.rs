@@ -1,7 +1,12 @@
 //! Shared pinhole intrinsics from multiple views of a metric plane (plan §10.2, FTX-20).
 //! Zhang's orthogonality/equal-length constraints, with zero skew and B33 fixed to one:
 //! MSR-TR-98-71 §2.3/3.1, https://www.microsoft.com/en-us/research/publication/a-flexible-new-technique-for-camera-calibration/ .
-//! This is an algebraic calibration, not distortion estimation or nonlinear maximum likelihood.
+//! The default is algebraic pinhole calibration. Explicit `brown5_zero_skew` inputs also fit
+//! radial/tangential distortion and refine intrinsics/poses in original pixel coordinates.
+
+mod refine;
+pub mod uncertainty;
+pub use refine::{CornerNoise, DistortionFit, IntrinsicUncertainty, RefinementReport};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,19 +58,24 @@ pub struct View {
     pub corners: Vec<Corner>,
 }
 
-/// Zero-skew pinhole calibration. Uniform lens/focus/zoom and negligible residual distortion are
-/// explicit caller assumptions. Metadata alone cannot establish either from images.
+/// Same-lens zero-skew calibration. The default requires negligible residual distortion;
+/// `brown5_zero_skew` explicitly estimates the shared Brown lens instead.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CalibrationInput {
     /// Must be `ftx-camera-calibration-input/1`.
     pub schema: String,
-    /// Must be `pinhole_zero_skew`. Distorted raw pixels are not supported by this fit.
+    /// `pinhole_zero_skew`, or `brown5_zero_skew` with explicit `distortion_fit` options.
     pub image_model: String,
     /// Lens/settings identifier. Different lenses, zooms, crops and focus settings need separate fits.
     pub lens_id: String,
     /// Receipt explaining why the supplied pixels follow a pinhole model (e.g. rectified images).
+    /// Omitted for Brown fitting, whose model assumptions belong in `distortion_fit.model_evidence`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pinhole_evidence: String,
+    /// Optional nonlinear Brown fit. Absent fields retain the original pinhole behavior and JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distortion_fit: Option<DistortionFit>,
     /// Receipt identifying the rigid, flat reference and the source of its physical dimensions.
     pub reference_evidence: String,
     /// One unchanged width/height for the entire acquisition; principal point must lie inside it.
@@ -123,6 +133,9 @@ pub struct CalibrationSolution {
 /// Calibration receipt. A small residual is not an uncertainty or real-wearer accuracy certificate.
 #[derive(Clone, Debug, Serialize)]
 pub struct CalibrationReport {
+    /// Optional declared-noise covariance from the shared explicit-noise API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditional_uncertainty: Option<uncertainty::CalibrationUncertainty>,
     /// `ftx-camera-calibration/1`.
     pub schema: &'static str,
     /// ACCEPTED, REJECTED or UNOBSERVABLE.
@@ -145,6 +158,12 @@ pub struct CalibrationReport {
     pub flags: Vec<String>,
     /// Missing independent checks and physical/model limitations.
     pub advisories: Vec<String>,
+    /// Fit-only pixel objective and convergence diagnostics for explicit Brown fitting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refinement: Option<RefinementReport>,
+    /// Conditional fit-only intrinsic covariance, only after every calibration gate passes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uncertainty: Option<IntrinsicUncertainty>,
     /// Scope of the estimate.
     pub no_claim: &'static str,
 }
@@ -157,6 +176,17 @@ fn evidence(s: &str) -> bool {
 }
 
 fn prepare(input: &CalibrationInput) -> Result<CalibrationInput, Refusal> {
+    match (&input.distortion_fit, input.image_model.as_str()) {
+        (None, "pinhole_zero_skew") if evidence(&input.pinhole_evidence) => {}
+        (Some(options), "brown5_zero_skew") if input.pinhole_evidence.is_empty() => {
+            options.validate()?;
+        }
+        _ => {
+            return Err(invalid(
+                "select pinhole_zero_skew with pinhole_evidence, or brown5_zero_skew with distortion_fit; never mix rectified and raw-lens assumptions",
+            ));
+        }
+    }
     if input.controls.len() > 128
         || input.views.len() > 32
         || input.views.iter().any(|v| v.corners.len() > 128)
@@ -167,9 +197,7 @@ fn prepare(input: &CalibrationInput) -> Result<CalibrationInput, Refusal> {
         ));
     }
     if input.schema != "ftx-camera-calibration-input/1"
-        || input.image_model != "pinhole_zero_skew"
         || !name(&input.lens_id)
-        || !evidence(&input.pinhole_evidence)
         || !evidence(&input.reference_evidence)
         || input.controls.len() < 4
         || input.views.is_empty()
@@ -288,10 +316,13 @@ fn conic_row(a: Vec3, b: Vec3) -> [f64; 5] {
 /// Pinhole/zero-skew is an explicit assumption, not inferred from passing residuals. Negligible
 /// distortion, flatness, focus stability and accurate physical controls remain caller obligations.
 /// Near-degenerate data gives UNOBSERVABLE. An inconsistent fit gives REJECTED. Neither publishes
-/// intrinsics or poses. No nonlinear refinement, distortion parameters or uncertainty is estimated.
+/// intrinsics or poses. The default estimates neither distortion nor uncertainty. Explicit Brown
+/// inputs use this algebraic start followed by joint pixel-error refinement; require four fit
+/// views and an independent held-out view, with twelve fit/four held-out corners per view.
 pub fn calibrate_camera(input: &CalibrationInput) -> Result<CalibrationReport, Refusal> {
     let input = prepare(input)?;
     let mut report = CalibrationReport {
+        conditional_uncertainty: None,
         schema: "ftx-camera-calibration/1",
         status: "UNOBSERVABLE",
         solution: None,
@@ -303,7 +334,13 @@ pub fn calibrate_camera(input: &CalibrationInput) -> Result<CalibrationReport, R
         checks: Vec::new(),
         flags: Vec::new(),
         advisories: Vec::new(),
-        no_claim: "Algebraic zero-skew pinhole calibration, conditional on supplied correspondences and lens/reference assumptions; not distortion estimation, an uncertainty certificate or proof of metric accuracy. Sheet-local poses are not a shared world frame when the sheet moves.",
+        refinement: None,
+        uncertainty: None,
+        no_claim: if input.distortion_fit.is_some() {
+            refine::NO_CLAIM
+        } else {
+            "Algebraic zero-skew pinhole calibration, conditional on supplied correspondences and lens/reference assumptions; not distortion estimation, an uncertainty certificate or proof of metric accuracy. Sheet-local poses are not a shared world frame when the sheet moves."
+        },
     };
     if !input
         .views
@@ -431,6 +468,10 @@ pub fn calibrate_camera(input: &CalibrationInput) -> Result<CalibrationReport, R
             })
             .sum(),
     );
+    if input.distortion_fit.is_some() {
+        refine::calibrate(&mut report, intrinsics)?;
+        return Ok(report);
+    }
     let mut poses = Vec::new();
     for (view, (sheet, pixels)) in input.views.iter().zip(&pairs) {
         let mut check = ViewCheck {

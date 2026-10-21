@@ -1,7 +1,7 @@
 # Source refresh into the existing material-price workbench
 
 `scripts/refresh_textile_prices.py` reads public Shopify Ajax, reviewed CSV and schema.org Product/Offer data and emits the existing
-`ftx-textile-quotes/1` format consumed by `ftx-materials price`. This is an external data-ingestion
+`ftx-textile-quotes/1` format, or explicit intraday `/2` with `--intraday`, consumed by `ftx-materials price`. This is an external data-ingestion
 adapter, not a second catalog, pricing model, physics module, scheduler or checkout client.
 It requires only Python 3's standard library; the solver remains offline and deterministic.
 
@@ -69,23 +69,102 @@ mismatch refuses; no default currency or exchange rate is invented. Robots exclu
 requests are serial and paced, responses are bounded to 4 MiB, timeouts are bounded, and redirects to
 other origins refuse. Authentication gates, rate limits and anti-bot responses are not bypassed.
 
+The request's Accept header follows the reviewed source format: HTML pages request `text/html`, JSON-LD
+feeds request JSON-LD/JSON, CSV feeds request CSV, and Shopify Ajax requests JSON. This prevents an HTML
+product URL from negotiating a different JSON product representation that lacks the reviewed page data.
+
+Requests identify as `OpenAI File Downloader, XaiImageApiFetch/1.0`, with REP product token
+`XaiImageApiFetch`. The collector combines equally specific matching agent groups, uses the most
+specific matching path rule, and prefers Allow on equal-length ties. It handles `*`, terminal `$`,
+UTF-8 and percent-encoded paths; a leading `Allow: /` cannot override a longer cart exclusion.
+Same-origin source redirects are checked before the destination request. Declared Crawl-delay and
+Request-rate intervals apply from the first source request and between redirect hops. Only a robots
+404 is treated as an absent policy; other retrieval failures stop collection. Policy-file redirects
+remain restricted to the supplier origin and the resulting rules govern that origin.
+Protocol reference: [RFC 9309, section 2.2](https://www.rfc-editor.org/rfc/rfc9309.html#section-2.2).
+
 The manifest owns the reviewed quantity basis. The resolved material owns sourced width, so the existing
 Rust price consumer performs yard-to-area conversion and order-quantity rounding. Neither adapter nor
 consumer infers hide area, fabric density, thermal resistance, elasticity or safe machine settings from
 price data. Quote currency does not prove delivery-region eligibility. Market/quality/tax/shipping labels
 are reviewed declarations, not properties established by the Ajax response.
 
-The current Rust quote schema records calendar dates. Keep intraday refreshes as separate snapshots:
-merging conflicting same-day rows into a single historical book is deliberately rejected by that schema.
+The version-1 Rust quote schema records calendar dates and rejects conflicting same-day rows.
+Use the opt-in version-2 path below when a historical book needs multiple observations on one date;
+both versions retain immutable source snapshots.
 A successful fetch is not a purchase guarantee or a statistically representative world-market survey.
-No automatic recurring refresh is configured. Reviewed live supplier manifests and policy-aware scheduling
-remain follow-up work. Live supplier endpoints were inaccessible from the implementation environment;
-the adapter was verified with offline response fixtures, not presented as a successful live scrape.
+No automatic recurring refresh is configured. A reviewed four-offer live manifest is now available in
+`docs/examples/textile-supplier-refresh.json`; its full public-source refresh succeeded on 2026-10-18.
+The dated factual snapshot is `docs/examples/textile-quotes-2026-10-18.json`. The existing Rust price
+consumer resolved the corresponding built-in material widths, converted metre/yard prices to area
+rates, rounded actual sale increments and excluded the out-of-stock variant. See
+`docs/supplier-apparel-catalog.md` for exact source scope and remaining supplier coverage. Policy-aware
+scheduling and broader supplier qualification remain follow-up work.
 
 Primary interface references (checked 2026-10-13):
 - Shopify Ajax Product API: https://shopify.dev/docs/api/ajax/reference/product
 - Shopify Ajax Cart API: https://shopify.dev/docs/api/ajax/reference/cart
 - Shopify variant monetary representation: https://shopify.dev/docs/api/liquid/objects/variant
+
+### Public product sources with finite inventory, without a cart endpoint
+
+`adapter: "shopify_public_product_v1"` supports suppliers whose permitted public product JSON
+explicitly declares currency and quantity rules. It fetches `/products/HANDLE.json`, the matching
+`/products/HANDLE.js`, then the JSON endpoint again. The exact product ID, variant ID, SKU and reviewed
+variant title must match. The public decimal prices and currencies must agree with the Ajax price;
+descriptions must agree, contain the reviewed fragments, and remain unchanged during acquisition.
+Quantity minimums/increments must match the reviewed sale unit, maximums must be unbounded, and all
+three observations must explicitly contain no quantity price breaks. Subscription prices refuse.
+The existing Ajax/cart adapter remains available for its separately qualified sources.
+
+The `inventory_mode` is explicit. `tracked_deny` requires all three observations to agree on a finite,
+nonnegative inventory quantity, Shopify inventory tracking and a policy that refuses overselling.
+The collector converts that observed count into the manifest's physical sale unit and publishes
+`available_quantity`. Zero remains zero. `unreported` preserves unknown capacity; newly appearing
+numeric stock requires review instead of silently discarding it. Source quantity is a dated
+observation, never a reservation, a continuous roll length or a guarantee of future availability.
+
+Any expiry reviewed outside those APIs is retained in `reviewed_valid_through` and copied to the
+quote. A refresh cannot extend this date; collection refuses after it and requires another page
+review. This is relevant to Discovery Fabrics, whose exact Offer expiry appears in HTML JSON-LD.
+Specification metadata published outside the selected API representation likewise requires separate
+page review; the collector does not interpret unrequested HTML, images or remote files.
+
+All three original responses are retained by hash. Existing `--specifications-out`,
+`--compare-specifications`, `--previous-evidence` and `--review-out` workflows replay both corroborating
+public sources before accepting a baseline. Price/stock changes remain market history; changes in
+the selected non-price declarations still require specification review. Missing or altered evidence
+refuses. Both the date-only quote schema and opt-in intraday histories use the same adapter.
+
+The reviewed manifest [textile-public-product-refresh.json](examples/textile-public-product-refresh.json)
+was successfully fetched on **2026-10-20**. Its
+[six-offer intraday snapshot](examples/textile-public-product-quotes-2026-10-20.json) binds each
+offer to the exact resolved built-in material hash and records:
+
+| Exact material offer | Currency / price per linear yard | Observed available quantity |
+| --- | --- | --- |
+| RBTR 1.1 oz Black / Uncalendered ripstop nylon | USD 8.00 | 593 yards |
+| RBTR 1.1 oz Black / Calendered ripstop nylon | USD 9.25 | 700 yards |
+| RBTR Climashield APEX 2.5 | USD 11.00 | 776 yards |
+| Discovery Power Stretch 94010 Olive Mesh | CAD 23.00 | Unknown |
+| Discovery Power Stretch 94016 Grey | CAD 23.00 | Unknown |
+| Discovery Power Stretch 94021 A-Maze | CAD 29.00 | Unknown |
+
+Discovery's three independently reviewed expiries are **2026-10-30**, inclusive. APEX has a
+supplier-stated standard maximum continuous cut of **five yards**; 776 available yards do not imply
+one continuous piece. Nominal widths support area-rate estimates but do not establish defect-free
+cutting envelopes. The three CAD quotes and three USD quotes retain separate regional and terms
+scopes. These are six different material offers, not six comparable samples for a market percentile.
+No taxes, shipping, FX, safety rating, stretch-to-stiffness conversion or warmth estimate is invented.
+
+The catalog adds the two finish-specific RBTR nylon constructions and the Grey and A-Maze Discovery
+knit constructions: four new cards and 14 numerical source observations, bringing the built-in catalog
+to 166 records. The established Olive Mesh and APEX source records retain their identities and evidence.
+The new knit cards retain distinct composition, weight, width and uninterpreted supplier stretch
+percentages. Missing mechanics and measured thermal properties remain unavailable to those consumers.
+Primary pages: [RBTR nylon](https://ripstopbytheroll.com/products/1-1-oz-ripstop-nylon),
+[RBTR APEX](https://ripstopbytheroll.com/products/climashield-apex-2-5-oz-sq-yd),
+[Discovery Power Stretch](https://discoveryfabrics.com/products/polartec-power-stretch-jersey).
 
 The source tests cover exact variant selection, price-field distinction, currency drift, the Shopify
 hundredths representation, unavailable offers, changed/old quantity evidence, malformed JSON and
@@ -160,7 +239,8 @@ Only standard schema.org contexts (or a sole schema.org `@vocab`) are supported,
 term remapping. JavaScript is never executed and referenced scripts, contexts and external nodes are
 never fetched. There is no browser fallback or authentication bypass. HTML must be UTF-8, with at most
 64 data scripts; graph traversal is bounded. Original HTML/JSON and source-selection receipts are
-retained by hash. All SKUs drawn from one URL use the same fetched bytes and observation timestamp.
+retained by hash. All SKUs drawn from one URL and representation use the same fetched bytes and
+observation timestamp; distinct negotiated representations are cached separately.
 
 A direct Offer price or one plain PriceSpecification can supply the price, with explicit currency.
 When both exist, their amounts/currencies must agree. UnitPriceSpecification, list/sale-price arrays,
@@ -170,14 +250,22 @@ or disappearing tax observation refuses. This checks published metadata, not che
 Exact Product-description fragments still guard the reviewed quantity basis; JSON-LD prices do not
 establish roll length, yardage, dye lot, delivery eligibility or calibrated textile physics.
 
+When a reviewed selling-basis statement appears elsewhere on the product page, HTML entries may also
+declare `"required_page_text": ["All fabric is sold by the half meter."]`. Every fragment must be a
+nonempty exact substring of the fetched UTF-8 HTML. Changed or missing fragments refuse the offer;
+whitespace, markup and entities are not normalized. This optional check supplements the mandatory
+`required_description_text` checks and is retained in the existing source receipt. It is unavailable
+for `source_format: "json"`. Matching raw page text does not establish visibility or interpret the
+statement: the reviewed manifest still declares the sale unit and quantity, and no scripts run.
+
 ### Source expiry is a purchasing constraint, not just a receipt note
 
 The quote model accepts optional `valid_through: "YYYY-MM-DD"` (last eligible UTC date, inclusive).
 Existing quotes omit it and round-trip unchanged; absence means no known expiry, not guaranteed
 future validity. JSON-LD retains the earliest dated price/offer/availability end boundary in this
-field. It rejects already-expired or not-yet-valid observations. Intraday end timestamps refuse because
-the current purchasing scope evaluates calendar dates, not instants; they are not rounded into a
-longer-lived offer. A new build is required to consume this optional field with expiry semantics.
+field. It rejects already-expired or not-yet-valid observations. Intraday end timestamps still refuse
+in version 1; version 2 retains them as precise instants rather than rounding them into longer-lived
+offers. A compatible build is required to consume the declared schema with its expiry semantics.
 
 The Rust evaluator first chooses the latest observation per exact offer/scope and **then** filters
 expiry and staleness. Consequently an expired or unavailable latest offer cannot resurrect an older,
@@ -188,3 +276,176 @@ Primary structured-data interface reference, checked 2026-10-14: https://schema.
 Offline regressions cover graph/variant selection, conflicting prices, explicit stock and tax,
 conditional offers, source/quote expiry, broken JSON-LD, bounded traversal, and complete CLI evidence
 publication. They do not establish live supplier qualification or worldwide price coverage.
+
+### Intraday histories through the existing procurement and study consumers
+
+Use `--intraday` to publish `ftx-textile-quotes/2`. The reviewed manifest and source adapters remain
+the same; each quote adds its actual source-observation `observed_at`, taken from the same clock as
+its retained receipt, and keeps `observed_on` as the matching UTC calendar date. CSV responses shared
+by several selected rows retain one fetch time. Shopify, CSV and JSON-LD all use this path:
+
+```sh
+python3 scripts/refresh_textile_prices.py docs/examples/textile-supplier-refresh.json \
+  --intraday --out quotes-next.json --evidence supplier-evidence
+```
+
+Each version-2 quote requires `observed_at` in UTC
+`YYYY-MM-DDTHH:MM:SSZ` or `YYYY-MM-DDTHH:MM:SS.fractionZ` form. Rust accepts one to nine fractional
+digits and compares integer seconds/nanoseconds without floating-point rounding. Offsets, local
+times, named zones, leap-second spellings, `24:00` and more than nine fractional digits refuse at
+this boundary. The Python adapter normalizes its timezone-aware retrieval clock to UTC and preserves
+its six-digit microsecond resolution. No time is invented for an older calendar-only observation.
+
+Keep full source observations when combining version-2 snapshots into a history. The same offer ID
+must continue to identify the same material/product/SKU and comparable market. Distinct instants may
+contain changed price, availability or quantified capacity. Exact duplicate records are harmless;
+different records at the same parsed instant refuse, including different fractional spellings of
+that instant. This conservatively leaves conflicting source evidence for review rather than choosing
+one by input order. Version 1 keeps its original date-only conflict and serialization behavior;
+timestamp fields cannot silently change a version-1 book's semantics.
+
+For pricing, supply `as_of_at` as well as the existing matching `as_of` date in `Scope` or the cutting
+procurement `Market`. For example, these are explicit illustrative evaluation choices:
+
+```json
+{
+  "as_of": "2026-10-20",
+  "as_of_at": "2026-10-20T14:30:00.123456Z"
+}
+```
+
+Include the ordinary currency, region, quality, terms, age and requirement/market fields as before.
+The evaluator selects the newest observation **at or before that instant**, then applies expiry,
+availability, material hash, age and whole-order stock checks. A latest expired, unavailable or
+insufficient-stock observation excludes the offer; it never promotes an earlier cheaper or available
+one. Future observations cannot leak into historical evaluations. `max_age_days` continues to count
+UTC calendar-day boundaries, not elapsed 24-hour intervals. Missing or inconsistent evaluation time
+refuses a version-2 request; version-1 requests omit `as_of_at`.
+
+JSON-LD can retain the earliest timed source end boundary as inclusive `valid_through_at`, alongside
+the earliest calendar-date `valid_through` when both kinds are present. Both limits apply, and expiry
+before observation refuses. A source DateTime must include seconds, an explicit `Z` or numeric
+`+/-HH:MM` offset, and no more than six fractional digits, so Python does not silently truncate a
+more precise source. Unknown `-00:00` offsets refuse. Original timezone spelling remains in the
+retained source bytes; emitted quotes use UTC. A time-only offer change remains a purchasing change,
+not a material specification change, when using `--compare-specifications`.
+
+The native price/cut-price commands, shared WASM procurement entry point and manufacturing/scenario
+studies use the same `QuoteBook` evaluator. Marker-derived whole-order quantities and market comparisons
+therefore use the requested instant without another pricing formula. Reports retain the exact chosen
+or excluded observation and complete evaluation scope. These are source observations, not reserved
+inventory, checkout guarantees, intraday market population statistics or automatic refresh scheduling.
+
+## Review supplier specification revisions
+
+The refresh command can retain and compare the selected supplier's declarations before a new
+quote is published for an existing material revision. Add `--specifications-out` to a successful
+refresh to save a new `ftx-supplier-specifications/1` snapshot alongside its original source bytes
+and receipts:
+
+```sh
+python3 scripts/refresh_textile_prices.py manifest.json \
+  --out quotes-initial.json --evidence supplier-evidence \
+  --specifications-out specifications-initial.json
+```
+
+For subsequent observations, replay that exact baseline and request a detailed comparison:
+
+```sh
+python3 scripts/refresh_textile_prices.py manifest.json \
+  --out quotes-next.json --evidence supplier-evidence \
+  --compare-specifications specifications-initial.json \
+  --specifications-out specifications-next.json --review-out revision-review.json
+```
+
+Every output path must be new. `--previous-evidence DIRECTORY` can locate the baseline's evidence
+when it differs from the new evidence directory. The replay verifies source and receipt SHA-256s,
+reselects the exact product/variant, and reconstructs the retained declarations; editing a baseline's
+facts or changing its material hash without matching original evidence refuses before retrieval.
+
+The comparison preserves original text, numbers and units. It covers the selected Shopify product
+and variant, selected schema.org Product/Offer and locally referenced property nodes, or the complete
+matched CSV row. Composition, construction, finish, nominal dimensions, variant options and supplier
+lot declarations are retained wherever that representation actually supplies them. Selected source
+and selling-basis/material bindings are compared too. Added, removed and changed offers receive
+field paths with old/new values, observation dates and source/receipt hashes. Missing and null facts
+remain distinct. A source's product-level minimum price or another variant cannot replace the exact
+selected offer. Media, external references and prose are not interpreted as measurements.
+
+Ordinary price and availability changes remain price observations. An unchanged declaration can
+publish a newly unavailable quote, preserving the existing latest-observation semantics. Publication
+through comparison additionally requires the same explicit `material_sha256` in both reviewed
+manifests. An absent hash is unresolved; an ID alone does not qualify the material revision.
+
+When a specification, selection or material binding changes, the command saves the new source
+evidence, specification snapshot and `ftx-supplier-revision-review/1` report, exits with code **2**,
+and leaves the requested quote output absent. Previous quotes, material selections and completed
+studies remain intact. Existing adapter refusals, such as a missing SKU, unsupported quantity basis
+or invalid price, still stop collection before a new snapshot; the comparison does not guess a
+replacement offer or relax those checks.
+
+Review the actual changed declarations before creating a new canonical material revision and
+freezing its selection. Record that new selection's hash in the reviewed manifest and start a new
+baseline. The comparison never transfers an older lot's mechanical, thermal or process observations
+to a replacement SKU. Reports explicitly leave measured-specimen binding unresolved: a supplier
+declaration, even unchanged, cannot establish that two manufactured lots are physically identical.
+Broader real-supplier qualification and source-to-measured-lot binding remain open under `ftx-sr2`.
+
+## Exact material snapshots and finite source quantities
+
+An offer can now include two optional fields in the existing quote format:
+
+```json
+{
+  "material_sha256": "<64 hexadecimal digits from the reviewed resolved material>",
+  "available_quantity": 1.25
+}
+```
+
+These are additions to a complete quote, not a standalone observation. The material hash binds
+the quote to the exact source-bearing material and evidence policy, including its usable width.
+Changing a same-ID fabric's width, finish, source observations or estimate policy invalidates a
+locked offer before unit conversion. An omitted lock preserves existing ID-based pricing and
+does not establish snapshot qualification. Old quotes still serialize without either new field.
+
+`available_quantity` is the source's observed maximum supply in the quote's **original sale unit**.
+For a price per half linear yard (`quantity: 0.5`, `unit: "linear_yard"`), a capacity of `1.25`
+means 1.25 yards, not 1.25 half-yard packages. Capacity must be finite and nonnegative. A known
+zero cannot supply any positive order; an omitted capacity remains unknown. It is not a price-tier
+ceiling, a continuous-cut-length guarantee or a reason to guess usable hide area.
+
+The order calculation includes both the minimum quantity and the selling increment. For example,
+a 2.1 m² marker with 0.5 m² order increments needs 2.5 m² of purchasable stock; a source reporting
+2.25 m² is excluded even though it exceeds the net requirement. Endpoint comparison accounts for
+one final binary multiplication rounding step (such as `3 × 0.05`); it does not add an inventory
+allowance or change the reported order quantity.
+
+All three adapters accept the optional reviewed `material_sha256` in their manifest entry and
+preserve it in the source receipt and quote. Only the CSV adapter currently imports quantified
+stock: add the mapping below to its existing `columns` object, and document the sale-unit meaning
+in the reviewed `basis_note`:
+
+```json
+"available_quantity": "AVAILABLE_YARDS"
+```
+
+The exact selected row must then contain a plain nonnegative decimal in that column. Missing,
+ambiguous, nonfinite or unrepresentable values refuse the refresh; they never become zero or
+unlimited supply. CSV variant, region, SKU, unit and selling-basis checks remain in force, and the
+complete source response is retained. Without this reviewed mapping, numeric stock columns are
+ignored. Shopify/JSON-LD availability labels still provide only a boolean, so their capacity
+remains unknown. No static inventory number is copied from the reviewed manifest into live quotes.
+
+Set `"require_observed_quantity": true` in a `price` scope or `cut-price` market to require source
+quantity sufficient for every complete rounded order. Omission retains observational price
+comparison with unknown capacity. Every accepted offer reports `quantity_sufficiency_observed`.
+The marker report's `complete_observed_quantity_coverage` describes the chosen least-cost orders;
+it can be false even when a legacy observational cost is available. If any material has no eligible
+offer, the total remains unknown. `excluded_offers` retain the latest source row and a reason such
+as `insufficient_quantity`, `unknown_quantity` or `material_snapshot_mismatch`; insufficient-stock
+rows also report `required_order_quantity` in their source sale unit.
+
+The latest observation is selected before these checks, so a later exhausted or rebound offer
+cannot resurrect an older unlimited or cheaper observation. Independent material orders are not
+pooled. None of these results reserves inventory, establishes market population percentiles,
+confirms a live supplier's current stock or authorizes a purchase. Tests use synthetic data.

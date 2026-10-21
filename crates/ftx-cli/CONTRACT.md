@@ -69,8 +69,9 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   rather than the reference round's ignored-zero quirk (spec 04 §16). Body fitting keeps the standard
   tape reference pose; only the collision/display pose and garment placement change. Reports retain
   the actual angle. A requested pose can still fail contact/feasibility gates; it is not a fit claim.
-- `ftx outfit --layer PATTERN --layer PATTERN ... --measurements M --out DIR [--fit F ...] [--json]`:
-  sequentially drapes multiple garment layers onto the same fitted body (`docs/outfit.md`).
+- `ftx outfit --sim DRAPE_DIR --sim DRAPE_DIR ... --measurements M --out DIR [--json]`:
+  composes frozen final garments from compatible saved drapes for a proportions review
+  (`docs/outfit.md`). It does not resolve contact between garments or simulate their layers together.
 - `ftx sim-points SIMDIR --pattern P --measurements M [--json]`: inspects drafted vs settled z-levels of
   non-sleeve corners across the tail of `fold.pc2` (`docs/fold-inspection.md`).
 - `ftx materials list|show|validate|fit|thermal ... [--json]`: inspects and validates the material

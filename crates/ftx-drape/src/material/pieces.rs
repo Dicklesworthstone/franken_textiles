@@ -53,36 +53,51 @@ pub(super) fn resolve(
     let mut bindings = Vec::with_capacity(pieces.len());
     let mut fabrics = Vec::with_capacity(pieces.len());
     let mut responses = Vec::with_capacity(pieces.len());
+    let mut relaxations = Vec::with_capacity(pieces.len());
+    let mut membrane_plasticities = Vec::with_capacity(pieces.len());
+    let mut plasticities = Vec::with_capacity(pieces.len());
     for (piece_index, p) in pieces.iter().enumerate() {
         let mut explicit_role: Option<String> = None;
-        let (fabric, response, hash, mechanical) = if p.get("fabric").is_some() {
-            let f = piece_fabric(pattern, piece_index)?;
-            explicit_role = f
-                .get("role")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned);
-            let resolved = resolve_uniform(&Pattern::new(json!({"fabric":f})), &base.options)?;
-            if explicit_role.as_deref() == Some("laminate")
-                && resolved.report["record"]["authored"]["form"] != "laminate"
-            {
-                return Err(invalid(
-                    "piece.fabric.role \"laminate\" requires a material with form \"laminate\"",
-                ));
-            }
-            let hash = resolved.report["record_sha256"]
-                .as_str()
-                .ok_or_else(|| invalid("piece material has no source identity"))?
-                .to_owned();
-            records.insert(hash.clone(), resolved.report);
-            (resolved.fabric, resolved.response, hash, resolved.mechanics)
-        } else {
-            (
-                base.fabric,
-                base.response.clone(),
-                default_hash.clone(),
-                base.mechanics,
-            )
-        };
+        let (fabric, response, relaxation, membrane_plasticity, plasticity, hash, mechanical) =
+            if p.get("fabric").is_some() {
+                let f = piece_fabric(pattern, piece_index)?;
+                explicit_role = f
+                    .get("role")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                let resolved = resolve_uniform(&Pattern::new(json!({"fabric":f})), &base.options)?;
+                if explicit_role.as_deref() == Some("laminate")
+                    && resolved.report["record"]["authored"]["form"] != "laminate"
+                {
+                    return Err(invalid(
+                        "piece.fabric.role \"laminate\" requires a material with form \"laminate\"",
+                    ));
+                }
+                let hash = resolved.report["record_sha256"]
+                    .as_str()
+                    .ok_or_else(|| invalid("piece material has no source identity"))?
+                    .to_owned();
+                records.insert(hash.clone(), resolved.report);
+                (
+                    resolved.fabric,
+                    resolved.response,
+                    resolved.relaxation,
+                    resolved.membrane_plasticity,
+                    resolved.plasticity,
+                    hash,
+                    resolved.mechanics,
+                )
+            } else {
+                (
+                    base.fabric,
+                    base.response.clone(),
+                    base.relaxation.clone(),
+                    base.membrane_plasticity.clone(),
+                    base.plasticity.clone(),
+                    default_hash.clone(),
+                    base.mechanics,
+                )
+            };
         // Include unplaced pieces in the receipt and validation. No named material is silently
         // ignored merely because this particular drape did not simulate its source piece.
         hashes.insert(hash.clone());
@@ -104,6 +119,9 @@ pub(super) fn resolve(
         bindings.push(binding);
         fabrics.push(fabric);
         responses.push(response);
+        relaxations.push(relaxation);
+        membrane_plasticities.push(membrane_plasticity);
+        plasticities.push(plasticity);
     }
     let hashes: Vec<_> = hashes.into_iter().collect();
     let diagonal: Vec<_> = hashes.iter().map(|h| mechanics[h].friction_self).collect();
@@ -143,7 +161,7 @@ pub(super) fn resolve(
     base.options.validate()?;
     let mut report = json!({
         "basis":"per_piece_characterization",
-        "model":"per_piece_green_strain_scalar_bending",
+        "model":if fabrics.iter().any(|f| f.bending_response().is_some()) {"per_piece_green_strain_tensor_panel_bending"} else {"per_piece_green_strain_scalar_bending"},
         "default_record_sha256":default_hash,
         "pieces":bindings, "records":records,
         "contact_policy":"feature-local thickness/body friction and source-bound pairwise friction; welded features use maximum-adjacent envelopes",
@@ -153,15 +171,50 @@ pub(super) fn resolve(
         "interfaces":interfaces.report,
         "self_contact_enabled":base.options.self_contact.is_some(),
         "hinge_policy":"shared curvature with each adjacent triangle's bending-area share; not an empirical seam law",
-        "not_simulated":["layer generation", "directional bending", "resolved seam cross-section", "irreversible hysteresis/damage"],
+        "panel_bending_piece_count":fabrics.iter().filter(|f| f.bending_response().is_some()).count(),
+        "panel_bending_policy":"selected panels use source-topology quadratic tensor patches; scalar seam approximation is retained independently",
+        "not_simulated":["layer generation", "conforming shell discretization", "resolved seam cross-section", "plastic set/damage"],
         "fit_claim":false
     });
+    if plasticities.iter().any(Option::is_some) {
+        report["plastic_bending_piece_count"] =
+            json!(plasticities.iter().filter(|p| p.is_some()).count());
+        report["not_simulated"] = json!([
+            "layer generation",
+            "conforming shell discretization",
+            "resolved seam cross-section",
+            "membrane plasticity/damage",
+            "seam plasticity",
+            "rate/temperature-dependent creasing"
+        ]);
+    }
+    if membrane_plasticities.iter().any(Option::is_some) {
+        report["membrane_plasticity_piece_count"] =
+            json!(membrane_plasticities.iter().filter(|p| p.is_some()).count());
+        let excluded = report["not_simulated"]
+            .as_array_mut()
+            .expect("authored list");
+        excluded.retain(|s| s != "plastic set/damage" && s != "membrane plasticity/damage");
+        excluded.extend([
+            json!("membrane damage/rupture"),
+            json!("plastic-work thermal feedback"),
+        ]);
+        if !plasticities.iter().any(Option::is_some) {
+            excluded.push(json!("bending plasticity"));
+        }
+    }
     report["assignment_sha256"] = json!(sha256_hex(
         &serde_json::to_vec(&report).map_err(|e| invalid(e.to_string()))?
     ));
     base.report = report;
     base.piece_fabrics = Some(fabrics);
     base.piece_responses = responses.iter().any(Option::is_some).then_some(responses);
+    // Keep explicit None entries: an equilibrium-only cuff must not inherit a transient shell law.
+    base.piece_relaxations = Some(relaxations);
+    // Explicitly elastic/Maxwell pieces never inherit another piece's permanent membrane state.
+    base.piece_membrane_plasticities = Some(membrane_plasticities);
+    // An explicitly elastic lining/cuff must not inherit its shell's irreversible curvature law.
+    base.piece_plasticities = Some(plasticities);
     // One identity keeps the original homogeneous start/ramp and numerical path exactly.
     base.contact_materials = (hashes.len() > 1).then_some(ContactMaterials {
         piece_ids,

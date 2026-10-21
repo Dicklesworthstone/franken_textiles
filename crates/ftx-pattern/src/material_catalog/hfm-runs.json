@@ -1,0 +1,149 @@
+{
+  "materials": [
+    {
+      "composition": [],
+      "composition_complete": false,
+      "form": "sheet",
+      "id": "fsri/hfm/cotton-sheet/dry/220330-r1",
+      "name": "FSRI cotton fitted sheet Dry conductivity run 220330 R1",
+      "properties": {
+        "thickness": {
+          "bounds": null,
+          "conditions": {
+            "conditioning": "FSRI Dry source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+            "instrument": "F200s",
+            "instrument_serial": "2522",
+            "scope": "One HFM run; pressure, ply count and lot linkage are not established by this import",
+            "source_sha256": "f501f8bd36c14fd062087f0b54176408b8e408c2344b61e4e2cb9d35c69048e7",
+            "specimen": "Cotton_Fitted_Sheet_HFM_Dry_Conductivity_220330_R1"
+          },
+          "evidence": "measured",
+          "method": "Instrument-reported full specimen thickness; from instrument. Not inferred from density or another run",
+          "source": "hfm",
+          "unit": "mm",
+          "value": 0.3
+        }
+      },
+      "sources": {
+        "hfm": {
+          "accessed_on": "2026-10-15",
+          "note": "McKinnon, Weinschenk, Dow, DiDomizio and Madrzykowski, FSRI Materials and Products Database (2023). Upstream git blob 899253ffc79b62493734bc137cf8956a85febffd. UTF-8 factual transcription of identity, instrument thickness, corner measurements and all six results rows; NOT the complete original UTF-16 export or its byte hash. Block telemetry and calibration history are not reproduced. Nominal-degree grouping retains this run separately from pooled website means.",
+          "reference": "https://github.com/ulfsri/fsri_materials_database/blob/a432697e4b7d40f642b5cc8f384506439ebb32df/01_Data/Cotton_Sheet/HFM/Cotton_Sheet_HFM_Dry_conductivity_220330_R1.tst"
+        }
+      },
+      "structure": {
+        "identity_scope": "Exact instrument run, not generic fiber or pooled conditioning group",
+        "missing_characterization": "Matched mass/area, specific heat, ply count, pressure, lot, mechanical coefficients and physical validation",
+        "raw_source_sha256": "f501f8bd36c14fd062087f0b54176408b8e408c2344b61e4e2cb9d35c69048e7",
+        "retention_note": "Attributed factual instrument metadata and numeric readings only; no photographs or source narrative. Retained bytes are a labelled excerpt, not the original export; retain full raw exports separately where permitted.",
+        "uncertainty_scope": "Within-run repeated-reading sample SD, not independent specimen SD, uncertainty of mean or confidence interval"
+      },
+      "thermal_response": {
+        "conditioning": "FSRI Dry source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+        "conductivity": {
+          "conditions": {
+            "conditioning": "FSRI Dry source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+            "instrument": "F200s",
+            "instrument_serial": "2522",
+            "reading_counts_by_temperature": "{\"15.0\": 3, \"65.0\": 3}",
+            "scope": "One HFM run; pressure, ply count and lot linkage are not established by this import",
+            "source_sha256": "f501f8bd36c14fd062087f0b54176408b8e408c2344b61e4e2cb9d35c69048e7",
+            "specimen": "Cotton_Fitted_Sheet_HFM_Dry_Conductivity_220330_R1",
+            "temperature_grouping": "{\"maximum_deviation_c\":0.1,\"method\":\"within_run_nearest_integer_c\"}",
+            "variability": "Within-run sample SD (n-1); repeated setpoints are not independent specimen replicates"
+          },
+          "evidence": "measured",
+          "method": "Arithmetic mean of printed Average Cond within this run at explicitly grouped nearest-integer temperatures; interpolation remains an estimate",
+          "points": [
+            {
+              "mean": 0.022633333333333335,
+              "standard_deviation": 0.00027300793639257695,
+              "temperature_c": 15.0
+            },
+            {
+              "mean": 0.026846666666666668,
+              "standard_deviation": 3.511884584284268e-05,
+              "temperature_c": 65.0
+            }
+          ],
+          "source": "hfm",
+          "unit": "W/(m*K)"
+        },
+        "specimen": "Cotton_Fitted_Sheet_HFM_Dry_Conductivity_220330_R1"
+      }
+    },
+    {
+      "composition": [],
+      "composition_complete": false,
+      "form": "sheet",
+      "id": "fsri/hfm/cotton-sheet/wet/220318-r1",
+      "name": "FSRI cotton fitted sheet Wet conductivity run 220318 R1",
+      "properties": {
+        "thickness": {
+          "bounds": null,
+          "conditions": {
+            "conditioning": "FSRI Wet source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+            "instrument": "F200s",
+            "instrument_serial": "2522",
+            "scope": "One HFM run; pressure, ply count and lot linkage are not established by this import",
+            "source_sha256": "f4bf5698854ea8995796b6d469aaffb212385acefccf6cb5387172a85bf810a1",
+            "specimen": "Cotton_Fitted_Sheet_HFM_Wet_Conductivity_220318_R1"
+          },
+          "evidence": "measured",
+          "method": "Instrument-reported full specimen thickness; from instrument. Not inferred from density or another run",
+          "source": "hfm",
+          "unit": "mm",
+          "value": 0.43
+        }
+      },
+      "sources": {
+        "hfm": {
+          "accessed_on": "2026-10-15",
+          "note": "McKinnon, Weinschenk, Dow, DiDomizio and Madrzykowski, FSRI Materials and Products Database (2023). Upstream git blob 8ca5af619fd9584be859db87c0b2cd0b76f7855a. UTF-8 factual transcription of identity, instrument thickness, corner measurements and all six results rows; NOT the complete original UTF-16 export or its byte hash. Block telemetry and calibration history are not reproduced. Nominal-degree grouping retains this run separately from pooled website means.",
+          "reference": "https://github.com/ulfsri/fsri_materials_database/blob/a432697e4b7d40f642b5cc8f384506439ebb32df/01_Data/Cotton_Sheet/HFM/Cotton_Sheet_HFM_Wet_conductivity_220318_R1.tst"
+        }
+      },
+      "structure": {
+        "identity_scope": "Exact instrument run, not generic fiber or pooled conditioning group",
+        "missing_characterization": "Matched mass/area, specific heat, ply count, pressure, lot, mechanical coefficients and physical validation",
+        "raw_source_sha256": "f4bf5698854ea8995796b6d469aaffb212385acefccf6cb5387172a85bf810a1",
+        "retention_note": "Attributed factual instrument metadata and numeric readings only; no photographs or source narrative. Retained bytes are a labelled excerpt, not the original export; retain full raw exports separately where permitted.",
+        "uncertainty_scope": "Within-run repeated-reading sample SD, not independent specimen SD, uncertainty of mean or confidence interval"
+      },
+      "thermal_response": {
+        "conditioning": "FSRI Wet source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+        "conductivity": {
+          "conditions": {
+            "conditioning": "FSRI Wet source token; moisture content, pressure, ply count and detailed conditioning history unqualified in this excerpt",
+            "instrument": "F200s",
+            "instrument_serial": "2522",
+            "reading_counts_by_temperature": "{\"15.0\": 3, \"65.0\": 3}",
+            "scope": "One HFM run; pressure, ply count and lot linkage are not established by this import",
+            "source_sha256": "f4bf5698854ea8995796b6d469aaffb212385acefccf6cb5387172a85bf810a1",
+            "specimen": "Cotton_Fitted_Sheet_HFM_Wet_Conductivity_220318_R1",
+            "temperature_grouping": "{\"maximum_deviation_c\":0.1,\"method\":\"within_run_nearest_integer_c\"}",
+            "variability": "Within-run sample SD (n-1); repeated setpoints are not independent specimen replicates"
+          },
+          "evidence": "measured",
+          "method": "Arithmetic mean of printed Average Cond within this run at explicitly grouped nearest-integer temperatures; interpolation remains an estimate",
+          "points": [
+            {
+              "mean": 0.02562666666666667,
+              "standard_deviation": 0.0004398105652816146,
+              "temperature_c": 15.0
+            },
+            {
+              "mean": 0.030783333333333333,
+              "standard_deviation": 2.5166114784236646e-05,
+              "temperature_c": 65.0
+            }
+          ],
+          "source": "hfm",
+          "unit": "W/(m*K)"
+        },
+        "specimen": "Cotton_Fitted_Sheet_HFM_Wet_Conductivity_220318_R1"
+      }
+    }
+  ],
+  "schema": "ftx-textile-catalog/1"
+}

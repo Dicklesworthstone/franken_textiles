@@ -80,7 +80,7 @@ fn bootstrap(c: &Calibration, options: &PhotoOptions) -> Result<Vec<Homography>,
                 }
                 (fit(&corners, &rectangle(size)), size)
             }
-            Samples::Charuco { pixels, board } => {
+            Samples::Charuco { pixels, board, .. } => {
                 let n = pixels.len();
                 let ids: Vec<usize> = (0..n)
                     .map(|_| (rng.uniform() * n as f64) as usize)
@@ -135,7 +135,7 @@ fn bootstrap(c: &Calibration, options: &PhotoOptions) -> Result<Vec<Homography>,
     Ok(out)
 }
 
-fn on_plane(h: &Homography, p: Point, centre: Point) -> Result<Point, Refusal> {
+pub(super) fn on_plane(h: &Homography, p: Point, centre: Point) -> Result<Point, Refusal> {
     if h.denominator(p)?.is_sign_positive() != h.denominator(centre)?.is_sign_positive() {
         return Err(super::geometry::degenerate(
             "landmark lies across the sheet's projective horizon",
@@ -224,6 +224,7 @@ pub fn measure_photo(
         ));
     }
     let hs = bootstrap(c, options)?;
+    let lens_modes = super::lens_uncertainty::Modes::prepare(c)?;
     let centre = plane_scale(&c.h, c.size)?.centre;
     let factor = c.image[0] / options.points_from_width.unwrap_or(c.image[0]);
     let reference_name = if matches!(c.samples, Samples::Charuco { .. }) {
@@ -344,9 +345,14 @@ pub fn measure_photo(
         } else {
             dist * depth.abs() / options.camera_distance_mm
         };
+        let lens_sigma = lens_modes
+            .as_ref()
+            .map(|m| m.sigma(p, q, delta, angle))
+            .transpose()?;
+        let conditional_sigma = det::hypot(det::hypot(sa, sb), sc);
         let sigma = Refusal::finite(
             "photo measurement sigma",
-            det::hypot(det::hypot(sa, sb), sc),
+            lens_sigma.map_or(conditional_sigma, |s| det::hypot(conditional_sigma, s)),
         )?;
         let mut method = format!("photo {view} {reference_name} sheet-plane homography");
         if let Some(tag) = tag {
@@ -379,6 +385,12 @@ pub fn measure_photo(
         if crate::definition(&crate::canonical_name(name)).is_none() {
             notes.push_str("; name not in the catalogue");
         }
+        if let Some(s) = lens_sigma {
+            notes.push_str(&format!(
+                "; intrinsic calibration σ {} {}; conditional on declared independent calibration noise and fixed inlier IDs",
+                py::fixed(s, 3), if angle { "deg" } else { "mm" }
+            ));
+        }
         let digits = if angle { 2 } else { 1 };
         let mut record = crate::make_record(
             name,
@@ -390,11 +402,14 @@ pub fn measure_photo(
             &notes,
         )?;
         record["points_px"] = json!([round_point(p, 2), round_point(q, 2)]);
-        let terms = if angle {
+        let mut terms = if angle {
             json!({"homography":py::round(sa, 3), "click":py::round(sc, 3), "sheet_level":sb})
         } else {
             json!({"homography":py::round(sa, 3), "depth_offset":py::round(sb, 3), "click":py::round(sc, 3)})
         };
+        if let Some(s) = lens_sigma {
+            terms["intrinsics"] = json!(py::round(s, 3));
+        }
         record[if angle {
             "sigma_terms_deg"
         } else {

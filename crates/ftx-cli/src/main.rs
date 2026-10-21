@@ -60,7 +60,7 @@ const USAGE: &str = "usage:
   ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
-            [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--json]
+            [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--self-contact-mm MM] [--self-mu MU] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--model PATH] [--json]
@@ -597,6 +597,11 @@ fn cmd_validate(args: &Args) -> Result<(Value, i32, String), Refusal> {
 /// Validate settings before reading files, fitting the body or creating outputs.
 fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
     let mut opts = DrapeOptions::default();
+    if let Some(mm) = args.options.get("spacing-mm") {
+        opts.spacing = mm
+            .parse()
+            .map_err(|_| bad_input("--spacing-mm must be a positive distance in millimetres"))?;
+    }
     for (name, slot) in [
         ("sew", &mut opts.sew_steps),
         ("drape", &mut opts.drape_steps),
@@ -697,6 +702,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "drape",
             "model",
             "self-contact-mm",
+            "spacing-mm",
             "self-mu",
             "elastic-ea",
             "arm-deg",
@@ -829,6 +835,11 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     for f in &advisory {
         text.push_str(&format!("  advisory {f}\n"));
     }
+    text.push_str(match report["numerical"]["settled"].as_bool() {
+        Some(true) => "numerical: Newton converged; instantaneous-speed quiet window passed\n",
+        Some(false) => "numerical: Newton converged; instantaneous-speed quiet window failed\n",
+        None => "numerical: Newton converged; gravity settling not evaluated\n",
+    });
     text.push_str(if opts.self_contact.is_some() {
         "self-contact: enabled; solver-state audits passed\n"
     } else {
@@ -845,6 +856,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "gating": gating,
         "advisory": advisory,
         "settled": report["settled"],
+        "numerical": report["numerical"],
         "self_contact": report["self_contact"],
         "files": ["sim_report.json", "fold.pc2", "mesh_map.json", "fold_viewer.html",
                   "garment.obj", "garment_strain.obj", "body.obj"],
@@ -1095,6 +1107,20 @@ mod tests {
         assert_eq!(opts.contact, DrapeOptions::default().contact);
         let default = drape_options(&parse(&["drape".into()]).unwrap()).unwrap();
         assert!(default.self_contact.is_none());
+    }
+
+    #[test]
+    fn panel_refinement_spacing_is_explicit_and_rejected_before_io_when_invalid() {
+        let args = parse(&["drape", "--spacing-mm", "4"].map(String::from)).unwrap();
+        let opts = drape_options(&args).unwrap();
+        assert_eq!(opts.spacing, 4.0); // scene meshing is in mm, not metres
+        assert_eq!(opts.contact, DrapeOptions::default().contact);
+        for value in ["0", "-1", "NaN", "inf", "fine"] {
+            let args =
+                parse(&["drape", "no-pattern.json", "--spacing-mm", value].map(String::from))
+                    .unwrap();
+            assert_ne!(cmd_drape(&args).unwrap_err().code, RefusalCode::Io);
+        }
     }
 
     #[test]

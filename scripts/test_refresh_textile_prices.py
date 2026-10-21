@@ -2,6 +2,7 @@
 import copy
 import csv
 import datetime as dt
+from email.message import Message
 import hashlib
 import io
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.response import addinfourl
 
 import refresh_textile_prices as r
 
@@ -36,6 +38,26 @@ def raw(value):
     return json.dumps(value).encode()
 
 
+def public_entry():
+    e = entry()
+    del e["cart_url"]
+    e.update(adapter="shopify_public_product_v1", public_url="https://example.invalid/products/sheet.json",
+             product_id=7, variant_title="Black / half yard", inventory_mode="tracked_deny",
+             reviewed_valid_through="2026-10-20")
+    return e
+
+
+def public_product():
+    p = product()
+    p["id"] = 7
+    p["variants"][1].update(title="Black / half yard", quantity_rule={"min": 2, "max": None, "increment": 1},
+                            quantity_price_breaks=[], inventory_quantity=20,
+                            inventory_management="shopify", inventory_policy="deny")
+    v = copy.deepcopy(p["variants"][1])
+    v.update(price="12.99", price_currency="USD", product_id=7)
+    return p, {"product": {"id": 7, "body_html": p["description"], "variants": [v]}}
+
+
 CART = raw(dict(currency="USD", items=[], item_count=0, token="anonymous-do-not-persist"))
 
 
@@ -60,6 +82,83 @@ def csv_raw(rows=None, delimiter=","):
     return output.getvalue().encode()
 
 
+class PublicProductTests(unittest.TestCase):
+    def test_exact_offer_retains_capacity_sale_units_expiry_and_source_bytes(self):
+        p, public = public_product()
+        q, receipt = r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW,
+                                               intraday=True)
+        self.assertEqual((q["price"], q["available_quantity"], q["quantity"]), (12.99, 10.0, 0.5))
+        self.assertEqual(q["valid_through"], "2026-10-20")
+        self.assertEqual(q["observed_at"], "2026-10-13T12:00:00.000000Z")
+        self.assertEqual(receipt["public_before_sha256"], hashlib.sha256(raw(public)).hexdigest())
+        self.assertEqual(receipt["public_after_sha256"], receipt["public_before_sha256"])
+        p["variants"][1].update(available=False, inventory_quantity=0)
+        public["product"]["variants"][0]["inventory_quantity"] = 0
+        q, _ = r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW)
+        self.assertFalse(q["available"])
+        self.assertEqual(q["available_quantity"], 0.0)
+
+    def test_unreported_capacity_is_unknown_and_cannot_hide_new_numeric_evidence(self):
+        p, public = public_product()
+        e = public_entry(); e["inventory_mode"] = "unreported"
+        with self.assertRaises(ValueError):
+            r.extract_public_product(e, raw(p), raw(public), raw(public), NOW)
+        del p["variants"][1]["inventory_quantity"]
+        del public["product"]["variants"][0]["inventory_quantity"]
+        q, _ = r.extract_public_product(e, raw(p), raw(public), raw(public), NOW)
+        self.assertNotIn("available_quantity", q)
+
+    def test_currency_variant_quantity_and_stock_drift_refuse_the_entire_observation(self):
+        changes = {"price_currency": "CAD", "price": "13.00", "sku": "OTHER", "title": "sample",
+                   "product_id": 8, "quantity_price_breaks": [{"minimum_quantity": 5, "price": "9.00"}],
+                   "quantity_rule": {"min": 2, "max": 5, "increment": 1}, "inventory_quantity": 19,
+                   "inventory_policy": "continue", "inventory_management": None}
+        for key, value in changes.items():
+            for which in ("before", "after"):
+                p, public = public_product(); changed = copy.deepcopy(public)
+                changed["product"]["variants"][0][key] = value
+                before, after = (changed, public) if which == "before" else (public, changed)
+                with self.subTest(key=key, which=which), self.assertRaises(ValueError):
+                    r.extract_public_product(public_entry(), raw(p), raw(before), raw(after), NOW)
+        for bad in (-1, True, 0.5, "20", 2**53):
+            p, public = public_product()
+            p["variants"][1]["inventory_quantity"] = bad
+            public["product"]["variants"][0]["inventory_quantity"] = bad
+            with self.subTest(stock=bad), self.assertRaises(ValueError):
+                r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW)
+
+    def test_expiry_identity_and_unconditional_source_contracts_are_required(self):
+        for field, value in (("reviewed_valid_through", "2026-10-12"), ("product_id", 8),
+                             ("variant_id", True), ("public_url", "https://other.invalid/products/sheet.json"),
+                             ("order_increment", 1), ("minimum_quantity", 0.5)):
+            p, public = public_product(); e = public_entry(); e[field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                r.extract_public_product(e, raw(p), raw(public), raw(public), NOW)
+        for field, value in (("requires_selling_plan", True), ("available", None), ("price", True),
+                             ("quantity_price_breaks", None)):
+            p, public = public_product(); p["variants"][1][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW)
+        p, public = public_product()
+        public["product"]["body_html"] += " Changed finish."
+        with self.assertRaises(ValueError):
+            r.extract_public_product(public_entry(), raw(p), raw(public), raw(public), NOW)
+
+    def test_refresh_never_reads_cart_and_retains_both_public_observations(self):
+        p, public = public_product(); calls = []
+        def get(url, *, accept):
+            calls.append((url, accept))
+            self.assertNotIn("cart", url)
+            return raw(public) if url.endswith(".json") else raw(p)
+        book, evidence = r.refresh({"schema": "ftx-textile-refresh/1", "offers": [public_entry()]},
+                                   get, lambda: NOW, intraday=True)
+        self.assertEqual([u.rsplit(".", 1)[1] for u, _ in calls], ["json", "js", "json"])
+        self.assertTrue(all(a == "application/json" for _, a in calls))
+        self.assertEqual(book["schema"], r.INTRADAY_SCHEMA)
+        self.assertEqual(evidence[hashlib.sha256(raw(public)).hexdigest() + ".json"], raw(public))
+        self.assertEqual(evidence[book["quotes"][0]["source_sha256"] + ".json"], raw(p))
+
+
 class RefreshTests(unittest.TestCase):
     def extract(self, e=None, p=None, before=CART, after=CART, now=NOW):
         return r.extract(e or entry(), raw(p or product()), before, after, now)
@@ -77,6 +176,50 @@ class RefreshTests(unittest.TestCase):
     def test_price_is_not_product_minimum_or_compare_at(self):
         p = product(); p["price_min"] = 1; p["variants"][1]["compare_at_price"] = 50000
         self.assertEqual(self.extract(p=p)[0]["price"], 12.99)
+
+    def test_intraday_retains_actual_utc_retrieval_precision_without_changing_legacy_output(self):
+        local = dt.datetime(2026, 10, 12, 22, 30, 1, 123456,
+                            tzinfo=dt.timezone(dt.timedelta(hours=-4)))
+        old, old_receipt = self.extract(now=local)
+        q, receipt = r.extract(entry(), raw(product()), CART, CART, local, intraday=True)
+        self.assertEqual(q["observed_at"], "2026-10-13T02:30:01.123456Z")
+        self.assertEqual(q["observed_on"], "2026-10-13")
+        self.assertEqual(receipt["quote_schema"], r.INTRADAY_SCHEMA)
+        self.assertEqual(r.utc_instant(dt.datetime.fromisoformat(receipt["observed_at"])), q["observed_at"])
+        self.assertEqual({k: v for k, v in q.items() if k != "observed_at"}, old)
+        self.assertEqual({k: v for k, v in receipt.items() if k != "quote_schema"}, old_receipt)
+        with self.assertRaises(ValueError):
+            r.extract(entry(), raw(product()), CART, CART, local.replace(tzinfo=None), intraday=True)
+
+    def test_intraday_refresh_stamps_each_exact_supplier_response_in_shared_receipts(self):
+        feed = csv_entry(); feed["offer_id"] = "synthetic/csv"
+        ticks = iter([NOW.replace(microsecond=1), NOW.replace(microsecond=2)])
+        def get(url, *, accept):
+            return csv_raw() if url.endswith(".csv") else CART if url.endswith("cart.js") else raw(product())
+        book, evidence = r.refresh(dict(schema="ftx-textile-refresh/1", offers=[feed, entry()]),
+                                   get, lambda: next(ticks), intraday=True)
+        self.assertEqual(book["schema"], "ftx-textile-quotes/2")
+        observed = {q["offer_id"]: q["observed_at"] for q in book["quotes"]}
+        self.assertEqual(observed, {"synthetic/csv": "2026-10-13T12:00:00.000001Z",
+                                    "synthetic/42": "2026-10-13T12:00:00.000002Z"})
+        for name, data in evidence.items():
+            if name.endswith(".receipt.json"):
+                receipt = r.load(data)
+                self.assertEqual(receipt["quote_schema"], book["schema"])
+                self.assertEqual(r.utc_instant(dt.datetime.fromisoformat(receipt["observed_at"])),
+                                 observed[receipt["manifest_entry"]["offer_id"]])
+
+    def test_reviewed_material_lock_is_optional_and_not_a_source_inventory_number(self):
+        e = entry(); e["material_sha256"] = "a1" * 32
+        q, receipt = self.extract(e=e)
+        self.assertEqual(q["material_sha256"], e["material_sha256"])
+        self.assertEqual(receipt["manifest_entry"]["material_sha256"], e["material_sha256"])
+        self.assertNotIn("available_quantity", q)
+        for digest in [None, True, "", "g" * 64, "0" * 63]:
+            e["material_sha256"] = digest
+            with self.subTest(digest=digest), self.assertRaises(ValueError): self.extract(e=e)
+        e = entry(); e["available_quantity"] = 100
+        with self.assertRaises(ValueError): self.extract(e=e)
 
     def test_currency_changed_or_missing_refuses_without_fx(self):
         for c in ({"currency":"EUR", "items":[], "item_count":0}, {"items":[], "item_count":0}):
@@ -135,7 +278,8 @@ class RefreshTests(unittest.TestCase):
 
     def test_refresh_orders_cart_product_cart_and_retains_product_evidence(self):
         calls = []
-        def get(url):
+        def get(url, *, accept):
+            self.assertEqual(accept, "application/json")
             calls.append(url)
             return CART if url.endswith("cart.js") else raw(product())
         book, evidence = r.refresh(dict(schema="ftx-shopify-refresh/1", offers=[entry()]), get, lambda: NOW)
@@ -191,6 +335,29 @@ class CsvRefreshTests(unittest.TestCase):
         with self.assertRaises(ValueError): r.extract_csv(csv_entry(), csv_raw(rows[:2]), NOW)
         with self.assertRaises(ValueError): r.extract_csv(csv_entry(), csv_raw([row, row]), NOW)
 
+    def test_explicit_available_sale_units_and_material_lock_preserve_source_evidence(self):
+        e = csv_entry(); e["material_sha256"] = "b2" * 32
+        e["columns"]["available_quantity"] = "AVAILABLE_YARDS"
+        row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
+        data = csv_raw([dict(row, AVAILABLE_YARDS="1.25")])
+        q, receipt = r.extract_csv(e, data, NOW)
+        self.assertEqual(q["available_quantity"], 1.25)
+        self.assertEqual(q["unit"], "linear_yard")
+        self.assertEqual(q["quantity"], 0.5)  # NOT 1.25 half-yard packages.
+        self.assertEqual(q["material_sha256"], "b2" * 32)
+        self.assertEqual(q["source_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(receipt["manifest_entry"]["columns"]["available_quantity"], "AVAILABLE_YARDS")
+        zero, _ = r.extract_csv(e, csv_raw([dict(row, AVAILABLE_YARDS="0", AVAILABLE="no")]), NOW)
+        self.assertEqual(zero["available_quantity"], 0.0)
+        self.assertFalse(zero["available"])
+        for value in ["", "-1", "unknown", "1e2", "0." + "0" * 400 + "1", "9" * 400]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                r.extract_csv(e, csv_raw([dict(row, AVAILABLE_YARDS=value)]), NOW)
+        with self.assertRaises(ValueError): r.extract_csv(e, csv_raw(), NOW)
+        # No reviewed column means capacity is unknown, even if the feed has unrelated numbers.
+        unreviewed, _ = r.extract_csv(csv_entry(), data, NOW)
+        self.assertNotIn("available_quantity", unreviewed)
+
     def test_basis_currency_and_stock_drift_refuse(self):
         row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
         for key, value in [("QUANTITY", "1"), ("UNIT", "yard"), ("MINIMUM_QUANTITY", "5"),
@@ -229,7 +396,8 @@ class CsvRefreshTests(unittest.TestCase):
         calls = []
         a = csv_entry(); b = copy.deepcopy(a); b["offer_id"] = "synthetic/42/other-scope"
         c = entry(); c["offer_id"] = "synthetic/shopify42"
-        def get(url):
+        def get(url, *, accept):
+            self.assertEqual(accept, "text/csv" if url.endswith(".csv") else "application/json")
             calls.append(url)
             return csv_raw() if url.endswith(".csv") else CART if url.endswith("cart.js") else raw(product())
         book, evidence = r.refresh(dict(schema="ftx-textile-refresh/1", offers=[c, b, a]), get, lambda: NOW)
@@ -245,6 +413,204 @@ class CsvRefreshTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             r.refresh(dict(schema="ftx-textile-refresh/1", offers=[dict(csv_entry(), adapter="guess")]),
                       lambda _: self.fail("network"))
+
+
+class RobotsTests(unittest.TestCase):
+    def test_supplier_cart_exclusions_win_over_broad_allow_in_either_order(self):
+        rules = ["Allow: /", "Disallow: /cart/", "Disallow: /cart.js", "Disallow: /*/cart.js"]
+        for ordered in (rules, list(reversed(rules))):
+            policy = r.RobotsPolicy("User-agent: *\n" + "\n".join(ordered))
+            for path in ("/cart.js", "/cart/add", "/en/cart.js", "/fr-ca/cart.js"):
+                with self.subTest(path=path, ordered=ordered):
+                    self.assertFalse(policy.can_fetch("https://example.invalid" + path))
+            self.assertTrue(policy.can_fetch(entry()["product_url"]))
+
+    def test_longest_rule_allow_ties_and_glob_specificity(self):
+        for rules, path, allowed in [
+            (["Disallow: /", "Allow: /products/"], "/products/silk", True),
+            (["Allow: /products/", "Disallow: /products/private"], "/products/private", False),
+            (["Disallow: /same", "Allow: /same"], "/same", True),
+            (["Allow: /page", "Disallow: /*.htm"], "/page.htm", False),
+            (["Allow: /page", "Disallow: /*.ph"], "/page.php", True),
+            (["Disallow: /$", "Allow: /"], "/", False),
+        ]:
+            for ordered in (rules, list(reversed(rules))):
+                with self.subTest(rules=ordered, path=path):
+                    policy = r.RobotsPolicy("User-agent: *\n" + "\n".join(ordered))
+                    self.assertEqual(policy.can_fetch("https://example.invalid" + path), allowed)
+
+    def test_specific_groups_merge_and_do_not_borrow_wildcard_rules(self):
+        text = """Disallow: /outside-group
+User-agent: *
+Disallow: /fallback
+User-agent: Xai
+Disallow: /
+User-agent: OtherBot
+User-agent: XAIIMAGEAPIFETCH
+Disallow: /first
+Sitemap: https://example.invalid/sitemap.xml
+Disallow: /after-sitemap
+
+User-agent: XaiImageApiFetch/1.0
+Disallow: /second
+"""
+        policy = r.RobotsPolicy(text)
+        for path in ("/first", "/second", "/after-sitemap"):
+            self.assertFalse(policy.can_fetch("https://example.invalid" + path))
+        for path in ("/fallback", "/outside-group", "/products/silk"):
+            self.assertTrue(policy.can_fetch("https://example.invalid" + path))
+        self.assertFalse(r.RobotsPolicy(text, "UnlistedBot").can_fetch("https://example.invalid/fallback"))
+
+    def test_empty_rules_groups_bom_comments_and_unknown_records(self):
+        for text in ("", "User-agent: DifferentBot\nDisallow: /",
+                     "User-agent: *\nDisallow: /\nUser-agent: XaiImageApiFetch",
+                     "User-agent: *\nDisallow:\nAllow:"):
+            self.assertTrue(r.RobotsPolicy(text).can_fetch(entry()["product_url"]))
+        policy = r.RobotsPolicy("\ufeffUser-Agent: XaiImageApiFetch\n\nSitemap: ignored\n"
+                                "User-agent: OtherBot\nDisallow: /private # inline comment\n")
+        self.assertFalse(policy.can_fetch("https://example.invalid/private"))
+        malformed = r.RobotsPolicy("User-agent: *\nAllow: /\nUser-agent:\nDisallow: /cart.js")
+        self.assertFalse(malformed.can_fetch(entry()["cart_url"]))
+        self.assertTrue(r.RobotsPolicy("User-agent: *\nDisallow: /").can_fetch("https://example.invalid/robots.txt"))
+
+    def test_wildcards_end_anchor_query_and_case(self):
+        policy = r.RobotsPolicy("User-agent: *\nDisallow: /*/cart.js$\nDisallow: /*.csv$\n"
+                                "Disallow: /offer?preview=\nDisallow: /a*b*c$\n")
+        for path in ("/en/cart.js", "/prices.csv", "/nested/prices.csv", "/offer?preview=yes", "/abbcc"):
+            self.assertFalse(policy.can_fetch("https://example.invalid" + path), path)
+        for path in ("/en/cart.js/more", "/prices.csv?version=1", "/prices.CSV", "/abdc/more"):
+            self.assertTrue(policy.can_fetch("https://example.invalid" + path), path)
+
+    def test_percent_encoding_preserves_reserved_separators_and_literal_operators(self):
+        for rule, path, allowed in [
+            ("/cart", "/%63art.js", False), ("/%63art", "/cart.js", False),
+            ("/café", "/caf%C3%A9", False), ("/caf%c3%a9", "/café", False),
+            ("/a%2Fb", "/a/b", True), ("/a/b", "/a%2fb", True),
+            ("/a%2Fb", "/a%2fb", False), ("/a%252Fb", "/a%2Fb", True),
+            ("/file%2A", "/file*", False), ("/file%2A", "/file-other", True),
+            ("/cost%24", "/cost$", False), ("/x%23secret", "/x%23secret", False),
+        ]:
+            with self.subTest(rule=rule, path=path):
+                policy = r.RobotsPolicy("User-agent: *\nDisallow: " + rule)
+                self.assertEqual(policy.can_fetch("https://example.invalid" + path), allowed)
+        policy = r.RobotsPolicy("User-agent: *\nDisallow: /%63art\nAllow: /cart")
+        self.assertTrue(policy.can_fetch("https://example.invalid/cart"))
+
+
+class PublicSessionTests(unittest.TestCase):
+    def session(self, replies):
+        """Keep urllib's redirects/errors/cookie handling; replace only HTTP transport."""
+        calls = []
+        class FixtureHttp(r.urllib.request.BaseHandler):
+            handler_order = 0
+            def https_open(self, request):
+                calls.append(request)
+                reply = replies[request.full_url]
+                if callable(reply):
+                    reply = reply(request)
+                code, body, location = reply if isinstance(reply, tuple) else (200, reply, None)
+                headers = Message()
+                if location:
+                    headers["Location"] = location
+                response = addinfourl(io.BytesIO(body), headers, request.full_url, code)
+                response.msg = "synthetic HTTP fixture"
+                return response
+        session = r.PublicSession()
+        session.opener.add_handler(FixtureHttp())
+        return session, calls
+
+    def test_blocked_cart_never_reaches_http(self):
+        host = "https://example.invalid"
+        session, calls = self.session({host + "/robots.txt": b"User-agent: *\nAllow: /\nDisallow: /cart.js"})
+        with patch.object(r.time, "sleep") as sleep:
+            with self.assertRaisesRegex(ValueError, "robots.txt disallows"):
+                session.get(host + "/cart.js")
+        self.assertEqual([c.full_url for c in calls], [host + "/robots.txt"])
+        sleep.assert_not_called()
+
+    def test_manifest_requests_the_reviewed_representation_and_caches_it_separately(self):
+        e = entry()
+        for key in ("product_url", "cart_url", "variant_id"):
+            del e[key]
+        e.update(adapter="jsonld_v1", source_url="https://example.invalid/products/sheet",
+                 source_format="html", offer_ref=None, tax_included=None)
+        ld = {"@context": "https://schema.org", "@type": "Product", "sku": "TEST-42",
+              "description": "Sold per half yard", "offers": {"@type": "Offer", "price": "12.99",
+              "priceCurrency": "USD", "availability": "https://schema.org/InStock"}}
+        page = b'<script type="application/ld+json">' + raw(ld) + b'</script>'
+        def negotiated(request):
+            # Ordinary Shopify product JSON is not the page's embedded JSON-LD.
+            return {"text/html": page, "application/ld+json,application/json": raw(ld)}.get(
+                request.get_header("Accept"), raw({"product": {"sku": "TEST-42"}}))
+        session, calls = self.session({"https://example.invalid/robots.txt": b"User-agent: *\nDisallow:",
+                                      e["source_url"]: negotiated})
+        feed = dict(e, offer_id="synthetic/feed", source_format="json")
+        same_page = dict(e, offer_id="synthetic/other-scope")
+        with patch.object(r.time, "sleep"):
+            book, evidence = r.refresh(dict(schema="ftx-textile-refresh/1", offers=[e, feed, same_page]),
+                                      session.get, lambda: NOW)
+        self.assertEqual([c.get_header("Accept") for c in calls],
+                         ["text/plain", "text/html", "application/ld+json,application/json"])
+        self.assertEqual(len(book["quotes"]), 3)
+        self.assertEqual(evidence[hashlib.sha256(page).hexdigest() + ".html"], page)
+        self.assertEqual(evidence[hashlib.sha256(raw(ld)).hexdigest() + ".json"], raw(ld))
+
+    def test_headers_policy_cache_and_delays_include_first_source_request(self):
+        host = "https://example.invalid"
+        robots = b"User-agent: *\nCrawl-delay: 2\nUser-agent: XaiImageApiFetch\nCrawl-delay: 3.5\nRequest-rate: 2/10"
+        session, calls = self.session({host + "/robots.txt": robots, host + "/prices.csv": b"prices"})
+        with patch.object(r.time, "monotonic", return_value=100.0), patch.object(r.time, "sleep") as sleep:
+            self.assertEqual(session.get(host + "/prices.csv"), b"prices")
+            self.assertEqual(session.get(host + "/prices.csv"), b"prices")
+        self.assertEqual([c.full_url for c in calls], [host + "/robots.txt", host + "/prices.csv", host + "/prices.csv"])
+        self.assertEqual([c.args for c in sleep.call_args_list], [(5.0,), (5.0,)])
+        for request in calls:
+            self.assertEqual(request.get_header("User-agent"), "OpenAI File Downloader, XaiImageApiFetch/1.0")
+            self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(r.RobotsPolicy("User-agent: *\nCrawl-delay: 4\nUser-agent: XaiImageApiFetch\nAllow: /").delay, 4)
+
+    def test_only_robots_404_is_treated_as_no_policy(self):
+        host = "https://example.invalid"
+        for status in (404, 403, 429, 503):
+            session, calls = self.session({host + "/robots.txt": (status, b"", None), host + "/price": b"price"})
+            with self.subTest(status=status), patch.object(r.time, "sleep"):
+                if status == 404:
+                    self.assertEqual(session.get(host + "/price"), b"price")
+                    self.assertEqual(len(calls), 2)
+                else:
+                    with self.assertRaises(r.urllib.error.HTTPError):
+                        session.get(host + "/price")
+                    self.assertEqual(len(calls), 1)
+
+    def test_redirects_recheck_exclusions_and_pace_allowed_hops(self):
+        host = "https://example.invalid"
+        for destination in ("/cart.js", "https://other.invalid/price", "/public"):
+            replies = {host + "/robots.txt": b"User-agent: *\nAllow: /\nDisallow: /cart.js\nCrawl-delay: 2",
+                       host + "/price": (302, b"", destination), host + "/public": b"public"}
+            session, calls = self.session(replies)
+            with self.subTest(destination=destination), patch.object(r.time, "monotonic", return_value=100.0), \
+                    patch.object(r.time, "sleep") as sleep:
+                if destination == "/public":
+                    self.assertEqual(session.get(host + "/price"), b"public")
+                    self.assertEqual([c.args for c in sleep.call_args_list], [(2.0,), (2.0,)])
+                    self.assertEqual(len(calls), 3)
+                else:
+                    with self.assertRaisesRegex(ValueError, "robots.txt disallows|cross-origin redirect"):
+                        session.get(host + "/price")
+                    self.assertEqual([c.full_url for c in calls], [host + "/robots.txt", host + "/price"])
+
+    def test_robots_redirect_bootstrap_keeps_the_original_supplier_policy(self):
+        host = "https://example.invalid"
+        session, calls = self.session({host + "/robots.txt": (302, b"", "/private/rules"),
+                                      host + "/private/rules": b"User-agent: *\nDisallow: /private\nCrawl-delay: 2",
+                                      host + "/public": b"public"})
+        with patch.object(r.time, "monotonic", return_value=100.0), patch.object(r.time, "sleep") as sleep:
+            self.assertEqual(session.get(host + "/public"), b"public")
+            with self.assertRaisesRegex(ValueError, "robots.txt disallows"):
+                session.get(host + "/private/rules")
+        self.assertEqual([c.full_url for c in calls], [host + "/robots.txt", host + "/private/rules", host + "/public"])
+        self.assertEqual([c.args for c in sleep.call_args_list], [(2.0,)])
+        self.assertTrue(all(c.get_header("User-agent") == r.AGENT for c in calls))
 
 
 if __name__ == "__main__":

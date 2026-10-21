@@ -1,0 +1,155 @@
+{
+  "schema": "ftx-textile-catalog/1",
+  "materials": [
+    {
+      "id": "zagreb/polym17152013/M1",
+      "name": "M1 cotton/polyester/elastane twill — measured outerwear specimen",
+      "form": "woven",
+      "composition": [
+        {
+          "fiber": "cotton",
+          "fraction": 0.65,
+          "source": "paper"
+        },
+        {
+          "fiber": "polyester",
+          "fraction": 0.33,
+          "source": "paper"
+        },
+        {
+          "fiber": "elastane",
+          "fraction": 0.02,
+          "source": "paper"
+        }
+      ],
+      "composition_complete": true,
+      "structure": {
+        "specimen": "M1; one fabric tested by multiple methods, not multiple independent materials",
+        "weave": "twill",
+        "warp_yarn": "cotton",
+        "weft_yarn": "elastane filament wrapped with polyester fibers",
+        "application": "women’s outerwear",
+        "composition_scope": "Published blend fractions; microscopy qualitatively confirms identities, not an independent mass-fraction assay",
+        "mechanical_scope": "KES observations retained under extension keys; not converted into solver moduli or bending tensors",
+        "thickness_scope": "Mean at 1 kPa pressure; not unloaded loft or a presser-foot compression law",
+        "rights": "CC BY 4.0; numerical transcription with attribution; no article images copied"
+      },
+      "properties": {
+        "areal_density": {
+          "value": 226.58,
+          "unit": "g/m2",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "HRN ISO 3801:2003",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "samples": "3 conditioned circular coupons",
+            "coupon_area_cm2": "100"
+          }
+        },
+        "thickness": {
+          "value": 0.52,
+          "unit": "mm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "HRN ISO 5084:2003",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "statistic": "mean of 10 measurements",
+            "pressure_kpa": "1",
+            "presser_foot_diameter_mm": "50"
+          }
+        },
+        "thread_density_warp": {
+          "value": 40.0,
+          "unit": "1/cm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "HRN EN ISO 7211-2:2024",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp",
+            "measurements": "5 per sample"
+          }
+        },
+        "thread_density_weft": {
+          "value": 20.0,
+          "unit": "1/cm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "HRN EN ISO 7211-2:2024",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft",
+            "measurements": "5 per sample"
+          }
+        },
+        "kes_emt_warp": {
+          "value": 1.73,
+          "unit": "%",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "KES-FB; Table 2 EMT-1",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp",
+            "reported_load_cN": "490.35",
+            "scope": "elongation at the reported load, not strain at break; load/width normalization not established"
+          }
+        },
+        "kes_emt_weft": {
+          "value": 11.18,
+          "unit": "%",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "KES-FB; Table 2 EMT-2",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft",
+            "reported_load_cN": "490.35",
+            "scope": "elongation at the reported load, not strain at break; load/width normalization not established"
+          }
+        },
+        "kes_bending_warp_reported": {
+          "value": 0.356,
+          "unit": "cNcm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "KES-FB; Table 2 B-1",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp",
+            "scope": "Original reported number/unit; no inferred effective sheet coefficient"
+          }
+        },
+        "kes_bending_weft_reported": {
+          "value": 0.093,
+          "unit": "cNcm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "KES-FB; Table 2 B-2",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft",
+            "scope": "Original reported number/unit; no inferred effective sheet coefficient"
+          }
+        }
+      },
+      "sources": {
+        "paper": {
+          "reference": "https://doi.org/10.3390/polym17152013",
+          "accessed_on": "2026-10-15",
+          "note": "Mahnic Naglic, Petrak and Tomljenovic (2025), Analysis of Woven Fabric Mechanical Properties in the Context of Sustainable Clothing Development Process, Polymers 17(15), 2013. Tables 1-2 and section 2.1; open-access copy https://pmc.ncbi.nlm.nih.gov/articles/PMC12349057/. No Table 1/2 uncertainty bounds inferred. Published CLO conversions and Table 3 force units need separate reconciliation before calibration; Table 4 AI estimates are not measured coefficients."
+        }
+      }
+    }
+  ]
+}

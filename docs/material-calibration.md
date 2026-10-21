@@ -59,6 +59,21 @@ even when observations were measured. Replacement of existing stiffness evidence
 `replace_existing: true`, with the old values retained in the receipt. No confidence interval is
 invented from the declared weighting scale or residual budget.
 
+The FIT-only `fitted_green_strain_range` is also an enforced operating domain. All four fitted
+coefficients must retain the same source and range; incomplete or mixed metadata refuses. Ordinary
+material resolution carries these bounds through each piece's grain frame into its retained cloth
+triangles. Scene construction, post-untangling admission, Newton trials and accepted-state reactions
+check raw physical Green strain before numerical compression softening. An out-of-range trial is
+backtracked, not evaluated by unrestricted extrapolation. The box does not establish measured
+accuracy at every combined strain inside it, and held-out samples never enlarge it.
+
+The synthetic fixture includes explicit signed compression and shear force observations so its sewn
+band example stays within its own supported range. A regression retains the original narrow fit and
+verifies refusal when scene construction requires negative shear. Replacing sheet materials clears
+old scalar-fit domains together with old nonlinear laws; the new material must bind its own bounds.
+Existing Maxwell and permanent-set histories also reject a changed domain, even when scalar
+coefficients happen to be identical.
+
 Mass, thickness, bending, skin/self friction and thermal properties must be characterized separately.
 They remain missing unless present in the supplied source-bearing material. The command reports those
 gaps rather than inventing values from composition. Strongly nonlinear stretch, shear locking, cyclic

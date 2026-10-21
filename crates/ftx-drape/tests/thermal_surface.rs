@@ -82,6 +82,94 @@ fn deformed_one_cell_matches_reference_mass_backward_euler() {
 }
 
 #[test]
+fn internal_patch_energy_stays_in_joules_while_current_exchange_area_changes() {
+    let s = surface("heated", 0.4, 200.0);
+    let receipt = s.snapshot();
+    let old = s.initial(20.0).unwrap();
+    let b = Boundary {
+        inside_c: 20.0,
+        outside_c: 20.0,
+        ..boundary()
+    };
+    for stretch in [0.25, 1.0, 2.0, 4.0] {
+        let result = s
+            .advance_with_heat(&old, &mesh(stretch), 5.0, &[b], &[vec![300.0]])
+            .unwrap();
+        let area = 0.5 * stretch;
+        let expected = 20.0 + 300.0 / (100.0 + 5.0 * area * (1.0 / 0.3 + 1.0 / 0.4));
+        near(result.state.temperature_c()[0][0], expected, 1e-12);
+        near(result.stored_change_j, 100.0 * (expected - 20.0), 1e-10);
+        assert_eq!(result.supplied_heat_j, 300.0);
+        near(
+            result.stored_change_j,
+            5.0 * (result.inside_heat_w - result.outside_heat_w) + 300.0,
+            1e-10,
+        );
+        near(result.balance_error_j, 0.0, 1e-10);
+    }
+    assert_eq!(old.temperature_c(), &[vec![20.0]]);
+    assert_eq!(s.snapshot(), receipt);
+}
+
+#[test]
+fn patch_heat_is_local_and_invalid_sources_cannot_change_material_state() {
+    let s = Surface::new(
+        vec![column("first", 0.4, 200.0), column("second", 0.2, 100.0)],
+        4,
+        vec![
+            patch(),
+            Patch {
+                vertices: [1, 3, 2],
+                reference_area_m2: 0.5,
+                column: 1,
+            },
+        ],
+    )
+    .unwrap();
+    let positions = [
+        Vec3::ZERO,
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(1.0, 1.0, 0.0),
+    ];
+    let old = s.initial(20.0).unwrap();
+    let boundaries = [Boundary {
+        inside_c: 20.0,
+        outside_c: 20.0,
+        ..boundary()
+    }; 2];
+    let result = s
+        .advance_with_heat(
+            &old,
+            &positions,
+            2.0,
+            &boundaries,
+            &[vec![100.0], vec![0.0]],
+        )
+        .unwrap();
+    assert!(result.state.temperature_c()[0][0] > 20.0);
+    assert_eq!(result.state.temperature_c()[1], [20.0]);
+    assert_eq!(result.supplied_heat_j, 100.0);
+    for heat in [
+        vec![],
+        vec![vec![1.0]],
+        vec![vec![1.0], vec![]],
+        vec![vec![1.0], vec![-1.0]],
+        vec![vec![1.0], vec![f64::NAN]],
+        vec![vec![1.0], vec![f64::INFINITY]],
+    ] {
+        assert!(
+            s.advance_with_heat(&old, &positions, 2.0, &boundaries, &heat)
+                .is_err()
+        );
+    }
+    assert_eq!(old.temperature_c(), &[vec![20.0], vec![20.0]]);
+    let unchanged = s.advance(&old, &positions, 2.0, &boundaries).unwrap();
+    assert_eq!(unchanged.supplied_heat_j, 0.0);
+    assert_eq!(unchanged.state.temperature_c(), old.temperature_c());
+}
+
+#[test]
 fn stretch_changes_exchange_area_not_total_material_heat_capacity() {
     let s = surface("a", 0.4, 200.);
     let equilibrium = s.steady(&mesh(1.), &[boundary()]).unwrap();

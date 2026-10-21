@@ -1,0 +1,16 @@
+{
+  "schema": "ftx-drape-scenario/1",
+  "options": {"spacing": 24.0, "sew_steps": 3, "drape_steps": 3, "step": 0.001},
+  "fit_spec": {},
+  "max_mesh_points": 4096,
+  "max_vertex_frames": 1000000,
+  "surface": {
+    "schema": "ftx-steady-surface-conditions/1",
+    "boundaries": [{"inside_c": 30.0, "outside_c": 10.0, "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.2}]
+  },
+  "coverage": {
+    "body_triangle_ids": [0], "instance_layers": {"band": "shell"},
+    "settings": {"max_distance_m": 0.08, "min_normal_cosine": 0.1, "separation_tolerance_m": 0.00001, "cells_per_layer": 1, "interfaces": []},
+    "conditions": {"boundaries": [{"inside_c": 30.0, "outside_c": 10.0, "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.2}]}
+  }
+}

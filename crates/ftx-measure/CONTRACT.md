@@ -70,6 +70,19 @@ unstable consensus are explicit errors. Blur, if supplied, is external metadata,
 computed image diagnostic. No claim of OpenCV RANSAC/noisy-fit or NumPy RNG parity.
 Runnable CLI and input examples are in `docs/photo-measurement.md`.
 
+**Conditional intrinsic covariance.** Opt-in Brown `corner_noise` declares independent isotropic
+per-coordinate pixel noise and its evidence, never derived from residual RMS. The undamped
+full fit-only Jacobian yields a nine-parameter covariance after marginalizing fitted poses;
+every existing rank/held-out gate still applies. `PhotoScale::with_lens_uncertainty` requires
+the identical lens and explicit independent-acquisition evidence. It propagates correlated
+lens modes through refits of the same original inlier pixels, adds a separate intrinsic sigma
+term, and retains the assumptions. No print/flatness error, lens drift, empirical calibration,
+joint acquisition noise, nonlinear confidence region or general cross-record covariance claim.
+Tests in `camera_brown` and `photo_lens` include independent pixel-difference/SVD marginalization, 80 independent
+noisy refits, held-out independence, parameter correlations, pinhole-gauge cancellation and
+horizontal-angle derivatives. The image-to-measurement CLI test includes recomputation, tamper
+refusal, explicit independence and decoded-pixel acquisition-reuse rejection.
+
 **Section girths** (spec 02 A.5). `girth_from_section` applies the documented uncertain
 chest/waist/hip shape factors to the Ramanujan ellipse perimeter, propagating width, depth
 and shape-factor uncertainty separately. Clothing offsets and calibrated k ratios are

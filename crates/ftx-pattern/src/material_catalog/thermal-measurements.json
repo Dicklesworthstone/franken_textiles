@@ -1,0 +1,133 @@
+{
+  "schema": "ftx-textile-catalog/1",
+  "materials": [
+    {
+      "id": "fsri.cotton-sheet.unconditioned.2026-10-14",
+      "name": "FSRI cotton bedding sheet — unconditioned HFM observations",
+      "form": "woven",
+      "structure": {
+        "scope": "FSRI Cotton_Sheet specimen group; not a generic cotton constitutive law",
+        "construction": "Cotton fabric top sheet; weave and yarn parameters unreported",
+        "coverage": "Thermal observations only; areal mass and matching HFM sheet geometry not acquired",
+        "rights": "Attributed factual observations only; source page and images are not redistributed"
+      },
+      "thermal_response": {
+        "specimen": "FSRI:Cotton_Sheet",
+        "conditioning": "unconditioned",
+        "conductivity": {
+          "unit": "W/(m*K)", "evidence": "measured", "source": "hfm",
+          "method": "FSRI heat-flow-meter reported mean and standard deviation",
+          "conditions": {"direction": "through thickness", "pressure": "not reported in the retained table", "geometry": "HFM specimen dimensions not acquired"},
+          "points": [
+            {"temperature_c": 15.0, "mean": 0.023, "standard_deviation": 0.003},
+            {"temperature_c": 65.0, "mean": 0.028, "standard_deviation": 0.003}
+          ]
+        },
+        "specific_heat": {
+          "unit": "J/(kg*K)", "evidence": "measured", "source": "hfm",
+          "method": "FSRI heat-flow-meter reported mean and standard deviation",
+          "points": [
+            {"temperature_c": 10.0, "mean": 1268.0, "standard_deviation": 510.0},
+            {"temperature_c": 20.0, "mean": 1314.0, "standard_deviation": 535.0},
+            {"temperature_c": 30.0, "mean": 1363.0, "standard_deviation": 648.0},
+            {"temperature_c": 40.0, "mean": 1451.0, "standard_deviation": 601.0}
+          ]
+        }
+      },
+      "sources": {"hfm": {"reference": "https://materials.fsri.org/materialdetail/cotton-sheet", "accessed_on": "2026-10-14", "note": "McKinnon et al., Materials and Products Database, FSRI/UL Research Institutes. Dated transcription of unconditioned HFM tables. Means and SD retained as published; no sample counts, confidence intervals or garment validation inferred. Original unit labels J/kg-K and W/m-K are dimensionally identical to stored units. Metadata: ulfsri/fsri_materials_database blob 211bd64fa76b5350127efeaf1e1b094a6461e791 identifies a commercially available cotton top sheet, but does not establish conditioning-specific areal mass."}}
+    },
+    {
+      "id": "fsri.cotton-sheet.dried.2026-10-14",
+      "name": "FSRI cotton bedding sheet — dried HFM observations",
+      "form": "woven",
+      "structure": {"scope": "FSRI Cotton_Sheet specimen group, dried; not interchangeable with unconditioned", "coverage": "Matching conditioned geometry and areal mass remain unknown", "rights": "Attributed factual observations only; source page and images are not redistributed"},
+      "thermal_response": {
+        "specimen": "FSRI:Cotton_Sheet", "conditioning": "dried",
+        "conductivity": {
+          "unit": "W/(m*K)", "evidence": "measured", "source": "hfm", "method": "FSRI heat-flow-meter reported mean and standard deviation",
+          "conditions": {"direction": "through thickness", "pressure": "not reported in the retained table"},
+          "points": [
+            {"temperature_c": 15.0, "mean": 0.020, "standard_deviation": 0.003},
+            {"temperature_c": 65.0, "mean": 0.025, "standard_deviation": 0.003}
+          ]
+        },
+        "specific_heat": {
+          "unit": "J/(kg*K)", "evidence": "measured", "source": "hfm", "method": "FSRI heat-flow-meter reported mean and standard deviation",
+          "points": [
+            {"temperature_c": 10.0, "mean": 1220.0, "standard_deviation": 209.0},
+            {"temperature_c": 20.0, "mean": 1273.0, "standard_deviation": 225.0},
+            {"temperature_c": 30.0, "mean": 1320.0, "standard_deviation": 239.0},
+            {"temperature_c": 40.0, "mean": 1349.0, "standard_deviation": 278.0}
+          ]
+        }
+      },
+      "sources": {"hfm": {"reference": "https://materials.fsri.org/materialdetail/cotton-sheet", "accessed_on": "2026-10-14", "note": "McKinnon et al., FSRI Materials and Products Database. Dated transcription of dried HFM tables, not unconditioned data. Means and sample SD retained; sample counts, exact conditioning protocol and matching geometry not acquired. No webpage reproduction license asserted."}}
+    },
+    {
+      "id": "fsri.cotton-batting.unconditioned.2026-10-14",
+      "name": "FSRI cotton batting — unconditioned HFM observations",
+      "form": "fill",
+      "structure": {"scope": "FSRI Cotton_Batting specimen group; not a load-bearing shell", "coverage": "Matching areal mass, pressure and loft not acquired", "rights": "Attributed factual observations only; source page and images are not redistributed"},
+      "thermal_response": {
+        "specimen": "FSRI:Cotton_Batting", "conditioning": "unconditioned",
+        "conductivity": {
+          "unit": "W/(m*K)", "evidence": "measured", "source": "hfm", "method": "FSRI heat-flow-meter mean and SD; zero SD is the source's rounded value, not exact certainty",
+          "conditions": {"direction": "through thickness", "pressure": "not reported in the retained table"},
+          "points": [
+            {"temperature_c": 15.0, "mean": 0.032, "standard_deviation": 0.0},
+            {"temperature_c": 65.0, "mean": 0.039, "standard_deviation": 0.0}
+          ]
+        },
+        "specific_heat": {
+          "unit": "J/(kg*K)", "evidence": "measured", "source": "hfm", "method": "FSRI heat-flow-meter reported mean and standard deviation",
+          "points": [
+            {"temperature_c": 10.0, "mean": 1339.0, "standard_deviation": 69.0},
+            {"temperature_c": 20.0, "mean": 1383.0, "standard_deviation": 94.0},
+            {"temperature_c": 30.0, "mean": 1450.0, "standard_deviation": 69.0},
+            {"temperature_c": 40.0, "mean": 1559.0, "standard_deviation": 71.0}
+          ]
+        }
+      },
+      "sources": {"hfm": {"reference": "https://materials.fsri.org/materialdetail/cotton-batting", "accessed_on": "2026-10-14", "note": "McKinnon et al., FSRI Materials and Products Database. Dated transcription of unconditioned HFM tables. Rounded SD values preserved without conversion to bounds or standard errors. Fill geometry/compression cannot be inferred from this table."}}
+    },
+    {
+      "id": "fsri.cotton-batting.dried.2026-10-14",
+      "name": "FSRI cotton batting — dried conductivity only",
+      "form": "fill",
+      "structure": {"scope": "FSRI Cotton_Batting specimen group, dried", "coverage": "No dried specific heat in the retained page; unconditioned heat capacity is not borrowed", "rights": "Attributed factual observations only; source page and images are not redistributed"},
+      "thermal_response": {
+        "specimen": "FSRI:Cotton_Batting", "conditioning": "dried",
+        "conductivity": {
+          "unit": "W/(m*K)", "evidence": "measured", "source": "hfm", "method": "FSRI heat-flow-meter mean and SD; rounded zero SD is not exact certainty",
+          "conditions": {"direction": "through thickness", "pressure": "not reported in the retained table"},
+          "points": [
+            {"temperature_c": 15.0, "mean": 0.032, "standard_deviation": 0.0},
+            {"temperature_c": 65.0, "mean": 0.038, "standard_deviation": 0.0}
+          ]
+        }
+      },
+      "sources": {"hfm": {"reference": "https://materials.fsri.org/materialdetail/cotton-batting", "accessed_on": "2026-10-14", "note": "McKinnon et al., FSRI Materials and Products Database. Dated transcription of dried conductivity table only. No dried specific heat reported on this page; no alternate conditioning or inferred value substituted."}}
+    },
+    {
+      "id": "fsri.chair-polyester-batting.unconditioned.2026-10-14",
+      "name": "FSRI overstuffed-chair polyester batting — unconditioned conductivity only",
+      "form": "fill",
+      "structure": {"scope": "Specific overstuffed-chair polyester batting, not all polyester fills", "coverage": "No specific heat on the retained page; geometry, compression and areal mass not acquired", "rights": "Attributed factual observations only; source page and images are not redistributed"},
+      "thermal_response": {
+        "specimen": "FSRI:Overstuffed_Chair_Polyester_Batting", "conditioning": "unconditioned",
+        "conductivity": {
+          "unit": "W/(m*K)", "evidence": "measured", "source": "hfm", "method": "FSRI heat-flow-meter reported mean and standard deviation; temperatures transcribed from actual rows, not generic page introduction",
+          "conditions": {"direction": "through thickness", "pressure": "not reported in the retained table"},
+          "points": [
+            {"temperature_c": 25.0, "mean": 0.049, "standard_deviation": 0.005},
+            {"temperature_c": 30.0, "mean": 0.051, "standard_deviation": 0.006},
+            {"temperature_c": 35.0, "mean": 0.053, "standard_deviation": 0.006},
+            {"temperature_c": 40.0, "mean": 0.054, "standard_deviation": 0.006},
+            {"temperature_c": 45.0, "mean": 0.056, "standard_deviation": 0.007}
+          ]
+        }
+      },
+      "sources": {"hfm": {"reference": "https://materials.fsri.org/materialdetail/overstuffed-chair-polyester-batting", "accessed_on": "2026-10-14", "note": "McKinnon et al., FSRI Materials and Products Database. Dated transcription of unconditioned HFM table, five temperatures 25 to 45 C. No specific heat data on the page. No cotton heat capacity, generic polyester value or fire/process safety rating inferred."}}
+    }
+  ]
+}

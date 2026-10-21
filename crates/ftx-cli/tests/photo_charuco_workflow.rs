@@ -916,3 +916,59 @@ fn pure_rust_charuco_detector_covers_generated_warped_brown_distorted_and_refuse
         assert!(measured["photo"]["reprojection_rms_px"].as_f64().unwrap() < 0.6);
     }
 }
+
+#[test]
+fn pure_rust_charuco_detector_finds_a_sheet_small_in_a_large_frame() {
+    // A full-body photo leaves the sheet small: its markers are about 25 px wide in this 3000 x 2250
+    // frame, under the 1000-pixel search's 10-pixel floor, so only the finer search finds them.
+    let dir = setup();
+    sheet(&dir, "letter");
+    let source =
+        load_png(&std::fs::read(dir.join("sheet/calib-sheet-letter.png")).unwrap()).unwrap();
+    let scale = 0.13;
+    let (ox, oy) = (1400, 900);
+    let mut image = Gray::filled(3000, 2250, 80);
+    let (fw, fh) = (
+        (source.w as f64 * scale) as usize,
+        (source.h as f64 * scale) as usize,
+    );
+    for y in 0..fh {
+        for x in 0..fw {
+            // The sheet pixels this frame pixel covers, averaged.
+            let (x0, x1) = (
+                (x as f64 / scale) as usize,
+                ((x + 1) as f64 / scale) as usize,
+            );
+            let (y0, y1) = (
+                (y as f64 / scale) as usize,
+                ((y + 1) as f64 / scale) as usize,
+            );
+            let mut sum = 0u32;
+            for sy in y0..y1.min(source.h) {
+                for sx in x0..x1.min(source.w) {
+                    sum += u32::from(source.at(sx, sy)[0]);
+                }
+            }
+            let count = ((y1.min(source.h) - y0) * (x1.min(source.w) - x0)) as u32;
+            image.data[(oy + y) * image.w + ox + x] = (sum / count) as u8;
+        }
+    }
+    std::fs::write(dir.join("small.png"), encode_png_gray(&image)).unwrap();
+    let scale_report = run(
+        &dir,
+        &[
+            "measure",
+            "photo-scale",
+            "--image",
+            "small.png",
+            "--sheet",
+            "sheet/calib-sheet-letter.json",
+        ],
+        0,
+    )["result"]
+        .clone();
+    assert_eq!(scale_report["inliers"], 35, "{scale_report}");
+    let want = 25.4 / 300.0 / scale;
+    let got = scale_report["mm_per_px"].as_f64().unwrap();
+    assert!((got / want - 1.0).abs() < 0.005, "{got} vs {want}");
+}

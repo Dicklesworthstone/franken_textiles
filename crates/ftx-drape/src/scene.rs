@@ -12,6 +12,7 @@ use ftx_body::BodyFrames;
 use ftx_core::np::linspace;
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, det};
 use ftx_pattern::{Pattern, truthy};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::cloth::{ClothModel, SheetMaterial, SolveReport, Solver};
@@ -357,13 +358,15 @@ pub fn build_scene(
     contact: ContactParams,
     elastic: Option<&ElasticCasing>,
 ) -> Result<Scene, Refusal> {
-    if pattern.raw()["fabric"].get("interfaces").is_some()
+    if pattern.raw()["fabric"].get("material").is_some()
+        || pattern.raw()["fabric"].get("material_id").is_some()
+        || pattern.raw()["fabric"].get("interfaces").is_some()
         || pattern.raw()["pieces"]
             .as_array()
             .is_some_and(|ps| ps.iter().any(|p| p.get("fabric").is_some()))
     {
         return Err(bad(
-            "per-piece fabrics require the resolved drape pipeline, not a uniform Fabric argument"
+            "characterized/per-piece fabrics require the resolved drape pipeline, not a uniform Fabric argument"
                 .into(),
         ));
     }
@@ -393,7 +396,7 @@ pub(crate) fn build_scene_resolved(
     material: &crate::material::MaterialInputs,
     elastic: Option<&ElasticCasing>,
 ) -> Result<Scene, Refusal> {
-    build_scene_inner(
+    let mut scene = build_scene_inner(
         pattern,
         mesh,
         frames,
@@ -407,7 +410,79 @@ pub(crate) fn build_scene_resolved(
         material.response.as_ref(),
         material.piece_responses.as_deref(),
         material.contact_materials.as_ref(),
-    )
+    )?;
+    if material.relaxation.is_some()
+        || material
+            .piece_relaxations
+            .as_ref()
+            .is_some_and(|v| v.iter().any(Option::is_some))
+    {
+        let laws = material_triangle_field(
+            pattern,
+            &scene,
+            &material.relaxation,
+            material.piece_relaxations.as_deref(),
+        )?;
+        scene.solver = scene.solver.with_relaxation(&laws)?;
+    }
+    if material.membrane_plasticity.is_some()
+        || material
+            .piece_membrane_plasticities
+            .as_ref()
+            .is_some_and(|v| v.iter().any(Option::is_some))
+    {
+        let laws = material_triangle_field(
+            pattern,
+            &scene,
+            &material.membrane_plasticity,
+            material.piece_membrane_plasticities.as_deref(),
+        )?;
+        // The solver checks the actual retained grain/gather mapping. Never overwrite a caller's
+        // compression factor or a gathered zone to make a permanent-set law appear compatible.
+        scene.solver = scene.solver.with_membrane_plasticity(&laws)?;
+    }
+    if material.plasticity.is_some()
+        || material
+            .piece_plasticities
+            .as_ref()
+            .is_some_and(|v| v.iter().any(Option::is_some))
+    {
+        let laws = material_triangle_field(
+            pattern,
+            &scene,
+            &material.plasticity,
+            material.piece_plasticities.as_deref(),
+        )?;
+        scene.solver = scene.solver.with_bending_plasticity(&laws)?;
+    }
+    Ok(scene)
+}
+
+// All material history binds to the SAME retained triangle ownership and rotated rest frame.
+// Welded vertices never merge materials; explicit None entries do not inherit a default law.
+fn material_triangle_field<T: Clone>(
+    pattern: &Pattern,
+    scene: &Scene,
+    uniform: &Option<T>,
+    pieces: Option<&[Option<T>]>,
+) -> Result<Vec<Option<T>>, Refusal> {
+    scene
+        .triangle_owner
+        .iter()
+        .map(|owner| {
+            let id = &scene.mesh.instances[*owner];
+            let instance = pattern
+                .instance(id)
+                .ok_or_else(|| bad(format!("missing instance {id}")))?;
+            match pieces {
+                Some(field) => field
+                    .get(instance.piece_index)
+                    .cloned()
+                    .ok_or_else(|| bad("missing per-piece material-history selector".into())),
+                None => Ok(uniform.clone()),
+            }
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -492,7 +567,10 @@ fn build_scene_inner(
     let mut tri_compression = Vec::new();
     let mut tri_materials = Vec::new();
     let mut tri_responses = Vec::new();
+    let mut tri_domains = Vec::new();
     let mut triangle_owner = Vec::new();
+    let mut source_triangles = Vec::new();
+    let mut tri_bending = Vec::new();
     let low = GATHER_COMPRESSION.min(compression);
     for f in &mesh.faces {
         let t = f.map(|v| weld[v]);
@@ -501,9 +579,18 @@ fn build_scene_inner(
             continue;
         }
         tris.push(t);
+        source_triangles.push(*f);
         tri_rest.push(f.map(|v| rest[v]));
         let owner = mesh.owner[f[0]];
         triangle_owner.push(owner);
+        let sheet = match &instance_fabrics {
+            Some(field) => field
+                .get(owner)
+                .ok_or_else(|| bad("invalid bending triangle owner".into()))?,
+            None => &fabric,
+        };
+        tri_bending.push(sheet.bending_response());
+        tri_domains.push(sheet.strain_domain());
         if let Some(field) = &instance_fabrics {
             if f.iter().any(|&v| mesh.owner[v] != owner) {
                 return Err(bad(
@@ -550,10 +637,14 @@ fn build_scene_inner(
         )?
     };
     model.set_compression(&tri_compression)?;
+    model.set_membrane_domains(&tri_domains)?;
+    if tri_bending.iter().any(Option::is_some) {
+        model.set_panel_bending(&rest, &source_triangles, &weld, &tri_bending)?;
+    }
     if !tri_responses.is_empty() {
         model.set_membrane_responses(&tri_responses)?;
-        model.check_membrane_domains(&x)?;
     }
+    model.check_membrane_domains(&x)?;
     let mut elastic_rings = Vec::new();
     if let Some(e) = elastic {
         for ring in elastic_rings_of(&mesh, &weld, e)? {
@@ -562,8 +653,10 @@ fn build_scene_inner(
             elastic_rings.push(at..model.elastics.len());
         }
     }
+    crate::attached_mass::bind(pattern, &mesh, &weld, &mut model)?;
     let body = Body::new(skin_vertices.to_vec(), skin_triangles.to_vec(), 5e-3)?;
     let untangled = untangle(&mut x, &tris, &body, &tree)?;
+    model.check_membrane_domains(&x)?;
     // The relaxed start keeps every vertex 4.8 mm out, but an edge between two of them can pass close to
     // a sharp body feature (a thumb by a sleeve hem). Start the barrier at half the smallest distance
     // when that is less than the cloth offset; `run_phase` raises it back as the cloth moves out.
@@ -730,8 +823,17 @@ fn ramp_thickness(scene: &mut Scene) {
     }
 }
 
+/// One accepted step; the Newton residual is in N, correction in m and potential in J.
+#[derive(Clone, Debug, Serialize)]
+pub struct PhaseStep {
+    /// Newton diagnostics for this accepted implicit step.
+    pub solve: SolveReport,
+    /// Largest instantaneous vertex speed after the step (m/s), never a window-mean drift.
+    pub max_speed_m_s: f64,
+}
+
 /// One phase's per-step reports.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct PhaseReport {
     /// Steps taken.
     pub steps: usize,
@@ -753,13 +855,16 @@ pub struct PhaseReport {
     pub max_speed: f64,
     /// The cloth offset at the end (m).
     pub thickness: f64,
+    /// Accepted steps in execution order. A failed step produces no sample or animation frame.
+    pub samples: Vec<PhaseStep>,
 }
 
 /// Runs `steps` implicit steps of `h` seconds under `gravity` (m/s², along −z), calling `frame` after
 /// each with the step index and the mesh-vertex positions.
 ///
 /// # Errors
-/// A refusal from the solver (a non-finite state).
+/// A refusal from the solver, including a stalled Newton solve. Accepted earlier steps remain;
+/// the failed step emits no frame and does not advance the contact-offset ramp.
 pub fn run_phase(
     scene: &mut Scene,
     steps: usize,
@@ -770,8 +875,17 @@ pub fn run_phase(
     scene.solver.gravity = Vec3::new(0.0, 0.0, -gravity);
     let mut rep = PhaseReport::default();
     for k in 0..steps {
+        let thickness = scene.solver.contact.as_ref().map(|c| c.params.thickness);
         ramp_thickness(scene);
-        let r: SolveReport = scene.solver.step(h)?;
+        let r: SolveReport = match scene.solver.step(h) {
+            Ok(r) => r,
+            Err(e) => {
+                if let (Some(c), Some(thickness)) = (&mut scene.solver.contact, thickness) {
+                    c.params.thickness = thickness;
+                }
+                return Err(e);
+            }
+        };
         rep.steps += 1;
         rep.iterations += r.iterations;
         rep.unconverged += usize::from(!r.converged);
@@ -780,6 +894,10 @@ pub fn run_phase(
         rep.halvings += r.halvings;
         rep.projected_iterations += r.projected_iterations;
         rep.pcg_iterations += r.pcg_iterations;
+        rep.samples.push(PhaseStep {
+            solve: r,
+            max_speed_m_s: scene.solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max),
+        });
         frame(k, &scene.positions());
     }
     rep.max_speed = scene.solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max);

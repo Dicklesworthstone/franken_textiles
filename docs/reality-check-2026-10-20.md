@@ -1,0 +1,620 @@
+# FrankenTextiles reality check — 2026-10-20
+
+Assessed source: `main` at `6410556378514874274e77c304efd0d4e2200a73`.
+This initial assessment and delivery plan is not release certification. It preceded product changes;
+the implementation follow-through at the end records subsequent work and current verification.
+AGENTS.md and README.md were read in full before investigation. Oracle fixtures remain unchanged.
+
+## Verdict
+
+FrankenTextiles has a substantial implementation of the original garment engine and a much larger
+material/thermal/manufacturing platform. It is beyond a skeleton or collection of placeholder APIs.
+The strongest evidence is the spec-driven pattern/export port and its captured-reference corpus.
+The weakest link is now establishing that accepted numerical results support the stronger physical
+and user-facing conclusions, using production assets and matched independent measurements.
+
+It is **not finished against the complete current plan**. In particular:
+
+1. The production memoryless drape path can accept unconverged Newton steps; its published `settled`
+   flag remains the reference's window-drift measure. This differs materially from the plan's
+   residual/velocity and fail-closed promises.
+2. The essential Anny and fitted-garment tests need an external model and explicit execution.
+   Ordinary debug workspace tests omit those tests and three release-only contact tests.
+3. Matched linen/leather/performance-knit characterization, measured garment comparisons,
+   qualified thermal/process experiments and real-photo body-fitting acceptance remain incomplete.
+4. Finishing all currently active Beads would still leave gaps: some promised work is absent from
+   the active issue file, some original integration issues were closed while acceptance remains
+   partial, and performance/reproducible-release work lacks concrete acceptance tasks.
+5. The source has grown to **187,214 Rust lines**, including tests/examples, against the still-written
+   **120,000-line ceiling**. The expansion needs an explicit scope/budget decision, not an unrequested
+   mass refactor during this review.
+
+Parity, physics, fit and performance have separate conclusions. No overall completion percentage
+would convey these distinctions honestly.
+
+## Evidence scope and limits
+
+The assessment compares README/AGENTS promises, the comprehensive plan, FEATURE_PARITY, specification
+boundaries, crate contracts, active and staged issue records, source control flow, capture scripts,
+fixtures, integration tests and browser checks. Source inspection concentrated on actual dispatch,
+solver acceptance/publication, measurement/model boundaries and shared material consumers. This is
+not a claim that every line of the 187,214-line tree or every subsystem note received a bug audit.
+
+Historical results in README, FEATURE_PARITY and Bead comments are identified as historical; they
+were not silently promoted to a current-head pass. No internet source, remote release service or
+private wearer data was consulted. Local Git has no tags; that does not establish the absence of
+remote releases. No hosted product or installed `ftx` was verified.
+
+### Checks actually run
+
+| Command / inspection | Result and meaning |
+|---|---|
+| `cargo fmt --check` | PASS, exit 0. Formatting only. |
+| `python3.13 -m unittest discover -s scripts -p 'test_*.py'` | PASS: 84 tests, Python 3.13.9. Offline supplier/HFM/specification behavior. |
+| `python3 -m unittest discover -s scripts -p 'test_*.py'` | FAIL: 84 tests, one failure, Python 3.15.0. Invalid source timestamp `2026-10-13T24:00:00Z` is accepted. |
+| `python3.14 -m unittest discover -s scripts -p 'test_*.py'` | Same failure, Python 3.14.6. |
+| `PYTHONPATH=scripts python3.12 -m unittest test_textile_jsonld.JsonLdTests.test_intraday_source_time_refuses_unknown_offsets_and_precision_loss` | PASS on Python 3.12.12; the same focused test passes on 3.13.9. Establishes runtime dependence. |
+| `node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_materials_frontend.cjs` | PASS: 104 test executions, 2 skips, Node 26.8.1. The tracing suite imports the materials suite, so this command runs its tests twice. These are DOM/WASM-double lifecycle/routing checks; the compiled-WASM case skips without its inputs. Do not count these as 104 distinct numerical proofs. |
+| `ast-grep run --lang Rust --pattern 'fn $NAME($$$) { todo!() }' crates` | No matches, exit 1. Keyword scan also found no production `todo!()` or `unimplemented!()` bodies. Manual dispatch/control-flow inspection corroborates substantial implementations. This is not proof of completeness. |
+| `sbh check --need 20G` | FAIL, exit 1: about 306 GB container space available, but 7.66% free is below SBH's active threshold. No local heavy build bypass was used. |
+| `RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=verbose rch exec -- env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" cargo test --workspace --locked` | Refused, exit 103: no admissible worker; pressure, slots and OS exclusions. No Rust tests executed. |
+| `RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=verbose rch exec -- cargo test --workspace --locked -j 1` | Worker `vmi1153651` selected, then source initialization refused: unfinished overlapping physical source owner. Retries exhausted; exit 103 before compilation. |
+| `bv --robot-triage`, `bv --robot-insights`, `bv --robot-plan` | PASS on the active JSONL: 27 nonclosed, 18 actionable, 9 blocked; no cycles reported. Highest-impact item is `ftx-tm2`. |
+| `br stats --json`, `br --no-auto-import stats --json`, `br --no-db list --status=open --limit 0 --json` | FAIL: duplicate import comment ID 1. Neither alternate read mode bypasses validation. |
+| `br doctor --json` | Reports missing active database/recoverable workspace. The portable source collision prevents ordinary bootstrap. |
+| `br create --title 'Restore lossless Beads import for the FrankenTextiles backlog' --type bug --priority 1 --description ... --json` | FAIL, exit 4 on the same duplicate comment. **No Bead created.** |
+| `br sync --flush-only` | FAIL, exit 4 on the same duplicate comment. No successful backlog flush is claimed. |
+
+`cargo clippy --all-targets -- -D warnings`, a completed `cargo test`, the wasm build, the ignored
+model/physics lanes and Chromium numerical end-to-end checks did **not** run successfully here.
+DSR quality was not run: no matching local repo configuration was found, and even DSR help/startup
+did not finish normally during the bounded investigation. No GitHub Actions workflow was dispatched.
+
+There is no `target/`, `web/pkg/`, installed `ftx`, or default converted Anny model in this checkout's
+examined locations. These are setup/reproduction limitations, not evidence that the corresponding
+implementations are fake. The advertised native draft/round/drape and browser numerical flows could
+not be executed in this session. The Python source-adapter flows and frontend state logic did execute.
+
+## Vision checklist
+
+Status describes the capability, with verification qualified separately. `UNPROVEN` does not mean
+missing source: here it often means implemented with historical evidence, but no fresh execution.
+`NO_ACTIVE_BEAD` means missing actionable coverage, even where a broad parent mentions the theme.
+
+| # | Testable goal and source | Reality / status | Concrete evidence and remaining coverage |
+|---|---|---|---|
+| 1 | Deterministic core, units, geometry and structured refusals (§6–7) | Implemented; current numerical execution UNPROVEN | `ftx-core/src/{det,curve,exact,linalg,refusal}.rs`; provenance, direct tests, `ftx-conformance/tests/no_platform_libm.rs`. |
+| 2 | Read/write `fabric-pattern/1`, mirror/fold instances and structure checks (§8; spec 01) | Implemented; current execution UNPROVEN | `ftx-pattern/src/{doc,instance}.rs`, pattern oracle fixtures and model/geometry conformance tests. |
+| 3 | Seam walk, truing, points of measure and fit-spec verdict (§8) | Implemented; current execution UNPROVEN | `ftx-pattern/src/validate.rs`, captured validation/default-fit cases. |
+| 4 | Five alteration operations with reference behavior and safe refusals (§8) | Implemented; current execution UNPROVEN | `alter.rs`, oracle alterations, direct safety and real-CLI workflow tests. |
+| 5 | Measured bolero, trousers and fez drafts (§8; spec 02 C) | Implemented for those three programs | `draft/`, captured programs; `draft_workflow.rs` actually invokes draft → validate → export. Not a general garment-idea interpreter inside Rust; agent judgment stays outside. |
+| 6 | Catalogue, priors, fusion, provenance and readiness (§10.1) | Implemented; current execution UNPROVEN | `ftx-measure`, 35-item catalogue and fusion/readiness oracle cases. `MODEL_FIT` and reference readiness remain separate from measured evidence. |
+| 7 | Pinned Anny conversion and forward parity, G1a (§9) | Implemented; historical gate, current UNPROVEN | Converter, pin, 16-case reference and 10-pose corpus; `anny_parity.rs`/`drape_poses.rs` ignored without external asset. |
+| 8 | Tape functionals, fitting and honest unmeasured values, G1b (§9.3–4) | PARTIAL | 21 functionals, LM and residuals; `fit_tape.rs` and `body_model_fit.rs`. FEATURE_PARITY still marks fitting/tape/placement partial; anatomical heuristics/population priors and independent qualification remain. |
+| 9 | Poses, nappy calibration and checked collider (§9.5) | Implemented with explicit limits | Posed skin checks and nappy bisection exist. Contract notes seated/squat volume loss and absence of pose self-intersection qualification. |
+| 10 | Photo scale from Letter/A4 or ChArUco (§10.1) | Implemented numerically; empirical acceptance UNPROVEN | Pure-Rust detector, oriented JPEG/PNG paths, camera/lens and CLI tests. Recorded detector evaluation uses synthetic photographs, not real-photo acceptance. |
+| 11 | Print calibration references with specified variants (§10.1; spec 02 A.9) | PARTIAL | Native Letter/A4 DICT_4X4_50 PNG/PDF generation exists. Other dictionaries and browser calibration controls remain absent; the parity map explicitly says so. |
+| 12 | Moving-child frame identity, cameras, still windows and triangulation (§10.2) | PARTIAL | `video`, `still`, `camera`, `triangulate`, `bundle`; decoded image/mask manifests and separate commands. External decoding/segmentation is intentional, but complete capture-to-result orchestration and uncertainty acceptance are not established. |
+| 13 | Multi-frame Anny fit from 2D and silhouettes (§9.4; §10.2) | PARTIAL | Real fitter, held-out checks, multistart/observability and accepted-body reuse. CLI tests use a tiny synthetic Anny-format model; production-asset/real-photo acceptance remains unverified. Closed FTX-21 is not proof of that acceptance. |
+| 14 | Mesh, welded seams, grain, gathers and elastic (§11.4) | Implemented with strong historical parity | `garment`, `scene`, `start`; captured mesh/start states; 42,003-triangle correspondence is documented. Native cloth mechanics intentionally replaces Blender response. |
+| 15 | Orthotropic membrane, bending, IPC, CCD and friction (§11) | Implemented; current physics execution UNPROVEN | Real solver/contact/sparse code and KATs. Some decisive KATs are skipped by ordinary debug tests. |
+| 16 | Numerical stall refuses; settled means residual and velocity (§6; §11.1–3) | PARTIAL / acceptance defect | `cloth::step_inner`, `scene::run_phase`, `run::drape`, `metrics`; detailed finding A below. NO_ACTIVE_BEAD for the concrete repair. |
+| 17 | Start sensitivity quantified on every drape (§11.1, KAT10) | PARTIAL | `--two-start-sew` exists and is tested, but is opt-in. Ordinary runs have no two-start error bar. Document that scope or implement the promised policy. |
+| 18 | Contact-correct cloth layers (§11.4) | PARTIAL by invocation | Self-contact exists but `DrapeOptions::default().self_contact` is `None`. Skill/browser can enable 2 mm; the short native command does not automatically do so. |
+| 19 | Metrics, PC2, mesh map, viewer and review (§11.6–8) | Implemented; reporting gaps remain | Reference metrics/flags and native rendering exist. Solver convergence telemetry is not the report's acceptance authority; viewer imports Three.js from a CDN. |
+| 20 | Every export and 51 acceptance-check kinds (§12; spec 03) | Implemented; current execution UNPROVEN | Real SVG/PDF/DXF/HPGL/cutter/GarmentCode/DST writers and mutation/differential tests. File-format checks are not process or hardware qualification. |
+| 21 | Trace, annotate, audit and scale-fit (§13) | PARTIAL parity | Extensive real raster/vector implementations and fixtures. `ftx-q3m` retains platform-libm/decoder-tail decisions; native review-image pixel exceptions are deliberate. |
+| 22 | Immutable round with separate measurement/flat/sim/export bases (§14) | Implemented; inherits numerical acceptance gap | `ftx-cli/src/round.rs`, `ftx-pattern/src/round.rs`, real-CLI tests. Round status checks simulation `gating`, not independent Newton convergence. |
+| 23 | Local browser draft/validate/export and small-garment drape, G4 (§15) | Implemented; historical G4, current numerical UNPROVEN | Real shared Rust APIs and browser workers. Lifecycle tests pass now; actual compiled-WASM/Chromium drapes were not rerun. |
+| 24 | Whole-outfit review (§14) | Implemented visualization; broader claim overstated | `outfit.rs` consumes completed `--sim` directories and freezes garments. It does not jointly or sequentially simulate layers. `docs/outfit.md` states this; CLI CONTRACT still describes a different `--layer` flow. |
+| 25 | One source-bearing material authority feeds relevant consumers (§25.1–3) | Substantial implementation; empirical PARTIAL | `material_catalog`, `material_binding`, `ftx-drape/src/material`, shared workbench. Capability-specific missing-data refusals and material/interface identity are real. |
+| 26 | Calibrated nonlinear, directional, time-dependent and permanent response (§25.3) | PARTIAL | Constitutive/calibration/history paths exist, including bounded model comparisons and plastic heat. Matched measured validation, damage/rupture and qualified combined laws remain `ftx-tm4`, `ftx-rc1/2`, `ftx-ps1`. |
+| 27 | Matched linen/leather/knit fixed-jacket substitution (§25.1, 25.5) | PARTIAL; principal empirical blocker | Synthetic propagation tests exist. `ftx-tm2`, `ftx-md1`, `ftx-tm8` and related acquisition gates remain open; catalogue breadth does not provide a fully characterized matched trio. |
+| 28 | Layer coverage, motion, heat, compression and moisture (§25.4) | PARTIAL | Conservative dry steady/transient/coverage/exterior/motion paths are real. Measured local compression, coupled moisture/evaporation, ventilation and garment validation remain open. No wearer comfort claim follows. |
+| 29 | Comparable current offers and procurement (§25.4) | PARTIAL, with reproduced runtime defect | Offline import/history/spec-review/procurement exists. Live source/stock qualification remains `ftx-tm6`, `ftx-pq1`, `ftx-sr2`; invalid-clock rejection breaks on newer Python. |
+| 30 | Material-aware nesting, sewing and machine planning (§25.4) | PARTIAL | Real bounded nesting/search, assembly dependencies/setup optimization and stitch programs. Measured recipes/quality/accessibility and hardware remain `ftx-tm7`, `ftx-sp2`; hardware execution is deliberately unauthorized. |
+| 31 | Native/debug/release/wasm determinism and budgeted performance (§11.7; §17.5) | Historical slices; full current acceptance UNPROVEN | Digests/check scripts exist. No Cargo benchmark directory was found; README itself says timed, not benchmarked. Material/history extensions require execution, not just wasm compilation. |
+| 32 | G5, usable release and reference retirement (§17.6; §19) | NOT COMPLETE | `ftx-onn` open; no completed gauntlet/certification demonstrated. No release installation or hosted-browser flow was verified. |
+| 33 | Real-person fit (§3) | UNPROVEN by this repository assessment | Requires private muslin/dressed-photo evidence. Synthetic bodies, computed flags and passing source tests cannot establish it; no personal data should be added to the repo. |
+
+## Findings that change the delivery decision
+
+### A. Physical convergence is not the published verdict authority — P0
+
+The source path is explicit:
+
+- `cloth.rs::step_inner` accepts the `SolveReport` returned by minimization, audits finiteness/contact,
+  updates velocity, and returns `Ok(rep)` even when `rep.converged` is false. History-bearing laws take
+  a separate stricter path; the defect described here is the memoryless path.
+- `scene.rs::run_phase` increments `unconverged` and continues, collecting subsequent frames.
+- `run.rs::drape` prints phase counts/speed to its progress callback, then builds the saved report
+  from the reference metrics. It does not gate that report on the phase's unconverged count.
+- `metrics.rs` explicitly computes settledness from drift of window means, not speed. A periodic
+  motion can have equal window means while continuing to move; a small drift is not a residual check.
+- `ftx-cli/src/main.rs` chooses drape exit 0 solely from an empty `gating` list. The ordinary round's
+  status policy similarly considers `sim.gating`. The unsettled metric is advisory.
+
+This is a source-established publication/acceptance gap, not a claim that a newly executed bolero
+failed: the Rust runtime was unavailable here. Plan §6 says numerical stalls refuse; §11 promises
+residual/velocity settledness and solver telemetry. Preserve the reference metrics for parity, and
+add an independent native numerical acceptance basis. Do not silently redefine the oracle metric.
+
+### B. Important test names do not imply routine gate coverage — P1
+
+There are 1,506 `#[test]` declarations and 27 ignore annotations active in debug source, including
+three `cfg_attr(debug_assertions, ignore=...)` contact tests. Anny forward/hash/pose/fitting tests,
+elastic ladder, fitted armpit wedge, two-start and fitted determinism require the external model.
+The ordinary workflow invokes debug `cargo test --workspace --locked`; it cannot establish those
+gates. The separate photo workflow includes optional OpenCV tests, but does not close the Anny lane.
+
+The existing Anny reference comparison uses selected vertices, bounding boxes, aggregate checksums,
+bone summaries and data hashes. That is useful parity evidence. A claimed maximum error over every
+vertex would require a full upstream/candidate comparison, rather than treating aggregate sums as
+a maximum-norm certificate. Any added reference data must come from the pinned upstream.
+
+Use the existing tests and capture scripts in the supported DSR/RCH path. No additional gate
+framework, validator hierarchy or newly dispatched GitHub Actions workflow is needed.
+
+### C. The expanded platform is waiting on experiments, not another catalogue abstraction — P0
+
+The common selection/resolution boundary is in production code. Directional nonlinear mechanics,
+Maxwell recovery, permanent strain, pressure-conditioned snapshots, thermal coverage/motion,
+finite stock and process studies are much more extensive than the original Phase 0 proposal.
+The newest commits continue that trajectory. However, source observations of thickness/resistance
+or fibre composition cannot supply missing directional mechanics, pair friction, matched storage
+or seam recipes. Existing documents often make that distinction correctly.
+
+The highest-value next acceptance is a matched-specimen chain: conditioned coupon measurements →
+compiled material → held-out coupon → unchanged jacket/body substitution → measured sewn behavior.
+Use the existing `ftx-tm2/tm8/tme/tmf/md1/sp2` work instead of starting another simulator or database.
+Thermal and manufacturing completion remain independently reportable if a mechanical specimen is
+incomplete. Synthetic source-qualified records establish propagation, not experimental agreement.
+
+### D. Photo/video implementation is useful engineering software, not a finished capture product — P1
+
+`video-select` accepts decoded PNGs and reviewed masks/metadata; `fit-body` accepts explicit model
+correspondences, calibrated cameras, bounded variables and independent initializations. Segmentation,
+detector correspondence decisions and video decoding are external by design. These boundaries do
+not justify calling the engine absent. They do mean a parent cannot simply give the current Rust
+CLI an arbitrary phone clip and obtain a qualified body without preparing evidence.
+
+The current body-fit documentation explicitly leaves production-asset qualification and a
+ruler-in-frame real-photo check unverified. The original Phase 3 exit requires that real-photo check.
+Closed `ftx-sdk`, `ftx-994` and `ftx-uql` do not supply a dedicated remaining acceptance task.
+Do not reopen all their delivered software; track the missing product/empirical slice explicitly.
+
+### E. Supplier timestamp refusal depends on Python version — P1
+
+`scripts/refresh_textile_prices.py::valid_period` validates the spelling with a regex but lets
+`datetime.fromisoformat` validate the clock. On Python 3.14.6 and 3.15.0,
+`2026-10-13T24:00:00Z` normalizes to the next day's midnight. The existing regression expects refusal.
+All 84 tests pass on 3.13.9; 83 pass and that test fails on both newer interpreters. The focused
+test also passes on 3.12.12. This is an actual portability defect in source validity admission,
+not a reason to regenerate a fixture or suppress the failing case. Validate source clock ranges
+explicitly and retain the existing invalid-offset/precision and inclusive-expiry behavior.
+
+### F. Scope, documentation and dependency rules have drifted — P1/P2
+
+| Crate | Rust lines incl. tests/examples | Planned allocation |
+|---|---:|---:|
+| ftx-core | 5,154 | 8,000 |
+| ftx-pattern | 28,696 | 16,000 |
+| ftx-body | 5,407 | 9,000 |
+| ftx-measure | 17,373 | 16,000 |
+| ftx-drape | 45,827 | 14,000 |
+| ftx-export | 24,022 | 14,000 |
+| ftx-trace | 17,976 | 7,000 |
+| ftx-cli | 29,780 | 4,000 |
+| ftx-wasm | 4,313 | 3,000 |
+| ftx-conformance | 8,666 | 9,000 |
+| **Total** | **187,214** | **120,000 ceiling including contingency** |
+
+The ceiling is exceeded by 67,214 lines, or 56.0%. This count includes substantial direct tests;
+it is a scope/maintenance constraint discrepancy, not a claim that the extra code is worthless.
+Plan §25 deliberately expands §1.4's original garment-only product, while AGENTS still describes
+the original boundary. The plan wins, but the unchanged ceiling and current priority need resolving.
+`ftx-trace/Cargo.toml` also depends on `ftx-export`, outside the documented core/pattern-only direction.
+Inspect its concrete preview/text use before deciding whether a small shared-kernel move is justified.
+
+Other concrete drift: README's phase badge says Phase 1 despite claimed G1–G4 passage; its fitting
+description still says fifteen measurements while the implementation has 21; CLI CONTRACT's outfit
+command describes sequential draping, whereas `docs/outfit.md` and source correctly describe frozen
+composition. Spec 06's initial thermal boundary predates implemented transient/coverage work. The
+fold viewer includes remote Three.js imports despite being described as self-contained. Local
+computation is not the same claim as an offline-complete HTML artifact.
+
+Correct these specific facts in existing truth sources after the capability decisions; do not create
+another competing architecture plan or refactor the entire workspace to satisfy a line counter.
+
+## Backlog reality and the “finish every open Bead” test
+
+Read-only parsing of the active `.beads/issues.jsonl` gives **74 issues: 47 closed, 26 open and one
+in progress**. These are parsed portable-source counts, not a successful `br stats` result.
+`bv` can read that source and reports no cycles, but a clean graph cannot diagnose absent tasks.
+
+Two distinct comments on `ftx-enu` both have `id: 1`, the same author/time and slightly different
+wording. Current `br` rejects the import before reading or creating issues. The exact portable
+source was preserved; neither comment was discarded or manually renumbered. Repeated attempts
+left ignored recovery artifacts; no destructive recovery was attempted.
+
+SHA-256 of the inspected backlog sources:
+
+- `issues.jsonl`: `98cc1f05a150449051338c17a17beecba0af8d25e574b46b82262cccf020793c`
+- `material-study-additions.jsonl`: `e9b365c30ce13c9e4fcaf474810385297aba246d8dd96b7a521fe3824f3af756`
+
+The separate additions file contains `ftx-ms1` (closed), `ftx-ms2` (open P0) and `ftx-ms3` (open P1).
+None is in the active issue file. The plan also refers to `ftx-cv1`, `ftx-cv2`, `ftx-cv3` and
+`ftx-cv4`, which are absent from both active issue rows and the three-row additions file. Some of
+their software is now implemented, so these references must be reconciled against actual delivered
+scope rather than blindly recreated as new implementation work.
+
+| Goal / gap | Existing actionable coverage | Would completing the present active backlog close it? |
+|---|---|---|
+| Matched material mechanics and fixed-jacket acceptance | `ftx-tm2`, `ftx-md1`, `ftx-tm8`, targeted source issues | Yes only if their empirical acceptance is actually met, rather than closed on synthetic tests. |
+| Qualified thermal data, compression/moisture and garment exchange | `ftx-tma/b/c/e/f`, `ftx-cp2`, `ftx-ex2/3`, `ftx-op1`, `ftx-np1` | Substantial coverage; full-garment acceptance is more concrete in absent `ftx-cv2` and should be made active. |
+| Live supplier and process qualification | `ftx-tm6/7`, `ftx-sr2`, `ftx-pq1`, `ftx-sp2` | Broadly covered; clock portability needs a concrete defect/test. |
+| Recovery/plasticity/damage empirical work | `ftx-tm4`, `ftx-rc1/2`, `ftx-ps1` | Broadly covered, with several software portions already delivered. Do not reimplement them. |
+| Scenario study and raw M1 source-unit follow-up | `ftx-ms2/3` only in the separate additions file | No active scheduling coverage; parent descriptions are not these actionable tasks. |
+| Trace compatibility policy | `ftx-q3m` in progress | Covered, but its old description/comments need a final residual-scope decision. |
+| Numerical completion/physical settledness and saved report basis | No dedicated open task; `ftx-onn` only names the gauntlet | No concrete repair/acceptance coverage. |
+| Production-Anny multi-frame and real-photo exit acceptance | Original FTX-19/20/21 tasks are closed; parity map remains partial | No dedicated open acceptance task. |
+| Repeated benchmarks, complete determinism lanes, fresh-install/user smoke | Broad `ftx-onn` only | Not sufficiently specified to ensure these deliverables. |
+| Current scope/budget/direction and command-document reconciliation | Truth-sync `ftx-eoi` closed | No concrete active follow-up. |
+| Private real-wearer muslin comparison | No dedicated acceptance task found | No. Do not infer it from model fitting or add personal evidence to Git. |
+
+Thus the answer is **no**: the current open/in-progress list does not guarantee the complete vision.
+The material work is largely tracked; numerical acceptance, realistic input acceptance and current
+release proof need specific coverage. This does not call for a second large project-management system.
+
+## Bridge plan and Bead-ready work
+
+These are **proposed work identifiers, not created Bead IDs**. `br create` and final flush failed.
+Use only `br` to register/revise issues once its lossless import is operational. Reuse existing
+parents and source tasks. Each implementation item below has explicit companion verification work;
+do not close either on a planning document or on unavailable infrastructure.
+
+| Proposed work | Priority / size | Smallest implementation and completion condition | Companion verification / dependencies |
+|---|---|---|---|
+| R1 Restore lossless backlog operations | P1 / S, operational prerequisite | Preserve original source bytes, all 74 active rows, both comment texts and every relation; recover with supported `br` operations. Reconcile staged `ms1/2/3` without overwriting later edits. Match absent `cv*` references to delivered/remaining scope. | `br show`, `br doctor`, `br sync --status`, successful flush, and `bv` no cycles/dangling prerequisites. Recount/preserve all imported information. Do not skip the entire `ftx-enu` record. |
+| R2 Make numerical completion an independent drape acceptance basis | P0 / M | In existing `cloth.rs`, `scene.rs`, `run.rs` and CLI/round consumers, stop or explicitly fail numerical acceptance on a stalled accepted solve; retain per-phase convergence/residual/speed evidence in the saved report. Implement or explicitly delimit production settle behavior. Preserve oracle metrics and identify the native verdict separately. | R2-test: force low Newton limits/stall and periodic equal-window-mean motion; no ordinary successful physical verdict or stale output. Cover direct CLI, round, shared WASM/scenario and history rollback. Existing oracle metrics must remain unchanged unless a named exception is deliberate. R1 only blocks recording, not implementation. |
+| R3 Execute the existing G1/G2/G4 proof on current production assets | P1 / M execution; small script changes only if necessary | Obtain the pinned converted model outside Git, verify it, and use supported remote gates to execute forward/hash/pose/fitting, release contact KATs, fitted garment KATs, native debug/release and compiled-WASM/browser comparisons. Record failures and exclusions separately. | R3-test: prove the commanded tests actually ran; absent asset/browser/worker is unavailable, never green. Include default/sourced and representative history paths. Use existing scripts; no new gate framework. Depends on R2 for an honest final acceptance claim. |
+| R4 Complete capture-to-fitted-body acceptance | P1 / M–L | Keep external decoder/model boundaries; provide a concrete reproducible local sequence from decoded timestamps, sheet calibration and reviewed correspondences/masks through `fit-body` to accepted body → round. Add production-asset and independent ruler-in-frame acceptance missing from closed FTX-19/20/21. | R4-test: full-scale Anny synthetic recovery, held-out observations, moving poses, focal/depth ambiguity and failed scale/still-window cases; then private independently measured photo/tape residuals. No tiny-model test may stand in for the production-asset result. Follow plan's 3 mm girth / 2 mm length synthetic gate where applicable; retain actual empirical residuals. |
+| R5 Finish matched three-material and garment experiments | P0 / L, existing work | Execute `ftx-tm2`, `ftx-md1`, staged `ftx-ms3` and related acquisition tasks: exact lot, conditioned mass/thickness, warp/weft/shear/bending, pair friction, domains/replicates and compatible thermal/process observations. Use existing calibration/resolution; no generic fibre coefficients. | Companion acceptance is existing `ftx-tm8` plus `ftx-tmf`/`ftx-sp2`: independent held-out coupons first, unchanged jacket/body/material-only swaps next, measured drape/thermal/seam comparisons last. Compare failures, residuals and source bounds separately. R3 before final software parity claim; no false dependency that prevents independent acquisition now. |
+| R6 Close qualified transport/process/purchasing slices | P1 / L, existing work | Continue existing `tm5/tmb/tmc/cp2/ex2/ex3/op1/np1`, `tm6/sr2/pq1`, `tm7/sp2`; restore missing full-garment coverage/study acceptance to active tracking. Complete local compression/moisture and physical face/recipe/source qualification only where observations support them. | Existing analytic conservation/remap/refusal tests plus held-out coupon/garment/process and permitted live-source acceptance. Distinguish capabilities, experiments and hardware authorization. Avoid a monolithic dependency that blocks useful steady transport on absent mechanics. |
+| R7 Stabilize supplier source-clock validation | P1 / S | In `valid_period`, explicitly reject clock hours/minutes/seconds outside the schema before `fromisoformat`; preserve supported offsets, source precision and inclusive expiry. Existing test already demonstrates the defect. | R7-test: run the existing 84-test suite under supported Python versions, including 3.14/3.15 if supported; retain `24:00:00`, invalid offset minutes, leap-second and fractional-precision cases. Add focused cases only for newly exposed normalization holes. Relates to `ftx-tm6`; does not need new source acquisition. |
+| R8 Align user-visible scope and numerical defaults | P1/P2 / S | Update existing README/FEATURE_PARITY/CONTRACT/spec statements: phase, 21 tapes, frozen `outfit --sim`, current thermal implementation, body-only versus self-contact, opt-in two-start, actual viewer network dependency. Make the explicit scope/budget decision for §25 and the 120k ceiling; resolve the trace→export rule against its actual uses. | R8-test: check documented commands against actual CLI tests/help and browser behavior; verify supported default/refusal examples. No command parser redesign, new crate, whole-tree refactor or automatic feature removal. R2/R3 determine justified gate wording. |
+| R9 Produce bounded performance and delivery evidence | P1 / M | Extend existing examples/check scripts only as needed to repeatedly time fixed bolero/trousers and representative material/history/scenario cases. Retain machine, commit, inputs/model/material hashes, build options, workload, warm/cold policy and spread. Document executable/browser setup and asset conversion/discovery from a fresh checkout. | R9-test: compare §11.7 native <60 s / browser <300 s targets on the stated hardware; include full contact policy and no incomplete solves. Run real CLI/Chromium smoke and matched digests. Do not call an oversubscribed remote timing an M4 laptop benchmark. No new benchmark framework required. Depends on R2/R3, then feeds `ftx-onn`. |
+| R10 Private muslin prediction check and G5 completion | P1 / empirical + existing gate | Compare one supported garment's predeclared predicted issues with a privately retained muslin/dressed result and independent measurements. Resolve discrepancies in geometry/body/material assumptions; report residuals without replacing tests with anecdotes. Complete `ftx-onn` within a declared release scope. | Local/private fit evidence never enters Git. G5 still requires its existing convergence/negative-ledger acceptance and two clean rounds; the assessment is not one of those passed rounds. Depends on the relevant R2–R5/R9 results; broader §25 research may remain a clearly labelled preview if release scope explicitly says so. |
+
+### Dependency order and immediate priorities
+
+The practical order is R2 numerical verdict correctness and R7's small existing regression, while
+matched specimen acquisition R5 proceeds independently. Recover R1 so work is actually schedulable;
+restore remote proof access and execute R3. R4/R5 supply realistic-input and empirical evidence;
+R6 extends only qualified capabilities. R8 fixes exact claims; R9/R10 provide benchmark/release/fit
+evidence. These are gates on claims, not a reason to withhold useful partial source-data consumers.
+
+Do not select more optional constitutive features simply because the data/experiments are harder.
+The current library already supports more material behavior than its matched empirical acceptance
+can establish. Keep calibration work tied to acquired specimens and the fixed-pattern consumer path.
+
+### Ambition and refinement outcome
+
+Three challenge passes improved the plan: from missing-feature inventory to a complete user route;
+from additional material breadth to matched, held-out experiments; and from persuasive pictures to
+independent numerical, physical, performance and fit acceptance. No speculative mathematical subsystem
+was added merely to make the plan appear ambitious.
+
+Four refinement passes checked completeness, reuse, tests and dependencies. They retained the
+external decoder/privacy boundaries, avoided recreating existing solvers/calibrators, separated
+missing data from unavailable computation, added explicit stalled-solve and realistic-model tests,
+and identified the active/staged backlog discrepancy. Final review found no reason to add another
+implementation framework. `bv` validates the existing active graph only; the proposed additions could
+not be inserted or graph-validated because `br` import is broken. No Bead-generation success is claimed.
+
+## Handoff
+
+Deliverable is this one report. Product sources, fixtures, plan, README and both backlog JSONLs were
+left unchanged. No branches, worktrees, commits, releases or external messages were created. The
+Agent Mail report reservation is released at closeout. An untracked
+`.ee/hook-state/session_start_orient.last.json` also appeared during the session; it was preserved
+rather than deleted.
+
+The next high-value work is an honest numerical acceptance boundary and the matched three-material
+experiment, backed by current production-asset execution. More module count or catalogue rows cannot
+substitute for either result.
+
+## Implementation follow-through — 2026-10-20
+
+This checklist follows the user's request to implement the highest-value repairs and track the
+remaining work. It is a session handoff, retired as an active checklist when its rows are resolved
+or handed back to the named Beads. It is not another release gate or evidence of physical validity.
+The original assessment above describes `6410556`, not the repaired tree.
+
+- [x] R1: preserve the complete Beads directory before repair; retain all 74 original issues,
+  114 dependencies and 65 comments, including both distinct `ftx-enu` comments formerly numbered 1.
+- [x] R1: assign the second duplicate comment the unused ID 65; recover supported `br` operations.
+- [x] R1: reconcile the three staged material-study issues additively, preserving five dependencies;
+  verify canonical sync and successful flush. `br doctor` reports healthy data with warnings about
+  its stale merge anchor and missing optional WAL-index ignore pattern; it is not an all-green result.
+- [x] Register and complete `ftx-6en` (P0) and `ftx-dzf` (P1), with existing parent gates retained.
+- [x] R7 / `ftx-dzf`: explicitly reject source-clock overflow before Python datetime normalization;
+  retain valid offsets, expiry, source precision and source data. Implemented in `b23c281`.
+- [x] R7: fresh solo rerun of `python3.12`, `python3.13`, `python3.14`, and `python3.15`, each with
+  `-m unittest discover -s scripts`: **84 passed on each version**. Parent `ftx-tm6` stays open.
+- [x] R2 / `ftx-6en`: require every inner Newton solve, including friction rounds, to converge;
+  return a structured refusal with residual/correction diagnostics otherwise (`9cef987`).
+- [x] R2: preserve accepted geometry, velocities, contact lag and caches on step/static-solve failure;
+  preserve the phase's contact-offset ramp on failure too (`ed0fdee`).
+- [x] R2: retain per-step Newton reports and actual maximum speeds in phase reports and saved
+  `numerical` output; gate gravity drapes lacking three consecutive steps at at most 1 mm/s.
+- [x] R2: preserve reference metric values/texts; mark sewing-only gravity settling unavailable;
+  validate the existing adaptive `Solver::settle` limits rather than admitting an empty quiet window.
+- [x] R2: direct exhaustion/rollback/replay, line-search failure, valid quiet window, oscillatory
+  cancellation and qualification tests: **113 drape library tests passed remotely** on `vmi1227854`.
+- [x] R2: actual material-to-drape diagnostic/gating and failed-phase frame/ramp rollback:
+  **10 material integration tests passed remotely**. Direct CLI JSON and human output expose numerical status.
+- [x] R2/R3: strict remote all-target clippy with `-D warnings`, and `ftx-wasm` compilation passed.
+  Compiled Node/WASM admitted the full pinned model and refused malformed bytes. The synthetic
+  articulated plastic-heating report matches the complete native JSON; a short loose-band run
+  is numerically gated and excluded from the frontier in actual WASM. This is not browser navigation
+  or G4. Final all-target clippy also passes on fixed base `4bb1129` with the four explicit Rust overlays.
+- [x] R2: corrected full native CLI integration passes (1 test, 8 filtered; 236.94 s), retaining
+  plastic work, heat balance, both-CLI equality, frontier and coverage-only assertions. Actual direct
+  `ftx drape` and immutable `round --sim` also return exit 2 with the numerical gating flag saved.
+- [x] R2/R3: execute the full debug workspace: 1,536 passed, 2 failed, 28 ignored on its older
+  snapshot. Both failed targets have passing current focused reruns: CLI (1 test, 8 filtered) and
+  WASM scenario (3 tests). This is not a claim that a full current-snapshot command returned zero.
+- [x] R2/R3: final frozen release run passes 114 library tests and all 4 contact KATs. Static-ring
+  gauge constraints and 4 mm mesh converge in 13 iterations with ~5.5 µm clearance error, within
+  the unchanged 20 µm limit. Pinned contact digest and cone/cylinder friction inequalities pass.
+- [x] R2/R3: verify the kernel's increased 300-iteration work budget against the full production
+  elastic ladder: all eight garments at friction 0.3/0.5 finish with no gating flags; original grip,
+  waistband and monotonicity assertions pass. Final frozen release total: 119 passed, zero ignored.
+  Complete fresh solo review and close `ftx-6en`; performance, empirical fit and release remain separate.
+- [x] R8: correct the 21-tape description, frozen `outfit --sim` command, and numerical/parity
+  boundaries in README and touched contracts (`60ae9b4`). Full scope/budget review remains open.
+- [x] R3 / `ftx-eju`: reproduce the pinned converted asset with unchanged integrity checks; record
+  supported environment and SHA-256 in `tools/body-model/PIN.md`. Linux conversion drift remains
+  refused. Install the hash-checked model at the local documented default cache path outside Git.
+  No oracle, pin, array hash or comparison tolerance changed.
+- [x] R3: run all normally ignored production-Anny body tests against that admitted asset:
+  **33 passed, zero ignored** (25 unit, 3 forward parity, 1 pose, 4 fitting). Sixteen forward cases
+  differ by at most 1.049e-14 m; ten pose cases by at most 8.82e-16 m. Synthetic tape recovery passes
+  its existing 1.5 mm bound. Public-prior wearer residuals remain reported, not real-person fit proof.
+- [x] R3: five non-contact KATs, all four production fitted-bolero tests and all four final contact
+  KATs pass on the admitted asset where required; physical assertions and pinned digests are intact.
+- [x] R3: finish the production elastic-trouser ladder. Its earlier 100-iteration refusal is retained;
+  the 300-iteration candidate passes both friction values. G2's current-hardware budget proof remains
+  separate (R9); oversubscribed remote test elapsed time is not an M4 benchmark.
+- [ ] R4: complete production-model capture-to-body acceptance, then private photo/tape comparisons.
+- [ ] R5: acquire matched specimens/raw observations and execute held-out coupons and fixed-jacket
+  swaps (`ftx-tm2`, `ftx-md1`, restored `ftx-ms3`, `ftx-tm8`, `ftx-tmf`).
+- [ ] R6: continue source-qualified thermal/process/purchasing slices through their existing tasks;
+  restored `ftx-ms2` remains open. No new coefficients or physical acceptance are inferred here.
+- [ ] R9/R10: current hardware/input-bound benchmarks, native/wasm/browser comparisons, private
+  muslin evidence and the existing `ftx-onn` release gate remain required.
+- [x] Finalize fresh self-review, Beads evidence/flush and handoff notes; report failed/unavailable
+  checks separately. Reservation release follows the final commit.
+
+Raw command output for this block is retained outside the repository at
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-followthrough-20261020T214254Z/`.
+Remote checks use `RCH_REQUIRE_REMOTE=1`; the laptop's `sbh check --need 20G` failed its free-space-ratio
+gate, so no heavy local compilation was substituted. This is not a current garment benchmark or G2 pass.
+
+At handoff the live backlog has 83 issues, 127 dependencies and 82 comments; the original 74 rows,
+114 dependencies and 65 comments were preserved. New
+`ftx-eju` is closed after admitted-asset reproduction, source-backed diagonal-drift diagnosis and
+successful body/fitted-bolero execution; `ftx-6en` is also closed after the completed release run.
+The corrected articulated
+collar (`y0 = -600 mm`, because placement subtracts the offset) directly replays with no gates,
+zero final speed, positive post-settle plastic work and the expected cooler unconverted frontier;
+the compiled integration assertion run passes. The final staged four-Rust-file UBS scan exits 1
+with one critical match
+at `Command::new(binary)` in the existing helper: every caller supplies a Cargo `env!` binary path,
+not user input. This is a reviewed false positive; 739 inventory warnings remain, not a clean scan.
+Changed-line findings were reviewed; no scanner suppression or test weakening was added.
+
+Final checks use RCH's existing clean-overlay mode: fixed base `4bb1129` plus the literal touched
+Rust files, with no branch or worktree. Concurrent commits invalidated an earlier content-mode
+receipt; its runtime output is diagnostic, not a confirmed gate. The frozen WASM build passes,
+remote/local artifact SHA-256 matches, and its complete synthetic plastic report equals native
+JSON; the short loose-band negative is also gated in that artifact. Browser navigation and G4
+remain unclaimed. Final all-target clippy passes with the same four-file overlay fingerprint
+`41fb42b9…`; release library/contact/elastic tests all pass. The broad
+workspace failures and their passing focused reruns are listed separately above.
+
+### Fresh self-review of this implementation block
+
+Creation-gate worksheet: running code does not consume this checklist. Its consumer is the user who
+explicitly requested a granular TODO list; its gate is an accurate implementation handoff; its observed
+defects are the lost backlog rows and unsupported numerical verdict described above. The checklist
+retires at handoff into its named Beads. Recovery snapshots are separate minimal integrity controls:
+they preserve both DB-only work and incoming JSONL before reconciliation of demonstrated corruption;
+both stores are needed, a copy is the smallest reliable protection, and no cheaper destructive rebuild
+is justified. The ready capability priority is numerical acceptance (`ftx-6en`); an hour of additional
+report machinery would have less value. Verdict: keep only this requested checklist and command logs.
+
+Real-work worksheet, task-owned changes since the initial assessment: source-clock repair, numerical
+solver/report behavior and user documentation are USER (3); direct regression execution is ENABLER
+(1); backlog recovery and this requested handoff are PROCESS (2); UNKNOWN (0). Concurrent material
+features committed by other sessions are excluded from this task's delivery credit. The most visible
+result is a moving drape retaining its diagnostics and gaining a gating flag. Without the process work,
+the capability would still exist but scheduling/evidence would again be lost to the duplicate-comment
+import failure. Existing CLI/scenario/wasm consumers exercise the solver/report seam; no new framework
+was built. The older release and measured-material tasks remain open because numerical correctness
+precedes their acceptance and physical specimens cannot be invented. No swarm was dispatched. No plan
+edit substitutes for implementation and no parent gate was closed by creating these repair items.
+Verdict: capability work dominates; continue focused checks, not more machinery.
+
+Honesty inventory (solo self-review, **not independent verification**):
+
+1. No (checked: task-owned test diffs retain the positive frontier, heat-accounting, replay and KAT
+   assertions; added a short-run negative and a physically supported positive input).
+2. No (checked: rollback, phase and CLI tests use the actual solver; synthetic report arithmetic is
+   labelled and is not counted as measured cloth proof).
+3. No (checked: oracle capture scripts and oracle fixtures are unchanged).
+4. Yes: this repair changes the runtime acceptance gate and its tests together. It strengthens
+   acceptance; no tolerance, ignore, suppression or bypass was added. Original positive checks remain.
+   Countermeasure RH-1: retain those assertions and execute the new negative and real positive paths.
+5. Fixture inputs changed after stricter acceptance exposed unsupported positives: a 3 ms loose band
+   and an inadequately hardened plastic band. This is disclosed, not a numerical-limit adjustment;
+   the original short-run negative remains. The elastic positive passed before the later plastic
+   comparison failed. The revised plastic positive still requires actual execution before credit.
+6. No (checked: 84 Python tests per version and 112 initial drape tests actually ran; filtered focused
+   commands are reported with their denominators, not as full workspace results).
+7. No (checked: saved command output; pending or failed broader checks are not called passed).
+8. No (checked: synthetic Anny interchange and invented materials remain software evidence only).
+9. The initial workspace run failed at the comparison frontier; the next focused run reached and
+   failed the plastic frontier. Both failures are retained in logs and this handoff; no all-green
+   workspace claim or closure of `ftx-6en` is made on that evidence.
+10. No (checked: command logs combine stdout and stderr; CASS timeout output was retained).
+11. No (checked: only the narrow timestamp bug was closed after fresh four-version execution;
+    numerical, release and empirical parents remain open).
+12. No (checked: the technical plan was not changed by this task; docs distinguish legacy metrics
+    from the stricter result and retain the unmet production-asset and empirical gates).
+13–17. Not applicable: no delegated agents or panes were dispatched or accepted as independent proof;
+    concurrent external commits are not credited as this task's verified delivery.
+18. No (checked: test-command denominators and explicit exclusions; no aggregate completion score).
+19. The moments requiring explanation are the physical test-input changes and the repeated upstream
+    restoration of old backlog bytes. Neither is a reason to hide failures or overwrite DB-only work.
+20. Strongest current evidence: real solver rollback/replay plus the direct CLI test reaching the
+    genuinely settled elastic frontier with all positive assertions intact. Full completion still
+    depends on the pending commands and plastic case, not this statement.
+
+Older-session inventory is unavailable: CASS reported a healthy index, but the bounded project-scoped
+search timed out. This block does not claim an audit of older sessions. Disposition: no test weakening,
+oracle regeneration or false closure found in this bounded review; observed invalid positive fixtures
+are being corrected with explicit negative coverage and original positive acceptance retained (RH-1,
+RH-2). Final command outcomes below supersede the intermediate status in this inventory.
+
+### Completed follow-through disposition
+
+Closed `ftx-dzf`, `ftx-eju` and `ftx-6en`; the larger source acquisition, capture acceptance,
+performance, browser and private-muslin Beads remain open. Fresh solo review, not independent
+verification: original physical inequalities, heat balances, parity tolerances and oracle bytes are
+retained. Synthetic inputs and the static-ring constraints/mesh were corrected openly; no failed
+physical cell was reclassified as excluded or accepted by relaxing accuracy.
+
+Confirmed remote results: 33 production-body tests; five non-contact KATs; four fitted-bolero tests;
+119 final release library/contact/elastic tests; final all-target clippy with `-D warnings`; WASM
+build and actual compiled-WASM positive/negative replay. The full older-snapshot workspace command
+returned 101 (1,536 passed, 2 failed, 28 ignored); both failed targets have passing current focused
+reruns. No full current-snapshot zero-exit workspace run, browser navigation, hardware-bound
+performance result, empirical material qualification, real-person fit or complete G2/G4/G5 pass
+is claimed. The pinned model is now installed in the documented local cache outside Git.
+
+### Browser continuation — `ftx-onn.1`
+
+- [x] Refresh the live tree, ready Beads and existing frontend lane (64 passed, two optional cases skipped).
+- [x] Identify obsolete round/body reuse and missing round-handle cleanup in the primary workshop.
+- [x] Withdraw round/fold downloads when their actual inputs change or a replacement starts.
+- [x] Bind worker replies and fold source documents to current round/body request identities.
+- [x] Reject superseded async file reads; clear an absent or refused replacement body.
+- [x] Free round handles on every extraction path; retain valid latest round/body/fold behavior.
+- [x] Exercise positive, stale, failed replacement and cleanup paths in the existing frontend tests.
+  All four new regressions fail against the original `92e1cec` page/worker and pass on the repair.
+- [x] Run the existing compiled-WASM frontend lane with the previously confirmed frozen artifact;
+  record its source boundary, without calling it a current-source build or browser navigation.
+- [x] Finish the actual Chromium production-Anny bolero run, malformed replacement and result-withdrawal checks.
+- [x] Fresh solo review and scoped UBS scan; close the repair Bead and flush it.
+- [x] Prepare the scoped commit and reservation handoff; final completion receipts are in the session output.
+
+This repairs browser input/result association; it supplies no empirical fit, source-material or timing evidence.
+`FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_trace_frontend.cjs` passes
+**66 tests, zero skips**. The ordinary lane passes 64 with its two optional WASM cases skipped.
+The WASM input SHA-256 remains `25e19a8b0a5f059c132ee3919eadc71e994d8d6d39525298dbe0172faf97643f`:
+the previous confirmed fixed-base/four-overlay build, not a new compilation. The current Rust differences
+from that base are exactly those four paths; this block changes JavaScript and documentation only.
+
+The first Chromium command passes the three chart programs, URL revocation, production-model loading,
+malformed replacement refusal and actual production bolero drape (`gating: []`, numerical settled,
+30 consecutive quiet steps). It returns nonzero afterward because the test driver tries to fill the
+Style textarea without opening its enclosing details panel. That failure is retained; the corrected
+driver opens the panel and is rerunning the complete flow. Its earlier report and screenshot remain at
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-workbench-browser-6AYQtQ/`.
+The final driver and UBS outputs use the sibling `ftx-workbench-browser-final-IBMQDZ/` directory.
+Viewer HTML still depends on the CDN identified in R8. This block verifies reports and download
+lifecycle, not offline viewer rendering or the complete G4/G5 gate.
+`git diff --check`, `node --check web/worker.js`, and `node --check tools/check_materials_frontend.cjs`
+pass. The staged `ubs $(git diff --name-only --cached)` exits zero: two JavaScript files scanned,
+zero critical, 251 warning and 581 informational findings. Changed-line findings were reviewed:
+the listener warning is the test DOM adapter, deep-chain warnings are test assertions, and worker
+JSON extraction is inside its outer catch. HTML is outside that scanner lane and was reviewed
+directly and executed by the Node/Chromium checks. No suppression was added. No Rust source changes,
+fresh Cargo compile/test/clippy or hardware benchmark are part of this JavaScript repair.
+
+Fresh solo audit of this browser block (not independent verification):
+
+- Creation worksheet: this is the existing user-requested granular checklist, not runtime state.
+  Consumer: the user; gate: accurate handoff of `ftx-onn.1`; observed defect: old garment/model reuse;
+  retirement: completed checklist rows hand off to that Bead. No integrity-control exception is needed;
+  no new process artifact or framework is created. Highest actionable software item is this browser
+  repair; an hour extending the report would deliver less value. Verdict: keep this bounded extension.
+- Real-work worksheet: purpose is sewing patterns that sew together and fit a specific body, with usable
+  manufacturing files. USER 1 (browser repair/contract), ENABLER 1 (direct regressions), PROCESS 1
+  (requested checklist/Bead), UNKNOWN 0. Demo: edit an input and obsolete downloads/folding disappear.
+  Omitting process would change tracking, not runtime behavior. Existing page/worker code exercises the
+  tests; nothing speculative is enabled. Older material acquisition remains open because raw specimens
+  and physical validation are unavailable here. No swarm or plan edit substitutes for implementation;
+  no parent's unfinished acceptance was moved into this repair to close it. Verdict: HEALTHY; finish checks.
+- Honesty 1: No (checked: existing test assertions unchanged; four new tests added).
+  2: No (checked: explicit DOM/WASM doubles exercise actual modules and are labelled lifecycle evidence;
+  separate compiled-WASM and Chromium paths run actual production code).
+  3: No (checked: no oracle/golden/capture changes).
+  4: Runtime stale-result guards and their regressions change together; no accuracy, CI, ignore,
+  timeout, suppression or parity gate is relaxed. Original-source negatives fail on observable behavior.
+  5: No (checked: request identities apply to ordinary worker traffic, not fixture detection).
+  6: No (checked: focused five-test run and complete 66-test compiled lane have nonzero denominators).
+  7: No (checked: completed outputs distinguished from the pending corrected browser command).
+  8: No (checked: doubles, compiled WASM, real Chromium and the earlier frozen build are distinct claims).
+  9: The initial regression failed because its DOM double replaced rather than accumulated event
+  listeners; corrected the double to match DOM semantics, retaining every product assertion. The first
+  browser driver fails on the collapsed Style panel after the positive drape; its failure is disclosed.
+  10: No (checked: stderr retained in tool outputs or combined command logs).
+  11: No (checked: repair remains in progress pending final checks; empirical/release parents stay open).
+  12: No (checked: no technical-plan/spec edits; contract adds lifecycle behavior and labels old timings).
+  13–17: Not applicable because this block is solo, with no delegated reports or independent verifier.
+  18: No (checked: existing complete frontend lane and its optional-case denominator were selected before execution).
+  Older-session mining is outside this block; the earlier bounded CASS timeout remains disclosed above.
+  19: Explain the initial test-double and closed-panel driver mistakes and the earlier artifact's source boundary.
+  20: Strongest evidence is actual production-Anny browser settling plus original-source failing lifecycle
+  regressions; all are reproducible. Disposition: no test weakening or false closure found; RH-1/RH-2
+  countermeasures are retained assertions, original-source negatives and separately labelled runtime proof.
+
+Final browser disposition: the corrected complete command returns **zero**. All three chart drafts,
+empty-tape NOT_READY, invalid-stature refusal, revoked downloads, refused replacement model, actual
+production-Anny bolero drape and post-drape style invalidation pass. It records zero page errors;
+all four local HTTP requests carry the mandated user agent. Both browser runs produce byte-identical
+`sim_report.json`, SHA-256 `d6f1d1cf8c89db4b456e2d3b3018ae86b3fa795ad75dea0ca07415630fa624d4`.
+The bolero reports 30 consecutive quiet steps and no gating flags. No native comparison or benchmark
+is inferred from those repeated browser reports. The initial driver's failure above is superseded,
+not erased. `ftx-onn.1` is complete on fresh solo re-execution; parent `ftx-onn`, the physical-material,
+capture, offline-viewer and performance work remain open.
+
+### Offline-viewer continuation — `ftx-onn.2`
+
+- [x] Reproduce the current downloaded viewer offline: two attempted CDN imports, no canvas and no ready state.
+- [x] Retain exact Three.js r160 and OrbitControls bytes from the primary upstream tag, with hashes
+  and the complete MIT license; keep the existing renderer version and two-module closure.
+- [x] Document the named `viewer-offline-r160` HTML exception in spec 04 before implementation;
+  keep numerical payloads, oracle fixtures and capture scripts unchanged.
+- [x] Embed both modules and their notice through the existing shared `viewer_html` path;
+  replace template markers before user payload insertion and refuse missing/duplicated markers.
+- [x] Extend existing unit/CLI regressions and the existing browser checker with offline rendering,
+  frame/pixel changes, controls and zero HTTP(S) requests. No new harness or crate.
+- [ ] Pass focused Rust tests and the actual native viewer reconstruction.
+- [ ] Pass all-target clippy and current workspace tests on frozen remote inputs.
+- [ ] Build WASM and execute its viewer generation, then open that generated HTML fully offline.
+- [ ] Record actual native/WASM artifact and browser outcomes; do not credit preview templating as compiled proof.
+- [ ] Fresh solo audit, scoped UBS review, Beads evidence/flush, commit and reservation handoff.
+
+Checks are retained at
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-offline-viewer-checks-pwtimqo3/`.
+The laptop's fresh `sbh check --need 20G` fails its ratio threshold (200.6 GB available, 5.02% free),
+so Rust compilation remains strictly remote. Local `cargo fmt --check` and Node syntax checking pass.
+The first remote request refuses with RCH-E413/exit 103 because this task added the CLI fixture-path
+print while admission was queued. No local compilation followed; selected Rust/assets are now frozen
+and that request is retried. This is a source-freeze mistake, not a passing compiler result.
+An external HTML preview reuses the prior real production payload to check the proposed module packaging;
+it is labelled `preview-not-compiled.html` and cannot establish Rust/WASM generation acceptance.

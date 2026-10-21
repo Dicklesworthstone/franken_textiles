@@ -1,7 +1,7 @@
 //! Dry one-dimensional transient heat transport through source-bearing textile layers.
 //!
 //! A finite-volume RC model, not a comfort, weather, loft-compression or moisture model. Each layer's
-//! effective resistance and areal heat capacity are constant under the caller's declared conditions.
+//! effective properties are constant or follow its condition-qualified temperature observations.
 //! Every material comes from the same immutable selection used by mechanics and purchasing.
 
 use ftx_core::{Refusal, RefusalCode};
@@ -9,6 +9,11 @@ use ftx_pattern::material_catalog::ResolvedMaterial;
 use ftx_pattern::materials::Form;
 use serde_json::{Value, json};
 
+pub mod compression;
+pub mod exterior;
+mod heating;
+mod nonlinear;
+pub mod steady;
 pub mod surface;
 
 /// Prescribed temperatures and film resistances. A zero film means a prescribed surface temperature,
@@ -41,7 +46,7 @@ pub struct State {
 }
 
 /// Immutable material and discretization inputs. Refining space/time remains the caller's accuracy
-/// responsibility; unconditional stability is not an accuracy or experimental-validation claim.
+/// responsibility; numerical stability is not an accuracy or experimental-validation claim.
 #[derive(Clone, Debug)]
 pub struct DryThermalModel {
     layers: Vec<ResolvedMaterial>,
@@ -50,6 +55,7 @@ pub struct DryThermalModel {
     resistance: Vec<f64>,
     capacity: Vec<f64>,
     joins: Vec<f64>,
+    variable: Option<nonlinear::Variable>,
 }
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -80,6 +86,46 @@ fn temperature(value: f64) -> Result<(), Refusal> {
 }
 
 impl DryThermalModel {
+    // Re-express this column per unit COVERED BODY area, without modifying a single material
+    // observation. For layer i: R' = R * A_body/A_sheet_current, C' = C * A_sheet_ref/A_body.
+    // Interfaces and films already refer to covered-body area. Only the coverage adapter uses this
+    // temporary solve object; its public receipt retains original materials and explicit mappings.
+    fn with_area_factors(&self, resistance: &[f64], capacity: &[f64]) -> Result<Self, Refusal> {
+        if resistance.len() != self.layers.len() || capacity.len() != self.layers.len() {
+            return Err(invalid("one geometry factor is required per thermal layer"));
+        }
+        for &value in resistance.iter().chain(capacity) {
+            positive("thermal area factor", value)?;
+        }
+        let mut model = self.clone();
+        if let Some(variable) = &mut model.variable {
+            variable.scale_areas(resistance, capacity);
+        } else {
+            for i in 0..self.cells() {
+                let layer = i / self.cells_per_layer;
+                model.resistance[i] = positive(
+                    "scaled cell resistance",
+                    self.resistance[i] * resistance[layer],
+                )?;
+                model.capacity[i] =
+                    positive("scaled cell capacity", self.capacity[i] * capacity[layer])?;
+            }
+            for i in 1..self.cells() {
+                let interface = if i % self.cells_per_layer == 0 {
+                    self.interfaces[i / self.cells_per_layer - 1]
+                } else {
+                    0.0
+                };
+                let path = positive(
+                    "scaled thermal path",
+                    model.resistance[i - 1] / 2.0 + model.resistance[i] / 2.0 + interface,
+                )?;
+                model.joins[i - 1] = positive("scaled conductance", 1.0 / path)?;
+            }
+        }
+        Ok(model)
+    }
+
     /// Build a layer stack with equal cells within each layer. Interfaces are declared thermal
     /// contact/air-gap resistances, not inferred from drape, names, nominal loft or blend fractions.
     /// Fill is admitted only when it has separately characterized effective sheet R, mass and heat
@@ -105,6 +151,21 @@ impl DryThermalModel {
         }
         for &r in &interfaces {
             nonnegative("interface resistance", r)?;
+        }
+        if layers
+            .iter()
+            .any(|m| m.material().thermal_response.is_some())
+        {
+            let variable = nonlinear::Variable::new(&layers, &interfaces, cells_per_layer)?;
+            return Ok(Self {
+                layers,
+                interfaces,
+                cells_per_layer,
+                variable: Some(variable),
+                resistance: Vec::new(),
+                capacity: Vec::new(),
+                joins: Vec::new(),
+            });
         }
         let mut resistance = Vec::new();
         let mut capacity = Vec::new();
@@ -150,18 +211,62 @@ impl DryThermalModel {
             resistance,
             capacity,
             joins,
+            variable: None,
         })
     }
 
     /// Number of cell-centre temperatures required by [`Self::advance`].
     #[must_use]
     pub fn cells(&self) -> usize {
-        self.capacity.len()
+        self.layers.len() * self.cells_per_layer
+    }
+
+    /// Common characterized temperature interval for state AND reservoirs, or None for legacy
+    /// constants. This deliberately conservative scope never extrapolates a constituent curve.
+    #[must_use]
+    pub fn temperature_domain(&self) -> Option<[f64; 2]> {
+        self.variable.as_ref().map(nonlinear::Variable::domain)
+    }
+
+    /// Validate an initial material temperature without performing a step.
+    ///
+    /// # Errors
+    /// Non-finite temperature, below absolute zero, or outside the common characterized interval.
+    pub fn check_temperature(&self, value: f64) -> Result<(), Refusal> {
+        match &self.variable {
+            Some(law) => law.check(value),
+            None => temperature(value),
+        }
     }
 
     /// Source-complete model description. Serialize outside the numerical time-stepping loop.
     #[must_use]
     pub fn snapshot(&self) -> Value {
+        if let Some(variable) = &self.variable {
+            let polynomial = self.layers.iter().any(|m| {
+                m.material().thermal_response.as_ref().is_some_and(|r| {
+                    [&r.conductivity, &r.specific_heat]
+                        .into_iter()
+                        .flatten()
+                        .any(|s| s.polynomial.is_some())
+                })
+            });
+            let storage = if polynomial {
+                "integrated source-qualified specific heat (tabulated or polynomial) times reference mass"
+            } else {
+                "integrated piecewise-linear specific heat times reference mass"
+            };
+            return json!({"schema":"ftx-dry-thermal-model/2", "layers":self.layers,
+                "interface_resistance_m2_k_w":self.interfaces,"cells_per_layer":self.cells_per_layer,
+                "temperature_domain_c":variable.domain(),
+                "model":"temperature-dependent dry 1D finite volume; enthalpy backward Euler",
+                "transport":"cell-centre conductivity, harmonic half-cell paths; no extrapolation",
+                "storage":storage,
+                "solver":{"iteration_limit":nonlinear::ITERATIONS,"damping":0.5,
+                    "acceptance":"local nonlinear residual and global energy balance"},
+                "not_simulated":["human thermoregulation","moisture","evaporation","wind-dependent films",
+                    "compression-dependent loft","draped air-gap geometry","radiative exchange","thermal bridges"]});
+        }
         json!({"schema":"ftx-dry-thermal-model/1", "layers":self.layers,
             "interface_resistance_m2_k_w":self.interfaces,"cells_per_layer":self.cells_per_layer,
             "cell_resistance_m2_k_w":self.resistance,"cell_capacity_j_m2_k":self.capacity,
@@ -190,12 +295,17 @@ impl DryThermalModel {
         Ok(g)
     }
 
-    /// Exact steady solution of this discrete network; half-cell resistances locate cell centres.
+    /// Steady solution of this discrete network; half-cell resistances locate cell centres. Constant
+    /// properties use a direct solution; temperature curves require converged nonlinear residuals.
     ///
     /// # Errors
     /// Invalid boundary conditions or overflow. This still requires heat-capacity characterization,
-    /// because the same model is prepared for transients; use `ThermalStack` for resistance-only data.
+    /// because this model is prepared for transients; use [`steady::SteadyConductionModel`] for
+    /// transport-only data, including temperature-dependent conductivity without heat capacity.
     pub fn steady(&self, boundary: Boundary) -> Result<State, Refusal> {
+        if let Some(variable) = &self.variable {
+            return variable.solve(None, 1.0, boundary);
+        }
         let g = self.conductances(boundary)?;
         let r = positive("stack resistance", g.iter().map(|v| 1.0 / v).sum())?;
         let flux = (boundary.inside_c - boundary.outside_c) / r;
@@ -220,11 +330,15 @@ impl DryThermalModel {
     }
 
     /// One conservative backward-Euler step. The caller's state is untouched on failure. Boundary
-    /// temperatures/films may change between steps; source-bearing layer properties remain fixed.
+    /// temperatures/films may change between steps. Source observations remain fixed; their bounded
+    /// temperature laws update resistance and integrated sensible heat automatically.
     ///
     /// # Errors
     /// Wrong state size, invalid time/temperature, coefficient overflow or failed energy balance.
     pub fn advance(&self, old: &[f64], seconds: f64, boundary: Boundary) -> Result<State, Refusal> {
+        if let Some(variable) = &self.variable {
+            return variable.solve(Some(old), seconds, boundary);
+        }
         positive("thermal time step", seconds)?;
         if old.len() != self.cells() {
             return Err(invalid("thermal state has the wrong cell count"));

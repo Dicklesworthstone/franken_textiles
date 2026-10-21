@@ -111,12 +111,24 @@ impl ClothModel {
 
     /// Reassembles mass and every constitutive coefficient atomically, leaving rest geometry,
     /// topology, seam welds and elastic segments unchanged. Call before creating a new solver for
-    /// a material substitution. Resets compression to the supplied factors; reapply gathered zones
-    /// with `set_compression` afterward. No factor or old material coefficient is silently reused.
+    /// a material substitution. Resets compression to the supplied factors and clears any previous
+    /// nonlinear membrane responses and fitted domains; reapply gathered zones and the new response field
+    /// afterward. No factor or old material coefficient is silently reused.
     ///
     /// # Errors
-    /// Invalid/mismatched materials, mass underflow/overflow, or unrepresentable bending coefficients.
+    /// Invalid/mismatched materials, existing panel/attachment bindings, mass underflow/overflow,
+    /// or unrepresentable bending coefficients.
     pub fn set_materials(&mut self, materials: &[SheetMaterial]) -> Result<(), Refusal> {
+        if self.attached_mass.is_some() {
+            return Err(bad(
+                "rebuild the scene to replace sheet materials with source-bound attached mass",
+            ));
+        }
+        if self.panel_bending.is_some() {
+            return Err(bad(
+                "rebuild the cloth model to replace materials bound to panel bending",
+            ));
+        }
         if materials.len() != self.membranes.len() || materials.is_empty() {
             return Err(bad("one sheet material per triangle is required"));
         }
@@ -159,6 +171,8 @@ impl ClothModel {
         self.compression = materials.iter().map(|m| m.membrane.compression).collect();
         self.element_materials =
             heterogeneous.then(|| materials.iter().map(|m| m.membrane).collect());
+        self.element_responses = None;
+        self.element_domains = None;
         self.hinge_bending = heterogeneous.then_some(bending);
         Ok(())
     }

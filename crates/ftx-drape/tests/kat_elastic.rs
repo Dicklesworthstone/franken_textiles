@@ -80,7 +80,7 @@ fn kat7_elastic_ladder() {
                     let (body, spec, opts) = (&body, &case["input"]["fit_spec"], &opts);
                     s.spawn(move || {
                         drape(&Pattern::new(raw), spec, body, opts, |_| {})
-                            .unwrap()
+                            .unwrap_or_else(|e| panic!("mu {mu}, {frac} x waist: {e:?}"))
                             .report
                     })
                 })

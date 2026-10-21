@@ -36,6 +36,27 @@ Python's `str(KeyError)`; `Value` prints as is).
 
 **Determinism class.** Fixed-order f64 arithmetic over `ftx-core`; bit-identical across targets.
 
+**Retained extra mass** (`material_mass`). One shared source-qualified total-group `Extra` observation
+feeds assembly accounting and optional `attached_mass` dynamics. Explicit physical instance/boundary
+vertex targets allocate fractions summing to one; mirrors are never inferred and mass is not multiplied
+by target count. Unknown or unadmitted observations stay unknown for accounting. Dynamics requires an
+admitted nominal kg value. Structural, evidence and budget failures are typed refusals. Schema, units,
+shared-ID semantics and the point-mass/no-accessory-geometry boundary are in `docs/attached-mass.md`;
+synthetic tests are `tests/attached_mass.rs`.
+
+**Permanent membrane identification** (`material_membrane_plasticity::calibration`). Whole acquired
+histories replay the existing raw-Green/second-Piola incremental return map from explicitly pristine
+reference states. Four source-qualified elastic observations and six independently supplied strain/
+accumulation domains stay fixed; only six yield/hardening values are identified inside declared bounds.
+FIT alone controls bounded multistart optimization, equivalent-candidate checks and local sensitivity;
+CHECK replays the fixed choice afterwards. Missing force channels remain absent while their strain
+nodes advance memory. Numerical bound projection never substitutes for stationarity, and every forward
+probe/refusal/replay consumes the shared work budget. Ambiguous, incomplete or rejected reports carry
+no material. Accepted source-bearing fitted quantities remain estimates with no inferred confidence,
+continuous-path, measured-textile, damage, fatigue or empirical garment claim. The independent synthetic
+cycle fixture and `tests/membrane_plasticity_calibration.rs` exercise signed history, coupled elasticity,
+unobserved peaks, held-out isolation and constrained identification.
+
 **Validation** (`validate`, spec 01 §9): seam walk, truing, points of measure, report status, text table
 and the role-based default fit spec. The body comes through the `BodyMeasure` trait (values, σ, landmark
 heights); `Measurements` implements it for a measurement file (flat or fused) with the reference's
@@ -90,3 +111,25 @@ measurement (`invalid_document` naming it, the reference's `KeyError`). No claim
 and the simulator's placement helpers (spec 02 B.6–B.7; the drape places pieces on Anny); the fez's
 taper refusal, which the style ranges make unreachable (the widest allowed sector is 314°); a braid line
 that comes back within twice its inset of itself (the curve would then need the buffer's other side).
+
+**Bounded thermal fits** (`material_thermal`, `tests/thermal_polynomial.rs`). A thermal series
+contains either reported temperature observations or an explicitly classified polynomial fit of
+maximum degree three. Coefficients are in ascending Celsius powers and canonical output units;
+fits preserve their source/method/domain and never acquire measured-knot status. Admission checks
+positive values at both endpoints and all interior stationary points and refuses numerically
+cancellation-dominated positivity. All fitted/interpolated laws require explicit estimate consent.
+Local Simpson integration is algebraically exact through cubic degree and avoids subtracting large
+absolute enthalpies near equilibrium. Existing tabulated arithmetic and serialization are unchanged.
+The same law reaches dry thermal stepping and source-locked surface replay; evidence qualification
+is independent from physical specimen validation, uncertainty propagation and garment safety.
+
+**Purchasing instants** (`material_cost`). `ftx-textile-quotes/1` retains its calendar-only observation,
+scope and conflict semantics. Explicit `/2` books require UTC source timestamps and an explicit
+matching-date evaluation instant. Bounded Gregorian/clock parsing and integer nanoseconds establish
+ordering without platform timezones or floating-point truncation; unsupported clocks refuse. Choose
+the latest observation at or before evaluation before checking inclusive source expiry, availability,
+exact material lock and complete minimum/increment-rounded stock. A failed latest observation never
+revives an older price. Distinct records at the same instant conflict. Quote fields retain original
+source identity and estimates are not made into purchases or reserved inventory. The same evaluator
+feeds ordinary price commands, marker procurement and native/WASM studies; see
+`docs/textile-price-refresh.md` and the `material_cost` unit tests.

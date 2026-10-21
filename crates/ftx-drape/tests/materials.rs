@@ -160,6 +160,41 @@ fn the_real_drape_changes_when_only_material_observations_change() {
     );
     assert_eq!(a.report["mass_kg"], ma);
     assert_eq!(a.report["material"]["fit_claim"], false);
+    for run in [&a, &b] {
+        assert_eq!(run.sew.samples.len(), opts.sew_steps);
+        assert_eq!(run.drape.samples.len(), opts.drape_steps);
+        for sample in run.sew.samples.iter().chain(&run.drape.samples) {
+            assert!(sample.solve.converged);
+            assert!(sample.solve.residual.is_finite());
+            assert!(sample.solve.last_step / opts.step < opts.tol);
+        }
+        let speed = run
+            .scene
+            .solver
+            .v
+            .iter()
+            .map(|v| v.norm())
+            .fold(0.0, f64::max);
+        assert_eq!(run.drape.samples.last().unwrap().max_speed_m_s, speed);
+        assert_eq!(run.report["numerical"]["drape"]["max_speed"], speed);
+        assert_eq!(run.report["numerical"]["settled"], false);
+        assert!(
+            run.gating()
+                .iter()
+                .any(|s| s.starts_with("not numerically settled"))
+        );
+    }
+
+    let mut scene = a.scene;
+    scene.solver.max_newton = 0;
+    scene.solver.contact.as_mut().unwrap().params.thickness = 0.0;
+    let accepted = format!("{:?}", scene.solver);
+    let mut frames = 0;
+    let failure = ftx_drape::scene::run_phase(&mut scene, 1, opts.step, 9.81, |_, _| frames += 1)
+        .unwrap_err();
+    assert_eq!(failure.code, ftx_core::RefusalCode::NotConverged);
+    assert_eq!(frames, 0);
+    assert_eq!(format!("{:?}", scene.solver), accepted);
 }
 
 #[test]
@@ -300,6 +335,19 @@ fn swatch_identification_reaches_real_sewn_band_dynamics_without_pattern_edits()
             .unwrap();
         let pattern = band(json!({"material":selected.frozen_selection()}));
         let run = drape(&pattern, &json!({}), &body, &opts, |_| {}).unwrap();
+        let domain = resolve(&pattern, &opts)
+            .unwrap()
+            .fabric
+            .strain_domain()
+            .unwrap();
+        assert_eq!(
+            run.report["material"]["fitted_strain_range"],
+            json!(domain.ranges())
+        );
+        for (i, element) in run.scene.solver.model.membranes.iter().enumerate() {
+            assert_eq!(run.scene.solver.model.membrane_domain(i), Some(domain));
+            assert!(domain.contains(element.strain(&run.scene.solver.x)));
+        }
         (pattern, run)
     };
     let (pa, a) = solve(1.0);
@@ -327,4 +375,104 @@ fn swatch_identification_reaches_real_sewn_band_dynamics_without_pattern_edits()
         a.report["material"]["record_sha256"],
         b.report["material"]["record_sha256"]
     );
+}
+
+#[test]
+fn narrow_swatch_cannot_silently_extrapolate_during_sewn_scene_construction() {
+    use ftx_pattern::material_calibration::{Input, calibrate};
+    let mut input: Input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-swatch.json"
+    ))
+    .unwrap();
+    // Preserve the original acquisition's three FIT states: no negative shear was observed.
+    input.samples.truncate(4);
+    let identified = calibrate(&input).unwrap();
+    assert_eq!(identified.fitted_strain_range[2][0], 0.);
+    let pattern = band(json!({"material":{
+        "id":identified.material.id,"record":identified.material,"allow_estimates":true
+    }}));
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.,
+    };
+    let options = DrapeOptions {
+        spacing: 24.,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 1e-3,
+        ..DrapeOptions::default()
+    };
+    let refusal = drape(&pattern, &json!({}), &body, &options, |_| {})
+        .err()
+        .unwrap();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::OutOfRange);
+    assert!(
+        refusal.message.contains("outside fitted ranges"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn nonlinear_identification_changes_actual_sewn_dynamics_without_geometry_or_mass_edits() {
+    use ftx_pattern::material_calibration::nonlinear::{Input, calibrate};
+    use ftx_pattern::material_catalog::Selection;
+
+    let input: Input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-nonlinear-swatch.json"
+    ))
+    .unwrap();
+    let surface = body();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&surface.vertices, &surface.triangles),
+        display: (&surface.vertices, &surface.triangles),
+        arm_deg: 35.0,
+    };
+    let opts = DrapeOptions {
+        spacing: 24.0,
+        sew_steps: 3,
+        drape_steps: 3,
+        step: 1e-3,
+        ..DrapeOptions::default()
+    };
+    let solve = |scale: f64| {
+        let mut input = input.clone();
+        for force in input
+            .samples
+            .iter_mut()
+            .flat_map(|s| s.nominal_n_m.iter_mut().flatten().flatten())
+        {
+            *force *= scale;
+        }
+        let identified = calibrate(&input).unwrap();
+        let selected = ftx_pattern::textile_import::catalog()
+            .unwrap()
+            .resolve(&Selection {
+                id: identified.material.id.clone(),
+                record: Some(identified.material),
+                allow_estimates: true,
+                ..Selection::default()
+            })
+            .unwrap();
+        let pattern = band(json!({"material":selected.frozen_selection()}));
+        let run = drape(&pattern, &json!({}), &body, &opts, |_| {}).unwrap();
+        (pattern, run)
+    };
+    let (pa, a) = solve(1.0);
+    let (pb, b) = solve(0.25);
+    assert_eq!(pa.raw()["pieces"], pb.raw()["pieces"]);
+    assert_eq!(pa.raw()["seams"], pb.raw()["seams"]);
+    assert_eq!(a.scene.mesh.verts2d, b.scene.mesh.verts2d);
+    assert_eq!(a.scene.weld, b.scene.weld);
+    assert_eq!(a.scene.solver.model.mass, b.scene.solver.model.mass);
+    assert_eq!(a.scene.solver.model.bending, b.scene.solver.model.bending);
+    assert_ne!(a.scene.solver.x, b.scene.solver.x);
+    assert_ne!(
+        a.report["material"]["record_sha256"],
+        b.report["material"]["record_sha256"]
+    );
+    assert!(a.report["material"]["nonlinear_strain_range"].is_array());
 }

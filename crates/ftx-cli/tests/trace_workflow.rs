@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ftx_pattern::doc::PatternDoc;
 use ftx_trace::OValue;
@@ -36,11 +37,17 @@ fn case<'a>(fx: &'a Fixture, id: &str) -> &'a Case {
 }
 
 fn scratch() -> PathBuf {
+    // macOS clocks tick in microseconds: parallel tests need the counter too
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("ftx-trace-{}-{stamp}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-trace-{}-{stamp}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir(&dir).unwrap();
     dir
 }

@@ -181,6 +181,69 @@ fn actual_drape_exports_material_locked_heat_fields_without_changing_geometry() 
 }
 
 #[test]
+fn prescribed_pressure_reaches_sewn_drape_contact_mass_and_heat_transport() {
+    use ftx_drape::thermal::{Boundary, surface::Surface};
+    use ftx_pattern::material_compression;
+    let mut input: material_compression::Input = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-compression.json"
+    ))
+    .unwrap();
+    // Thin synthetic sheet geometry for this small sewn band; no measured fabric claim.
+    let thickness = input.samples[0].properties.get_mut("thickness").unwrap();
+    thickness.value = 0.6;
+    thickness.bounds = Some([0.54, 0.66]);
+    let thickness = input.samples[1].properties.get_mut("thickness").unwrap();
+    thickness.value = 0.03; // centimetres, as authored in the shared fixture
+    thickness.bounds = Some([0.027, 0.033]);
+    let boundary = Boundary {
+        inside_c: 40.,
+        outside_c: 20.,
+        inside_resistance: 0.,
+        outside_resistance: 0.,
+    };
+    let mut runs = Vec::new();
+    let mut hashes = Vec::new();
+    for (pressure, offset, resistance) in [(0., 0.0003, 0.5), (500., 0.00015, 0.25)] {
+        input.pressure_pa = pressure;
+        let prepared = material_compression::condition(&input).unwrap();
+        let mut raw = band().raw().clone();
+        raw["fabric"]["material"] = serde_json::to_value(&prepared.selection).unwrap();
+        let pattern = Pattern::new(raw);
+        let resolved = ftx_drape::material::resolve(&pattern, &options()).unwrap();
+        assert!((resolved.options.contact.thickness - offset).abs() < 1e-15);
+        assert!((resolved.fabric.areal_kg_m2 - 0.1).abs() < 1e-15);
+        let solved = run(&pattern, options());
+        let (surface, positions) = Surface::from_drape_report(&solved.report).unwrap();
+        assert_eq!(positions, solved.scene.solver.x);
+        let snapshot = surface.snapshot();
+        assert_eq!(snapshot, solved.thermal_surface(4).unwrap().snapshot());
+        for column in snapshot["columns"].as_array().unwrap() {
+            let capacity: f64 = column["cell_capacity_j_m2_k"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .sum();
+            assert!((capacity - 100.).abs() < 1e-12);
+        }
+        let heat = surface.steady(&positions, &[boundary]).unwrap();
+        for patch in heat.patches {
+            assert!((patch.inside_flux_w_m2 - 20. / resistance).abs() < 1e-10);
+        }
+        hashes.push(snapshot["sha256"].clone());
+        runs.push(solved);
+    }
+    // Pressure changes material/contact/thermal state; it cannot manufacture or discard mass.
+    assert_eq!(runs[0].scene.mesh.faces, runs[1].scene.mesh.faces);
+    assert_eq!(runs[0].scene.mesh.verts2d, runs[1].scene.mesh.verts2d);
+    assert_eq!(
+        runs[0].scene.solver.model.mass,
+        runs[1].scene.solver.model.mass
+    );
+    assert_ne!(hashes[0], hashes[1]);
+}
+
+#[test]
 fn missing_thermal_data_preserves_mechanical_success_and_modified_receipts_refuse() {
     use ftx_drape::thermal::surface::Surface;
     let mechanical = run(&band(), options());
@@ -205,4 +268,347 @@ fn missing_thermal_data_preserves_mechanical_success_and_modified_receipts_refus
     changed = snapshot;
     changed["patches"][0]["column"] = json!(usize::MAX);
     assert!(Surface::from_snapshot(&changed).is_err());
+}
+
+#[test]
+fn temperature_series_follow_sewn_drape_without_alternative_material_lookup() {
+    use ftx_drape::thermal::{Boundary, surface::Surface};
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-variable-thermal.json"
+    ))
+    .unwrap();
+    let mut selected = sheet(1.0);
+    let record = &mut selected["record"];
+    record["thermal_response"] = fixture["layers"][0]["record"]["thermal_response"].clone();
+    for name in ["areal_density", "thickness"] {
+        record["properties"][name]["conditions"] = json!({
+            "specimen":"test:temperature-sheet", "conditioning":"synthetic-dry"
+        });
+    }
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = selected;
+    let original_geometry = raw["pieces"].clone();
+    let solved = run(&Pattern::new(raw.clone()), options());
+    assert_eq!(solved.report["thermal_surface"]["available"], true);
+    let (surface, x) = Surface::from_drape_report(&solved.report).unwrap();
+    assert_eq!(
+        surface.snapshot()["columns"][0]["schema"],
+        "ftx-dry-thermal-model/2"
+    );
+    let b = Boundary {
+        inside_c: 30.0,
+        outside_c: 0.0,
+        inside_resistance: 0.1,
+        outside_resistance: 0.2,
+    };
+    let first = surface.steady(&x, &[b]).unwrap();
+    let transient = surface
+        .advance(&surface.initial(10.0).unwrap(), &x, 1.0, &[b])
+        .unwrap();
+    assert!(transient.balance_error_j.abs() < 1e-7);
+    // Alter only the record's transport observation; drape geometry and mechanical inputs stay fixed.
+    for p in raw["fabric"]["material"]["record"]["thermal_response"]["conductivity"]["points"]
+        .as_array_mut()
+        .unwrap()
+    {
+        p["mean"] = json!(p["mean"].as_f64().unwrap() * 2.0);
+    }
+    let changed = run(&Pattern::new(raw.clone()), options());
+    let (new_surface, new_x) = Surface::from_drape_report(&changed.report).unwrap();
+    assert_eq!(original_geometry, raw["pieces"]);
+    assert_eq!(x, new_x);
+    assert_ne!(
+        surface.snapshot()["sha256"],
+        new_surface.snapshot()["sha256"]
+    );
+    assert!(new_surface.steady(&new_x, &[b]).unwrap().inside_heat_w > first.inside_heat_w);
+    assert!(
+        new_surface
+            .advance(&transient.state, &new_x, 1.0, &[b])
+            .is_err()
+    );
+}
+
+#[test]
+fn conduction_only_drape_follows_materials_without_fabricating_storage() {
+    use ftx_core::receipt::sha256_hex;
+    use ftx_drape::thermal::{Boundary, steady::surface::SteadySurface};
+    let mut raw = band().raw().clone();
+    let mut material = thermal_sheet(0.2, 1000.0);
+    material["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("specific_heat");
+    raw["fabric"]["material"] = material.clone();
+    let uniform = run(&Pattern::new(raw.clone()), options());
+    material["record"]["properties"]["thermal_resistance"]["value"] = json!(0.6);
+    raw["pieces"][1]["fabric"] = json!({"material":material});
+    let mixed = run(&Pattern::new(raw), options());
+    assert_eq!(uniform.scene.solver.x, mixed.scene.solver.x);
+    assert_eq!(mixed.report["thermal_surface"]["available"], false);
+    assert!(mixed.thermal_surface(4).is_err());
+    assert_eq!(mixed.report["steady_thermal_surface"]["available"], true);
+    let (s, x) = SteadySurface::from_drape_report(&mixed.report).unwrap();
+    assert_eq!(x, mixed.scene.solver.x);
+    assert_eq!(
+        s.snapshot().unwrap(),
+        mixed.steady_thermal_surface().unwrap().snapshot().unwrap()
+    );
+    let boundary = Boundary {
+        inside_c: 30.0,
+        outside_c: 0.0,
+        inside_resistance: 0.1,
+        outside_resistance: 0.2,
+    };
+    let output = s.solve(&x, &[boundary; 2]).unwrap();
+    for (i, &owner) in mixed.scene.triangle_owner.iter().enumerate() {
+        let patch = &output.patches[i];
+        let expected = 30.0 / (0.3 + if owner == 0 { 0.2 } else { 0.6 });
+        assert!((output.columns[patch.column].flux_w_m2 - expected).abs() < 1e-7);
+        assert_eq!(
+            s.snapshot().unwrap()["patches"][i]["vertices"],
+            json!(mixed.scene.solver.model.membranes[i].v)
+        );
+    }
+    let saved = serde_json::to_string(&mixed.report).unwrap();
+    assert_eq!(
+        SteadySurface::from_drape_report(&serde_json::from_str(&saved).unwrap())
+            .unwrap()
+            .0
+            .snapshot()
+            .unwrap(),
+        s.snapshot().unwrap()
+    );
+    let mut changed = mixed.report.clone();
+    changed["steady_thermal_surface"]["positions_m"][0][0] = json!(10.0);
+    assert!(SteadySurface::from_drape_report(&changed).is_err());
+    // Even rehashing a mixed receipt cannot associate a different material report with old columns.
+    changed = mixed.report.clone();
+    changed["material"] = uniform.report["material"].clone();
+    let hash = |v: &Value| sha256_hex(&serde_json::to_vec(v).unwrap());
+    changed["steady_thermal_surface"]["material_report_sha256"] = json!(hash(&changed["material"]));
+    let frame = &mut changed["steady_thermal_surface"];
+    frame.as_object_mut().unwrap().remove("sha256");
+    frame["sha256"] = json!(hash(frame));
+    assert!(SteadySurface::from_drape_report(&changed).is_err());
+}
+
+#[test]
+fn steady_workbench_on_actual_drape_binds_conditions_and_omits_unrelated_metadata() {
+    use ftx_drape::thermal::steady::request::SurfaceConditions;
+    let mut raw = band().raw().clone();
+    let mut material = thermal_sheet(0.2, 1000.0);
+    material["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("specific_heat");
+    raw["fabric"]["material"] = material.clone();
+    material["record"]["properties"]["thermal_resistance"]["value"] = json!(0.6);
+    raw["pieces"][1]["fabric"] = json!({"material":material});
+    let solved = run(&Pattern::new(raw.clone()), options());
+    let c: SurfaceConditions = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/steady-surface-conditions.json"
+    ))
+    .unwrap();
+    let mut report = solved.report.clone();
+    report["unrelated_metadata"] = json!("synthetic field not needed for thermal replay");
+    let result = c.evaluate(&report).unwrap();
+    assert_eq!(result["positions_m"], json!(solved.scene.solver.x));
+    assert!(
+        result["request"]["report"]
+            .get("unrelated_metadata")
+            .is_none()
+    );
+    assert_eq!(result["request"]["report"].as_object().unwrap().len(), 2);
+    let frozen: SurfaceConditions =
+        serde_json::from_value(result["request"]["conditions"].clone()).unwrap();
+    assert_eq!(
+        result,
+        frozen.evaluate(&result["request"]["report"]).unwrap()
+    );
+    // A transport-only change alters identity and heat flow, not mechanical trajectories.
+    raw["pieces"][1]["fabric"]["material"]["record"]["properties"]["thermal_resistance"]["value"] =
+        json!(1.2);
+    let changed = run(&Pattern::new(raw), options());
+    assert_eq!(solved.scene.solver.x, changed.scene.solver.x);
+    assert!(frozen.evaluate(&changed.report).is_err());
+    let new_result = c.evaluate(&changed.report).unwrap();
+    assert!(
+        new_result["steady"]["power_w"].as_f64().unwrap()
+            < result["steady"]["power_w"].as_f64().unwrap()
+    );
+    let mut per_column = c.clone();
+    per_column.boundaries.push(per_column.boundaries[0]);
+    assert!(per_column.evaluate(&report).is_err());
+    per_column.model_sha256 = frozen.model_sha256;
+    assert_eq!(
+        per_column.evaluate(&report).unwrap()["steady"],
+        result["steady"]
+    );
+}
+
+#[test]
+fn actual_sewn_drape_material_swap_reprojects_local_body_coverage_without_storage() {
+    use ftx_drape::thermal::steady::coverage::request::Request;
+    let mut raw = band().raw().clone();
+    let mut material = thermal_sheet(0.2, 1000.0);
+    material["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("specific_heat");
+    raw["fabric"]["material"] = material;
+    let first = run(&Pattern::new(raw.clone()), options());
+    raw["fabric"]["material"]["record"]["properties"]["thermal_resistance"]["value"] = json!(0.8);
+    let second = run(&Pattern::new(raw), options());
+    assert_eq!(first.scene.solver.x, second.scene.solver.x);
+    assert_eq!(first.report["thermal_surface"]["available"], false);
+    // A declared local prescribed-temperature boundary just inside an actual retained cloth face.
+    // This tests sewn-cloth propagation, not an inferred whole-body thermal/fit validation.
+    let [a, b, c] = first.scene.solver.model.membranes[0]
+        .v
+        .map(|i| first.scene.solver.x[i]);
+    let normal = (b - a).cross(c - a).normalized();
+    let center = (a + b + c) / 3.0;
+    let local_body = [a, b, c].map(|p| center + (p - center) * 0.2 - normal * 0.00001);
+    let names: std::collections::BTreeMap<_, _> = first
+        .scene
+        .mesh
+        .instances
+        .iter()
+        .map(|id| (id.clone(), "garment"))
+        .collect();
+    let mut request: Request = serde_json::from_value(json!({
+        "schema":"ftx-steady-coverage-request/1","report":first.report,
+        "map":{"body_positions_m":local_body,"body_triangles":[[0,1,2]],
+            "instance_layers":names,"settings":{"max_distance_m":0.00002,
+                "min_normal_cosine":0.99,"separation_tolerance_m":0.000000001,
+                "cells_per_layer":1,"interfaces":[]}},
+        "conditions":{"boundaries":[{"inside_c":30.0,"outside_c":0.0,
+            "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}]}
+    }))
+    .unwrap();
+    let one = request.evaluate().unwrap();
+    request.report = second.report;
+    let two = request.evaluate().unwrap();
+    let area = one["steady"]["body_area_m2"].as_f64().unwrap();
+    assert!(area > 0.0);
+    assert!((one["steady"]["covered_area_m2"].as_f64().unwrap() - area).abs() < 1e-12);
+    assert!((one["steady"]["power_w"].as_f64().unwrap() - area * 30.0 / 0.5).abs() < 1e-9);
+    assert!((two["steady"]["power_w"].as_f64().unwrap() - area * 30.0 / 1.1).abs() < 1e-9);
+    assert_eq!(
+        one["projection"]["footprints"],
+        two["projection"]["footprints"]
+    );
+    assert_ne!(one["assembly"]["sha256"], two["assembly"]["sha256"]);
+    let frozen: Request = serde_json::from_value(two["request"].clone()).unwrap();
+    assert_eq!(frozen.evaluate().unwrap(), two);
+}
+
+#[test]
+fn finish_only_changes_follow_an_actual_sewn_drape_into_exterior_exchange() {
+    use ftx_drape::thermal::steady::request::SurfaceConditions;
+    let example: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-exterior-exchange.json"
+    ))
+    .unwrap();
+    let mut material = thermal_sheet(0.4, 1000.);
+    material["record"]["properties"]["emissivity"] =
+        example["layers"][0]["record"]["properties"]["emissivity"].clone();
+    material["record"]["properties"]["emissivity"]["source"] = json!("test");
+    let mut raw = band().raw().clone();
+    raw["fabric"]["material"] = material.clone();
+    let first = run(&Pattern::new(raw.clone()), options());
+    material["record"]["properties"]["emissivity"]["value"] = json!(0.05);
+    raw["pieces"][1]["fabric"] = json!({"material":material});
+    let second = run(&Pattern::new(raw), options());
+    assert_eq!(first.scene.solver.x, second.scene.solver.x);
+    let conditions: SurfaceConditions = serde_json::from_value(json!({
+        "schema":"ftx-steady-surface-conditions/1",
+        "boundaries":[{"inside_c":35.,"outside_c":5.,
+            "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.}],
+        "exterior_exchange":[example["exterior_exchange"]]
+    }))
+    .unwrap();
+    let a = conditions.evaluate(&first.report).unwrap();
+    let b = conditions.evaluate(&second.report).unwrap();
+    assert_eq!(a["positions_m"], b["positions_m"]);
+    assert_eq!(a["steady"]["area_m2"], b["steady"]["area_m2"]);
+    assert!(a["steady"]["power_w"].as_f64().unwrap() > b["steady"]["power_w"].as_f64().unwrap());
+    assert_ne!(a["model_sha256"], b["model_sha256"]);
+    let exchange = &b["exterior_exchange"];
+    let residual = b["steady"]["power_w"].as_f64().unwrap()
+        - exchange["convective_power_w"].as_f64().unwrap()
+        - exchange["radiative_power_w"].as_f64().unwrap();
+    assert!(residual.abs() < 1e-10);
+    let frozen: SurfaceConditions =
+        serde_json::from_value(b["request"]["conditions"].clone()).unwrap();
+    assert_eq!(b, frozen.evaluate(&b["request"]["report"]).unwrap());
+    assert!(frozen.evaluate(&first.report).is_err());
+    // A finish cannot change the old fixed-film computation when radiation is not selected.
+    let mut old = conditions.clone();
+    old.exterior_exchange = None;
+    old.boundaries[0].outside_resistance_m2_k_w = 0.2;
+    assert_eq!(
+        old.evaluate(&first.report).unwrap()["steady"]["power_w"],
+        old.evaluate(&second.report).unwrap()["steady"]["power_w"]
+    );
+    // Carry the same optical-only substitution through geometric BODY coverage as well. Use a
+    // declared local boundary inside an actual back-piece triangle, not an inferred wearer model.
+    let back = first
+        .scene
+        .mesh
+        .instances
+        .iter()
+        .position(|n| n == "back")
+        .unwrap();
+    let triangle = first
+        .scene
+        .triangle_owner
+        .iter()
+        .position(|&i| i == back)
+        .unwrap();
+    let [p, q, r] = first.scene.solver.model.membranes[triangle]
+        .v
+        .map(|i| first.scene.solver.x[i]);
+    let normal = (q - p).cross(r - p).normalized();
+    let center = (p + q + r) / 3.;
+    let local_body = [p, q, r].map(|v| center + (v - center) * 0.2 - normal * 0.00001);
+    let layers: std::collections::BTreeMap<_, _> = first
+        .scene
+        .mesh
+        .instances
+        .iter()
+        .map(|n| (n.clone(), "garment"))
+        .collect();
+    let mut coverage: ftx_drape::thermal::steady::coverage::request::Request = serde_json::from_value(json!({
+        "schema":"ftx-steady-coverage-request/1","report":first.report,
+        "map":{"body_positions_m":local_body,"body_triangles":[[0,1,2]],"instance_layers":layers,
+            "settings":{"max_distance_m":0.00002,"min_normal_cosine":0.99,
+                "separation_tolerance_m":0.000000001,"cells_per_layer":1,"interfaces":[]}},
+        "conditions":{"boundaries":conditions.boundaries,"exterior_exchange":conditions.exterior_exchange,
+            "bare_boundaries":[{"inside_c":35.,"outside_c":5.,
+                "inside_resistance_m2_k_w":0.1,"outside_resistance_m2_k_w":0.2}]}
+    })).unwrap();
+    let covered_first = coverage.evaluate().unwrap();
+    coverage.report = second.report;
+    let covered_second = coverage.evaluate().unwrap();
+    assert_eq!(
+        covered_first["projection"]["footprints"],
+        covered_second["projection"]["footprints"]
+    );
+    assert!(
+        covered_first["steady"]["power_w"].as_f64().unwrap()
+            > covered_second["steady"]["power_w"].as_f64().unwrap()
+    );
+    let area = covered_second["steady"]["covered_area_m2"]
+        .as_f64()
+        .unwrap();
+    let flux = b["exterior_exchange"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["conduction"]["flux_w_m2"].as_f64().unwrap())
+        .min_by(f64::total_cmp)
+        .unwrap();
+    assert!((covered_second["steady"]["power_w"].as_f64().unwrap() - area * flux).abs() < 1e-12);
 }

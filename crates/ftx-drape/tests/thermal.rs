@@ -56,6 +56,77 @@ fn one_cell_matches_backward_euler_and_conserves_boundary_heat() {
 }
 
 #[test]
+fn internal_cell_energy_obeys_backward_euler_above_equal_reservoir_temperatures() {
+    let model = DryThermalModel::new(vec![layer("heated", 0.4, 200.0)], vec![], 1).unwrap();
+    let receipt = model.snapshot();
+    let old = [20.0];
+    let supplied = [1000.0];
+    let b = Boundary {
+        inside_c: 20.0,
+        outside_c: 20.0,
+        ..boundary()
+    };
+    let state = model.advance_with_heat(&old, 5.0, b, &supplied).unwrap();
+    let expected = 20.0 + 1000.0 / (200.0 + 5.0 * (1.0 / 0.3 + 1.0 / 0.4));
+    near(state.temperature_c[0], expected, 1e-12);
+    assert!(state.temperature_c[0] > 20.0);
+    near(state.stored_change_j_m2, 200.0 * (expected - 20.0), 1e-10);
+    near(
+        state.stored_change_j_m2,
+        5.0 * (state.inside_flux_w_m2 - state.outside_flux_w_m2) + supplied[0],
+        1e-10,
+    );
+    near(state.balance_error_j_m2, 0.0, 1e-10);
+    assert_eq!(old, [20.0]);
+    assert_eq!(supplied, [1000.0]);
+    assert_eq!(model.snapshot(), receipt);
+}
+
+#[test]
+fn internal_energy_validation_is_atomic_and_zero_sources_preserve_existing_steps() {
+    let model = DryThermalModel::new(vec![layer("heated", 0.4, 200.0)], vec![], 2).unwrap();
+    let old = [10.0, 15.0];
+    let original = model.advance(&old, 5.0, boundary()).unwrap();
+    let zero = model
+        .advance_with_heat(&old, 5.0, boundary(), &[0.0, 0.0])
+        .unwrap();
+    assert_eq!(zero.temperature_c, original.temperature_c);
+    assert_eq!(zero.stored_change_j_m2, original.stored_change_j_m2);
+    assert_eq!(zero.balance_error_j_m2, original.balance_error_j_m2);
+    assert_eq!(zero.inside_flux_w_m2, original.inside_flux_w_m2);
+    assert_eq!(zero.outside_flux_w_m2, original.outside_flux_w_m2);
+    for heat in [
+        vec![],
+        vec![1.0],
+        vec![1.0, -1.0],
+        vec![1.0, f64::NAN],
+        vec![1.0, f64::INFINITY],
+        vec![f64::MAX, f64::MAX],
+    ] {
+        assert!(
+            model
+                .advance_with_heat(&old, 5.0, boundary(), &heat)
+                .is_err()
+        );
+    }
+    assert!(
+        model
+            .advance_with_heat(&old, 0.0, boundary(), &[1.0; 2])
+            .is_err()
+    );
+    assert!(
+        model
+            .advance_with_heat(&[10.0], 5.0, boundary(), &[1.0; 2])
+            .is_err()
+    );
+    assert_eq!(old, [10.0, 15.0]);
+    assert_eq!(
+        model.advance(&old, 5.0, boundary()).unwrap().temperature_c,
+        original.temperature_c
+    );
+}
+
+#[test]
 fn steady_limit_matches_series_stack_and_interfaces_locate_cell_centres() {
     let layers = vec![layer("a", 0.2, 100.0), layer("b", 0.4, 300.0)];
     let refs: Vec<_> = layers.iter().map(|m| m.material()).collect();

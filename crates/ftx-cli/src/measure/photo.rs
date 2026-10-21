@@ -1,5 +1,7 @@
-//! Photo commands from explicit coordinates or an oriented PNG. EXIF conversion remains external.
+//! Photo commands from explicit coordinates, an oriented PNG or a JPEG (its EXIF orientation applied).
 
+#[path = "calibration_images.rs"]
+pub(super) mod calibration_images;
 #[path = "charuco_image.rs"]
 mod charuco_image;
 
@@ -10,9 +12,10 @@ use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
 use ftx_measure::camera::{Camera, Intrinsics};
 use ftx_measure::photo::{
-    MAX_PHOTO_PIXELS, PhotoOptions, analyze_plain_sheet, analyze_reference, measure_photo,
+    MAX_PHOTO_PIXELS, PhotoOptions, analyze_plain_sheet, analyze_reference,
+    intrinsics::IntrinsicUncertainty, measure_photo,
 };
-use ftx_trace::raster::{Bgr, image::load_png_with_limit};
+use ftx_trace::raster::{Bgr, image::load_png_with_limit, jpeg::decode_photo};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -31,6 +34,12 @@ struct LensInput {
     intrinsics: Intrinsics,
 }
 
+struct LensSource {
+    lens: LensInput,
+    receipt: Value,
+    uncertainty: Option<IntrinsicUncertainty>,
+}
+
 impl LensInput {
     fn check_image(&self, size: &Value) -> Result<(), Refusal> {
         if *size != json!(self.image_size_px) {
@@ -42,10 +51,15 @@ impl LensInput {
     }
 }
 
-fn read_lens(args: &Args) -> Result<Option<(LensInput, Value)>, Refusal> {
+fn read_lens(args: &Args) -> Result<Option<LensSource>, Refusal> {
     let Some(path) = option(args, "lens") else {
-        if option(args, "lens-id").is_some() || option(args, "rotation-cw-deg").is_some() {
-            return Err(bad_input("--lens-id and --rotation-cw-deg require --lens"));
+        if option(args, "lens-id").is_some()
+            || option(args, "rotation-cw-deg").is_some()
+            || option(args, "independent-calibration-evidence").is_some()
+        {
+            return Err(bad_input(
+                "lens identity, rotation and independent-calibration-evidence require --lens",
+            ));
         }
         return Ok(None);
     };
@@ -65,14 +79,28 @@ fn read_lens(args: &Args) -> Result<Option<(LensInput, Value)>, Refusal> {
     }
     let (value, bytes) = super::intrinsics::read_document(path)?;
     let recomputed = value["schema"] == "ftx-camera-calibration/1";
+    let mut uncertainty = None;
     let lens: LensInput = if recomputed {
         let checked = super::intrinsics::checked_calibration(&value)?;
+        uncertainty = checked.uncertainty.clone().map_or_else(
+            || {
+                checked
+                    .conditional_uncertainty
+                    .as_ref()
+                    .map(IntrinsicUncertainty::from_calibration)
+                    .transpose()
+            },
+            |u| Ok(Some(u)),
+        )?;
         LensInput {
             schema: "ftx-photo-lens/1".into(),
             lens_id: checked.input.lens_id,
             image_size_px: checked.input.image_size_px,
             rotation_cw_deg: checked.input.rotation_cw_deg,
-            calibration_evidence: checked.input.pinhole_evidence,
+            calibration_evidence: checked
+                .input
+                .distortion_fit
+                .map_or(checked.input.pinhole_evidence, |fit| fit.model_evidence),
             intrinsics: checked.solution.unwrap().intrinsics,
         }
     } else {
@@ -99,10 +127,32 @@ fn read_lens(args: &Args) -> Result<Option<(LensInput, Value)>, Refusal> {
         ));
     }
     lens.intrinsics.validate()?;
-    let receipt = json!({"path":path,"sha256":sha256_hex(&bytes),"calibration":value,
+    let independence = option(args, "independent-calibration-evidence");
+    if uncertainty.is_some() {
+        if independence.is_none_or(|s| s.trim().is_empty() || s.len() > 4096) {
+            return Err(bad_input(
+                "calibration carries intrinsic uncertainty: supply --independent-calibration-evidence explaining independent acquisition of this photo; correlated calibration/photo noise is not supported",
+            ));
+        }
+    } else if independence.is_some() {
+        return Err(bad_input(
+            "independent-calibration-evidence requires a verified Brown calibration report with declared corner_noise and intrinsic uncertainty",
+        ));
+    }
+    let mut receipt = json!({"path":path,"sha256":sha256_hex(&bytes),"calibration":value,
         "capture_lens_id":id,"rotation_applied_degrees":rotation,"recomputed":recomputed,
         "no_claim":"Metadata matching does not prove unchanged physical lens settings; intrinsic uncertainty is not estimated."});
-    Ok(Some((lens, receipt)))
+    if uncertainty.is_some() {
+        receipt["independence_evidence"] = json!(independence.unwrap());
+        receipt["no_claim"] = json!(
+            "Conditional first-order intrinsic covariance under declared corner-noise and independent-photo assumptions. No print/flatness error, lens drift or real-camera accuracy claim."
+        );
+    }
+    Ok(Some(LensSource {
+        lens,
+        receipt,
+        uncertainty,
+    }))
 }
 
 /// Bound both encoded input and decoded storage. Opaque 8-bit pixels preserve photo brightness;
@@ -118,7 +168,7 @@ pub(super) fn load_image(path: &str, max_pixels: usize) -> Result<(Bgr, Value), 
     let budget = || {
         Refusal::new(
             RefusalCode::BudgetExceeded,
-            "photo PNG exceeds 64 MiB encoded input",
+            "photo exceeds 64 MiB encoded input",
         )
     };
     if metadata.len() > MAX_BYTES {
@@ -131,9 +181,20 @@ pub(super) fn load_image(path: &str, max_pixels: usize) -> Result<(Bgr, Value), 
     if bytes.len() as u64 > MAX_BYTES {
         return Err(budget());
     }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        // One complete frame, its EXIF orientation applied once without resampling (Pillow's
+        // ImageOps.exif_transpose), no repaired or smoothed pixels: clicks are in this frame.
+        let photo = decode_photo(&bytes, max_pixels)?;
+        let receipt = json!({"path":path, "sha256":sha256_hex(&bytes),
+            "image_size_px":[photo.image.w,photo.image.h],
+            "orientation":if photo.exif_orientation.is_some() {"exif_applied"} else {"stored_pixels_without_exif"},
+            "exif_orientation":photo.exif_orientation, "stored_size_px":photo.stored_size_px,
+            "stored_to_oriented_px":photo.stored_to_oriented_px, "encoding":"jpeg"});
+        return Ok((photo.image, receipt));
+    }
     if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err(bad_input(
-            "photo input must be an oriented PNG; convert JPEG, HEIC or WebP first",
+            "photo input must be a PNG or a JPEG; convert HEIC or WebP first",
         ));
     }
     let mut pos = 8usize;
@@ -214,6 +275,7 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
             "lens",
             "lens-id",
             "rotation-cw-deg",
+            "independent-calibration-evidence",
             "out",
         ]
     } else {
@@ -226,6 +288,7 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
             "lens",
             "lens-id",
             "rotation-cw-deg",
+            "independent-calibration-evidence",
             "points",
             "depth-offset-mm",
             "camera-distance-mm",
@@ -273,7 +336,8 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
                 ));
             }
             let reference = read_json(path)?.0;
-            let scale = if let Some((lens, _)) = &lens {
+            let scale = if let Some(source) = &lens {
+                let lens = &source.lens;
                 if reference["reference"] != "charuco" || reference.get("intrinsics").is_some() {
                     return Err(bad_input(
                         "--lens requires a ChArUco reference without inline intrinsics; no calibration is silently overridden",
@@ -294,15 +358,31 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
                 return Err(bad_input("paper must be letter, a4 or auto"));
             }
             let (image, mut receipt) = load_image(path, MAX_PHOTO_PIXELS)?;
-            if let Some((lens, _)) = &lens {
-                lens.check_image(&json!([image.w, image.h]))?;
+            if let Some(source) = &lens {
+                source.lens.check_image(&json!([image.w, image.h]))?;
+                if source.uncertainty.is_some() {
+                    let digest = sha256_hex(&image.data);
+                    let reused = source.receipt["calibration"]["image_acquisition"]["views"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|v| {
+                            v["pixels_bgr_sha256"] == digest || v["sha256"] == receipt["sha256"]
+                        });
+                    if reused {
+                        return Err(bad_input(
+                            "photo reuses a calibration image: independent lens/photo uncertainty is not supported for this acquisition",
+                        ));
+                    }
+                    receipt["pixels_bgr_sha256"] = json!(digest);
+                }
             }
             let scale = if let Some(sheet) = option(args, "sheet") {
                 let (scale, detection) = charuco_image::analyze(
                     &image,
                     sheet,
                     option(args, "detector-python"),
-                    lens.as_ref().map(|(lens, _)| lens.intrinsics),
+                    lens.as_ref().map(|s| s.lens.intrinsics),
                 )?;
                 receipt["charuco_detection"] = detection;
                 scale
@@ -317,11 +397,19 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
             ));
         }
     };
+    let scale = if let Some(uncertainty) = lens.as_ref().and_then(|s| s.uncertainty.as_ref()) {
+        scale.with_lens_uncertainty(
+            uncertainty,
+            required(args, "independent-calibration-evidence")?,
+        )?
+    } else {
+        scale
+    };
     if command == "photo-scale" {
         let mut report = scale.report().clone();
         report[source_key] = source;
-        if let Some((_, receipt)) = lens {
-            report["lens_input"] = receipt;
+        if let Some(source) = lens {
+            report["lens_input"] = source.receipt;
         }
         charuco_image::annotate(&mut report);
         let code = if report["ok"] == true { 0 } else { 3 };
@@ -345,8 +433,8 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
     let mut result = measure_photo(&scale, &points, &options)?;
     result["taken_on"] = json!(taken_on);
     result["photo"][source_key] = source;
-    if let Some((_, receipt)) = lens {
-        result["photo"]["lens_input"] = receipt;
+    if let Some(source) = lens {
+        result["photo"]["lens_input"] = source.receipt;
     }
     charuco_image::annotate(&mut result["photo"]);
     result["photo"]["measurement_options"] = json!({

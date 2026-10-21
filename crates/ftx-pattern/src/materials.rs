@@ -17,6 +17,8 @@ pub const CATALOG_SCHEMA: &str = "ftx-textile-catalog/1";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Form {
+    /// A finished sheet whose weave/knit/bonded construction is not established by the source.
+    Sheet,
     /// Constituent fiber, not a sheet.
     Fiber,
     /// Spun or filament yarn, including sewing thread.
@@ -120,6 +122,17 @@ pub struct Material {
     /// observations so consumers can use them independently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membrane_response: Option<crate::material_response::TabulatedMembrane>,
+    /// Optional Maxwell branches in parallel with the equilibrium membrane. History belongs to
+    /// each simulated triangle, not this immutable source record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membrane_relaxation: Option<crate::material_relaxation::Relaxation>,
+    /// Condition-qualified temperature observations; no extrapolation or implicit conditioning mix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_response: Option<crate::material_thermal::ThermalResponse>,
+    /// Explicit mapping from oriented source-sheet sides to named optical observations. Missing
+    /// mappings never imply that opposite faces have equal properties.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optical_faces: Option<crate::material_optics::OpticalFaces>,
     /// Sources keyed by stable local identifiers.
     pub sources: BTreeMap<String, Source>,
 }
@@ -272,6 +285,16 @@ impl Material {
                 return Err(invalid(format!("{}: invalid bounds for {name}", self.id)));
             }
         }
+        crate::material_calibration::fitted_domain(self)?;
+        if let Some(response) = &self.thermal_response {
+            response.validate(self)?;
+        }
+        if let Some(faces) = &self.optical_faces {
+            faces.validate(self)?;
+        }
+        if let Some(relaxation) = &self.membrane_relaxation {
+            relaxation.validate(&self.sources, true)?;
+        }
         if let Some(response) = &self.membrane_response {
             for key in [
                 "warp_stiffness",
@@ -368,6 +391,9 @@ impl Material {
                 self.id, self.form
             )));
         }
+        // Capability discovery must reject an invalid permanent-strain selector or unsupported
+        // joint history law before a consumer can silently fall back to elastic mechanics.
+        self.compiled_membrane_plasticity(allow_estimates)?;
         let mut v = [0.0; 9];
         v[0] = self.require("areal_density", "kg/m2", allow_estimates)?;
         if let Some(law) = self.compiled_membrane(allow_estimates)? {
@@ -418,7 +444,7 @@ impl Material {
                 self.id
             )));
         }
-        Ok(Mechanics {
+        let mechanics = Mechanics {
             areal_kg_m2: v[0],
             warp_n_m: v[1],
             weft_n_m: v[2],
@@ -428,7 +454,12 @@ impl Material {
             thickness_m: v[6],
             friction_skin: v[7],
             friction_self: v[8],
-        })
+        };
+        if let Some(relaxation) = &self.membrane_relaxation {
+            relaxation.validate_equilibrium(self)?;
+            relaxation.compile(&self.sources, allow_estimates, mechanics.origin_tangent())?;
+        }
+        Ok(mechanics)
     }
 
     /// Dry through-thickness thermal resistance (m²·K/W) for the stated test condition.
@@ -555,6 +586,9 @@ mod tests {
             structure: BTreeMap::new(),
             properties,
             membrane_response: None,
+            membrane_relaxation: None,
+            thermal_response: None,
+            optical_faces: None,
             sources,
         }
     }

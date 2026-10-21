@@ -4,6 +4,7 @@ use std::{
     fs,
     path::PathBuf,
     process::{Command, Output},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde_json::{Value, json};
@@ -11,13 +12,16 @@ use serde_json::{Value, json};
 struct Workspace(PathBuf);
 impl Workspace {
     fn new() -> Self {
+        // macOS clocks tick in microseconds: parallel tests need the counter too
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "ftx-cut-workflow-{}-{}",
+            "ftx-cut-workflow-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&root).unwrap();
         Self(root)
@@ -204,6 +208,192 @@ fn source_width_substitution_changes_layout_and_actual_procurement_cost() {
         a["cut_plan"]["rolls"][0]["external_cut_area_m2"],
         b["cut_plan"]["rolls"][0]["external_cut_area_m2"]
     );
+}
+
+#[test]
+fn locked_finite_supplier_stock_gates_real_marker_orders_and_material_edits() {
+    let w = setup();
+    let plan = w.ok(PLAN);
+    let shell_hash = plan["rolls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|roll| roll["material"]["authored"]["id"] == "shell")
+        .unwrap()["material"]["sha256"]
+        .clone();
+    let mut shell = quote("shell", 10.0);
+    shell["material_sha256"] = shell_hash;
+    // The marker needs 0.12 m but its source sells 0.05 m increments: 0.125 m is insufficient.
+    shell["available_quantity"] = json!(0.125);
+    let mut knit = quote("knit", 16.0);
+    let publish = |shell: &Value, knit: &Value| {
+        w.write(
+            "quotes.json",
+            &json!({"schema":"ftx-textile-quotes/1","quotes":[shell,knit]}),
+        );
+    };
+    publish(&shell, &knit);
+    let limited = w.ok(PRICE);
+    assert_eq!(limited["complete_offer_coverage"], false);
+    assert!(limited["least_observed_independent_order_total"].is_null());
+    let excluded = limited["roll_prices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["sample"]["excluded_offers"][0]["quote"]["material_id"] == "shell")
+        .unwrap();
+    assert_eq!(
+        excluded["sample"]["excluded_offers"][0]["reason"],
+        "insufficient_quantity"
+    );
+    assert!(
+        (excluded["sample"]["excluded_offers"][0]["required_order_quantity"]
+            .as_f64()
+            .unwrap()
+            - 0.15)
+            .abs()
+            < 1e-14
+    );
+
+    shell["available_quantity"] = json!(0.15);
+    publish(&shell, &knit);
+    let observed_price = w.ok(PRICE);
+    assert_eq!(observed_price["complete_offer_coverage"], true);
+    assert_eq!(observed_price["complete_observed_quantity_coverage"], false);
+    let mut market: Value =
+        serde_json::from_slice(&fs::read(w.0.join("market.json")).unwrap()).unwrap();
+    market["require_observed_quantity"] = json!(true);
+    w.write("market.json", &market);
+    assert_eq!(w.ok(PRICE)["complete_offer_coverage"], false);
+    knit["available_quantity"] = json!(0.1);
+    publish(&shell, &knit);
+    let quantified = w.ok(PRICE);
+    assert_eq!(quantified["complete_offer_coverage"], true);
+    assert_eq!(quantified["complete_observed_quantity_coverage"], true);
+    assert!(
+        (quantified["least_observed_independent_order_total"]
+            .as_f64()
+            .unwrap()
+            - 6.2)
+            .abs()
+            < 1e-10
+    );
+
+    let mut changed = pattern();
+    changed["fabric"] = fabric("shell", 0.075);
+    w.write("pattern.json", &changed);
+    let swapped = w.ok(PRICE);
+    assert_eq!(swapped["complete_offer_coverage"], false);
+    assert!(swapped["least_observed_independent_order_total"].is_null());
+    assert!(
+        swapped["roll_prices"].as_array().unwrap().iter().any(
+            |row| row["sample"]["excluded_offers"][0]["reason"] == "material_snapshot_mismatch"
+        )
+    );
+}
+
+#[test]
+fn intraday_marker_orders_use_exact_instants_and_never_revive_older_stock() {
+    let w = setup();
+    let mut old = quote("shell", 10.0);
+    old["observed_at"] = json!("2026-10-14T09:00:00Z");
+    let mut later = quote("shell", 20.0);
+    later["observed_at"] = json!("2026-10-14T12:00:00.123456789Z");
+    later["source_sha256"] = json!("1".repeat(64));
+    let mut knit = quote("knit", 16.0);
+    knit["observed_at"] = old["observed_at"].clone();
+    let publish = |later: &Value| {
+        w.write(
+            "quotes.json",
+            &json!({"schema":"ftx-textile-quotes/2","quotes":[later,knit,old]}),
+        );
+    };
+    let mut market = json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-14","max_age_days":3});
+    publish(&later);
+    for (instant, expected_cost, expected_observation) in [
+        ("2026-10-14T12:00:00.123456788Z", 6.2, &old),
+        ("2026-10-14T12:00:00.123456789Z", 9.2, &later),
+    ] {
+        market["as_of_at"] = json!(instant);
+        w.write("market.json", &market);
+        let result = w.ok(PRICE);
+        assert_eq!(result["complete_offer_coverage"], true);
+        assert!(
+            (result["least_observed_independent_order_total"]
+                .as_f64()
+                .unwrap()
+                - expected_cost)
+                .abs()
+                < 1e-10
+        );
+        for row in result["roll_prices"].as_array().unwrap() {
+            assert_eq!(row["sample"]["scope"]["as_of_at"], instant);
+            if row["least_observed_order"]["quote"]["material_id"] == "shell" {
+                assert_eq!(row["least_observed_order"]["quote"], *expected_observation);
+            }
+        }
+    }
+    market["as_of_at"] = json!("2026-10-14T13:00:00Z");
+    w.write("market.json", &market);
+    for (field, value, reason) in [
+        ("available", json!(false), "unavailable"),
+        ("valid_through_at", json!("2026-10-14T12:30:00Z"), "expired"),
+        ("available_quantity", json!(0.125), "insufficient_quantity"),
+    ] {
+        let mut unusable = later.clone();
+        unusable[field] = value;
+        publish(&unusable);
+        let result = w.ok(PRICE);
+        assert_eq!(result["complete_offer_coverage"], false);
+        assert!(result["least_observed_independent_order_total"].is_null());
+        let excluded = result["roll_prices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|row| row["sample"]["excluded_offers"].as_array())
+            .unwrap();
+        assert_eq!(excluded.len(), 1);
+        assert_eq!(excluded[0]["reason"], reason);
+        assert_eq!(excluded[0]["quote"], unusable);
+    }
+}
+
+#[test]
+fn intraday_history_requires_explicit_scope_and_rejects_conflicting_instants() {
+    let w = setup();
+    let mut shell = quote("shell", 10.0);
+    shell["observed_at"] = json!("2026-10-14T09:00:00Z");
+    let mut knit = quote("knit", 16.0);
+    knit["observed_at"] = shell["observed_at"].clone();
+    let book = json!({"schema":"ftx-textile-quotes/2","quotes":[shell,knit]});
+    w.write("quotes.json", &book);
+    assert!(!w.run(PRICE).status.success()); // Calendar date alone cannot choose intraday stock.
+    let market = json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-14","max_age_days":3,
+        "as_of_at":"2026-10-14T10:00:00Z"});
+    w.write("market.json", &market);
+    assert_eq!(w.ok(PRICE)["complete_offer_coverage"], true);
+
+    let mut conflicting = book.clone();
+    let mut duplicate = conflicting["quotes"][0].clone();
+    duplicate["price"] = json!(99.0);
+    conflicting["quotes"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    w.write("quotes.json", &conflicting);
+    assert!(!w.run(PRICE).status.success());
+
+    let mut legacy = book.clone();
+    legacy["schema"] = json!("ftx-textile-quotes/1");
+    w.write("quotes.json", &legacy);
+    assert!(!w.run(PRICE).status.success());
+    w.write("quotes.json", &book);
+    let mut mismatched = market;
+    mismatched["as_of"] = json!("2026-10-15");
+    w.write("market.json", &mismatched);
+    assert!(!w.run(PRICE).status.success());
 }
 
 #[test]

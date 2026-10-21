@@ -7,6 +7,43 @@ thickness-offset gap, additive CCD, lagged smoothed Coulomb friction); and the g
 (`garment.rs`). Placement, pre-sew, the drape schedule and the reference's metrics are described below.
 Optional cloth self-contact adds moving cloth–cloth barriers and independent friction.
 
+**Numerical acceptance** (`ftx-6en`). Every Newton solve, including friction lag rounds, must converge;
+iteration exhaustion or a failed line search returns `not_converged` with the residual (N), last
+correction (m), iteration count and repair suggestions. A refused step or static solve preserves
+positions, velocities, contact lag and linear-solver caches. `PhaseReport.samples` retains the accepted
+steps' Newton diagnostics and instantaneous maximum vertex speeds. Native drape reports expose these
+under `numerical`; gravity draping additionally requires three consecutive accepted steps at at most
+1 mm/s, otherwise a numerical-settling gating flag propagates to CLI, round and browser consumers.
+The fixed phase schedule is not automatically extended. Sewing-only qualification reports numerical
+settledness as unavailable. The reference's top-level `settled` and other oracle metrics retain their
+legacy window-mean definition; they do not override the numerical gate. Neither criterion certifies
+static stress equilibrium, material-history relaxation or real-person fit. Historical timings and
+verdicts below predate this stricter acceptance boundary and require fresh production-model checks.
+
+**Attached trim/accessory mass** (`attached_mass`). Optional source-qualified total groups bind named
+physical pattern corners through the actual seam weld map. Explicit shares add once to sheet masses,
+entering both gravitational load and implicit inertia in sewn drape, static solves and prescribed
+motion. The receipt separates simulated cloth, attached and total inertial mass and retains exact
+source/target mappings and arithmetic residuals. Sheet thermal storage remains source/reference-area
+based; no accessory geometry, thermal properties, contact or attachment strength is inferred. Stale
+inertia/reference/topology refuses before accepted state or receipt publication. Absent/empty input
+preserves the existing path and wire output. Contract: `docs/attached-mass.md`; tests:
+`tests/attached_mass.rs` (independent static/dynamic balances, welded/mirrored mapping, substitution,
+thermal separation, deterministic replay and motion rollback).
+
+**Scenario transient heat** (`study::heat`, plan §25.10). Optional independent-sheet and geometric
+body/layer consumers follow every accepted prescribed-motion sample through the existing Surface
+and conservative Frame/remap APIs. Time-zero temperatures and spatially uniform interval films are
+explicit. Heat storage follows reference mass; changing coverage preserves covered/exposed material
+enthalpy, with remap residual separated from physical heat. Thermal failures never erase complete
+mechanics or another consumer. Complete histories retain time/geometry/source identities and final
+fields; coverage includes a restorable checkpoint. Per-history/session work is bounded. Prescribed
+films, qualified exterior exchange and independently opted-in plastic-work heating retain separate
+energy accounting. There is no inferred ambient state, moisture, thermal feedback, human
+thermoregulation or empirical warmth claim. Schemas, accounting and
+limits are in `docs/material-scenario-studies.md`; production regressions in `material_scenario.rs`
+compare every sample against direct solvers and independent reference-mass heat accounting.
+
 **Garment mesh** (`build_garment`, spec 04 §2). Simulated instances (`sim` not false, a placement),
 matched seam samples at `spacing` (12 mm), boundary samples, the hex interior, constrained Delaunay inside
 the outline, sewing pairs, seam records, corner and edge-index maps, then `sim_scale`. Triangulation is
@@ -224,8 +261,28 @@ identity to the rotation onto its k = 0 roll, centroid on a raised path) then th
 frames. Rotations use Horn's quaternion method with the deterministic Jacobi solver where the reference
 uses numpy's SVD Kabsch. Written as `fold.pc2` (float32 point cache), `mesh_map.json`, seam and strain
 colours, and the `fabric-fold-viewer/1` payload embedded in `assets/fold_viewer_template.html` (the
-skill's page, unchanged; SHA-256 `7de25b18…a878`). The page's verdict line shows the run's own gating
+skill's page with offline module packaging). The page's verdict line shows the run's own gating
 and advisory flags from `metrics`.
+
+**Offline viewer dependency.** `viewer_html` embeds the existing Three.js 0.160.0 renderer and
+OrbitControls as base64 data-URL imports, with the complete MIT notice in each HTML file. The
+template requires exactly one payload, renderer, controls and license marker. It is shared by
+native draping, `ftx viewer` and browser fold-up; numerical payloads and controls are unchanged.
+No JavaScript loader API or external resource is used by this view. The unmodified primary-source
+files live in `assets/three-r160/`, pinned to the upstream `mrdoob/three.js` **r160** tag:
+
+| File | Primary source | SHA-256 |
+|---|---|---|
+| `three.module.min.js` (670,681 bytes) | [build](https://raw.githubusercontent.com/mrdoob/three.js/r160/build/three.module.min.js) | `3e690ac7d180b0aadf0891bea39eec643e29e2d3e75c99b18689518665f69ba6` |
+| `OrbitControls.js` (29,868 bytes) | [controls](https://raw.githubusercontent.com/mrdoob/three.js/r160/examples/jsm/controls/OrbitControls.js) | `5a44a9e86a2a0fb11933eed69bc2cd33c76a496854c1aed6ed776efa87d7b064` |
+| `LICENSE` (1,081 bytes) | [notice](https://raw.githubusercontent.com/mrdoob/three.js/r160/LICENSE) | `852e0e8699169bf9f6fdc6bda3e682d078dcbc738b5d33e74df594721bff271d` |
+
+Used APIs remain buffer geometry/attributes, meshes, lights, camera, WebGL renderer and orbit
+controls. The module closure is those two files: OrbitControls imports only `three`; the core module
+has no imports. This removes demonstrated offline failure without adding a crate or changing the
+renderer version. `tools/check_web.cjs --viewer HTML` executes offline file rendering, frame changes
+and controls. Native/WASM build outcomes and actual artifact execution are recorded in the reality-check
+follow-through; this dependency change is not numerical or empirical cloth evidence.
 
 **Metrics and flags** (`metrics.rs`; spec 04 §6). From the baked frames, the wrapped start and the true
 body: seam gaps after sewing and at the end, seam strain; ring strain, contact and clearance at each
@@ -258,6 +315,7 @@ cone (tan α = μ/2 holds, +0.11 mm; tan α = 2μ slides 42 mm); KAT 9 for conta
 digest, identical native debug, release and wasm32-wasip1). KATs 4–6 are release only (26 s; 140 s
 unoptimised). Bodies and bands are built with `det::sin_cos`: the platform's `sin`/`cos` made the wasm
 digest differ.
+
 Fitted bodies (`tests/kat_fitted.rs`; the toddler fitted to the reference wearer's 21 tape readings, release,
 needs the Anny model): KAT 8 armpit wedge, the drafted bolero at 80, 92 and 116 cm with the arms at 35°: no
 gating flag, settled, every hem within ±15 mm of its drafted level (the 80 cm front hangs 13 mm higher than
@@ -298,3 +356,74 @@ debug, native release and wasm32-wasip1.
 a moving body; an elastic's own mass or its friction in the casing; fabric parameters (they are inputs;
 plan §11, research 07 §2.7). The §11.7 budgets are measured above, on one machine (native and node's
 wasm), not on a browser's.
+
+**Explicit thermal coverage** (`thermal::surface::coverage`, plan §25.6 / `ftx-tmb`).
+`Coverage` composes the existing source-locked independent-sheet `Surface` into declared disjoint
+body-area fractions and inside-to-outside layers. It checks both body and cloth allocation budgets,
+consistent layer identities and acyclic layer order. Uncovered body fractions use explicitly supplied
+films; unallocated cloth is reported and excluded. Temperature state follows allocated reference
+cloth mass while resistance uses current cloth area; films/interfaces use covered body area. The
+existing constant and temperature-dependent column solvers are reused without modifying material
+observations. Native field calculations are in metres, watts and joules. Snapshot replay has no
+catalog lookup; material/topology edits invalidate state, while pose changes do not. Tests:
+`thermal_coverage` (analytic series/parallel networks, independent enthalpy and moving-area answers,
+partition invariance, input refusals, source-locked replay). The added direct `serde` dependency is
+the already pinned workspace 1.0.229 with std/derive, used only for layout/report serialization;
+no additional package/version or transitive dependency is introduced.
+For authored layouts alone, there is no claim of geometry-derived overlap or spatial disjointness.
+Neither layout mode establishes air-gap transport, in-plane conduction, tissue storage, human comfort
+or measured garment validation.
+The `ftx-materials thermal-coverage` consumer verifies saved drape/frame identity before reading
+indices, retains declared body geometry and mapping, and emits regional/bare heat and bounded
+transient histories. See `docs/thermal-coverage.md` and the actual sewn-drape CLI regressions in
+`crates/ftx-cli/tests/thermal_coverage_workflow.rs`.
+
+**Geometry-derived thermal correspondence** (`thermal::surface::projection`, `ftx-tmb`).
+`project` partitions body triangles by local-normal cloth projection using bounded convex clipping,
+retains inverse-mapped cloth subpolygons and mid-surface distance ranges, and emits the existing
+`coverage::Layout`. It enforces ordering over complete polygons and rejects grazing/crossing sheets,
+unresolved folds, horizon cuts and spatially duplicated cloth allocations even below scalar budgets.
+Physical layer identities and directed interface resistances remain explicit. The caller supplies an
+outward non-self-intersecting boundary; edge consistency is checked, not global body validity. Fixed
+ordering, the existing BVH and geometry/output budgets bound the calculation. Numerical partition
+residuals, tiny unresolved footprints and bounded allocation-roundoff corrections are reported.
+`ftx-materials thermal-map` accepts saved drape + triangular body OBJ + instance-to-layer settings;
+`thermal-coverage` recomputes generated projection receipts before reporting geometric verification
+under this closure. Tests: `thermal_projection` and the actual sewn-drape CLI workflow above. No
+automatic interface physics, true surface air-gap construction, general concave/folded correspondence,
+temperature remapping, wearer thermoregulation, measured material/fit or browser execution-parity claim.
+
+**Resumable thermal motion** (`thermal::surface::coverage::motion`, `ftx-tmb`).
+`Frame::checkpoint` and `Frame::from_checkpoint` retain/rebuild the complete material and
+geometric frame and exact cell temperatures. Restoration reruns projection and enforces
+cell shape, source identity and characterized domains; a digest is not authentication.
+`ftx-materials thermal-motion` chains prescribed timed poses through instantaneous
+material-polygon/depth-cell enthalpy remap and the existing heat solver, without resetting
+heat at a new pose. Physical heat and remap numerical residuals remain distinct. The
+complete source-cloth material domain is conserved while body coverage may change. Each
+source triangle retains one first-order uncovered through-thickness temperature profile;
+covered/exposed transfers preserve reference-mass enthalpy. Uncovered cloth is adiabatic
+unless the caller supplies explicit canonical-face boundaries; no ambient condition is
+inferred. Body/depth discretization may change, while material substitution and cloth
+remeshing still refuse. A bounded
+convexification removes only roundoff-scale inward polygon corners, reports the reference
+area correction and leaves original projection snapshots unchanged. Genuine nonconvexity
+and unmatched donors still refuse. Tests: `thermal_motion`, motion polygon unit cases,
+and actual saved-drape/production-CLI restart/exposure cases in `thermal_coverage_workflow`.
+See `docs/thermal-motion.md` for timing, checkpoint schemas, budgets and no-claim boundaries.
+
+`Frame::advance_with_exchange_and_heat` accepts nonnegative joules in retained source-triangle
+order and partitions them over covered/exposed reference area and depth. The same bounded enthalpy
+kernel preserves distinct layer capacities and heats adiabatic exposed cloth without heating bare
+body. Source allocation and inversion residuals remain in the physical balance; remap residuals
+stay separate. Invalid sources or temperatures leave input checkpoints unchanged. Production
+coverage reuses the independent-sheet material conversion authority and accepted-work capture,
+excluding initial drape work and rejected trials. Both histories may consume the same motion
+without duplicating retained work; their energy totals remain separate model domains. Tests in
+`thermal_motion` integrate enthalpy independently through coverage transitions, and the native
+accepted-body workflow compares conversion-only substitutions and coverage-only source capture.
+That supported workflow also exercises fully covered overlap roundoff: only a positive retained
+covered stencil within the existing allocation tolerance can avoid a nonexistent exposed donor.
+Weights are not inflated; area and material-local enthalpy residuals remain reported. A reduced
+real-geometry regression checks nonuniform variable-capacity heat and changed depth resolution;
+finite missing wedges and empty microscopic stencils still refuse.

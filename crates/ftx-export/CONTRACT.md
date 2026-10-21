@@ -8,6 +8,81 @@ orchestration of both (`export_all`, `check_files`). The `ftx export` / `ftx che
 
 **Units and frames.** Millimetres, the pattern's own frame (x right, y up, loops counter-clockwise).
 
+**Sewing setup order** (`sewing::ordering`, plan §25.4 / `ftx-tm7`). Optional
+`SewOptions.ordering` minimizes the explicit sum of exact needle and thread identity
+changes across an already fully admitted job, preserving every declared predecessor
+and every complete operation's geometry, recipe, source qualification and feed time.
+An optional initial setup is counted; absent initial installation and a final reset
+are outside the objective. At most 20 passes and 200000 examined feasible prefix
+extensions are admitted; iterative search holds at most 20 bounded frames. The normal
+lexicographic topological schedule is the incumbent, equal counts retain it, and
+trials are ordered by immediate count then operation ID. A limit returns a complete
+feasible incumbent with explicit budget/proof status, never a partial schedule or an
+unearned optimum claim. Count bounds ignore prerequisites only to underestimate the
+remaining changes. Completed proof is conditional on declared identities/prerequisites,
+not physical handling, seam accessibility, elapsed production time or hardware safety.
+Omitted policy preserves legacy wire output; requested policy uses `ftx-sewing-plan/6`
+through ordinary plan, stitch-program and study consumers. Tests: `sewing` and
+`sewing_program`, including independent exhaustive schedule comparisons.
+
+**Declared assembly mass** (`assembly_mass`, plan §25.10 / `ftx-ms2`). Every expanded physical
+cut instance uses the same exporter outline, fold/mirror semantics, allowances and outward tabs.
+Strictly contained disjoint closed cutouts are subtracted with the existing budgeted cutting
+geometry kernel. Source-locked areal density supplies retained sheet mass; width, grain, body and
+mechanics are unrelated requirements. `sim:false` and simulation scaling never alter this inventory.
+Extra retained thread, trim, closures and loose fill need explicit source-bearing group masses in
+kg using the existing `Quantity`/`Source` vocabulary and independent estimate consent. Missing
+contributions and undeclared inventory completeness keep the assembly total unknown. Reported
+endpoints are scaled/summed only with complete bounds and fixed authored geometry. This is one
+pre-finishing cut assembly, not purchased stock, a simulated subset, propagated geometry uncertainty,
+a weighed final garment or automatic discovery of unrepresented components. Studies optionally rerun
+this consumer and compare `assembly_mass_kg` under explicit nominal or reported-bounds policies. Effective
+cutting/mass allowances must match; missing complete mass never becomes a winning zero. Aggregate
+instance, extra-group and polygon work limits apply before returning a study frontier. Tests:
+`assembly_mass`, `material_study`; native/WASM adapters use the same evaluator.
+
+Pattern-owned `attached_mass` extras share the `ftx-pattern::material_mass::Extra` authority, re-exported
+at the existing path. Their source observations merge once with request extras by ID; identical
+complete observations share one contribution and conflicting observations refuse. Optional
+`attached_inventory` preserves the pattern groups/targets while `request` stays the original inventory
+request. Inventory completeness is still explicit, and unknown mass stays unknown. No attachment
+keeps the existing output shape. See `docs/attached-mass.md` and `tests/assembly_mass.rs`.
+
+**Material-study comparison** (`material_study::comparison`, plan §25.10). Optional explicit
+objectives/constraints consume actual cutting/sewing/dated procurement results on the same
+unchanged pattern and shared process inputs. Canonical metric names fix m², kg, seconds, counts or
+the exact market currency. Required unknown/refused/incomplete outputs exclude the candidate,
+never score zero. Default dominance requires matching relevant reported protocols by source piece;
+mixed protocols require deliberate consent. Nominal mode retains its existing point comparisons.
+Reported-bounds mode supports only complete `assembly_mass_kg` endpoints from the real mass consumer,
+conditional on fixed authored geometry and additive inventory. Inclusive constraints must contain
+the whole range; dominance requires strictly separated ranges, while overlap/touching and missing
+bounds remain explicit. Other objective/constraint metrics refuse this mode before evaluation;
+source bounds are not relabeled as numerical-solver or physical-garment uncertainty. Required
+consumer/source gates remain independent. Ties, tradeoffs, exclusions and incompatible pairs remain visible. Existing reports and
+request identities are unchanged when the optional comparison is absent. See
+`docs/material-screening-and-studies.md`; direct real-planner, native-binary and file-free WASM
+regressions use synthetic geometry/data. No physical validation or global optimum is asserted.
+Scenario comparisons also consume fresh production drape/heat outcomes by stable key, without
+introducing a numerical crate dependency here. Signed heat, simulated-cloth mass and reported edge
+strain require matching pattern/body/scenario identities, geometric settledness and clear gating;
+required heat consumers retain their own validity domains. Callback serialization occurs only when
+needed, one alternative at a time. Full scenario context qualifies the top-level comparison.
+Explicit motion consumers/objectives additionally require the requested complete converged trajectory,
+its path/initial/end geometry links and physical duration. Independent-sheet and body-coverage
+transient objectives separately admit complete policy/time/geometry-linked histories for signed
+incoming/net boundary energy and separately initial-inclusive sampled or final cloth-cell temperature
+extrema. `motion_required` exposes whether the comparison policy requires movement. Heat-capacity protocols participate only
+for transient comparisons. Required motion/history failures never borrow initial static outputs;
+existing static metric names and default consumer requirements keep their original meaning.
+See `docs/material-scenario-studies.md`; geometric settledness is not stress equilibrium or fit.
+Opted-in plastic work is admitted separately for independent-sheet and covered/exposed histories.
+Each requires the exact bound material conversion observation, accepted per-triangle cumulative
+work, excluded initial dissipation and complete source-energy accounting at every sample. Coverage
+uses physical storage, never remap residual, in the balance. Conversion protocols participate only
+when that thermal domain is consumed. A refusal preserves independent domain and manufacturing
+outputs; neither a boundary total nor the other thermal model can substitute for supplied heat.
+
 **Text and numbers** (`text.rs`, §2). `fnum` (fixed-point, ties to even on the exact binary value, trailing
 zeros stripped, `-0` → `0`), `ascii_text` (NFKD, `×` → `x`, `— – ·` → `-`, code points 32..126 kept),
 `safe_name`, Helvetica `text_width`, greedy `wrap`, the single-stroke font (`stroke_text`), tile column

@@ -13,6 +13,7 @@ ftx-body = { path = "../ftx-body" }
 ftx-core = { path = "../ftx-core" }
 ftx-pattern = { path = "../ftx-pattern" }
 miniz_oxide.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 spade.workspace = true
 

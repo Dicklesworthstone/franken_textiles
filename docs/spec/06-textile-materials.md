@@ -54,6 +54,25 @@ heat flow in W, not a comfort index, clo certification, temperature rating or su
 Wind, sweating, evaporative transport, air-gap geometry, layer compression, transient storage, seams,
 thermal bridges, metabolism and thermoregulation remain separate, unimplemented coupling work.
 
+## Dated purchasing and finite observed stock
+
+`ftx-textile-quotes/1` may bind an offer to `material_sha256`, the exact resolved material
+snapshot used for its width and specimen identity. A supplied lock must match before any price
+conversion; a same-ID material edit cannot inherit that offer. Legacy observations without the
+optional lock retain their existing ID-based behavior and do not establish snapshot qualification.
+The optional `available_quantity` is the supplier's observed capacity in the quote's original
+`unit`, not packages or the area of pattern pieces. It is finite and nonnegative; absence means
+unknown capacity. The complete minimum/increment-rounded order must fit a stated capacity.
+Neither these dated observations nor their hashes reserve inventory or guarantee stock at checkout.
+
+Price scopes and cut-procurement markets may set `require_observed_quantity: true` to exclude
+unknown capacity; omission preserves legacy observational pricing. Select the latest observation
+in the exact market before checking expiry, availability, snapshot identity or quantity. A later
+insufficient or mismatched observation must not revive an older offer. Eligible offers retain
+whether quantity sufficiency was observed, and excluded latest observations retain their reason.
+Marker procurement must keep total cost unknown when any material has no eligible whole-order
+offer. Missing stock numbers never mean infinite stock or zero cost.
+
 ## Verification
 
 Synthetic unit tests cover anisotropy, explicit estimate admission, missing fields, dimensional mistakes,
@@ -61,3 +80,27 @@ non-finite inputs, constitutive stability, zero friction/bending, unsupported ma
 balance, source references/bounds, duplicate catalog IDs and a known-answer series thermal stack. These
 are software/physics checks, not measurements of any commercial fabric. Existing parity paths must remain
 unchanged unless a material is explicitly selected.
+
+## Prescribed pressure conditioning
+
+`ftx-material-compression/1` prepares an ordinary, content-locked `Selection` through
+`material_compression::condition`; it does not add a parallel material or contact solver.
+The request owns the original material, sources, fixed specimen/conditioning/loading branch,
+pressure table and target Pa. Positive loft is nonincreasing on the declared branch. Exact knots
+retain authored observations; in-domain interpolation is an explicitly admitted estimate.
+
+Every retained scalar must be observed in the complete pressure-row keyset or have an explicit
+source-qualified invariant covering the entire table. An original fixed-pressure observation must
+also lie inside that invariant range; malformed or conflicting pressure qualifiers refuse.
+Sampled areal mass is prohibited, and retained reference mass is unchanged. No bulk-density/loft
+mass reconstruction, conductivity mixing or thickness-derived stiffness is inferred. At most one
+thermal resistance/conductivity authority survives. Unqualified scalar properties, response blocks
+and `*_model` selectors are removed and named in the receipt; missing consumer inputs remain missing.
+
+The report's `selection_json` is the exact portable selection text; display-layer numeric
+reserialization must not replace it. Reserved `compression_` structure markers identify the prescribed
+state and prevent reconditioning its incomplete result. Existing unloaded-stack sewing checks refuse
+these selections until an appropriate pressure-qualified process path exists. This establishes neither
+dynamic pressure/loft coupling nor moisture, recovery or empirical garment performance.
+See [Pressure-conditioned materials](../pressure-conditioned-materials.md) for the runnable native and
+browser workflow, full qualification rules and synthetic known answers.

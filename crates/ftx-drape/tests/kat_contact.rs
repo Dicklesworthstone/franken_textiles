@@ -139,13 +139,29 @@ fn ease_sweep_on_a_tube() {
         assert!((hoop - want).abs() < 0.003, "hoop strain {hoop} vs {want}");
     }
     let c = g + 0.030;
-    let (solver, _) = band(c, 0.04, 0.008, 0.0, |_| c / (2.0 * PI), 0.2, true);
+    // Refine this unconstrained ring so polygonal chord error stays below the same 20 µm
+    // continuum-clearance bound; at 8 mm spacing the converged discretization differs by 29 µm.
+    let (solver, bottom) = band(c, 0.04, 0.004, 0.0, |_| c / (2.0 * PI), 0.2, true);
+    // With no contact, the static tube has rigid in-plane translations and rotation. Fix their
+    // gauge explicitly; the single tangential pin in band() leaves a singular static Hessian.
+    let mut fixed = vec![[false; 3]; solver.x.len()];
+    for &i in &bottom {
+        fixed[i][2] = true;
+    }
+    fixed[bottom[0]][0] = true;
+    fixed[bottom[0]][1] = true;
+    fixed[bottom[bottom.len() / 2]][1] = true;
+    let solver = Solver::new(solver.model, solver.x, &fixed, Vec3::ZERO);
     let mut s = solver.with_contact(body, p).unwrap();
-    s.static_solve().unwrap();
+    // The loose tube's bending relaxation is slow; budget iterations rather than accepting an
+    // exhausted solve. Keep the default displacement tolerance and the analytic clearance check.
+    s.max_newton = 1000;
+    let rep = s.static_solve().unwrap();
     let clearance = mean_radius(&s.x) - r - p.thickness;
     let want = (c - g) / (2.0 * PI) - p.thickness;
     println!(
-        "ease +30 mm: clearance {:.4} mm vs {:.4} mm",
+        "ease +30 mm: {} Newton iterations, clearance {:.4} mm vs {:.4} mm",
+        rep.iterations,
         clearance * 1e3,
         want * 1e3
     );
@@ -222,6 +238,8 @@ fn band_slip_on_cone(mu: f64, tan_alpha: f64) -> f64 {
         false,
     );
     let mut s = solver.with_contact(body, p).unwrap();
+    // Projected contact steps can converge linearly near the friction threshold.
+    s.max_newton = 1000;
     let z0 = mean_z(&s.x);
     for _ in 0..15 {
         s.step(0.002).unwrap();

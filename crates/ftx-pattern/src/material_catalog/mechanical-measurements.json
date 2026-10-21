@@ -1,0 +1,1424 @@
+{
+  "schema": "ftx-textile-catalog/1",
+  "materials": [
+    {
+      "id": "fujii/2026/sheeting-a",
+      "name": "Fujii A cotton plain sheeting — measured specimen",
+      "form": "woven",
+      "composition": [
+        {
+          "fiber": "cotton",
+          "fraction": 1,
+          "source": "paper"
+        }
+      ],
+      "composition_complete": true,
+      "structure": {
+        "specimen": "A in Tables 1 and 3; commercial cotton plain sheeting, not a generic cotton law",
+        "weave": "plain",
+        "finish": "No dyeing, coating or other post-processing",
+        "source_axes": "x = weft; y = warp",
+        "composition_scope": "Source identifies commercial cotton fabric; no independent composition assay reported",
+        "cotton_count_notation": "Table 1: / denotes a single yarn; // denotes two parallel single yarns of equal cotton count",
+        "conditioning": "All specimen tests: JIS L0105; 20 +/- 2 degrees C; 65 +/- 4 percent RH",
+        "weight_scope": "Table 1 omits the Weight unit; five 5 x 5 cm2 specimens averaged. No mass or areal density is inferred",
+        "tensile_protocol": "Appendix C.1: JIS L1096 A strip test; Shimadzu AG-100kNX; 50 mm width; 200 mm gauge; 100 mm/min until rupture; five specimens per direction",
+        "tensile_fit_model": "Eq (17): E(e)=d*ln((b+exp(a*e))/(b+1))+c*e+d*(1-exp(-k*e)) for e>=0; k=a*sqrt(b)/(b+1); odd continuation for e<0. E is stress in Pa, not a constant modulus; e is engineering strain",
+        "tensile_summary_scope": "Appendix C.1 p20: elastic is the fitted stress-response derivative as strain tends to infinity; low is that derivative at strain corresponding to 500 gf/cm tensile load per width, not the zero-strain slope",
+        "poisson_fit_model": "Eq (19): nu_hat(e)=b*e^c*exp(a*e)+d for e>=0; video extensometry from five tensile specimens per direction. Eq (42) corrects initial apparent ratios to satisfy reciprocity using elastic, not low, tensile moduli",
+        "shear_fit_model": "Eq (18): G(g)=a*ln(1+b*g)+c*g+d*(1-exp(-k*g)) for g>=0; k=sqrt(-a*b*b/d); odd continuation for g<0; g is shear angle in radians. Source extrapolates beyond its measured 8-degree range; no extrapolated law is activated",
+        "mechanical_scope": "Only thickness and source-interval membrane shear slope are canonical mechanical properties; original fujii_* fit coefficients remain unconsumed extensions",
+        "bending_scope": "Reported B_KES in Pa only: Eq (44) prints strain=z*kappa*10^2 but labels z in mm and kappa in cm^-1, which would require 10^-1. No canonical bending rigidity is inferred from this dimensional ambiguity; twisting was not measured",
+        "data_scope": "Published summary values and fitted coefficients; no raw replicates or uncertainty distributions ingested",
+        "rights": "Fujii et al. (2026), CC BY 4.0; numerical transcription with stated unit conversions",
+        "cotton_count_warp_reported": "20/1",
+        "cotton_count_weft_reported": "20/1",
+        "source_weight_value_without_unit": "0.0142"
+      },
+      "properties": {
+        "thickness": {
+          "value": 0.66,
+          "unit": "mm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 1 p6; KES-FB3-A; mean of 25 readings, five tests on each of five specimens",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "pressure_gf_cm2": "0.5",
+            "speed_um_s": "20",
+            "contact_area_cm2": "2.0",
+            "scope": "Thickness under stated pressure, not unloaded loft"
+          }
+        },
+        "thread_density_warp": {
+          "value": 24.8,
+          "unit": "1/cm",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Table 1 p6; 124 threads/5 cm divided by 5; count-test uncertainty unspecified",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "thread_density_weft": {
+          "value": 22.6,
+          "unit": "1/cm",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Table 1 p6; 113 threads/5 cm divided by 5; count-test uncertainty unspecified",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "shear_stiffness": {
+          "value": 64.7262,
+          "unit": "N/m",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9; inverse of Appendix C.3 Eq (43), p22: G_low [Pa] * h [m] = 98070 * 0.000660 = 64.7262 N/m. Pa*m=N/m; no constitutive fit or mixture rule",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "apparatus": "KES-FB1-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 50",
+            "source_shear_load_gf": "200",
+            "rate_deg_s": "0.5",
+            "branch": "first right-loading",
+            "slope_interval_degrees": "0.5 to 2.5",
+            "statistic": "mean of ten tests, five per weft/warp direction",
+            "scope": "Low-angle loading slope; not a finite-strain or unloading law"
+          }
+        },
+        "fujii_tensile_weft_a": {
+          "value": 60.84,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient a; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_b": {
+          "value": 258.4,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient b; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_c": {
+          "value": -5973000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient c; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_d": {
+          "value": 3457000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient d; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_elastic": {
+          "value": 204400000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) as strain tends to infinity; not a membrane coefficient",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_low": {
+          "value": 28810000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) at strain corresponding to 500 gf/cm tensile load per width; not the zero-strain slope",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_warp_a": {
+          "value": 103.4,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient a; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_b": {
+          "value": 46.44,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient b; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_c": {
+          "value": -39660000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient c; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_d": {
+          "value": 3216000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient d; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_elastic": {
+          "value": 292800000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) as strain tends to infinity; not a membrane coefficient",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_low": {
+          "value": 66950000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) at strain corresponding to 500 gf/cm tensile load per width; not the zero-strain slope",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_poisson_xy_corrected": {
+          "value": 0.2772,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (42), Appendix C.2 p21; corrected initial apparent ratio using elastic-modulus reciprocity; not paired with low moduli",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "source_axes": "x=weft, y=warp"
+          }
+        },
+        "fujii_apparent_poisson_xy_a": {
+          "value": 34.96,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient a; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_apparent_poisson_xy_b": {
+          "value": 101300,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient b; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_apparent_poisson_xy_c": {
+          "value": 3.881,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient c; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_apparent_poisson_xy_d": {
+          "value": 0.2485,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient d; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_poisson_yx_corrected": {
+          "value": 0.397,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (42), Appendix C.2 p21; corrected initial apparent ratio using elastic-modulus reciprocity; not paired with low moduli",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "source_axes": "x=weft, y=warp"
+          }
+        },
+        "fujii_apparent_poisson_yx_a": {
+          "value": 46.06,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient a; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_apparent_poisson_yx_b": {
+          "value": 7358,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient b; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_apparent_poisson_yx_c": {
+          "value": 2.317,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient c; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_apparent_poisson_yx_d": {
+          "value": 0.4257,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient d; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_shear_a": {
+          "value": -1900,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient a; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_b": {
+          "value": 351.6,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient b; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_c": {
+          "value": 148600,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient c; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_d": {
+          "value": 4749,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient d; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_low": {
+          "value": 98070,
+          "unit": "Pa",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.3 Eq (43), p22; KES-FB1-A slope normalized by measured thickness",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "apparatus": "KES-FB1-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 50",
+            "source_shear_load_gf": "200",
+            "rate_deg_s": "0.5",
+            "branch": "first right-loading",
+            "slope_interval_degrees": "0.5 to 2.5",
+            "statistic": "mean of ten tests, five per weft/warp direction",
+            "scope": "Low-angle loading slope; not a finite-strain or unloading law"
+          }
+        },
+        "fujii_kes_bending_weft": {
+          "value": 295900,
+          "unit": "Pa",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9, B_x_KES; Appendix D.2 Eq (44), p22; original labeled modulus only; unresolved strain/thickness-unit inconsistency prevents canonical bending conversion",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)",
+            "apparatus": "KES-FB2-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 10",
+            "rate_cm_inverse_s": "0.5",
+            "slope_interval_cm_inverse": "0.5 to 1.5",
+            "branch": "first downward-loading",
+            "statistic": "mean of five tests"
+          }
+        },
+        "fujii_kes_bending_warp": {
+          "value": 174900,
+          "unit": "Pa",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9, B_y_KES; Appendix D.2 Eq (44), p22; original labeled modulus only; unresolved strain/thickness-unit inconsistency prevents canonical bending conversion",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)",
+            "apparatus": "KES-FB2-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 10",
+            "rate_cm_inverse_s": "0.5",
+            "slope_interval_cm_inverse": "0.5 to 1.5",
+            "branch": "first downward-loading",
+            "statistic": "mean of five tests"
+          }
+        }
+      },
+      "sources": {
+        "paper": {
+          "reference": "https://doi.org/10.1007/s00366-026-02343-z",
+          "accessed_on": "2026-10-18",
+          "note": "Fujii, Nakashima, Santo, Kinari and Okura (2026), Empirical hyperelastic modeling of textile fabrics for measuring nonlinear bending rigidity, Engineering with Computers 42, 107. Published 2026-05-19. Tables 1 (p6), 3 (p9); Eqs 17-19 (pp6-7), 42-44 (pp21-22). CC BY 4.0, https://creativecommons.org/licenses/by/4.0/. Numerical transcription and explicitly identified conversions; no figures copied. Paper offers implementations and data on reasonable request; no raw replicates ingested. Table 1 weight unit and Eq 44 dimensional ambiguity unresolved."
+        }
+      }
+    },
+    {
+      "id": "fujii/2026/oxford-b",
+      "name": "Fujii B cotton Oxford basket weave — measured specimen",
+      "form": "woven",
+      "composition": [
+        {
+          "fiber": "cotton",
+          "fraction": 1,
+          "source": "paper"
+        }
+      ],
+      "composition_complete": true,
+      "structure": {
+        "specimen": "B in Tables 1 and 3; commercial cotton Oxford basket weave, not a generic cotton law",
+        "weave": "Oxford basket weave; source labels Ox (Plain); parallel double warp yarns",
+        "finish": "No dyeing, coating or other post-processing",
+        "source_axes": "x = weft; y = warp",
+        "composition_scope": "Source identifies commercial cotton fabric; no independent composition assay reported",
+        "cotton_count_notation": "Table 1: / denotes a single yarn; // denotes two parallel single yarns of equal cotton count",
+        "conditioning": "All specimen tests: JIS L0105; 20 +/- 2 degrees C; 65 +/- 4 percent RH",
+        "weight_scope": "Table 1 omits the Weight unit; five 5 x 5 cm2 specimens averaged. No mass or areal density is inferred",
+        "tensile_protocol": "Appendix C.1: JIS L1096 A strip test; Shimadzu AG-100kNX; 50 mm width; 200 mm gauge; 100 mm/min until rupture; five specimens per direction",
+        "tensile_fit_model": "Eq (17): E(e)=d*ln((b+exp(a*e))/(b+1))+c*e+d*(1-exp(-k*e)) for e>=0; k=a*sqrt(b)/(b+1); odd continuation for e<0. E is stress in Pa, not a constant modulus; e is engineering strain",
+        "tensile_summary_scope": "Appendix C.1 p20: elastic is the fitted stress-response derivative as strain tends to infinity; low is that derivative at strain corresponding to 500 gf/cm tensile load per width, not the zero-strain slope",
+        "poisson_fit_model": "Eq (19): nu_hat(e)=b*e^c*exp(a*e)+d for e>=0; video extensometry from five tensile specimens per direction. Eq (42) corrects initial apparent ratios to satisfy reciprocity using elastic, not low, tensile moduli",
+        "shear_fit_model": "Eq (18): G(g)=a*ln(1+b*g)+c*g+d*(1-exp(-k*g)) for g>=0; k=sqrt(-a*b*b/d); odd continuation for g<0; g is shear angle in radians. Source extrapolates beyond its measured 8-degree range; no extrapolated law is activated",
+        "mechanical_scope": "Only thickness and source-interval membrane shear slope are canonical mechanical properties; original fujii_* fit coefficients remain unconsumed extensions",
+        "bending_scope": "Reported B_KES in Pa only: Eq (44) prints strain=z*kappa*10^2 but labels z in mm and kappa in cm^-1, which would require 10^-1. No canonical bending rigidity is inferred from this dimensional ambiguity; twisting was not measured",
+        "data_scope": "Published summary values and fitted coefficients; no raw replicates or uncertainty distributions ingested",
+        "rights": "Fujii et al. (2026), CC BY 4.0; numerical transcription with stated unit conversions",
+        "cotton_count_warp_reported": "20//2",
+        "cotton_count_weft_reported": "16/1",
+        "source_weight_value_without_unit": "0.0222"
+      },
+      "properties": {
+        "thickness": {
+          "value": 0.822,
+          "unit": "mm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 1 p6; KES-FB3-A; mean of 25 readings, five tests on each of five specimens",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "pressure_gf_cm2": "0.5",
+            "speed_um_s": "20",
+            "contact_area_cm2": "2.0",
+            "scope": "Thickness under stated pressure, not unloaded loft"
+          }
+        },
+        "thread_density_warp": {
+          "value": 23,
+          "unit": "1/cm",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Table 1 p6; 115 threads/5 cm divided by 5; count-test uncertainty unspecified",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "thread_density_weft": {
+          "value": 14.2,
+          "unit": "1/cm",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Table 1 p6; 71 threads/5 cm divided by 5; count-test uncertainty unspecified",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "shear_stiffness": {
+          "value": 215.4462,
+          "unit": "N/m",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9; inverse of Appendix C.3 Eq (43), p22: G_low [Pa] * h [m] = 262100 * 0.000822 = 215.4462 N/m. Pa*m=N/m; no constitutive fit or mixture rule",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "apparatus": "KES-FB1-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 50",
+            "source_shear_load_gf": "200",
+            "rate_deg_s": "0.5",
+            "branch": "first right-loading",
+            "slope_interval_degrees": "0.5 to 2.5",
+            "statistic": "mean of ten tests, five per weft/warp direction",
+            "scope": "Low-angle loading slope; not a finite-strain or unloading law"
+          }
+        },
+        "fujii_tensile_weft_a": {
+          "value": 214.8,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient a; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_b": {
+          "value": 795.1,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient b; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_c": {
+          "value": 15410000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient c; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_d": {
+          "value": 722900,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient d; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_elastic": {
+          "value": 170700000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) as strain tends to infinity; not a membrane coefficient",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_low": {
+          "value": 44220000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) at strain corresponding to 500 gf/cm tensile load per width; not the zero-strain slope",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_warp_a": {
+          "value": 25.32,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient a; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_b": {
+          "value": 0.1937,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient b; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_c": {
+          "value": 4276000000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient c; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_d": {
+          "value": -138600000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient d; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_elastic": {
+          "value": 767500000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) as strain tends to infinity; not a membrane coefficient",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_low": {
+          "value": 50920000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) at strain corresponding to 500 gf/cm tensile load per width; not the zero-strain slope",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_poisson_xy_corrected": {
+          "value": 0.04914,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (42), Appendix C.2 p21; corrected initial apparent ratio using elastic-modulus reciprocity; not paired with low moduli",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "source_axes": "x=weft, y=warp"
+          }
+        },
+        "fujii_apparent_poisson_xy_a": {
+          "value": 42.1,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient a; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_apparent_poisson_xy_b": {
+          "value": 2314,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient b; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_apparent_poisson_xy_c": {
+          "value": 2.174,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient c; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_apparent_poisson_xy_d": {
+          "value": 0.004279,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient d; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_poisson_yx_corrected": {
+          "value": 0.2209,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (42), Appendix C.2 p21; corrected initial apparent ratio using elastic-modulus reciprocity; not paired with low moduli",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "source_axes": "x=weft, y=warp"
+          }
+        },
+        "fujii_apparent_poisson_yx_a": {
+          "value": 14.47,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient a; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_apparent_poisson_yx_b": {
+          "value": 17.76,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient b; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_apparent_poisson_yx_c": {
+          "value": 1.101,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient c; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_apparent_poisson_yx_d": {
+          "value": 0.2658,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient d; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_shear_a": {
+          "value": -0.007293,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient a; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_b": {
+          "value": 236000,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient b; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_c": {
+          "value": 214600,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient c; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_d": {
+          "value": 8586,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient d; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_low": {
+          "value": 262100,
+          "unit": "Pa",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.3 Eq (43), p22; KES-FB1-A slope normalized by measured thickness",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "apparatus": "KES-FB1-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 50",
+            "source_shear_load_gf": "200",
+            "rate_deg_s": "0.5",
+            "branch": "first right-loading",
+            "slope_interval_degrees": "0.5 to 2.5",
+            "statistic": "mean of ten tests, five per weft/warp direction",
+            "scope": "Low-angle loading slope; not a finite-strain or unloading law"
+          }
+        },
+        "fujii_kes_bending_weft": {
+          "value": 652000,
+          "unit": "Pa",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9, B_x_KES; Appendix D.2 Eq (44), p22; original labeled modulus only; unresolved strain/thickness-unit inconsistency prevents canonical bending conversion",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)",
+            "apparatus": "KES-FB2-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 10",
+            "rate_cm_inverse_s": "0.5",
+            "slope_interval_cm_inverse": "0.5 to 1.5",
+            "branch": "first downward-loading",
+            "statistic": "mean of five tests"
+          }
+        },
+        "fujii_kes_bending_warp": {
+          "value": 287900,
+          "unit": "Pa",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9, B_y_KES; Appendix D.2 Eq (44), p22; original labeled modulus only; unresolved strain/thickness-unit inconsistency prevents canonical bending conversion",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)",
+            "apparatus": "KES-FB2-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 10",
+            "rate_cm_inverse_s": "0.5",
+            "slope_interval_cm_inverse": "0.5 to 1.5",
+            "branch": "first downward-loading",
+            "statistic": "mean of five tests"
+          }
+        }
+      },
+      "sources": {
+        "paper": {
+          "reference": "https://doi.org/10.1007/s00366-026-02343-z",
+          "accessed_on": "2026-10-18",
+          "note": "Fujii, Nakashima, Santo, Kinari and Okura (2026), Empirical hyperelastic modeling of textile fabrics for measuring nonlinear bending rigidity, Engineering with Computers 42, 107. Published 2026-05-19. Tables 1 (p6), 3 (p9); Eqs 17-19 (pp6-7), 42-44 (pp21-22). CC BY 4.0, https://creativecommons.org/licenses/by/4.0/. Numerical transcription and explicitly identified conversions; no figures copied. Paper offers implementations and data on reasonable request; no raw replicates ingested. Table 1 weight unit and Eq 44 dimensional ambiguity unresolved."
+        }
+      }
+    },
+    {
+      "id": "fujii/2026/twill-c",
+      "name": "Fujii C cotton 2/1 twill — measured specimen",
+      "form": "woven",
+      "composition": [
+        {
+          "fiber": "cotton",
+          "fraction": 1,
+          "source": "paper"
+        }
+      ],
+      "composition_complete": true,
+      "structure": {
+        "specimen": "C in Tables 1 and 3; commercial cotton 2/1 twill, not a generic cotton law",
+        "weave": "2/1 twill",
+        "finish": "No dyeing, coating or other post-processing",
+        "source_axes": "x = weft; y = warp",
+        "composition_scope": "Source identifies commercial cotton fabric; no independent composition assay reported",
+        "cotton_count_notation": "Table 1: / denotes a single yarn; // denotes two parallel single yarns of equal cotton count",
+        "conditioning": "All specimen tests: JIS L0105; 20 +/- 2 degrees C; 65 +/- 4 percent RH",
+        "weight_scope": "Table 1 omits the Weight unit; five 5 x 5 cm2 specimens averaged. No mass or areal density is inferred",
+        "tensile_protocol": "Appendix C.1: JIS L1096 A strip test; Shimadzu AG-100kNX; 50 mm width; 200 mm gauge; 100 mm/min until rupture; five specimens per direction",
+        "tensile_fit_model": "Eq (17): E(e)=d*ln((b+exp(a*e))/(b+1))+c*e+d*(1-exp(-k*e)) for e>=0; k=a*sqrt(b)/(b+1); odd continuation for e<0. E is stress in Pa, not a constant modulus; e is engineering strain",
+        "tensile_summary_scope": "Appendix C.1 p20: elastic is the fitted stress-response derivative as strain tends to infinity; low is that derivative at strain corresponding to 500 gf/cm tensile load per width, not the zero-strain slope",
+        "poisson_fit_model": "Eq (19): nu_hat(e)=b*e^c*exp(a*e)+d for e>=0; video extensometry from five tensile specimens per direction. Eq (42) corrects initial apparent ratios to satisfy reciprocity using elastic, not low, tensile moduli",
+        "shear_fit_model": "Eq (18): G(g)=a*ln(1+b*g)+c*g+d*(1-exp(-k*g)) for g>=0; k=sqrt(-a*b*b/d); odd continuation for g<0; g is shear angle in radians. Source extrapolates beyond its measured 8-degree range; no extrapolated law is activated",
+        "mechanical_scope": "Only thickness and source-interval membrane shear slope are canonical mechanical properties; original fujii_* fit coefficients remain unconsumed extensions",
+        "bending_scope": "Reported B_KES in Pa only: Eq (44) prints strain=z*kappa*10^2 but labels z in mm and kappa in cm^-1, which would require 10^-1. No canonical bending rigidity is inferred from this dimensional ambiguity; twisting was not measured",
+        "data_scope": "Published summary values and fitted coefficients; no raw replicates or uncertainty distributions ingested",
+        "rights": "Fujii et al. (2026), CC BY 4.0; numerical transcription with stated unit conversions",
+        "cotton_count_warp_reported": "20/1",
+        "cotton_count_weft_reported": "20/1",
+        "source_weight_value_without_unit": "0.0216"
+      },
+      "properties": {
+        "thickness": {
+          "value": 0.769,
+          "unit": "mm",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 1 p6; KES-FB3-A; mean of 25 readings, five tests on each of five specimens",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "pressure_gf_cm2": "0.5",
+            "speed_um_s": "20",
+            "contact_area_cm2": "2.0",
+            "scope": "Thickness under stated pressure, not unloaded loft"
+          }
+        },
+        "thread_density_warp": {
+          "value": 45,
+          "unit": "1/cm",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Table 1 p6; 225 threads/5 cm divided by 5; count-test uncertainty unspecified",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "thread_density_weft": {
+          "value": 23.4,
+          "unit": "1/cm",
+          "evidence": "published",
+          "source": "paper",
+          "method": "Table 1 p6; 117 threads/5 cm divided by 5; count-test uncertainty unspecified",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "shear_stiffness": {
+          "value": 72.64743,
+          "unit": "N/m",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9; inverse of Appendix C.3 Eq (43), p22: G_low [Pa] * h [m] = 94470 * 0.000769 = 72.64743 N/m. Pa*m=N/m; no constitutive fit or mixture rule",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "apparatus": "KES-FB1-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 50",
+            "source_shear_load_gf": "200",
+            "rate_deg_s": "0.5",
+            "branch": "first right-loading",
+            "slope_interval_degrees": "0.5 to 2.5",
+            "statistic": "mean of ten tests, five per weft/warp direction",
+            "scope": "Low-angle loading slope; not a finite-strain or unloading law"
+          }
+        },
+        "fujii_tensile_weft_a": {
+          "value": 90.48,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient a; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_b": {
+          "value": 2052,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient b; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_c": {
+          "value": 604500,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient c; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_d": {
+          "value": 2186000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient d; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_elastic": {
+          "value": 198400000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) as strain tends to infinity; not a membrane coefficient",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_weft_low": {
+          "value": 32610000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) at strain corresponding to 500 gf/cm tensile load per width; not the zero-strain slope",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)"
+          }
+        },
+        "fujii_tensile_warp_a": {
+          "value": 43.92,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient a; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_b": {
+          "value": 0.2232,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient b; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_c": {
+          "value": 2830000000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient c; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_d": {
+          "value": -53330000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (17) fitted coefficient d; structure.tensile_protocol and tensile_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_elastic": {
+          "value": 487900000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) as strain tends to infinity; not a membrane coefficient",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_tensile_warp_low": {
+          "value": 55680000,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.1 p20: derivative of fitted Eq (17) at strain corresponding to 500 gf/cm tensile load per width; not the zero-strain slope",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)"
+          }
+        },
+        "fujii_poisson_xy_corrected": {
+          "value": 0.07776,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (42), Appendix C.2 p21; corrected initial apparent ratio using elastic-modulus reciprocity; not paired with low moduli",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "source_axes": "x=weft, y=warp"
+          }
+        },
+        "fujii_apparent_poisson_xy_a": {
+          "value": 28.09,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient a; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_apparent_poisson_xy_b": {
+          "value": 3448,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient b; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_apparent_poisson_xy_c": {
+          "value": 2.891,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient c; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_apparent_poisson_xy_d": {
+          "value": 0.1056,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient d; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "weft (x)"
+          }
+        },
+        "fujii_poisson_yx_corrected": {
+          "value": 0.1912,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (42), Appendix C.2 p21; corrected initial apparent ratio using elastic-modulus reciprocity; not paired with low moduli",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "source_axes": "x=weft, y=warp"
+          }
+        },
+        "fujii_apparent_poisson_yx_a": {
+          "value": 12.22,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient a; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_apparent_poisson_yx_b": {
+          "value": 9.332,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient b; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_apparent_poisson_yx_c": {
+          "value": 0.7747,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient c; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_apparent_poisson_yx_d": {
+          "value": 0.1634,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (19) coefficient d; video-extensometry fit, Appendix C.2; structure.poisson_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "loading_direction": "warp (y)"
+          }
+        },
+        "fujii_shear_a": {
+          "value": -715,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient a; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_b": {
+          "value": 713.3,
+          "unit": "1",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient b; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_c": {
+          "value": 120400,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient c; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_d": {
+          "value": 2807,
+          "unit": "Pa",
+          "evidence": "estimate",
+          "source": "paper",
+          "method": "Table 3 p9; Eq (18) fitted coefficient d; KES-FB1-A right-loading data; radians dimensionless; structure.shear_fit_model",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "measured_angle_degrees": "0 to 8",
+            "rate_deg_s": "0.5"
+          }
+        },
+        "fujii_shear_low": {
+          "value": 94470,
+          "unit": "Pa",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9; Appendix C.3 Eq (43), p22; KES-FB1-A slope normalized by measured thickness",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "apparatus": "KES-FB1-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 50",
+            "source_shear_load_gf": "200",
+            "rate_deg_s": "0.5",
+            "branch": "first right-loading",
+            "slope_interval_degrees": "0.5 to 2.5",
+            "statistic": "mean of ten tests, five per weft/warp direction",
+            "scope": "Low-angle loading slope; not a finite-strain or unloading law"
+          }
+        },
+        "fujii_kes_bending_weft": {
+          "value": 325300,
+          "unit": "Pa",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9, B_x_KES; Appendix D.2 Eq (44), p22; original labeled modulus only; unresolved strain/thickness-unit inconsistency prevents canonical bending conversion",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "weft (x)",
+            "apparatus": "KES-FB2-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 10",
+            "rate_cm_inverse_s": "0.5",
+            "slope_interval_cm_inverse": "0.5 to 1.5",
+            "branch": "first downward-loading",
+            "statistic": "mean of five tests"
+          }
+        },
+        "fujii_kes_bending_warp": {
+          "value": 158100,
+          "unit": "Pa",
+          "evidence": "measured",
+          "source": "paper",
+          "method": "Table 3 p9, B_y_KES; Appendix D.2 Eq (44), p22; original labeled modulus only; unresolved strain/thickness-unit inconsistency prevents canonical bending conversion",
+          "conditions": {
+            "temperature_c": "20 +/- 2",
+            "relative_humidity_percent": "65 +/- 4",
+            "direction": "warp (y)",
+            "apparatus": "KES-FB2-A",
+            "specimen_mm": "200 x 200; active width 200, gauge 10",
+            "rate_cm_inverse_s": "0.5",
+            "slope_interval_cm_inverse": "0.5 to 1.5",
+            "branch": "first downward-loading",
+            "statistic": "mean of five tests"
+          }
+        }
+      },
+      "sources": {
+        "paper": {
+          "reference": "https://doi.org/10.1007/s00366-026-02343-z",
+          "accessed_on": "2026-10-18",
+          "note": "Fujii, Nakashima, Santo, Kinari and Okura (2026), Empirical hyperelastic modeling of textile fabrics for measuring nonlinear bending rigidity, Engineering with Computers 42, 107. Published 2026-05-19. Tables 1 (p6), 3 (p9); Eqs 17-19 (pp6-7), 42-44 (pp21-22). CC BY 4.0, https://creativecommons.org/licenses/by/4.0/. Numerical transcription and explicitly identified conversions; no figures copied. Paper offers implementations and data on reasonable request; no raw replicates ingested. Table 1 weight unit and Eq 44 dimensional ambiguity unresolved."
+        }
+      }
+    }
+  ]
+}

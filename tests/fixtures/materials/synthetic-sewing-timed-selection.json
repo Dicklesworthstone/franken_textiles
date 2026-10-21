@@ -1,0 +1,105 @@
+{
+  "schema": "ftx-sewing-selection/2",
+  "objective": "minimize_feed_and_setup_seconds",
+  "max_plan_evaluations": 8,
+  "options": {
+    "machine": {
+      "id": "example-configuration-not-a-qualified-machine",
+      "stitch_mm": [0.5, 5.0],
+      "feed_b_over_a": [0.5, 2.0],
+      "max_stack_mm": 3.0,
+      "max_stitches_per_minute": 1000.0
+    },
+    "seam_tolerance_mm": 0.5,
+    "passes": [
+      {
+        "id": "join", "seam": "side", "max_stitch_mm": 2.5, "plies": [1, 1],
+        "minimum_allowance_mm": 6.0, "stitches_per_minute": 600.0,
+        "needle": "operator-selected-needle", "thread": "operator-selected-thread", "after": []
+      },
+      {
+        "id": "finish", "seam": "side", "max_stitch_mm": 2.5, "plies": [1, 1],
+        "minimum_allowance_mm": 6.0, "stitches_per_minute": 600.0,
+        "needle": "operator-selected-needle", "thread": "operator-selected-thread", "after": ["join"]
+      }
+    ],
+    "ordering": {
+      "objective": "minimize_setup_time",
+      "max_search_nodes": 1000,
+      "initial_setup": {"needle": "operator-selected-needle", "thread": "operator-selected-thread"},
+      "setup_times": {
+        "machine": "example-configuration-not-a-qualified-machine",
+        "source": {
+          "reference": "test:synthetic-sewing-setup-times",
+          "accessed_on": "2026-10-20",
+          "note": "Invented software fixture, not measured setup durations"
+        },
+        "method": "Synthetic directed complete needle/thread changes; excludes handling and final reset",
+        "conditions": {"purpose": "software numerical check, not production guidance"},
+        "evidence": "estimate",
+        "allow_estimates": true,
+        "transitions": [
+          {
+            "from": {"needle": "operator-selected-needle", "thread": "operator-selected-thread"},
+            "to": {"needle": "synthetic-needle-b", "thread": "synthetic-thread-b"},
+            "milliseconds": 10000
+          },
+          {
+            "from": {"needle": "synthetic-needle-b", "thread": "synthetic-thread-b"},
+            "to": {"needle": "operator-selected-needle", "thread": "operator-selected-thread"},
+            "milliseconds": 7000
+          }
+        ]
+      }
+    },
+    "require_qualification": true,
+    "qualifications": [
+      {
+        "id": "synthetic-original",
+        "materials": [
+          "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b",
+          "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"
+        ],
+        "machine": "example-configuration-not-a-qualified-machine",
+        "needle": "operator-selected-needle", "thread": "operator-selected-thread",
+        "stitch_mm": [0.5, 3.0], "feed_b_over_a": [0.9, 1.1], "stack_mm": [0.7, 0.9],
+        "stitches_per_minute": [500.0, 650.0], "allow_reverse": false,
+        "evidence": "estimate", "allow_estimates": true,
+        "source": {
+          "reference": "test:synthetic-sewing-selection", "accessed_on": "2026-10-20",
+          "note": "Invented software fixture, not measured seam or machine evidence"
+        },
+        "method": "Synthetic process-window software oracle; not a sewing recommendation"
+      },
+      {
+        "id": "synthetic-alternative",
+        "materials": [
+          "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b",
+          "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"
+        ],
+        "machine": "example-configuration-not-a-qualified-machine",
+        "needle": "synthetic-needle-b", "thread": "synthetic-thread-b",
+        "stitch_mm": [3.0, 4.0], "feed_b_over_a": [0.9, 1.1], "stack_mm": [0.7, 0.9],
+        "stitches_per_minute": [700.0, 800.0], "allow_reverse": false,
+        "evidence": "estimate", "allow_estimates": true,
+        "source": {
+          "reference": "test:synthetic-sewing-selection", "accessed_on": "2026-10-20",
+          "note": "Invented software fixture, not measured seam or machine evidence"
+        },
+        "method": "Synthetic process-window software oracle; not a sewing recommendation"
+      }
+    ]
+  },
+  "alternatives": [
+    {
+      "operation": "join",
+      "recipes": [{"id": "fast", "needle": "synthetic-needle-b", "thread": "synthetic-thread-b",
+        "max_stitch_mm": 4.0, "stitches_per_minute": 750.0}]
+    },
+    {
+      "operation": "finish",
+      "recipes": [{"id": "fast", "needle": "synthetic-needle-b", "thread": "synthetic-thread-b",
+        "max_stitch_mm": 4.0, "stitches_per_minute": 750.0}]
+    }
+  ]
+}

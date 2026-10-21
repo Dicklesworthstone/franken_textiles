@@ -15,6 +15,8 @@
 
 pub mod ad;
 pub mod animation;
+pub mod attached_mass;
+pub mod bending;
 mod bvh;
 pub mod cloth;
 pub mod contact;
@@ -33,6 +35,8 @@ pub mod run;
 pub mod scene;
 pub mod sparse;
 pub mod start;
+pub mod stepping;
+pub mod study;
 pub mod thermal;
 pub mod two_start;
 

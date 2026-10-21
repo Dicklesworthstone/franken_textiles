@@ -1,0 +1,67 @@
+{
+  "schema": "ftx-material-compression/1",
+  "material": {
+    "id": "synthetic/compression-sheet",
+    "name": "Synthetic pressure-conditioned sheet; software verification only",
+    "form": "woven",
+    "structure": {"scope": "Artificial fixed dry reference area; no empirical textile or garment validation"},
+    "sources": {
+      "synthetic": {
+        "reference": "local:synthetic-compression-known-answer",
+        "accessed_on": "2026-10-18",
+        "note": "Invented arithmetic fixture for software verification, not measurements or a construction law for any real textile. Prescribed pressures, scalar response, and invariance assumptions are all explicit estimates."
+      }
+    },
+    "properties": {
+      "areal_density": {"value": 100.0, "unit": "g/m2", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic reference mass per fixed dry reference area", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "thickness": {"value": 20.0, "unit": "mm", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic unloaded loft", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "thermal_resistance": {"value": 0.5, "unit": "m2*K/W", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic unloaded effective resistance", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "thermal_conductivity": {"value": 0.04, "unit": "W/(m*K)", "evidence": "estimate", "source": "synthetic", "method": "Original unloaded transport intentionally not admitted at other pressures", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "bulk_density": {"value": 5.0, "unit": "kg/m3", "evidence": "estimate", "source": "synthetic", "method": "Original unloaded density intentionally not retained as loft changes", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "specific_heat": {"value": 1000.0, "unit": "J/(kg*K)", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic constant dry specific heat", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "width": {"value": 150.0, "unit": "cm", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic stock width", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "warp_stiffness": {"value": 8000.0, "unit": "N/m", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic membrane coefficient, independent from loft", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "weft_stiffness": {"value": 4000.0, "unit": "N/m", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic membrane coefficient, independent from loft", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "shear_stiffness": {"value": 600.0, "unit": "N/m", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic membrane coefficient, independent from loft", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "poisson_warp_weft": {"value": 0.2, "unit": "1", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic normal coupling, independent from loft", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "bending_rigidity": {"value": 0.00003, "unit": "N*m", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic bending coefficient, no solid-plate thickness law", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "friction_skin": {"value": 0.4, "unit": "1", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic interface coefficient, no pressure law inferred", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+      "friction_self": {"value": 0.3, "unit": "1", "evidence": "estimate", "source": "synthetic", "method": "Explicit synthetic interface coefficient, no pressure law inferred", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}}
+    }
+  },
+  "specimen": "synthetic-compression-sheet",
+  "conditioning": "dry software fixture at 20 C",
+  "loading_branch": "loading",
+  "method": "Prescribed synthetic Pa/thickness/resistance table for exact arithmetic and production adapter verification. No force-to-pressure conversion or empirical measurement.",
+  "conditioned_on": "2026-10-18",
+  "pressure_pa": 250.0,
+  "allow_estimates": true,
+  "samples": [
+    {
+      "pressure_pa": 0.0,
+      "properties": {
+        "thickness": {"value": 20.0, "unit": "mm", "evidence": "estimate", "source": "synthetic", "method": "Synthetic loft knot", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading", "pressure_pa": "0"}, "bounds": [18.0, 22.0]},
+        "thermal_resistance": {"value": 0.5, "unit": "m2*K/W", "evidence": "estimate", "source": "synthetic", "method": "Synthetic effective resistance knot", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading", "pressure_pa": "0"}}
+      }
+    },
+    {
+      "pressure_pa": 500.0,
+      "properties": {
+        "thickness": {"value": 1.0, "unit": "cm", "evidence": "estimate", "source": "synthetic", "method": "Synthetic loft knot", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading", "pressure_pa": "500"}, "bounds": [0.9, 1.1]},
+        "thermal_resistance": {"value": 0.25, "unit": "m2*K/W", "evidence": "estimate", "source": "synthetic", "method": "Synthetic effective resistance knot", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading", "pressure_pa": "500"}}
+      }
+    }
+  ],
+  "invariants": {
+    "areal_density": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Fixed dry reference area and conserved synthetic reference mass throughout the interval", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+    "specific_heat": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Explicit synthetic pressure-independent dry specific heat", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+    "width": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Explicit synthetic fixed reference width throughout the pressure interval", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+    "warp_stiffness": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Explicit synthetic pressure-invariant membrane law; no claim for real textiles", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+    "weft_stiffness": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Explicit synthetic pressure-invariant membrane law; no claim for real textiles", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+    "shear_stiffness": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Explicit synthetic pressure-invariant membrane law; no claim for real textiles", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+    "poisson_warp_weft": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Explicit synthetic pressure-invariant coupling; no claim for real textiles", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+    "bending_rigidity": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Explicit synthetic pressure-invariant bending; no inferred thickness-cubed scaling", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+    "friction_skin": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Explicit synthetic constant interface coefficient throughout the interval", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}},
+    "friction_self": {"pressure_range_pa": [0.0, 500.0], "source": "synthetic", "evidence": "estimate", "method": "Explicit synthetic constant interface coefficient throughout the interval", "conditions": {"specimen": "synthetic-compression-sheet", "conditioning": "dry software fixture at 20 C", "loading_branch": "loading"}}
+  }
+}

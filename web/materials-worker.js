@@ -1,0 +1,200 @@
+// The only network request loads the local application bundle. User evidence is never uploaded.
+// Every operation carries explicit inputs; no old pattern/drape survives a failed replacement.
+import init, * as ftx from "./pkg/ftx_wasm.js";
+let failure = null, active = null;
+const ready = init().then(() => postMessage({ type: "ready" })).catch(e => {
+  failure = e; postMessage({ type: "loadError", message: String(e.message || e) });
+});
+self.ftxProgress = text => postMessage({ type: "progress", request: active, text });
+const json = text => JSON.parse(text);
+const file = (name, value, mime = "application/json") => ({ name, text: typeof value === "string" ? value : JSON.stringify(value, null, 2), mime });
+function budget(msg) {
+  let bytes = 0;
+  for (const value of Object.values(msg)) {
+    if (typeof value === "string") bytes += new TextEncoder().encode(value).byteLength;
+  }
+  if (bytes > 64 * 1024 * 1024) throw Error("Combined JSON inputs exceed 64 MiB.");
+  if (msg.bytes?.byteLength > 256 * 1024 * 1024) throw Error("Body model exceeds 256 MiB.");
+}
+
+self.onmessage = async ({ data: msg }) => {
+  await ready;
+  if (failure) return postMessage({ type: "error", request: msg.request, message: String(failure.message || failure), fatal: true });
+  active = msg.request;
+  try {
+    budget(msg);
+    let result, files = [], viewer = null, picture = null, raw, reportText = null;
+    switch (msg.type) {
+      case "catalog": result = json(ftx.material_catalog(msg.query)); break;
+      case "inspect": result = json(ftx.material_inspect(msg.selection)); break;
+      case "pressure": {
+        if (json(msg.compressionRequest).schema === "ftx-compression-stack/1") {
+          if (typeof msg.compressionLayer !== "string" || !msg.compressionLayer.trim()) throw Error("Name the stack layer to inspect and assign; no layer is selected automatically.");
+          if (typeof ftx.material_compression_stack !== "function") throw Error("Rebuild web/pkg: missing compression-stack engine.");
+          raw = ftx.material_compression_stack(msg.compressionRequest); result = json(raw);
+          const chosen = result.layers.find(layer => layer.id === msg.compressionLayer);
+          if (!chosen) throw Error("The requested stack layer ID is not in this result.");
+          if (result.layers.some(layer => typeof layer.conditioned?.selection_json !== "string")) throw Error("Rebuild web/pkg: missing frozen stack selections.");
+          // Keep the exact Rust selection bytes. Layer IDs are display text, never download paths.
+          result.chosen_layer_id = chosen.id;
+          result.selection = chosen.conditioned.selection;
+          result.selection_json = chosen.conditioned.selection_json;
+          result.inspection = json(ftx.material_inspect(result.selection_json));
+          files = [file("compression-stack-report.json", raw), file("compression-request.json", msg.compressionRequest),
+            ...result.layers.map((layer, i) => file(`compression-layer-${i + 1}-selection.json`, layer.conditioned.selection_json))];
+          break;
+        }
+        if (msg.compressionLayer) throw Error("A layer ID is only valid for a compression-stack request.");
+        raw = ftx.material_pressure_condition(msg.compressionRequest); result = json(raw);
+        if (typeof result.selection_json !== "string") throw Error("Rebuild web/pkg: missing pressure-conditioned selection bridge.");
+        result.inspection = json(ftx.material_inspect(result.selection_json));
+        files = [file("pressure-conditioned-material.json", raw),
+          file("pressure-conditioned-selection.json", result.selection_json),
+          file("compression-request.json", msg.compressionRequest)];
+        break;
+      }
+      case "calibrate": {
+        const identify = ({ nonlinear: ftx.material_calibrate_nonlinear,
+          relaxation: ftx.material_calibrate_relaxation,
+          membrane_plasticity: ftx.material_calibrate_membrane_plasticity })[msg.calibrationMode];
+        if (!["nonlinear", "relaxation", "membrane_plasticity"].includes(msg.calibrationMode)) throw Error("Choose the response to identify.");
+        if (typeof identify !== "function") throw Error("Rebuild web/pkg: missing material calibration engine.");
+        if (typeof msg.allowEstimates !== "boolean") throw Error("Declare admission of fitted estimates explicitly.");
+        raw = identify(msg.calibrationRequest, msg.allowEstimates); result = json(raw);
+        if (result.calibration?.schema === "ftx-membrane-plasticity-calibration-report/1" && result.calibration.status !== "ACCEPTED") {
+          if (result.selection !== null || result.selection_json !== null || result.material !== null) {
+            throw Error("Unresolved permanent-stretch identification cannot publish a selection.");
+          }
+          files = [file("material-calibration.json", raw), file("calibration-input.json", msg.calibrationRequest)];
+          break;
+        }
+        if (result.comparison?.schema === "ftx-relaxation-model-comparison-report/1" && result.comparison.status !== "ACCEPTED") {
+          if (result.selection_json !== null || result.calibration !== null) throw Error("Unresolved model comparison cannot publish a selection.");
+          files = [file("material-calibration.json", raw), file("calibration-input.json", msg.calibrationRequest)];
+          break;
+        }
+        if (typeof result.selection_json !== "string" || !result.material?.capabilities) {
+          throw Error("Rebuild web/pkg: missing calibrated selection and capability bridge.");
+        }
+        files = [file("material-calibration.json", raw), file("calibrated-selection.json", result.selection_json),
+          file("calibration-input.json", msg.calibrationRequest)];
+        break;
+      }
+      case "screen":
+        raw = ftx.material_screen(msg.screenRequest); result = json(raw);
+        files = [file("material-screen.json", raw), file("screen-request.json", msg.screenRequest)];
+        break;
+      case "study":
+        raw = ftx.material_study(msg.pattern, msg.studyRequest); result = json(raw);
+        files = [file("material-study.json", raw), file("original-pattern.json", msg.pattern),
+          file("study-request.json", msg.studyRequest)];
+        break;
+      case "scenario": {
+        // A new handle for every invocation: no previous alternative's body or cloth state.
+        const model = new ftx.WebBody(new Uint8Array(msg.bytes));
+        try {
+          raw = ftx.material_scenario_study(model, msg.pattern, msg.studyRequest, msg.scenarioRequest, msg.measurements);
+          result = json(raw);
+        } finally { model.free(); }
+        // Save original JSON text, not the display objects: number spellings participate in locks.
+        // The large local model stays with its owner; the report identifies its exact source hash.
+        files = [file("material-scenario-study.json", raw), file("original-pattern.json", msg.pattern),
+          file("study-request.json", msg.studyRequest), file("scenario-request.json", msg.scenarioRequest),
+          file("body-input.json", msg.measurements)];
+        break;
+      }
+      case "bind":
+        raw = ftx.material_bind(msg.pattern, msg.changes); result = json(raw);
+        if (typeof result.pattern_json !== "string") throw Error("Rebuild web/pkg: missing lossless material pattern bridge.");
+        files = [file("pattern.json", result.pattern_json), file("material-bindings.json", raw),
+          file("material-changes.json", msg.changes), file("original-pattern.json", msg.pattern)];
+        break;
+      case "fold": {
+        const model = new ftx.WebBody(new Uint8Array(msg.bytes));
+        try {
+          const fold = ftx.fold_up(model, msg.pattern, msg.measurements, msg.fit, msg.selfContactMm);
+          try { reportText = fold.report(); result = json(reportText); viewer = fold.viewer(); }
+          finally { fold.free(); }
+        } finally { model.free(); }
+        files = [file("sim_report.json", reportText), file("fold_viewer.html", viewer, "text/html")];
+        break;
+      }
+      case "heat":
+        raw = ftx.thermal_steady_surface(msg.report, msg.conditions); result = json(raw);
+        files = [file("thermal-surface.json", raw)]; break;
+      case "coverage":
+        // Validate each complete JSON fragment, but preserve its number representation. A JS
+        // parse/stringify round trip would invalidate the Rust material/geometry receipt hashes.
+        for (const fragment of [msg.report, msg.map, msg.conditions]) json(fragment);
+        raw = ftx.thermal_steady_coverage(`{"schema":"ftx-steady-coverage-request/1","report":${msg.report},"map":${msg.map},"conditions":${msg.conditions}}`);
+        result = json(raw); files = [file("thermal-coverage.json", raw)]; break;
+      case "cut":
+        raw = ftx.cut_plan(msg.pattern, msg.options); result = json(raw);
+        files = [file("cut-plan.json", raw)];
+        // One bounded on-demand preview rather than quadratically regenerating every roll.
+        if (result.rolls.length) {
+          picture = ftx.cut_svg(msg.pattern, msg.options, 0);
+          files.push(file("roll-0.svg", picture, "image/svg+xml"));
+        }
+        break;
+      case "stock": {
+        // Older bundles keep their existing single-product contract. Unknown optimizer options
+        // still fail their native request parser; the worker never removes or rewrites a policy.
+        if (ftx.stock_job === undefined) {
+          raw = ftx.stock_plan(msg.pattern, msg.stockRequest); result = json(raw);
+          const residual = ftx.stock_residual(msg.pattern, msg.stockRequest); json(residual);
+          files = [file("finite-stock-plan.json", raw), file("residual-stock-request.json", residual)];
+          const i = result.markers.findIndex(m => m.placements.length);
+          if (i >= 0) {
+            picture = ftx.stock_svg(msg.pattern, msg.stockRequest, i);
+            files.push(file(`stock-${i}.svg`, picture, "image/svg+xml"));
+          }
+          break;
+        }
+        if (typeof ftx.stock_job !== "function") throw Error("Rebuild web/pkg: invalid single-run finite-stock engine.");
+        const job = json(ftx.stock_job(msg.pattern, msg.stockRequest));
+        if (job.schema !== "ftx-stock-job/1" || typeof job.plan_json !== "string" || typeof job.residual_json !== "string") {
+          throw Error("Rebuild web/pkg: incomplete finite-stock job response.");
+        }
+        raw = job.plan_json; result = json(raw); json(job.residual_json);
+        const i = job.stock_index;
+        if (!Number.isInteger(i) || i < 0 || !result.markers?.[i]?.placements?.length) {
+          throw Error("Finite-stock preview does not identify an allocated item.");
+        }
+        files = [file("finite-stock-plan.json", raw), file("residual-stock-request.json", job.residual_json)];
+        if (typeof job.preview_svg === "string" && job.preview_refusal == null) {
+          picture = job.preview_svg; files.push(file(`stock-${i}.svg`, picture, "image/svg+xml"));
+        } else if (job.preview_svg == null && job.preview_refusal?.message) {
+          files.push(file("stock-preview-refusal.json", job.preview_refusal));
+        } else {
+          throw Error("Finite-stock preview needs either its SVG or its explicit refusal.");
+        }
+        if (result.optimization) files.push(file("stock-optimization.json", result.optimization));
+        break;
+      }
+      case "price":
+        raw = ftx.cut_price(msg.pattern, msg.options, msg.quotes, msg.market); result = json(raw);
+        files = [file("cut-price.json", raw)]; break;
+      case "sew":
+        raw = ftx.sew_stitches(msg.pattern, msg.options); result = json(raw);
+        files = [file("sewing-program.json", raw)]; break;
+      case "exports": {
+        for (const fragment of [msg.pattern, msg.fit, msg.measurements]) json(fragment);
+        const round = ftx.run(`{"pattern":${msg.pattern},"fit_spec":${msg.fit},"body":{"mode":"file","measurements":${msg.measurements}}}`, msg.today, msg.created);
+        try {
+          result = json(round.page());
+          if (result.errors || result.status === "BLOCKED") throw Error(JSON.stringify(result.errors || result));
+          files = [{ name: round.zip_name(), bytes: round.zip(), mime: "application/zip" }];
+        } finally { round.free(); }
+        break;
+      }
+      default: throw Error("Unknown material workbench operation.");
+    }
+    postMessage({ type: "result", request: msg.request, op: msg.type, result, files, viewer, picture, reportText },
+      files.filter(f => f.bytes).map(f => f.bytes.buffer));
+  } catch (e) {
+    const fatal = e instanceof WebAssembly.RuntimeError;
+    if (fatal) failure = e;
+    postMessage({ type: "error", request: msg.request, op: msg.type, fatal, message: String(e.message || e) });
+  } finally { active = null; }
+};
