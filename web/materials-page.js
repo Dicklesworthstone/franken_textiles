@@ -589,22 +589,32 @@ function permanentStretchResult(parent, r) {
       "Review the retained diagnostics and source histories. No identified selection is available to assign." };
 }
 function stripCalibrationResult(parent, r) {
-  const c = r.calibration;
+  const c = r.calibration, family = c.input.response_family;
   const quality = table(parent, "Clamped strip observations — independent partitions",
     ["Partition", "Observed channels", "Scaled RMS", "Scaled peak"]);
   for (const [name, q] of [["FIT", c.fit], ["CHECK", c.check]]) {
     cells(quality, [name, metric(q?.components), metric(q?.rms_scaled), metric(q?.peak_scaled)]);
   }
-  const parameters = table(parent, c.accepted ? "Identified orthotropic sheet coefficients" : "Candidate orthotropic sheet coefficients",
+  const parameterTitle = family ? "nonlinear shape scales and coupling" : "orthotropic sheet coefficients";
+  const parameters = table(parent, `${c.accepted ? "Identified" : "Candidate"} ${parameterTitle}`,
     ["Coefficient", "Value", "Unit", "Search minimum", "Search maximum"]);
-  for (const [i, [label, unit]] of [
-    ["Warp / wale stiffness", "N/m"],
-    ["Weft / course stiffness", "N/m"],
-    ["Major Poisson ratio", "1"],
-    ["Shear stiffness", "N/m"]
-  ].entries()) {
-    cells(parameters, [label, metric(c.parameters[i]), unit,
+  const descriptors = c.parameter_descriptors ?? [
+    {label:"Warp / wale stiffness",unit:"N/m"},
+    {label:"Weft / course stiffness",unit:"N/m"},
+    {label:"Major Poisson ratio",unit:"1"},
+    {label:"Shear stiffness",unit:"N/m"}
+  ];
+  for (const [i, descriptor] of descriptors.entries()) {
+    cells(parameters, [descriptor.label, metric(c.parameters[i]), descriptor.unit,
       ...c.input.parameter_bounds[i].map(metric)]);
+  }
+  if (family) {
+    const scope = document.createElement("p");
+    scope.textContent = "The warp, weft and shear curve shapes and strain knots were supplied by the request. " +
+      "The fit identifies only three dimensionless shape scales and signed normal coupling in N/m. " +
+      "It does not identify the curve shapes or impose area preservation. Shape evidence, acquisition observations and fitted outputs require their separate permissions.";
+    parent.append(scope);
+    detail(parent, "Declared nonlinear response shapes and source evidence", family);
   }
   const geometry = table(parent, "Actual strip geometry and declared width comparison",
     ["Experiment", "Partition", "Width (m)", "Free gauge (m)", "Warp axis [across, along]", "Authored mesh cells", "Width observation"]);

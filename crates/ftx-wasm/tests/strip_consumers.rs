@@ -13,6 +13,8 @@ const ACQUISITION: &str =
     include_str!("../../ftx-pattern/src/material_catalog/knit-strip-measurements.json");
 const INVERSE: &str =
     include_str!("../../../examples/strip-identification/synthetic-calibration.json");
+const NONLINEAR: &str =
+    include_str!("../../../examples/strip-identification/synthetic-nonlinear-calibration.json");
 
 fn forward() -> Request {
     let fixture: Value = serde_json::from_str(include_str!(
@@ -208,6 +210,150 @@ fn inverse_api_replays_accepted_selections_and_preserves_rejected_candidates_wit
     input.allow_estimated_observations = false;
     assert_eq!(
         materials::calibrate_strip(&serde_json::to_string(&input).unwrap(), false)
+            .unwrap_err()
+            .code,
+        RefusalCode::InvalidDocument
+    );
+}
+
+#[test]
+fn nonlinear_strip_api_preserves_declared_shapes_and_replays_only_admitted_frozen_material() {
+    let input: strip::fit::Input = serde_json::from_str(NONLINEAR).unwrap();
+    let result: Value =
+        serde_json::from_str(&materials::calibrate_strip(NONLINEAR, true).unwrap()).unwrap();
+    let report: strip::fit::Report = serde_json::from_value(result["calibration"].clone()).unwrap();
+    assert!(report.accepted, "{:?}", report.reasons);
+    assert!(report.domain_replay_verified);
+    assert_eq!(
+        serde_json::to_value(&report.input.response_family).unwrap(),
+        serde_json::to_value(&input.response_family).unwrap()
+    );
+    for (actual, known) in report.parameters.iter().zip([1.1, 0.9, 1.2, 40.0]) {
+        assert!((actual - known).abs() < 1e-4);
+    }
+    assert_eq!(
+        result["calibration"]["parameter_descriptors"][3]["id"],
+        "normal_coupling"
+    );
+    assert_eq!(
+        result["calibration"]["parameter_descriptors"][3]["unit"],
+        "N/m"
+    );
+    assert_eq!(
+        result["selection_json"],
+        result["calibration"]["selection_json"]
+    );
+    let raw = result["selection_json"].as_str().unwrap();
+    let selection: Selection = serde_json::from_str(raw).unwrap();
+    let inspected: Value = serde_json::from_str(&materials::inspect(raw).unwrap()).unwrap();
+    assert_eq!(inspected, result["material"]);
+    assert_eq!(inspected["selection_json"], raw);
+    assert_eq!(
+        inspected["capabilities"]["mechanical_coefficients"]["ready"],
+        false
+    );
+    let material = selection.record.as_ref().unwrap();
+    assert!(material.properties.is_empty());
+    assert!(material.membrane_response.is_some());
+    let resolved = ftx_pattern::textile_import::catalog()
+        .unwrap()
+        .resolve(&selection)
+        .unwrap();
+    assert!(resolved.membrane_response().unwrap().is_some());
+    let request = Request {
+        schema: "ftx-strip-experiment/1".into(),
+        material: selection,
+        fixture: input.experiments[0].fixture.clone(),
+        extensions: input.experiments[0]
+            .observations
+            .iter()
+            .map(|o| o.extension_fraction)
+            .collect(),
+        controls: input.controls.clone(),
+    };
+    let forward: Value = serde_json::from_str(
+        &materials::strip_experiment(&serde_json::to_string(&request).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        forward["input"]["material"]["expected_sha256"],
+        result["selection"]["expected_sha256"]
+    );
+    assert_eq!(
+        forward["states"].as_array().unwrap().len(),
+        request.extensions.len()
+    );
+    assert!(forward["states"][1]["force_n"].as_f64().unwrap() > 0.0);
+    let denied: Value =
+        serde_json::from_str(&materials::calibrate_strip(NONLINEAR, false).unwrap()).unwrap();
+    assert_eq!(denied["calibration"]["accepted"], true);
+    assert_eq!(
+        denied["calibration"]["parameters"],
+        result["calibration"]["parameters"]
+    );
+    assert_eq!(denied["selection"]["allow_estimates"], false);
+    assert_eq!(
+        denied["calibration"]["input"]["response_family"],
+        result["calibration"]["input"]["response_family"]
+    );
+    let denied_forward = Request {
+        material: serde_json::from_str(denied["selection_json"].as_str().unwrap()).unwrap(),
+        ..request
+    };
+    assert_eq!(
+        materials::strip_experiment(&serde_json::to_string(&denied_forward).unwrap())
+            .unwrap_err()
+            .code,
+        RefusalCode::InvalidDocument
+    );
+
+    let mut changed = input;
+    changed
+        .experiments
+        .iter_mut()
+        .find(|e| e.partition == ftx_pattern::material_calibration::Partition::Check)
+        .unwrap()
+        .observations[0]
+        .force_n += 10.0;
+    let rejected: Value = serde_json::from_str(
+        &materials::calibrate_strip(&serde_json::to_string(&changed).unwrap(), true).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rejected["calibration"]["accepted"], false);
+    assert_eq!(
+        rejected["calibration"]["parameters"],
+        result["calibration"]["parameters"]
+    );
+    assert_eq!(
+        rejected["calibration"]["parameter_descriptors"],
+        result["calibration"]["parameter_descriptors"]
+    );
+    for field in ["material", "selection", "selection_json"] {
+        assert!(rejected[field].is_null() && rejected["calibration"][field].is_null());
+    }
+}
+
+#[test]
+fn nonlinear_shape_evidence_requires_its_own_permission_before_any_candidate_is_published() {
+    let original: Value = serde_json::from_str(NONLINEAR).unwrap();
+    for omitted in [false, true] {
+        let mut denied = original.clone();
+        if omitted {
+            denied["response_family"]
+                .as_object_mut()
+                .unwrap()
+                .remove("allow_estimated_shapes");
+        } else {
+            denied["response_family"]["allow_estimated_shapes"] = json!(false);
+        }
+        let refusal = materials::calibrate_strip(&denied.to_string(), true).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        assert!(refusal.message.contains("allow_estimated_shapes"));
+    }
+    let mut denied = original;
+    denied["allow_estimated_observations"] = json!(false);
+    assert_eq!(
+        materials::calibrate_strip(&denied.to_string(), true)
             .unwrap_err()
             .code,
         RefusalCode::InvalidDocument

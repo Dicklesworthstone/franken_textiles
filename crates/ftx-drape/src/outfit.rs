@@ -4,7 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
-use ftx_pattern::{Pattern, material_friction::Interface, textile_import};
+use ftx_pattern::{
+    Pattern, material_friction::Interface, material_mass::Attachments, textile_import,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -106,6 +108,47 @@ fn collect_interfaces(
     Ok(())
 }
 
+// Validate against the original physical instances before introducing a namespace. Only identities
+// change: preserve authored mass, fractions, source records, bounds and per-group estimate policy.
+fn collect_attached_mass(
+    pattern: &Pattern,
+    garment: &str,
+    groups: &mut Vec<Value>,
+) -> Result<Option<Value>, Refusal> {
+    let Some(attachments) = Attachments::from_pattern(pattern)? else {
+        return Ok(None);
+    };
+    if attachments.groups.is_empty() {
+        return Ok(None);
+    }
+    let original = &pattern.raw()["attached_mass"];
+    let name = |id: &str| format!("{garment}::{id}");
+    let mut correspondence = BTreeMap::new();
+    for (i, group) in attachments.groups.iter().enumerate() {
+        // An unknown/denied mass must refuse before body fitting, not become a weightless accessory.
+        group.extra.evaluate()?;
+        let mut raw = original["groups"][i].clone();
+        raw["extra"]["id"] = json!(name(&group.extra.id));
+        for (j, target) in group.targets.iter().enumerate() {
+            let instance = pattern
+                .instance(&target.instance)
+                .expect("validated target");
+            if pattern.raw()["pieces"][instance.piece_index]["sim"] == Value::Bool(false) {
+                return Err(invalid(format!(
+                    "{garment}: attached mass target {} is excluded from simulation",
+                    target.instance
+                )));
+            }
+            raw["targets"][j]["instance"] = json!(name(&target.instance));
+        }
+        correspondence.insert(group.extra.id.clone(), name(&group.extra.id));
+        groups.push(raw);
+    }
+    Ok(Some(
+        json!({"source_input_sha256":digest(original)?,"groups":correspondence}),
+    ))
+}
+
 /// Freeze material selections, namespace source references, and preflight the actual contact resolver.
 /// No garment is moved, scaled, assigned invented friction, or sewn to another garment.
 ///
@@ -125,6 +168,7 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
     let mut seams = Vec::new();
     let mut sources = Vec::new();
     let mut interfaces = BTreeMap::new();
+    let mut attached_groups = Vec::new();
     let mut instance_garment = BTreeMap::new();
     let mut default = None;
     for (index, garment) in input.garments.iter().enumerate() {
@@ -146,7 +190,15 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
             .ok_or_else(|| invalid("garment pattern must be an object"))?;
         if object.keys().any(|k| {
             ![
-                "schema", "units", "style", "size", "meta", "fabric", "pieces", "seams",
+                "schema",
+                "units",
+                "style",
+                "size",
+                "meta",
+                "fabric",
+                "pieces",
+                "seams",
+                "attached_mass",
             ]
             .contains(&k.as_str())
         }) {
@@ -260,19 +312,28 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
             seam["id"] = json!(id);
             seams.push(seam);
         }
-        sources.push(json!({"id":garment.id,"source_pattern_sha256":digest(original)?,
-            "style":original["style"],"meta":original["meta"],"pieces":source_map,"seams":seam_map}));
+        let mut source = json!({"id":garment.id,"source_pattern_sha256":digest(original)?,
+            "style":original["style"],"meta":original["meta"],"pieces":source_map,"seams":seam_map});
+        if let Some(mapping) = collect_attached_mass(&pattern, &garment.id, &mut attached_groups)? {
+            source["attached_mass"] = mapping;
+        }
+        sources.push(source);
     }
     collect_interfaces(&input.interfaces, &mut interfaces)?;
-    let raw = json!({"schema":"fabric-pattern/1","units":"mm","style":"JOINT_OUTFIT",
+    let mut raw = json!({"schema":"fabric-pattern/1","units":"mm","style":"JOINT_OUTFIT",
         "fabric":{"material":default,"interfaces":interfaces.into_values().collect::<Vec<_>>()},
         "pieces":pieces,"seams":seams});
+    if !attached_groups.is_empty() {
+        raw["attached_mass"] = json!({"schema":"ftx-attached-mass/1","groups":attached_groups});
+    }
     let composed_sha256 = digest(&raw)?;
     let pattern = Pattern::new(raw);
     let errors = pattern.structure_errors();
     if !errors.is_empty() {
         return Err(invalid(format!("composed outfit: {}", errors.join("; "))));
     }
+    // Reuse the shared combined group/target budgets and validate every transformed physical name.
+    Attachments::from_pattern(&pattern)?;
     // One authority checks grain, constitutive domains, evidence, pair coverage and contact thickness.
     crate::material::resolve(&pattern, options)?;
     Ok(Prepared {
@@ -351,6 +412,26 @@ impl Prepared {
         receipt["instance_garment"] = json!(owners);
         receipt["triangle_garment"] = json!(triangle_garment);
         receipt["garment_mass_kg"] = json!(mass);
+        if let Some(attached) = run.scene.solver.model.attached_mass_report()? {
+            let mut extras = vec![0.0; mass.len()];
+            for group in &attached.groups {
+                let mut owner = None;
+                for target in &group.targets {
+                    let garment = self.instance_garment.get(&target.instance).copied();
+                    if garment.is_none() || owner.is_some_and(|old| Some(old) != garment) {
+                        return Err(invalid("attached mass lost its source garment ownership"));
+                    }
+                    owner = garment;
+                }
+                extras
+                    [owner.ok_or_else(|| invalid("attached group has no physical targets"))?] +=
+                    group.mass_kg;
+            }
+            receipt["garment_attached_mass_kg"] = json!(extras);
+            receipt["garment_mass_basis"] = json!(
+                "garment_mass_kg is total simulated inertia including attached groups; mass_kg remains sheet mass."
+            );
+        }
         receipt["contact_basis"] = json!(
             "All garments in one cloth solver with full cross-garment self-contact; not frozen overlay or sequential dressing."
         );

@@ -26,54 +26,102 @@ const KEYS: [&str; 4] = [
     "shear_stiffness",
 ];
 
-/// Recover the scalar fit's operating domain from its ordinary source-bearing quantities.
-/// All four coefficients belong to one fit; dropping or mixing their bounds must not turn the
-/// calibrated material into an unrestricted scalar law. Independently authored scalar materials
-/// without calibration metadata retain their existing contract.
+/// Recover a fitted membrane's operating domain from its source-bearing quantities or curves.
+/// Each set of four components belongs to one fit; dropping or mixing their bounds must not turn
+/// a calibrated material into an unrestricted law. Independently authored materials without
+/// calibration metadata retain their existing contract.
 ///
 /// # Errors
 /// A fitted coefficient has missing, inconsistent, nonfinite or reversed domain/source metadata.
 pub fn fitted_domain(material: &Material) -> Result<Option<StrainDomain>, Refusal> {
     const KEY: &str = "fitted_green_strain_range";
-    let fitted = KEYS.iter().any(|key| {
-        material.properties.get(*key).is_some_and(|q| {
-            q.conditions.contains_key(KEY)
-                || material.sources.get(&q.source).is_some_and(|source| {
-                    source
-                        .reference
-                        .starts_with("local:ftx-swatch-calibration/")
-                        || source.reference.starts_with("local:ftx-strip-calibration/")
-                })
-        })
+    let scalar = KEYS.map(|key| {
+        (
+            key,
+            material
+                .properties
+                .get(key)
+                .map(|q| (q.source.as_str(), &q.conditions)),
+        )
     });
-    if !fitted {
-        return Ok(None);
-    }
-    let mut identity: Option<(&str, StrainDomain)> = None;
-    for key in KEYS {
-        let quantity = material
-            .properties
-            .get(key)
-            .ok_or_else(|| invalid(format!("fitted membrane is missing the {key} coefficient")))?;
-        let ranges = quantity.conditions.get(KEY).ok_or_else(|| {
-            invalid(format!(
-                "fitted membrane {key} is missing its Green-strain domain"
-            ))
-        })?;
-        let domain = StrainDomain::new(
-            serde_json::from_str(ranges)
-                .map_err(|e| invalid(format!("fitted membrane {key} domain: {e}")))?,
-        )?;
-        if let Some((source, first)) = identity
-            && (source != quantity.source || first != domain)
-        {
-            return Err(invalid(
-                "fitted membrane coefficients must share one source and Green-strain domain",
-            ));
+    let nonlinear = material.membrane_response.as_ref().map(|response| {
+        [
+            (
+                "warp curve",
+                Some((response.warp.source.as_str(), &response.warp.conditions)),
+            ),
+            (
+                "weft curve",
+                Some((response.weft.source.as_str(), &response.weft.conditions)),
+            ),
+            (
+                "shear curve",
+                Some((response.shear.source.as_str(), &response.shear.conditions)),
+            ),
+            (
+                "normal coupling",
+                Some((
+                    response.coupling.source.as_str(),
+                    &response.coupling.conditions,
+                )),
+            ),
+        ]
+    });
+    let mut result: Option<StrainDomain> = None;
+    for components in std::iter::once(scalar).chain(nonlinear) {
+        let fitted = components.iter().any(|(_, component)| {
+            component.is_some_and(|(source, conditions)| {
+                conditions.contains_key(KEY)
+                    || material.sources.get(source).is_some_and(|source| {
+                        [
+                            "local:ftx-swatch-calibration/",
+                            "local:ftx-nonlinear-swatch-calibration/",
+                            "local:ftx-strip-calibration/",
+                        ]
+                        .iter()
+                        .any(|prefix| source.reference.starts_with(prefix))
+                    })
+            })
+        });
+        if !fitted {
+            continue;
         }
-        identity = Some((&quantity.source, domain));
+        let mut identity: Option<(&str, StrainDomain)> = None;
+        for (name, component) in components {
+            let (source, conditions) =
+                component.ok_or_else(|| invalid(format!("fitted membrane is missing {name}")))?;
+            let ranges = conditions.get(KEY).ok_or_else(|| {
+                invalid(format!(
+                    "fitted membrane {name} is missing its Green-strain domain"
+                ))
+            })?;
+            let domain = StrainDomain::new(
+                serde_json::from_str(ranges)
+                    .map_err(|e| invalid(format!("fitted membrane {name} domain: {e}")))?,
+            )?;
+            if let Some((first_source, first_domain)) = identity
+                && (first_source != source || first_domain != domain)
+            {
+                return Err(invalid(
+                    "fitted membrane components must share one source and Green-strain domain",
+                ));
+            }
+            identity = Some((source, domain));
+        }
+        if let Some((_, domain)) = identity {
+            result = Some(if let Some(prior) = result {
+                StrainDomain::new(std::array::from_fn(|axis| {
+                    [
+                        prior.ranges()[axis][0].max(domain.ranges()[axis][0]),
+                        prior.ranges()[axis][1].min(domain.ranges()[axis][1]),
+                    ]
+                }))?
+            } else {
+                domain
+            });
+        }
     }
-    Ok(identity.map(|(_, domain)| domain))
+    Ok(result)
 }
 
 /// Held-out observations never participate in identification.

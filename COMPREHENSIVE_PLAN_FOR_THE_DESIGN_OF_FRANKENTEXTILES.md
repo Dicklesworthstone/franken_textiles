@@ -2317,6 +2317,42 @@ do not weaken acceptance gates or invent local strains to make a card pass. Matc
 bending/contact characterization, specimen uncertainty and the fixed-pattern linen/leather/knit
 garment gate remain open under `ftx-tm2` and `ftx-tm8`.
 
+### 25.39 Declared nonlinear shapes enter the clamped-strip inverse solver
+
+**Delivered capability (`ftx-ki5`, continuing `ftx-ki4`).** Scalar strip identification cannot express a
+knit's changing tangent stiffness. The existing finite-strip authority now accepts an explicitly
+declared `scaled_piecewise_linear/1` response family: three source-bearing signed Green-strain
+curves, three positive dimensionless amplitude scales and one signed normal coupling in N/m.
+Knot locations and relative branch shapes remain caller-supplied assumptions. Every candidate uses
+the existing `TabulatedMembrane` compiler and production equilibrium solver; no parallel material
+engine, inferred yarn law, symmetry assumption or hidden area penalty is introduced.
+
+Keep the full parameter box stable, enforce authored and inherited domains during all trials,
+and preserve three-start stationarity, excitation, FIT/CHECK separation and doubled-mesh gates.
+Accepted publication restricts each piecewise-linear curve to FIT-only support while retaining
+interior knots, then solves and checks the actual published law again. The final report must describe
+that replayed law's force/width residuals and numerical refinement. Source and domain metadata remain
+validated when the result enters ordinary material consumers. Estimated shape nodes, estimated
+acquisition observations and estimated output consumption require independent explicit permissions.
+Missing unrelated material properties stay unknown.
+
+The same public native/WASM requests and browser workbench expose this optional family, with
+report-owned parameter names/units and exact frozen selection downloads. Existing scalar requests
+retain their serialized identities when the family is absent. A reproducible synthetic nonlinear
+example recovers dimensionless scales `[1.1, 0.9, 1.2]` and coupling `40 N/m`, passes actual
+publication-domain replay and freezes a directly reusable selection. Native/WASM/worker comparisons
+cover accepted and rejected nonlinear requests, independent permissions and exact output identities.
+These numerical checks do not qualify an industrial knit.
+
+**Empirical continuation remains open.** The Sperl source fits an area-preserving shell model using
+force and contraction in all three cut directions. Its fitted coefficients cannot supply an
+independent shape prior for a later bias CHECK, and its area terms are not equivalent to this
+separable curve family. Obtain independently justified shapes, qualify a shared area-response
+extension where supported, and establish the transverse measurement operator under `ftx-ki4`.
+Preserve the independent bending/contact and garment gates in §25.38. The detailed schema,
+permissions and executable examples belong in
+[clamped-strip-identification.md](docs/clamped-strip-identification.md).
+
 ---
 
 ## Appendix A. Sources
