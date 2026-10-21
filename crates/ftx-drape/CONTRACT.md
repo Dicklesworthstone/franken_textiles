@@ -75,6 +75,20 @@ relaxes for two blocks instead of one.
 **Scene** (`scene.rs`; plan §11.3–11.4). A pattern meshed, placed with a body's part frames (any
 `PartFrames`; `ftx_body::BodyFrames` reads them off a posed Anny body), started (wrap, pre-sew, relax
 against the drape body), untangled, welded and handed to the solver with contact over the body:
+
+Explicit `meta.solved.elastic_casings` retain 1–64 independent casing instances, positive relaxed
+lengths in metres and physical `load_instances`. Joint composition namespaces these declarations
+from each source's original cut-minus-overlap length without changing source geometry or metadata.
+Each casing keeps two existing tension-only rings and its own gathered compression. Its grip report
+uses that instance's body friction and unique welded load-domain mass, including attached inertia;
+capacities are not summed and load sharing is not inferred. Frozen composed patterns replay through
+ordinary drape and study meshing. EA remains the existing caller option, not newly measured evidence.
+Ambiguous legacy/explicit metadata, duplicate/inactive targets and malformed load scopes refuse.
+EA zero validates explicit declarations but disables rings and cut-length restoration. The original
+single-waistband convention and singular `elastic` report remain unchanged; explicit cases report
+`elastics` separately. Tests: `outfit` (two actual sewn casings, analytic mass/rest lengths, independent
+friction, attached weight, disabled behavior, frozen replay and drafted jacket/trouser composition).
+
 - Rest coordinates per piece in metres with the grainline along +u; welding merges each sewing group into
   one vertex and keeps every triangle's own rest coordinates, so eased and gathered seams are strained,
   not rewritten. Fabric from `pattern.fabric` over the reference's defaults (spec 04 §5.3); membrane

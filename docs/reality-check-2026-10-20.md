@@ -1322,3 +1322,21 @@ The fresh-solo verification above supports closing this browser-delivery slice o
 workspace suite was not repeated after the second concurrent feature merge; its affected targets,
 lint, release artifact and real browser route were rechecked instead. `ftx-ki1`, `ftx-ki4`, `ftx-md1`
 and G5 keep their original unresolved empirical/physical acceptance requirements.
+
+### Joint elastic casing delivery — ftx-99t
+
+The concrete gap is the outfit composer's refusal of the trousers drafter's existing elastic casing.
+The smallest useful repair scopes existing rings and reporting by physical garment; no new solver,
+fabric constant or casing inference. This user-requested TODO lives here and retires at this block's
+handoff. Original empirical material and G5 gates remain open.
+
+- [x] Read project instructions/README, relevant plan/spec/contract, ready Beads and actual casing paths.
+- [x] Claim `ftx-99t`; reserve only the affected source/test/docs and Beads paths.
+- [x] Preserve source casing lengths and namespace physical instances in composed patterns.
+- [x] Restore every active casing's cut geometry and existing independent two-ring mechanics.
+- [x] Keep grip estimates separate, using each casing's material friction and declared garment inertia.
+- [x] Connect the ordinary replay and study mesh-budget path; retain EA-zero and legacy behavior.
+- [ ] Run actual two-casing/replay/attached-mass and drafted-trouser composition regressions; fix defects.
+- [ ] Run narrow legacy regressions, formatting, all-target lint, full native tests and wasm build remotely.
+- [ ] Fresh solo recheck; record exact source/results/limits and bounded worksheets; scan and commit
+  scoped changes, close/sync the Bead and release reservations.
