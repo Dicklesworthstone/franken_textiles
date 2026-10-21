@@ -5,6 +5,8 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
+#[path = "bin/material_workbench/cutting.rs"]
+mod cutting;
 #[path = "bin/material_workbench/membrane_plasticity.rs"]
 mod membrane_plasticity;
 mod nonlinear;
@@ -19,6 +21,25 @@ mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
+    if matches!(action, "cut-plan" | "cut-price" | "cut-svg") {
+        known_options(args, "materials", &[])?;
+        let result = match (action, &args.positional[2..]) {
+            ("cut-plan", [pattern, options]) => cutting::plan(pattern, options)?,
+            ("cut-price", [pattern, options, quotes, market]) => {
+                cutting::price(pattern, options, quotes, market)?
+            }
+            ("cut-svg", [pattern, options, index, out]) => {
+                cutting::preview(pattern, options, index, out)?
+            }
+            _ => {
+                return Err(bad_input(
+                    "usage: ftx materials cut-plan PATTERN.json OPTIONS.json | cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json | cut-svg PATTERN.json OPTIONS.json INDEX NEW.svg",
+                ));
+            }
+        };
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if action == "strip-acquisition" {
         known_options(args, "materials", &[])?;
         let [path] = &args.positional[2..] else {

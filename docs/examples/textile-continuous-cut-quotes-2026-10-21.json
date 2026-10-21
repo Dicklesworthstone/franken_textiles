@@ -1,0 +1,28 @@
+{
+  "schema": "ftx-textile-quotes/2",
+  "quotes": [
+    {
+      "offer_id": "rbtr/INS-2.5-Clim-AP/US-retail",
+      "material_id": "climashield/apex-2.5",
+      "supplier": "Ripstop by the Roll",
+      "sku": "INS-2.5-Clim-AP",
+      "quantity": 1,
+      "unit": "linear_yard",
+      "minimum_quantity": 1,
+      "order_increment": 1,
+      "currency": "USD",
+      "region": "US",
+      "quality": "supplier-retail-grade-unspecified",
+      "terms": "listed-merchandise-tax-shipping-unqualified",
+      "material_sha256": "977bfd60a0cdc7c9e3c3e3c9eab421a38b12a84274a39ad66e596a8a7c412e51",
+      "maximum_continuous_quantity": 5,
+      "price": 11.0,
+      "observed_on": "2026-10-21",
+      "available": true,
+      "source": "https://ripstopbytheroll.com/products/climashield-apex-2-5-oz-sq-yd.js",
+      "source_sha256": "f36addfbf15cb734490cc8df3cace0d9ed03931ef2fc016cbfe65503b394fd7d",
+      "available_quantity": 776.0,
+      "observed_at": "2026-10-21T15:39:38.113468Z"
+    }
+  ]
+}

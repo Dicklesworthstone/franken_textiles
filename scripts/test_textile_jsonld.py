@@ -34,6 +34,20 @@ def html(value):
 
 
 class JsonLdTests(unittest.TestCase):
+    def test_continuous_limit_retains_reviewed_source_and_refuses_description_drift(self):
+        e, p = manifest_entry(), product()
+        fragment = "Maximum continuous cut: 5 yards."
+        e.update(maximum_continuous_quantity=5, continuous_cut_text=fragment)
+        e["required_description_text"].append(fragment)
+        p["description"] += fragment
+        q, receipt = r.extract_jsonld(e, html(p), NOW)
+        self.assertEqual(q["maximum_continuous_quantity"], 5)
+        self.assertEqual(receipt["manifest_entry"]["continuous_cut_text"], fragment)
+        self.assertNotIn("available_quantity", q)
+        p["description"] = p["description"].replace("5 yards", "3 yards")
+        with self.assertRaises(ValueError):
+            r.extract_jsonld(e, html(p), NOW)
+
     def extract(self, p=None, e=None):
         return r.extract_jsonld(e or manifest_entry(), html(p or product()), NOW)
 

@@ -423,6 +423,93 @@ fn permitted_half_turn_nests_complementary_pieces_and_reduces_actual_purchase_co
 }
 
 #[test]
+fn procurement_qualifies_the_actual_marker_length_without_splitting_or_hiding_unknowns() {
+    use ftx_export::cutting::procurement::{Market, evaluate};
+    use ftx_pattern::material_cost::QuoteBook;
+    let p = pattern(vec![piece("front", 40.0, 100.0)]);
+    let plan = CutPlan::build(&p, &options()).unwrap();
+    assert_eq!(plan.rolls[0].length_m, 0.12); // Includes both 10 mm end margins.
+    let source = json!({"offer_id":"short", "material_id":"shell", "supplier":"Synthetic supplier", "sku":"short",
+        "price":1.0,"quantity":1.0,"unit":"linear_meter","minimum_quantity":0.05,"order_increment":0.05,
+        "currency":"USD","region":"US","quality":"test","terms":"ex-tax-shipping",
+        "observed_on":"2026-10-18","available":true,"available_quantity":1000.0,
+        "maximum_continuous_quantity":0.1,"source":"test:continuous-cut","source_sha256":"0".repeat(64)});
+    let mut quotes = vec![source.clone()];
+    let market: Market =
+        serde_json::from_value(json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-18","max_age_days":3}))
+        .unwrap();
+    let evaluate_quotes = |quotes: &[Value], market: &Market| {
+        let book: QuoteBook =
+            serde_json::from_value(json!({"schema":"ftx-textile-quotes/1","quotes":quotes}))
+                .unwrap();
+        evaluate(&plan, &book, market).unwrap()
+    };
+    let blocked = evaluate_quotes(&quotes, &market);
+    assert_eq!(blocked["complete_offer_coverage"], false);
+    assert!(blocked["least_observed_independent_order_total"].is_null());
+    assert_eq!(
+        blocked["roll_prices"][0]["sample"]["excluded_offers"][0]["reason"],
+        "insufficient_continuous_length"
+    );
+    assert_eq!(
+        blocked["roll_prices"][0]["sample"]["excluded_offers"][0]["required_continuous_length_m"],
+        0.12
+    );
+    assert_eq!(blocked["cut_plan"], serde_json::to_value(&plan).unwrap());
+
+    let mut unknown = source.clone();
+    unknown["offer_id"] = json!("unknown");
+    unknown["sku"] = json!("unknown");
+    unknown
+        .as_object_mut()
+        .unwrap()
+        .remove("maximum_continuous_quantity");
+    quotes.push(unknown);
+    let unqualified = evaluate_quotes(&quotes, &market);
+    assert_eq!(unqualified["complete_offer_coverage"], true);
+    assert_eq!(unqualified["complete_observed_quantity_coverage"], true);
+    assert_eq!(
+        unqualified["complete_continuous_length_limit_coverage"],
+        false
+    );
+    assert_eq!(
+        unqualified["roll_prices"][0]["continuity"],
+        "source_limit_unknown"
+    );
+
+    let mut strict = market;
+    strict.require_observed_continuous_length = true;
+    assert_eq!(
+        evaluate_quotes(&quotes, &strict)["complete_offer_coverage"],
+        false
+    );
+    let mut long = source;
+    long["offer_id"] = json!("long");
+    long["sku"] = json!("long");
+    long["price"] = json!(10.0);
+    long["maximum_continuous_quantity"] = json!(0.12);
+    quotes.push(long);
+    let admitted = evaluate_quotes(&quotes, &strict);
+    assert_eq!(admitted["complete_continuous_length_limit_coverage"], true);
+    assert_eq!(
+        admitted["roll_prices"][0]["continuity"],
+        "within_observed_limit"
+    );
+    assert_eq!(
+        admitted["roll_prices"][0]["least_observed_order"]["quote"]["offer_id"],
+        "long"
+    );
+    assert_eq!(
+        admitted["roll_prices"][0]["sample"]["excluded_offers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn reversal_is_material_scoped_refuses_stale_permissions_and_preserves_budget_fallback() {
     let mut raw = triangular_pair().raw().clone();
     let mut other = raw["pieces"].as_array().unwrap().clone();

@@ -420,9 +420,9 @@ a 2.1 m² marker with 0.5 m² order increments needs 2.5 m² of purchasable stoc
 one final binary multiplication rounding step (such as `3 × 0.05`); it does not add an inventory
 allowance or change the reported order quantity.
 
-All three adapters accept the optional reviewed `material_sha256` in their manifest entry and
-preserve it in the source receipt and quote. Only the CSV adapter currently imports quantified
-stock: add the mapping below to its existing `columns` object, and document the sale-unit meaning
+All adapters accept the optional reviewed `material_sha256` in their manifest entry and
+preserve it in the source receipt and quote. CSV feeds can import quantified stock: add the
+mapping below to the existing `columns` object, and document the sale-unit meaning
 in the reviewed `basis_note`:
 
 ```json
@@ -433,8 +433,9 @@ The exact selected row must then contain a plain nonnegative decimal in that col
 ambiguous, nonfinite or unrepresentable values refuse the refresh; they never become zero or
 unlimited supply. CSV variant, region, SKU, unit and selling-basis checks remain in force, and the
 complete source response is retained. Without this reviewed mapping, numeric stock columns are
-ignored. Shopify/JSON-LD availability labels still provide only a boolean, so their capacity
-remains unknown. No static inventory number is copied from the reviewed manifest into live quotes.
+ignored. The public-product adapter above also imports corroborated tracked inventory. Ordinary
+Shopify Ajax/cart and JSON-LD availability labels provide only a boolean, so their capacity remains
+unknown. No static inventory number is copied from the reviewed manifest into live quotes.
 
 Set `"require_observed_quantity": true` in a `price` scope or `cut-price` market to require source
 quantity sufficient for every complete rounded order. Omission retains observational price
@@ -449,3 +450,63 @@ The latest observation is selected before these checks, so a later exhausted or 
 cannot resurrect an older unlimited or cheaper observation. Independent material orders are not
 pooled. None of these results reserves inventory, establishes market population percentiles,
 confirms a live supplier's current stock or authorizes a purchase. Tests use synthetic data.
+
+## Source-qualified continuous-cut limits
+
+Quotes may retain `maximum_continuous_quantity`: a positive finite source-stated upper limit for
+one uninterrupted cut, in the quote's original `linear_yard` or `linear_meter` unit. It is independent
+of total `available_quantity` and is never inferred from it. For a half-yard price, a maximum of five
+still means five yards, not five half-yard packages. Area/mass sale units cannot carry this field;
+an absent value means the continuous-cut limit is unknown.
+
+For Shopify and JSON-LD sources, a reviewed manifest supplies the numeric maximum and an exact
+`continuous_cut_text` fragment that must also occur in `required_description_text`. The fetched
+description must retain that fragment. For CSV, explicitly map
+`columns.maximum_continuous_quantity` to the source column and supply the reviewed numeric maximum;
+the selected row must agree. Missing, changed or invalid evidence refuses publication. The adapters
+do not interpret arbitrary prose into a length. The reviewed fields and original source bytes remain
+in the receipt, and specification comparison treats a changed or removed limit as a reviewable
+declaration change rather than an ordinary inventory fluctuation.
+
+The existing reviewed APEX entry in
+[textile-public-product-refresh.json](examples/textile-public-product-refresh.json) now includes:
+
+```json
+{
+  "maximum_continuous_quantity": 5,
+  "continuous_cut_text": "standard max continuous cut for all insulation is 5 yds"
+}
+```
+
+These fields supplement the complete linear-yard offer; the same fragment is already among its
+required description checks. [RBTR's APEX page](https://ripstopbytheroll.com/products/climashield-apex-2-5-oz-sq-yd)
+states the standard five-yard maximum and directs larger specific cuts to separate supplier review.
+The fresh [single-offer version-2 snapshot](examples/textile-continuous-cut-quotes-2026-10-21.json)
+was fetched at **2026-10-21T15:39:38.113468Z**. It retains the source SHA-256, exact material hash,
+776 yards of observed total stock, and the five-yard continuous-cut limit as distinct facts. The
+six-offer October 20 snapshot is unchanged; the new file does not refresh those other five offers.
+
+For a direct `price` request, add the following to a complete area-based scope with an admitted
+material width and a total `requirement` large enough to contain the full-width segment:
+
+```json
+{
+  "continuous_length_m": 4.572,
+  "require_observed_continuous_length": true
+}
+```
+
+The requested segment is always in metres. Five international yards equal 4.572 metres; that length
+is within the observed APEX upper limit, whereas five metres is excluded. The strict flag rejects
+unknown limits; without it, an unknown limit remains explicit and a known insufficient limit still
+excludes. A strict flag without a segment length, a mass-based request, or a segment larger than the
+total area requirement refuses. Whole-order stock checks still apply separately, including minimums
+and increments. The latest observation is selected before continuity checks, so a later smaller or
+missing maximum cannot resurrect an earlier longer cut.
+
+For `cut-price`, set the same strict flag in `market.json`; the actual marker supplies the length.
+See [the complete roll-market example](cutting-plans.md#qualifying-one-uninterrupted-cut-per-marker).
+**APEX remains cataloged as `fill`, which the roll cutter refuses.** Its new quote validates the
+canonical price path and records a real supply constraint; it does not introduce a rectangular fill
+cutting model, mechanical calibration, or automatic marker splitting. A supplier's maximum remains
+an upper bound, not a guarantee of continuous stock or a purchase reservation.

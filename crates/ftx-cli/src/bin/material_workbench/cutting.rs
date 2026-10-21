@@ -1,15 +1,39 @@
 //! Cutting/BOM/purchasing share one computed marker and its resolved material snapshots.
 //! The requirements are gross stock areas, never user-guessed net garment area or drape mesh area.
 
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 
-use ftx_core::{Refusal, receipt::sha256_hex};
+use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_export::cutting::{CutOptions, CutPlan, procurement};
 use ftx_pattern::Pattern;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use super::{invalid, io, read};
+fn invalid(message: impl Into<String>) -> Refusal {
+    Refusal::new(RefusalCode::InvalidDocument, message)
+}
+
+fn io(path: &str, error: std::io::Error) -> Refusal {
+    Refusal::new(RefusalCode::Io, format!("{path}: {error}"))
+}
+
+fn read<T: DeserializeOwned>(path: &str) -> Result<T, Refusal> {
+    const MAX: u64 = 64 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|e| io(path, e))?
+        .take(MAX + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| io(path, e))?;
+    if bytes.len() as u64 > MAX {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "material input exceeds 64 MiB",
+        ));
+    }
+    serde_json::from_slice(&bytes).map_err(|e| invalid(format!("{path}: {e}")))
+}
 
 fn build(pattern: &str, options: &str) -> Result<CutPlan, Refusal> {
     CutPlan::build(&Pattern::new(read(pattern)?), &read::<CutOptions>(options)?)

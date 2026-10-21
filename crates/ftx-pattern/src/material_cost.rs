@@ -86,6 +86,11 @@ pub struct Quote {
     /// Zero means no quantity; absence means the source did not establish available quantity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_quantity: Option<f64>,
+    /// Source-stated upper limit for ONE uninterrupted cut, in this quote's linear sale unit.
+    /// Only linear_yard/linear_meter offers can supply this field. It is independent of total
+    /// inventory and does not guarantee that a particular length is currently available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_continuous_quantity: Option<f64>,
     /// Source endpoint or evidence locator.
     pub source: String,
     /// SHA-256 of the retrieved source bytes, for traceability rather than validation.
@@ -130,6 +135,14 @@ pub struct Scope {
     /// False retains legacy price observations without claiming known available stock.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_observed_quantity: bool,
+    /// Required length of one uninterrupted full-width segment, in metres. Its area must fit
+    /// inside `requirement`; omission makes no continuous-cut qualification request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuous_length_m: Option<f64>,
+    /// Require a source-stated continuous-cut limit. False admits an unknown limit explicitly;
+    /// a known insufficient limit always excludes, regardless of this policy or total inventory.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_observed_continuous_length: bool,
 }
 
 /// One eligible quote and its actual minimum/increment-rounded merchandise order.
@@ -148,6 +161,10 @@ pub struct Offer {
     /// The source supplied enough quantity for this rounded order on its observation date.
     /// False means unknown capacity, never unlimited stock or a failed quantity check.
     pub quantity_sufficiency_observed: bool,
+    /// True only when the requested segment fits within a source-stated uninterrupted-cut limit.
+    /// None means the limit is unknown or continuity was not requested, never unlimited length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub within_observed_continuous_limit: Option<bool>,
 }
 
 /// Why the latest observation in the requested comparable market cannot supply this order.
@@ -166,6 +183,10 @@ pub enum ExclusionReason {
     UnknownQuantity,
     /// The minimum/increment-rounded order exceeds the stated capacity.
     InsufficientQuantity,
+    /// A continuous segment was requested with strict admission, but its source limit is unknown.
+    UnknownContinuousLength,
+    /// The uninterrupted segment is longer than the source's permitted maximum cut.
+    InsufficientContinuousLength,
     /// The sale unit cannot supply the requested area/mass dimension.
     IncompatibleBasis,
 }
@@ -180,6 +201,9 @@ pub struct ExcludedOffer {
     /// Complete rounded quantity in the quote's sale unit, when rejected for insufficient stock.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_order_quantity: Option<f64>,
+    /// Requested uninterrupted length, when the source's continuity qualification excludes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_continuous_length_m: Option<f64>,
 }
 
 /// A price sample with enough context to reproduce its membership and calculations.
@@ -359,6 +383,15 @@ impl Quote {
                 "observed available quantity must be finite and nonnegative in sale units",
             ));
         }
+        if let Some(quantity) = self.maximum_continuous_quantity {
+            positive("maximum continuous quantity", quantity)?;
+            if !matches!(self.unit, SaleUnit::LinearYard | SaleUnit::LinearMeter) {
+                return Err(invalid(
+                    "maximum continuous quantity requires a linear-yard or linear-meter sale unit",
+                ));
+            }
+            positive("maximum continuous length", quantity * self.linear_unit_m())?;
+        }
         let observed = day(&self.observed_on)?;
         let observed_at = self.observed_at.as_deref().map(instant).transpose()?;
         if observed_at.is_some_and(|t| t.day != observed) {
@@ -405,6 +438,19 @@ impl Quote {
         }
     }
 
+    fn linear_unit_m(&self) -> f64 {
+        if self.unit == SaleUnit::LinearYard {
+            0.9144
+        } else {
+            1.0
+        }
+    }
+
+    fn continuous_limit_m(&self) -> Option<f64> {
+        self.maximum_continuous_quantity
+            .map(|quantity| quantity * self.linear_unit_m())
+    }
+
     fn offer(&self, material: &ResolvedMaterial, scope: &Scope) -> Result<Option<Offer>, Refusal> {
         let factor = match (self.unit, scope.basis) {
             (SaleUnit::SquareMeter, Basis::Area) | (SaleUnit::Kilogram, Basis::Mass) => 1.0,
@@ -440,6 +486,10 @@ impl Quote {
             acquired,
             order_cost,
             quantity_sufficiency_observed: self.available_quantity.is_some(),
+            within_observed_continuous_limit: scope
+                .continuous_length_m
+                .zip(self.continuous_limit_m())
+                .map(|(length, maximum)| length <= maximum),
         }))
     }
 }
@@ -505,6 +555,27 @@ impl QuoteBook {
     ) -> Result<PriceSample, Refusal> {
         self.validate()?;
         positive("purchase requirement", scope.requirement)?;
+        if scope.require_observed_continuous_length && scope.continuous_length_m.is_none() {
+            return Err(invalid(
+                "requiring an observed continuous-cut limit needs continuous_length_m",
+            ));
+        }
+        if let Some(length) = scope.continuous_length_m {
+            positive("required continuous length", length)?;
+            if scope.basis != Basis::Area {
+                return Err(invalid("continuous length requires an area purchase"));
+            }
+            let width = material
+                .material()
+                .require("width", "m", material.allows_estimates())?;
+            positive("material width", width)?;
+            let area = positive("continuous segment area", length * width)?;
+            if !within_capacity(area, scope.requirement) {
+                return Err(invalid(
+                    "continuous segment area exceeds the complete purchase requirement",
+                ));
+            }
+        }
         let as_of_day = day(&scope.as_of)?;
         let intraday = self.intraday()?;
         let as_of = if intraday {
@@ -585,6 +656,16 @@ impl QuoteBook {
                 Some(ExclusionReason::MaterialSnapshotMismatch)
             } else if scope.require_observed_quantity && q.available_quantity.is_none() {
                 Some(ExclusionReason::UnknownQuantity)
+            } else if let Some(length) = scope.continuous_length_m {
+                match q.continuous_limit_m() {
+                    Some(maximum) if length > maximum => {
+                        Some(ExclusionReason::InsufficientContinuousLength)
+                    }
+                    None if scope.require_observed_continuous_length => {
+                        Some(ExclusionReason::UnknownContinuousLength)
+                    }
+                    _ => None,
+                }
             } else {
                 None
             };
@@ -593,6 +674,13 @@ impl QuoteBook {
                     quote: q.clone(),
                     reason,
                     required_order_quantity: None,
+                    required_continuous_length_m: matches!(
+                        reason,
+                        ExclusionReason::UnknownContinuousLength
+                            | ExclusionReason::InsufficientContinuousLength
+                    )
+                    .then_some(scope.continuous_length_m)
+                    .flatten(),
                 });
                 continue;
             }
@@ -611,6 +699,7 @@ impl QuoteBook {
                         ExclusionReason::IncompatibleBasis
                     },
                     required_order_quantity: offer.map(|o| o.order_quantity),
+                    required_continuous_length_m: None,
                 }),
             }
         }
@@ -664,6 +753,7 @@ mod tests {
             valid_through_at: None,
             available: true,
             available_quantity: None,
+            maximum_continuous_quantity: None,
             source: "https://example.org/synthetic".into(),
             source_sha256: "0".repeat(64),
         }
@@ -680,6 +770,8 @@ mod tests {
             requirement: 2.,
             basis: Basis::Area,
             require_observed_quantity: false,
+            continuous_length_m: None,
+            require_observed_continuous_length: false,
         }
     }
     fn book(quotes: Vec<Quote>) -> QuoteBook {
@@ -1019,6 +1111,158 @@ mod tests {
         s.basis = Basis::Mass;
         let kg = book(vec![q]).evaluate(&material(), &s).unwrap();
         assert_eq!(kg.offers[0].acquired, 2.5);
+    }
+
+    #[test]
+    fn continuous_cut_limit_is_not_total_inventory_or_package_count() {
+        let mut q = quote(); // Price describes half a yard; limits describe actual yards.
+        q.available_quantity = Some(1000.0);
+        q.maximum_continuous_quantity = Some(5.0);
+        let mut s = scope();
+        s.requirement = 10.0;
+        s.continuous_length_m = Some(5.0); // Five metres cannot come from a five-yard cut.
+        let limited = book(vec![q.clone()]).evaluate(&material(), &s).unwrap();
+        assert!(limited.offers.is_empty());
+        let excluded = &limited.excluded_offers[0];
+        assert_eq!(
+            excluded.reason,
+            ExclusionReason::InsufficientContinuousLength
+        );
+        assert_eq!(excluded.required_continuous_length_m, Some(5.0));
+        assert_eq!(excluded.quote.available_quantity, Some(1000.0));
+        assert_eq!(excluded.quote.source_sha256, q.source_sha256);
+
+        // Exactly 5 yards = 4.572 m admits; any additional positive length does not.
+        s.continuous_length_m = Some(4.572);
+        let admitted = book(vec![q.clone()]).evaluate(&material(), &s).unwrap();
+        let offer = &admitted.offers[0];
+        assert_eq!(offer.within_observed_continuous_limit, Some(true));
+        assert!(offer.quantity_sufficiency_observed);
+        assert!(offer.order_quantity > 5.0); // Other stock need not be in the same segment.
+        s.continuous_length_m = Some(4.572_f64.next_up());
+        assert!(
+            book(vec![q.clone()])
+                .evaluate(&material(), &s)
+                .unwrap()
+                .offers
+                .is_empty()
+        );
+
+        q.unit = SaleUnit::LinearMeter;
+        s.continuous_length_m = Some(5.0);
+        assert_eq!(
+            book(vec![q]).evaluate(&material(), &s).unwrap().offers[0]
+                .within_observed_continuous_limit,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn unknown_continuity_is_explicit_and_strict_admission_is_independent() {
+        let mut q = quote();
+        q.available_quantity = Some(1000.0);
+        let mut s = scope();
+        s.continuous_length_m = Some(1.0);
+        s.require_observed_quantity = true;
+        let unknown = book(vec![q.clone()]).evaluate(&material(), &s).unwrap();
+        assert_eq!(unknown.offers[0].within_observed_continuous_limit, None);
+        s.require_observed_continuous_length = true;
+        let strict = book(vec![q.clone()]).evaluate(&material(), &s).unwrap();
+        assert!(strict.offers.is_empty());
+        assert_eq!(
+            strict.excluded_offers[0].reason,
+            ExclusionReason::UnknownContinuousLength
+        );
+        assert_eq!(
+            strict.excluded_offers[0].required_continuous_length_m,
+            Some(1.0)
+        );
+        // Area and mass offers never acquire a fictitious linear limit from material width.
+        q.unit = SaleUnit::SquareMeter;
+        assert_eq!(
+            book(vec![q.clone()])
+                .evaluate(&material(), &s)
+                .unwrap()
+                .excluded_offers[0]
+                .reason,
+            ExclusionReason::UnknownContinuousLength
+        );
+        q.maximum_continuous_quantity = Some(2.0);
+        assert!(q.validate().is_err());
+        q.unit = SaleUnit::Kilogram;
+        assert!(q.validate().is_err());
+
+        s.continuous_length_m = None;
+        assert!(book(Vec::new()).evaluate(&material(), &s).is_err());
+        s.continuous_length_m = Some(1.0);
+        s.basis = Basis::Mass;
+        assert!(book(Vec::new()).evaluate(&material(), &s).is_err());
+        s.basis = Basis::Area;
+        s.requirement = 0.1;
+        assert!(book(Vec::new()).evaluate(&material(), &s).is_err());
+    }
+
+    #[test]
+    fn latest_continuous_limit_or_missing_limit_cannot_revive_prior_longer_cuts() {
+        let mut old = timed_quote("2026-10-13T12:00:00Z");
+        old.maximum_continuous_quantity = Some(5.0);
+        let mut latest = old.clone();
+        latest.observed_at = Some("2026-10-13T12:00:00.000000001Z".into());
+        latest.maximum_continuous_quantity = Some(1.0);
+        let mut s = timed_scope("2026-10-13T12:00:00.000000001Z");
+        s.continuous_length_m = Some(1.0);
+        s.require_observed_continuous_length = true;
+        let observed = timed_book(vec![old.clone(), latest.clone()])
+            .evaluate(&material(), &s)
+            .unwrap();
+        assert!(observed.offers.is_empty());
+        assert_eq!(
+            observed.excluded_offers[0].reason,
+            ExclusionReason::InsufficientContinuousLength
+        );
+        latest.maximum_continuous_quantity = None;
+        let changed = timed_book(vec![old.clone(), latest.clone()]);
+        assert_eq!(
+            changed.evaluate(&material(), &s).unwrap().excluded_offers[0].reason,
+            ExclusionReason::UnknownContinuousLength
+        );
+        s.as_of_at = old.observed_at.clone();
+        assert_eq!(
+            changed.evaluate(&material(), &s).unwrap().offers[0].within_observed_continuous_limit,
+            Some(true)
+        );
+        s.as_of_at = latest.observed_at.clone();
+        latest.maximum_continuous_quantity = Some(5.0);
+        latest.material_sha256 = Some("0".repeat(64));
+        assert_eq!(
+            timed_book(vec![old, latest])
+                .evaluate(&material(), &s)
+                .unwrap()
+                .excluded_offers[0]
+                .reason,
+            ExclusionReason::MaterialSnapshotMismatch
+        );
+    }
+
+    #[test]
+    fn continuous_length_observations_and_requests_refuse_invalid_values() {
+        for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let mut q = quote();
+            q.maximum_continuous_quantity = Some(value);
+            assert!(q.validate().is_err());
+            let mut s = scope();
+            s.continuous_length_m = Some(value);
+            assert!(book(vec![quote()]).evaluate(&material(), &s).is_err());
+        }
+        let legacy = serde_json::to_value(quote()).unwrap();
+        assert!(legacy.get("maximum_continuous_quantity").is_none());
+        let old_scope = serde_json::to_value(scope()).unwrap();
+        assert!(old_scope.get("continuous_length_m").is_none());
+        assert!(
+            old_scope
+                .get("require_observed_continuous_length")
+                .is_none()
+        );
     }
 
     #[test]

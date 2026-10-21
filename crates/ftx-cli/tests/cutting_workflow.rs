@@ -126,6 +126,73 @@ fn cli_derives_mixed_material_stock_without_requiring_mechanical_data() {
 }
 
 #[test]
+fn continuous_cut_limits_reach_both_native_commands_and_explicit_unknown_policy() {
+    let w = setup();
+    let plan = w.ok(PLAN);
+    let mut quotes = vec![quote("shell", 10.0), quote("knit", 16.0)];
+    for q in &mut quotes {
+        q["available_quantity"] = json!(1000.0);
+        let roll = plan["rolls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|roll| roll["material"]["authored"]["id"] == q["material_id"])
+            .unwrap();
+        q["maximum_continuous_quantity"] = roll["length_m"].clone();
+    }
+    w.write(
+        "quotes.json",
+        &json!({"schema":"ftx-textile-quotes/1","quotes":quotes}),
+    );
+    let admitted = w.ok(PRICE);
+    assert_eq!(admitted["complete_continuous_length_limit_coverage"], true);
+    let primary = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&w.0)
+        .arg("materials")
+        .args(PRICE)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        primary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&primary.stderr)
+    );
+    let primary: Value = serde_json::from_slice(&primary.stdout).unwrap();
+    assert_eq!(primary["result"], admitted);
+
+    quotes[0]["maximum_continuous_quantity"] = json!(0.1);
+    w.write(
+        "quotes.json",
+        &json!({"schema":"ftx-textile-quotes/1","quotes":quotes}),
+    );
+    let blocked = w.ok(PRICE);
+    assert_eq!(blocked["complete_offer_coverage"], false);
+    assert!(blocked["least_observed_independent_order_total"].is_null());
+    assert!(blocked["roll_prices"].as_array().unwrap().iter().any(
+        |row| row["sample"]["excluded_offers"][0]["reason"] == "insufficient_continuous_length"
+    ));
+
+    quotes[0]
+        .as_object_mut()
+        .unwrap()
+        .remove("maximum_continuous_quantity");
+    w.write(
+        "quotes.json",
+        &json!({"schema":"ftx-textile-quotes/1","quotes":quotes}),
+    );
+    let unknown = w.ok(PRICE);
+    assert_eq!(unknown["complete_offer_coverage"], true);
+    assert_eq!(unknown["complete_observed_quantity_coverage"], true);
+    assert_eq!(unknown["complete_continuous_length_limit_coverage"], false);
+    let mut market: Value =
+        serde_json::from_slice(&fs::read(w.0.join("market.json")).unwrap()).unwrap();
+    market["require_observed_continuous_length"] = json!(true);
+    w.write("market.json", &market);
+    assert_eq!(w.ok(PRICE)["complete_offer_coverage"], false);
+}
+
+#[test]
 fn incomplete_stale_unavailable_and_wrong_market_offers_never_become_free_stock() {
     let w = setup();
     for case in 0..4 {

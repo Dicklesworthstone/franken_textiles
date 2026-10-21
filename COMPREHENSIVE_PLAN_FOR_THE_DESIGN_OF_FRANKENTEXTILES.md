@@ -2355,6 +2355,26 @@ permissions and executable examples belong in
 
 ---
 
+### 25.40 Continuous-cut limits qualify actual marker purchases
+
+The existing quote authority now distinguishes total inventory from a source's maximum uninterrupted
+linear cut. Roll procurement passes each computed marker's actual length into the shared price
+evaluator. A known shorter limit excludes the offer even when total inventory is ample. Unknown
+limits remain explicitly unknown unless the caller requires an observed limit; a maximum is never
+reported as guaranteed continuous inventory. Latest-observation, exact material-lock and whole-order
+quantity rules remain authoritative. No physical marker is split by dividing its area arithmetically.
+
+Shopify, JSON-LD and CSV refresh paths retain reviewed limits with checked source text or columns,
+and specification review detects changed or removed limits. A fresh 2026-10-21 APEX observation keeps
+its five-yard maximum and observed inventory separately; the prior snapshot is preserved. That
+catalog record remains fill, so it is exercised through the quote evaluator rather than treated as
+a cuttable characterized sheet. Actual marker, native CLI, shared WASM and material-study tests use
+explicit synthetic sheet selections (`ftx-pc1`). The primary `ftx materials` command now exposes the
+same cut-plan, cut-price and cut-svg implementations as the companion workbench. See
+[cutting-plans.md](docs/cutting-plans.md) and [textile-price-refresh.md](docs/textile-price-refresh.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

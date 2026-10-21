@@ -619,6 +619,69 @@ fn procurement_uses_marker_requirements_and_missing_offers_stay_unknown() {
 }
 
 #[test]
+fn continuous_marker_limits_reach_portable_purchasing_and_material_studies() {
+    let raw: Value = serde_json::from_str(PATTERN).unwrap();
+    let bound = bind(&raw, &changes(selection(0.1, 0.4)));
+    let pattern = bound["pattern_json"].as_str().unwrap();
+    let native = CutPlan::build(
+        &Pattern::from_json(pattern).unwrap(),
+        &serde_json::from_str(&cut()).unwrap(),
+    )
+    .unwrap();
+    let length = native.rolls[0].length_m;
+    let mut quote = json!({"offer_id":"synthetic/continuous","material_id":"synthetic-sewing-sheet",
+        "material_sha256":native.rolls[0].material.sha256(),"supplier":"Synthetic supplier",
+        "sku":"continuous","price":10.0,"quantity":1.0,"unit":"linear_meter",
+        "minimum_quantity":0.1,"order_increment":0.1,"currency":"USD","region":"US",
+        "quality":"test","terms":"test","observed_on":"2026-10-15",
+        "available":true,"available_quantity":1000.0,"maximum_continuous_quantity":length * 0.5,
+        "source":"test:continuous-limit","source_sha256":"0".repeat(64)});
+    let market = json!({"currency":"USD","region":"US","quality":"test","terms":"test",
+        "as_of":"2026-10-15","max_age_days":1,"require_observed_continuous_length":true});
+    for admits in [false, true] {
+        if admits {
+            quote["maximum_continuous_quantity"] = json!(length);
+        }
+        let book = json!({"schema":"ftx-textile-quotes/1","quotes":[quote]});
+        let got: Value = serde_json::from_str(
+            &manufacturing::cut_price(pattern, &cut(), &book.to_string(), &market.to_string())
+                .unwrap(),
+        )
+        .unwrap();
+        let expected = procurement::evaluate(
+            &native,
+            &serde_json::from_value(book.clone()).unwrap(),
+            &serde_json::from_value(market.clone()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(got, expected);
+        assert_eq!(got["complete_offer_coverage"], admits);
+        assert_eq!(got["complete_continuous_length_limit_coverage"], admits);
+        let study_request = json!({"schema":"ftx-material-study/1", "variants":[{"key":"same",
+            "changes":{"schema":"ftx-material-bindings/1"}}],
+            "cutting":serde_json::from_str::<Value>(&cut()).unwrap(),
+            "purchasing":{"quotes":book,"market":market}});
+        let study: Value =
+            serde_json::from_str(&materials::study(pattern, &study_request.to_string()).unwrap())
+                .unwrap();
+        assert_eq!(
+            study["alternatives"][0]["purchasing"]["result"]["roll_prices"],
+            got["roll_prices"]
+        );
+        if !admits {
+            assert_eq!(
+                got["roll_prices"][0]["sample"]["excluded_offers"][0]["reason"],
+                "insufficient_continuous_length"
+            );
+            assert!(
+                study["alternatives"][0]["metrics"]["least_observed_independent_order_total"]
+                    .is_null()
+            );
+        }
+    }
+}
+
+#[test]
 fn intraday_procurement_and_studies_share_native_expiry_and_complete_order_semantics() {
     let raw: Value = serde_json::from_str(PATTERN).unwrap();
     let bound = bind(&raw, &changes(selection(0.1, 0.4)));
