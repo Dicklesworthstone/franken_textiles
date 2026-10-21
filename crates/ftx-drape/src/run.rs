@@ -228,7 +228,9 @@ pub fn drape(
     // an elastic casing is simulated at its cut length and drawn up by its elastic
     let elastics = elastic_casings(pattern, opts.elastic_ea)?;
     let simulated;
-    let pattern = if elastics.is_empty() { pattern } else {
+    let pattern = if elastics.is_empty() {
+        pattern
+    } else {
         simulated = casings_at_cut_length(pattern, &elastics);
         &simulated
     };
@@ -323,13 +325,17 @@ pub fn drape(
             arm_deg: body.arm_deg,
         },
     );
-    let casing_mu: Vec<_> = elastics.iter().map(|e| {
-        (|| {
-            let piece = pattern.instance(&e.instance)?.piece_index;
-            let field = material.contact_materials.as_ref()?;
-            Some(field.surfaces[field.piece_ids[piece]].friction_body)
-        })().unwrap_or(opts.contact.mu)
-    }).collect();
+    let casing_mu: Vec<_> = elastics
+        .iter()
+        .map(|e| {
+            (|| {
+                let piece = pattern.instance(&e.instance)?.piece_index;
+                let field = material.contact_materials.as_ref()?;
+                Some(field.surfaces[field.piece_ids[piece]].friction_body)
+            })()
+            .unwrap_or(opts.contact.mu)
+        })
+        .collect();
     add_run_fields(
         &mut report,
         &scene,
@@ -585,7 +591,9 @@ fn add_run_fields(
     );
     let elastics = &scene.solver.model.elastics;
     let mut casing_reports = Vec::new();
-    let explicit = pattern.raw()["meta"]["solved"].get("elastic_casings").is_some();
+    let explicit = pattern.raw()["meta"]["solved"]
+        .get("elastic_casings")
+        .is_some();
     for (group, &mu) in scene.elastic_groups.iter().zip(casing_mu) {
         // FrankenTextiles: the casing's elastic at the end (the reference has none). Its rings (fold and
         // seam line) pull in parallel: the elastic's tension is their sum and it lies between them.
@@ -607,23 +615,30 @@ fn add_run_fields(
         let stretch = (length / relaxed - 1.0) * 100.0;
         // KAT 4's law: a ring of tension T holds up to 2πμT, here against the whole garment's weight
         let grip = 2.0 * std::f64::consts::PI * mu * tension;
-        let weight = group.loaded_vertices.iter().map(|&v| scene.solver.model.mass[v]).sum::<f64>() * GRAVITY;
+        let weight = group
+            .loaded_vertices
+            .iter()
+            .map(|&v| scene.solver.model.mass[v])
+            .sum::<f64>()
+            * GRAVITY;
         let mut row = json!({
-                "relaxed_mm": round(relaxed * 1000.0, 1),
-                "length_mm": round(length * 1000.0, 1),
-                "rings_mm": rings.iter().map(|r| round(r.1 * 1000.0, 1)).collect::<Vec<_>>(),
-                "stretch_pct": round(stretch, 1),
-                "tension_n": round(tension, 3),
-                "grip_n": round(grip, 3),
-                "weight_n": round(weight, 3),
-                "holds": grip >= weight,
-                "ea_n": elastics[scene.elastic_rings[group.rings.start].start].ea * n,
-            });
+            "relaxed_mm": round(relaxed * 1000.0, 1),
+            "length_mm": round(length * 1000.0, 1),
+            "rings_mm": rings.iter().map(|r| round(r.1 * 1000.0, 1)).collect::<Vec<_>>(),
+            "stretch_pct": round(stretch, 1),
+            "tension_n": round(tension, 3),
+            "grip_n": round(grip, 3),
+            "weight_n": round(weight, 3),
+            "holds": grip >= weight,
+            "ea_n": elastics[scene.elastic_rings[group.rings.start].start].ea * n,
+        });
         if explicit {
             row["instance"] = json!(group.casing.instance);
             row["load_instances"] = json!(group.casing.load_instances);
             row["friction_mu"] = json!(mu);
-            row["grip_basis"] = json!("independent ideal ring estimate using this casing/body friction and declared garment's simulated inertia; not integrated contact traction or combined support capacity");
+            row["grip_basis"] = json!(
+                "independent ideal ring estimate using this casing/body friction and declared garment's simulated inertia; not integrated contact traction or combined support capacity"
+            );
             casing_reports.push(row);
         } else {
             o.insert("elastic".into(), row);
@@ -639,7 +654,11 @@ fn add_run_fields(
                     ftx_core::py::fixed(grip, 2),
                     ftx_core::py::fixed(weight, 2)
                 );
-                flags.push(json!(if explicit { format!("{}: {message}", group.casing.instance) } else { message }));
+                flags.push(json!(if explicit {
+                    format!("{}: {message}", group.casing.instance)
+                } else {
+                    message
+                }));
             }
         }
     }

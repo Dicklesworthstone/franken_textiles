@@ -96,7 +96,11 @@ wrinkling, grip slip, bending, rate dependence or hysteresis.</p>
 </details>
 </section>
 <section><h2>2. Bind the same pattern</h2>
-<label>Original pattern JSON <input id="patternFile" type="file" accept=".json,application/json"></label>
+<label>Original pattern or joint outfit JSON <input id="patternFile" type="file" accept=".json,application/json"></label>
+<p class="note">A <code>ftx-outfit-drape/1</code> request composes independently authored garments for one contact solve.
+The original request and source correspondence remain downloadable; the exact composed pattern drives assignments and every consumer below.
+Choose a whole garment, every outfit piece, or an individual piece for substitution. Garment-prefixed piece names keep independent seams and accessory attachments separate. Joint drapes require cloth self-contact;
+scenario requests must also supply <code>options.self_contact</code>. Placements and layer order must already be authored.</p>
 <p id="patternName">No pattern loaded. Export pattern.json from the drafting page or load an existing pattern.</p>
 <label>Assign the inspected selection to <select id="target"><option value="">Pattern default (preserve explicit piece choices)</option></select></label>
 <button id="assign" disabled>Assign inspected material</button><button id="reset" disabled>Clear pending assignments</button>

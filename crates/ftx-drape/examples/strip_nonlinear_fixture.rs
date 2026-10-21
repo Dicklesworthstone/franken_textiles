@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]),
         allow_estimated_shapes: true,
     };
-    input.parameter_bounds = [[0.7, 1.5], [0.5, 1.3], [0.8, 1.6], [15.0, 65.0]];
+    input.parameter_bounds = vec![[0.7, 1.5], [0.5, 1.3], [0.8, 1.6], [15.0, 65.0]];
     input.response_family = Some(family.clone());
     let mut truth = input.material.clone();
     let mut response = TabulatedMembrane {

@@ -2375,6 +2375,60 @@ same cut-plan, cut-price and cut-svg implementations as the companion workbench.
 
 ---
 
+### 25.41 Independent nonlinear interval tangents from finite-strip acquisitions
+
+**Delivered software (`ftx-ki6`, extending `ftx-ki5`).** The existing bounded strip inverse now also
+identifies 7–12 independent signed tangent intervals and constant normal coupling through the same
+production membrane authority. Warp, weft and engineering-shear knot positions are declared fixed
+model coordinates; relative interval stiffnesses are fitted. Compression/tension and opposite shear
+branches remain independent, with no inferred symmetry or missing branch. This optional mode is
+mutually exclusive with the preserved four-parameter declared-shape family. Existing scalar and
+fixed-shape request identities and parameter meanings remain intact.
+
+The complete search box must be stable. Whole-acquisition FIT/CHECK separation, stationary bounded
+starts, local excitation, equivalent-minimum checks, numerical refinement and aggregate work limits
+govern publication. Unexcited intervals cannot become accepted material properties. Prior fitted
+metadata, compiled curve support and declared knot support constrain all trials. Accepted curves
+are restricted to FIT-only support; the actual cropped material is compiled and replayed, and its
+force/width residuals and mesh changes must pass again before an exact frozen selection is returned.
+
+Five focused interval tests and the preserved scalar/fixed-shape regressions pass. Native commands
+and the shared portable material API retain the same descriptors, source identities and ordinary
+selection replay. The executable synthetic acquisition recovers nine known coefficients, including
+positive-strain stiffening and unequal signed shear tangents. It is numerical software evidence;
+`ftx-ki4` remains open for measured-knit model adequacy, qualified transverse observations, independent
+specimens and matched bending/contact and garment acceptance. Detailed inputs, bounds, permissions
+and the executable example are in
+[clamped-strip-identification.md](docs/clamped-strip-identification.md#identify-independent-signed-tangent-intervals).
+
+---
+
+### 25.42 Joint-outfit material workbench and nonlinear characterization display
+
+**Delivered software (`ftx-oi1`).** The browser material workbench imports an ordinary
+`ftx-outfit-drape/1` request through the production WASM composer, retaining exact source bytes,
+the initial composition receipt and the exact composed pattern. Material assignments can target
+the whole outfit, one garment or one source piece. Existing binding, drape, cutting, purchasing,
+sewing and material studies consume that composition; outfit imports require self-contact in both
+the page and worker. Source-qualified attached mass and independent elastic casings retain their
+existing composed-pattern behavior. Replaced requests invalidate dependent results.
+
+The original composition receipt remains scoped before substitutions. Current bound patterns and
+downstream reports retain their own source identities. The browser uses ordinary composed-pattern
+drape and does not append the native outfit wrapper's runtime garment-ownership annotation. It
+does not infer a dressing sequence, physical fit, missing material interfaces or new thermal boundaries.
+
+Independent nonlinear interval results display every coefficient's descriptor, unit and search bounds
+alongside the declared fixed strain knots. Purchasing displays the actual marker length and each
+supplier's observed continuous-cut limit independently of total stock, retaining unknowns and exclusions.
+All 71 frontend/compiled-worker checks pass with zero skips: the actual WASM interval report and frozen
+selection equal native output, a held-out refined strip replays through the ordinary material authority,
+and an outfit material substitution doubles computed assembly mass without changing geometry. Two
+native outfit-adapter tests additionally check actual joint-solver propagation and source refusals.
+These are software integration results; the measured-material and garment acceptance gates remain open.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

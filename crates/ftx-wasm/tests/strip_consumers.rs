@@ -15,6 +15,8 @@ const INVERSE: &str =
     include_str!("../../../examples/strip-identification/synthetic-calibration.json");
 const NONLINEAR: &str =
     include_str!("../../../examples/strip-identification/synthetic-nonlinear-calibration.json");
+const INDEPENDENT_INTERVALS: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-nonlinear-clamped-strip.json");
 
 fn forward() -> Request {
     let fixture: Value = serde_json::from_str(include_str!(
@@ -330,6 +332,105 @@ fn nonlinear_strip_api_preserves_declared_shapes_and_replays_only_admitted_froze
     );
     for field in ["material", "selection", "selection_json"] {
         assert!(rejected[field].is_null() && rejected["calibration"][field].is_null());
+    }
+}
+
+#[test]
+fn independent_interval_strip_api_matches_core_and_replays_exact_selection() {
+    let input: strip::fit::Input = serde_json::from_str(INDEPENDENT_INTERVALS).unwrap();
+    let core = strip::fit::calibrate(&input).unwrap();
+    assert!(core.accepted, "{:?}", core.reasons);
+    assert!(core.domain_replay_verified);
+    assert_eq!(core.parameters.len(), 9);
+    let result: Value =
+        serde_json::from_str(&materials::calibrate_strip(INDEPENDENT_INTERVALS, true).unwrap())
+            .unwrap();
+    assert_eq!(result["calibration"], serde_json::to_value(&core).unwrap());
+    assert!(
+        result["calibration"]["input"]
+            .get("response_family")
+            .is_none()
+    );
+    assert!(
+        result["calibration"]["input"]
+            .get("parameter_bounds")
+            .is_none()
+    );
+    let model = input.nonlinear.as_ref().unwrap();
+    let bounds: Vec<_> = model
+        .tangent_bounds
+        .iter()
+        .flatten()
+        .copied()
+        .chain([model.coupling_bounds])
+        .collect();
+    assert_eq!(core.parameter_bounds, bounds);
+    let descriptors = core.parameter_descriptors.as_ref().unwrap();
+    assert_eq!(descriptors.len(), 9);
+    assert_eq!(descriptors[0].id, "warp_tangent_0");
+    assert_eq!(descriptors[8].id, "normal_coupling");
+    assert!(descriptors.iter().all(|parameter| parameter.unit == "N/m"));
+
+    let raw_selection = core.selection_json.as_deref().unwrap();
+    assert_eq!(result["selection_json"], raw_selection);
+    let inspected: Value =
+        serde_json::from_str(&materials::inspect(raw_selection).unwrap()).unwrap();
+    assert_eq!(inspected, result["material"]);
+    assert_eq!(inspected["selection_json"], raw_selection);
+    assert_eq!(
+        inspected["capabilities"]["mechanical_coefficients"]["ready"],
+        false
+    );
+    assert_eq!(result["fit_claim"], false);
+    assert_eq!(result["empirical_validation_claim"], false);
+    let selection: Selection = serde_json::from_str(raw_selection).unwrap();
+    let resolved = ftx_pattern::textile_import::catalog()
+        .unwrap()
+        .resolve(&selection)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_string(&resolved.frozen_selection()).unwrap(),
+        raw_selection
+    );
+    assert!(resolved.membrane_response().unwrap().is_some());
+    assert!(resolved.material().properties.is_empty());
+    assert!(resolved.mechanics().is_err());
+
+    let acquired = input
+        .experiments
+        .iter()
+        .find(|experiment| {
+            experiment.partition == ftx_pattern::material_calibration::Partition::Check
+        })
+        .unwrap();
+    let mut fixture = acquired.fixture.clone();
+    fixture.cells.iter_mut().for_each(|cells| *cells *= 2);
+    let request = Request {
+        schema: "ftx-strip-experiment/1".into(),
+        material: selection,
+        fixture,
+        extensions: acquired
+            .observations
+            .iter()
+            .map(|observation| observation.extension_fraction)
+            .collect(),
+        controls: input.controls.clone(),
+    };
+    let forward = strip::evaluate(&request).unwrap();
+    assert_eq!(
+        materials::strip_experiment(&serde_json::to_string(&request).unwrap()).unwrap(),
+        serde_json::to_string(&forward).unwrap()
+    );
+    for (observation, state) in acquired.observations.iter().zip(&forward.states) {
+        let prediction = core
+            .predictions
+            .iter()
+            .find(|prediction| {
+                prediction.experiment == acquired.id && prediction.observation == observation.id
+            })
+            .unwrap();
+        assert!((state.force_n - prediction.state.force_n).abs() < 1e-7);
+        assert!((state.mid_width_m - prediction.state.mid_width_m).abs() < 1e-9);
     }
 }
 

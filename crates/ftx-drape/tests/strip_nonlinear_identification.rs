@@ -81,7 +81,7 @@ fn input() -> Input {
         ]),
         allow_estimated_shapes: true,
     };
-    input.parameter_bounds = [[0.7, 1.5], [0.5, 1.3], [0.8, 1.6], [15.0, 65.0]];
+    input.parameter_bounds = vec![[0.7, 1.5], [0.5, 1.3], [0.8, 1.6], [15.0, 65.0]];
     input.response_family = Some(family.clone());
     let mut truth = input.material.clone();
     let mut response = TabulatedMembrane {
@@ -163,7 +163,10 @@ fn identifies_declared_nonlinear_amplitudes_and_replays_the_actual_published_law
     }
     let descriptors = report.parameter_descriptors.as_ref().unwrap();
     assert_eq!(
-        descriptors.each_ref().map(|p| p.unit.as_str()),
+        descriptors
+            .iter()
+            .map(|p| p.unit.as_str())
+            .collect::<Vec<_>>(),
         ["1", "1", "1", "N/m"]
     );
     assert_eq!(descriptors[3].id, "normal_coupling");

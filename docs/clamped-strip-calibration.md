@@ -59,7 +59,12 @@ By default, the four parameter bounds are ordered as warp stiffness in N/m, weft
 major Poisson ratio, and shear stiffness in N/m. An optional `response_family` instead identifies
 three dimensionless fixed-shape scales and normal coupling in N/m; see
 [declared nonlinear shape identification](clamped-strip-identification.md#identify-amplitudes-of-declared-nonlinear-shapes)
-for its schema, separate shape permission and reproducible example. The entire search box must be physically
+for its schema, separate shape permission and reproducible example. The optional `nonlinear`
+parameterization instead identifies independent signed tangent intervals and coupling at declared
+fixed Green-strain knots. It accepts 7–12 parameters, uses its own bounds, and is mutually exclusive
+with `response_family`; see
+[independent interval identification](clamped-strip-identification.md#identify-independent-signed-tangent-intervals).
+All three modes use the same inverse solver and production membrane authority. The entire search box must be physically
 admissible. Three deterministic bounded searches use only FIT observations. Publication
 requires stationary starts, interior parameters, independent local sensitivity, no
 discovered separated equivalent minimum, acceptable FIT and held-out CHECK errors,
@@ -80,8 +85,8 @@ The `--allow-estimates` flag controls consumption of the fitted output and overr
 to use estimated acquisition observations: those require the separate input permission
 `allow_estimated_observations`. Changing output consent changes the effective request
 and frozen selection identities; it does not change fitted coefficients or residuals.
-Explicit `replace_existing` consent is required to replace existing equilibrium evidence. A declared
-nonlinear family may replace a scalar or nonlinear law while retaining its inherited support;
+Explicit `replace_existing` consent is required to replace existing equilibrium evidence. Either
+nonlinear parameterization may replace a scalar or nonlinear law while retaining its inherited support;
 scalar-only calibration cannot replace a nonlinear law, and history laws remain unsupported.
 
 ## Replay the accepted result without changing source identities
@@ -124,7 +129,7 @@ material identification, load the acquisition JSON, and explicitly choose whethe
 the fitted estimates. The worker runs the same `strip::fit` authority locally through
 `material_calibrate_strip(input, allow_estimates)`.
 
-The result separates FIT and CHECK errors and displays all four coefficients with their
+The result separates FIT and CHECK errors and displays the selected model's coefficients with their
 search bounds, actual strip dimensions and warp axes, midpoint-width usage, local FIT
 strain support, stationary starts, forward-work use, mesh-refinement error and enforced-domain
 replay. A prediction table retains each acquisition/observation identity alongside actual
@@ -153,7 +158,8 @@ The reported contraction is `1 - width / reference_width`, but the publication d
 identify the exact width station or statistic. Do not automatically turn those CSV values
 into the solver's midpoint chord observations. An explicit, independently justified
 measurement/model correspondence is needed. The full source curves also contain large
-deformations and unloading; the current reversible four-coefficient model may be inadequate.
+deformations and unloading; a reversible planar elastic model may be inadequate even when its
+directional response is nonlinear.
 No built-in measured knit is promoted to a simulation-ready law by this interface.
 
 Independent coupon data, source-specific model adequacy, matched bending/contact/thermal

@@ -19,6 +19,10 @@ use crate::Membrane;
 /// Caller-declared nonlinear shapes identified through the same bounded strip experiment.
 pub mod family;
 
+/// Independently fitted signed tangent intervals through the same strip experiment.
+pub mod nonlinear;
+use nonlinear::Nonlinear;
+
 const KEYS: [&str; 4] = [
     "warp_stiffness",
     "weft_stiffness",
@@ -81,7 +85,7 @@ pub struct Policy {
     pub max_peak_scaled: f64,
     /// Maximum coarse-to-doubled-mesh change divided by each observation's scale.
     pub max_mesh_scaled: f64,
-    /// Minimum column-normalized sensitivity Gram pivot for all four parameters.
+    /// Minimum column-normalized sensitivity Gram pivot for every fitted parameter.
     pub min_excitation_pivot: f64,
     /// Per-start Levenberg-Marquardt iteration cap, 1..80.
     pub max_iterations: usize,
@@ -108,11 +112,16 @@ pub struct Input {
     /// Scalar bounds are [warp N/m, weft N/m, major Poisson ratio, shear N/m]. With
     /// response_family, these are [warp scale, weft scale, shear scale, coupling N/m].
     /// The entire box must be stable; no bound is silently repaired.
-    pub parameter_bounds: [[f64; 2]; 4],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameter_bounds: Vec<[f64; 2]>,
     /// Optional declared piecewise-linear shapes. Their knots and relative shape are fixed;
     /// only three dimensionless amplitudes and signed normal coupling are identified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_family: Option<family::Family>,
+    /// Optional independent signed tangent intervals, mutually exclusive with response_family.
+    /// Its own tangent/coupling bounds replace the omitted scalar parameter_bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonlinear: Option<Nonlinear>,
     /// Acknowledge the planar ideal-grip elastic model; this does not assert it fits a real knit.
     pub admit_planar_elastic_model: bool,
     /// Explicit permission for estimated input observations, independently of fitted outputs.
@@ -145,10 +154,10 @@ pub struct Quality {
 /// Every attempt is retained; an exhausted search is never promoted to a characterized material.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Start {
-    /// Uniform normalized starting coordinate in the declared four-dimensional box.
+    /// Uniform normalized starting coordinate in the declared parameter box.
     pub initial_fraction: f64,
     /// Final physical coefficients in the documented order.
-    pub parameters: [f64; 4],
+    pub parameters: Vec<f64>,
     /// Squared scaled FIT residual at this start's final point.
     pub fit_sse: f64,
     /// Actual first-order objective stationarity reached before the iteration limit.
@@ -184,10 +193,13 @@ pub struct Report {
     /// SHA-256 identity of the serialized input; not evidence of measurement quality.
     pub input_sha256: String,
     /// Best FIT candidate, whether or not accepted.
-    pub parameters: [f64; 4],
+    pub parameters: Vec<f64>,
     /// Physical meaning of nonlinear family parameters; absent for legacy scalar reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parameter_descriptors: Option<[family::ParameterDescriptor; 4]>,
+    pub parameter_descriptors: Option<Vec<family::ParameterDescriptor>>,
+    /// Independent interval bounds in parameter order; scalar/shape bounds remain in input.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameter_bounds: Vec<[f64; 2]>,
     /// Whether every publication gate passed.
     pub accepted: bool,
     /// Specific remaining numerical, identifiability or model-adequacy gates.
@@ -221,12 +233,13 @@ pub struct Report {
     pub model_scope: String,
 }
 
-struct Budget {
+struct Budget<'a> {
     used: usize,
     limit: usize,
     // Replacing coefficients does not erase the original specimen's characterized support.
     inherited_domain: Option<StrainDomain>,
     family: Option<family::Prepared>,
+    input: &'a Input,
 }
 
 fn intersect(a: StrainDomain, b: StrainDomain) -> Result<StrainDomain, Refusal> {
@@ -237,7 +250,7 @@ fn intersect(a: StrainDomain, b: StrainDomain) -> Result<StrainDomain, Refusal> 
     }))
 }
 
-impl Budget {
+impl Budget<'_> {
     fn admit(&mut self) -> Result<(), Refusal> {
         if self.used >= self.limit {
             return Err(Refusal::new(
@@ -252,19 +265,34 @@ impl Budget {
     fn solve(
         &mut self,
         fixture: &Fixture,
-        parameters: [f64; 4],
+        parameters: &[f64],
         extension: f64,
         controls: &Controls,
     ) -> Result<State, Refusal> {
         self.admit()?;
-        let response = self
-            .family
-            .as_ref()
-            .map(|family| family.compile(parameters))
-            .transpose()?;
-        let [warp, weft, nu, shear] = response
-            .as_ref()
-            .map_or(Ok(parameters), CompiledMembrane::reference_moduli)?;
+        let response = if let Some(family) = &self.family {
+            Some(family.compile(four(parameters)?)?)
+        } else if let Some(model) = &self.input.nonlinear {
+            // Trial curves remain unpublished estimates; CHECK never supplies this temporary key.
+            let source = self
+                .input
+                .experiments
+                .iter()
+                .find(|e| e.partition == Partition::Fit)
+                .map(|e| &e.source)
+                .ok_or_else(|| invalid("strip acquisition source is missing"))?;
+            Some(
+                model
+                    .response(parameters, None, source, &self.input.conditions)?
+                    .compile(&self.input.material.sources, true)?,
+            )
+        } else {
+            None
+        };
+        let [warp, weft, nu, shear] = match &response {
+            Some(response) => response.reference_moduli()?,
+            None => four(parameters)?,
+        };
         solve_law(
             fixture,
             Membrane::orthotropic(warp, weft, nu, shear, 1.0),
@@ -285,15 +313,17 @@ impl Budget {
     fn replay(
         &mut self,
         fixture: &Fixture,
-        parameters: [f64; 4],
+        parameters: &[f64],
         domain: StrainDomain,
         response: Option<&CompiledMembrane>,
         extension: f64,
         controls: &Controls,
     ) -> Result<State, Refusal> {
         self.admit()?;
-        let [warp, weft, nu, shear] =
-            response.map_or(Ok(parameters), CompiledMembrane::reference_moduli)?;
+        let [warp, weft, nu, shear] = match response {
+            Some(response) => response.reference_moduli()?,
+            None => four(parameters)?,
+        };
         solve_law(
             fixture,
             Membrane::orthotropic(warp, weft, nu, shear, 1.0),
@@ -305,16 +335,32 @@ impl Budget {
     }
 }
 
-fn physical(input: &Input, p: [f64; 4]) -> [f64; 4] {
-    std::array::from_fn(|i| {
-        input.parameter_bounds[i][0]
-            + p[i] * (input.parameter_bounds[i][1] - input.parameter_bounds[i][0])
-    })
+fn four(parameters: &[f64]) -> Result<[f64; 4], Refusal> {
+    parameters
+        .try_into()
+        .map_err(|_| invalid("scalar/declared-shape strip fit requires four parameters"))
+}
+
+fn bounds(input: &Input) -> Vec<[f64; 2]> {
+    input
+        .nonlinear
+        .as_ref()
+        .map_or_else(|| input.parameter_bounds.clone(), Nonlinear::bounds)
+}
+
+fn physical<const N: usize>(input: &Input, p: [f64; N]) -> [f64; N] {
+    let bounds = bounds(input);
+    std::array::from_fn(|i| bounds[i][0] + p[i] * (bounds[i][1] - bounds[i][0]))
 }
 
 fn validate(input: &Input) -> Result<(), Refusal> {
     input.material.validate()?;
     input.controls.validate()?;
+    if input.response_family.is_some() && input.nonlinear.is_some() {
+        return Err(invalid(
+            "response_family and independent nonlinear intervals are mutually exclusive",
+        ));
+    }
     let policy = &input.policy;
     if input.schema != "ftx-strip-calibration/1"
         || !input.admit_planar_elastic_model
@@ -323,7 +369,9 @@ fn validate(input: &Input) -> Result<(), Refusal> {
         || matches!(input.material.form, Form::Fiber | Form::Yarn | Form::Fill)
         || input.experiments.is_empty()
         || input.experiments.len() > 16
-        || (input.material.membrane_response.is_some() && input.response_family.is_none())
+        || (input.material.membrane_response.is_some()
+            && input.response_family.is_none()
+            && input.nonlinear.is_none())
         || input.material.membrane_relaxation.is_some()
         || input
             .material
@@ -371,31 +419,50 @@ fn validate(input: &Input) -> Result<(), Refusal> {
             "invalid strip residual, refinement, sensitivity or bounded-work policy",
         ));
     }
-    for (i, &[lo, hi]) in input.parameter_bounds.iter().enumerate() {
-        if !lo.is_finite()
-            || !hi.is_finite()
-            || hi <= lo
-            || !((hi - lo).is_finite())
-            || (if input.response_family.is_some() {
-                i < 3
-            } else {
-                i != 2
-            } && lo <= 0.0)
-        {
+    if let Some(model) = &input.nonlinear {
+        if !input.parameter_bounds.is_empty() {
             return Err(invalid(
-                "strip parameter bounds must be finite, nonempty and positive for all stiffnesses",
+                "nonlinear strip identification uses tangent/coupling bounds; omit scalar parameter_bounds",
             ));
         }
-    }
-    let nu = input.parameter_bounds[2][0]
-        .abs()
-        .max(input.parameter_bounds[2][1].abs());
-    if input.response_family.is_none()
-        && nu * nu * input.parameter_bounds[1][1] / input.parameter_bounds[0][0] >= 1.0
-    {
-        return Err(invalid(
-            "the entire declared orthotropic parameter box must be positive-definite",
-        ));
+        model.validate()?;
+        if input.conditions.len() > 60 {
+            return Err(invalid(
+                "nonlinear strip conditions leave room for fitted-domain and model metadata",
+            ));
+        }
+    } else {
+        if input.parameter_bounds.len() != 4 {
+            return Err(invalid(
+                "scalar/declared-shape strip identification needs exactly four parameter bounds",
+            ));
+        }
+        for (i, &[lo, hi]) in input.parameter_bounds.iter().enumerate() {
+            if !lo.is_finite()
+                || !hi.is_finite()
+                || hi <= lo
+                || !((hi - lo).is_finite())
+                || (if input.response_family.is_some() {
+                    i < 3
+                } else {
+                    i != 2
+                } && lo <= 0.0)
+            {
+                return Err(invalid(
+                    "strip parameter bounds must be finite, nonempty and positive for all stiffnesses",
+                ));
+            }
+        }
+        let nu = input.parameter_bounds[2][0]
+            .abs()
+            .max(input.parameter_bounds[2][1].abs());
+        if input.response_family.is_none()
+            && nu * nu * input.parameter_bounds[1][1] / input.parameter_bounds[0][0] >= 1.0
+        {
+            return Err(invalid(
+                "the entire declared orthotropic parameter box must be positive-definite",
+            ));
+        }
     }
     let mut ids = BTreeSet::new();
     let mut acquisition_ids = BTreeSet::new();
@@ -450,9 +517,9 @@ fn validate(input: &Input) -> Result<(), Refusal> {
             }
         }
     }
-    if fit_channels < 4 {
+    if fit_channels < bounds(input).len() {
         return Err(invalid(
-            "strip calibration requires at least four measured FIT channels",
+            "strip calibration requires at least one measured FIT channel per fitted coefficient",
         ));
     }
     for fit in input
@@ -490,7 +557,11 @@ struct Evaluation {
     sse: f64,
 }
 
-fn evaluate(input: &Input, p: [f64; 4], budget: &mut Budget) -> Result<Evaluation, Refusal> {
+fn evaluate<const N: usize>(
+    input: &Input,
+    p: [f64; N],
+    budget: &mut Budget<'_>,
+) -> Result<Evaluation, Refusal> {
     let mut residuals = Vec::new();
     let parameters = physical(input, p);
     for experiment in input
@@ -501,7 +572,7 @@ fn evaluate(input: &Input, p: [f64; 4], budget: &mut Budget) -> Result<Evaluatio
         for point in &experiment.observations {
             let state = budget.solve(
                 &experiment.fixture,
-                parameters,
+                &parameters,
                 point.extension_fraction,
                 &input.controls,
             )?;
@@ -518,9 +589,13 @@ fn evaluate(input: &Input, p: [f64; 4], budget: &mut Budget) -> Result<Evaluatio
     Ok(Evaluation { residuals, sse })
 }
 
-fn jacobian(input: &Input, p: [f64; 4], budget: &mut Budget) -> Result<Vec<[f64; 4]>, Refusal> {
+fn jacobian<const N: usize>(
+    input: &Input,
+    p: [f64; N],
+    budget: &mut Budget<'_>,
+) -> Result<Vec<[f64; N]>, Refusal> {
     let mut rows = Vec::new();
-    for j in 0..4 {
+    for j in 0..N {
         let mut lo = p;
         let mut hi = p;
         lo[j] = (p[j] - 1e-4).max(0.0);
@@ -528,7 +603,7 @@ fn jacobian(input: &Input, p: [f64; 4], budget: &mut Budget) -> Result<Vec<[f64;
         let left = evaluate(input, lo, budget)?;
         let right = evaluate(input, hi, budget)?;
         if rows.is_empty() {
-            rows = vec![[0.0; 4]; left.residuals.len()];
+            rows = vec![[0.0; N]; left.residuals.len()];
         }
         for ((row, a), b) in rows.iter_mut().zip(left.residuals).zip(right.residuals) {
             row[j] = (b - a) / (hi[j] - lo[j]);
@@ -540,13 +615,13 @@ fn jacobian(input: &Input, p: [f64; 4], budget: &mut Budget) -> Result<Vec<[f64;
     Ok(rows)
 }
 
-fn norms(j: &[[f64; 4]]) -> [f64; 4] {
+fn norms<const N: usize>(j: &[[f64; N]]) -> [f64; N] {
     std::array::from_fn(|k| j.iter().map(|row| row[k] * row[k]).sum::<f64>().sqrt())
 }
 
-fn gradient(j: &[[f64; 4]], e: &Evaluation) -> f64 {
+fn gradient<const N: usize>(j: &[[f64; N]], e: &Evaluation) -> f64 {
     let scales = norms(j);
-    (0..4)
+    (0..N)
         .map(|k| {
             let value = j
                 .iter()
@@ -562,14 +637,14 @@ fn gradient(j: &[[f64; 4]], e: &Evaluation) -> f64 {
         .fold(0.0, f64::max)
 }
 
-fn excitation(j: &[[f64; 4]]) -> f64 {
+fn excitation<const N: usize>(j: &[[f64; N]]) -> f64 {
     let scales = norms(j);
     if scales.iter().any(|s| !s.is_finite() || *s <= 1e-10) {
         return 0.0;
     }
-    let mut lower = [[0.0; 4]; 4];
+    let mut lower = [[0.0; N]; N];
     let mut pivot = 1.0_f64;
-    for i in 0..4 {
+    for i in 0..N {
         for k in 0..=i {
             let dot = j
                 .iter()
@@ -590,8 +665,12 @@ fn excitation(j: &[[f64; 4]]) -> f64 {
     pivot
 }
 
-fn search(input: &Input, initial: f64, budget: &mut Budget) -> Result<(Start, [f64; 4]), Refusal> {
-    let mut p = [initial; 4];
+fn search<const N: usize>(
+    input: &Input,
+    initial: f64,
+    budget: &mut Budget<'_>,
+) -> Result<(Start, [f64; N]), Refusal> {
+    let mut p = [initial; N];
     let mut e = evaluate(input, p, budget)?;
     let mut lambda = 1e-3_f64;
     let mut converged = false;
@@ -609,19 +688,19 @@ fn search(input: &Input, initial: f64, budget: &mut Budget) -> Result<(Start, [f
         }
         let mut accepted = false;
         for _ in 0..10 {
-            let mut rows: Vec<[f64; 4]> = j
+            let mut rows: Vec<[f64; N]> = j
                 .iter()
                 .map(|row| std::array::from_fn(|k| row[k] / scales[k]))
                 .collect();
             let mut target: Vec<f64> = e.residuals.iter().map(|r| -r).collect();
-            for k in 0..4 {
-                let mut row = [0.0; 4];
+            for k in 0..N {
+                let mut row = [0.0; N];
                 row[k] = lambda.sqrt();
                 rows.push(row);
                 target.push(0.0);
             }
             let scaled = lstsq(&rows, &target);
-            let mut step: [f64; 4] = std::array::from_fn(|k| scaled[k] / scales[k]);
+            let mut step: [f64; N] = std::array::from_fn(|k| scaled[k] / scales[k]);
             let max = step.iter().map(|v| v.abs()).fold(0.0, f64::max);
             if !max.is_finite() {
                 return Err(invalid("strip inverse step overflow"));
@@ -648,7 +727,7 @@ fn search(input: &Input, initial: f64, budget: &mut Budget) -> Result<(Start, [f
     Ok((
         Start {
             initial_fraction: initial,
-            parameters: physical(input, p),
+            parameters: physical(input, p).to_vec(),
             fit_sse: e.sse,
             converged,
             iterations,
@@ -665,8 +744,8 @@ fn quality(values: &[f64]) -> Quality {
     }
 }
 
-/// Identify scalar orthotropy or declared nonlinear shape amplitudes/coupling using actual grips.
-/// Both families use the ordinary production membrane authority. Three bounded starts, local
+/// Identify scalar orthotropy, declared nonlinear shape amplitudes, or independent signed tangents.
+/// Every parameterization uses the production membrane authority and actual grips. Bounded starts, local
 /// excitation, held-out experiments and doubled-mesh checks are publication gates. An inadequate
 /// candidate returns diagnostics with no material or selection.
 ///
@@ -674,11 +753,32 @@ fn quality(values: &[f64]) -> Quality {
 /// Invalid acquisition/source/model input, exhausted aggregate work, or any failed forward solve.
 pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     validate(input)?;
+    match bounds(input).len() {
+        4 => calibrate_n::<4>(input),
+        7 => calibrate_n::<7>(input),
+        8 => calibrate_n::<8>(input),
+        9 => calibrate_n::<9>(input),
+        10 => calibrate_n::<10>(input),
+        11 => calibrate_n::<11>(input),
+        12 => calibrate_n::<12>(input),
+        _ => Err(invalid("unsupported strip identification parameter count")),
+    }
+}
+
+fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     let family = input
         .response_family
         .as_ref()
         .map(|family| {
-            family::Prepared::new(family, &input.material.sources, input.parameter_bounds)
+            family::Prepared::new(
+                family,
+                &input.material.sources,
+                input
+                    .parameter_bounds
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| invalid("shape family requires four parameter bounds"))?,
+            )
         })
         .transpose()?;
     let mut inherited_domain = fitted_domain(&input.material)?;
@@ -694,6 +794,11 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             .map(|response| StrainDomain::new(response.strain_range()))
             .transpose()?,
         family.as_ref().map(family::Prepared::domain),
+        input
+            .nonlinear
+            .as_ref()
+            .map(Nonlinear::domain)
+            .transpose()?,
     ]
     .into_iter()
     .flatten()
@@ -713,11 +818,12 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         limit: input.policy.max_forward_solves,
         inherited_domain,
         family,
+        input,
     };
     let mut starts = Vec::new();
     let mut coordinates = Vec::new();
     for initial in [0.25, 0.5, 0.75] {
-        let (start, p) = search(input, initial, &mut budget)?;
+        let (start, p) = search::<N>(input, initial, &mut budget)?;
         starts.push(start);
         coordinates.push(p);
     }
@@ -725,7 +831,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         .min_by(|&a, &b| starts[a].fit_sse.total_cmp(&starts[b].fit_sse))
         .unwrap_or(0);
     let p = coordinates[best];
-    let parameters = starts[best].parameters;
+    let parameters = starts[best].parameters.clone();
     let j = jacobian(input, p, &mut budget)?;
     let pivot = excitation(&j);
     let mut reasons = Vec::new();
@@ -737,8 +843,11 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
             .push("best fit lies at a parameter bound; expand justified bounds and repeat".into());
     }
     if pivot < input.policy.min_excitation_pivot {
-        reasons
-            .push("FIT forces/widths do not independently identify all four coefficients".into());
+        reasons.push(if input.nonlinear.is_some() {
+            "FIT forces/widths do not independently identify every signed tangent and coupling coefficient".into()
+        } else {
+            "FIT forces/widths do not independently identify all four coefficients".into()
+        });
     }
     for (i, start) in starts.iter().enumerate() {
         if start.fit_sse <= starts[best].fit_sse + 1e-8 * (1.0 + starts[best].fit_sse)
@@ -762,7 +871,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         let mut refined = experiment.fixture.clone();
         refined.cells.iter_mut().for_each(|n| *n *= 2);
         if experiment.partition == Partition::Fit {
-            let zero = budget.solve(&refined, parameters, 0.0, &input.controls)?;
+            let zero = budget.solve(&refined, &parameters, 0.0, &input.controls)?;
             for (range, actual) in ranges.iter_mut().zip(zero.green_strain_range) {
                 range[0] = range[0].min(actual[0]);
                 range[1] = range[1].max(actual[1]);
@@ -771,13 +880,13 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         for observation in &experiment.observations {
             let coarse = budget.solve(
                 &experiment.fixture,
-                parameters,
+                &parameters,
                 observation.extension_fraction,
                 &input.controls,
             )?;
             let state = budget.solve(
                 &refined,
-                parameters,
+                &parameters,
                 observation.extension_fraction,
                 &input.controls,
             )?;
@@ -861,8 +970,8 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     }
     let digest = sha256_hex(&serde_json::to_vec(input).map_err(invalid)?);
     let mut nonlinear_material = None;
-    if reasons.is_empty() && budget.family.is_some() {
-        match publish(input, &digest, parameters, ranges, budget.family.as_ref()) {
+    if reasons.is_empty() && (budget.family.is_some() || input.nonlinear.is_some()) {
+        match publish(input, &digest, &parameters, ranges, budget.family.as_ref()) {
             Ok(material) => nonlinear_material = Some(material),
             Err(refusal) => reasons.push(format!(
                 "nonlinear FIT-support publication failed: {}; no material or missing branch was invented",
@@ -897,7 +1006,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
                 for (i, observation) in experiment.observations.iter().enumerate() {
                     let state = match budget.replay(
                         &fixture,
-                        parameters,
+                        &parameters,
                         domain,
                         replay_response.as_ref(),
                         observation.extension_fraction,
@@ -983,7 +1092,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     let material = if reasons.is_empty() {
         Some(match nonlinear_material {
             Some(material) => material,
-            None => publish(input, &digest, parameters, ranges, None)?,
+            None => publish(input, &digest, &parameters, ranges, None)?,
         })
     } else {
         None
@@ -1014,7 +1123,12 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         parameter_descriptors: input
             .response_family
             .as_ref()
-            .map(|_| family::descriptors()),
+            .map(|_| family::descriptors().to_vec())
+            .or_else(|| input.nonlinear.as_ref().map(Nonlinear::descriptors)),
+        parameter_bounds: input
+            .nonlinear
+            .as_ref()
+            .map_or_else(Vec::new, Nonlinear::bounds),
         accepted: material.is_some(),
         reasons,
         material,
@@ -1029,7 +1143,11 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
         domain_replay_verified,
         fitted_green_strain_range: ranges,
         predictions,
-        model_scope: if input.response_family.is_some() {
+        model_scope: if input.nonlinear.is_some() {
+            format!(
+                "{SCOPE} Independent signed piecewise-linear interval tangents and constant normal coupling are identified at declared fixed Green-strain knots. Knot positions, symmetry, missing branches, history and area-preserving behavior are not identified."
+            )
+        } else if input.response_family.is_some() {
             format!(
                 "{SCOPE} Conditional on caller-declared signed piecewise-linear shapes; only three dimensionless amplitudes and constant normal coupling are identified. Knots, relative shape, unobserved branches and area-preserving behavior are not identified."
             )
@@ -1042,7 +1160,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
 fn publish(
     input: &Input,
     digest: &str,
-    parameters: [f64; 4],
+    parameters: &[f64],
     ranges: [[f64; 2]; 3],
     family: Option<&family::Prepared>,
 ) -> Result<Material, Refusal> {
@@ -1060,13 +1178,23 @@ fn publish(
     conditions.insert("held_out_checks".into(), "true".into());
     conditions.insert("fixture_model".into(), SCOPE.into());
     if let Some(family) = family {
+        material.membrane_response = Some(family.publish(
+            four(parameters)?,
+            StrainDomain::new(ranges)?,
+            &source,
+            &conditions,
+        )?);
+        for key in KEYS {
+            material.properties.remove(key);
+        }
+    } else if let Some(model) = &input.nonlinear {
         material.membrane_response =
-            Some(family.publish(parameters, StrainDomain::new(ranges)?, &source, &conditions)?);
+            Some(model.response(parameters, Some(ranges), &source, &conditions)?);
         for key in KEYS {
             material.properties.remove(key);
         }
     } else {
-        for (key, value) in KEYS.into_iter().zip(parameters) {
+        for (key, &value) in KEYS.into_iter().zip(parameters) {
             material.properties.insert(key.into(), Quantity { value, unit: if key == "poisson_warp_weft" { "1" } else { "N/m" }.into(), evidence: Evidence::Estimate, source: source.clone(), method: "Bounded inverse orthotropic Green-strain membrane using clamped strip equilibrium, total grip force and optional transverse width; local sensitivity and held-out doubled-mesh checks. No independent bending or contact identification.".into(), conditions: conditions.clone(), bounds: None });
         }
     }

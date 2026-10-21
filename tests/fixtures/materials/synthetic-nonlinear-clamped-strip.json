@@ -1,0 +1,455 @@
+{
+  "schema": "ftx-strip-calibration/1",
+  "material": {
+    "id": "synthetic-nonlinear-strip",
+    "name": "Synthetic signed nonlinear strip identification; no real textile",
+    "form": "knit",
+    "composition": [],
+    "composition_complete": false,
+    "structure": {},
+    "properties": {},
+    "sources": {
+      "check-bias": {
+        "reference": "test:synthetic-nonlinear-strip/check-bias",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic solver-generated acquisition; whole CHECK acquisition excluded from identification; no empirical independence claim"
+      },
+      "check-warp": {
+        "reference": "test:synthetic-nonlinear-strip/check-warp",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic solver-generated acquisition; whole CHECK acquisition excluded from identification; no empirical independence claim"
+      },
+      "fit-bias": {
+        "reference": "test:synthetic-nonlinear-strip/fit-bias",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic solver-generated acquisition; whole CHECK acquisition excluded from identification; no empirical independence claim"
+      },
+      "fit-oblique": {
+        "reference": "test:synthetic-nonlinear-strip/fit-oblique",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic solver-generated acquisition; whole CHECK acquisition excluded from identification; no empirical independence claim"
+      },
+      "fit-reverse-bias": {
+        "reference": "test:synthetic-nonlinear-strip/fit-reverse-bias",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic solver-generated acquisition; whole CHECK acquisition excluded from identification; no empirical independence claim"
+      },
+      "fit-warp": {
+        "reference": "test:synthetic-nonlinear-strip/fit-warp",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic solver-generated acquisition; whole CHECK acquisition excluded from identification; no empirical independence claim"
+      },
+      "fit-weft": {
+        "reference": "test:synthetic-nonlinear-strip/fit-weft",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic solver-generated acquisition; whole CHECK acquisition excluded from identification; no empirical independence claim"
+      },
+      "planted": {
+        "reference": "test:synthetic-nonlinear-strip/planted",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic independent signed tangent parameters [260,300,500,150,180,320,70,90,25] N/m; production forward observations are numerical checks, not measured specimen evidence"
+      }
+    }
+  },
+  "method": "Synthetic full-width ideal planar clamped strips; every signed tangent interval is independent, positive branches stiffen at declared Green strain 0.04; no assumed symmetry, measured textile, rate or conditioning",
+  "conditions": {
+    "conditioning": "synthetic numerical test; no physical coupon",
+    "provenance": "numerical synthetic acquisition",
+    "specimen_id": "synthetic-nonlinear-strip"
+  },
+  "fitted_on": "2026-10-21",
+  "experiments": [
+    {
+      "id": "fit-warp",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          0.0,
+          1.0
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "fit-warp",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-warp-0",
+          "extension_fraction": 0.03,
+          "force_n": 0.5613356881311009,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.05974807267678712,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-warp-1",
+          "extension_fraction": 0.08,
+          "force_n": 2.168780843061876,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.059340722235177876,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-warp-2",
+          "extension_fraction": 0.14,
+          "force_n": 4.561213271292567,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.05887929549209915,
+            "scale_m": 0.002
+          }
+        }
+      ]
+    },
+    {
+      "id": "fit-weft",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          1.0,
+          0.0
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "fit-weft",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-weft-0",
+          "extension_fraction": 0.03,
+          "force_n": 0.33670760034832364,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.05984250332859861,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-weft-1",
+          "extension_fraction": 0.08,
+          "force_n": 1.356753794393223,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.0595767027322825,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-weft-2",
+          "extension_fraction": 0.14,
+          "force_n": 2.8855345215267247,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.059254894140199584,
+            "scale_m": 0.002
+          }
+        }
+      ]
+    },
+    {
+      "id": "fit-bias",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          0.7071067811865476,
+          0.7071067811865476
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "fit-bias",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-bias-0",
+          "extension_fraction": 0.03,
+          "force_n": 0.4094691846819599,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.05974055275626204,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-bias-1",
+          "extension_fraction": 0.08,
+          "force_n": 1.184282504105572,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.0592852599209705,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-bias-2",
+          "extension_fraction": 0.14,
+          "force_n": 2.538374032579625,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.0581724485425978,
+            "scale_m": 0.002
+          }
+        }
+      ]
+    },
+    {
+      "id": "fit-reverse-bias",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          -0.7071067811865476,
+          0.7071067811865476
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "fit-reverse-bias",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-reverse-bias-0",
+          "extension_fraction": 0.03,
+          "force_n": 0.3639484456431454,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.05956204840840011,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-reverse-bias-1",
+          "extension_fraction": 0.08,
+          "force_n": 1.0523319607066375,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.0588081373063679,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-reverse-bias-2",
+          "extension_fraction": 0.14,
+          "force_n": 2.267647809459233,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.05743278996617342,
+            "scale_m": 0.002
+          }
+        }
+      ]
+    },
+    {
+      "id": "fit-oblique",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          0.6,
+          0.8
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "fit-oblique",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-oblique-0",
+          "extension_fraction": 0.03,
+          "force_n": 0.4427630563587623,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.05973438320209945,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-oblique-1",
+          "extension_fraction": 0.08,
+          "force_n": 1.3463568602534572,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.059265591201064394,
+            "scale_m": 0.002
+          }
+        },
+        {
+          "id": "fit-oblique-2",
+          "extension_fraction": 0.14,
+          "force_n": 2.826751078152465,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.05827940069320225,
+            "scale_m": 0.002
+          }
+        }
+      ]
+    },
+    {
+      "id": "check-warp",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          0.0,
+          1.0
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "check-warp",
+      "evidence": "estimate",
+      "partition": "check",
+      "observations": [
+        {
+          "id": "check-warp-0",
+          "extension_fraction": 0.06,
+          "force_n": 1.4500536438805118,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.059500988902868895,
+            "scale_m": 0.002
+          }
+        }
+      ]
+    },
+    {
+      "id": "check-bias",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [
+          0.7071067811865476,
+          0.7071067811865476
+        ],
+        "cells": [
+          2,
+          2
+        ]
+      },
+      "source": "check-bias",
+      "evidence": "estimate",
+      "partition": "check",
+      "observations": [
+        {
+          "id": "check-bias-0",
+          "extension_fraction": 0.06,
+          "force_n": 0.8554598382020313,
+          "scale_n": 0.2,
+          "mid_width": {
+            "value_m": 0.059475774459311376,
+            "scale_m": 0.002
+          }
+        }
+      ]
+    }
+  ],
+  "nonlinear": {
+    "strain_knots": [
+      [
+        -0.2,
+        0.0,
+        0.04,
+        0.25
+      ],
+      [
+        -0.2,
+        0.0,
+        0.04,
+        0.25
+      ],
+      [
+        -0.3,
+        0.0,
+        0.3
+      ]
+    ],
+    "tangent_bounds": [
+      [
+        [
+          220.0,
+          300.0
+        ],
+        [
+          260.0,
+          340.0
+        ],
+        [
+          440.0,
+          560.0
+        ]
+      ],
+      [
+        [
+          120.0,
+          180.0
+        ],
+        [
+          150.0,
+          210.0
+        ],
+        [
+          280.0,
+          360.0
+        ]
+      ],
+      [
+        [
+          50.0,
+          90.0
+        ],
+        [
+          70.0,
+          110.0
+        ]
+      ]
+    ],
+    "coupling_bounds": [
+      15.0,
+      35.0
+    ]
+  },
+  "admit_planar_elastic_model": true,
+  "allow_estimated_observations": true,
+  "replace_existing": false,
+  "allow_estimates": true,
+  "controls": {
+    "tolerance_m": 1e-9,
+    "force_tolerance_n": 1e-6,
+    "max_newton": 100
+  },
+  "policy": {
+    "max_rms_scaled": 2.0,
+    "max_peak_scaled": 2.0,
+    "max_mesh_scaled": 2.0,
+    "min_excitation_pivot": 1e-7,
+    "max_iterations": 40,
+    "max_forward_solves": 32768
+  }
+}

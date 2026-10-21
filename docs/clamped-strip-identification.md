@@ -24,7 +24,7 @@ cargo build -p ftx-cli --bin ftx --bin ftx-materials
 |---|---|---|
 | Validate and expose original source observations | `ftx-materials strip-acquisition ACQUISITION.json` | Source identities, complete force histories, geometry and optional original transverse curves |
 | Predict a declared membrane in a grip fixture | `ftx-materials strip-experiment REQUEST.json` | Frozen material request, equilibrium states, reactions, local strain ranges and solver residuals |
-| Identify scalar coefficients or amplitudes of declared nonlinear shapes | `ftx-materials calibrate-strip REQUEST.json [--allow-estimates]` | `calibration` report, conditional exact material selection and separate garment readiness |
+| Identify scalar coefficients, declared-shape amplitudes, or independent signed tangent intervals | `ftx-materials calibrate-strip REQUEST.json [--allow-estimates]` | `calibration` report, conditional exact material selection and separate garment readiness |
 
 The same actions are available as `ftx materials ACTION FILE.json --json`; their report is inside
 the ordinary `ftx-cli/1` envelope's `result`. The companion writes the report directly as JSON to
@@ -130,8 +130,8 @@ as declared. This lets an independently characterized or explicitly assumed nonl
 the actual grip experiment without a second constitutive engine. It does not learn arbitrary curve
 shapes, certify unexcited compression/shear behavior or turn the supplied shape prior into a measured
 property. The output remains a conditional model estimate, even when the acquisition forces are
-measured. The scalar parameter order elsewhere in this guide applies only when `response_family`
-is absent.
+measured. The scalar parameter order elsewhere in this guide applies only when both `response_family`
+and the independent-interval `nonlinear` option are absent.
 
 Every candidate must be stable over the full declared shape domain, and the entire parameter box
 must satisfy the worst-case coupling bound. Shape support and any inherited material support constrain
@@ -191,6 +191,76 @@ target/debug/ftx-materials calibrate-strip /tmp/new-nonlinear-strip-request.json
 The generator reuses the scalar example's fixture declarations, partitions and numerical controls;
 it replaces every force, width and source description. The signed shape nodes, scales and coupling
 are declared in its source. It does not derive a nonlinear family from the empirical Sperl curves.
+
+## Identify independent signed tangent intervals
+
+Use the optional `nonlinear` object when the relative directional curve shape must also be identified.
+It fits each interval's tangent independently through the same finite-strip equilibria. The knot
+positions are declared model choices and remain fixed; the solver identifies second-Piola sheet
+resultants by integrating the fitted tangents from the exact stress-free origin. Compression and
+tension intervals, and the two shear signs, are independent. No symmetry or missing branch is supplied.
+
+The complete executable request is
+[synthetic-nonlinear-clamped-strip.json](../tests/fixtures/materials/synthetic-nonlinear-clamped-strip.json).
+Its parameterization is:
+
+```json
+{
+  "nonlinear": {
+    "strain_knots": [
+      [-0.2, 0.0, 0.04, 0.25],
+      [-0.2, 0.0, 0.04, 0.25],
+      [-0.3, 0.0, 0.3]
+    ],
+    "tangent_bounds": [
+      [[220.0, 300.0], [260.0, 340.0], [440.0, 560.0]],
+      [[120.0, 180.0], [150.0, 210.0], [280.0, 360.0]],
+      [[50.0, 90.0], [70.0, 110.0]]
+    ],
+    "coupling_bounds": [15.0, 35.0]
+  }
+}
+```
+
+Omit top-level `parameter_bounds` and `response_family` in this mode. Supplying both nonlinear
+parameterizations refuses. The three knot vectors describe warp Green strain, weft Green strain,
+and engineering shear `2 E12`; each strictly increases through exact zero and includes both signs.
+Provide one finite positive, nonempty tangent bound per consecutive knot interval. The coupling
+bounds describe the signed constant cross derivative in N/m. Every combination inside the declared
+box must have a positive-definite coupled tangent. There are 7–12 fitted parameters in total.
+
+`calibration.parameters` follows warp intervals, weft intervals, shear intervals, then normal coupling.
+All these coefficients are in **N/m**. `parameter_descriptors` supplies stable IDs, labels and units;
+the report's `parameter_bounds` supplies corresponding interval/coupling bounds. The fixed-shape mode
+continues to report its three dimensionless amplitudes and N/m coupling in the original order.
+
+```sh
+target/debug/ftx-materials calibrate-strip \
+  tests/fixtures/materials/synthetic-nonlinear-clamped-strip.json --allow-estimates \
+  > /tmp/interval-strip-report.json
+```
+
+The synthetic request has 17 states across seven acquisitions. Five FIT cut orientations each supply
+three extensions; separate warp and bias acquisitions supply CHECK. Its independently authored
+curves stiffen in positive warp/weft strain and have different signed shear tangents. The nine known
+coefficients are `[260, 300, 500, 150, 180, 320, 70, 90, 25]` N/m. Force and midpoint-width observations
+come from the production forward experiment and are explicitly marked as estimates. These data
+verify numerical identification and source-preserving replay, not measured textile agreement.
+
+The same three-start, interior-optimum, excitation, equivalent-minimum, held-out, refinement and
+aggregate-work gates apply. An unexcited interval prevents publication. Previously fitted domain
+metadata, existing nonlinear curve support and declared knot support constrain every candidate.
+The published ordinary `TabulatedMembrane` is further restricted to actual FIT element support.
+The solver compiles that exact cropped material and re-evaluates coarse/refined FIT and CHECK before
+returning a selection; final predictions and residuals describe that replayed law. Incomplete material
+properties remain unavailable. Estimated acquisition and fitted-output permissions stay separate.
+
+The focused interval tests reconstruct the retained synthetic acquisition, recover all nine
+coefficients, replay the ordinary frozen selection, reject unused intervals and incompatible modes,
+and preserve inherited support and CHECK isolation. Both native command forms and the shared portable
+material API exercise the same request, descriptors and exact selection. Real-knit model adequacy,
+the source's transverse measurement operator, independent specimens, bending/contact properties and
+garment qualification remain open under `ftx-ki4`; passing this example does not close those gates.
 
 ## Use the retained real production-knit observations
 
@@ -303,7 +373,8 @@ inverse report compares its selected solution with the doubled mesh.
 ## Write an inverse request
 
 `ftx-strip-calibration/1` takes the actual specimen `material`, `method`, `conditions`, `fitted_on`,
-`experiments`, `parameter_bounds`, `policy` and permissions. Each experiment supplies a unique
+`experiments`, scalar/fixed-shape `parameter_bounds` or independent-interval `nonlinear` bounds,
+`policy` and permissions. Each experiment supplies a unique
 acquisition ID, fixture, source key, evidence class, one partition and observation rows. The helper
 above emits the complete current schema rather than a separate import format.
 
