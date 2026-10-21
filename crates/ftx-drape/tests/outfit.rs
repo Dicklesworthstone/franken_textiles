@@ -681,6 +681,223 @@ fn attachment(mass: f64, targets: Value) -> Value {
             "allow_estimates":true},"targets":targets}]})
 }
 
+// Two closed sleeves joined end-to-end. The shared seam is one mechanical degree of freedom,
+// but each panel and each accessory allocation still has its own authored mass owner.
+fn scoped_casing_pattern() -> Value {
+    let mut raw = casing_outfit().garments[0].pattern.clone();
+    let width = std::f64::consts::TAU * 40.0;
+    raw["pieces"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("sim_scale");
+    let mut skirt = raw["pieces"][0].clone();
+    skirt["id"] = json!("skirt");
+    skirt["vertices"] = json!({"a":[0,-40],"b":[width,-40],"c":[width,0],"d":[0,0]});
+    skirt["fabric"] = json!({"material":sheet()});
+    skirt["fabric"]["material"]["record"]["properties"]["areal_density"]["value"] = json!(0.8);
+    raw["pieces"].as_array_mut().unwrap().push(skirt);
+    raw["seams"] = json!([
+        {"id":"close_band","a":"waistband/end_r","b":"waistband/end_l","reverse":true},
+        {"id":"close_skirt","a":"skirt/end_r","b":"skirt/end_l","reverse":true},
+        {"id":"join","a":"waistband/bottom","b":"skirt/top","reverse":true}
+    ]);
+    raw["meta"] = json!({"solved":{"elastic_casings":[{
+        "instance":"waistband","relaxed_m":width*0.99/1000.0,
+        "load_instances":["waistband"]
+    }]}});
+    raw["attached_mass"] = attachment(
+        0.003,
+        json!([
+            {"instance":"waistband","vertex":"a","fraction":0.25},
+            {"instance":"skirt","vertex":"d","fraction":0.75}
+        ]),
+    );
+    raw
+}
+
+#[test]
+fn casing_load_scope_does_not_borrow_mass_across_a_welded_seam() {
+    let raw = scoped_casing_pattern();
+    let pattern = ftx_pattern::Pattern::new(raw);
+    let skin = skin();
+    let run = ftx_drape::run::drape(
+        &pattern,
+        &json!({}),
+        &body(&skin),
+        &DrapeOptions {
+            self_contact: None,
+            spacing: 12.0,
+            ..options()
+        },
+        |_| {},
+    )
+    .unwrap();
+    let targets = &run
+        .scene
+        .solver
+        .model
+        .attached_mass_report()
+        .unwrap()
+        .unwrap()
+        .groups[0]
+        .targets;
+    assert_eq!(
+        targets[0].solver_vertex, targets[1].solver_vertex,
+        "fixture must put independently owned accessories on one welded vertex"
+    );
+    let expected = std::f64::consts::TAU * 40.0 * 20.0 * 1e-6 * 0.2 + 0.003 * 0.25;
+    assert_eq!(
+        run.report["elastics"][0]["weight_n"],
+        json!(ftx_core::py::round(expected * 9.81, 3))
+    );
+    let group = &run.scene.elastic_groups[0];
+    assert!((group.loaded_mass_kg - expected).abs() < 1e-14);
+    assert!((group.loaded_attached_mass_kg - 0.003 * 0.25).abs() < 1e-14);
+    let borrowed: f64 = group
+        .loaded_vertices
+        .iter()
+        .map(|&v| run.scene.solver.model.mass[v])
+        .sum();
+    assert!(
+        borrowed > 2.0 * expected,
+        "fixture must expose the original overcount"
+    );
+    assert_eq!(
+        run.report["elastics"][0]["load_mass"]["inertial_kg"],
+        group.loaded_mass_kg
+    );
+    assert_eq!(
+        run.report["elastics"][0]["load_mass"]["attached_kg"],
+        group.loaded_attached_mass_kg
+    );
+}
+
+#[test]
+fn source_scopes_partition_shared_seam_mass_without_changing_the_dynamics() {
+    let mut raw = scoped_casing_pattern();
+    let width = std::f64::consts::TAU * 40.0;
+    raw["meta"]["solved"]["elastic_casings"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "instance":"skirt", "relaxed_m":width*0.99/1000.0, "load_instances":["skirt"]
+        }));
+    let skin = skin();
+    let opts = DrapeOptions {
+        self_contact: None,
+        spacing: 12.0,
+        ..options()
+    };
+    let solve = |raw| {
+        ftx_drape::run::drape(
+            &ftx_pattern::Pattern::new(raw),
+            &json!({}),
+            &body(&skin),
+            &opts,
+            |_| {},
+        )
+        .unwrap()
+    };
+    let partitioned = solve(raw.clone());
+    let groups = &partitioned.scene.elastic_groups;
+    assert!(
+        groups[0]
+            .loaded_vertices
+            .iter()
+            .any(|v| groups[1].loaded_vertices.contains(v))
+    );
+    let expectations = [width * 20e-6 * 0.2 + 0.00075, width * 40e-6 * 0.8 + 0.00225];
+    for (group, expected) in groups.iter().zip(expectations) {
+        assert!((group.loaded_mass_kg - expected).abs() < 1e-14);
+    }
+    let accounted: f64 = groups.iter().map(|g| g.loaded_mass_kg).sum();
+    let model_mass: f64 = partitioned.scene.solver.model.mass.iter().sum();
+    assert!((accounted - model_mass).abs() < 1e-14);
+    for entry in raw["meta"]["solved"]["elastic_casings"]
+        .as_array_mut()
+        .unwrap()
+    {
+        entry["load_instances"] = json!(["waistband", "skirt"]);
+    }
+    let whole = solve(raw);
+    // Load domains qualify an ideal-ring comparison; they do not infer load transfer or edit forces.
+    assert_eq!(partitioned.scene.solver.x, whole.scene.solver.x);
+    assert_eq!(partitioned.scene.solver.v, whole.scene.solver.v);
+    assert_eq!(
+        partitioned.scene.solver.model.mass,
+        whole.scene.solver.model.mass
+    );
+    assert_eq!(partitioned.fold.frames, whole.fold.frames);
+    for group in &whole.scene.elastic_groups {
+        assert_eq!(group.loaded_mass_kg, model_mass);
+    }
+}
+
+#[test]
+fn casing_source_mass_survives_refinement_and_excludes_neighbor_density_changes() {
+    let raw = scoped_casing_pattern();
+    let skin = skin();
+    let solve = |raw, spacing| {
+        ftx_drape::run::drape(
+            &ftx_pattern::Pattern::new(raw),
+            &json!({}),
+            &body(&skin),
+            &DrapeOptions {
+                self_contact: None,
+                spacing,
+                ..options()
+            },
+            |_| {},
+        )
+        .unwrap()
+    };
+    let coarse = solve(raw.clone(), 24.0);
+    let fine = solve(raw.clone(), 12.0);
+    assert_ne!(
+        coarse.scene.solver.model.mass.len(),
+        fine.scene.solver.model.mass.len()
+    );
+    assert!(
+        (coarse.scene.elastic_groups[0].loaded_mass_kg
+            - fine.scene.elastic_groups[0].loaded_mass_kg)
+            .abs()
+            < 1e-14
+    );
+    let mut heavier = raw;
+    heavier["pieces"][1]["fabric"]["material"]["record"]["properties"]["areal_density"]["value"] =
+        json!(8.0);
+    let heavy = solve(heavier, 12.0);
+    assert_eq!(
+        heavy.scene.elastic_groups[0].loaded_mass_kg,
+        fine.scene.elastic_groups[0].loaded_mass_kg
+    );
+    assert!(
+        heavy.scene.solver.model.mass.iter().sum::<f64>()
+            > fine.scene.solver.model.mass.iter().sum::<f64>()
+    );
+}
+
+#[test]
+fn explicit_casing_loads_cannot_silently_omit_an_inactive_instance() {
+    let mut raw = scoped_casing_pattern();
+    raw["meta"]["solved"]["elastic_casings"][0]["load_instances"] = json!(["waistband", "skirt"]);
+    for mutate in [
+        (|v: &mut Value| v["pieces"][1]["sim"] = json!(false)) as fn(&mut Value),
+        |v| {
+            v["pieces"][1].as_object_mut().unwrap().remove("placement");
+        },
+    ] {
+        let mut invalid = raw.clone();
+        mutate(&mut invalid);
+        for ea in [0.0, 15.0] {
+            let error =
+                ftx_drape::scene::elastic_casings(&ftx_pattern::Pattern::new(invalid.clone()), ea)
+                    .unwrap_err();
+            assert!(error.message.contains("active placed"), "{error}");
+        }
+    }
+}
+
 #[test]
 fn accessory_evidence_and_mirrored_folded_targets_survive_namespacing_exactly() {
     let mut input = input();

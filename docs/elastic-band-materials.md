@@ -76,6 +76,23 @@ friction still belongs to the casing cloth, not an invented exposed-band surface
 ideal-ring grip estimates use that casing's simulated load domain; they are not integrated contact forces
 or a sum of outfit support capacities.
 
+An explicit `load_instances` scope counts only the retained cloth triangles and accessory allocations
+owned by those physical instances. A seam weld shares motion, not source ownership: an accessory
+targeted at a neighboring panel does not become part of this load merely because both targets weld to
+one solver vertex. A group's mass is apportioned by its declared target fractions, not charged in full
+to every casing touching any target. Each explicit `elastics` row includes `load_mass.cloth_kg`,
+`load_mass.attached_kg`, and `load_mass.inertial_kg`; the last supplies the nominal weight comparison.
+The low-level `loaded_vertices` list describes geometric support only, not permission to sum entire
+vertex masses. These reference-mass quantities are assembled once with the scene and retained through
+motion; rebuild the scene when material density or attachment inputs change.
+
+Declared load instances must be active and placed, even when the elastic switch is zero. Missing
+simulated loads cannot silently become a lighter garment. Full-load scopes retain the ordinary
+inertial mass, and disjoint source scopes partition it even when their boundary vertices coincide.
+Changing only a load scope changes the ideal-ring comparison, not force transmission, cloth dynamics
+or the body's actual support reactions. Overlapping scopes are separate comparisons, not additive
+support capacities; neither source mass accounting nor a `holds` value establishes real retention.
+
 The joint composer freezes each selected band into its namespaced casing entry. Changing only a band
 therefore changes the composed-pattern identity while leaving source pieces, seams and sheet/contact
 material identities unchanged. The saved `outfit_pattern.json` replays the same band laws through ordinary
