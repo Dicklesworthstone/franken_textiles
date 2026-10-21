@@ -2093,6 +2093,40 @@ catalog-backed two-by-two example and the interface/assignment contract.
 
 ---
 
+### 25.32 Measured performance-knit strip observations
+
+**Matched production specimens (`ftx-kn1`, supports `ftx-tm2`).** Three records from the
+MIT-licensed Sperl et al. SIGGRAPH 2022 dataset add polyester/spandex single jerseys SJ1/SJ3 and
+the polyester/Celliant-polyester/spandex interlock DKIN8. They retain reported yarn mass fractions,
+yarn identities, counts and finishes, three areal masses, three specimen-gauge observations and
+18 directional grip-force values. The built-in catalog now contains **169 records**.
+
+For each specimen and warp/weft/bias cut, the force attributes retain exact author-reported loading
+rows at 10% and 30% grip extension on a 100 mm free-gauge by 60 mm-wide clamped strip. The source's
+upstream processing, conditioning, rate and uncertainty remain unspecified where not supplied.
+No interpolation, smoothing or conversion into a homogeneous deformation gradient is performed.
+The original nine CSV byte strings, full metadata, archive paths, source hashes and complete MIT
+notice are retained for test-time reconstruction; normal native/WASM catalog construction uses
+compact transcriptions without bundling the source fixture into the application binary.
+
+The ordinary screener can now choose minimum measured areal mass subject to a qualified directional
+grip-force constraint. For example, weft force at 30% of at least 2 N selects SJ3 among these three
+when the caller explicitly permits comparison across specimen identities. Missing source bounds
+remain unavailable. Unspecified gauge pressure prevents promoting specimen thickness to canonical
+unloaded clearance. These observations do not supply thermal, homogeneous membrane, shear or bending
+laws, and do not make a knit solver-ready by inference.
+
+**Next critical acquisition consumer (`ftx-ki1`).** Implement an inverse characterization path that
+models the actual clamped strip geometry, orientations, grip motion and transverse freedom before
+fitting constitutive parameters. Retain loading/unloading history and upstream processing scope;
+separate fitting from held-out tests and quantify identifiability before publishing a frozen law.
+Matched independent bending/contact and thermal observations remain separate requirements. This is
+the path from the retained force observations to defensible automatic garment substitution, rather
+than treating grip extension as uniform textile strain. See
+[measured-knit-strips.md](docs/measured-knit-strips.md) for sources, all values and a screening request.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

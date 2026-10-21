@@ -1199,6 +1199,22 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     assert.equal(screened.type, 'result', screened.message);
     assert.deepEqual(screened.result, JSON.parse(ftx.material_screen(screenRequest)));
     assert.equal(screened.files[1].text, screenRequest);
+    const knitRequest = JSON.stringify({ schema:'ftx-material-screen/1', basis:'nominal', query:'sperl2022/',
+      forms:['knit'], allow_mixed_protocols:true,
+      constraints:[{attribute:{key:'strip_force_30pct_weft',unit:'N',conditions:{branch:'loading',
+        free_gauge_length_mm:'100',reference_strip_width_mm:'60'}},minimum:2}],
+      objectives:[{attribute:{key:'areal_density',unit:'kg/m2'},direction:'minimize'}] });
+    const knits = await w.send({type:'screen',screenRequest:knitRequest});
+    assert.equal(knits.type,'result',knits.message);
+    assert.equal(knits.files[0].text,ftx.material_screen(knitRequest));
+    assert.deepEqual(knits.result.frontier,['sperl2022/SJ3']);
+    assert.equal(knits.result.alternatives.filter(row => row.key.startsWith('sperl2022/')).length,3);
+    const knitWinner = knits.result.alternatives.find(row => row.key === 'sperl2022/SJ3');
+    assert.equal(knitWinner.readings.strip_force_30pct_weft.value,2.48);
+    const knitInspection = JSON.parse(ftx.material_inspect(JSON.stringify(knitWinner.selection)));
+    assert.equal(knitInspection.capabilities.mechanical_coefficients.ready,false);
+    assert.equal(knitInspection.capabilities.steady_conduction.ready,false);
+    assert.equal(knitInspection.capabilities.sewing_thickness_m.ready,false);
     const pattern = fixture('synthetic-sewing-pattern.json');
     const pressureChanges = `{"schema":"ftx-material-bindings/1","default":${prepared.result.selection_json}}`;
     const pressureBinding = await w.send({ type: 'bind', pattern, changes: pressureChanges });
@@ -1223,21 +1239,23 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     assert.deepEqual(pairRow.frozen_changes.interfaces,[pair]);
     assert.equal(pairRow.binding.result.pattern_json,paired.result.pattern_json);
     assert.equal(JSON.parse(ftx.material_bind(pattern,JSON.stringify(pairRow.frozen_changes))).pattern_json,paired.result.pattern_json);
+    const combinationPattern = pressureBinding.result.pattern_json;
     const combinationGroups = ['front', 'back'].map(piece => `{"key":"${piece}","target":{"scope":"pieces","ids":["${piece}"]},"choices":[{"key":"low","selection":${prepared.result.selection_json}},{"key":"high","selection":${high.selection_json}}]}`).join(',');
     const combinationRequest = pool => `{"schema":"ftx-material-study/1","combinations":{"groups":[${combinationGroups}],"interfaces":${JSON.stringify(pool)}},"cutting":{"copies":1,"gap_mm":2,"edge_margin_mm":0,"end_margin_mm":0}}`;
     for (const supplied of [false, true]) {
       const request = combinationRequest(supplied ? [pair] : []);
-      const combined = await w.send({ type:'study', pattern, studyRequest:request });
+      const combined = await w.send({ type:'study', pattern:combinationPattern, studyRequest:request });
       assert.equal(combined.type,'result',combined.message);
-      assert.equal(combined.files[0].text,ftx.material_study(pattern,request));
+      assert.equal(combined.files[0].text,ftx.material_study(combinationPattern,request));
       assert.equal(combined.files[2].text,request);
       assert.equal(combined.result.alternatives.length,4);
       for (const row of combined.result.alternatives) {
         const mixed = row.choices.front !== row.choices.back;
         assert.equal(row.binding.status,'available');
-        assert.equal(row.binding.result.drape_materials_with_self_contact.ready,!mixed || supplied);
+        const replay = JSON.parse(ftx.material_bind(combinationPattern,JSON.stringify(row.frozen_changes)));
+        assert.equal(replay.drape_materials_with_self_contact.ready,!mixed || supplied);
         assert.deepEqual(row.frozen_changes.interfaces,mixed && supplied ? [pair] : []);
-        assert.equal(JSON.parse(ftx.material_bind(pattern,JSON.stringify(row.frozen_changes))).pattern_json,row.binding.result.pattern_json);
+        assert.equal(replay.pattern_json,row.binding.result.pattern_json);
       }
     }
     pair.allow_estimates=false;
