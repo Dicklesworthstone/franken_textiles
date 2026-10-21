@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
 const boundOperations = ["exports", "fold", "heat", "coverage", "cut", "stock", "price", "sew"];
-const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "calibrate",
+const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "vapor", "calibrate",
   "stripAcquisition", "stripExperiment", "stripFit", "outfit"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
@@ -20,7 +20,7 @@ for (const op of operations) {
   const section = document.createElement("div"); section.hidden = true;
   const title = document.createElement("h3"); title.textContent = ({ screen: "Source-qualified screening",
     study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives",
-    pressure: "Pressure-conditioned material", calibrate: "Identified material behavior",
+    pressure: "Pressure-conditioned material", vapor: "Potential evaporative transfer", calibrate: "Identified material behavior",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
     stripFit: "Clamped-strip identification", outfit: "Imported joint outfit" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
@@ -41,6 +41,7 @@ function controls() {
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
   $("pressure").disabled ||= !has("compressionRequest");
+  $("vapor").disabled ||= !has("vaporRequest");
   $("calibrate").disabled ||= !has("calibrationRequest");
   for (const op of ["stripAcquisition", "stripExperiment", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
   $("study").disabled ||= !source || !has("studyRequest");
@@ -541,6 +542,37 @@ function compressionHistoryResult(parent, r) {
     initial_preparation_work_j: r.initial_compression.external_work_j, no_claim: r.no_claim,
     next: "Review the final selected layer's capabilities, then assign it above. Download all final layers and the complete history below." };
 }
+function vaporResult(parent, r) {
+  const note = document.createElement("p");
+  note.textContent = "Potential steady transfer through the declared series of vapor resistances. " +
+    "Boundary vapor pressures, film resistances, area and latent heat are supplied assumptions. " +
+    "This does not establish available sweat, actual evaporative cooling, condensation, garment comfort or a coupled dry/wet heat history. " +
+    (r.mixed_protocols ? "Different reported source protocols were explicitly admitted. " : "Reported layer protocols match. ") +
+    "Source measurement conditions remain attached to each layer; they are not an operating range for this model.";
+  parent.append(note);
+  const totals = table(parent, "Potential vapor and latent heat exchange", ["Quantity", "Value", "Unit"]);
+  for (const [label, value, unit] of [
+    ["Total vapor resistance", r.total_resistance_m2_pa_w, "m²·Pa/W"],
+    ["Boundary vapor pressure difference", r.pressure_difference_pa, "Pa"],
+    ["Potential latent heat flux", r.potential_heat_flux_w_m2, "W/m²"],
+    ["Potential latent heat flow", r.potential_heat_flow_w, "W"],
+    ["Potential water mass flux", r.potential_mass_flux_kg_m2_s, "kg/(m²·s)"],
+    ["Potential water mass flow", r.potential_mass_flow_kg_s, "kg/s"],
+    ["Inside film pressure drop", r.inside_film_pressure_drop_pa, "Pa"],
+    ["Outside film pressure drop", r.outside_film_pressure_drop_pa, "Pa"]
+  ]) cells(totals, [label, metric(value), unit]);
+  const layers = table(parent, "Layer resistances and vapor pressure drops — inside to outside",
+    ["Layer", "Material", "Ret (m²·Pa/W)", "Inside pressure (Pa)", "Outside pressure (Pa)", "Drop (Pa)", "Evidence"]);
+  for (const row of r.layers) {
+    cells(layers, [row.key, row.selection.id, metric(row.observation.value), metric(row.inside_pressure_pa),
+      metric(row.outside_pressure_pa), metric(row.pressure_drop_pa), row.observation.evidence]);
+    detail(parent, `${row.key}: measurement method, conditions and exact source`, row);
+  }
+  detail(parent, "Declared boundary conditions and effective model", { request: r.request, effective_model: r.effective_model });
+  return { schema: r.schema, request_sha256: r.request_sha256, mixed_protocols: r.mixed_protocols,
+    physical_validation_claim: r.physical_validation_claim, notes: r.notes,
+    next: "Download the exact report, original input and frozen replay request to repeat this calculation." };
+}
 function sewingResult(parent, r) {
   const plan = r.plan, order = plan?.ordering;
   if (order) {
@@ -566,6 +598,22 @@ function sewingResult(parent, r) {
         "No initial setup was supplied, so installing the first setup is not counted.");
     parent.append(note);
     detail(parent, "Baseline order, selected order and bounded search result", order);
+  }
+  if (plan?.seams.some(row => row.source_span)) {
+    const spans = table(parent, "Partial-seam operations — original source correspondence",
+      ["Operation", "Source seam", "Side A range", "Side B range", "Full source lengths (mm)", "Traveled lengths (mm)", "Direction"]);
+    for (const row of plan.seams) {
+      const span = row.source_span, range = side => span ? `[${span.source_ranges[side].map(metric).join(", ")}]` : "Whole seam";
+      cells(spans, [row.pass.id || row.pass.seam, row.pass.seam, range(0), range(1),
+        span ? span.source_lengths_mm.map(metric).join(" / ") : "See full seam stations",
+        span ? span.sewn_lengths_mm.map(metric).join(" / ") : "See full seam stations", row.pass.direction]);
+      if (span) detail(parent, `${row.pass.id || row.pass.seam}: retained source span`, span);
+    }
+    const note = document.createElement("p");
+    note.textContent = "Ranges are fractions of each original seam side in paired traversal order; side B includes the seam's reverse setting. " +
+      "The planner checks complete coverage on both source sides. Overlapping passes can reinforce a join. " +
+      "These ranges preserve the declared notch correspondence and do not authorize a physical fold transition or machine execution.";
+    parent.append(note);
   }
   return { schema: r.schema, stitches: r.stitches?.length, feed_seconds: plan?.feed_seconds,
     setup_changes: order?.selected_changes, minimum_setup_changes_proven: order?.optimality_proven,
@@ -895,6 +943,7 @@ function show(op, msg) {
           gross_area_m2: m.gross_area_m2, defect_free_area_m2: m.defect_free_area_m2, utilization: m.utilization,
           stock_mass_kg: m.stock_mass_kg, mass_unavailable: m.mass_unavailable })), limitations: r.limitations } :
       op === "sew" ? sewingResult(s.comparison, r) :
+      op === "vapor" ? vaporResult(s.comparison, r) :
       op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } :
       op === "pressure" && ["ftx-compressed-thermal-history-report/1", "ftx-compressed-thermal-history-report/2"].includes(r.schema) ? compressionHistoryResult(s.comparison, r) :
       op === "pressure" && r.schema === "ftx-compression-stack-report/1" ? {
@@ -1007,6 +1056,7 @@ async function execute(op) {
       msg.compressionLayer = $("compressionLayer").value;
       msg.compressionRequest = await read("compressionRequest");
     }
+    else if (op === "vapor") msg.vaporRequest = await read("vaporRequest");
     else if (op === "calibrate") {
       msg.calibrationMode = $("calibrationMode").value;
       msg.allowEstimates = $("calibrationEstimates").checked;
@@ -1184,7 +1234,7 @@ for (const [id, operation] of [["compressionRequest", "pressure"], ["compression
 }
 for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","coverage","scenario"], fit:["exports","fold","heat","coverage"],
   body:["fold","heat","coverage","scenario"], selfContact:["fold","heat","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
-  stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"],
+  stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
   $(id).addEventListener("change", () => invalidate(id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : keys));

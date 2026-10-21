@@ -67,6 +67,11 @@ temperature dependence of Ret. It does not couple latent transfer into the exist
 infer comfort, or qualify a garment for weather. Source test conditions remain observations rather
 than an inferred operating domain. `physical_validation_claim` is always false.
 
+The [browser material workbench](browser-material-workbench.md#potential-evaporative-transfer)
+accepts this request independently of a bound pattern. It displays the shared calculation and source
+details and downloads the original input, exact report and frozen replay request. Replacing or
+refusing an input withdraws the previous result without changing the inspected material selection.
+
 Analytical layer/film balances, real catalog substitutions, source/filter refusals, offline replay and
 native/portable consumer equality verify the software path. Measured coupled transport and garment
 validation remain open under `ftx-tm5` and `ftx-tmc`.

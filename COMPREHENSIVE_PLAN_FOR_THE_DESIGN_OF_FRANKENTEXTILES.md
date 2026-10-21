@@ -2496,6 +2496,12 @@ potential heat and mass transfer. The report retains every material's source-qua
 conditions, evidence and content lock, plus layer/film pressure drops and exact frozen replay JSON.
 The native primary/companion commands and file-free WASM boundary share this one implementation.
 
+The material workbench accepts a standalone vapor-stack request, shows potential heat/water exchange
+and source-qualified layer pressure profiles, and downloads exact input/report/frozen replay bytes.
+It also displays partial-seam correspondence from §25.46, including full source and traveled lengths.
+Compiled-worker outputs for both features match complete native reports; replacing or refusing input
+withdraws obsolete results. No browser-side physics or replacement material observation is introduced.
+
 The existing ten measured bovine-leather groups can now drive this consumer without fabricated
 mechanics or heat storage. Their 35°C air, 40% RH and 1 m/s source conditions remain visible;
 reported SD/CV is not an uncertainty interval. Exact required method/condition filters, independent

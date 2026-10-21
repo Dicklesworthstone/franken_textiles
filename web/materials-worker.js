@@ -140,6 +140,14 @@ self.onmessage = async ({ data: msg }) => {
       }
       case "catalog": result = json(ftx.material_catalog(msg.query)); break;
       case "inspect": result = json(ftx.material_inspect(msg.selection)); break;
+      case "vapor": {
+        if (typeof ftx.thermal_vapor !== "function") throw Error("Rebuild web/pkg: missing vapor-resistance engine.");
+        raw = ftx.thermal_vapor(msg.vaporRequest); result = json(raw);
+        if (typeof result.replay_request_json !== "string") throw Error("Rebuild web/pkg: missing frozen vapor replay request.");
+        files = [file("vapor-report.json", raw), file("vapor-request.json", msg.vaporRequest),
+          file("vapor-replay-request.json", result.replay_request_json)];
+        break;
+      }
       case "pressure": {
         const schema = json(msg.compressionRequest).schema;
         const history = ["ftx-compressed-thermal-history/1", "ftx-compressed-thermal-history/2"].includes(schema);
