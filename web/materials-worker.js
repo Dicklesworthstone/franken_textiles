@@ -181,6 +181,40 @@ self.onmessage = async ({ data: msg }) => {
           file("calibration-input.json", msg.calibrationRequest)];
         break;
       }
+      case "stripAcquisition":
+      case "stripExperiment":
+      case "stripFit": {
+        const api = ({ stripAcquisition: ftx.material_strip_acquisition,
+          stripExperiment: ftx.material_strip_experiment, stripFit: ftx.material_calibrate_strip })[msg.type];
+        if (typeof api !== "function") throw Error("Rebuild web/pkg: missing clamped-strip engine.");
+        // The dedicated request owns its output-estimate permission as well as observation
+        // consent. Pass that explicit policy to the shared public calibration API without
+        // rewriting the original bytes or converting grip extension to local strain.
+        if (msg.type === "stripFit") {
+          const input = json(msg.stripRequest);
+          const allowEstimates = input.allow_estimates === undefined ? false : input.allow_estimates;
+          if (typeof allowEstimates !== "boolean") throw Error("Declare allow_estimates as a boolean.");
+          raw = api(msg.stripRequest, allowEstimates);
+        } else raw = api(msg.stripRequest);
+        result = json(raw);
+        const stem = ({ stripAcquisition: "strip-acquisition", stripExperiment: "strip-experiment",
+          stripFit: "strip-calibration" })[msg.type];
+        files = [file(`${stem}-report.json`, raw), file(`${stem}-input.json`, msg.stripRequest)];
+        if (msg.type === "stripFit") {
+          if (result.calibration?.schema !== "ftx-strip-calibration-report/1" || typeof result.calibration.accepted !== "boolean") {
+            throw Error("Rebuild web/pkg: incomplete strip calibration decision.");
+          }
+          if (result.calibration.accepted) {
+            if (typeof result.selection_json !== "string" || !result.selection || !result.material?.capabilities) {
+              throw Error("Rebuild web/pkg: missing accepted strip selection bridge.");
+            }
+            files.push(file("strip-calibrated-selection.json", result.selection_json));
+          } else if (result.selection !== null || result.selection_json !== null || result.material !== null) {
+            throw Error("Rejected strip identification cannot publish a selection.");
+          }
+        }
+        break;
+      }
       case "screen":
         raw = ftx.material_screen(msg.screenRequest); result = json(raw);
         files = [file("material-screen.json", raw), file("screen-request.json", msg.screenRequest)];

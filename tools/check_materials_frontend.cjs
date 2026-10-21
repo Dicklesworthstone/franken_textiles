@@ -299,6 +299,55 @@ test('clamped-strip worker preserves unresolved physical acquisitions without a 
   assert.match((await w.send({type:'calibrate',calibrationMode:'clamped_strip',calibrationRequest:input,allowEstimates:true})).message,/cannot publish a selection/);
 });
 
+test('strip worker preserves original acquisition and experiment requests without constructing measurements', async () => {
+  const input='{"source":-0.0,"value":1.0,"allow_estimates":false}', calls=[];
+  const raw='{"source_value":1.0,"origin":-0.0}';
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),
+    material_strip_acquisition:(...args)=>{calls.push(['acquisition',...args]);return raw;},
+    material_strip_experiment:(...args)=>{calls.push(['experiment',...args]);return raw;}}});
+  for (const [type, name] of [['stripAcquisition','acquisition'],['stripExperiment','experiment']]) {
+    const result=await w.send({type,stripRequest:input,request:33});
+    assert.equal(result.type,'result',result.message); assert.equal(result.request,33);
+    assert.deepEqual(calls.at(-1),[name,input]);
+    assert.equal(result.files.length,2); assert.equal(result.files[0].text,raw); assert.equal(result.files[1].text,input);
+    assert.equal(result.result.selection,undefined);
+  }
+});
+
+test('strip calibration worker publishes exact frozen selections only after all gates accept', async () => {
+  for (const admission of [false,true]) for (const accepted of [false,true]) {
+    const input=`{"schema":"ftx-strip-calibration/1","allow_estimates":${admission},"source":-0.0}`;
+    const report=stripCalibration(accepted?'ACCEPTED':'REJECTED',admission), raw=JSON.stringify(report), calls=[];
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),
+      material_calibrate_strip:(...args)=>{calls.push(args);return raw;}}});
+    const result=await w.send({type:'stripFit',stripRequest:input});
+    assert.equal(result.type,'result',result.message); assert.deepEqual(calls,[[input,admission]]);
+    assert.equal(result.files[0].text,raw); assert.equal(result.files[1].text,input);
+    assert.equal(result.files.some(f=>f.name==='strip-calibrated-selection.json'),accepted);
+    if (accepted) {
+      assert.equal(result.files[2].text,calibrationSelection(admission));
+      assert.equal(result.result.material.capabilities.mechanical_coefficients.ready,admission);
+    }
+  }
+  const input='{"schema":"ftx-strip-calibration/1","allow_estimates":false,"source":-0.0}';
+  for (const report of [
+    {...stripCalibration('REJECTED'),selection_json:calibrationSelection(true)},
+    {...stripCalibration(),selection_json:null}
+  ]) {
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_strip:()=>JSON.stringify(report)}});
+    const result=await w.send({type:'stripFit',stripRequest:input});
+    assert.equal(result.type,'error'); assert.match(result.message,/selection/);
+    assert.equal(w.sent.some(m=>m.type==='result'),false);
+  }
+  const defaults=[];
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),
+    material_calibrate_strip:(...args)=>{defaults.push(args);return JSON.stringify(stripCalibration());}}});
+  assert.equal((await w.send({type:'stripFit',stripRequest:'{}'})).type,'result');
+  assert.deepEqual(defaults,[['{}',false]]);
+  assert.equal((await w.send({type:'stripFit',stripRequest:'{"allow_estimates":"true"}'})).type,'error');
+  assert.equal(defaults.length,1);
+});
+
 test('scenario studies retain partial failures and free the fresh model on success, refusal and trap', async () => {
   for (const mode of [{}, { failScenario: true }, { trapScenario: true }]) {
     const w = await workerModule(mode);
@@ -661,6 +710,83 @@ test('a refused replacement calibration leaves no previous selection or report a
   p.current().emit({type:'error',request,message:'held-out peak exceeds declared budget'});
   assert.match(p.e.error.textContent,/held-out peak/); assert.equal(p.live.size,0);
   assert.equal(p.e.assign.disabled,true); assert.equal(section(p,'Identified material behavior').hidden,true);
+});
+
+test('strip identification exposes candidate gates and preserves exact selection admission through assignment', async () => {
+  const p=await pageModule(); await p.load();
+  const input='{"schema":"ftx-strip-calibration/1","allow_estimates":false,"origin":-0.0}';
+  p.select('stripFitRequest',input); p.e.stripFitRequest.handlers.change();
+  assert.equal(p.e.stripFit.disabled,false); await p.e.stripFit.onclick();
+  assert.equal(p.current().messages.at(-1).stripRequest,input);
+  assert.equal(Object.hasOwn(p.current().messages.at(-1),'allowEstimates'),false);
+  const report=stripCalibration(), raw=JSON.stringify(report);
+  p.emit(report,[{name:'strip-calibration-report.json',text:raw,mime:'application/json'},
+    {name:'strip-calibrated-selection.json',text:report.selection_json,mime:'application/json'}]);
+  const s=section(p,'Clamped-strip identification');
+  assert.equal(p.e.selection.value,calibrationSelection(false)); assert.equal(p.e.assign.disabled,false);
+  assert.match(visibleText(s),/ACCEPTED/);
+  assert.match(visibleText(s),/CHECK/); assert.match(visibleText(s),/Enforced-domain replay/);
+  assert.match(s.children[1].textContent,/"mechanical_coefficients_available": false/);
+  const t=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Identified orthotropic sheet coefficients');
+  assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),['Warp / wale stiffness','300','N/m','100','500']);
+  const download=descendants(s).find(n=>n.download==='strip-calibration-report.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  p.e.target.value='front'; p.e.assign.onclick(); await p.e.bind.onclick();
+  assert.ok(p.current().messages.at(-1).changes.includes(calibrationSelection(false))); p.emit({pattern_json:'{}',pieces:[]});
+  p.e.stripFitRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.e.assign.disabled,true);
+  await p.e.stripFit.onclick(); const rejected=stripCalibration('REJECTED');
+  p.emit(rejected,[{name:'strip-calibration-report.json',text:JSON.stringify(rejected),mime:'application/json'}]);
+  assert.equal(p.e.assign.disabled,true); assert.equal(p.e.selection.value,'');
+  assert.match(visibleText(s),/NOT ACCEPTED/); assert.match(visibleText(s),/No identified selection is available/);
+  assert.ok(descendants(s).some(n=>n.download==='strip-calibration-report.json'));
+  assert.equal(descendants(s).some(n=>n.download==='strip-calibrated-selection.json'),false);
+});
+
+test('changed strip inputs and later selections cancel pending work and delayed reads without stale publication', async () => {
+  const p=await pageModule(); await p.load(); p.select('stripFitRequest');
+  await p.e.stripFit.onclick(); const old=p.current(), id=old.messages.at(-1).request;
+  p.e.stripFitRequest.handlers.change(); p.ready();
+  old.emit({type:'result',request:id,result:stripCalibration(),files:[]});
+  assert.equal(old.dead,true); assert.equal(p.e.assign.disabled,true); assert.equal(section(p,'Clamped-strip identification').hidden,true);
+  const delay=deferred(); p.e.stripFitRequest.files[0].text=()=>delay.promise;
+  const before=p.current(), reading=p.e.stripFit.onclick();
+  p.e.catalog.value='newer-material'; p.e.catalog.onchange(); p.ready(); delay.resolve('{}'); await reading;
+  assert.equal(before.messages.length,0); assert.equal(JSON.parse(p.e.selection.value).id,'newer-material');
+});
+
+test('strip acquisition and forward inspection retain independent outputs without assigning a material', async () => {
+  const p=await pageModule(); await p.load(); await p.inspect('existing-material'); const selection=p.e.selection.value;
+  p.select('stripAcquisitionRequest','{"original":-0.0}'); p.e.stripAcquisitionRequest.handlers.change();
+  await p.e.stripAcquisition.onclick(); assert.equal(p.current().messages.at(-1).stripRequest,'{"original":-0.0}');
+  p.emit({acquisition_sha256:'archive-lock',archive_url:'https://example.invalid/source',retrieved_on:'2026-10-20',
+    metadata_json:'{"original":1.0}',license:'Source license',protocol:{free_gauge_length_m:0.1,reference_width_m:0.06},
+    curves:[{specimen:'SJ1',direction:'warp',entry:'source.csv',sha256:'curve-lock',
+      observations:[{extension_fraction:0.1,force_n:-0.02,branch:'loading'}]}],
+    transverse_curves:[{specimen:'SJ1',direction:'bias',entry:'transverse.csv',sha256:'transverse-lock',
+      source:{reference:'<original source>',accessed_on:'2026-10-21'},measurement_scope:'Exact spatial measurement coordinates are not reported',
+      observations:[{csv_line:2,extension_fraction:0.0,compression_fraction:-0.001}]}],
+    transverse_readme:{entry:'dataset/README.md',sha256:'readme-lock',text:'<Original fractional units>'}});
+  const acquired=section(p,'Complete clamped-strip acquisitions');
+  assert.match(visibleText(acquired), /Original transverse acquisitions/);
+  assert.match(visibleText(acquired), /transverse-lock/);
+  assert.match(visibleText(acquired), /equivalence to the solver's mid-gauge width is unverified/);
+  const transverse=descendants(acquired).find(n=>n.tag==='details'&&n.children[0].textContent.includes('original transverse observations'));
+  transverse.open=true; transverse.handlers.toggle();
+  assert.match(visibleText(transverse), /"compression_fraction": -0.001/);
+  assert.match(visibleText(transverse), /<original source>/);
+  assert.doesNotMatch(visibleText(transverse), /"width_m"|"poisson"/);
+  const readme=descendants(acquired).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('Original acquisition README'));
+  readme.open=true; readme.handlers.toggle(); assert.match(visibleText(readme), /<Original fractional units>/);
+  assert.match(visibleText(acquired),/SJ1/); assert.match(visibleText(acquired),/Grip extension does not establish local membrane strain/);
+  assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,false);
+  p.select('stripExperimentRequest','{"extension":0.1}'); p.e.stripExperimentRequest.handlers.change(); await p.e.stripExperiment.onclick();
+  p.emit({input_sha256:'request-lock',input:{fixture:{gauge_length_m:0.1},controls:{}},model_scope:'Planar model',
+    states:[{extension_fraction:0.1,force_n:2,fixed_grip_force_n:-2,free_force_residual_n:1e-8,
+      grip_balance_residual_n:2e-8,mid_width_m:0.058,energy_j:0.002}]});
+  const forward=section(p,'Clamped-strip experiment'); assert.match(visibleText(forward),/Grip imbalance/);
+  assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,false);
+  p.e.stripExperimentRequest.handlers.change(); assert.equal(forward.hidden,true); assert.equal(acquired.hidden,false);
+  p.e.stripAcquisitionRequest.handlers.change(); assert.equal(acquired.hidden,true);
 });
 
 test('recovery ambiguity displays competing models and withdraws the previous assignable material', async () => {
@@ -1030,6 +1156,31 @@ test('manufacturing studies use original lossless source, not bound previews, an
   p.windowEvents.pagehide(); assert.equal(p.live.size, 0);
 });
 
+test('material study sewing choices retain bounded search status separately from unavailable plans', async () => {
+  const p = await pageModule(); await p.load(); p.select('studyRequest', '{}');
+  const bounded = studyRow('bounded'), missing = studyRow('missing');
+  bounded.sewing_selection = outcome({selected_choices:{hem:'qualified knit recipe'},trials:[{},{}],
+    search_complete:false,budget_exhausted:true,optimality_proven:false,unresolved_trials:1});
+  missing.sewing_selection = outcome({selected_choices:null,trials:[{}],
+    search_complete:true,budget_exhausted:false,optimality_proven:false,unresolved_trials:0});
+  missing.sewing = refused('No source-qualified listed sewing recipe');
+  missing.metrics.stitch_intervals = null; missing.metrics.feed_seconds = null;
+  await p.e.study.onclick(); p.emit(studyReport([bounded,missing]));
+  const s = section(p, 'Fixed-pattern manufacturing alternatives');
+  const choices = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'Material-specific sewing recipe search');
+  assert.deepEqual(plain(choices.children[2].children.map(n => n.textContent)),
+    ['bounded','Available','hem: qualified knit recipe','2','false','true','false','1']);
+  assert.deepEqual(plain(choices.children[3].children.map(n => n.textContent)),
+    ['missing','Available','No listed recipe selected','1','true','false','false','0']);
+  const consumers = descendants(s).find(n => n.tag === 'table');
+  assert.match(visibleText(consumers.children[3]), /Refused: No source-qualified listed sewing recipe/);
+  assert.deepEqual(plain(consumers.children[3].children.slice(9,11).map(n => n.textContent)), ['Unknown','Unknown']);
+  assert.match(visibleText(choices), /Listed optimum proved/);
+  const receipt = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('bounded: sewing recipe choices'));
+  receipt.open = true; receipt.handlers.toggle(); assert.match(visibleText(receipt), /"unresolved_trials": 1/);
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
+});
+
 test('scenario comparisons join keys, preserve signed values, and distinguish gating and independent refusals', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   assert.equal(p.e.scenario.disabled, false); assert.equal(p.e.fold.disabled, true); // no bind or single-preview fit
@@ -1348,7 +1499,7 @@ test('assembly mass and finite stock retain independent totals and refusals in m
 // native parity, successful anatomical body fitting, or empirical textile validation.
 test('compiled WASM studies preserve source replay and optional model-backed motion equality',
   { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
-    const pkg = path.join(__dirname, '../web/pkg');
+    const pkg = process.env.FTX_WASM_PKG ? path.resolve(process.env.FTX_WASM_PKG) : path.join(__dirname, '../web/pkg');
     assert.ok(fs.existsSync(path.join(pkg, 'ftx_wasm_bg.wasm')), 'Build web/pkg before FTX_REAL_WASM=1');
     const ftx = await import(require('node:url').pathToFileURL(path.join(pkg, 'ftx_wasm.js')).href);
     ftx.initSync({ module: fs.readFileSync(path.join(pkg, 'ftx_wasm_bg.wasm')) });
@@ -1792,7 +1943,7 @@ test('transient heat displays signed energy and remap separately, preserving ref
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
-test('plastic heat displays each domain source separately and preserves independent refusals', async () => {
+test('plastic and relaxation heat display each domain source separately and preserve independent refusals', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const report = scenarioReport(); report.scenario.scenario = { motion: { transient_surface: {}, transient_coverage: {} } };
   const surface = { duration_s: 1, thermal_steps: 2, trace: [{temperature_range_c:[20,22]}],
@@ -1802,33 +1953,44 @@ test('plastic heat displays each domain source separately and preserves independ
     transient_coverage: outcome(coverage) };
   report.simulations.find(row => row.key === 'A').evaluation.result.motion = outcome(motion);
   const s = section(p, 'Fresh drape and heat alternatives');
-  const work = () => descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'A: plastic work supplied to independent-sheet heat');
-  const coverageWork = () => descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'A: plastic work supplied to coverage and exposed-cloth heat');
+  const work = () => descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'A: material work supplied to independent-sheet heat');
+  const coverageWork = () => descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'A: material work supplied to coverage and exposed-cloth heat');
   await p.e.scenario.onclick(); p.emit(report); assert.equal(work(), undefined);
   surface.plastic_dissipation_heat = { distribution: 'uniform_reference_thickness', temporal_distribution: 'uniform_over_accepted_interval',
     plastic_dissipation_j: 12, supplied_heat_j: 9, unconverted_dissipation_j: 3, initial_plastic_dissipation_j: 5,
     material_fractions: [{ source: '<qualified material fraction>', fraction: 0.75 }] };
   await p.e.scenario.onclick(); p.emit(report);
-  assert.deepEqual(plain(work().children[2].children.map(n => n.textContent)), ['12','9','3','5']);
+  assert.deepEqual(plain(work().children[2].children.map(n => n.textContent)), ['Plastic yield','12','9','3','5']);
   const heat = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent.startsWith('A: transient heat'));
   assert.deepEqual(plain(heat.children[2].children.slice(5,8).map(n => n.textContent)), ['-3','6','0']);
   assert.deepEqual(plain(heat.children[3].children.slice(5,8).map(n => n.textContent)), ['4','4','0']);
-  assert.match(visibleText(s), /stored change minus net boundary energy minus supplied plastic heat/);
-  assert.match(visibleText(s), /initial drape is excluded/);
+  assert.match(visibleText(s), /stored change minus net boundary energy minus the sum of qualified source heat/);
+  assert.match(visibleText(s), /initial drape, reversible storage and numerical loss are excluded/);
   assert.equal(coverageWork(), undefined);
   coverage.plastic_dissipation_heat = {...surface.plastic_dissipation_heat, supplied_heat_j: 6, unconverted_dissipation_j: 6};
   coverage.physical_stored_change_j = 10;
   await p.e.scenario.onclick(); p.emit(report);
-  assert.deepEqual(plain(coverageWork().children[2].children.map(n => n.textContent)), ['12','6','6','5']);
+  assert.deepEqual(plain(coverageWork().children[2].children.map(n => n.textContent)), ['Plastic yield','12','6','6','5']);
+  coverage.relaxation_dissipation_heat = { distribution:'uniform_reference_thickness', temporal_distribution:'uniform_over_accepted_interval',
+    viscous_dissipation_j:8,supplied_heat_j:2,unconverted_dissipation_j:6,initial_viscous_dissipation_j:4,
+    material_fractions:[{source:'<independent Maxwell fraction>',fraction:0.25}] };
+  coverage.physical_stored_change_j = 12;
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.deepEqual(plain(coverageWork().children[2].children.map(n => n.textContent)), ['Plastic yield','12','6','6','5']);
+  assert.deepEqual(plain(coverageWork().children[3].children.map(n => n.textContent)), ['Maxwell dashpots','8','2','6','4']);
+  assert.equal(work().children.length, 3); // A coverage source is never duplicated into independent sheets.
+  const combinedHeat = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent.startsWith('A: transient heat'));
+  assert.deepEqual(plain(combinedHeat.children[3].children.slice(5,8).map(n => n.textContent)), ['4','12','0']);
   assert.match(visibleText(s), /Source heat follows covered and exposed reference material; bare body receives none/);
   const source = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('A: Independent sheets temperature'));
   source.open = true; source.handlers.toggle(); assert.match(visibleText(source), /<qualified material fraction>/);
   assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
   surface.plastic_dissipation_heat.unconverted_dissipation_j = null;
-  await p.e.scenario.onclick(); p.emit(report); assert.equal(work().children[2].children[2].textContent, 'Unknown');
+  await p.e.scenario.onclick(); p.emit(report); assert.equal(work().children[2].children[3].textContent, 'Unknown');
   motion.transient_surface = refused('missing source-qualified plastic heat fraction');
   await p.e.scenario.onclick(); p.emit(report); assert.equal(work(), undefined);
-  assert.deepEqual(plain(coverageWork().children[2].children.map(n => n.textContent)), ['12','6','6','5']);
+  assert.deepEqual(plain(coverageWork().children[2].children.map(n => n.textContent)), ['Plastic yield','12','6','6','5']);
+  assert.deepEqual(plain(coverageWork().children[3].children.map(n => n.textContent)), ['Maxwell dashpots','8','2','6','4']);
   assert.match(visibleText(s), /Refused: missing source-qualified plastic heat fraction/);
   assert.match(visibleText(s), /Body coverage \+ exposed cloth/);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);

@@ -109,6 +109,8 @@ heterogeneous combinations and model-backed scenario studies. The search needs a
 maximum stitch pitch and stitch-rate alternatives. It never invents a recipe from a fiber name.
 Machine limits, assemblies, pressure settings, geometry and source-admission policy remain fixed.
 
+The timed `ftx-sewing-selection/2` request is also supported: `selected_objective_seconds` preserves feed plus qualified setup time, while the study's `feed_seconds` remains the selected plan's feed time.
+
 For an executable **synthetic software example**, embed the existing selector fixture in a study:
 
 ```sh

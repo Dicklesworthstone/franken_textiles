@@ -28,7 +28,7 @@ mod screening;
 #[path = "../materials/thermal.rs"]
 mod steady_workbench;
 #[path = "../materials/strip.rs"]
-mod strip_calibration;
+mod strips;
 #[path = "material_workbench/coverage.rs"]
 mod thermal_coverage;
 #[path = "material_workbench/motion.rs"]
@@ -71,10 +71,11 @@ ftx-materials pressure-condition REQUEST.json
 ftx-materials compression-stack REQUEST.json
 ftx-materials calibrate SWATCHES.json [--allow-estimates]
 ftx-materials calibrate-nonlinear SWATCHES.json [--allow-estimates]
-ftx-materials calibrate-strip ACQUISITION.json [--allow-estimates]
-ftx-materials strip-experiment REQUEST.json
 ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
 ftx-materials calibrate-membrane-plasticity HISTORIES.json [--allow-estimates]
+ftx-materials strip-acquisition ACQUISITION.json
+ftx-materials strip-experiment REQUEST.json
+ftx-materials calibrate-strip REQUEST.json [--allow-estimates]
 ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials calibrate-friction SLIDING.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
@@ -109,8 +110,10 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-steady-coverage` recomputes layered body coverage and heat directly from retained drape materials, without invented storage.
 `calibrate` fits observed swatches, retaining the receipt and a portable locked selection.
 `calibrate-nonlinear` identifies signed nonlinear membrane curves from nominal forces without extrapolating.
-`calibrate-strip` identifies the existing orthotropic law from actual clamped-strip forces and declared width observations; unresolved fits publish no selection.
 `calibrate-membrane-plasticity` identifies permanent stretch and hardening from source-qualified loading cycles; unresolved fits retain their report without publishing a selection.
+`strip-acquisition` preserves the complete retained source curves, protocol, metadata and hashes without inferring local strain or transverse width.
+`strip-experiment` runs the production planar membrane with declared ideal grips and reports total reactions and equilibrium residuals.
+`calibrate-strip` identifies bounded coefficients from grip forces and optional measured widths; rejected candidates retain their diagnostics without a selection. --allow-estimates controls admission of fitted coefficients; the request separately owns allow_estimated_observations.
 `calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
 `calibrate-friction` identifies explicit pair/self/body kinetic coefficients from corrected steady sliding forces.
 `thermal-surface` calculates dry heat maps on frozen drape geometry, not whole-wearer comfort.
@@ -126,7 +129,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `sew-plan` checks material thickness, allowances, local feed and multi-pass/reverse/backtack order.
 `sew-stitches` expands all directed stitch travel in paired pattern frames; neither command authorizes hardware.
 `sew-svg` writes a new operation preview with source/offset paths and needle stations; never a machine file.
-Fitted coefficients are estimates: --allow-estimates explicitly admits them to simulation.";
+Fitted coefficients are estimates: --allow-estimates explicitly admits them for commands listing that flag; forward strip requests retain their frozen selection's policy.";
 
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
@@ -263,12 +266,13 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["calibrate-nonlinear", path, "--allow-estimates"] => {
             nonlinear_calibration::run(path, true)
         }
-        ["strip-experiment", path] => strip_calibration::experiment(path),
-        ["calibrate-strip", path] => strip_calibration::run(path, false),
-        ["calibrate-strip", path, "--allow-estimates"] => strip_calibration::run(path, true),
         ["calibrate-friction", path] => friction_calibration::run(path, false),
         ["calibrate-friction", path, "--allow-estimates"] => friction_calibration::run(path, true),
         ["screen", path] => screening::run(path),
+        ["strip-acquisition", path] => strips::acquisition(path),
+        ["strip-experiment", path] => strips::experiment(path),
+        ["calibrate-strip", path] => strips::run(path, false),
+        ["calibrate-strip", path, "--allow-estimates"] => strips::run(path, true),
         ["pressure-condition", path] => screening::pressure_condition(path),
         ["compression-stack", path] => screening::compression_stack(path),
         ["study", pattern, request] => screening::study(pattern, request),

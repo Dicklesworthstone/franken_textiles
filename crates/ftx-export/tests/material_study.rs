@@ -1753,6 +1753,88 @@ fn material_substitution_selects_the_matching_qualified_recipe_through_real_plan
 }
 
 #[test]
+fn timed_recipe_studies_preserve_joint_scores_search_status_and_selected_plan_metrics() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let mut search: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-timed-selection.json"
+    ))
+    .unwrap();
+    // Synthetic source timing makes both fast passes cost 4 s feed + 3 s setup, versus
+    // the unchanged template's 8 s feed. The study's feed metric must still report 4 s.
+    search["options"]["ordering"]["setup_times"]["transitions"][0]["milliseconds"] = json!(3000);
+    for (limit, objective_seconds, feed_seconds, complete) in
+        [(8, 7.0, 4.0, true), (1, 8.0, 8.0, false)]
+    {
+        search["max_plan_evaluations"] = json!(limit);
+        let request: Request = serde_json::from_value(json!({
+            "schema":"ftx-material-study/1",
+            "variants":[variant("timed", source.raw()["fabric"]["material"].clone())],
+            "sewing_selection":search,
+            "comparison":{"basis":"nominal","required_consumers":["sewing"],
+                "objectives":[{"metric":"feed_seconds","direction":"minimize"}]}
+        }))
+        .unwrap();
+        let result = evaluate(&request, &source);
+        let alternative = row(&result, "timed");
+        let bound = Pattern::new(alternative["binding"]["result"]["pattern"].clone());
+        let direct = request
+            .sewing_selection
+            .as_ref()
+            .unwrap()
+            .select(&bound)
+            .unwrap();
+        let direct = serde_json::to_value(direct).unwrap();
+        assert_eq!(direct["schema"], "ftx-sewing-selection-report/2");
+        assert_eq!(alternative["sewing_selection"]["status"], "available");
+        assert_eq!(alternative["sewing"]["status"], "available");
+        assert_eq!(alternative["sewing"]["result"], direct["selected_plan"]);
+        let receipt = &alternative["sewing_selection"]["result"];
+        for field in [
+            "request",
+            "pattern_sha256",
+            "candidate_combinations",
+            "trials",
+            "selected_choices",
+            "selected_objective_seconds",
+            "unresolved_trials",
+            "search_complete",
+            "budget_exhausted",
+            "optimality_proven",
+            "no_feasible_listed_recipe",
+            "tie_break",
+        ] {
+            assert_eq!(receipt[field], direct[field], "limit {limit}: {field}");
+        }
+        assert_eq!(receipt["request"]["schema"], "ftx-sewing-selection/2");
+        assert_eq!(receipt["candidate_combinations"], 4);
+        assert_eq!(receipt["selected_objective_seconds"], objective_seconds);
+        assert_eq!(receipt["search_complete"], complete);
+        assert_eq!(receipt["budget_exhausted"], !complete);
+        assert_eq!(receipt["optimality_proven"], complete);
+        assert_eq!(receipt["unresolved_trials"], 0);
+        assert!(receipt.get("selected_plan").is_none());
+        assert_eq!(alternative["metrics"]["feed_seconds"], feed_seconds);
+        let compared = row(&result["comparison"], "timed");
+        assert_eq!(compared["eligible"], true);
+        assert_eq!(compared["readings"]["feed_seconds"]["value"], feed_seconds);
+        assert_eq!(result["comparison"]["frontier"], json!(["timed"]));
+        assert_eq!(result["comparison"]["physical_validation_claim"], false);
+        assert_eq!(result["hardware_execution_authorized"], false);
+        assert!(
+            result["comparison"]["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|note| {
+                    note.as_str().is_some_and(|text| {
+                        text.contains("No empirical") && text.contains("global optimum is claimed")
+                    })
+                })
+        );
+    }
+}
+
+#[test]
 fn truncated_recipe_search_retains_real_incumbents_and_keeps_missing_plans_unknown() {
     let source = Pattern::from_json(PATTERN).unwrap();
     let mut request = recipe_study();
