@@ -9,6 +9,50 @@ const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-stock-pattern.json");
 const STOCK: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-stock-optimization.json");
+const COST_STOCK: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-stock-cost.json");
+
+#[test]
+fn priced_stock_job_retains_native_prices_and_study_recomputes_the_same_layout() {
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let r: Request = serde_json::from_str(COST_STOCK).unwrap();
+    let plan = r.build(&p).unwrap();
+    let job: Value =
+        serde_json::from_str(&manufacturing::stock_job(PATTERN, COST_STOCK).unwrap()).unwrap();
+    assert_eq!(
+        job["plan_json"].as_str().unwrap(),
+        serde_json::to_string(&plan).unwrap()
+    );
+    assert_eq!(
+        job["purchasing_json"].as_str().unwrap(),
+        serde_json::to_string(plan.purchasing().unwrap()).unwrap()
+    );
+    assert_eq!(
+        job["residual_json"].as_str().unwrap(),
+        serde_json::to_string(&plan.residual_request().unwrap()).unwrap()
+    );
+    assert_eq!(
+        plan.purchasing()
+            .unwrap()
+            .least_observed_independent_order_total,
+        Some(7.)
+    );
+    let study = json!({"schema":"ftx-material-study/1", "variants":[{"key":"current",
+        "changes":{"schema":"ftx-material-bindings/1"}}], "finite_stock":r});
+    let report: Value =
+        serde_json::from_str(&materials::study(PATTERN, &study.to_string()).unwrap()).unwrap();
+    let stock = &report["alternatives"][0]["finite_stock"];
+    assert_eq!(stock["status"], "available");
+    assert_eq!(
+        stock["result"]["purchasing"]["least_observed_independent_order_total"],
+        7.
+    );
+    assert_eq!(stock["result"]["used_stock_count"], 2);
+    assert_eq!(stock["result"]["optimization"]["lattice_optimal"], true);
+    let plain: Value =
+        serde_json::from_str(&manufacturing::stock_job(PATTERN, STOCK).unwrap()).unwrap();
+    assert!(plain.get("purchasing_json").is_none());
+}
 
 #[test]
 fn one_job_retains_exact_plan_residual_preview_and_budget_limited_incumbent() {

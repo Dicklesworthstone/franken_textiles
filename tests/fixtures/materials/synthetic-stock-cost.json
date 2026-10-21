@@ -1,0 +1,300 @@
+{
+  "schema": "ftx-finite-stock-request/1",
+  "stocks": [
+    {
+      "id": "large-first",
+      "material": {
+        "id": "example-hide",
+        "allow_estimates": true,
+        "record": {
+          "id": "example-hide",
+          "name": "Synthetic hide, not measured",
+          "form": "hide",
+          "properties": {
+            "areal_density": {
+              "value": 0.5,
+              "unit": "kg/m2",
+              "evidence": "estimate",
+              "source": "test",
+              "method": "Synthetic areal mass"
+            }
+          },
+          "sources": {
+            "test": {
+              "reference": "test:finite-stock-example",
+              "accessed_on": "2026-10-15",
+              "note": "Synthetic material for geometry checks only"
+            }
+          }
+        }
+      },
+      "outline_mm": [
+        [
+          0,
+          0
+        ],
+        [
+          70,
+          0
+        ],
+        [
+          70,
+          30
+        ],
+        [
+          0,
+          30
+        ]
+      ],
+      "grain_mm": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          10
+        ]
+      ],
+      "geometry_source": {
+        "reference": "test:stock-optimization",
+        "accessed_on": "2026-10-20",
+        "note": "Synthetic miniature sheet, not measured stock or price evidence"
+      }
+    },
+    {
+      "id": "small-a",
+      "material": {
+        "id": "example-hide",
+        "allow_estimates": true,
+        "record": {
+          "id": "example-hide",
+          "name": "Synthetic hide, not measured",
+          "form": "hide",
+          "properties": {
+            "areal_density": {
+              "value": 0.5,
+              "unit": "kg/m2",
+              "evidence": "estimate",
+              "source": "test",
+              "method": "Synthetic areal mass"
+            }
+          },
+          "sources": {
+            "test": {
+              "reference": "test:finite-stock-example",
+              "accessed_on": "2026-10-15",
+              "note": "Synthetic material for geometry checks only"
+            }
+          }
+        }
+      },
+      "outline_mm": [
+        [
+          0,
+          0
+        ],
+        [
+          25,
+          0
+        ],
+        [
+          25,
+          25
+        ],
+        [
+          0,
+          25
+        ]
+      ],
+      "grain_mm": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          10
+        ]
+      ],
+      "geometry_source": {
+        "reference": "test:stock-optimization",
+        "accessed_on": "2026-10-20",
+        "note": "Synthetic miniature remnant A"
+      }
+    },
+    {
+      "id": "small-b",
+      "material": {
+        "id": "example-hide",
+        "allow_estimates": true,
+        "record": {
+          "id": "example-hide",
+          "name": "Synthetic hide, not measured",
+          "form": "hide",
+          "properties": {
+            "areal_density": {
+              "value": 0.5,
+              "unit": "kg/m2",
+              "evidence": "estimate",
+              "source": "test",
+              "method": "Synthetic areal mass"
+            }
+          },
+          "sources": {
+            "test": {
+              "reference": "test:finite-stock-example",
+              "accessed_on": "2026-10-15",
+              "note": "Synthetic material for geometry checks only"
+            }
+          }
+        }
+      },
+      "outline_mm": [
+        [
+          0,
+          0
+        ],
+        [
+          25,
+          0
+        ],
+        [
+          25,
+          25
+        ],
+        [
+          0,
+          25
+        ]
+      ],
+      "grain_mm": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          10
+        ]
+      ],
+      "geometry_source": {
+        "reference": "test:stock-optimization",
+        "accessed_on": "2026-10-20",
+        "note": "Synthetic miniature remnant B"
+      }
+    }
+  ],
+  "options": {
+    "copies": 1,
+    "gap_mm": 2,
+    "boundary_margin_mm": 2,
+    "step_mm": 20,
+    "work_limit": 2000000,
+    "backtrack_limit": 10000,
+    "optimize": "minimize_purchase_cost"
+  },
+  "pricing": {
+    "schema": "ftx-finite-stock-pricing/1",
+    "quotes": {
+      "schema": "ftx-textile-quotes/1",
+      "quotes": [
+        {
+          "offer_id": "synthetic/large-first",
+          "material_id": "example-hide",
+          "material_sha256": "2fbefc33804bf7e093972b55fbc02b714d79db427d54b758606e0db7b5f374a4",
+          "supplier": "synthetic",
+          "sku": "large-first",
+          "price": 100,
+          "unit": "square_meter",
+          "quantity": 0.0021,
+          "minimum_quantity": 0.0021,
+          "order_increment": 0.0021,
+          "available_quantity": 0.0021,
+          "available": true,
+          "currency": "USD",
+          "region": "test",
+          "quality": "test",
+          "terms": "whole-item merchandise only",
+          "observed_on": "2026-10-20",
+          "source": "test:synthetic-price-not-live",
+          "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "offer_id": "synthetic/small-a",
+          "material_id": "example-hide",
+          "material_sha256": "2fbefc33804bf7e093972b55fbc02b714d79db427d54b758606e0db7b5f374a4",
+          "supplier": "synthetic",
+          "sku": "small-a",
+          "price": 3,
+          "unit": "square_meter",
+          "quantity": 0.000625,
+          "minimum_quantity": 0.000625,
+          "order_increment": 0.000625,
+          "available_quantity": 0.000625,
+          "available": true,
+          "currency": "USD",
+          "region": "test",
+          "quality": "test",
+          "terms": "whole-item merchandise only",
+          "observed_on": "2026-10-20",
+          "source": "test:synthetic-price-not-live",
+          "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "offer_id": "synthetic/small-b",
+          "material_id": "example-hide",
+          "material_sha256": "2fbefc33804bf7e093972b55fbc02b714d79db427d54b758606e0db7b5f374a4",
+          "supplier": "synthetic",
+          "sku": "small-b",
+          "price": 4,
+          "unit": "square_meter",
+          "quantity": 0.000625,
+          "minimum_quantity": 0.000625,
+          "order_increment": 0.000625,
+          "available_quantity": 0.000625,
+          "available": true,
+          "currency": "USD",
+          "region": "test",
+          "quality": "test",
+          "terms": "whole-item merchandise only",
+          "observed_on": "2026-10-20",
+          "source": "test:synthetic-price-not-live",
+          "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    "bindings": [
+      {
+        "stock_id": "large-first",
+        "stock_sha256": "5d9f9c37d3d2b35ba496d6e6525b4009cfb2b52f534a9c11f6c6c860bf44eec2",
+        "offer_ids": [
+          "synthetic/large-first"
+        ]
+      },
+      {
+        "stock_id": "small-a",
+        "stock_sha256": "dd4418015740221527351c309df42c032f8c74ca9bc78abbc0ab24e3625df4d6",
+        "offer_ids": [
+          "synthetic/small-a"
+        ]
+      },
+      {
+        "stock_id": "small-b",
+        "stock_sha256": "2be70d10477cc4046b99fec16d889797e0e54fb553404aa5723c8a101ac2aeba",
+        "offer_ids": [
+          "synthetic/small-b"
+        ]
+      }
+    ],
+    "market": {
+      "currency": "USD",
+      "region": "test",
+      "quality": "test",
+      "terms": "whole-item merchandise only",
+      "as_of": "2026-10-20",
+      "max_age_days": 1,
+      "require_observed_quantity": true
+    }
+  }
+}

@@ -170,6 +170,13 @@ self.onmessage = async ({ data: msg }) => {
           throw Error("Finite-stock preview needs either its SVG or its explicit refusal.");
         }
         if (result.optimization) files.push(file("stock-optimization.json", result.optimization));
+        if (result.purchasing != null) {
+          if (typeof job.purchasing_json !== "string") throw Error("Rebuild web/pkg: missing source-preserving stock purchasing receipt.");
+          json(job.purchasing_json);
+          files.push(file("stock-purchasing.json", job.purchasing_json));
+        } else if (job.purchasing_json != null) {
+          throw Error("Unexpected purchasing receipt without a priced stock plan.");
+        }
         break;
       }
       case "price":

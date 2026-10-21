@@ -75,3 +75,24 @@ test('matching compiled WASM job and worker retain the selected stock and exact 
     assert.ok(Math.abs(result.result.used_gross_area_m2-0.00125)<1e-14);
     assert.equal(result.result.optimization.lattice_optimal,true);
   });
+
+test('cost-directed jobs preserve the native quote receipt without rerunning pricing', async () => {
+  const priced = job();
+  priced.purchasing_json = '{"currency":"USD","least_observed_independent_order_total":7.0,"pricing_sha256":"test"}';
+  const plan = JSON.parse(priced.plan_json); plan.purchasing = JSON.parse(priced.purchasing_json);
+  plan.optimization.objective = 'minimize_purchase_cost'; plan.optimization.selected.purchase_cost = 7;
+  priced.plan_json = JSON.stringify(plan);
+  let calls = 0;
+  const send = await worker({stock_job:()=>{++calls; return JSON.stringify(priced);},
+    stock_price:()=>assert.fail('pricing must come from the selected job')});
+  const result = await send(msg);
+  assert.equal(result.type, 'result'); assert.equal(calls, 1);
+  const receipt = result.files.find(f=>f.name === 'stock-purchasing.json');
+  assert.equal(receipt.text, priced.purchasing_json); assert.match(receipt.text, /7\.0/);
+  for (const invalid of [{...priced,purchasing_json:null}, {...priced,purchasing_json:'bad'},
+    {...job(),purchasing_json:priced.purchasing_json}]) {
+    const bad = await worker({stock_job:()=>JSON.stringify(invalid)});
+    const outcome = await bad(msg);
+    assert.equal(outcome.type, 'error'); assert.equal(outcome.files, undefined);
+  }
+});
