@@ -1744,3 +1744,161 @@ paths on `main`, leaves unrelated untracked files intact and releases all reserv
 During closeout another actor committed the nine owned source/guide/initial-TODO paths as
 `3244564`; the final source hashes still match and no Rust source differs from the frozen base.
 The remaining scoped commit records only Bead closure/progress and these completed evidence notes.
+
+### Grouped marker purchasing display — ftx-w8n
+
+The bounded-marker producer returns quote samples on `material_orders` in
+`ftx-cut-procurement/2`; marker rows retain only order links. The page at `6de830f`
+dereferences `row.sample.scope` on marker rows, so a valid grouped result cannot be displayed.
+Concurrent commit `6ea17d5` supplied the production renderer repair and marker selector while
+this item was being investigated. That implementation is preserved, not claimed as authored
+here. This continuation adds mixed-material regression coverage, an actual Chromium purchasing
+check, user instructions and delivery of the matching remotely built browser bundle.
+
+- [x] Refresh live Beads/history and inspect producer, shared API and actual renderer.
+- [x] Claim `ftx-w8n`, reserve affected paths and freeze the Rust source.
+- [x] Reproduce the old renderer failure with a grouped-order regression.
+- [x] Verify the incoming display of each material order once, its markers and longest segment.
+- [x] Preserve version-1 display, source text, native quantities/costs, unknown totals and invalidation.
+- [x] Build matching wasm remotely; verify and preserve old bundle before installing.
+- [x] Run focused native/shared tests, full compiled frontend and actual Chromium grouped-order checks.
+- [x] Review source hashes/diffs and UBS; fill bounded solo work/honesty worksheets.
+- [x] Close/sync this bug, commit owned work and release reservations at handoff.
+
+Creation worksheet: the user explicitly requests this TODO. Consumer: the user reviewing this
+particular valid-result repair; gate: a reviewable `ftx-w8n` handoff; observed defect: the producer's
+new order/marker split reaches the old per-marker sample dereference; retirement: this handoff.
+No integrity exception is needed, so its four questions do not apply. Highest ready empirical
+material work still needs independent observations; more reporting cannot supply them. Another
+hour of process would be worse than fixing this consumer. Verdict: minimal requested PROCESS;
+the actual purchasing result and its display are FEATURE, with no JavaScript repricing.
+
+The corrected new DOM regression fails on an archived, unchanged `6de830f` page with
+`Cannot read properties of undefined (reading 'scope')`, then passes against `6ea17d5`.
+It supplies three marker links and two material orders, one excluded, and verifies two tables,
+literal supplier text, native quantities/costs, null incomplete totals, byte-exact raw download
+and stale-output revocation. Existing version-1 regressions remain. The initial test fixture
+omitted `marker_lengths_m` and failed at `.map` against the already repaired page; that setup
+failure is retained, not used as evidence of the original defect. The corrected fixture matches
+the native shape. No oracle capture was edited.
+
+Two attempted frozen RCH Node jobs were rejected before execution: `--job --clean-overlay` is
+rejected as mutually exclusive, while omitting `--clean-overlay` rejects the required source
+flags. Rather than bypass the source gate or repair RCH here, the baseline uses three archived
+web files and a copy of the existing checker under ignored `out/ftx-grouped-purchases-20261021/`.
+This is not a clone, branch, worktree or new maintained harness. Archived page SHA-256
+`1505d89a9e9a4f663e701f1b0181b77f9b10b900089529751ceba5dbbe804c05` matches `git show`.
+Both rejected commands, the setup failure and the actual baseline failure remain in `checks/`.
+
+The first native/build/lint pass used frozen `6de830f` (55 affected native tests passed).
+One bounded refresh uses **`3b32e708eb953d60ad4d53898341db1c8033c04c`**, tree
+`8e795c64e26bd23d73cee157074561aa9199624f`, with clean/no-overlay fingerprint
+`fe0d5151031be8fda7951fe7fe1f42f7ce344018fdb3ed21e6ada866b230b195`.
+The latter includes the concurrent CLI/WASM consumer regressions and material resolver; their
+source is not authored here. Remote Clippy and release wasm build both exit 0 on `ts1`:
+
+```sh
+RCH_REQUIRE_REMOTE=1 RCH_ENV_ALLOWLIST=CARGO_HTTP_USER_AGENT CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0' rch exec --worker ts1 --base 3b32e708eb953d60ad4d53898341db1c8033c04c --clean-overlay --no-overlay -- cargo clippy --locked -j1 --all-targets -- -D warnings
+RCH_REQUIRE_REMOTE=1 RCH_ENV_ALLOWLIST=CARGO_HTTP_USER_AGENT CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0' rch exec --worker ts1 --base 3b32e708eb953d60ad4d53898341db1c8033c04c --clean-overlay --no-overlay -- cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm
+RCH_REQUIRE_REMOTE=1 RCH_ENV_ALLOWLIST=CARGO_HTTP_USER_AGENT CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0' rch exec --worker ts1 --base 3b32e708eb953d60ad4d53898341db1c8033c04c --clean-overlay --no-overlay -- cargo test --locked -j1 -p ftx-export -p ftx-cli -p ftx-wasm --test cutting --test cutting_workflow --test materials
+```
+
+Final affected native result: **57 passed, 0 failed, 0 ignored/filtered** (11 CLI, 22 export,
+24 portable API). This includes the incoming positive multi-marker tests and shared study equality.
+The first final native attempt queued on the saturated `ovh-b`; its own waiting client was
+terminated (exit 143, no tests run), and the request disappeared from the queue. The separate
+`ts1` attempt above completed remotely, exit 0. Both logs remain. `cargo fmt --check`, both
+checker syntax checks and `git diff --check` also pass. No source changed after the hash barrier.
+
+Laptop `sbh check --need 20G` failed its free-ratio threshold: 86,911,504,384 bytes free,
+2.1748% versus 8.0606% required. No local Rust compilation was used. Full workspace tests and
+DSR are not rerun for this browser delivery; affected native tests are recorded separately.
+No performance, empirical material, fit, live stock/checkout or supplier-qualification claim.
+
+Raw final wasm SHA-256 `46eda18358900a49c1c8ea407fcc58393cabc317e57b29915d2464f45810dd42`
+matches the retrieved artifact and direct worker SSH hash. The owned previous bundle is preserved
+in `previous-bundle/`, then the first refreshed bundle in `pre-final-bundle/`.
+The first final bindgen invocation omitted `--out-name` and generated the saved input's basename;
+those four unused outputs are preserved in `misnamed-bindgen/`. Corrected generation with
+`wasm-bindgen --target web --out-name ftx_wasm --out-dir web/pkg` completed before final tests.
+Installed wasm SHA-256 is `dfed8177dc6326730582c4489a1e552e1e83f45fe65e38e056679e65da3ae390`;
+glue/types remain unchanged. `source-sha256.txt` binds three production web files, both checkers
+and all four bundle files. All nine hashes still match after the final checks.
+
+After confirmed installation and that hash barrier, these commands all exit 0:
+
+```sh
+FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs
+FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules node tools/check_materials_web.cjs --purchasing-proof
+FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules node tools/check_materials_web.cjs --compression-proof
+```
+
+Frontend: **79 passed, 0 failed, 0 skipped**. Actual Chromium binds a synthetic material, plans
+three whole pieces into two 0.12 m markers, previews either marker and prices their 0.24 m total
+as **one 0.3 m / 3 USD order**, independently expected from the stated minimum/increment.
+The 0.12 m longest segment is checked separately from the total. Insufficient total stock and
+insufficient uninterrupted stock independently exclude the offer with unknown totals. Preview
+changes retain the exact purchasing report; quote/market edits withdraw it. Exact raw reports,
+binding and SVG are retained. No console errors, external requests or non-GET requests occurred.
+Final purchasing inputs/reports/screenshot:
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-hgSjUv/`.
+The screenshot was visually reviewed. The existing compression/heat browser lane also passes
+against this final bundle. These are synthetic software checks, not physical material evidence.
+
+`ubs $(git diff --name-only --cached)` exits **2 / partial** on the two changed checker files:
+zero critical, 463 warnings, 1,038 informational. `js.taint.command` exceeds its work limit in
+the existing browser checker. Separate `ubs web/materials-page.js web/materials-worker.js`
+completes, exit **0**: zero critical, 30 warnings, 272 informational. It does not replace the
+incomplete staged scan. Changed paths were reviewed directly: native numbers are displayed,
+source strings use text nodes, blob URLs revoke on invalidation, retained evidence uses fixed
+names with exclusive creation in a new temporary directory, and the loopback server checks its
+resolved path. No new true defect found; no scanner edits, suppressions or partial-run override.
+
+Bounded fresh-solo worksheets for this one item:
+
+- **Real work:** actual history and ready/in-progress Beads were refreshed. Core purpose: patterns
+  that sew together and fit a particular body, with usable manufacturing files. Incoming `6ea17d5`
+  and `3b32e70` are USER implementation commits owned by their author, not output credited to this
+  continuation. Of the five owned tracked paths at handoff, USER 1 (cutting instructions), ENABLER
+  2 (existing checkers, exercised), PROCESS 2 (requested TODO/evidence and Beads), UNKNOWN 0.
+  The four ignored runtime files deliver one matching browser bundle. Q1: demo binding, two
+  marker previews and one rounded order through the real controls. Q2: removing PROCESS changes
+  tracking, not that capability. Q3: the checkers exercised actual page/worker and compiled wasm,
+  not speculative infrastructure. Q4: the older G5 and high-priority source-characterization work
+  remain open; this small consumer break prevented using already delivered software. Q5: solo,
+  no pane comparison. Q6: no plan/spec edit or follow-up moved acceptance out of an original.
+  Verdict: useful bounded delivery; stop adding machinery after the native result and handoff.
+- **Honesty 1–3:** No (checked: own checker diffs and incoming consumer tests retain old assertions;
+  new DOM data explicitly tests display/lifecycle and real Chromium supplies integration proof;
+  no fixture/golden was regenerated). **4:** Yes, both existing checkers changed with this delivery.
+  The new focused browser branch alone omits the native-binary prerequisite; it makes no native
+  parity claim. Default prerequisites and all older focused branches/assertions remain unchanged.
+  Separate dispatch/assertion review is the RH-1 countermeasure; no suppression, timeout or old
+  tolerance was relaxed. The native run separately exercises the shared producer/CLI/WASM seam.
+  **5–6:** No (checked: no product special case or environment sniffing; the final compiled frontend
+  denominator is 79 named tests, none skipped; baseline runs exactly the new test and fails).
+  **7–10:** No (checked: observed exits, retained stdout/stderr and source/artifact hashes; synthetic
+  quotations are not live purchasing, DOM doubles are not numerical proof; rejected baseline jobs,
+  incomplete initial test data, queued native attempt, basename error and partial UBS are disclosed).
+  **11–12:** No (checked: this bug's original positive acceptance is verified before closure; broader
+  supplier/material/G5 tasks remain open; no spec, plan or original requirement was weakened).
+  **13–17:** not applicable to delegation, none used. Concurrent incoming commits are not independent
+  verification, and no agreement is counted as evidence. **18:** No (checked: the positive arithmetic,
+  two stock negatives, old-version regression and final full frontend lane were chosen before their
+  final results). Older-session search is not repeated for this bounded continuation; this inventory
+  claims only this work item, not a new audit of older sessions. **19:** explain the malformed initial
+  fixture and missing bindgen basename before presenting the final results: both are corrected above,
+  original artifacts retained, and the final checks ran after complete installation and hashes.
+  **20:** strongest evidence is the unchanged old-page failure followed by actual Chromium's two
+  intact markers and independently expected one 0.3 m / 3 USD order, exact downloads and stock
+  exclusions. A skeptic can replay the retained request and commands. Disposition: checker changes
+  received separate RH-1 review; no original acceptance weakening found. Final re-execution is fresh
+  solo verification, not an independent verifier or empirical textile validation.
+
+`ftx-w8n` is closed and flushed; comment 94 on `ftx-tm6` records the delivered software slice
+without closing live supplier qualification. The scoped `main` handoff contains only the two
+checker changes, cutting instructions, this requested TODO/evidence and Bead updates. The
+unrelated untracked paths remain untouched. All seven reservations are released at handoff.
+During closeout another actor committed the three owned checker/guide paths as `b5d0164`;
+their hashes still match the tested files and no Rust source changed. The remaining scoped
+commit records only Bead closure/progress and these completed evidence notes.
