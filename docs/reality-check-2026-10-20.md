@@ -1500,11 +1500,11 @@ TODO is maintained here and retires at this work item's handoff; no new tracking
 - [x] Observe the new positive CLI regression fail against the unchanged baseline.
 - [x] Verify actual JPEG selection, equivalent decoded PNG scores, source preservation and refusals.
 - [x] Run formatting, strict-remote focused tests, all-target lint and wasm build.
-- [ ] Complete the full strict-remote native workspace test run.
+- [x] Complete the full strict-remote native workspace test run.
 - [x] Preserve the previously owned four-file browser bundle, install the matching release and run
   the existing compiled frontend and actual browser checks for the concurrent joint-study delivery.
 - [x] Fresh solo review, bounded worksheets and complete staged UBS scan.
-- [ ] Commit owned paths, close/sync Bead and release reservations.
+- [x] Commit owned paths, close/sync Bead and release reservations at handoff.
 
 The new positive test fails against frozen `5e0bd0f` plus only the test-file overlay: **one failed,
 zero passed**, with the CLI returning exit 3 and its original PNG-only refusal. The initial `hz3`
@@ -1538,6 +1538,36 @@ No model-backed browser drape, real textile, stillness, accuracy or speed claim 
 The stale PNG-only photo note on `ftx-q3m` received a factual source/test comment; its remaining
 codec/precision/parity acceptance stays in progress. No original material or G5 item was closed.
 
+The complete `cargo test --locked -j1` run passed on `vmi1264463`: **1,813 passed, zero failed,
+29 ignored**, across 252 result summaries including doc-tests. Its final receipt binds the
+`b14693a` baseline and two-path overlay above; the ignored lanes were not run or counted as passes.
+DSR was not run. Logs retain the full command output and terminal remote receipt.
+
+During that run another actor committed these exact six owned paths as `0aee71c`, then merged
+three separate compression/heat files in `5617e80831a5cf2e521f7f33a458f384b8b05ffa`.
+Both JPEG source hashes remained unchanged. The incoming change adds a branch API and extracts
+the original storage check without changing it; no incoming source was edited here. The full
+workspace result above does **not** include those three new compression files. Fresh strict-remote
+checks bind the merged commit with `--base 5617e80831a5cf2e521f7f33a458f384b8b05ffa
+--clean-overlay --no-overlay`, fingerprint
+`fe0d5151031be8fda7951fe7fe1f42f7ce344018fdb3ed21e6ada866b230b195`, tree
+`ad6ca89792d0c8a86ef3c1fa2036db07ccd96436`:
+
+- `cargo test --locked -j1 -p ftx-drape -p ftx-cli --test compressed_thermal --test compressed_thermal_path --test video_selection_workflow`: **20 passed, zero failed/ignored**, `ovh-b`.
+- `cargo clippy --locked -j1 --all-targets -- -D warnings`: passes, `ts1`.
+- `cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm`: passes, `hz2`.
+
+The merged raw WASM SHA-256 is `6fbfccc7f130182564414996f541d29937ac0610555eec2893e8ce7b8ee21bc6`,
+independently matched directly on `hz2`. Before installing it, the preceding four-file bundle was
+preserved in `out/ftx-dsu-20261021/pre-merge-bundle/`. Final installed WASM SHA-256 is
+`643a6d848f5e8103aadf10efe9fa5c56c8764fd3cf9b5362621336cb39416f72`; glue/types stay unchanged.
+The same frontend command again passes **71/71, zero skipped**, and both actual Chromium commands
+again pass. Final outfit capture: `/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-Q7g9wa/`.
+These final outputs are in `checks/merge-*.log` under the evidence directory above. `ftx-dsu` is
+closed with these distinct verification scopes; Beads are flushed. Final formatting, diff checks
+and the two-file source hash barrier pass. Handoff commits only owned metadata still outstanding
+after the automatic source commit, preserves unrelated untracked paths and releases the leases.
+
 `ubs $(git diff --name-only --cached)` completed with exit 0 for the two Rust files: **zero
 critical, 170 warnings, 102 informational**. The warnings remain reported, largely test
 unwrap/index patterns and the existing guarded PNG parser/allocation paths. Reviewed the full
@@ -1569,8 +1599,8 @@ Bounded worksheets for this work item (fresh solo review, not independent verifi
   **7–10:** No (checked: observed exits/logs, retained stderr and raw artifact hashes; no claimed
   stillness, decoder-parity proof, measured textile accuracy, real fit or speed from these cases).
   The generated comparison PNG is decoded-pixel integration evidence, not an independent JPEG
-  oracle. **11–12:** No (checked: `ftx-dsu` remains in progress while the full workspace check is
-  pending; existing empirical/codec/G5 requirements remain; documentation adds a format boundary,
+  oracle. **11–12:** No (checked: `ftx-dsu` closes on the observed full-workspace and merged-snapshot
+  results above; existing empirical/codec/G5 requirements remain; documentation adds a format boundary,
   with binary-mask/orientation/quality gates retained). **13–17:** not applicable, solo; automatic
   incoming commits are not peer verification. **18:** No (checked: one baseline target, the three
   focused targets and the complete workspace command were selected before their results).
