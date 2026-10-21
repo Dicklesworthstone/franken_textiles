@@ -43,6 +43,18 @@ function calibrationReport(mode = 'nonlinear', admission = false, check = true) 
         {time_seconds:32,stiffness_n_m:[0,0,0,0],active:false}]} : undefined,
       fit: quality, check: check ? quality : null, input_sha256:'source-lock', missing_mechanics:[] } };
 }
+function areaCalibrationReport() {
+  const result=calibrationReport('nonlinear',true), c=result.calibration;
+  const conditions={specimen:'synthetic <area specimen>',conditioning:'synthetic reference',temperature_c:'20'};
+  const quantity=value=>({value,unit:'N/m',evidence:'estimate',source:'joint-area-fit',
+    method:'Synthetic joint identification; <literal evidence>',conditions});
+  c.input.area_response={model:'area_green_strain/1',area_ratio_range:[0.7,1.5]};
+  c.fitted_area_ratio_range=[0.75,1.45];c.parameter_count=9;c.excitation_pivot=0.0015;
+  c.material={membrane_response:{area_response:{model:'area_green_strain/1',quadratic:quantity(40),
+    log_squared:quantity(15),area_ratio_range:[0.75,1.45],conditions}},
+    sources:{'joint-area-fit':{reference:'local:synthetic-area-fit',note:'Synthetic source <retained>'}}};
+  return result;
+}
 function recoveryComparison(status = 'AMBIGUOUS') {
   const selected = calibrationReport('relaxation', true);
   const comparison = { schema:'ftx-relaxation-model-comparison-report/1', status,
@@ -834,11 +846,38 @@ test('identified swatches show independent errors, retain their source across pa
   assert.match(visibleText(s),/Held out: not supplied/);
   assert.match(visibleText(s),/Fitted estimates need admission/);
   assert.match(visibleText(s),/Strain domain from fitting observations/);
+  assert.doesNotMatch(visibleText(s),/Area coefficients|Physical area ratio J|Joint identification diagnostics/);
   assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,true);
   await p.load(); assert.equal(s.hidden,false); assert.equal(p.live.size,1); assert.equal(p.e.assign.disabled,false);
   p.e.target.value='front'; p.e.assign.onclick(); await p.e.bind.onclick();
   assert.ok(p.current().messages.at(-1).changes.includes(selection));
   assert.equal(JSON.parse(p.current().messages.at(-1).changes).pieces.front.allow_estimates,false);
+});
+
+test('joint swatches expose area coefficients, exact applicability and source evidence without changing reusable selections', async () => {
+  const p=await pageModule();p.e.calibrationMode.value='nonlinear';p.select('calibrationRequest');
+  await p.e.calibrate.onclick();
+  const report=areaCalibrationReport(),raw=JSON.stringify(report);
+  p.emit(report,[{name:'material-calibration.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'Identified material behavior'), tables=descendants(s).filter(n=>n.tag==='table');
+  const coefficients=tables.find(n=>visibleText(n).includes('Area coefficients'));
+  assert.deepEqual(plain(coefficients.children.slice(2).map(n=>n.children.map(v=>v.textContent))),[
+    ['(J − 1)²','40','N/m','estimate','joint-area-fit'],['(ln J)²','15','N/m','estimate','joint-area-fit']]);
+  const domain=tables.find(n=>visibleText(n).includes('Physical area ratio J'));
+  assert.deepEqual(plain(domain.children.slice(2).map(n=>n.children.map(v=>v.textContent))),[
+    ['Admissible input domain','0.7','1.5'],['FIT observations and undeformed reference','0.75','1.45'],
+    ['Published material domain','0.75','1.45']]);
+  assert.match(visibleText(s),/Nonlinear stretch, shear and area response/);
+  assert.match(visibleText(s),/Identified coefficients\s+9/);
+  assert.match(visibleText(s),/CHECK cannot widen/);
+  const evidence=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('Area response,'));
+  evidence.open=true;evidence.handlers.toggle();
+  assert.match(visibleText(evidence),/"temperature_c": "20"/);
+  assert.match(visibleText(evidence),/Synthetic source <retained>/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  assert.equal(p.e.selection.value,report.selection_json);
+  const download=descendants(s).find(n=>n.download==='material-calibration.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
 });
 
 test('adaptive heat histories display native local errors and charged work without changing selections', async () => {
@@ -1014,6 +1053,51 @@ test('nonlinear strip coefficients retain declared shape assumptions, physical u
     assert.equal(p.e.selection.value,'');assert.equal(p.e.assign.disabled,true);
     assert.match(visibleText(s),/Candidate nonlinear shape scales and coupling/);
     assert.match(visibleText(s),/No identified selection is available/);
+  }
+});
+
+test('strip area reports display all six search bounds or retained source coefficients in both controls', async () => {
+  for (const mode of ['identify','preserve']) for (const dedicated of [false,true]) {
+    const p=await pageModule();await p.load();
+    const operation=dedicated?'stripFit':'calibrate';
+    p.e.calibrationMode.value='clamped_strip';p.e.calibrationEstimates.checked=true;
+    p.select(dedicated?'stripFitRequest':'calibrationRequest');await p.e[operation].onclick();
+    const report=nonlinearStripCalibration(),c=report.calibration;
+    c.material=areaCalibrationReport().calibration.material;
+    const area=c.material.membrane_response.area_response;
+    c.input.area_response=mode==='identify'?{mode,parameter_bounds:[[10,80],[5,30]]}:{mode,allow_estimates:true};
+    if(mode==='identify') {
+      c.parameters.push(40,15);c.parameter_bounds=[...c.input.parameter_bounds,[10,80],[5,30]];
+      c.parameter_descriptors.push({id:'area_quadratic',label:'Quadratic area coefficient',unit:'N/m'},
+        {id:'area_log_squared',label:'Log-squared area coefficient',unit:'N/m'});
+      c.fitted_area_ratio_range=[0.75,1.45];
+    } else {
+      area.quadratic.evidence='published';area.log_squared.evidence='published';
+    }
+    c.input.material={membrane_response:{area_response:structuredClone(area)}};
+    p.emit(report);
+    const s=section(p,dedicated?'Clamped-strip identification':'Identified material behavior');
+    const parameters=descendants(s).find(n=>n.tag==='table'&&visibleText(n).includes(mode==='identify'?
+      'Identified directional and physical-area coefficients':'Identified nonlinear shape scales'));
+    if(mode==='identify') {
+      assert.deepEqual(plain(parameters.children.slice(-2).map(n=>n.children.map(v=>v.textContent))),[
+        ['Quadratic area coefficient','40','N/m','10','80'],['Log-squared area coefficient','15','N/m','5','30']]);
+      assert.match(visibleText(s),/jointly with the two physical-area coefficients/);
+      assert.match(visibleText(s),/FIT observations and undeformed reference/);
+      await p.e[operation].onclick();
+      c.accepted=false;c.material=null;report.material=null;report.selection=null;report.selection_json=null;
+      p.emit(report);
+      assert.match(visibleText(s),/Candidate directional and physical-area coefficients/);
+      assert.equal(p.e.assign.disabled,true);
+      assert.equal(p.e.selection.value,'');
+    } else {
+      assert.equal(parameters.children.length,6);
+      assert.match(visibleText(s),/Area coefficients — preserved source observations/);
+      assert.match(visibleText(s),/published/);
+      assert.match(visibleText(s),/retained from the supplied material/);
+      assert.doesNotMatch(visibleText(s),/FIT observations and undeformed reference/);
+      assert.equal(p.e.selection.value,report.selection_json);
+    }
   }
 });
 
@@ -2667,6 +2751,51 @@ test('compiled WASM bounded markers retain whole geometry, selected SVG and one 
     assert.equal(row.purchasing.status,'available');assert.equal(row.metrics.least_observed_independent_order_total,2.5);
     const invalid=await w.send({type:'cut',request:54,pattern,options,rollIndex:2});
     assert.equal(invalid.type,'error');assert.match(invalid.message,/between 1 and 2/);
+  });
+
+test('compiled WASM joint area identification publishes the fitted law and exact frozen strip replay',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx});
+    const calibrationRequest=fs.readFileSync(path.join(__dirname,'../examples/area-identification/swatch.json'),'utf8');
+    const identified=await w.send({type:'calibrate',request:71,calibrationMode:'nonlinear',calibrationRequest,allowEstimates:true});
+    assert.equal(identified.type,'result',identified.message);
+    assert.equal(identified.files[0].text,ftx.material_calibrate_nonlinear(calibrationRequest,true));
+    assert.equal(identified.files[1].text,identified.result.selection_json);
+    assert.equal(identified.files[2].text,calibrationRequest);
+    const c=identified.result.calibration,area=c.material.membrane_response.area_response;
+    assert.equal(c.parameter_count,9);
+    assert.ok(Math.abs(area.quadratic.value-40)<1e-7);
+    assert.ok(Math.abs(area.log_squared.value-15)<1e-7);
+    assert.equal(area.quadratic.evidence,'estimate');assert.equal(area.log_squared.evidence,'estimate');
+    assert.deepEqual(area.area_ratio_range,c.fitted_area_ratio_range);
+    assert.ok(c.fit.rms_scaled<1e-9&&c.check.rms_scaled<1e-9);
+    assert.equal(identified.result.fit_claim,false);
+    assert.equal(identified.result.material.capabilities.mechanical_coefficients.ready,false);
+    assert.deepEqual(JSON.parse(ftx.material_inspect(identified.result.selection_json)),identified.result.material);
+    if(process.env.FTX_AREA_CALIBRATION_REPLAY) {
+      const native=JSON.parse(fs.readFileSync(process.env.FTX_AREA_CALIBRATION_REPLAY,'utf8'));
+      for(const field of ['calibration','selection','selection_json','fit_claim']) assert.deepEqual(identified.result[field],native[field]);
+    }
+    const requestFor=selection=>`{"schema":"ftx-strip-experiment/1","material":${selection},`+
+      '"fixture":{"gauge_length_m":0.1,"width_m":0.06,"warp_axis":[0,1],"cells":[2,4]},"extensions":[0,0.02]}';
+    const stripRequest=requestFor(identified.result.selection_json);
+    const forward=await w.send({type:'stripExperiment',request:72,stripRequest});
+    assert.equal(forward.type,'result',forward.message);
+    assert.equal(forward.files[0].text,ftx.material_strip_experiment(stripRequest));
+    assert.ok(forward.result.states[1].force_n>0);
+    assert.equal(forward.result.input.material.expected_sha256,identified.result.selection.expected_sha256);
+    if(process.env.FTX_AREA_IDENTIFIED_STRIP_REPLAY) {
+      assert.deepEqual(forward.result,JSON.parse(fs.readFileSync(process.env.FTX_AREA_IDENTIFIED_STRIP_REPLAY,'utf8')));
+    }
+    const replay=await w.send({type:'stripExperiment',request:73,stripRequest:JSON.stringify(forward.result.input)});
+    assert.equal(replay.type,'result',replay.message);assert.equal(replay.files[0].text,forward.files[0].text);
+    const denied=JSON.parse(ftx.material_calibrate_nonlinear(calibrationRequest,false));
+    assert.deepEqual(denied.calibration,c);
+    const refusal=await w.send({type:'stripExperiment',request:74,stripRequest:requestFor(denied.selection_json)});
+    assert.equal(refusal.type,'error');assert.match(refusal.message,/estimate/);assert.equal(refusal.files,undefined);
   });
 
 test('compiled WASM area response changes strip mechanics and preserves source, frozen replay and refusals through the worker',
