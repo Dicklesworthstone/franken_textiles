@@ -1156,17 +1156,122 @@ Creation gate: the consumer is the existing material workbench user; the immedia
 release bundle predates the finite-strip/acquisition routes. Refreshing the bundle and exercising the
 existing Chromium checker is the smallest direct delivery. This existing report and Bead supply the
 granular TODO explicitly requested by the user; no additional tracking framework is needed.
+Retirement: stop updating this block after the source/bundle handoff; retain it only as the historical
+audit requested by the user. The existing checker remains a regression for this delivered route.
 
 - [x] Read complete AGENTS/README, current source state, relevant contracts and plan sections.
 - [x] Integrate incoming joint-outfit and source-acquisition work on main, preserving local material
   data work and unique Beads. An external actor completed both merge commits; credit its code separately.
 - [x] Claim `ftx-onn.5`; retain empirical `ftx-ki1`, `ftx-md1` and parent G5 acceptance as open.
 - [ ] Finish strict-remote merged native tests, all-target Clippy and release WASM build.
-- [ ] Capture actual native strip results and source/binary identities from the same committed source.
-- [ ] Back up existing ignored browser bundle; refresh it from the matching release artifact.
-- [ ] Exercise real Chromium acquisition, both estimate policies, exact downloads, accepted assignment,
+- [x] Capture actual native strip results and source/binary identities from the same committed source.
+- [x] Back up existing ignored browser bundle; refresh it from the matching release artifact.
+- [x] Exercise real Chromium acquisition, both estimate policies, exact downloads, accepted assignment,
   retained unaccepted diagnostics, work-budget refusal and stale-result withdrawal.
-- [ ] Run compiled-WASM worker regressions and the existing browser round smoke checks.
-- [ ] Review observed output and failures with a fresh solo pass; fix concrete defects if found.
+- [x] Run compiled-WASM worker regressions and the existing browser round smoke checks.
+- [x] Review observed output and failures with a fresh solo pass; fix concrete defects if found.
 - [ ] Record exact results/limits and the three bounded no-ceremony worksheets; scan the staged patch,
   update/sync Beads, commit scoped changes on main and release reservations.
+
+Delivered locally: the ignored `web/pkg` now contains the merged release module, including all 52 MIT
+raw source records and the finite-strip/acquisition exports. Production implementation came from the
+incoming commits, not this checker change. Frozen Rust source is `af0fba3bc11e85b5c45e14e732177e484f9c1000`;
+later `6ce1d80` was an external actor committing the initial checker/report while this work continued.
+No Rust code or numerical acceptance rule changed after the frozen build.
+
+Strict-remote commands (each preceded by `RCH_REQUIRE_REMOTE=1 RCH_ENV_ALLOWLIST=CARGO_HTTP_USER_AGENT`
+and `CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0'`):
+
+- `rch exec --base af0fba3 --clean-overlay --no-overlay -- cargo test --locked -j1` — running on `hz3`.
+- `rch exec --base af0fba3 --clean-overlay --no-overlay -- cargo clippy --locked -j1 --all-targets -- -D warnings`
+  — passed on `vmi1152480`.
+- `rch exec --base af0fba3 --clean-overlay --no-overlay -- cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm`
+  — passed on `vmi1227854`; no overlay, tree `726e6e398655b17e4999dab30c7482d303e86cd6`.
+
+Raw release WASM SHA-256 `2ea207d003dd805ee7157c27dbedaf04fed67c01f470e681ef09da8a052b6d06`.
+`wasm-bindgen 0.2.128 --target web --out-name ftx_wasm` produces browser WASM SHA-256
+`a4d8997805e2fa5d2a5338c3b0336e982793395fcdaa62ce9f2d4a440a801576` and glue SHA-256
+`ffbb1fa5e779b473ae28474204d892403f32c413637b014079a38705cea76a41`.
+All four previous generated files were hash-checked and preserved under
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-before-af0fba3-ac2e2c6p`.
+
+Actual native reports use executable SHA-256 `737d7ee5b40fc42cb6dba4cce5534c6fa166e6629f5de277fce39e59ce8bf83c`
+from the matching `hz3` Cargo test build. Three commands (`calibrate-strip` with/without
+`--allow-estimates`, and `strip-acquisition`) exited zero; inputs equal the exact committed bytes;
+binary hashes agree before/after capture. Capture used SSH for runtime only, after RCH first rejected
+`--job` with `--clean-overlay` and then refused a normal job's unsettled source namespace. No local
+Rust compilation, namespace repair or guard bypass. Logs and all stdout/stderr remain in ignored
+`out/ftx-integrated-browser-20261021/`, including the failed capture attempts.
+
+Real Chromium `156.0.8078.4` / Node `v26.8.1` passes the explicit `--strip-proof` mode in
+`tools/check_materials_web.cjs`. It finds all 52 MIT raw rows, compares every acquisition field
+(10,384 force observations and 66 original transverse observations), and compares the complete
+synthetic calibration plus exact selection under both estimate policies. The dedicated strip-fit
+control independently follows its file's output policy. FIT has 12 channels, CHECK two; recovered
+parameters are `[300, 180, 0.2, 70]`, with 565 forward solves, FIT RMS 0.18861505420016011 and CHECK RMS
+0.04475855208572256 in the declared scaled units. Mesh change remains 0.4005272780318836 and enforced
+domain replay succeeds. These nonzero residuals are retained, not rounded away. Missing bending/contact
+still prevents full mechanical readiness. Pattern pieces/seams remain unchanged; selected hashes bind
+exactly. Unaccepted results retain reasons/starts and no selection; work-budget refusal and changed
+source inputs remove stale prepared selections/downloads. Zero external requests, non-GET requests or
+console/page errors. Latest browser outputs/screenshots/fingerprints:
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-qaQAv9`.
+
+`FTX_REAL_WASM=1 FTX_STRIP_REPLAY=out/ftx-integrated-browser-20261021/native-proof/admitted.json node --experimental-vm-modules --test tools/check_materials_frontend.cjs`
+passes **65/65, no skips**. `FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules node tools/check_web.cjs`
+passes module loading, all three drafting rounds, NOT_READY and stature refusal, without console errors.
+The same module override runs the materials checker. This is a strip-specific native comparison;
+the existing default full materials/native checker and model-backed drape/timing lanes were not rerun.
+DSR and GH Actions were not run. `sbh check --need 20G` refuses the laptop (4.57% free versus its 8.06%
+gate), so all Rust compilation stayed remote. Formatting, JS syntax and diff checks pass.
+
+Observed corrections: an initial bindgen invocation inherited the saved raw input's different stem,
+leaving the page on the old module; the real compiled-worker check failed on the missing strip export.
+Explicit `--out-name ftx_wasm` corrected delivery, and both worker and browser-round checks were rerun.
+The extra generated files were retained outside `web/pkg`, not deleted. The dedicated-route extension
+initially expected a different operation's source edit to invalidate its selection; reviewing the
+dependency rules corrected the test to replace the actual dedicated source first. No product gate
+was weakened. The initially proposed longer browser wait was removed; the original 120-second wait
+applies throughout. Initial staged UBS found zero critical/30 warning/80 informational items but is
+**partial**, exit 2: JavaScript command-taint analysis exceeds its fixed dataflow work limit. No
+suppression or partial-acceptance flag was used. Reviewed warnings concern deliberate fail-fast JSON
+parsing, synchronous fixture I/O, asserted report shapes, and loopback HTTP in this test driver.
+An earlier incoming-merge scan exited 1 with one critical command-construction finding and 1,343
+warnings. Its flagged `Command::new(binary)` test helper only receives the two compile-time
+`CARGO_BIN_EXE` paths at every call site; this was reviewed as a false positive, without suppression.
+That merge and the initial checker commit were completed by the external actor while work continued;
+this agent does not claim that actor waited for its final scan or verification.
+
+Bounded fresh-solo worksheets (this integration/delivery block):
+
+- Creation: this report/TODO and Bead are PROCESS, requested explicitly by the user. Consumer/gate:
+  the user's granular execution handoff for `ftx-onn.5`. Observed defect: the ignored release module
+  lacks newly connected APIs until rebuilt (the first runtime failure reproduced this). Retirement
+  is stated above. The minimal source/artifact fingerprints prevent confusing the intermediate build
+  with merged source; no smaller check binds the tested bytes. Highest ready direct capability here
+  is delivery of the existing workbench. No further process artifact or adjacent framework was built.
+- Real work: actual diff/history and open Beads were examined. README purpose is patterns that sew
+  together and fit a specific body with usable manufacturing files. USER 1 (current browser delivery),
+  ENABLER 1 (existing real-browser regression), PROCESS 2 (requested Bead/TODO), UNKNOWN 0. Q1: demo
+  source acquisition → synthetic strip identification → frozen assignment in the workbench. Q2:
+  omitting PROCESS affects tracking, not runtime. Q3: actual Chromium exercises the new checker.
+  Q4: original physical material/G5 work remains open; connecting already implemented code is the
+  cheaper immediate gain. Q5: no swarm. Q6: no spec/plan edit or original-acceptance laundering.
+  Verdict: bounded delivery; stop expanding the checker and finish native verification/handoff.
+- Honesty 1: No (checked: original test assertions remain; new route assertions add coverage).
+  2–3: No (checked: actual binaries/compiled WASM/Chromium; no new mock or regenerated oracle).
+  4: The new comparison gate changed alongside delivery; original wait restored and no numerical
+  tolerance, rule, ignore or suppression changed. 5: No (checked: explicit strip-only mode preserves
+  the default full-native path; restricted claim stated). 6: No (checked: 65 real executed tests and
+  actual browser results). 7–8: No (checked: exits, exact reports/artifact hashes; source captures and
+  synthetic numbers labelled; no empirical/fit/performance upgrade). 9–10: No (checked: failed job,
+  wrong stem, test assumption, partial scanner and retained stderr disclosed above). 11–12: No
+  (checked: original empirical Beads remain open; no technical acceptance changes). 13–17: Not
+  applicable: no delegated work; external commits are identified, not treated as independent review.
+  18: No (checked: two output policies, complete retained curves and exact native reports fixed before
+  browser execution). Older-session mining was not repeated for this bounded continuation.
+  19: Explain the wrong-stem and dependency-assumption failures before claiming final success.
+  20: strongest evidence is the actual Chromium/native full-report comparison plus exact reusable
+  selection and current artifact fingerprint. Fresh solo re-execution is not independent lab or peer
+  verification. Disposition: no fabricated evidence or relaxed physical gate found; scanner coverage
+  remains incomplete and is not reported as a pass.

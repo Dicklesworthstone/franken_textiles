@@ -52,10 +52,10 @@ const server = http.createServer((req, res) => {
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('request', r => { methods.push(r.method()); if (!r.url().startsWith(origin) && !r.url().startsWith('blob:')) external.push(r.url()); });
   const input = async (id, value) => page.setInputFiles('#'+id, { name:id+'.json', mimeType:'application/json', buffer:Buffer.from(JSON.stringify(value)) });
-  const run = async (id, timeout = 120000) => {
+  const run = async id => {
     await page.click('#'+id);
     const op = id === 'search' ? 'catalog' : id;
-    await page.waitForFunction(op => new RegExp(`^${op} (complete|refused)`).test(document.getElementById('status').textContent), op, { timeout });
+    await page.waitForFunction(op => new RegExp(`^${op} (complete|refused)`).test(document.getElementById('status').textContent), op, { timeout:120000 });
     return await page.locator('#error').isVisible() ? page.textContent('#error') : '';
   };
   const download = name => page.locator(`a[download="${name}"]`).evaluate(async a => await (await fetch(a.href)).text());
@@ -80,6 +80,9 @@ const server = http.createServer((req, res) => {
         return JSON.parse(raw);
       };
       const retain = (name, raw) => fs.writeFileSync(path.join(work,name),raw,{flag:'wx'});
+      await page.fill('#query','mit.raw-2013.');
+      assert.equal(await run('search'),'');
+      assert.equal(await page.locator('#catalog option').count(),52);
       const acquisition = path.join(root,'crates/ftx-pattern/src/material_catalog/knit-strip-measurements.json');
       await page.locator('details').filter({has:page.locator('#stripAcquisition')}).evaluate(e => {e.open=true;});
       await page.setInputFiles('#stripAcquisitionRequest',acquisition);
@@ -100,7 +103,7 @@ const server = http.createServer((req, res) => {
         await page.setChecked('#calibrationEstimates',admission);
         assert.equal(await page.isDisabled('#assign'),true);
         assert.equal(await page.locator('a[download="material-calibration.json"]').count(),0);
-        assert.equal(await run('calibrate',600000),'');
+        assert.equal(await run('calibrate'),'');
         const raw = await download('material-calibration.json'), report = JSON.parse(raw);
         const expected = reference(admission ? 'admitted.json' : 'denied.json');
         for (const field of ['calibration','selection','selection_json']) assert.deepEqual(report[field],expected[field],field);
@@ -130,12 +133,27 @@ const server = http.createServer((req, res) => {
         assert.equal(binding.geometry_changed,false); assert.equal(binding.drape_materials_with_self_contact.ready,false);
         retain(`accepted-${admission}.json`,raw); retain(`pattern-${admission}.json`,await download('pattern.json'));
       }
+      // The dedicated input takes estimate policy from its file, independently of the generic checkbox.
+      await page.setChecked('#calibrationEstimates',false);
+      await page.setInputFiles('#stripFitRequest',fixture('synthetic-clamped-strip.json'));
+      assert.equal(await run('stripFit'),'');
+      const dedicatedRaw = await download('strip-calibration-report.json'), dedicated = JSON.parse(dedicatedRaw);
+      for (const field of ['calibration','selection','selection_json'])
+        assert.deepEqual(dedicated[field],reference('admitted.json')[field],`Dedicated strip ${field}`);
+      assert.equal(await download('strip-calibration-input.json'),fs.readFileSync(fixture('synthetic-clamped-strip.json'),'utf8'));
+      assert.equal(await download('strip-calibrated-selection.json'),dedicated.selection_json);
+      assert.equal(await page.inputValue('#selection'),dedicated.selection_json);
+      assert.equal(await page.isDisabled('#assign'),false);
+      retain('dedicated-strip.json',dedicatedRaw);
       await page.screenshot({path:path.join(work,'accepted.png'),fullPage:true});
       const unfinished = load('synthetic-clamped-strip.json'); unfinished.policy.max_iterations=1;
+      await input('stripFitRequest',unfinished);
+      assert.equal(await page.isDisabled('#assign'),true);
+      assert.equal(await page.locator('a[download="strip-calibrated-selection.json"]').count(),0);
       await input('calibrationRequest',unfinished);
       assert.equal(await page.isDisabled('#assign'),true);
       assert.equal(await page.locator('a[download="calibrated-selection.json"]').count(),0);
-      assert.equal(await run('calibrate',600000),'');
+      assert.equal(await run('calibrate'),'');
       const unfinishedRaw = await download('material-calibration.json'), rejected = JSON.parse(unfinishedRaw);
       assert.equal(rejected.calibration.accepted,false); assert.ok(rejected.calibration.reasons.length>0);
       assert.ok(rejected.calibration.starts.length>0); assert.equal(rejected.selection_json,null);
@@ -147,7 +165,7 @@ const server = http.createServer((req, res) => {
       const exhausted = load('synthetic-clamped-strip.json'); exhausted.policy.max_forward_solves=1;
       await input('calibrationRequest',exhausted);
       assert.equal(await page.locator('a[download="material-calibration.json"]').count(),0);
-      assert.match(await run('calibrate',600000),/budget/i);
+      assert.match(await run('calibrate'),/budget/i);
       assert.equal(await page.isDisabled('#assign'),true);
       assert.equal(await page.locator('a[download="calibrated-selection.json"]').count(),0);
       assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m => m==='GET'));
