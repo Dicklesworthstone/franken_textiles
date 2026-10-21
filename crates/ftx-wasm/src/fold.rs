@@ -10,7 +10,7 @@ use ftx_drape::run::{DrapeBody, DrapeOptions, drape, viewer};
 use ftx_pattern::Pattern;
 use serde_json::Value;
 
-/// The viewer page's template (Three.js from a CDN, the fold-up's frames embedded).
+/// The viewer page's template (the pinned renderer and fold-up frames are embedded).
 const TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template.html");
 
 /// A finished fold-up: `sim_report.json`'s content and the viewer page.

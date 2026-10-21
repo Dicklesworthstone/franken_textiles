@@ -211,6 +211,10 @@ fn viewer_rebuilds_fold_viewer_html_from_saved_drape_directory() {
     assert!(html.contains("data:text/javascript;base64,"));
     assert!(html.contains("Copyright © 2010-2023 three.js authors"));
     assert!(!html.contains("https://cdn.jsdelivr.net/"));
+    println!(
+        "viewer fixture: {}",
+        dir.join("sim/fold_viewer.html").display()
+    );
 
     // Custom --out path also works.
     let out_custom = Command::new(env!("CARGO_BIN_EXE_ftx"))

@@ -603,11 +603,12 @@ capture, offline-viewer and performance work remain open.
   replace template markers before user payload insertion and refuse missing/duplicated markers.
 - [x] Extend existing unit/CLI regressions and the existing browser checker with offline rendering,
   frame/pixel changes, controls and zero HTTP(S) requests. No new harness or crate.
-- [ ] Pass focused Rust tests and the actual native viewer reconstruction.
-- [ ] Pass all-target clippy and current workspace tests on frozen remote inputs.
-- [ ] Build WASM and execute its viewer generation, then open that generated HTML fully offline.
-- [ ] Record actual native/WASM artifact and browser outcomes; do not credit preview templating as compiled proof.
-- [ ] Fresh solo audit, scoped UBS review, Beads evidence/flush, commit and reservation handoff.
+- [x] Pass focused Rust tests and the actual native viewer reconstruction.
+- [x] Pass all-target clippy and workspace tests on the named frozen remote inputs.
+- [x] Build WASM and execute its viewer generation, then open that generated HTML fully offline.
+- [x] Record actual native/WASM artifact and browser outcomes; do not credit preview templating as compiled proof.
+- [x] Fresh solo audit, scoped UBS review, Beads evidence/flush and scoped commit/handoff preparation;
+  final commit and reservation-release receipts are in the session output.
 
 Checks are retained at
 `/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-offline-viewer-checks-pwtimqo3/`.
@@ -618,3 +619,145 @@ print while admission was queued. No local compilation followed; selected Rust/a
 and that request is retried. This is a source-freeze mistake, not a passing compiler result.
 An external HTML preview reuses the prior real production payload to check the proposed module packaging;
 it is labelled `preview-not-compiled.html` and cannot establish Rust/WASM generation acceptance.
+
+The frozen native command now exits **zero** on `ovh-b`: `RCH_REQUIRE_REMOTE=1 rch exec --base
+37e80c9 --clean-overlay --overlay-path crates/ftx-cli/tests/sim_points.rs -- cargo test --locked -j1
+--no-fail-fast -- --nocapture`. Its complete denominator is **1,668 passed, zero failed, 28 ignored**
+across 234 test-result groups (including empty binary/doc groups). Both new `animation` regressions
+and the real CLI viewer reconstruction pass. This is the named frozen source, not later incoming
+material/sewing changes on shared main. The sole overlay adds the printed artifact path; no assertion
+or test selection is relaxed. `workspace-ovh.log` retains the remote exit and overlay receipt.
+
+That CLI-produced synthetic 12-vertex, 20-frame HTML is retained as `native-fold-viewer.html`,
+SHA-256 `844a3f2b5976afc3323552965467414febd9eb00cf5b1f0c4d6317841b691740`.
+Two fresh offline Chromium executions pass file and blob rendering, upstream-module hashes and full
+license, retained-frame navigation, differing board/draped pixels and playback, with **zero HTTP(S)
+requests and zero page errors**. The second complete output is `native-offline.log`; this is actual
+CLI generation/rendering evidence, not a physical cloth or real-person fit result.
+
+The frozen no-overlay `cargo build --locked -j1 --target wasm32-unknown-unknown -p ftx-wasm`
+also exits **zero**, remotely on `hz3`. Its returned raw WASM is 186,280,077 bytes, SHA-256
+`dc71b587623b8de0c7444ac073c98593838d94d8338aa7125244e858a5f9a1a7`, independently reread from
+the worker and matched locally. `wasm-any-linux.log` and `wasm-artifact.json` identify the source,
+artifact and fresh external wasm-bindgen 0.2.128 Node bindings. Actual production-Anny `fold_up`
+execution is running; its generation/rendering acceptance remains pending until that command finishes.
+
+Resource failures remain part of the record: earlier explicit-worker requests time out with
+RCH-I001/exit 103; Windows selection refuses this WASM target instead of bypassing target-OS policy.
+Two obsolete queued requests were cancelled by their exact owned PID/parent/argv; no peer job was
+stopped. Fresh probes found `ovh-b` healthy and `wsurf` healthy for its supported OS, so their stale
+temporary bypasses were cleared using `rch workers enable`; critical-low-disk `hz4` remained bypassed.
+No capacity threshold was lowered or worker data cleaned. DSR registry lookup and the prescribed
+quality dry-run exit **4** because `franken_textiles` has no configured tool entry; no substitute
+release/quality claim or new DSR configuration is made.
+
+The full scoped UBS scan exits **2/partial**: ast-grep truncates output at 16,777,216 bytes while
+analyzing the unmodified minified renderer. Its six critical JS findings were inspected in context:
+two existing Playwright `$eval` callbacks misclassified as dynamic eval; two upstream pointer-number
+loose comparisons; a constant-time warning on the minified line (which includes ordinary shader/cache
+comparisons, not an authentication path); and two frozen `__proto__:null` constructor-name tables
+matched by the prototype-pollution regex. The last finding was initially attributed too broadly to
+generic upstream property assignment; rereading the exact scanner pattern and both source matches
+corrects that attribution. This is
+a bounded integration review, not an upstream security certification or a clean complete scanner pass.
+The Rust lane reports zero critical findings. No vendor bytes, scanner rule or suppression was changed.
+
+The matching frozen remote `cargo clippy --locked -j1 --all-targets -- -D warnings` exits **zero**
+on `ovh-b` (`clippy-ovh.log`). Final local `cargo fmt --check`, Node syntax and `git diff --check`
+pass. The current ordinary frontend lane passes **72/74 tests, zero failures, two optional compiled
+cases skipped**; it explicitly uses DOM/WASM doubles and is not the new module's execution proof.
+After the frozen builds, the stale CDN wording in `ftx-wasm/src/fold.rs` is corrected as a comment-only
+change; no compiled behavior changes. Incoming peer material/sewing code is preserved and receives
+no completion credit from this viewer block.
+
+Creation worksheet for this bounded continuation (October 20/21): runtime does not branch on this
+report. Consumer: the user who explicitly requested the granular TODO; gate: accurate `ftx-onn.2`
+completion handoff; observed defect: the downloaded page attempts two CDN imports and renders no
+canvas offline; retirement: these checklist rows become completed handoff history when the Bead
+closes. No integrity-control exception is used (its four prompts are inapplicable because the explicit
+consumer/gate already applies). Highest ready capability: making this existing viewer work offline;
+an hour extending reporting would deliver less value than finishing its actual WASM execution.
+Verdict: retain this minimal extension to the existing requested report; create no new framework.
+
+Actual new compiled-WASM execution finishes successfully through `WebBody`, `run` and `fold_up`,
+freeing every handle in `finally`. Inputs are the public-prior admitted Anny asset and the synthetic
+92 cm / 30 month chart bolero, not a real wearer's data. Output lives in `wasm-bolero-RsL0xJ/`:
+the 3,923,390-byte HTML has SHA-256
+`0827c84c2ac2622dd7eddea1856958b9ad1cf04b66c524bbd09e2ba0b4ee2248`.
+The complete `wasm-offline.log` confirms offline file/blob rendering, exact module hashes/license,
+frame/pixel changes and playback, **zero HTTP(S) requests and zero page errors**. The actual final
+canvas was visually inspected. The report has no gating flags and 30 consecutive numerically quiet
+steps; this does not establish static stress equilibrium or real-person fit. Its SHA-256 remains
+`d6f1d1cf8c89db4b456e2d3b3018ae86b3fa795ad75dea0ca07415630fa624d4`.
+The embedded 2,978,334-byte payload also matches the earlier real browser output byte for byte,
+SHA-256 `bcdc2dbd48bfdab0ca6f0f407dfb9f79ae691ccbe3dca129019f3b5b5ce76d87`.
+This is one repeated bolero case across old/new WASM artifacts, not a new native/WASM differential
+suite, oracle fixture, performance benchmark or entire browser/release gate.
+
+Fresh solo audit of this offline block (no independent verifier or delegated agent):
+
+- Real-work window: `ftx-onn.2`, from CDN failure reproduction through actual generation/rendering.
+  Purpose from README/charter: sewing patterns that sew together and fit a specific body, with usable
+  manufacturing files. Actual scoped history reviewed: `ba5bd20` USER (embedded renderer, generator
+  and regressions), `460e9f6` PROCESS (contract provenance), `37e80c9` PROCESS (exception/TODO),
+  `f15c26a` PROCESS (Bead evidence), `ceb43bf` ENABLER (executed offline browser checker).
+  Tally by these five commits: USER 1, ENABLER 1, PROCESS 3, UNKNOWN 0; commit counts are not value
+  or effort metrics. The remaining test-path print/comment and this handoff are bounded support.
+  Demo in two minutes: disconnect networking, open the downloaded HTML and scrub/play the drape.
+  Omitting PROCESS would change traceability and the requested checklist, not rendering; stop adding
+  reporting after this handoff. Existing native/Chromium consumers exercise the ENABLER now.
+  Oldest open user-facing item is the release gauntlet `ftx-onn`; this actual offline failure blocked
+  a smaller deliverable, while measured-material and hardware-bound release proof remain unfinished.
+  Swarm comparison is inapplicable: no agents were dispatched. No spec-only success or follow-up
+  laundering: the named packaging exception accompanies the actual renderer, the parent stays open.
+  Verdict HEALTHY by delivered capability/effort, with too many automatic support commits to treat
+  commit counts as progress; correction is to finish this handoff and return to product work.
+- Honesty 1: No (checked: complete owned unit/CLI/browser test diffs; assertions only added, no CI,
+  fixture, ignore or tolerance edits). 2: No (checked: exact upstream modules and actual Rust/WASM/
+  Chromium execution; the external preview remains explicitly labelled). 3: No (checked: no oracle
+  or golden paths changed). 4: Product and checker changed together; reviewed the added positive
+  assertions separately, including module hashes, nonidentical pixels and zero requests. No scanner
+  bypass or tolerance relaxation; unsafe shell output redirection was refused and replaced with
+  exclusive creation of a fresh log, preserving stderr. 5: No (checked: ordinary shared generator,
+  no fixture detection or fabricated renderer). 6: No (checked: 1,668 executed native tests, actual
+  generated pages and live canvases; empty result groups are included openly in the group count).
+  7: No (checked: observed remote exits/artifact hash and both browser logs). 8: No (checked:
+  preview, synthetic CLI cache, real compiled WASM and prior browser comparison are separate claims).
+  9: The source-freeze mistake, admission failures, unavailable DSR entry and partial UBS scan remain
+  disclosed; the prototype-warning attribution was corrected after reading exact source matches.
+  10: No (checked: compiler/browser stderr is retained; existing helper suppression was removed).
+  11: No (checked: only the positive offline-viewer acceptance is eligible for closure; parent and
+  empirical/performance work stay open). 12: The source/spec exception deliberately changes CDN
+  packaging, documented before implementation; original numerical/control/payload requirements and
+  fixtures are preserved. No claim of reference-identical HTML bytes.
+  13–17: Inapplicable because the work is solo; external shared-main commits are preserved and are
+  not accepted as delegated verification or credited to this block. 18: No (checked: complete native
+  suite and offline positive path were selected before results; failed admissions are not passes).
+  Older-session mining is outside this bounded block; the earlier CASS timeout is already disclosed.
+  19: Explain the late fixture print invalidating the first admission, the initial overbroad scanner
+  attribution, and why frozen-source checks cannot certify later incoming shared-main features.
+  20: Strongest reproducible evidence: actual CLI and new compiled-WASM HTML both create canvases,
+  change rendered frames and play in real Chromium with networking disabled and zero HTTP requests.
+  Disposition: positive capability verified by fresh solo re-execution, not independently verified.
+  RH-1/RH-2 countermeasures are retained assertions, explicit proof classes and exact source/artifact
+  boundaries; the failed requests/partial scanner remain visible. No accuracy gate was weakened.
+
+Final local integration: the four previously owned ignored `web/pkg` outputs were copied to
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-before-offline-web-pkg-ltyfaudn/` before
+the existing wasm-bindgen web step refreshed them from the verified raw module. No Rust compilation
+ran locally. The refreshed browser WASM is 39,202,236 bytes, SHA-256
+`e372ee64bf7d1f46b631cf92d1a87f595c9e735676404f952146dbf5b22de4d7`; `web-pkg-refresh.json`
+records all four hashes. `node tools/check_web.cjs` with the installed Playwright-core override
+then exits **zero**: real module loading, all three chart programs, empty-tape NOT_READY, invalid
+stature refusal and zero console errors (`web-current-wasm.log`). This command omits `--model`;
+the new module's actual bolero generation/offline rendering is the separately recorded check above.
+
+The exact staged `ubs $(git diff --name-only --cached)` exits **zero**: two Rust files scanned,
+zero critical, 85 warning and 52 informational findings. Changed-line review identifies only the
+intentional test fixture-path print; remaining assertions/unwraps/clones are test mechanics and
+the JSON string-key indexing warnings do not establish array bounds failures. This pass does not
+replace the disclosed partial scan of the already committed upstream renderer. No suppression or
+pre-commit bypass was used. `ftx-onn.2` is now closed with source-bound positive acceptance and the
+fresh-solo limitation, and `br sync --flush-only` reports nothing left to export. Parent `ftx-onn`,
+empirical material/fit work and performance gates stay open. Both unrelated untracked roots and all
+incoming peer edits remain untouched.
