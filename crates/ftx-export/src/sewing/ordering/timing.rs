@@ -1,8 +1,8 @@
 //! Exact, directed setup durations for the existing bounded scheduling search. Integer milliseconds
 //! keep pruning and tie comparisons exact; no measured time is inferred from setup-change counts.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use ftx_core::Refusal;
+use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::materials::{Evidence, Source};
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +11,20 @@ use crate::sewing::{SewingPass, bad, qualified_text};
 
 const MAX_TRANSITIONS: usize = 4096;
 const MAX_MILLISECONDS: u32 = 86_400_000;
+type Durations<'a> = BTreeMap<(&'a Setup, &'a Setup), usize>;
+
+fn duration(rows: &Durations<'_>, from: &Setup, to: &Setup) -> Result<usize, Refusal> {
+    if from == to {
+        Ok(0)
+    } else {
+        rows.get(&(from, to)).copied().ok_or_else(|| {
+            bad(format!(
+                "missing directed setup duration: {}/{} -> {}/{}",
+                from.needle, from.thread, to.needle, to.thread
+            ))
+        })
+    }
+}
 
 /// One directed, complete needle/thread change. Combined changes are not added independently.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,6 +63,13 @@ pub struct SetupTimes {
 }
 
 impl SetupTimes {
+    fn rows(&self) -> Durations<'_> {
+        self.transitions
+            .iter()
+            .map(|row| ((&row.from, &row.to), row.milliseconds as usize))
+            .collect()
+    }
+
     pub(super) fn validate(&self, machine: &str) -> Result<(), Refusal> {
         if self.machine != machine
             || !qualified_text(&self.machine)
@@ -86,6 +107,33 @@ impl SetupTimes {
         Ok(())
     }
 
+    /// Preflight a recipe search's entire timing domain. Missing evidence must not be mistaken for
+    /// an infeasible recipe and thereby produce a false optimum among only the known timings.
+    pub(crate) fn check_choices(
+        &self,
+        machine: &str,
+        choices: &BTreeSet<Setup>,
+        initial: &Setup,
+    ) -> Result<(), Refusal> {
+        if choices.is_empty() || choices.len() > 64 {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "timed recipe selection supports 1..64 distinct candidate setups",
+            ));
+        }
+        self.validate(machine)?;
+        if !initial.valid() || choices.iter().any(|s| !s.valid()) {
+            return Err(bad("invalid recipe or initial setup in timing domain"));
+        }
+        let rows = self.rows();
+        for from in choices.iter().chain(std::iter::once(initial)) {
+            for to in choices {
+                duration(&rows, from, to)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Costs between the active jobs and from the known initial setup (last row). Unused timing
     /// rows remain legal so a recipe search can reuse one evidence table across all its candidates.
     pub(super) fn matrix(
@@ -93,11 +141,7 @@ impl SetupTimes {
         passes: &[&SewingPass],
         initial: &Setup,
     ) -> Result<Vec<Vec<usize>>, Refusal> {
-        let rows: BTreeMap<_, _> = self
-            .transitions
-            .iter()
-            .map(|row| ((&row.from, &row.to), row.milliseconds as usize))
-            .collect();
+        let rows = self.rows();
         let mut setups: Vec<_> = passes
             .iter()
             .map(|p| Setup {
@@ -111,18 +155,7 @@ impl SetupTimes {
             .map(|from| {
                 setups[..passes.len()]
                     .iter()
-                    .map(|to| {
-                        if from == to {
-                            Ok(0)
-                        } else {
-                            rows.get(&(from, to)).copied().ok_or_else(|| {
-                                bad(format!(
-                                    "missing directed setup duration: {}/{} -> {}/{}",
-                                    from.needle, from.thread, to.needle, to.thread
-                                ))
-                            })
-                        }
-                    })
+                    .map(|to| duration(&rows, from, to))
                     .collect()
             })
             .collect()

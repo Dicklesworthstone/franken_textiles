@@ -160,3 +160,73 @@ fn malformed_input_and_unknown_estimate_flag_cannot_bypass_source_policy() {
     assert!(value.get("result").is_none());
     assert!(value["refusal"].is_object());
 }
+
+const TIMED: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-sewing-timed-selection.json");
+
+#[test]
+fn actual_timed_selection_and_replay_keep_source_durations_and_joint_objective() {
+    let dir = workspace();
+    fs::write(dir.join("request.json"), TIMED).unwrap();
+    let out = invoke(&dir, &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let job = &envelope["result"];
+    let expected: Value =
+        serde_json::from_str(&ftx_export::sewing_selection::select_json(PATTERN, TIMED).unwrap())
+            .unwrap();
+    assert_eq!(job, &expected);
+    assert_eq!(job["report"]["selected_objective_seconds"], 8.0);
+    assert_eq!(job["report"]["selected_choices"]["join"], "template");
+    assert_eq!(job["report"]["selected_choices"]["finish"], "template");
+    assert_eq!(job["report"]["trials"][3]["feed_seconds"], 4.0);
+    assert_eq!(job["report"]["trials"][3]["objective_seconds"], 14.0);
+    assert_eq!(job["report"]["optimality_proven"], true);
+    fs::write(
+        dir.join("chosen.json"),
+        job["selected_options_json"].as_str().unwrap(),
+    )
+    .unwrap();
+    let replay = Command::new(env!("CARGO_BIN_EXE_ftx-materials"))
+        .current_dir(&dir)
+        .args(["sew-stitches", "pattern.json", "chosen.json"])
+        .output()
+        .unwrap();
+    assert!(
+        replay.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    let replay: Value = serde_json::from_slice(&replay.stdout).unwrap();
+    assert_eq!(replay["plan"], job["report"]["selected_plan"]);
+    assert_eq!(replay["plan"]["schema"], "ftx-sewing-plan/9");
+    assert_eq!(replay["stitches"].as_array().unwrap().len(), 80);
+    assert_eq!(
+        fs::read_to_string(dir.join("pattern.json")).unwrap(),
+        PATTERN
+    );
+    assert_eq!(fs::read_to_string(dir.join("request.json")).unwrap(), TIMED);
+}
+
+#[test]
+fn real_command_rejects_unmeasured_timing_before_publishing_any_recipe() {
+    let dir = workspace();
+    let mut request: Value = serde_json::from_str(TIMED).unwrap();
+    request["options"]["ordering"]["setup_times"]["transitions"] = json!([]);
+    fs::write(dir.join("request.json"), request.to_string()).unwrap();
+    let out = invoke(&dir, &[]);
+    assert!(!out.status.success());
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(envelope.get("result").is_none());
+    assert!(
+        envelope["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("duration")
+    );
+    assert!(!invoke(&dir, &["--allow-estimates"]).status.success());
+}

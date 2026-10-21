@@ -34,3 +34,27 @@ fn absent_incumbents_have_no_options_and_malformed_inputs_refuse() {
     request["unknown_field"] = json!(true);
     assert!(ftx_wasm::sew_select(PATTERN, &request.to_string()).is_err());
 }
+
+#[test]
+fn file_free_timed_selection_preserves_complete_plan_and_withdraws_unknown_time_results() {
+    let timed =
+        include_str!("../../../tests/fixtures/materials/synthetic-sewing-timed-selection.json");
+    let text = ftx_wasm::sew_select(PATTERN, timed).unwrap();
+    assert_eq!(
+        text,
+        ftx_export::sewing_selection::select_json(PATTERN, timed).unwrap()
+    );
+    let job: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(job["report"]["selected_objective_seconds"], 8.0);
+    let plan: Value = serde_json::from_str(
+        &ftx_wasm::manufacturing::sew_plan(PATTERN, job["selected_options_json"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plan, job["report"]["selected_plan"]);
+    assert_eq!(plan["ordering"]["timing"]["feed_and_setup_seconds"], 8.0);
+    assert_eq!(plan["hardware_execution_authorized"], false);
+    let mut request: Value = serde_json::from_str(timed).unwrap();
+    request["options"]["ordering"]["setup_times"]["allow_estimates"] = json!(false);
+    assert!(ftx_wasm::sew_select(PATTERN, &request.to_string()).is_err());
+}

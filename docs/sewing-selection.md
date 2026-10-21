@@ -2,7 +2,8 @@
 
 `ftx materials sew-select PATTERN.json REQUEST.json --json` searches explicit needle, thread,
 maximum-pitch and stitch-rate choices using the **existing complete sewing planner**. It selects the
-admitted complete job with the least generated continuous-feed time. It does not manufacture process
+admitted complete job with the least generated continuous-feed time, or explicitly qualified feed-plus-setup
+time in version 2. It does not manufacture process
 qualification from fiber names, machine capabilities alone, or synthetic material presets.
 
 ## Runnable synthetic job
@@ -54,7 +55,7 @@ that resulting operation remains inside the independent process window.
 ## Search outcomes and limits
 
 The template is evaluated first. Groups and recipes are then traversed by operation/recipe ID,
-independent of input array order; exact time ties retain the first admitted job. The objective is
+independent of input array order; exact time ties retain the first admitted job. The version-1 objective is
 actual generated **continuous feed seconds**, including repeated backtack travel. It does not include
 setup duration, handling, acceleration or loading and is not an estimate of garment production time.
 Existing optional setup-change ordering is executed for each admitted job under the unchanged policy;
@@ -73,6 +74,65 @@ are counted separately as `unresolved_trials`; neither category supports an infe
 claim. `optimality_proven` requires an admitted plan, exhaustive enumeration and no unresolved trial.
 `no_feasible_listed_recipe` requires exhaustive, definitive refusals; it is not physical impossibility.
 The best **complete** incumbent remains available after interruption. No partial garment plan is saved.
+
+## Directed setup durations and the joint objective
+
+An ordinary job may now request `ordering.objective: "minimize_setup_time"` with a known
+`initial_setup` (exact needle/thread IDs) and `setup_times`. This selects `ftx-sewing-plan/9` and uses
+the existing dependency scheduler, preserving complete operation geometry, pressure/fold handling,
+qualification and backtack checks. Count-only ordering and untimed plans retain their previous outputs.
+
+The timing table names the exact `machine` ID, a `source` (reference, accessed_on, note), `method`,
+`conditions`, `evidence`, independent `allow_estimates`, and directed `transitions`. Each row has
+`from` and `to` needle/thread setups and `milliseconds`, an integer from zero to 86400000. Timing a
+combined needle/thread change is one whole-setup observation, not two inferred independent durations.
+Reverse changes need separate rows. No change costs zero; explicit no-change rows and duplicates
+refuse. Missing changes are **unknown**, not zero. The known initial setup is charged; no final reset
+is assumed. The table is limited to 4096 rows, all under the same source/protocol and evidence policy.
+
+The scheduler compares integer milliseconds with a conservative lower bound valid for asymmetric,
+nonmetric durations. A longer sequence of cheap changes can beat fewer expensive ones. Its
+`ordering.timing` reports baseline/selected setup milliseconds, the proved lower bound and generated
+`feed_and_setup_seconds`. Existing change counts are also retained but are not optimized in time mode.
+Scheduling remains limited to 20 passes and the declared search-node budget. A budget stop returns a
+complete feasible incumbent and explicitly does not claim a duration optimum.
+
+To choose recipes as well as their order, set the request schema to **`ftx-sewing-selection/2`** and
+`objective` to **`minimize_feed_and_setup_seconds`**. Its ordinary `options.ordering` must use the
+timed policy above. Every candidate is regenerated and scheduled by the same production planner;
+selection compares that planner's actual feed-plus-setup result, not a lookup by nominal recipe pitch.
+
+```sh
+cargo run -p ftx-cli --bin ftx -- materials sew-select \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  tests/fixtures/materials/synthetic-sewing-timed-selection.json --json > timed-selection.json
+```
+
+The new fixture is entirely synthetic. Two prerequisite-ordered operations use eight feed seconds
+without a setup change. Their faster recipes need only four feed seconds but require a ten-second
+changeover, so the selector retains the eight-second template, not the fourteen-second alternative.
+Changing only the declared entry-change duration to three seconds makes both faster recipes win at
+seven seconds. The reverse change is independently declared at seven seconds; mixed jobs are compared
+with their actual directed changes. Neither example is a measured production-time improvement.
+
+The timing domain is checked **before** the recipe search: all directed pairs among up to 64 distinct
+candidate setups and initial-to-candidate changes need source rows, even when prerequisites would
+exclude some transitions. Unused rows are allowed so one table can cover the alternatives. This
+conservative complete-domain requirement avoids declaring an unmeasured recipe infeasible and then
+claiming a false optimum among only the known durations. Invalid or missing timings refuse the
+request; they are never dropped from the candidate list or repaired with count weights.
+
+Version-2 reports retain each admitted trial's `objective_seconds` and
+`ordering_optimality_proven`, plus `selected_objective_seconds` for the complete incumbent. The outer
+`search_complete` and `budget_exhausted` still refer only to recipe enumeration. Every incomplete
+inner schedule is now an `unresolved_trial`, even though its complete incumbent remains admissible.
+Thus exhaustive recipe enumeration alone cannot prove the joint optimum. Version-1 feed-only results
+remain independent of schedule proof, and their original serialized fields are unchanged.
+
+Feed and setup seconds exclude handling, loading, acceleration, parallel machines, stoppages and final
+reset. Source timing conditions are retained, not matched automatically to machine sensors or workers.
+Neither timing measurements nor successful recipe qualification demonstrate empirical seam quality or
+total garment cycle time. Timing-estimate permission cannot relax any material or process evidence gate.
 
 ## Replay and browser boundary
 

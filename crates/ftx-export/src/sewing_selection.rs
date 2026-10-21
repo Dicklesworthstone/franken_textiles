@@ -9,7 +9,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::Pattern;
 use serde::{Deserialize, Serialize};
 
-use crate::sewing::{SewOptions, SewPlan, SewingPass};
+use crate::sewing::{SewOptions, SewPlan, SewingPass, ordering};
 
 const MAX_TRIALS: usize = 64;
 const MAX_OPERATIONS: usize = 64;
@@ -55,24 +55,27 @@ pub struct Alternatives {
 }
 
 /// Explicit objective with no hidden seam-quality or setup-duration weight.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Objective {
     /// Minimize actual generated continuous-feed seconds, counting locks and repeated travel.
     MinimizeFeedSeconds,
+    /// Minimize generated feed plus source-qualified setup seconds, including initial setup.
+    /// Requires the timed ordering objective; neither term includes handling or final reset.
+    MinimizeFeedAndSetupSeconds,
 }
 
 /// Search a finite Cartesian product of recipes, retaining the original complete job as a candidate.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// Must equal `ftx-sewing-selection/1`.
+    /// `/1` for feed only; `/2` for the explicit joint feed-and-setup objective.
     pub schema: String,
     /// Complete template job. `require_qualification` must be true; it is never silently enabled.
     pub options: SewOptions,
     /// One to twelve operations with explicit alternatives; unlisted operations remain unchanged.
     pub alternatives: Vec<Alternatives>,
-    /// Exactly the declared continuous-feed objective, not an estimate of handling or setup time.
+    /// Explicit feed-only or joint feed-and-setup objective; neither is total production time.
     pub objective: Objective,
     /// Maximum complete-plan evaluations, including refused trials and the original template, 1..64.
     pub max_plan_evaluations: usize,
@@ -89,12 +92,18 @@ pub struct Trial {
     pub stitch_intervals: Option<usize>,
     /// Original shared-planner refusal; no weakened retry or manufactured feasible result.
     pub refusal: Option<Refusal>,
+    /// Actual joint score when admitted in timed mode; omitted in feed-only mode or on refusal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective_seconds: Option<f64>,
+    /// Inner schedule proof for a timed trial. False retains a complete incumbent, not an optimum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ordering_optimality_proven: Option<bool>,
 }
 
 /// Complete incumbent plus explicit finite-search status. A refused template does not stop repair.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `ftx-sewing-selection-report/1`.
+    /// `/1` for feed only, `/2` for the joint timed objective.
     pub schema: &'static str,
     /// Original request, including all candidate settings and independent qualification evidence.
     pub request: Request,
@@ -108,20 +117,24 @@ pub struct Report {
     pub selected_choices: Option<BTreeMap<String, String>>,
     /// Exact production plan, retaining material/qualification/pressure/ordering receipts.
     pub selected_plan: Option<SewPlan>,
-    /// Plan trials interrupted by resource/convergence limits. They are not infeasible recipes.
+    /// Joint feed-and-setup score for the incumbent; omitted in feed-only mode or with no incumbent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_objective_seconds: Option<f64>,
+    /// Trials interrupted by resource/convergence limits, or unproved inner schedules in timed mode.
+    /// They are not infeasible recipes; a complete admitted incumbent may still be retained.
     pub unresolved_trials: usize,
     /// Every supplied combination was examined; no assertion about unlisted process recipes.
     pub search_complete: bool,
     /// Work stopped before exhausting the supplied combinations, with or without an incumbent.
     pub budget_exhausted: bool,
     /// True only with a feasible plan, exhaustive recipe search and no unresolved plan trials.
-    /// The objective is continuous feed alone.
-    /// Any separate ordering optimizer's proof remains in `selected_plan.ordering`.
+    /// Timed mode additionally requires every admitted trial's inner schedule to be proved optimal.
+    /// Feed-only mode remains independent of the ordering optimizer's separate proof.
     pub optimality_proven: bool,
     /// All listed combinations were definitively refused, without resource/convergence exhaustion;
     /// does not establish physical or global infeasibility.
     pub no_feasible_listed_recipe: bool,
-    /// Equal feed times retain the first admitted combination, preferring the original job.
+    /// Equal objective values retain the first admitted combination, preferring the original job.
     pub tie_break: &'static str,
 }
 
@@ -141,9 +154,13 @@ struct Group<'a> {
 
 impl Request {
     fn groups(&self) -> Result<Vec<Group<'_>>, Refusal> {
-        if self.schema != "ftx-sewing-selection/1" || !self.options.require_qualification {
+        let schema = match self.objective {
+            Objective::MinimizeFeedSeconds => "ftx-sewing-selection/1",
+            Objective::MinimizeFeedAndSetupSeconds => "ftx-sewing-selection/2",
+        };
+        if self.schema != schema || !self.options.require_qualification {
             return Err(invalid(
-                "sewing selection requires ftx-sewing-selection/1 and explicit require_qualification=true",
+                "sewing selection needs schema /1 for feed only or /2 for feed plus setup, and explicit require_qualification=true",
             ));
         }
         if !(1..=MAX_TRIALS).contains(&self.max_plan_evaluations)
@@ -217,6 +234,44 @@ impl Request {
             });
         }
         groups.sort_by(|a, b| a.operation.cmp(b.operation));
+        let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds;
+        if timed
+            && self.options.ordering.as_ref().is_none_or(|policy| {
+                policy.objective != ordering::Objective::MinimizeSetupTime
+                    || policy.initial_setup.is_none()
+                    || policy.setup_times.is_none()
+            })
+        {
+            return Err(invalid(
+                "joint timed selection requires minimize_setup_time ordering with initial_setup and source setup_times",
+            ));
+        }
+        if let Some(policy) = &self.options.ordering
+            && let Some(times) = &policy.setup_times
+        {
+            let initial = policy.initial_setup.as_ref().ok_or_else(|| {
+                invalid("timed recipe ordering requires an explicit initial setup")
+            })?;
+            if policy.objective != ordering::Objective::MinimizeSetupTime {
+                return Err(invalid("setup times require the timed ordering objective"));
+            }
+            let choices: BTreeSet<_> = self
+                .options
+                .passes
+                .iter()
+                .map(|p| ordering::Setup {
+                    needle: p.needle.clone(),
+                    thread: p.thread.clone(),
+                })
+                .chain(groups.iter().flat_map(|g| {
+                    g.recipes.iter().map(|r| ordering::Setup {
+                        needle: r.needle.clone(),
+                        thread: r.thread.clone(),
+                    })
+                }))
+                .collect();
+            times.check_choices(&self.options.machine.id, &choices, initial)?;
+        }
         Ok(groups)
     }
 
@@ -239,6 +294,8 @@ impl Request {
         let mut trials = Vec::new();
         let mut selected_plan: Option<SewPlan> = None;
         let mut selected_choices = None;
+        let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds;
+        let mut selected_score = None;
         let mut indices = vec![0; groups.len()];
         loop {
             let mut options = self.options.clone();
@@ -258,15 +315,32 @@ impl Request {
                 feed_seconds: None,
                 stitch_intervals: None,
                 refusal: None,
+                objective_seconds: None,
+                ordering_optimality_proven: None,
             };
             match SewPlan::build(pattern, &options) {
                 Ok(plan) => {
                     trial.feed_seconds = Some(plan.feed_seconds);
                     trial.stitch_intervals = Some(plan.stitch_intervals);
-                    if selected_plan
-                        .as_ref()
-                        .is_none_or(|old| plan.feed_seconds < old.feed_seconds)
-                    {
+                    let score = if timed {
+                        let schedule = plan
+                            .ordering
+                            .as_ref()
+                            .ok_or_else(|| invalid("admitted timed recipe lost its schedule"))?;
+                        let time = schedule.timing.as_ref().ok_or_else(|| {
+                            invalid("admitted timed recipe lost its duration accounting")
+                        })?;
+                        trial.objective_seconds = Some(time.feed_and_setup_seconds);
+                        trial.ordering_optimality_proven = Some(schedule.optimality_proven);
+                        time.feed_and_setup_seconds
+                    } else {
+                        plan.feed_seconds
+                    };
+                    if !score.is_finite() {
+                        return Err(invalid("nonrepresentable sewing selection objective"));
+                    }
+                    if selected_score.is_none_or(|old| score < old) {
+                        selected_score = Some(score);
                         selected_choices = Some(trial.choices.clone());
                         selected_plan = Some(plan);
                     }
@@ -296,23 +370,32 @@ impl Request {
                         r.code,
                         RefusalCode::BudgetExceeded | RefusalCode::NotConverged | RefusalCode::Io
                     )
-                })
+                }) || trial.ordering_optimality_proven == Some(false)
             })
             .count();
         Ok(Report {
-            schema: "ftx-sewing-selection-report/1",
+            schema: if timed {
+                "ftx-sewing-selection-report/2"
+            } else {
+                "ftx-sewing-selection-report/1"
+            },
             request: self.clone(),
             pattern_sha256,
             candidate_combinations: combinations,
             trials,
             selected_choices,
             selected_plan,
+            selected_objective_seconds: if timed { selected_score } else { None },
             unresolved_trials,
             search_complete,
             budget_exhausted: !search_complete,
             optimality_proven: search_complete && has_plan && unresolved_trials == 0,
             no_feasible_listed_recipe: search_complete && !has_plan && unresolved_trials == 0,
-            tie_break: "template first, then operation ID / recipe ID lexicographic; retain first equal feed time",
+            tie_break: if timed {
+                "template first, then operation ID / recipe ID lexicographic; retain first equal feed-plus-setup time"
+            } else {
+                "template first, then operation ID / recipe ID lexicographic; retain first equal feed time"
+            },
         })
     }
 }
