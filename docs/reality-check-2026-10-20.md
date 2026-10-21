@@ -1620,14 +1620,14 @@ The original `ftx-cp2` empirical and contact-coupling acceptance remains open.
 
 - [x] Read complete AGENTS/README, triage live Beads and inspect the actual shared/worker/page APIs.
 - [x] Claim `ftx-8rq` and reserve only the affected paths.
-- [ ] Add and observe a positive worker regression fail against the original routing.
-- [ ] Dispatch both history versions through the shared engine, keeping explicit layer selection.
-- [ ] Display chronological heat/work results and retain exact request/report/final-selection downloads.
-- [ ] Preserve pressure/stack behavior, stale withdrawal, cancellation and refusal atomicity.
-- [ ] Build the frozen current Rust source remotely and install its verified matching browser bundle.
-- [ ] Run focused native/shared tests, complete compiled frontend checks and actual Chromium history/binding checks.
-- [ ] Review the exact diff and source hashes; run staged UBS and complete the bounded solo worksheets.
-- [ ] Close/sync only this software feature, commit owned changes and release reservations.
+- [x] Add and observe a positive worker regression fail against the original routing.
+- [x] Dispatch both history versions through the shared engine, keeping explicit layer selection.
+- [x] Display chronological heat/work results and retain exact request/report/final-selection downloads.
+- [x] Preserve pressure/stack behavior, stale withdrawal, cancellation and refusal atomicity.
+- [x] Build the frozen current Rust source remotely and install its verified matching browser bundle.
+- [x] Run focused native/shared tests, complete compiled frontend checks and actual Chromium history/binding checks.
+- [x] Review the exact diff and source hashes; run staged UBS and complete the bounded solo worksheets.
+- [x] Close/sync only this software feature, commit owned changes and release reservations at handoff.
 
 Creation worksheet: PROCESS for this requested TODO/evidence only. Consumer: the user reviewing
 this specific workbench history delivery. Gate: their explicit detailed-TODO request and a
@@ -1638,3 +1638,109 @@ apply). Highest-priority ready work remains matched material characterization, w
 independent observations; another hour of reporting would not supply them. Verdict: minimum
 requested tracking, then product code and direct tests. Runtime history/report/selection files are
 FEATURE because the existing material inspector and binder consume them.
+
+The unchanged worker fails the new positive test: **one failed, zero passed**, with
+`A layer ID is only valid for a compression-stack request.` The connected worker passes that
+test and the original pressure case. The first lifecycle suite has **71 passed, two explicitly
+skipped compiled-WASM lanes**; the final compiled suite has **73 passed, zero failed/skipped**.
+This is not a 73-case numerical-physics claim: the unit transport/DOM doubles test lifecycle only.
+
+No Rust source was edited. Frozen Rust source is `2f88623c7e47edc2b210a808e07b3efff84158ec`,
+tree `f4600367a84b97c564293049abaa77d8b438ec48`, RCH no-overlay fingerprint
+`fe0d5151031be8fda7951fe7fe1f42f7ce344018fdb3ed21e6ada866b230b195`. All commands below use
+`RCH_REQUIRE_REMOTE=1 RCH_ENV_ALLOWLIST=CARGO_HTTP_USER_AGENT
+CARGO_HTTP_USER_AGENT='OpenAI File Downloader, XaiImageApiFetch/1.0' rch exec --base
+2f88623c7e47edc2b210a808e07b3efff84158ec --clean-overlay --no-overlay --`:
+
+- `cargo test --locked -j1 -p ftx-drape -p ftx-cli -p ftx-wasm --test compressed_thermal --test compressed_thermal_path --test compressed_thermal_workflow`: **22 passed, zero failed/ignored**, `ovh-b`.
+- `cargo clippy --locked -j1 --all-targets -- -D warnings`: passes, `ts1`.
+- `cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm`: passes, `ts1`.
+
+The initially pinned `hz2` wasm request exits 103 for no free slot, refusing local fallback.
+Automatic remote selection then succeeds. `sbh check --need 20G` fails the laptop policy
+(97,175,879,680 bytes / 2.43% free); no Rust compilation runs locally. `cargo fmt --check`, four
+`node --check` commands and diff checks pass. The full native suite and DSR were not repeated
+for these frontend-only edits; the previous full-suite result remains bound to its earlier source.
+
+Raw wasm SHA-256 `a48e1a4af87f77fe0a2dfec7c7f47e4f3e8776aa7836724be5fee45dc8cf30ab` matches
+the artifact directly on `ts1`. The first SSH hash attempt used the wrong key and was refused;
+the configured key succeeds. The previous owned bundle is preserved before installation in
+`out/ftx-8rq-20261021/previous-bundle/`. Installed wasm SHA-256 is
+`ec4d12ae8fc6857452a45bdaad2e0acca992c4860f2572b8fefe7d82af35dcb7`; glue/types stay unchanged.
+`out/ftx-8rq-20261021/source-sha256.txt` binds the five changed JS/HTML files and four bundle files.
+
+Final commands, all exit 0 after that hash barrier:
+
+```sh
+FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs
+FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules node tools/check_materials_web.cjs --compression-proof
+FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules node tools/check_web.cjs
+FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules node tools/check_materials_web.cjs --outfit-proof
+```
+
+The history browser lane exercises the old stack route, both preselected history versions,
+independent one-cell backward-Euler temperature/enthalpy and external-work answers, exact source
+and final-selection downloads, and actual pattern binding without geometry changes. Wrong layer,
+missing transition evidence, late invalid temperature and unknown conversion fields refuse without
+partial downloads. Input edits withdraw old results. No console errors, external requests or
+non-GET requests occur. Final retained screenshot/inputs/reports/bound pattern:
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-HvHCGs/`.
+Reviewed the screenshot too. Logs are under `out/ftx-8rq-20261021/checks/`.
+
+The first smoke batch overlapped the end of bundle installation. Although it passed, it is not
+the final artifact proof: all four checks were rerun after confirmed installation and hashes.
+No production source changed between that barrier and the final successful runs.
+
+Staged `ubs $(git diff --name-only --cached)` exits **2 / partial**: four JS files, zero critical,
+453 warnings, 1,232 informational. The existing browser checker's `js.taint.command` hits its
+dataflow work limit. A separate `ubs web/materials-worker.js web/materials-page.js` completes,
+exit **0**: two production files, zero critical, 28 warnings, 268 informational. These are distinct
+scopes, not a replacement full staged pass. Reviewed the warnings and changed paths: worker JSON
+parsing runs inside its operation catch, details/listeners follow the existing removed-DOM lifetime,
+blob URLs are revoked on invalidation, the numerical test denominators are positive declared
+constants, and evidence writes use fixed names and exclusive creation in a new temporary directory.
+No new true defect found; no suppression, scanner edit or partial-scan override. The incomplete
+checker analysis remains a verification limitation.
+
+Bounded fresh-solo worksheets for this item:
+
+- **Real work:** nine tracked paths, USER 5 (three web files, two user guides), ENABLER 2 (existing
+  direct checkers, actually run), PROCESS 2 (requested TODO/Beads), UNKNOWN 0. Four ignored runtime
+  files additionally deliver the existing incoming Rust API, not a newly authored solver here.
+  Q1: demo the captured version-2 input through the actual controls and assign its final selection.
+  Q2: omitting PROCESS changes tracking, not runtime. Q3: both checkers exercised the delivered
+  worker/page and actual wasm. Q4: the older G5 and higher-priority material gates remain open;
+  this connection supplies usable existing software while physical observations remain necessary.
+  Q5: solo, so pane comparisons do not apply. Q6: no plan/spec edit substitutes for code and no
+  original acceptance was transferred or closed. Verdict: working consumer plus direct tests;
+  stop adding machinery and hand off.
+- **Honesty 1–3:** No (checked: full test diff preserves old assertions; explicit DOM/WASM doubles
+  are lifecycle-only, real Chromium supplies numerical integration evidence; no oracle/fixture
+  source was edited). **4:** Yes, checker code accompanies the feature: the added focused mode
+  does not claim native parity; default native prerequisites and original modes remain intact.
+  Separately reviewed those dispatch/assertion changes; no tolerance/timeout relaxation, bypass
+  or suppression. Q4 disposition: the original prerequisites/assertions remain in place, this
+  report discloses the added mode, and separate gate-diff review is the RH-1 countermeasure;
+  no acceptance correction is needed because no original gate was relaxed.
+  **5–6:** No (checked: no product special case or environment sniffing; actual
+  final counts are 73 frontend and 22 affected native tests, with no skipped final lane).
+  **7–10:** No (checked: observed exits, retained stderr, source/artifact hashes; no real-material,
+  contact, fit, general parity or speed claim; worker refusal, SSH error, initial smoke timing and
+  partial scanner are disclosed). **11–12:** No (checked: only `ftx-8rq` closes against its original
+  positive criteria; `ftx-cp2`, empirical and G5 requirements remain; only user guides change).
+  **13–17:** not applicable, solo; automatic incoming commits are not independent verification.
+  **18:** No (checked: both versions, original stack regression and negative cases were selected
+  before final results). Older-session mining is not repeated for this bounded continuation.
+  **19:** explain the early smoke launch; corrected with all four checks rerun after the hash
+  barrier, preserving first outputs. Worker/key refusals remain recorded. **20:** strongest
+  evidence is the wrong-route baseline failure followed by actual Chromium heat/work agreement,
+  exact downloads and usable final binding. A skeptic can replay the command and retained input.
+  Disposition: no acceptance weakening or fabricated result found in this window; the timing
+  mistake is corrected and disclosed. Fresh solo re-execution is not independent verification.
+
+`ftx-8rq` is closed and flushed; comment 92 on `ftx-cp2` records this delivered software slice
+without closing its physical/contact requirements. The final handoff commits only these owned
+paths on `main`, leaves unrelated untracked files intact and releases all reservations.
+During closeout another actor committed the nine owned source/guide/initial-TODO paths as
+`3244564`; the final source hashes still match and no Rust source differs from the frozen base.
+The remaining scoped commit records only Bead closure/progress and these completed evidence notes.
