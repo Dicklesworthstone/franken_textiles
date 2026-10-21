@@ -130,6 +130,27 @@ receipt-bound numbers through JavaScript serialization. Unpriced jobs retain the
 The study's existing independent outcomes stay separate; this does not add a new cross-material
 cost metric or graphical quote editor. Existing original plan and residual downloads remain authoritative.
 
+## Read the stock result without inspecting JSON
+
+The material workbench's existing **Allocate finite stock & preview** operation also downloads
+`stock-review.html`. Open it locally for a self-contained, printable review of the first complete
+and selected layouts, the actual objective, whole-item costs, observation instants, comparable terms,
+and selected versus excluded inventory. Offer exclusions and source failures remain visible beside
+eligible alternatives. An unused item with no admitted price is not presented as free stock or as
+proved more expensive. Unpriced jobs explicitly say that costs were not evaluated.
+
+Budget exhaustion is displayed separately from a completed grid search. A grid-only proof is not
+labelled a global optimum, and incomplete quantity evidence is not labelled available inventory.
+The review displays native values without computing savings, ranking offers again, rounding monetary
+settlement, or changing the original JSON. A cost prefixed with `≈` is rounded for display to 12
+significant digits, with full precision retained in the original JSON. It runs no scripts and loads no external resources;
+source references are escaped text rather than executable markup or network links.
+
+Review output is limited to 4 MiB with a 32,768-character limit per displayed field. An oversized or
+inconsistent display produces `stock-review-refusal.json` instead; the already complete plan,
+residual request, purchasing receipt and SVG remain available. The HTML is a readable result, not
+a pricing editor, replay input, reservation or machine-execution file.
+
 ## Portable API and scope
 
 `ftx_wasm::stock_pricing::{stock_identities, stock_price}` exposes the same library without files.

@@ -96,3 +96,93 @@ test('cost-directed jobs preserve the native quote receipt without rerunning pri
     assert.equal(outcome.type, 'error'); assert.equal(outcome.files, undefined);
   }
 });
+
+function reviewJob() {
+  const quote = { offer_id:'supplier/item', observed_on:'2026-10-20', observed_at:'2026-10-20T12:00:00.000000001Z', source:'test:quoted-item' };
+  const chosen = { quote, order_cost:7, quantity_sufficiency_observed:false };
+  const purchasing = { currency:'USD', comparison_scope:'admitted_whole_item_offers_only',
+    least_observed_independent_order_total:7, complete_observed_quantity_coverage:false,
+    stocks:[{ identity:{stock_index:0,stock_id:'selected-item',used:true}, offers:[chosen],
+      least_observed_offer_id:quote.offer_id, least_observed_order_cost:7 },
+      {identity:{stock_index:1,stock_id:'unpriced-item',used:false}, offers:[],
+        least_observed_offer_id:null, least_observed_order_cost:null,
+        binding_refusal:{message:'Stock snapshot changed; price is unknown.'},
+        source_exclusions:[{quote:{...quote,offer_id:'old-price'},reason:'expired'}],
+        stock_exclusions:[{quote:{...quote,offer_id:'wrong-item'},reason:'Exact material lock missing.'}],
+        source_refusals:[{offer_id:'broken-source',refusal:{message:'Unqualified sale unit.'}}]}] };
+  const plan = {schema:'ftx-finite-stock-plan/1',pattern_sha256:'pattern-lock',request_sha256:'request-lock',
+    markers:[{id:'selected-item',placements:[{},{}],gross_area_m2:1}, {id:'unpriced-item',placements:[],gross_area_m2:0.5}],
+    candidates:45,work_used:1603,purchasing,request:{pricing:{market:{currency:'USD',region:'declared market',quality:'A',
+      terms:'merchandise only',as_of:'2026-10-20',as_of_at:'2026-10-20T12:30:00Z',max_age_days:1}}},
+    optimization:{...optimization,objective:'minimize_purchase_cost',baseline:{stock_count:1,gross_area_m2:2,purchase_cost:100},
+      selected:{stock_count:1,gross_area_m2:1,purchase_cost:7}}};
+  return {...job(),stock_index:0,plan_json:JSON.stringify(plan),purchasing_json:JSON.stringify(purchasing)};
+}
+test('offline stock review distinguishes selected costs, excluded items and incomplete proof without changing receipts', async () => {
+  const native = reviewJob();
+  const send = await worker({stock_job:()=>JSON.stringify(native)});
+  const result = await send(msg);
+  assert.equal(result.type,'result',result.message);
+  assert.equal(result.files[0].text,native.plan_json);
+  assert.equal(result.files.find(f=>f.name === 'stock-purchasing.json').text,native.purchasing_json);
+  const review = result.files.find(f=>f.name === 'stock-review.html');
+  assert.equal(review.mime,'text/html');
+  for (const text of ['Lower quoted purchase cost','100 USD','7 USD','Search budget reached',
+    'Excluded from priced search','Stock snapshot changed; price is unknown.','Excluded: expired',
+    'Exact material lock missing.','Unqualified sale unit.','Unknown','merchandise only',
+    '2026-10-20T12:00:00.000000001Z','2026-10-20T12:30:00Z','not reserved']) assert.ok(review.text.includes(text),text);
+  assert.ok(!review.text.includes('No better layout remains'));
+  assert.ok(!review.text.includes('<td>0 USD</td>'));
+  assert.ok(!/<script\b|<iframe\b|<img\b|<a\b/i.test(review.text));
+  const plan = JSON.parse(native.plan_json);
+  plan.optimization.budget_exhausted = false; plan.optimization.lattice_optimal = true;
+  plan.optimization.termination = 'lattice_exhausted';
+  plan.optimization.baseline.purchase_cost = 99.99999999999999;
+  const proved = await worker({stock_job:()=>JSON.stringify({...native,plan_json:JSON.stringify(plan)})});
+  const html = (await proved(msg)).files.find(f=>f.name === 'stock-review.html').text;
+  assert.match(html,/No better layout remains on the declared placement grid/);
+  assert.match(html,/not a continuous-space global optimum/);
+  assert.match(html,/≈100 USD/);
+  assert.match(html,/original JSON retains full precision/);
+  assert.ok(!html.includes('Search budget reached'));
+});
+
+test('stock review escapes source text and keeps unavailable prices unknown on legacy jobs', async () => {
+  const native = reviewJob(), plan = JSON.parse(native.plan_json);
+  const hostile = '<script>alert("source")</script>&<img src="https://example.invalid/a" onerror="x()">';
+  plan.purchasing.stocks[0].offers[0].quote.source = hostile;
+  plan.request.pricing.market.terms = hostile;
+  const send = await worker({stock_job:()=>JSON.stringify({...native,plan_json:JSON.stringify(plan)})});
+  const review = (await send(msg)).files.find(f=>f.name === 'stock-review.html').text;
+  assert.ok(!review.includes(hostile)); assert.ok(!/<script\b|<img\b/i.test(review));
+  assert.match(review,/&lt;script&gt;alert\(&quot;source&quot;\)&lt;\/script&gt;/);
+  assert.match(review,/Content-Security-Policy/);
+  assert.match(review,/default-src 'none'/);
+  delete plan.purchasing; delete plan.optimization; delete plan.request.pricing;
+  const legacy = await worker({stock_plan:()=>JSON.stringify(plan),stock_residual:()=>native.residual_json,stock_svg:()=>'<svg/>'});
+  const old = await legacy(msg);
+  const html = old.files.find(f=>f.name === 'stock-review.html').text;
+  assert.match(html,/Purchase costs were not evaluated/);
+  assert.match(html,/not a minimum-cost or minimum-waste claim/);
+  assert.match(html,/Unknown prices must not be interpreted as free stock/);
+  assert.ok(!html.includes('USD'));
+});
+
+test('review limits or broken display correspondence preserve a complete stock job', async () => {
+  for (const invalid of ['field','output','identity','currency']) {
+    const native = reviewJob(), plan = JSON.parse(native.plan_json);
+    if (invalid === 'field') plan.request.pricing.market.terms = 'x'.repeat(32769);
+    if (invalid === 'output') plan.purchasing.stocks[0].offers = Array.from({length:160}, (_,i) => ({
+      ...plan.purchasing.stocks[0].offers[0], quote:{offer_id:String(i),source:'x'.repeat(32768)}}));
+    if (invalid === 'identity') plan.purchasing.stocks[0].identity.stock_id = 'different-item';
+    if (invalid === 'currency') plan.request.pricing.market.currency = 'EUR';
+    native.plan_json = JSON.stringify(plan);
+    const send = await worker({stock_job:()=>JSON.stringify(native)});
+    const result = await send(msg);
+    assert.equal(result.type,'result',invalid);
+    assert.equal(result.files[0].text,native.plan_json);
+    assert.equal(result.files[1].text,native.residual_json);
+    assert.ok(!result.files.some(f=>f.name === 'stock-review.html'));
+    assert.ok(result.files.some(f=>f.name === 'stock-review-refusal.json'));
+  }
+});
