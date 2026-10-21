@@ -2061,6 +2061,38 @@ garment acceptance remain open. See [material-scenario-studies.md](docs/material
 
 ---
 
+### 25.31 Complete material combinations through garment consumers
+
+**Independent shell, lining and trim choices (`ftx-mc1`, supports `ftx-ms2`).** The existing
+`ftx-material-study/1` request accepts `combinations` as an alternative to explicit variants or
+scalar screening. One to eight named groups each select a material for the pattern default or a
+disjoint set of source pieces. The complete Cartesian product is limited to 32 alternatives and
+refuses before source resolution when over budget; no surrogate score or hidden pruning removes
+a candidate. Default replacement preserves explicit piece assignments, and named assignments
+retain their ordinary precedence.
+
+Every alternative goes through the same source binding, mass, cutting, finite-stock, sewing,
+purchasing and optional fresh drape/thermal scenario consumers as a manually authored variant.
+Each result retains its group choices, complete source-locked assignments and independent consumer
+refusals. The existing comparison policy ranks only supported actual outputs. A supplied pool of
+qualified pair-friction observations is validated completely, then selects only pairs used by
+that alternative's exact material hashes. Missing unlike-material observations remain unavailable;
+no averaging or material-family friction rule is introduced.
+
+The browser workbench can capture inspected selections into these named groups, display the
+combination count, load an optional interface pool and run ordinary manufacturing or scenario
+studies. It retains original JSON numbers and source locks, clears stale results after choice,
+policy or pattern changes, and downloads the complete generated request for replay. Native CLI
+and file-free WASM use the same request and production evaluators.
+
+This delivers finite heterogeneous design search, not unbounded global optimization or empirical
+garment accuracy. Large design spaces, alternative geometry/process variables and independently
+measured matched material/garment acceptance remain under `ftx-ms2` and `ftx-tm2`/`ftx-tm8`.
+See [material-screening-and-studies.md](docs/material-screening-and-studies.md) for a complete
+catalog-backed two-by-two example and the interface/assignment contract.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

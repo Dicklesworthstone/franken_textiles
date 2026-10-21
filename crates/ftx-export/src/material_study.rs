@@ -25,6 +25,7 @@ use crate::{
     sewing::{SewOptions, SewPlan},
 };
 
+pub mod combinations;
 pub mod comparison;
 
 /// Explicit substitution, including heterogeneous source-piece assignments.
@@ -35,6 +36,20 @@ pub struct Variant {
     pub key: String,
     /// Existing atomic material-binding operations; geometry/process parameters cannot be edited.
     pub changes: Changes,
+}
+
+struct PreparedVariant {
+    variant: Variant,
+    choices: BTreeMap<String, String>,
+}
+
+impl From<Variant> for PreparedVariant {
+    fn from(variant: Variant) -> Self {
+        Self {
+            variant,
+            choices: BTreeMap::new(),
+        }
+    }
 }
 
 /// Where every material shortlisted by screening is substituted.
@@ -79,12 +94,15 @@ pub struct Purchasing {
 pub struct Request {
     /// Must be `ftx-material-study/1`.
     pub schema: String,
-    /// Explicit alternatives; mutually exclusive with screening. At most 32 are evaluated.
+    /// Explicit alternatives; exclusive with screening/combinations. At most 32 are evaluated.
     #[serde(default)]
     pub variants: Vec<Variant>,
     /// Optional screening directly over the canonical catalog or embedded material selections.
     #[serde(default)]
     pub screened: Option<Screened>,
+    /// Exhaustive bounded combinations of independent material choices on declared targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combinations: Option<combinations::Request>,
     /// Shared cutting policy; omission means not requested, not failed or successful.
     #[serde(default)]
     pub cutting: Option<CutOptions>,
@@ -182,6 +200,9 @@ pub struct Metrics {
 pub struct Alternative {
     /// Original candidate key, stable across screening, binding and manufacturing.
     pub key: String,
+    /// Selected choice key for every declared combination group; absent for explicit/screened rows.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub choices: BTreeMap<String, String>,
     /// Source-complete binding report, including lossless `pattern_json` for later draping/exports.
     pub binding: Outcome<Value>,
     /// Source-locked changes which reproduce this binding on the SAME original pattern. Present
@@ -275,7 +296,7 @@ impl Request {
         &self,
         pattern: &Pattern,
         additional_consumer: bool,
-    ) -> Result<(Vec<Variant>, Option<material_screen::Report>), Refusal> {
+    ) -> Result<(Vec<PreparedVariant>, Option<material_screen::Report>), Refusal> {
         if let Some(policy) = &self.comparison {
             policy.validate(self, additional_consumer)?;
         }
@@ -283,8 +304,10 @@ impl Request {
             mass.validate()?;
         }
         if self.schema != "ftx-material-study/1"
-            || (self.screened.is_some() && !self.variants.is_empty())
-            || (self.screened.is_none() && self.variants.is_empty())
+            || usize::from(self.screened.is_some())
+                + usize::from(self.combinations.is_some())
+                + usize::from(!self.variants.is_empty())
+                != 1
             || (!additional_consumer
                 && self.cutting.is_none()
                 && self.finite_stock.is_none()
@@ -299,8 +322,14 @@ impl Request {
         if self.variants.len() > 32 {
             return Err(budget("material study exceeds 32 alternatives"));
         }
+        if let Some(combinations) = &self.combinations {
+            return Ok((combinations.variants(pattern)?, None));
+        }
         let Some(screened) = &self.screened else {
-            return Ok((self.variants.clone(), None));
+            return Ok((
+                self.variants.iter().cloned().map(Into::into).collect(),
+                None,
+            ));
         };
         if let Target::Pieces { ids } = &screened.target {
             let mut unique = BTreeSet::new();
@@ -346,6 +375,7 @@ impl Request {
                     key: a.key.clone(),
                     changes,
                 }
+                .into()
             })
             .collect();
         Ok((variants, Some(report)))
@@ -440,7 +470,7 @@ impl Request {
         let mut keys = BTreeSet::new();
         if variants
             .iter()
-            .any(|v| v.key.trim().is_empty() || !keys.insert(v.key.clone()))
+            .any(|v| v.variant.key.trim().is_empty() || !keys.insert(v.variant.key.clone()))
         {
             return Err(invalid("material variant keys must be unique and nonempty"));
         }
@@ -477,7 +507,7 @@ impl Request {
                 "material study exceeds 20000000 aggregate finite-stock work units; reduce alternatives or the per-plan work limit",
             ));
         }
-        variants.sort_by(|a, b| a.key.cmp(&b.key));
+        variants.sort_by(|a, b| a.variant.key.cmp(&b.variant.key));
         let mut alternatives = Vec::new();
         let mut stations = 0usize;
         let mut mass_work = Work::new(40_000_000);
@@ -530,6 +560,9 @@ impl Request {
         if self.finite_stock.is_some() {
             notes.push("Finite-stock alternatives independently start with the same physical inventory. Used-item area/mass includes defects and prior occupied regions; newly allocated cut area is separate. Alternatives neither reserve inventory nor create hide purchase quotes.");
         }
+        if self.combinations.is_some() {
+            notes.push("Every declared material combination is evaluated through the same production consumers. The frontier is conditional on this finite choice set and the declared comparison policy, not a global material/design optimum. Explicit interface pools select exact assigned snapshot pairs only; missing pair evidence remains a consumer refusal.");
+        }
         Ok(Report {
             schema: "ftx-material-study-report/1",
             source_pattern_sha256,
@@ -547,12 +580,24 @@ impl Request {
     fn evaluate_variant(
         &self,
         source: &Pattern,
-        variant: Variant,
+        prepared: PreparedVariant,
         mass_work: &mut Work,
     ) -> Result<Alternative, Refusal> {
-        let binding = variant.changes.apply(source);
+        let mut variant = prepared.variant;
+        let binding = (|| {
+            if let Some(combinations) = &self.combinations
+                && combinations.interfaces.is_some()
+            {
+                // Resolve actual effective assignments, including untouched pieces, before selecting
+                // exact pair evidence. The ordinary binder validates the selected complete table.
+                let bound = variant.changes.apply(source)?;
+                variant.changes.interfaces = combinations.interfaces_for(&bound)?;
+            }
+            variant.changes.apply(source)
+        })();
         let mut row = Alternative {
             key: variant.key,
+            choices: prepared.choices,
             binding: Outcome::NotRequested,
             frozen_changes: None,
             cutting: Outcome::NotRequested,

@@ -689,6 +689,86 @@ function scenarioInputs(p) {
   p.e.body.files[0].arrayBuffer = async () => new ArrayBuffer(8); p.e.body.handlers.change();
 }
 
+function addChoice(p, group, choice, pieces = ['front']) {
+  p.e.combinationGroup.value = group; p.e.combinationChoice.value = choice;
+  p.e.combinationScope.value = pieces === null ? 'default' : 'pieces';
+  for (const option of p.e.combinationPieces.children) option.selected = pieces?.includes(option.value) || false;
+  p.e.addCombination.onclick();
+}
+
+test('combination controls retain frozen selections and exact policy/pair numbers for native study evaluation', async () => {
+  const p = await pageModule(); await p.load();
+  p.e.combinationMode.checked = true; p.e.combinationMode.handlers.change();
+  assert.equal(p.e.study.disabled, true);
+  const policy = '{"schema":"ftx-material-study/1","assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[],"seam_allowance_mm":-0.0}}';
+  p.select('studyRequest', policy); p.e.studyRequest.handlers.change();
+  await p.inspect('light'); addChoice(p, 'shell', 'light');
+  await p.inspect('heavy'); addChoice(p, 'shell', 'heavy');
+  await p.inspect('lining'); addChoice(p, 'lining', 'soft', ['lining']);
+  assert.match(p.e.combinationCount.textContent, /^2 complete material combinations/);
+  const pairs = '[{"materials":["a","b"],"friction":{"value":1.0,"bounds":[-0.0,1.0]}}]';
+  p.select('combinationInterfaces', pairs); p.e.combinationInterfaces.handlers.change();
+  assert.equal(p.e.study.disabled, false);
+  await p.e.study.onclick();
+  const sent = p.current().messages.at(-1), request = JSON.parse(sent.studyRequest);
+  assert.ok(sent.studyRequest.includes('"seam_allowance_mm":-0.0'));
+  assert.ok(sent.studyRequest.includes(pairs));
+  assert.equal(request.combinations.groups[0].choices[0].selection.expected_sha256, 'locked');
+  assert.deepEqual(plain(request.combinations.groups.map(g => [g.key, g.target])),
+    [['shell', {scope:'pieces',ids:['front']}], ['lining',{scope:'pieces',ids:['lining']}]]);
+  assert.equal(Object.hasOwn(request, 'variants'), false);
+  assert.equal(sent.pattern, JSON.stringify({pieces:[{id:'front'},{id:'lining'}]}));
+  const row = studyRow('generated'); row.choices = {lining:'soft', shell:'heavy'};
+  p.emit(studyReport([row]));
+  const result = section(p, 'Fixed-pattern manufacturing alternatives');
+  assert.match(visibleText(result), /lining: soft; shell: heavy/);
+  assert.equal(descendants(result).some(n => 'innerHTML' in n), false);
+  await p.inspect('replacement'); addChoice(p, 'shell', 'heavy');
+  assert.equal(result.hidden, true); assert.equal(p.live.size, 0);
+  assert.match(p.e.combinationCount.textContent, /^2 complete/);
+  await p.e.study.onclick();
+  assert.equal(JSON.parse(p.current().messages.at(-1).studyRequest).combinations.groups[0].choices[1].selection.id, 'replacement');
+});
+
+test('combination controls reject overlapping targets, changed group targets, excessive products and ambiguous study sources', async () => {
+  const p = await pageModule(); await p.load(); await p.inspect('source');
+  p.e.combinationMode.checked = true;
+  addChoice(p, 'shell', 'one');
+  addChoice(p, 'other', 'one'); assert.match(p.e.error.textContent, /disjoint/);
+  addChoice(p, 'shell', 'two', ['lining']); assert.match(p.e.error.textContent, /same target/);
+  for (let i = 2; i <= 32; i++) addChoice(p, 'shell', `choice-${i}`);
+  assert.match(p.e.combinationCount.textContent, /^32 complete/);
+  addChoice(p, 'shell', 'too many'); assert.match(p.e.error.textContent, /limit of 32/);
+  assert.match(p.e.combinationCount.textContent, /^32 complete/);
+  p.select('studyRequest','{"schema":"ftx-material-study/1","variants":[]}');
+  const before = p.current().messages.length; await p.e.study.onclick();
+  assert.equal(p.current().messages.length, before);
+  assert.match(p.e.error.textContent, /must omit variants/);
+  p.e.clearCombinations.onclick(); assert.equal(p.e.study.disabled, true);
+  addChoice(p, 'base', 'one', null); addChoice(p, 'another base', 'two', null);
+  assert.match(p.e.error.textContent, /Only one group/);
+  assert.match(p.e.combinationCount.textContent, /^1 complete/);
+});
+
+test('combination changes and pattern replacement cancel pending reads and cannot publish stale alternatives', async () => {
+  const p = await pageModule(); await p.load(); await p.inspect('source');
+  p.e.combinationMode.checked = true; addChoice(p, 'shell', 'one');
+  p.select('studyRequest','{"schema":"ftx-material-study/1"}');
+  const delayed = deferred(); p.e.studyRequest.files[0].text = () => delayed.promise;
+  const old = p.current(), running = p.e.study.onclick();
+  p.e.combinationMode.checked = false; p.e.combinationMode.handlers.change(); p.ready();
+  delayed.resolve('{"schema":"ftx-material-study/1"}'); await running;
+  assert.equal(old.messages.filter(m => m.type === 'study').length, 0);
+  p.e.combinationMode.checked = true;
+  p.select('studyRequest','{"schema":"ftx-material-study/1"}');
+  await p.e.study.onclick(); const previous = p.current(), id = previous.messages.at(-1).request;
+  await p.load(); p.ready();
+  previous.emit({type:'result',request:id,result:studyReport(),files:[{name:'stale.json',text:'{}'}]});
+  assert.equal(p.live.size, 0); assert.equal(p.e.study.disabled, true);
+  assert.equal(p.e.combinationGroups.children.length, 0);
+  assert.equal(p.e.combinationPieces.children.length, 2);
+});
+
 test('purchasing displays exact intraday evidence, excluded latest offers and date-only history without repricing', async () => {
   const p = await pageModule(); await p.load(); await p.bind();
   const quotes = '{"schema":"ftx-textile-quotes/2","price":1.0}';
@@ -1143,6 +1223,23 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
     assert.deepEqual(pairRow.frozen_changes.interfaces,[pair]);
     assert.equal(pairRow.binding.result.pattern_json,paired.result.pattern_json);
     assert.equal(JSON.parse(ftx.material_bind(pattern,JSON.stringify(pairRow.frozen_changes))).pattern_json,paired.result.pattern_json);
+    const combinationGroups = ['front', 'back'].map(piece => `{"key":"${piece}","target":{"scope":"pieces","ids":["${piece}"]},"choices":[{"key":"low","selection":${prepared.result.selection_json}},{"key":"high","selection":${high.selection_json}}]}`).join(',');
+    const combinationRequest = pool => `{"schema":"ftx-material-study/1","combinations":{"groups":[${combinationGroups}],"interfaces":${JSON.stringify(pool)}},"cutting":{"copies":1,"gap_mm":2,"edge_margin_mm":0,"end_margin_mm":0}}`;
+    for (const supplied of [false, true]) {
+      const request = combinationRequest(supplied ? [pair] : []);
+      const combined = await w.send({ type:'study', pattern, studyRequest:request });
+      assert.equal(combined.type,'result',combined.message);
+      assert.equal(combined.files[0].text,ftx.material_study(pattern,request));
+      assert.equal(combined.files[2].text,request);
+      assert.equal(combined.result.alternatives.length,4);
+      for (const row of combined.result.alternatives) {
+        const mixed = row.choices.front !== row.choices.back;
+        assert.equal(row.binding.status,'available');
+        assert.equal(row.binding.result.drape_materials_with_self_contact.ready,!mixed || supplied);
+        assert.deepEqual(row.frozen_changes.interfaces,mixed && supplied ? [pair] : []);
+        assert.equal(JSON.parse(ftx.material_bind(pattern,JSON.stringify(row.frozen_changes))).pattern_json,row.binding.result.pattern_json);
+      }
+    }
     pair.allow_estimates=false;
     // Replace only the pair policy; each material keeps its independently authored consent.
     const deniedChanges=`{"schema":"ftx-material-bindings/1","default":${prepared.result.selection_json},"pieces":{"back":${high.selection_json}},"interfaces":${JSON.stringify([pair])}}`;

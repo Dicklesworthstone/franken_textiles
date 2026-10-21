@@ -12,6 +12,7 @@ let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
 let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
 const pieceChanges = new Map(), urls = new Map();
+const combinationGroups = new Map();
 const sections = new Map();
 for (const op of operations) {
   const section = document.createElement("div"); section.hidden = true;
@@ -30,6 +31,8 @@ function controls() {
   $("bind").disabled ||= !source || !interfaceReady;
   $("assign").disabled = !!pending || !source || !inspected;
   $("reset").disabled = !!pending || !source;
+  $("addCombination").disabled = !!pending || !source || !inspected;
+  $("clearCombinations").disabled = !!pending || !combinationGroups.size;
   $("clearInterfaces").disabled = interfaceChange === null && interfaceReady;
   for (const op of boundOperations) $(op).disabled ||= !bound;
   $("screen").disabled ||= !has("screenRequest");
@@ -37,6 +40,9 @@ function controls() {
   $("calibrate").disabled ||= !has("calibrationRequest");
   $("study").disabled ||= !source || !has("studyRequest");
   $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || (!has("scenarioBody") && !has("measurements"));
+  if ($("combinationMode").checked && !combinationGroups.size) {
+    $("study").disabled = true; $("scenario").disabled = true;
+  }
   $("exports").disabled ||= !has("measurements") || !has("fit");
   $("fold").disabled ||= !has("measurements") || !has("fit") || !has("body");
   $("cut").disabled ||= !has("cutOptions");
@@ -384,6 +390,11 @@ function comparison(op, r) {
   }
   if (r.comparison) objectiveComparison(parent, r.comparison);
   const study = op === "scenario" ? r.manufacturing : r;
+  if (study.alternatives.some(row => row.choices)) {
+    const choices = table(parent, "Material combinations evaluated by the study", ["Alternative", "Group choices"]);
+    for (const row of study.alternatives) cells(choices, [row.key,
+      Object.entries(row.choices || {}).map(([group, choice]) => `${group}: ${choice}`).join("; ")]);
+  }
   const t = table(parent, "Independent manufacturing outcomes", ["Alternative", "Binding", "Cutting", "Sewing", "Purchasing",
     "Stock area (m²)", "Cut area (m²)", "Complete stock mass (kg)", "Observed order cost", "Stitch intervals", "Feed-only seconds"]);
   for (const [i, row] of study.alternatives.entries()) {
@@ -400,7 +411,7 @@ function comparison(op, r) {
       link(op, actions, { name: `alternative-${i + 1}-pattern.json`, text: binding.pattern_json, mime: "application/json" });
     }
     detail(parent, `${row.key}: frozen assignments and source observations (display only)`, {
-      pattern_sha256: binding?.pattern_sha256, frozen_changes: row.frozen_changes, pieces: binding?.pieces,
+      pattern_sha256: binding?.pattern_sha256, choices: row.choices, frozen_changes: row.frozen_changes, pieces: binding?.pieces,
       refusals: { binding: row.binding.refusal, cutting: row.cutting.refusal, finite_stock: row.finite_stock?.refusal,
         sewing: row.sewing.refusal, purchasing: row.purchasing.refusal } });
   }
@@ -715,6 +726,49 @@ function changes() {
   return `{"schema":"ftx-material-bindings/1","default":${defaultChange || "null"},"pieces":{${pieces}}${interfaces}}`;
 }
 function edits() { $("edits").textContent = text(JSON.parse(changes())); }
+function showCombinations() {
+  const parent = $("combinationGroups"); parent.replaceChildren();
+  let count = combinationGroups.size ? 1 : 0;
+  for (const [key, group] of [...combinationGroups].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+    count *= group.choices.size;
+    const heading = document.createElement("p");
+    heading.textContent = `${key} — ${group.target.scope === "default" ? "Pattern default" : group.target.ids.join(", ")}`;
+    parent.append(heading);
+    for (const [choice, selection] of group.choices) {
+      const row = document.createElement("div"), label = document.createElement("span"), remove = document.createElement("button");
+      label.textContent = `${choice}: ${JSON.parse(selection).id} `; remove.textContent = `Remove ${choice}`;
+      remove.onclick = () => {
+        group.choices.delete(choice);
+        if (!group.choices.size) combinationGroups.delete(key);
+        showCombinations(); invalidate(["study", "scenario"]);
+      };
+      row.append(label, remove); parent.append(row);
+    }
+  }
+  $("combinationCount").textContent = count ? `${count} complete material combination${count === 1 ? "" : "s"}; limit 32.` : "No material choices added.";
+}
+async function studyInput() {
+  const raw = await read("studyRequest");
+  if (!$("combinationMode").checked) return raw;
+  const policy = JSON.parse(raw);
+  if (!policy || Array.isArray(policy) || policy.schema !== "ftx-material-study/1") throw Error("Combination mode needs an ftx-material-study/1 policy object.");
+  if (["variants", "screened", "combinations"].some(key => Object.hasOwn(policy, key))) {
+    throw Error("In combination mode, the study policy must omit variants, screened and combinations. Turn off combination mode to use a complete study file.");
+  }
+  if (!combinationGroups.size) throw Error("Add material choices before running combinations.");
+  const groups = [...combinationGroups].map(([key, group]) => {
+    const choices = [...group.choices].map(([choice, selection]) => `{"key":${JSON.stringify(choice)},"selection":${selection}}`);
+    return `{"key":${JSON.stringify(key)},"target":${JSON.stringify(group.target)},"choices":[${choices.join(",")}]}`;
+  });
+  let interfaces = "";
+  if (has("combinationInterfaces")) {
+    const pairs = await read("combinationInterfaces");
+    if (!Array.isArray(JSON.parse(pairs))) throw Error("The combination interface pool must be a JSON list.");
+    interfaces = `,"interfaces":${pairs}`;
+  }
+  // Insert authored fields without reserializing source-bound quantities, policies or selections.
+  return `${raw.trim().slice(0, -1)},"combinations":{"groups":[${groups.join(",")}]${interfaces}}}`;
+}
 function resetInterfaces() {
   ++interfaceRead; interfaceChange = null; interfaceReady = true;
   $("interfacesFile").value = "";
@@ -749,7 +803,7 @@ async function execute(op) {
     else if (op === "study" || op === "scenario") {
       if (!sourceText) throw Error("Load the original pattern first.");
       // Alternatives always start at the original, never the currently bound single-material preview.
-      msg.pattern = sourceText; msg.studyRequest = await read("studyRequest");
+      msg.pattern = sourceText; msg.studyRequest = await studyInput();
       if (op === "scenario") {
         msg.scenarioRequest = await read("scenarioRequest");
         msg.measurements = await read(has("scenarioBody") ? "scenarioBody" : "measurements");
@@ -804,13 +858,18 @@ $("selectionFile").onchange = async () => {
 };
 $("patternFile").onchange = async () => {
   const rev = ++patternRead; source = null; sourceText = null; defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits();
+  combinationGroups.clear(); showCombinations(); $("combinationPieces").replaceChildren();
   invalidate(["bind", ...boundOperations, "study", "scenario"]); $("patternName").textContent = "No pattern loaded.";
   $("target").replaceChildren(); const base = document.createElement("option"); base.value = "";
   base.textContent = "Pattern default (preserve explicit piece choices)"; $("target").append(base);
   try { const raw = await read("patternFile"), data = JSON.parse(raw); if (rev !== patternRead) return;
     if (!Array.isArray(data.pieces) || data.pieces.length > 4096) throw Error("Pattern needs at most 4096 source pieces.");
     source = data; sourceText = raw; $("patternName").textContent = `${$("patternFile").files[0].name}: ${data.pieces.length} source pieces. Original retained.`;
-    for (const p of data.pieces) { const o = document.createElement("option"); o.value = p.id; o.textContent = p.id; $("target").append(o); }
+    for (const p of data.pieces) {
+      for (const target of ["target", "combinationPieces"]) {
+        const o = document.createElement("option"); o.value = p.id; o.textContent = p.id; $(target).append(o);
+      }
+    }
     controls();
   } catch (e) { if (rev === patternRead) { source = null; error(String(e.message || e)); controls(); } }
 };
@@ -820,6 +879,34 @@ $("assign").onclick = () => {
   edits(); invalidate(["bind", ...boundOperations]);
 };
 $("reset").onclick = () => { defaultChange = null; pieceChanges.clear(); resetInterfaces(); edits(); invalidate(["bind", ...boundOperations]); };
+$("addCombination").onclick = () => {
+  if (!inspected || !source || pending) return;
+  try {
+    const key = $("combinationGroup").value.trim(), choice = $("combinationChoice").value.trim();
+    if (!key || !choice) throw Error("Name both the material group and its choice.");
+    const target = $("combinationScope").value === "default" ? { scope: "default" } :
+      { scope: "pieces", ids: [...$("combinationPieces").children].filter(o => o.selected).map(o => o.value).sort() };
+    if (target.scope === "pieces" && !target.ids.length) throw Error("Select source pieces for this group.");
+    const old = combinationGroups.get(key);
+    if (!old && combinationGroups.size >= 8) throw Error("Use at most eight material choice groups.");
+    if (old && JSON.stringify(old.target) !== JSON.stringify(target)) throw Error("A group's choices must share the same target. Remove that group's choices before changing its pieces.");
+    for (const [other, group] of combinationGroups) {
+      if (other === key) continue;
+      if (target.scope === "default" && group.target.scope === "default") throw Error("Only one group may change the pattern default.");
+      if (target.scope === "pieces" && group.target.scope === "pieces" && target.ids.some(id => group.target.ids.includes(id))) {
+        throw Error("Source-piece groups must be disjoint.");
+      }
+    }
+    const choices = new Map(old?.choices || []); choices.set(choice, inspected);
+    let count = choices.size;
+    for (const [other, group] of combinationGroups) if (other !== key) count *= group.choices.size;
+    if (count > 32) throw Error("These choices exceed the limit of 32 complete combinations. Remove a choice first.");
+    combinationGroups.set(key, { target, choices }); showCombinations(); invalidate(["study", "scenario"]);
+  } catch (e) { error(String(e.message || e)); controls(); }
+};
+$("clearCombinations").onclick = () => { combinationGroups.clear(); showCombinations(); invalidate(["study", "scenario"]); };
+$("combinationMode").addEventListener("change", () => invalidate(["study", "scenario"]));
+$("combinationInterfaces").addEventListener("change", () => invalidate(["study", "scenario"]));
 $("clearInterfaces").onclick = () => { resetInterfaces(); edits(); invalidate(["bind", ...boundOperations]); };
 $("interfacesFile").onchange = async () => {
   const rev = ++interfaceRead; interfaceChange = null; interfaceReady = false;

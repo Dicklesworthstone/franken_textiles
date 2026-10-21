@@ -52,6 +52,63 @@ fn run(main: bool, dir: &Path) -> Value {
 }
 
 #[test]
+fn both_study_commands_expand_mixed_material_choices_through_actual_planners() {
+    let mut input = request();
+    let choices: Vec<Value> = input["variants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| json!({"key":v["key"],"selection":v["changes"]["default"]}))
+        .collect();
+    input.as_object_mut().unwrap().remove("variants");
+    input["combinations"] = json!({"groups":[
+        {"key":"main","target":{"scope":"default"},"choices":choices},
+        {"key":"pocket","target":{"scope":"pieces","ids":["pocket"]},"choices":choices}
+    ]});
+    let typed: Request = serde_json::from_value(input.clone()).unwrap();
+    let expected = serde_json::to_value(
+        typed
+            .evaluate(&Pattern::from_json(PATTERN).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(expected["alternatives"].as_array().unwrap().len(), 4);
+    assert!(
+        expected["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| {
+                row["choices"].as_object().unwrap().len() == 2
+                    && row["binding"]["status"] == "available"
+            })
+    );
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-combination-study-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), PATTERN).unwrap();
+    let original = input.to_string();
+    fs::write(dir.join("study.json"), &original).unwrap();
+    for main in [false, true] {
+        assert_eq!(run(main, &dir), expected);
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("pattern.json")).unwrap(),
+        PATTERN
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("study.json")).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn both_study_binaries_compare_real_stock_without_losing_independent_roll_results() {
     let dir = std::env::temp_dir().join(format!(
         "ftx-stock-study-{}-{}",
