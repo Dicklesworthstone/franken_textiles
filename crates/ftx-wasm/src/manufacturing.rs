@@ -12,6 +12,8 @@ struct StockJob {
     schema: &'static str,
     plan_json: String,
     residual_json: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    purchasing_json: Option<String>,
     stock_index: usize,
     preview_svg: Option<String>,
     preview_refusal: Option<Refusal>,
@@ -121,6 +123,10 @@ pub fn stock_job(pattern: &str, request: &str) -> Result<String, Refusal> {
             schema: "ftx-stock-job/1",
             plan_json: limited_json(&plan, LIMIT)?,
             residual_json: limited_json(&plan.residual_request()?, LIMIT)?,
+            purchasing_json: plan
+                .purchasing()
+                .map(|p| limited_json(p, LIMIT))
+                .transpose()?,
             stock_index,
             preview_svg,
             preview_refusal,

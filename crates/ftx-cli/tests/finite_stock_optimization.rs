@@ -7,6 +7,8 @@ const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-stock-pattern.json");
 const STOCK: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-stock-optimization.json");
+const COST_STOCK: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-stock-cost.json");
 
 fn run(main: bool, dir: &Path, action: &str, extra: &[&str]) -> std::process::Output {
     let mut command = Command::new(if main {
@@ -115,5 +117,58 @@ fn optimized_and_interrupted_jobs_round_trip_through_both_binaries() {
             );
             assert!(!dir.join("partial.svg").exists());
         }
+    }
+}
+
+#[test]
+fn both_binaries_use_admitted_costs_and_reprice_the_exact_selected_items() {
+    let root = std::env::temp_dir().join(format!(
+        "ftx-stock-cost-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("pattern.json"), PATTERN).unwrap();
+    fs::write(root.join("stock.json"), COST_STOCK).unwrap();
+    let request: Request = serde_json::from_str(COST_STOCK).unwrap();
+    let plan = request
+        .build(&Pattern::from_json(PATTERN).unwrap())
+        .unwrap();
+    fs::write(
+        root.join("pricing.json"),
+        serde_json::to_string(request.pricing.as_ref().unwrap()).unwrap(),
+    )
+    .unwrap();
+    for main in [false, true] {
+        let v = result(run(main, &root, "stock-plan", &[]));
+        assert_eq!(v, serde_json::to_value(&plan).unwrap());
+        assert_eq!(v["optimization"]["selected"]["purchase_cost"], 7.);
+        assert_eq!(
+            v["purchasing"]["comparison_scope"],
+            "admitted_whole_item_offers_only"
+        );
+        let priced = result(run(main, &root, "stock-price", &["pricing.json"]));
+        assert_eq!(priced["least_observed_independent_order_total"], 7.);
+        assert_eq!(
+            result(run(main, &root, "stock-residual", &[])),
+            serde_json::to_value(plan.residual_request().unwrap()).unwrap()
+        );
+        let filename = format!("selected-{main}.svg");
+        result(run(main, &root, "stock-svg", &["1", &filename]));
+        assert_eq!(
+            fs::read_to_string(root.join(&filename)).unwrap(),
+            stock_svg(&plan, 1).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("stock.json")).unwrap(),
+            COST_STOCK
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("pattern.json")).unwrap(),
+            PATTERN
+        );
     }
 }

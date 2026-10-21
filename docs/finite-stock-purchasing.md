@@ -3,7 +3,8 @@
 `stock-price` prices the physical items used by a complete finite-stock allocation. It reuses the
 existing material quote engine for observation history, dates, intraday instants, expiry, capacity,
 currency and comparable terms. It does not treat a hide as fungible roll stock, infer missing prices,
-reserve inventory, or optimize the layout for purchase cost.
+reserve inventory, or invent missing costs. The same stock planner can now explicitly optimize
+the layout for admitted whole-item purchase costs, as described below.
 
 ## Run the synthetic example
 
@@ -74,6 +75,61 @@ Rust JSON text. A residual stock request changes consumed geometry and therefore
 old price binding: deliberately characterize and rebind the remaining physical item instead of
 carrying its original whole-hide price forward silently.
 
+## Cost-directed allocation
+
+The stock request accepts `options.optimize: "minimize_purchase_cost"` with an explicit
+`backtrack_limit` and a top-level `pricing` object using the existing
+`ftx-finite-stock-pricing/1` contract above. Other objectives must omit `pricing` so an unused
+commercial policy is never silently accepted. Obtain the exact stock identities using the same
+inventory in a geometry-only request before deliberately binding its offers.
+
+```sh
+cargo run -p ftx-cli --bin ftx-materials -- stock-plan \
+  tests/fixtures/materials/synthetic-stock-pattern.json \
+  tests/fixtures/materials/synthetic-stock-cost.json
+```
+
+This miniature synthetic fixture offers one large sheet for 100 USD and two small remnants for
+3 and 4 USD. The cost objective selects both remnants for 7 USD, although the stock-count objective
+would choose one large sheet. With other prices, cost minimization may instead prefer the large
+sheet over the area-minimizing pair. Each chosen item is charged once, not per cutter. These values
+are explicitly synthetic; they establish no live supplier price or measured production savings.
+
+Every candidate item's offers are evaluated **once before search** by the existing quote evaluator.
+No initial first-fit layout is needed to qualify prices. Unknown, stale, unavailable, changed-lock,
+insufficient-capacity or otherwise unqualified items are excluded from cost search, not assigned
+zero or an estimated substitute price. A first-fit layout using an excluded item does not prevent
+another, fully priced layout from succeeding. The final `purchasing` section retains all candidate
+offers and exclusions, actual used-item flags, the pricing-input digest, currency and selected total.
+Its `comparison_scope` is `admitted_whole_item_offers_only`: unknown offers are not proved more
+expensive or physically unusable. Unknown capacity can be admitted only under the existing market
+policy, and keeps `complete_observed_quantity_coverage` false.
+
+The geometric acceptance authority is unchanged: complete cutter paths must satisfy exact material,
+region, defect, prior-cut, clearance and orientation constraints. `optimization.baseline.purchase_cost`
+and `optimization.selected.purchase_cost` use the reported currency. Ties retain the first equal
+computed cost, without a hidden area/count objective. The existing quote arithmetic is retained;
+this does not introduce monetary settlement or currency-rounding rules.
+
+Nonnegative whole-item costs permit monotone lower-bound pruning. Once a complete priced layout
+exists, work or backtrack exhaustion retains that complete incumbent; before then exhaustion refuses.
+`lattice_optimal` refers only to the declared lattice/orientation choices **among admitted priced
+items**, with independent per-item orders and the fixed as-of inputs. It is not a continuous-space,
+shipping/bundle, future-market or reusable-offcut-value optimum. Existing quote/link caps apply to
+the one pricing pass, independently of the geometry work and undo limits.
+
+Frozen replay retains the original pricing inputs and locks. Residual requests retain those locks
+without rewriting them: newly consumed items require deliberate requalification, while unchanged
+unused stock can retain its existing eligible offers. `stock-price` can re-evaluate the selected
+layout with other observations, but does not retroactively re-optimize it.
+
+The ordinary native commands, file-free APIs and material-study stock consumer all call this same
+planner. The single-search `stock_job` additionally retains exact Rust `purchasing_json` text; the
+material worker publishes it as `stock-purchasing.json`, without rerunning pricing or passing its
+receipt-bound numbers through JavaScript serialization. Unpriced jobs retain their old output shape.
+The study's existing independent outcomes stay separate; this does not add a new cross-material
+cost metric or graphical quote editor. Existing original plan and residual downloads remain authoritative.
+
 ## Portable API and scope
 
 `ftx_wasm::stock_pricing::{stock_identities, stock_price}` exposes the same library without files.
@@ -84,6 +140,6 @@ the output budget refuses without returning a partial JSON document.
 This increment supplies native commands and browser-callable APIs; it does not add graphical pricing
 controls to the material workbench. It also does not add supplier records, network refreshes,
 supplier-bundle/shipping optimization, currency conversion, accounting rounding rules, inventory
-mutation or checkout. Area/count-optimized layouts remain distinct from price-optimized layouts.
+mutation or checkout. Area/count objectives remain distinct from the explicitly requested cost objective.
 These are explicit remaining purchasing tasks under `ftx-tm6`/`ftx-tm7`, not claims made by a
 successful synthetic price calculation.
