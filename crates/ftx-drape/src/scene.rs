@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ftx_body::BodyFrames;
 use ftx_core::np::linspace;
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, det};
-use ftx_pattern::{Pattern, truthy};
+use ftx_pattern::{Pattern, material_elastic::ElasticBand, truthy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -233,16 +233,23 @@ pub struct ElasticCasing {
     pub length: f64,
     /// Axial stiffness EA (N).
     pub ea: f64,
+    /// Independent finished-band evidence, when selected; absent retains caller-specified EA.
+    pub material: Option<ElasticBand>,
     /// Physical instances whose simulated inertia is compared with this casing's ideal-ring grip.
     /// This comparison does not infer load transfer between independent garments or casings.
     pub load_instances: Vec<String>,
 }
 
-/// The elastic casing of a drafted pattern: the piece with role `waistband` (one instance), the relaxed
-/// elastic `meta.solved.elastic_cut_mm` less `meta.style.elastic_overlap`. `None` without them (a traced
-/// pattern), or with `ea` ≤ 0 (the elastic switched off).
+/// Compatibility helper returning exactly one resolved casing, or None on absence/refusal.
+/// Production consumers must use [`elastic_casings`] to retain structured evidence refusals.
 #[must_use]
 pub fn elastic_casing(pattern: &Pattern, ea: f64) -> Option<ElasticCasing> {
+    let mut casings = elastic_casings(pattern, ea).ok()?;
+    (casings.len() == 1).then(|| casings.remove(0))
+}
+
+// Only the historical geometry convention; never resolves or defaults an explicitly selected band.
+fn legacy_casing(pattern: &Pattern, ea: f64) -> Option<ElasticCasing> {
     let raw = pattern.raw();
     let cut = raw["meta"]["solved"]["elastic_cut_mm"].as_f64()?;
     let overlap = raw["meta"]["style"]["elastic_overlap"]
@@ -268,6 +275,7 @@ pub fn elastic_casing(pattern: &Pattern, ea: f64) -> Option<ElasticCasing> {
         instance,
         length,
         ea,
+        material: None,
         load_instances: pattern.instances.iter().map(|i| i.id.clone()).collect(),
     })
 }
@@ -278,21 +286,51 @@ struct DeclaredCasing {
     instance: String,
     relaxed_m: f64,
     load_instances: Vec<String>,
+    #[serde(default)]
+    elastic_material: Option<ftx_pattern::material_catalog::Selection>,
+}
+
+fn band(raw: &Value) -> Result<ElasticBand, Refusal> {
+    let selection = serde_json::from_value(raw.clone())
+        .map_err(|e| bad(format!("elastic_material selection: {e}")))?;
+    ElasticBand::resolve(&ftx_pattern::textile_import::catalog()?, &selection)
 }
 
 /// Resolve source-preserving, explicitly scoped casings or the original single-waistband convention.
-/// Explicit declarations are validated even when EA is zero; disabled elastics do not shrink casings.
+/// A selected finished band supplies its own EA; positive caller EA is not a multiplier or override.
+/// Explicit declarations are validated even when caller EA is zero, which disables all casing rings.
 ///
 /// # Errors
 /// Ambiguous legacy/explicit declarations, duplicate or inactive casings, invalid lengths or load scopes.
 pub fn elastic_casings(pattern: &Pattern, ea: f64) -> Result<Vec<ElasticCasing>, Refusal> {
     let solved = &pattern.raw()["meta"]["solved"];
     let Some(raw) = solved.get("elastic_casings") else {
-        return Ok(elastic_casing(pattern, ea).into_iter().collect());
+        let Some(selected) = solved.get("elastic_material") else {
+            return Ok(legacy_casing(pattern, ea).into_iter().collect());
+        };
+        Refusal::finite("elastic stiffness switch", ea)?;
+        if ea < 0.0 {
+            return Err(bad("elastic stiffness switch must be nonnegative".into()));
+        }
+        let material = band(selected)?;
+        let mut casing = legacy_casing(pattern, material.axial_stiffness_n()).ok_or_else(|| {
+            bad("selected elastic band needs a valid single legacy casing".into())
+        })?;
+        let instance = pattern
+            .instance(&casing.instance)
+            .expect("legacy casing instance");
+        let piece = &pattern.raw()["pieces"][instance.piece_index];
+        if piece["sim"] == false || !truthy(&piece["placement"]) {
+            return Err(bad(
+                "selected elastic band needs an active placed casing".into()
+            ));
+        }
+        casing.material = Some(material);
+        return Ok(if ea == 0.0 { Vec::new() } else { vec![casing] });
     };
-    if solved.get("elastic_cut_mm").is_some() {
+    if solved.get("elastic_cut_mm").is_some() || solved.get("elastic_material").is_some() {
         return Err(bad(
-            "explicit casings cannot also declare legacy elastic_cut_mm".into(),
+            "explicit casings cannot also declare legacy elastic_cut_mm or elastic_material".into(),
         ));
     }
     let entries = raw
@@ -308,6 +346,9 @@ pub fn elastic_casings(pattern: &Pattern, ea: f64) -> Result<Vec<ElasticCasing>,
     let mut seen = BTreeSet::new();
     let mut casings = Vec::new();
     for entry in entries {
+        if entry.get("elastic_material").is_some_and(Value::is_null) {
+            return Err(bad("elastic_material must be a selection, not null".into()));
+        }
         let entry: DeclaredCasing =
             serde_json::from_value(entry.clone()).map_err(|e| bad(e.to_string()))?;
         let instance = pattern
@@ -341,11 +382,20 @@ pub fn elastic_casings(pattern: &Pattern, ea: f64) -> Result<Vec<ElasticCasing>,
                 "casing load_instances must include its own instance".into()
             ));
         }
+        // Resolve even when disabled; the global switch cannot authorize stale or missing evidence.
+        let material = entry
+            .elastic_material
+            .as_ref()
+            .map(|selection| {
+                ElasticBand::resolve(&ftx_pattern::textile_import::catalog()?, selection)
+            })
+            .transpose()?;
         if ea > 0.0 {
             casings.push(ElasticCasing {
                 instance: entry.instance,
                 length: entry.relaxed_m,
-                ea,
+                ea: material.as_ref().map_or(ea, ElasticBand::axial_stiffness_n),
+                material,
                 load_instances: entry.load_instances,
             });
         }

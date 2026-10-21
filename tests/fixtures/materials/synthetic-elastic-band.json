@@ -1,0 +1,27 @@
+{
+  "id": "synthetic-elastic-tape",
+  "allow_estimates": true,
+  "record": {
+    "id": "synthetic-elastic-tape",
+    "name": "Synthetic finished elastic tape; NOT measured textile data",
+    "form": "woven",
+    "structure": {"elastic_model": "linear_tension_only/1"},
+    "properties": {
+      "axial_stiffness": {
+        "value": 15.0,
+        "unit": "N",
+        "evidence": "estimate",
+        "source": "synthetic",
+        "method": "Synthetic axial force per unit engineering strain of the whole tape; not a breaking force or sheet modulus",
+        "conditions": {"purpose": "software regression only"}
+      }
+    },
+    "sources": {
+      "synthetic": {
+        "reference": "test:synthetic-casing-elastic",
+        "accessed_on": "2026-10-21",
+        "note": "Invented coefficient for independent numerical checks, not a commercial band qualification"
+      }
+    }
+  }
+}

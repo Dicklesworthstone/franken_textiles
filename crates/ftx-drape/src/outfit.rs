@@ -223,12 +223,16 @@ pub fn prepare(input: &Input, options: &DrapeOptions) -> Result<Prepared, Refusa
             )));
         }
         for casing in casings {
-            elastic_casings.push(json!({
+            let mut declared = json!({
                 "instance":format!("{}::{}", garment.id, casing.instance),
                 "relaxed_m":casing.length,
                 "load_instances":casing.load_instances.iter()
                     .map(|id| format!("{}::{id}", garment.id)).collect::<Vec<_>>()
-            }));
+            });
+            if let Some(material) = &casing.material {
+                declared["elastic_material"] = json!(material.frozen_selection());
+            }
+            elastic_casings.push(declared);
         }
         let source_pieces = original["pieces"]
             .as_array()
