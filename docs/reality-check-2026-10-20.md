@@ -895,3 +895,151 @@ suppression. Existing predictable-temp warnings in the older test remain outside
 `ftx-onn.3` is closed with the positive evidence and fresh-solo limitation; `br sync --flush-only`
 reports nothing left to export. All peer Bead rows are semantically preserved. R4's broader
 capture/garment/real-photo conditions and parent `ftx-onn` remain open.
+
+### Release-browser continuation — `ftx-onn.4`
+
+- [x] Refresh the live tree and R9 boundary; commit/flush/release the completed image-fit slice first.
+- [x] Fingerprint the actual host: Apple M5 Ultra, 36 logical/physical cores, 256 GiB, macOS 27.0.1.
+- [x] Start strict-remote existing-release-profile WASM build from frozen `6ce0c0e`, no overlay.
+- [x] Extend only the existing browser driver with explicit `--timings N` mode (about 80 lines).
+  Default native-byte comparison remains unchanged. Invalid zero/fraction counts refuse before launch.
+- [x] Verify returned release artifact hash and preserve old owned `web/pkg` before standard regeneration.
+- [x] Run actual Chromium: fixed 92 cm / 30 month chart inputs, bolero then trousers, three declared
+  warmups and **20 retained runs per garment**, 2 mm self-contact, accepted Newton steps and no gating.
+- [x] Retain every attempted row/report, input/model/source/artifact/browser/host hashes, empirical
+  nearest-rank p50/p95 and min/max; no latency summary for incomplete or failed numerical/offline checks.
+- [x] Verify first retained viewer for each garment with the existing offline file/blob/control checks.
+- [x] Review results/limits, scoped UBS and fresh solo honesty checks; complete Beads/commit handoff
+  with the final scoped command receipts in the session output.
+
+This uses the existing release build and numerical path, with no algorithm/tolerance/solver change,
+profiler attribution or OS tuning. Timings describe this shared M5 Ultra desktop and its explicit
+warm policy; the M4 native target, broader material/history workloads and parent gauntlet stay open.
+Creation gate: the requesting user consumes this existing TODO/evidence for `ftx-onn.4` handoff;
+observed gap is the debug local bundle plus unqualified historical timings; rows retire at closure.
+The immediate valuable action is delivering/executing the release artifact, not a new benchmark framework.
+Initial `hz3` namespace setup refuses with status 73 (`Killed`); RCH retries remotely on `vmi1152480`.
+Build/measurement logs use external `ftx-release-browser-checks-uvnlnenl/`; no local compilation.
+
+The strict-remote `cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm`
+exits **zero** on `vmi1152480`, clean base `6ce0c0e0dd2fcf5c144468529fe462269ff8dc2f`, no overlay.
+Raw WASM: 12,802,969 bytes, SHA-256
+`d500626a2349a6fbfbd288617720c576448c865eddc2c34de1f255e6724e482c`, matched against the worker.
+Standard wasm-bindgen **0.2.128** produces the 12,641,323-byte browser WASM, SHA-256
+`70798715ddf6abd1493e96d0fc671097ee281274819ed568075f48cac0caae1b`.
+The prior four files are preserved at external `ftx-before-release-web-pkg-8a4yoryu/`; hashes were
+rechecked before replacement. `release-artifact.json` records the build and each generated file.
+The new actual compiled-WASM frontend lane passes **74 tests, zero failures, zero skips**.
+Node syntax/diff checks and the ordinary Chromium draft/refusal lane also pass.
+
+The actual command exits **zero**:
+
+```sh
+FTX_PLAYWRIGHT_MODULE=playwright-core \
+NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules \
+FTX_WASM_PROFILE=release node tools/check_web.cjs \
+  --model /Users/jemanuel/.cache/franken_textiles/anny-0.6.1-default.ftxbody --timings 20
+```
+
+Chromium **156.0.8078.4**, Node **26.8.1**, arm64 Darwin 27.0.0 (macOS 27.0.1), M5 Ultra,
+36 logical cores, 256 GiB. Shared host, no affinity/clock/kernel tuning or cache flush; model
+retained in the worker, one draft per garment, sequential bolero then trousers. Duration uses
+Node's monotonic clock, fold click through completed UI result including tape fitting/sewing/drape;
+initial model upload/parse, drafting, export checks and offline-viewer tests are outside that window.
+All **46/46 attempted runs** pass: three warmups and 20 retained samples per garment. Every raw
+report was reread: gravity simulated, every recorded Newton solve converged, numerical settled,
+zero gating, enabled 2 mm self-contact and a stable per-garment digest. No run exceeded 300 s.
+
+| Garment | Retained n | Minimum (s) | p50 (s) | p95 (s) | Maximum (s) |
+|---|---:|---:|---:|---:|---:|
+| Bolero, 2,073 vertices / 3,744 faces | 20 | 16.294 | 16.658 | 17.433 | 18.799 |
+| Trousers, 3,738 vertices / 6,771 faces | 20 | 45.528 | 45.961 | 46.804 | 47.074 |
+
+These are empirical nearest-rank quantiles, independently recomputed from the retained JSONL,
+without tail-confidence estimates, cold-start claims or hardware extrapolation. Materials explicitly
+report `legacy_uncertain`; numerical settling is neither empirical fabric validation nor real fit.
+No controlled comparison against the prior debug artifact was run, so no speedup is claimed.
+This is a source-bound browser workload measurement, not the M4/native/material-history/full G5 gate.
+
+Evidence is hash-copied to ignored `out/ftx-onn4-browser-release-20261021-0312/`: `browser/` contains
+the complete fingerprint, exact three input documents per garment, all 46 reports/rows, both summaries
+and viewer HTML; `screenshots/` holds board/draped images; `checks/` retains complete build/frontend/
+Chromium logs and artifact/backup receipts. The original temporary files are preserved too.
+Web bindings and runtime sources matched their startup hashes after the complete run. Backend build
+base is `6ce0c0e`; the uncommitted driver at execution is bound separately by SHA-256
+`5e327b9c9e0f15fa1624fc00ae9e66c38b0f50a8669ab67c8e80bd7f94bee94b`.
+The admitted model remains SHA-256 `8f0bb151ba19975437147d239b7ff237642a7fa63659a6fac49fa23c299a0915`.
+
+Both saved viewers pass real offline file/blob initialization, canvas/frame/pixel/control/playback
+checks, exact upstream renderer/license checks, **zero HTTP requests and zero page errors**; their
+draped screenshots were also visually inspected. Bolero report/viewer SHA-256:
+`d6f1d1cf8c89db4b456e2d3b3018ae86b3fa795ad75dea0ca07415630fa624d4` /
+`0827c84c2ac2622dd7eddea1856958b9ad1cf04b66c524bbd09e2ba0b4ee2248`.
+Trousers report/viewer:
+`e8763844c5a93499d7e8264b3178aac4b7f86e0e45dcfe59e2ac70e74e46ade8` /
+`e247d987f34701cbd2fb0f48b302c3907cb6fedb136871b8b4b4073d0f151aff`.
+
+Fresh solo acceptance: reread the complete driver diff and original Bead criteria, then recomputed
+both summaries, all input/source/artifact hashes and each raw Newton-step sample. A first inspection
+assumed a top-level gravity field and stopped with `KeyError`; the actual field is
+`numerical.gravity_simulated`, and the corrected inspection passes all 46 reports. No source, report
+or gate changed. Standard wasm-bindgen nodejs postprocessing of the same verified raw release module
+(no Rust compilation) then re-executes both exact saved input triples. Both generated reports and
+viewer HTML match Chromium **byte for byte**. The two replayed HTML files separately pass the real
+Chromium offline file/blob/control/pixel checks again, zero HTTP requests/errors. Replay results and
+complete stdout/stderr are retained in `replay/`. These two extra executions are not timing samples
+or native/WASM parity evidence. This is fresh solo verification, **not independent verification**.
+
+Bounded worksheets for this block, using the actual diff/commands and live open/closed Beads:
+
+- Creation (existing report/TODO and raw timing output, 2026-10-21): PROCESS, no runtime branch.
+  Consumer: requesting user; gate: reviewable `ftx-onn.4` delivery; observed gap: debug bundle and
+  historical timings without retained repeats; retirement: completed handoff history at closure.
+  The user's explicit detailed-TODO request supplies the gate. Integrity exception Q1–Q4 do not
+  apply because no exception is needed. Highest ready bounded action was the release-browser
+  delivery; another hour of reporting would be worse. Verdict: legitimate minimal handoff; stop
+  adding machinery. This report's size is already high; no new audit/report framework was created.
+- Real work (this Bead only): README purpose is sewing patterns that sew together and fit a specific
+  body, with usable files. USER 2 (usable release bundle and measured user guide), ENABLER 1
+  (existing checker extended and actually exercised), PROCESS 2 (requested TODO and Bead), UNKNOWN 0.
+  Demo: load the release page/model and open either resulting offline viewer. Without PROCESS,
+  the product still works but the requested accounting/raw evidence is lost. The enabler's actual
+  consumer ran 46 numerical cases plus both offline viewers. Oldest open user-facing item remains
+  `ftx-onn`; this closes its tractable browser-delivery slice while its original acceptance remains
+  open. No swarm/pane comparison applies (solo). No plan/spec edit replaces implementation, and no
+  condition was removed from the parent to close the child. Verdict: bounded delivery/proof work;
+  return to product work instead of more reporting.
+- Honesty 1: No (checked: driver diff adds a lane; default assertions/native comparison unchanged).
+  2: No (checked: real compiled WASM, model, Chromium and outputs; no new mocks).
+  3: No (checked: no oracle/golden edits). 4: Yes, checker code changes alongside delivery: timing
+  mode explicitly omits native comparison and labels that boundary; the default path is unchanged.
+  Original numerical acceptance, 2 mm contact and 300 s budget are retained, with no new suppression,
+  timeout widening or guard bypass. This diff was separately reread before closure.
+  5: No (checked: both preselected garments, full contact, all attempts retained; no success branch).
+  6: No (checked: 74 compiled frontend tests and 46 browser attempts actually executed).
+  7: No (checked: remote build exit/hash, actual runtime logs and raw rows). 8: No (checked:
+  replay and timing lanes are labelled; neither establishes native parity, empirical fabric or fit).
+  9: No (checked: namespace retry, disk refusal, raw-inspection error and broader open gates disclosed).
+  10: No (checked: cited commands preserve stderr in complete logs). 11: No (checked: this child
+  covers its original positive delivery; parent/R9 remainder stay open). 12: No (checked: no plan,
+  spec or requirement edit). 13–17: Inapplicable because there was no delegation or peer agreement.
+  18: No (checked: three warmups/20 samples/two garments fixed before execution; 46/46 includes all
+  attempts). Older-session mining was not repeated for this bounded slice; the earlier CASS timeout
+  remains disclosed. 19: Explain the long shared remote build, non-independent review and initially
+  wrong inspection field; none is a performance/accuracy result. 20: Strongest evidence is actual
+  repeated Chromium folds with unchanged digests and a fresh exact-input replay producing identical
+  reports/viewers. Disposition: the lane's native-comparison exclusion is explicit in code, Bead and
+  report (RH-1/RH-2); original checks preserved, no self-review presented as independent authority.
+  No weakened gate or fabricated result found in this bounded review.
+
+Pre-commit `ubs $(git diff --name-only --cached)` returns **2, partial**, not a pass: its JavaScript
+taint dataflow work limit prevents complete eval/command analysis. One JavaScript file is scanned,
+with 2 critical, 22 warning and 48 informational findings. Both critical hits are existing Playwright
+`page.$eval` calls with fixed authored callbacks, not JavaScript string `eval`; neither changed in this
+block. Reviewed remaining findings cover synchronous file I/O in this sequential checker, exclusively
+created output files, normal failure propagation, guarded page queries and a blob whose browser
+context is closed in `finally`. No new true defect is established; incomplete taint analysis remains
+a limitation. No partial-acceptance flag, suppression, scanner edit or pre-commit bypass was used.
+The complete output is `checks/staged-ubs.log`. Node syntax and `git diff --check` pass. This block
+changes no Rust source; its actual release WASM build and 74-test compiled frontend lane are recorded
+above. It does not rerun the full native suite or substitute for the unavailable DSR tool gate.

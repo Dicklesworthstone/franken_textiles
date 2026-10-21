@@ -4,6 +4,7 @@
 //   tools/build_web.sh && cargo build --release -p ftx-cli
 //   NODE_PATH=$(npm root -g) node tools/check_web.cjs [--model PATH.ftxbody] [--ftx target/release/ftx]
 //   node tools/check_web.cjs --viewer /path/to/fold_viewer.html   # offline file:// rendering and controls
+//   node tools/check_web.cjs --model PATH.ftxbody --timings 20   # browser timing lane; no native comparison
 //
 // Needs Playwright with its Chromium (npm i -g playwright && npx playwright install chromium).
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
@@ -13,11 +14,17 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { pathToFileURL } = require("url");
+const { performance } = require("perf_hooks");
 
 const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : null; };
 const root = path.resolve(__dirname, "..");
 const model = arg("--model");
 const standalone = arg("--viewer");
+const timingArg = arg("--timings");
+const timingRuns = Number(timingArg || 0);
+if (process.argv.includes("--timings") && (!model || standalone || !/^[1-9][0-9]*$/.test(timingArg || "") || timingRuns > 100)) {
+  throw Error("--timings needs --model and an integer run count from 1 to 100; it is separate from --viewer");
+}
 const userAgent = "OpenAI File Downloader, XaiImageApiFetch/1.0";
 const ftx = arg("--ftx") || path.join(root, "target/release/ftx");
 const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
@@ -101,7 +108,83 @@ async function offlineViewer(browser, file) {
     return btoa(s);
   }), "base64");
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "ftx-check-web-"));
+  const writeTimingFingerprint = () => {
+    if (!timingRuns) return;
+    const fingerprint = {
+      lane: "browser_timing_only", requested_runs_per_garment: timingRuns, warmups_per_garment: 3,
+      garments: ["zouave_bolero", "zouave_trousers"],
+      duration_clock: "Node performance.now (monotonic milliseconds)",
+      host: { cpu: os.cpus()[0].model, logical_cpus: os.cpus().length, ram_bytes: os.totalmem(),
+        platform: os.platform(), arch: os.arch(), kernel: os.release(), node: process.version },
+      browser: browser.version(), repository_head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+      declared_build_profile: process.env.FTX_WASM_PROFILE || "unspecified; bind the artifact hash to its build receipt",
+      wasm_sha256: sha(fs.readFileSync(path.join(root, "web/pkg/ftx_wasm_bg.wasm"))),
+      glue_sha256: sha(fs.readFileSync(path.join(root, "web/pkg/ftx_wasm.js"))),
+      model_sha256: sha(fs.readFileSync(model)),
+      sources: Object.fromEntries(["web/index.html", "web/worker.js", "tools/check_web.cjs"].map(n => [n, sha(fs.readFileSync(path.join(root, n)))])),
+      conditions: "Headless Chromium on a shared host; no affinity, clock/governor changes or cache flush. Model retained in worker; each garment drafted once. Fold click to completed result, including tape fit and UI delivery; viewer checks outside timing. Sequential bolero then trousers.",
+      started_utc: new Date().toISOString(), system_load: os.loadavg(),
+    };
+    fs.writeFileSync(path.join(work, "fingerprint.json"), JSON.stringify(fingerprint, null, 2), { flag: "wx" });
+  };
+  const timedFolds = async (dir, program) => {
+    const rows = [];
+    const inputs = Object.fromEntries(["pattern.json", "measurements.json", "fit_spec.json"].map(n => [n, sha(fs.readFileSync(path.join(dir, n)))]));
+    let reference = null, viewerFile = null, verifiedOffline = false;
+    try {
+      await page.check("#selfContact");
+      for (let i = 0; i < timingRuns + 3; i++) {
+        const warmup = i < 3, name = `${warmup ? "warmup" : "sample"}-${warmup ? i + 1 : i - 2}`;
+        const row = { name, warmup, started_utc: new Date().toISOString(), system_load_start: os.loadavg() };
+        const t0 = performance.now();
+        try {
+          const err = await settle("#foldGo", 900000);
+          row.elapsed_ms = performance.now() - t0;
+          if (err) throw Error(err);
+          const raw = await bytes("a[download='sim_report.json']"), report = JSON.parse(raw);
+          fs.writeFileSync(path.join(dir, `${name}.report.json`), raw, { flag: "wx" });
+          row.report_sha256 = sha(raw);
+          row.numerical_settled = report.numerical?.settled === true;
+          row.all_steps_converged = report.numerical?.sew?.unconverged === 0 && report.numerical?.drape?.unconverged === 0;
+          row.gating = report.gating;
+          row.self_contact = report.self_contact;
+          row.vertices = report.vertices; row.faces = report.faces;
+          reference ||= row.report_sha256;
+          row.valid = row.numerical_settled && row.all_steps_converged && Array.isArray(row.gating) && row.gating.length === 0
+            && row.self_contact?.enabled === true && row.self_contact.thickness_mm === 2
+            && row.report_sha256 === reference && row.elapsed_ms < 300000;
+          if (!row.valid) throw Error("numerical, contact, digest or declared 300-second browser budget failed");
+          if (i === 3) {
+            viewerFile = path.join(dir, "browser_fold_viewer.html");
+            fs.writeFileSync(viewerFile, await bytes("a[download='fold_viewer.html']"), { flag: "wx" });
+          }
+        } catch (e) {
+          row.elapsed_ms ??= performance.now() - t0;
+          row.valid = false; row.error = String(e);
+          throw e;
+        } finally {
+          row.system_load_end = os.loadavg(); rows.push(row);
+          fs.appendFileSync(path.join(dir, "timings.jsonl"), JSON.stringify(row) + "\n");
+          console.log(`${program} ${name}: ${row.elapsed_ms} ms, ${row.valid ? "valid" : row.error}`);
+        }
+      }
+      const failuresBefore = failed;
+      await offlineViewer(browser, viewerFile);
+      verifiedOffline = failed === failuresBefore;
+    } finally {
+      const samples = rows.filter(r => !r.warmup), complete = verifiedOffline && rows.length === timingRuns + 3 && rows.every(r => r.valid);
+      const times = samples.map(r => r.elapsed_ms).sort((a, b) => a - b);
+      const quantile = q => times[Math.ceil(q * times.length) - 1];
+      const result = { program, inputs, warmups_requested: 3, runs_requested: timingRuns,
+        attempts: rows.length, retained_runs: samples.length, complete, offline_viewer_passed: verifiedOffline, report_sha256: reference,
+        latency_ms: complete ? { min: times[0], p50: quantile(0.5), p95: quantile(0.95), max: times.at(-1) } : null,
+        statistics: "Empirical nearest-rank quantiles; no tail confidence or hardware extrapolation. Failed/incomplete runs have no latency summary." };
+      fs.writeFileSync(path.join(dir, "timing-summary.json"), JSON.stringify(result, null, 2), { flag: "wx" });
+      console.log(JSON.stringify(result));
+    }
+  };
   try {
+    writeTimingFingerprint();
     await page.goto(`http://localhost:${port}/`);
     await page.waitForFunction(() => /Ready|Could not/.test(document.getElementById("status").textContent), null, { timeout: 60000 });
     check(/Ready/.test(await page.textContent("#status")), "the module loads");
@@ -129,6 +212,7 @@ async function offlineViewer(browser, file) {
         fs.mkdirSync(dir);
         fs.writeFileSync(path.join(dir, "round.zip"), await bytes("a[download$='.zip']"));
         execFileSync("unzip", ["-q", "round.zip"], { cwd: dir });
+        if (timingRuns) { await timedFolds(dir, program); continue; }
         const t0 = Date.now();
         const err = await settle("#foldGo", 900000);
         const s = ((Date.now() - t0) / 1000).toFixed(1);
