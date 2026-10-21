@@ -35,6 +35,7 @@ fn options() -> CutOptions {
         edge_margin_mm: 5.,
         end_margin_mm: 10.,
         seam_allowance_mm: None,
+        maximum_marker_length_m: None,
         nesting: None,
     }
 }
@@ -84,6 +85,134 @@ fn roll_requirements_count_real_cut_instances_not_simulated_vertices_or_net_area
     assert!((roll.stock_mass_kg.unwrap() - 0.0035).abs() < 1e-14);
     assert!(roll.material.mechanics().is_err()); // Purchasing does not invent mechanics to proceed.
     check_marker(&plan);
+}
+
+#[test]
+fn bounded_markers_keep_whole_copies_and_include_each_markers_end_margins() {
+    let p = pattern(vec![piece("front", 40.0, 100.0)]);
+    let mut o = options();
+    o.copies = 3;
+    let unbounded = CutPlan::build(&p, &o).unwrap();
+    assert_eq!(unbounded.schema, "ftx-roll-cut-plan/1");
+    assert!(
+        serde_json::to_value(&o)
+            .unwrap()
+            .get("maximum_marker_length_m")
+            .is_none()
+    );
+    assert_eq!(unbounded.rolls.len(), 1);
+    assert_eq!(unbounded.rolls[0].length_m, 0.225);
+
+    o.maximum_marker_length_m = Some(0.12);
+    let bounded = CutPlan::build(&p, &o).unwrap();
+    assert_eq!(bounded.schema, "ftx-roll-cut-plan/2");
+    assert_eq!(bounded.rolls.len(), 2);
+    assert_eq!(bounded.rolls[0].placements.len(), 2);
+    assert_eq!(bounded.rolls[1].placements.len(), 1);
+    assert!(bounded.rolls.iter().all(|r| r.length_m == 0.12));
+    let copies: std::collections::BTreeSet<_> = bounded
+        .rolls
+        .iter()
+        .flat_map(|r| r.placements.iter().map(|p| (&p.instance, p.copy)))
+        .collect();
+    assert_eq!(copies.len(), 3);
+    assert!(
+        copies
+            .iter()
+            .all(|(instance, _)| instance.as_str() == "front")
+    );
+    let area: f64 = bounded.rolls.iter().map(|r| r.stock_area_m2).sum();
+    assert!((area - 0.024).abs() < 1e-14); // The second marker needs its own end margins.
+    let cut_area: f64 = bounded.rolls.iter().map(|r| r.external_cut_area_m2).sum();
+    assert_eq!(cut_area, unbounded.rolls[0].external_cut_area_m2);
+    assert_eq!(
+        serde_json::to_value(&bounded).unwrap(),
+        serde_json::to_value(CutPlan::build(&p, &o).unwrap()).unwrap()
+    );
+    check_marker(&bounded);
+}
+
+#[test]
+fn bounded_markers_preserve_unfolded_mirrored_notched_and_internal_cut_geometry() {
+    let mut fold = piece("fold", 30., 80.);
+    fold["cut"]["on_fold"] = json!("left");
+    let mut pair = piece("pair", 20., 50.);
+    pair["cut"]["qty"] = json!(2);
+    pair["notches"] = json!([{"id":"n","edge":"right","s":0.5}]);
+    pair["internal"] = json!([{"kind":"cut","pts":[[5,8],[10,8]]}]);
+    pair["drills"] = json!([{"p":[8,12],"d":2}]);
+    let p = pattern(vec![fold, pair]);
+    let before = p.raw().clone();
+    let mut o = options();
+    o.copies = 2;
+    o.seam_allowance_mm = Some(2.);
+    o.maximum_marker_length_m = Some(0.11);
+    let plan = CutPlan::build(&p, &o).unwrap();
+    assert!(plan.rolls.len() > 1);
+    let mut seen = std::collections::BTreeSet::new();
+    let ctx = Ctx::new(
+        &p,
+        ExportOptions {
+            sa: Some(2.),
+            ..ExportOptions::default()
+        },
+    )
+    .unwrap();
+    for roll in &plan.rolls {
+        assert!(roll.length_m <= 0.11);
+        for placed in &roll.placements {
+            assert!(seen.insert((placed.instance.clone(), placed.copy)));
+            let g = ctx
+                .geom(Source::Instance(p.instance(&placed.instance).unwrap()), 6.)
+                .unwrap();
+            let t = placed.transform;
+            let map = |v: Vec2| {
+                Vec2::new(
+                    t[0][0] * v.x + t[0][1] * v.y + t[0][2],
+                    t[1][0] * v.x + t[1][1] * v.y + t[1][2],
+                )
+            };
+            let ring = cutter_ring(&g).unwrap();
+            assert_eq!(ring.len(), placed.cut_mm.len());
+            for (source, actual) in ring.iter().zip(&placed.cut_mm) {
+                assert!((map(*source) - *actual).norm() < 1e-10);
+            }
+            assert_eq!(g.internal_cut.len(), placed.internal_cut_mm.len());
+            for ((source, closed), (actual, actual_closed)) in
+                g.internal_cut.iter().zip(&placed.internal_cut_mm)
+            {
+                assert_eq!(closed, actual_closed);
+                for (source, actual) in source.iter().zip(actual) {
+                    assert!((map(*source) - *actual).norm() < 1e-10);
+                }
+            }
+            assert_eq!(g.drills.len(), placed.drills_mm.len());
+            for ((source, diameter), (actual, actual_diameter)) in
+                g.drills.iter().zip(&placed.drills_mm)
+            {
+                assert_eq!(diameter, actual_diameter);
+                assert!((map(*source) - *actual).norm() < 1e-10);
+            }
+        }
+    }
+    assert_eq!(seen.len(), p.instances.len() * o.copies);
+    assert_eq!(p.raw(), &before);
+    check_marker(&plan);
+}
+
+#[test]
+fn marker_length_policy_refuses_oversized_whole_pieces_and_invalid_limits() {
+    let p = pattern(vec![piece("front", 40.0, 100.0)]);
+    for limit in [0.0, -1.0, f64::NAN, f64::INFINITY, 0.02, 0.119] {
+        let mut o = options();
+        o.maximum_marker_length_m = Some(limit);
+        assert!(CutPlan::build(&p, &o).is_err(), "limit {limit:?}");
+    }
+    let mut o = options();
+    o.maximum_marker_length_m = Some(0.12);
+    assert!(CutPlan::build(&p, &o).is_ok());
+    // A narrow but too-long piece is not made feasible by splitting its area into two cuts.
+    assert!(CutPlan::build(&pattern(vec![piece("long", 1.0, 101.0)]), &o).is_err());
 }
 
 #[test]
@@ -420,6 +549,172 @@ fn permitted_half_turn_nests_complementary_pieces_and_reduces_actual_purchase_co
     );
     let svg = ftx_export::cutting::preview::svg(&nested, 0).unwrap();
     assert!(svg.contains("data-grain-reversed=\"true\""));
+}
+
+#[test]
+fn bounded_marker_compaction_retains_every_assigned_piece_and_budget_fallback() {
+    let p = triangular_pair();
+    let mut o = options();
+    o.copies = 2;
+    o.maximum_marker_length_m = Some(0.23);
+    let baseline = CutPlan::build(&p, &o).unwrap();
+    assert_eq!(baseline.rolls.len(), 2);
+    o.nesting = Some(Default::default());
+    o.nesting.as_mut().unwrap().grain_reversal_materials =
+        vec![baseline.rolls[0].material.sha256().to_owned()];
+    let compacted = CutPlan::build(&p, &o).unwrap();
+    assert_eq!(compacted.rolls.len(), baseline.rolls.len());
+    for (a, b) in baseline.rolls.iter().zip(&compacted.rolls) {
+        assert_eq!(
+            a.placements
+                .iter()
+                .map(|p| (&p.instance, p.copy))
+                .collect::<Vec<_>>(),
+            b.placements
+                .iter()
+                .map(|p| (&p.instance, p.copy))
+                .collect::<Vec<_>>()
+        );
+        assert!((b.length_m - 0.12).abs() < 1e-12);
+        assert!(b.length_m < a.length_m && b.length_m <= 0.23);
+        assert!(!b.nesting.as_ref().unwrap().optimality_claim);
+        assert_eq!(a.external_cut_area_m2, b.external_cut_area_m2);
+    }
+    o.nesting.as_mut().unwrap().work_limit = 1;
+    let limited = CutPlan::build(&p, &o).unwrap();
+    for (a, b) in baseline.rolls.iter().zip(&limited.rolls) {
+        assert_eq!(a.length_m, b.length_m);
+        assert_eq!(
+            serde_json::to_value(&a.placements).unwrap(),
+            serde_json::to_value(&b.placements).unwrap()
+        );
+        assert!(b.nesting.as_ref().unwrap().budget_exhausted);
+    }
+}
+
+#[test]
+fn multiple_markers_share_one_rounded_order_and_cannot_reuse_finite_stock() {
+    use ftx_export::cutting::procurement::{Market, evaluate};
+    use ftx_pattern::material_cost::QuoteBook;
+    let p = pattern(vec![piece("front", 40.0, 100.0)]);
+    let mut o = options();
+    o.copies = 3;
+    o.maximum_marker_length_m = Some(0.12);
+    let plan = CutPlan::build(&p, &o).unwrap();
+    let quote = json!({"offer_id":"short-stock", "material_id":"shell", "supplier":"Synthetic supplier", "sku":"shell",
+        "price":1.0,"quantity":1.0,"unit":"linear_meter","minimum_quantity":0.2,"order_increment":0.05,
+        "currency":"USD","region":"US","quality":"test","terms":"ex-tax-shipping",
+        "observed_on":"2026-10-18","available":true,"available_quantity":0.2,
+        "maximum_continuous_quantity":0.12,"source":"test:bounded-marker-order","source_sha256":"0".repeat(64)});
+    let mut enough = quote.clone();
+    enough["offer_id"] = json!("whole-order-stock");
+    enough["sku"] = json!("whole-order-stock");
+    enough["price"] = json!(10.0);
+    enough["available_quantity"] = json!(0.25);
+    let market: Market =
+        serde_json::from_value(json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-18","max_age_days":3,
+        "require_observed_quantity":true,"require_observed_continuous_length":true}))
+        .unwrap();
+    let book: QuoteBook = serde_json::from_value(
+        json!({"schema":"ftx-textile-quotes/1","quotes":[quote.clone(),enough.clone()]}),
+    )
+    .unwrap();
+    let priced = evaluate(&plan, &book, &market).unwrap();
+    assert_eq!(priced["schema"], "ftx-cut-procurement/2");
+    assert_eq!(priced["material_orders"].as_array().unwrap().len(), 1);
+    let order = &priced["material_orders"][0];
+    assert_eq!(order["roll_indices"], json!([0, 1]));
+    assert_eq!(order["marker_lengths_m"], json!([0.12, 0.12]));
+    assert_eq!(order["required_length_m"], 0.24);
+    assert_eq!(order["required_continuous_length_m"], 0.12);
+    assert_eq!(order["sample"]["scope"]["requirement"], 0.024);
+    assert_eq!(
+        order["least_observed_order"]["quote"]["offer_id"],
+        "whole-order-stock"
+    );
+    assert_eq!(order["least_observed_order"]["order_quantity"], 0.25);
+    assert_eq!(priced["least_observed_independent_order_total"], 2.5);
+    assert_eq!(
+        order["sample"]["excluded_offers"][0]["reason"],
+        "insufficient_quantity"
+    );
+    assert_eq!(
+        order["sample"]["excluded_offers"][0]["required_order_quantity"],
+        0.25
+    );
+    assert_eq!(priced["complete_observed_quantity_coverage"], true);
+    assert_eq!(priced["complete_continuous_length_limit_coverage"], true);
+    for (index, row) in priced["roll_prices"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(row["roll_index"], index);
+        assert_eq!(row["material_order_index"], 0);
+        assert!(row.get("least_observed_order").is_none());
+        assert!(row.get("sample").is_none());
+    }
+    let depleted: QuoteBook =
+        serde_json::from_value(json!({"schema":"ftx-textile-quotes/1","quotes":[quote]})).unwrap();
+    let failed = evaluate(&plan, &depleted, &market).unwrap();
+    assert_eq!(failed["complete_offer_coverage"], false);
+    assert!(failed["least_observed_independent_order_total"].is_null());
+
+    // Adequate aggregate inventory never relaxes the actual longest-marker constraint.
+    enough["maximum_continuous_quantity"] = json!(0.119);
+    enough["available_quantity"] = json!(100.0);
+    let short: QuoteBook =
+        serde_json::from_value(json!({"schema":"ftx-textile-quotes/1","quotes":[enough]})).unwrap();
+    let refused = evaluate(&plan, &short, &market).unwrap();
+    assert_eq!(
+        refused["material_orders"][0]["sample"]["excluded_offers"][0]["reason"],
+        "insufficient_continuous_length"
+    );
+    assert_eq!(refused["complete_offer_coverage"], false);
+}
+
+#[test]
+fn grouped_orders_keep_materials_separate_and_missing_coverage_makes_total_unknown() {
+    use ftx_export::cutting::procurement::{Market, evaluate};
+    use ftx_pattern::material_cost::QuoteBook;
+    let mut lining = piece("lining", 40.0, 100.0);
+    lining["fabric"] = fabric("lining", 0.1);
+    let p = pattern(vec![piece("front", 40.0, 100.0), lining]);
+    let mut o = options();
+    o.copies = 3;
+    o.maximum_marker_length_m = Some(0.12);
+    let plan = CutPlan::build(&p, &o).unwrap();
+    assert_eq!(plan.rolls.len(), 4);
+    let book: QuoteBook = serde_json::from_value(json!({"schema":"ftx-textile-quotes/1","quotes":[{
+        "offer_id":"shell", "material_id":"shell", "material_sha256":plan.rolls.iter().find(|r| r.material.material().id=="shell").unwrap().material.sha256(),
+        "supplier":"Synthetic supplier", "sku":"shell","price":10.0,"quantity":1.0,"unit":"linear_meter","minimum_quantity":0.2,"order_increment":0.05,
+        "currency":"USD","region":"US","quality":"test","terms":"ex-tax-shipping",
+        "observed_on":"2026-10-18","available":true,"available_quantity":0.25,
+        "maximum_continuous_quantity":0.12,"source":"test:bounded-materials","source_sha256":"0".repeat(64)
+    }]})).unwrap();
+    let market: Market =
+        serde_json::from_value(json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-18","max_age_days":3}))
+        .unwrap();
+    let priced = evaluate(&plan, &book, &market).unwrap();
+    let orders = priced["material_orders"].as_array().unwrap();
+    assert_eq!(orders.len(), 2);
+    assert_eq!(
+        orders
+            .iter()
+            .filter(|o| !o["least_observed_order"].is_null())
+            .count(),
+        1
+    );
+    assert!(
+        orders
+            .iter()
+            .all(|o| o["roll_indices"].as_array().unwrap().len() == 2)
+    );
+    assert_ne!(orders[0]["material_sha256"], orders[1]["material_sha256"]);
+    assert!(!priced["complete_offer_coverage"].as_bool().unwrap());
+    assert!(priced["least_observed_independent_order_total"].is_null());
+    // Public marker mutation cannot conceal a negative requirement in the aggregated sum.
+    let mut malformed = plan;
+    malformed.rolls[0].stock_area_m2 = -0.01;
+    assert!(evaluate(&malformed, &book, &market).is_err());
 }
 
 #[test]
