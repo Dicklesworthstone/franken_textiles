@@ -1440,6 +1440,38 @@ test('marker selection forwards a zero-based index and withdraws stale preview r
   }
 });
 
+test('grouped marker purchasing displays each whole material order once without per-marker samples', async () => {
+  const p=await pageModule(); await p.load(); await p.bind();
+  p.select('cutOptions'); p.select('quotes'); p.select('market'); await p.e.price.onclick();
+  const scope={currency:'USD',region:'US',quality:'test',terms:'test',as_of:'2026-10-21'};
+  const quote={offer_id:'<literal supplier>',observed_on:'2026-10-21',unit:'linear_meter',maximum_continuous_quantity:0.9};
+  const report={schema:'ftx-cut-procurement/2',currency:'USD',complete_offer_coverage:false,
+    complete_observed_quantity_coverage:false,complete_continuous_length_limit_coverage:false,
+    least_observed_independent_order_total:null,limits:['Synthetic display data only'],
+    roll_prices:[{roll_index:0,material_order_index:0},{roll_index:1,material_order_index:0},{roll_index:2,material_order_index:1}],
+    material_orders:[{material_order_index:0,roll_indices:[0,1],marker_lengths_m:[0.7,0.8],required_stock_area_m2:1.5,
+      required_length_m:1.5,required_continuous_length_m:0.8,sample:{scope,
+        offers:[{quote,order_quantity:2,order_cost:7.25,within_observed_continuous_limit:true}],excluded_offers:[]}},
+      {material_order_index:1,roll_indices:[2],marker_lengths_m:[0.5],required_stock_area_m2:0.5,required_length_m:0.5,
+        required_continuous_length_m:0.5,sample:{scope,offers:[],excluded_offers:[{
+          quote:{...quote,offer_id:'stock-lost'},reason:'insufficient_quantity',required_order_quantity:1}]}}]};
+  const raw=' '+JSON.stringify(report).replace('"order_cost":7.25','"order_cost":7.2500')+'\n';
+  p.emit(report,[{name:'cut-price.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'price'), tables=descendants(s).filter(n=>n.tag==='table');
+  assert.equal(tables.length,2);
+  assert.equal(tables[0].children[0].textContent,'Material order 1 — latest supplier observations');
+  assert.deepEqual(plain(tables[0].children[2].children.map(n=>n.textContent)),
+    ['<literal supplier>','2026-10-21 (date only)','Not reported','Eligible','2 linear_meter','7.25','0.9 linear_meter; within observed limit']);
+  assert.match(visibleText(s),/Markers 1, 2 require 0.7, 0.8 m respectively; total 1.5 m, longest continuous segment 0.8 m/);
+  assert.match(visibleText(s),/Minimum quantity, order increments and available stock apply once/);
+  assert.equal(tables[1].children[2].children[3].textContent,'Excluded: insufficient quantity');
+  assert.equal(JSON.parse(s.children[1].textContent).least_observed_independent_order_total,null);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  const link=descendants(s).find(n=>n.download==='cut-price.json');
+  assert.equal(await p.blobs.get(link.href).text(),raw);
+  p.e.market.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.has(link.href),false);
+});
+
 test('screening is available without a pattern and retains excluded source evidence for inspection', async () => {
   const p = await pageModule(); assert.equal(p.e.screen.disabled, true);
   p.select('screenRequest', '{"threshold":1.0}'); p.e.screenRequest.handlers.change();

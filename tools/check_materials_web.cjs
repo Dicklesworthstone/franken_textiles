@@ -6,6 +6,7 @@
 // --strip-proof DIR runs only strip browser checks against retained native reports (manifest.json).
 // --outfit-proof checks public-prior drafted garment composition with synthetic materials, without a model.
 // --compression-proof checks real history controls, heat/work answers and final material binding.
+// --purchasing-proof checks bounded marker previews and combined whole-order purchasing.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -22,7 +23,8 @@ if (stripIndex >= 0 && !process.argv[stripIndex + 1]) throw Error('--strip-proof
 const stripProof = stripIndex < 0 ? null : path.resolve(process.argv[stripIndex + 1]);
 const outfitProof = process.argv.includes('--outfit-proof');
 const compressionProof = process.argv.includes('--compression-proof');
-assert.ok([stripProof,outfitProof,compressionProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+const purchasingProof = process.argv.includes('--purchasing-proof');
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -47,7 +49,7 @@ const server = http.createServer((req, res) => {
 });
 (async () => {
   assert.ok(fs.existsSync(path.join(web, 'pkg/ftx_wasm_bg.wasm')), 'Build web/pkg first');
-  if (!stripProof && !outfitProof && !compressionProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
+  if (!stripProof && !outfitProof && !compressionProof && !purchasingProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
@@ -72,6 +74,66 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (purchasingProof) {
+      const pattern=load('synthetic-stock-pattern.json'); pattern.pieces=pattern.pieces.slice(0,1);
+      pattern.pieces[0].vertices={a:[0,0],b:[40,0],c:[40,100],d:[0,100]};
+      await input('patternFile',pattern); await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      const bound=await assign(sheet(0.1,1));
+      const options={copies:3,gap_mm:5,edge_margin_mm:5,end_margin_mm:10,seam_allowance_mm:0,maximum_marker_length_m:0.12};
+      await input('cutOptions',options); await page.fill('#rollPreview','2');
+      assert.equal(await run('cut'),'');
+      const planRaw=await download('cut-plan.json'), plan=JSON.parse(planRaw);
+      assert.equal(plan.schema,'ftx-roll-cut-plan/2'); assert.deepEqual(plan.rolls.map(r=>r.length_m),[0.12,0.12]);
+      assert.equal(plan.rolls.flatMap(r=>r.placements).length,3);
+      const svg=await download('roll-1.svg'); assert.match(svg,/data-copy="2"/); assert.doesNotMatch(svg,/data-copy="0"/);
+      const quote={offer_id:'synthetic-whole-order',material_id:bound.fabric.material.id,
+        material_sha256:bound.fabric.material.expected_sha256,supplier:'Synthetic supplier',sku:'whole-order',
+        price:10,quantity:1,unit:'linear_meter',minimum_quantity:0.3,order_increment:0.1,
+        currency:'USD',region:'US',quality:'test',terms:'test',observed_on:'2026-10-21',available:true,
+        available_quantity:0.4,maximum_continuous_quantity:0.15,source:'test:browser-purchasing',source_sha256:'0'.repeat(64)};
+      const market={currency:'USD',region:'US',quality:'test',terms:'test',as_of:'2026-10-21',max_age_days:1,
+        require_observed_quantity:true,require_observed_continuous_length:true};
+      await input('market',market); await input('quotes',{schema:'ftx-textile-quotes/1',quotes:[quote]});
+      assert.equal(await run('price'),'');
+      const raw=await download('cut-price.json'), priced=JSON.parse(raw), order=priced.material_orders[0];
+      assert.equal(priced.schema,'ftx-cut-procurement/2'); assert.equal(priced.material_orders.length,1);
+      assert.deepEqual(order.roll_indices,[0,1]); assert.equal(order.required_length_m,0.24);
+      assert.equal(order.required_continuous_length_m,0.12);
+      assert.ok(Math.abs(order.least_observed_order.order_quantity-0.3)<1e-12);
+      assert.ok(Math.abs(priced.least_observed_independent_order_total-3)<1e-12);
+      const t=page.locator('table').filter({has:page.locator('caption',{hasText:'Material order 1 — latest supplier observations'})});
+      assert.equal(await t.count(),1); assert.equal(await t.locator('tr').count(),2);
+      assert.equal(await t.locator('td').nth(4).textContent(),`${order.least_observed_order.order_quantity} linear_meter`);
+      assert.equal(await t.locator('td').nth(5).textContent(),String(order.least_observed_order.order_cost));
+      assert.match(await page.textContent('#outputs'),/total 0.24 m, longest continuous segment 0.12 m/);
+      assert.match(await page.textContent('#outputs'),/available stock apply once to the combined material order/);
+      fs.writeFileSync(path.join(work,'bounded-plan.json'),planRaw,{flag:'wx'});
+      fs.writeFileSync(path.join(work,'marker-2.svg'),svg,{flag:'wx'});
+      fs.writeFileSync(path.join(work,'whole-order-price.json'),raw,{flag:'wx'});
+      fs.writeFileSync(path.join(work,'bound-pattern.json'),await download('pattern.json'),{flag:'wx'});
+      await page.screenshot({path:path.join(work,'bounded-purchasing.png'),fullPage:true});
+      // A marker choice invalidates only its preview; the whole-order purchasing scope is unchanged.
+      await page.fill('#rollPreview','1'); await page.locator('#rollPreview').dispatchEvent('change');
+      assert.equal(await page.locator('a[download="roll-1.svg"]').count(),0);
+      assert.equal(await download('cut-price.json'),raw);
+      assert.equal(await run('cut'),''); assert.match(await download('roll-0.svg'),/data-copy="0"/);
+      for (const [field,value,reason] of [['available_quantity',0.2,'insufficient_quantity'],
+        ['maximum_continuous_quantity',0.1,'insufficient_continuous_length']]) {
+        await input('quotes',{schema:'ftx-textile-quotes/1',quotes:[{...quote,[field]:value}]});
+        assert.equal(await page.locator('a[download="cut-price.json"]').count(),0);
+        assert.equal(await run('price'),'');
+        const refused=JSON.parse(await download('cut-price.json'));
+        assert.equal(refused.least_observed_independent_order_total,null);
+        assert.equal(refused.material_orders[0].sample.excluded_offers[0].reason,reason);
+        assert.equal(await t.locator('td').nth(3).textContent(),`Excluded: ${reason.replaceAll('_',' ')}`);
+        assert.equal(await t.locator('td').nth(5).textContent(),'Unknown');
+      }
+      await input('market',{...market,as_of:'2026-10-22'});
+      assert.equal(await page.locator('a[download="cut-price.json"]').count(),0);
+      assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m=>m==='GET'));
+      console.log('PASS: real Chromium renders two bounded markers as one 0.3 m / 3 USD whole order, previews either intact marker, retains raw reports, excludes insufficient total stock/continuous cuts and withdraws stale prices. Synthetic observations only; no live purchasing, fulfillment, optimal nesting or machine claim. Artifacts:',work);
+      return;
+    }
     if (compressionProof) {
       const preparation=load('synthetic-compression.json'); preparation.pressure_pa=0;
       // Only this invented specimen has branch-independent reference observations. Real source

@@ -141,6 +141,17 @@ serialization.
 
 ### One purchasing order for all markers of the same material
 
+In the browser material workbench, load and bind the pattern, then select the same cutting-options,
+quotes and market JSON files. **Plan roll cuts** lists the markers; **Preview marker number** uses
+1 for the first marker, 2 for the second, and so on. Run the planner again to download that intact
+marker's SVG. Changing only the preview number withdraws its old image without discarding the
+purchasing result. Changing cutting options, quotes or market inputs invalidates affected results.
+
+**Compare whole-order costs** displays each material order once, identifies its member markers,
+and distinguishes their total length from the longest uninterrupted segment. Quantities, costs
+and exclusions come directly from the shared purchasing evaluator. Download `cut-price.json`
+to retain the full order/marker correspondence and dated source observations.
+
 When an exact material occupies several markers, `cut-price` evaluates their **summed gross stock area**
 as one whole order through the existing quote authority. Minimum quantities, order increments and
 observed total stock apply once to that total. The **longest actual marker** determines the separate
