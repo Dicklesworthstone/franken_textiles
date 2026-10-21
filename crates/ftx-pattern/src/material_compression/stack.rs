@@ -84,6 +84,17 @@ pub struct LayerResult {
     pub conditioned: Conditioned,
 }
 
+/// Conservative inverse ranges conditional on every authored thickness interval and the same
+/// monotone piecewise-linear branch model. Pressure knots, gap, area and preload are fixed inputs.
+/// These are not statistical confidence intervals; no independence assumption is needed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReportedBounds {
+    /// Closing-pressure envelope admitted by the reported thickness bounds, Pa.
+    pub pressure_pa: [f64; 2],
+    /// The pressure envelope multiplied by the fixed reference area, N.
+    pub normal_force_n: [f64; 2],
+}
+
 /// Atomic stack result. Invalid or nonunique inverse problems return a refusal, not partial states.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
@@ -109,6 +120,15 @@ pub struct Report {
     pub closure_residual_m: f64,
     /// Normal force at the final state, pressure times the declared reference area, newtons.
     pub normal_force_n: f64,
+    /// Present only when complete thickness bounds bracket every admitted branch's closure inside
+    /// the characterized pressure domain AND the requested direction from the known preload.
+    /// Does not change the central pressure, path work or any frozen material selection.
+    #[serde(default)]
+    pub reported_bounds: Option<ReportedBounds>,
+    /// Why inverse bounds are unavailable. Never replace missing endpoints with central values or
+    /// silently truncate a range at the acquisition/preload boundary.
+    #[serde(default)]
+    pub bounds_unavailable: Vec<String>,
     /// Signed external work on the complete stack, joules, never used automatically as heating.
     pub external_work_j: f64,
     /// Total reference mass only if every layer supplies admitted reference areal mass, kg.
@@ -123,19 +143,13 @@ pub struct Report {
 }
 
 struct Curve {
-    points: Vec<[f64; 2]>, // pressure (Pa), normalized full thickness (m)
+    points: Vec<[f64; 2]>,         // pressure (Pa), normalized full thickness (m)
+    bounds: Option<Vec<[f64; 2]>>, // complete normalized thickness intervals, or unavailable
 }
 
 impl Curve {
     fn thickness(&self, pressure: f64) -> f64 {
-        let hi = self.points.partition_point(|p| p[0] < pressure);
-        if self.points[hi][0] == pressure {
-            self.points[hi][1]
-        } else {
-            let [pa, a] = self.points[hi - 1];
-            let [pb, b] = self.points[hi];
-            super::lerp(a, b, (pressure - pa) / (pb - pa))
-        }
+        interpolate(&self.points, pressure)
     }
 
     fn work(&self, initial: f64, final_pressure: f64) -> Result<f64, Refusal> {
@@ -169,6 +183,132 @@ impl Curve {
             work
         })
     }
+}
+
+fn interpolate(points: &[[f64; 2]], pressure: f64) -> f64 {
+    let hi = points.partition_point(|p| p[0] < pressure);
+    if points[hi][0] == pressure {
+        points[hi][1]
+    } else {
+        let [pa, a] = points[hi - 1];
+        let [pb, b] = points[hi];
+        super::lerp(a, b, (pressure - pa) / (pb - pa))
+    }
+}
+
+// Earliest lower-envelope crossing and latest upper-envelope crossing. In particular, keep an
+// entire target plateau: choosing its first knot for BOTH ends would understate pressure bounds.
+fn crossing(knots: &[f64], heights: &[f64], gap: f64, earliest: bool) -> f64 {
+    let exact = if earliest {
+        heights.iter().position(|&h| h == gap)
+    } else {
+        heights.iter().rposition(|&h| h == gap)
+    };
+    if let Some(i) = exact {
+        return knots[i];
+    }
+    let hi = heights.partition_point(|&h| h > gap);
+    let lo = hi - 1;
+    super::lerp(
+        knots[lo],
+        knots[hi],
+        (heights[lo] - gap) / (heights[lo] - heights[hi]),
+    )
+}
+
+fn reported_bounds(
+    input: &Input,
+    curves: &[Curve],
+    knots: &[f64],
+    nominal: f64,
+) -> Result<ReportedBounds, String> {
+    let mut envelopes = Vec::with_capacity(curves.len());
+    for (layer, curve) in input.layers.iter().zip(curves) {
+        let bounds = curve.bounds.as_ref().ok_or_else(|| {
+            format!(
+                "layer {}: every acquired thickness needs reported lower and upper bounds",
+                layer.id
+            )
+        })?;
+        let mut lower: Vec<_> = curve
+            .points
+            .iter()
+            .zip(bounds)
+            .map(|(p, b)| [p[0], b[0]])
+            .collect();
+        let mut upper: Vec<_> = curve
+            .points
+            .iter()
+            .zip(bounds)
+            .map(|(p, b)| [p[0], b[1]])
+            .collect();
+        // Monotonicity couples knots: a later lower bound also bounds every earlier thickness;
+        // an earlier upper bound also bounds every later thickness. These attainable envelopes
+        // need not be the originally printed (possibly nonmonotone) bound endpoints.
+        for i in (0..lower.len() - 1).rev() {
+            lower[i][1] = lower[i][1].max(lower[i + 1][1]);
+        }
+        for i in 1..upper.len() {
+            upper[i][1] = upper[i][1].min(upper[i - 1][1]);
+        }
+        if lower.iter().zip(&upper).any(|(a, b)| a[1] > b[1]) {
+            return Err(format!(
+                "layer {}: thickness bounds admit no monotone branch",
+                layer.id
+            ));
+        }
+        envelopes.push((lower, upper));
+    }
+    let mut lower = Vec::with_capacity(knots.len());
+    let mut upper = Vec::with_capacity(knots.len());
+    for &p in knots {
+        lower.push(
+            sum_finite(
+                envelopes.iter().map(|(a, _)| interpolate(a, p)),
+                "lower thickness",
+            )
+            .map_err(|e| e.to_string())?,
+        );
+        upper.push(
+            sum_finite(
+                envelopes.iter().map(|(_, b)| interpolate(b, p)),
+                "upper thickness",
+            )
+            .map_err(|e| e.to_string())?,
+        );
+    }
+    if lower.windows(2).any(|p| p[1] > p[0]) || upper.windows(2).any(|p| p[1] > p[0]) {
+        return Err("reported thickness envelopes lost monotonicity numerically".into());
+    }
+    if lower[0] < input.gap_m || *upper.last().unwrap() > input.gap_m {
+        return Err("reported thickness bounds do not bracket every closure within the characterized domain and declared direction from preload; no extrapolation or truncated bounds".into());
+    }
+    let pressure_pa = [
+        crossing(knots, &lower, input.gap_m, true),
+        crossing(knots, &upper, input.gap_m, false),
+    ];
+    let normal_force_n = pressure_pa.map(|p| p * input.reference_area_m2);
+    if !pressure_pa
+        .iter()
+        .chain(&normal_force_n)
+        .all(|v| v.is_finite())
+        || pressure_pa[0] > nominal
+        || pressure_pa[1] < nominal
+        || pressure_pa[0] < knots[0]
+        || pressure_pa[1] > *knots.last().unwrap()
+        || pressure_pa
+            .iter()
+            .zip(normal_force_n)
+            .any(|(&p, f)| p > 0.0 && f == 0.0)
+    {
+        return Err(
+            "inverse reported pressure/force bounds cannot be represented consistently".into(),
+        );
+    }
+    Ok(ReportedBounds {
+        pressure_pa,
+        normal_force_n,
+    })
 }
 
 fn sum_finite(values: impl Iterator<Item = f64>, label: &str) -> Result<f64, Refusal> {
@@ -226,11 +366,16 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
         let checked = condition(&layer.preparation)?;
         domain[0] = domain[0].max(checked.pressure_range_pa[0]);
         domain[1] = domain[1].min(checked.pressure_range_pa[1]);
+        let normalized = rows(&layer.preparation)?;
         curves.push(Curve {
-            points: rows(&layer.preparation)?
+            points: normalized
                 .iter()
                 .zip(&layer.preparation.samples)
                 .map(|(m, s)| [s.pressure_pa, m.properties["thickness"].value])
+                .collect(),
+            bounds: normalized
+                .iter()
+                .map(|m| m.properties["thickness"].bounds)
                 .collect(),
         });
     }
@@ -295,6 +440,11 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
         }
         (p, [knots[lo], knots[hi]])
     };
+    let (reported_bounds, bounds_unavailable) =
+        match reported_bounds(input, &curves, &knots, pressure) {
+            Ok(bounds) => (Some(bounds), Vec::new()),
+            Err(reason) => (None, vec![reason]),
+        };
     let input_sha256 = sha256_hex(&serde_json::to_vec(input).map_err(|e| invalid(e.to_string()))?);
     let source_id = format!("compression-stack/{input_sha256}");
     let mut results = Vec::with_capacity(curves.len());
@@ -380,10 +530,12 @@ pub fn close(input: &Input) -> Result<Report, Refusal> {
         thickness_m,
         closure_residual_m,
         normal_force_n,
+        reported_bounds,
+        bounds_unavailable,
         external_work_j,
         reference_mass_kg: optional_sum(results.iter().map(|r| r.reference_mass_kg), "total mass")?,
         material_resistance_m2_k_w: optional_sum(results.iter().map(|r| r.material_resistance_m2_k_w), "series material resistance")?,
         layers: results,
-        no_claim: "Quasi-static uniform normal pressure between rigid parallel faces over one fixed common reference area, on caller-qualified monotone branches. Central thickness values determine the inverse; observation bounds are retained but not propagated to pressure/work uncertainty. No lateral expansion, buckling, garment contact topology, recovery-time law, branch switching, recoverable/dissipated energy split, heat generation, physical specimen validation or wearer-comfort claim.".into(),
+        no_claim: "Quasi-static uniform normal pressure between rigid parallel faces over one fixed common reference area, on caller-qualified monotone branches. Central thickness values determine nominal states and work. Available reported bounds enclose pressure and force under complete thickness intervals and monotone piecewise-linear branches, conditional on exact gap, area, pressure knots and preload; they are not confidence intervals or work/material-property uncertainty. No lateral expansion, buckling, garment contact topology, recovery-time law, branch switching, recoverable/dissipated energy split, heat generation, physical specimen validation or wearer-comfort claim.".into(),
     })
 }
