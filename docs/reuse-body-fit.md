@@ -78,5 +78,10 @@ One regression runs the actual multi-frame fitter on independently projected
 synthetic corners, then exports its saved accepted shape as the same closed body.
 Another verifies that a rejected import is retained as a failed simulation in the
 round verdict, without fallback fitting or a successful clip.
-Production Anny garment qualification and real-wearer accuracy are separate tests,
-not established by the synthetic interchange fixtures.
+The opt-in production case in `crates/ftx-cli/tests/body_model_fit.rs` now runs the full admitted
+Anny asset through synthetic multi-frame fitting and accepted-shape body export. It checks all
+20 withheld tape predictions, the rest skin's topology and every exported vertex against the known
+synthetic shape, exact report preservation, and refusal to export rejected or budget-stopped fits.
+It fits two shared controls while the other controls stay at model defaults; it supplies no real
+photographs, visibility inference or empirical accuracy evidence. Production garment/round
+qualification and real-wearer accuracy remain separate tests, not established by this body-only case.

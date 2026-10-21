@@ -761,3 +761,137 @@ pre-commit bypass was used. `ftx-onn.2` is now closed with source-bound positive
 fresh-solo limitation, and `br sync --flush-only` reports nothing left to export. Parent `ftx-onn`,
 empirical material/fit work and performance gates stay open. Both unrelated untracked roots and all
 incoming peer edits remain untouched.
+
+### Production image-fit continuation — `ftx-onn.3`
+
+- [x] Refresh full AGENTS/README, live Beads/dependencies and the existing full-model/tiny-model boundary.
+- [x] Read plan 9.4/10.2, camera/fitter/reuse contracts and the actual CLI adapters.
+- [x] Add a direct opt-in production case to existing `body_model_fit.rs`; no new framework or asset.
+- [x] Execute the admitted full-model case remotely: three moving poses, two nontruth starts,
+  predeclared held-out pixels and withheld tape predictions at the 3 mm girth / 2 mm length bounds.
+- [x] Verify actual accepted-shape body export without refitting or image-pose reuse.
+- [x] Verify incompatible held-out evidence and exhausted budgets retain diagnostics without a solution.
+- [x] Investigate exposed failures: correct two fixture errors; no production defect found in this case.
+- [x] Run focused existing regressions, formatting and all-target Clippy; record exact source/results.
+- [x] Update capability docs, fresh solo review, Beads/flush and scoped commit/handoff preparation;
+  final commit/reservation-release receipts are in the session output.
+
+This is a bounded numerical qualification of the existing fitting/reuse path. Known synthetic vertex
+correspondences and calibrated cameras do not establish detector visibility, raw-image calibration,
+segmentation accuracy, complete capture-to-round acceptance, real-person fit or performance. The admitted
+model remains outside Git. Creation gate: this extends the user's requested TODO, consumed by the user
+for `ftx-onn.3` handoff; the observed defect class is production-model acceptance absent from tiny-model
+tests; rows retire to completed handoff history. No new process artifact or integrity exception.
+The next value is executing the actual case, not extending this report.
+
+The first remote release command against `f9afcc7` plus the test overlay returns **101** at
+compilation: the new fixture incorrectly used `Mat3 * Vec3` where this crate requires `mul_vec`.
+No production fit ran in that request. The test call is corrected; the next frozen request runs
+the complete three directly relevant CLI targets (`body_model_fit`, `body_fit_workflow`,
+`accepted_body_workflow`) with `--include-ignored --nocapture`, plus a separate all-target Clippy.
+Only stature constrains the solve; **20** other tape predictions are withheld checks, alongside
+24 held-out pixels among 144 observations. Added direct skin/topology comparison and rejected/budget
+report import checks exercise the actual export, not just its description. These stay in the existing
+test file. Logs are retained outside Git at
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-production-image-fit-checks-f1_d_1x8/`.
+
+That three-target request also returns **101**: 25 existing tests pass, while the new case fails
+its full-resolution image-bounds assertion **before fitting**. The fixture's guessed camera height
+does not frame the production body. The synthetic camera is corrected to face the posed vertical
+midpoint from 3 m, with the same intrinsics/distortion and the original 1280×960 bounds assertion;
+no optimizer, acceptance gate or target shape changes. The prior all-target Clippy exits zero on
+`vmi1264463` for overlay `73a0c9760249810f598b406b860700f0de4f0f759bf0fbb7e0b2362462d39520`.
+Both checks are rerunning the framed fixture; that earlier lint result is not its runtime acceptance.
+
+Final frozen source: `f9afcc7ebbff93089f5751d598a9c0747bc02e27` plus only
+`crates/ftx-cli/tests/body_model_fit.rs`, overlay
+`d78ebafd25d6b7fdb90b3b8cee1ec9d0ef7f2a2754ca2629920717ea9cbaa178`.
+`RCH_REQUIRE_REMOTE=1 rch exec --base f9afcc7 --clean-overlay --overlay-path
+crates/ftx-cli/tests/body_model_fit.rs -- cargo test --locked --release -j1 -p ftx-cli
+--test body_model_fit --test body_fit_workflow --test accepted_body_workflow --
+--include-ignored --nocapture` exits **zero** on `ovh-b`: **26 passed, zero failed, zero ignored**
+(9 + 15 + 2). `FTX_ANNY_MODEL` is forwarded to the hash-checked external asset; every new positive
+and negative path actually executes. Matching all-target
+`cargo clippy --locked -j1 --all-targets -- -D warnings` exits **zero** on `vmi1264463`.
+Final local `cargo fmt --check` and `git diff --check` pass. No local Rust compilation ran: the
+fresh disk guard fails its free-space ratio (193.9 GB / 4.85%). No runtime/library/WASM code changed;
+a fresh WASM build or full-workspace test repetition was not run for this native integration test.
+
+The actual body has 13,718 model vertices; its exported checked skin has 13,348. Both nontruth
+starts converge, consuming 180 model calls each, plus one publication call. The two shared controls
+and all 12 root/joint pose values recover within the test's predeclared `1e-5` recovery tolerances.
+Every withheld tape prediction passes 3 mm girth / 2 mm length bounds, and every exported skin vertex
+passes its 2 mm comparison with the known rest shape; topology is unchanged. These near-roundoff
+synthetic residuals are numerical self-consistency, **not physical measurement precision**.
+Only stature entered as a tape constraint; the 20 other values were not used by optimization.
+Changing a held-out pixel by 20 px gives REJECTED with identical fitting histories and no solution.
+A one-call budget gives BUDGET_STOP with no solution. Both saved failed reports refuse body export
+with no output directory; there is no tape fallback or false READY evidence.
+
+Fresh solo re-execution runs the same already-compiled test and CLI under RCH's non-compilation
+job mode, with one test thread and one honestly declared slot. The test binary SHA-256 is
+`8039ee3645f1c07e4310fbdce1ad3d31b7af8e4206c464d3f6bc27712dbcf307`; CLI SHA-256 is
+`249871edc28a7c786c4eb789dc6ce30395de11f457d3ee7b118d5233024b358a`, unchanged before/after.
+The replay exits **zero**, one test passed and its sibling explicitly filtered, returning all 20
+evidence files under ignored `out/ftx-onn3-verification-20261021-0204/` (no source/framework changes).
+The actual returned reports were read: two CONVERGED cells, 361 total model calls, largest image
+residual below `1e-7` px, REJECTED/BUDGET_STOP solution null, identical accepted/rejected fit-only
+histories and exact accepted-report bytes in `reused/body_fit.json`.
+Accepted report SHA-256: `a3b2775c06e14daed7c0b563bd25b7af62d17e16786582aa5bc5e56c2664256e`;
+exported OBJ: `7145309652d1a62284fe642dacaaf8346fc87a2c2fc6a691b9129a5eeb4e3965`.
+
+The first artifact copy failed because RCH had already removed its managed temporary root.
+The initial composed replay shell was rejected by DCG's static-analysis guard; the literal,
+reviewable command was accepted. Its first RCH admission refused the default four-slot estimate
+on the three-slot worker. The supported per-request one-slot setting matches the single-threaded
+runtime replay, and admission then waited for peer jobs without stopping or altering them.
+`production-replay-1core.log` retains that command, binary hashes and complete result transfer.
+No guard was disabled, no local fallback occurred and no fixture/harness retention layer was built.
+
+Fresh solo worksheets for this block (not independent verification):
+
+- Creation: this existing report/TODO is PROCESS, consumed by the requesting user for `ftx-onn.3`
+  handoff, justified by the observed tiny-model-only qualification gap, retired to completed history
+  at closure. The integrity exception's four prompts are inapplicable because the explicit request
+  supplies the gate. Highest actionable item was executing this full-model path; another hour of
+  reporting would deliver less value. Verdict: legitimate bounded handoff; stop extending it.
+- Real work: window is this Bead's actual diff/commands, not unrelated incoming material commits.
+  Purpose from README: patterns that sew together and fit a specific body, with usable manufacturing
+  files. USER 1 (user guide's precise supported numerical boundary), ENABLER 1 (direct production-model
+  CLI qualification), PROCESS 1 (requested TODO/Bead), UNKNOWN 0. No runtime feature or defect fix is
+  claimed. Demo: run the documented opt-in test and inspect its actual accepted body and residuals.
+  Omitting PROCESS would affect tracking, not the result. The existing CLI consumes every enabler
+  now. Oldest open user-facing item is the release gauntlet; this closes one tractable proof gap
+  while its physical/capture/performance conditions stay open. Swarm comparisons do not apply:
+  no agent was dispatched. No spec edit substitutes for code execution and no unmet acceptance
+  condition was moved out of this Bead. Verdict: healthy bounded proof work; return to product gaps.
+- Honesty 1: No (checked: original test unchanged; a new asset-dependent case is explicitly ignored
+  by default and actually run with include-ignored). 2: No (checked: real binaries/full admitted
+  model; synthetic projections labelled, no mock). 3: No (checked: no oracle/golden changes).
+  4: New checks accompany the test seam; bounds/residuals/rank/convergence are unchanged. Only the
+  invalid synthetic camera framing and wrong matrix API were corrected. No suppression, CI/validator
+  edit or guard bypass. 5: No (checked: hash admission is a source pin, not a fabricated success
+  branch). 6: No (checked: 26 actual tests and one separately counted replay, not zero-run green).
+  7: No (checked: observed remote exits, binary hashes and returned reports). 8: No (checked:
+  self-generated model projections are numerical recovery, not reference-oracle or real-photo proof).
+  9: Both failed requests, lost first artifact copy and guarded/admission retries remain disclosed.
+  10: No (checked: command stderr retained in logs and every child command's saved stderr file).
+  11: No (checked: closure covers only this stated synthetic production-body path; R4/parent stay open).
+  12: No (checked: no technical-plan/spec change; guides distinguish this case from broader acceptance).
+  13–17: Inapplicable because this block is solo, with no delegated claims or peer agreement counted.
+  18: No (checked: three workflow targets and withheld 24/144 pixels, 20/21 tapes fixed before results).
+  Older-session mining is outside this block; the earlier bounded CASS timeout remains disclosed.
+  19: Explain the two fixture mistakes, artifact-loss/replay cost and absence of a runtime defect.
+  20: Strongest repeatable evidence is full admitted-model fitting followed by actual exported-skin
+  comparison, with failed reports independently refusing export. Disposition: fresh solo source
+  review/re-execution, no independent verifier; RH-1/RH-2 countermeasures are retained assertions,
+  predeclared partitions and explicit numerical/empirical proof boundaries. Stop further paperwork.
+
+The exact staged `ubs $(git diff --name-only --cached)` exits **zero**: one Rust test file,
+zero critical, 134 warnings and 35 informational findings. Reviewed changed-line findings are
+test assertions/expected unwraps, deliberate diagnostic prints, bounded casts/fixture formatting,
+and writes inside the exclusively created per-test directory; no new untrusted runtime path or
+suppression. Existing predictable-temp warnings in the older test remain outside this change.
+`ftx-onn.3` is closed with the positive evidence and fresh-solo limitation; `br sync --flush-only`
+reports nothing left to export. All peer Bead rows are semantically preserved. R4's broader
+capture/garment/real-photo conditions and parent `ftx-onn` remain open.

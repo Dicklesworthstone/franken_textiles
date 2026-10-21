@@ -196,9 +196,19 @@ output refusal, and 4 iteration budget exhausted. `--iterations` accepts 1–100
 overwrite source data, previous reports or their file aliases.
 
 The core's hard budgets and algorithm are in `crates/ftx-measure/BODY_FIT.md`. Its analytical
-tests exercise actual shape-depth degeneracy and multiple shape minima. The CLI tests execute
-the real loader, forward model, skinning, fitter and file writes using a tiny synthetic
-Anny-format two-bone model. They do not use production model assets or real-person photographs.
-Full-mask validation, automatic keypoint inference, camera/tape/segmentation systematic uncertainty,
-production-asset fitting qualification and a ruler-in-frame real-photo check remain unverified
-or outside this slice. No real-wearer or garment-fit claim follows from accepted geometry.
+tests exercise actual shape-depth degeneracy and multiple shape minima. Regular CLI tests execute
+the real loader, forward model, skinning, fitter and file writes using a tiny synthetic two-bone
+model. The opt-in production case in `crates/ftx-cli/tests/body_model_fit.rs` also exercises the
+admitted full Anny 0.6.1 asset: three independently moving root/arm poses, two shared shape
+controls, two nontruth starts, 144 projected points (24 held out), a stature constraint and
+20 withheld tape predictions. Other shape controls stay at explicit model defaults. It checks
+the 3 mm girth / 2 mm length bounds, accepted-shape body export, held-out rejection and exhausted
+budgets. With the admitted asset selected through `FTX_ANNY_MODEL`, run
+`cargo test -p ftx-cli --release --test body_model_fit -- --include-ignored --nocapture`.
+The production case refuses a different model hash; body assets and private observations stay out of Git.
+
+Known synthetic correspondences and cameras do not establish detector visibility or independent
+physical accuracy. The production case does not use silhouettes. Full-mask validation, automatic
+keypoint inference, camera/tape/segmentation systematic uncertainty, broader production capture
+qualification and a ruler-in-frame real-photo check remain unverified or outside this slice.
+No real-wearer or garment-fit claim follows from accepted geometry.
