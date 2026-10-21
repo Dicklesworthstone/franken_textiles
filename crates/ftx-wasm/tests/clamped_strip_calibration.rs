@@ -65,8 +65,7 @@ fn accepted_strip_api_freezes_the_source_estimate_without_fabricating_missing_ph
     assert_eq!(identified["empirical_validation_claim"], false);
     assert_eq!(identified["simulation_ready"], false);
     assert_eq!(
-        identified["mechanics_refusal"]["code"],
-        "missing_property",
+        identified["mechanics_refusal"]["code"], "missing_property",
         "{identified}"
     );
     let mut input: Input = serde_json::from_value(request).unwrap();

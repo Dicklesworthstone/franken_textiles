@@ -2194,9 +2194,10 @@ Detailed delivery TODO, bounded to this software connection:
   command output; run compiled frontend 87/87 with no skips and actual Chromium binding/refusals.
 - [x] Recheck the existing purchasing browser flow against the installed bundle; inspect the
   compression screenshot and review changed product/test code separately from reported success.
-- [ ] Finish corrected full native workspace and strict all-target Clippy; preserve every failure.
-- [ ] Finish the bounded scanner disposition, final source barrier and original-acceptance review;
-  close/flush only this child, make the scoped main handoff and release its file reservations.
+- [x] Finish corrected full native workspace and strict all-target Clippy; preserve every failure.
+- [x] Finish the bounded scanner disposition, final source barrier and original-acceptance review;
+  close/flush only this child. The final handoff records the scoped main commit and reservation
+  release after this evidence revision.
 
 Evidence is retained under ignored `out/ftx-cp2.1-20261021/`. Every Cargo command uses
 `RCH_REQUIRE_REMOTE=1`, base `9a84f3f3038a1418ac43076badb96dfd04081037` (tree
@@ -2211,12 +2212,13 @@ the final corrected-test overlay is
 debug assertions. Cargo's HTTP user agent is explicitly forwarded as required by AGENTS.
 SBH reports only 22749081600 free bytes (0.56925689%), below its threshold: no local Rust build.
 
-Executed checks and proof, with remaining native/scanner results recorded below at handoff:
+Executed checks and proof (the local staged/checker scan limitations remain recorded below):
 
 | Command / lane | Observed result |
 | --- | --- |
 | `cargo test --locked -j1 -p ftx-drape --test compressed_thermal --test compressed_thermal_path` | hz1, 18 passed, no failures/ignores/filters; `checks/core-first.log` |
 | `cargo test --locked -j1 -p ftx-cli --test compressed_thermal_workflow -p ftx-wasm --test compressed_thermal` | hz2, 10 passed, no failures/ignores/filters; `checks/consumers-corrected.log` |
+| `cargo test --locked --workspace -j1` (final corrected tests) | hz2, exit 0, 1914 passed / 29 ignored / 0 failed across 268 result groups; `checks/workspace-corrected.log`; exact final overlay receipt retained |
 | `cargo clippy --locked -j1 --all-targets -- -D warnings` | initial vmi1152480 and final corrected-test hz2 executions both exit 0; `checks/clippy.log`, `checks/clippy-final.log` |
 | `cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm` | ovh-b, exit 0; `checks/wasm.log`; subsequent changes affect tests/docs only |
 | `cargo fmt --check`, `git diff --check` | exit 0 after the single incoming test assertion's whitespace repair |
@@ -2343,8 +2345,11 @@ Bounded fresh-solo worksheets for this continuation:
   compact-versus-pretty diagnostic failure are explicitly uncredited). **8:** No (checked:
   compatibility captures are not reference parity oracles; analytic and synthetic consumer checks
   are not physical qualification). **9–10:** No (checked: failed tests, refused jobs, incomplete
-  scanner and diagnostic mistakes above; stderr retained). **11:** Pending final closure review;
-  parent remains open and this child's original acceptance has not been narrowed. **12:** No
+  scanner and diagnostic mistakes above; stderr retained). **11:** No (checked: original child
+  acceptance against 18 focused tests, both real command/portable suites, full native workspace,
+  installed-WASM/Chromium, exact baseline/source hashes and completed scoped Rust/page scans;
+  local staged/checker scans remain incomplete, parent remains open, no acceptance narrowed).
+  **12:** No
   (checked: technical plan/spec/gates unchanged; guide adds the implemented option and fixes an
   existing exit-code description).
 - **13–17:** Not applicable: no subagents or delegated verification; automatic commits receive
@@ -2358,3 +2363,11 @@ Bounded fresh-solo worksheets for this continuation:
   analytic RC answers and actual Chromium binding/refusal execution. A skeptic can rerun the
   named tests and retained requests. Disposition: RH-1 checker/test-policy change disclosed and
   bounded by unchanged negative/old gates; fresh solo re-execution is not independent verification.
+
+Final acceptance is rechecked against the original child description, without narrowing it:
+`ftx-cp2.1` is closed and explicitly flushed. The parent receives the delivered software evidence
+and remains open. All thirteen maintained-source and four installed-bundle hashes still match.
+Later shared-main casing-load implementation/replay and strip-readiness work are preserved outside
+the frozen compiler/browser snapshot; no claim is made that those later changes received this run.
+The two unrelated untracked paths are untouched. The active software TODO is retired at handoff;
+the remaining measured-data/physical/release work stays in its original open Beads.
