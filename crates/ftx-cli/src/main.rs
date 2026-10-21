@@ -61,6 +61,7 @@ const USAGE: &str = "usage:
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--self-contact-mm MM] [--self-mu MU] [--json]
+  ftx drape OUTFIT.json --measurements M --out NEW_DIR --self-contact-mm MM [--model PATH] [--json]
   ftx qualify (--ws WS | --measurements M --out DIR) [--pattern P] [--fabric F.json] [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--json]
   ftx body --measurements M --out DIR [--pose drape|rest|arms-up|seated|squat] [--model PATH] [--json]
   ftx body --body-fit REPORT --out NEW_DIR [--measurements M] [--pose rest|drape|arms-up|seated|squat] [--model PATH] [--json]
@@ -722,8 +723,22 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .positional
         .get(1)
         .ok_or_else(|| bad_input("ftx drape needs a pattern file"))?;
-    let (mut pat, _) = read_json(pattern_path)?;
+    let (mut pat, pattern_bytes) = read_json(pattern_path)?;
     let fabric_override = fabric::load(args)?;
+    let outfit = if pat["schema"] == ftx_drape::outfit::SCHEMA {
+        if fabric_override.is_some() || pair.is_some() {
+            return Err(bad_input(
+                "joint outfit requests do not accept --fabric or --two-start-sew; retain explicit source selections and one joint start",
+            ));
+        }
+        let input =
+            serde_json::from_value(pat.clone()).map_err(|e| bad_input(format!("outfit: {e}")))?;
+        let prepared = ftx_drape::outfit::prepare(&input, &opts)?;
+        pat = prepared.pattern().raw().clone();
+        Some(prepared)
+    } else {
+        None
+    };
     if let Some(selected) = &fabric_override {
         selected.apply(&mut pat)?;
     }
@@ -758,15 +773,22 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
     let started = std::time::Instant::now();
-    let run = match pair {
-        Some(policy) => {
-            ftx_drape::two_start::drape(&pattern, &spec, &body, &opts, &policy, |line| {
-                eprintln!("{line}")
-            })?
+    let run = if let Some(prepared) = &outfit {
+        prepared.drape(&spec, &body, &opts, |line| eprintln!("{line}"))?
+    } else {
+        match pair {
+            Some(policy) => {
+                ftx_drape::two_start::drape(&pattern, &spec, &body, &opts, &policy, |line| {
+                    eprintln!("{line}")
+                })?
+            }
+            None => drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?,
         }
-        None => drape(&pattern, &spec, &body, &opts, |line| eprintln!("{line}"))?,
     };
     let mut report = run.report.clone();
+    if outfit.is_some() {
+        report["outfit"]["input_file_sha256"] = json!(sha256_hex(&pattern_bytes));
+    }
     if let Some(selected) = &fabric_override {
         report["fabric_override"] = selected.receipt().clone();
     }
@@ -793,31 +815,35 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let mesh = &run.scene.mesh;
     let last = run.fold.frames.last().map_or(&[][..], Vec::as_slice);
     let style = pattern.raw()["style"].as_str().unwrap_or("");
-    write_drape_output(
-        &out,
-        &report,
-        &[
-            ("fold.pc2", pc2(&run.fold.frames)),
-            (
-                "mesh_map.json",
-                serde_json::to_vec_pretty(&mesh_map(&run.scene.mesh, &run.fold))
-                    .map_err(|e| bad_input(e.to_string()))?,
-            ),
-            ("fold_viewer.html", html.into_bytes()),
-            (
-                "garment.obj",
-                obj(last, &mesh.faces, Some(&seam_colours(mesh, style))).into_bytes(),
-            ),
-            (
-                "garment_strain.obj",
-                obj(last, &mesh.faces, Some(&strain_colours(mesh, last))).into_bytes(),
-            ),
-            (
-                "body.obj",
-                obj(&full.vertices, &full.triangles, None).into_bytes(),
-            ),
-        ],
-    )?;
+    let mut files = vec![
+        ("fold.pc2", pc2(&run.fold.frames)),
+        (
+            "mesh_map.json",
+            serde_json::to_vec_pretty(&mesh_map(&run.scene.mesh, &run.fold))
+                .map_err(|e| bad_input(e.to_string()))?,
+        ),
+        ("fold_viewer.html", html.into_bytes()),
+        (
+            "garment.obj",
+            obj(last, &mesh.faces, Some(&seam_colours(mesh, style))).into_bytes(),
+        ),
+        (
+            "garment_strain.obj",
+            obj(last, &mesh.faces, Some(&strain_colours(mesh, last))).into_bytes(),
+        ),
+        (
+            "body.obj",
+            obj(&full.vertices, &full.triangles, None).into_bytes(),
+        ),
+    ];
+    if outfit.is_some() {
+        files.push((
+            "outfit_pattern.json",
+            serde_json::to_vec_pretty(pattern.raw()).map_err(|e| bad_input(e.to_string()))?,
+        ));
+        files.push(("outfit_request.json", pattern_bytes));
+    }
+    write_drape_output(&out, &report, &files)?;
     let (gating, advisory) = (run.gating(), run.advisory());
     let mut text = format!(
         "fit: {} gating, {} advisory, {}\n",
@@ -863,6 +889,16 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     });
     if let Some(pair) = report.get("two_start") {
         result["two_start"] = pair.clone();
+    }
+    if let Some(composition) = report.get("outfit") {
+        result["outfit"] = composition.clone();
+        result["files"] = json!(
+            files
+                .iter()
+                .map(|(name, _)| *name)
+                .chain(std::iter::once("sim_report.json"))
+                .collect::<Vec<_>>()
+        );
     }
     Ok((result, code, text))
 }

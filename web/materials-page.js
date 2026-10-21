@@ -563,7 +563,74 @@ function permanentStretchResult(parent, r) {
     next: r.selection ? "Review capabilities, then assign the identified selection above and bind the pattern." :
       "Review the retained diagnostics and source histories. No identified selection is available to assign." };
 }
+function stripCalibrationResult(parent, r) {
+  const c = r.calibration;
+  const quality = table(parent, "Clamped strip observations — independent partitions",
+    ["Partition", "Observed channels", "Scaled RMS", "Scaled peak"]);
+  for (const [name, q] of [["FIT", c.fit], ["CHECK", c.check]]) {
+    cells(quality, [name, metric(q?.components), metric(q?.rms_scaled), metric(q?.peak_scaled)]);
+  }
+  const parameters = table(parent, c.accepted ? "Identified orthotropic sheet coefficients" : "Candidate orthotropic sheet coefficients",
+    ["Coefficient", "Value", "Unit", "Search minimum", "Search maximum"]);
+  for (const [i, [label, unit]] of [
+    ["Warp / wale stiffness", "N/m"],
+    ["Weft / course stiffness", "N/m"],
+    ["Major Poisson ratio", "1"],
+    ["Shear stiffness", "N/m"]
+  ].entries()) {
+    cells(parameters, [label, metric(c.parameters[i]), unit,
+      ...c.input.parameter_bounds[i].map(metric)]);
+  }
+  const geometry = table(parent, "Actual strip geometry and declared width comparison",
+    ["Experiment", "Partition", "Width (m)", "Free gauge (m)", "Warp axis [across, along]", "Authored mesh cells", "Width observation"]);
+  for (const e of c.input.experiments) {
+    cells(geometry, [e.id, e.partition, metric(e.fixture.width_m), metric(e.fixture.gauge_length_m),
+      e.fixture.warp_axis.map(metric).join(", "), e.fixture.cells.join(" × "),
+      e.observations.some(o => o.mid_width != null) ? "Chord at half the reference gauge" : "Not observed"]);
+  }
+  const method = document.createElement("p"); method.textContent = c.input.method; parent.append(method);
+  if (c.fitted_green_strain_range) {
+    const domain = table(parent, "Observed material strain range in FIT element fields",
+      ["Material direction", "Minimum Green strain", "Maximum Green strain"]);
+    for (const [i, axis] of ["Warp / wale (E11)", "Weft / course (E22)", "Engineering shear (2 E12)"].entries()) {
+      cells(domain, [axis, ...c.fitted_green_strain_range[i].map(metric)]);
+    }
+  }
+  const work = table(parent, "Inverse solve and excitation diagnostics", ["Diagnostic", "Value"]);
+  for (const row of [
+    ["Identification outcome", c.accepted ? "ACCEPTED" : "NOT ACCEPTED"],
+    ["Stationary / attempted starts", `${c.starts.filter(s => s.converged).length} / ${c.starts.length}`],
+    ["Normalized excitation pivot", metric(c.excitation_pivot)],
+    ["Forward solves / limit", `${metric(c.forward_solves)} / ${metric(c.input.policy.max_forward_solves)}`],
+    ["Doubled-mesh change / limit", `${metric(c.mesh_change_peak_scaled)} / ${metric(c.input.policy.max_mesh_scaled)}`],
+    ["Enforced-domain replay", c.domain_replay_verified ? "Verified" : "Not verified"]
+  ]) cells(work, row);
+  const predictions = table(parent, "Actual refined strip predictions and observation residuals",
+    ["Experiment / observation", "Partition", "Grip extension", "Force (N)", "Force residual (N)", "Mid-width (m)", "Width residual (m)"]);
+  for (const p of c.predictions) cells(predictions, [`${p.experiment} / ${p.observation}`, p.partition,
+    metric(p.state.extension_fraction), metric(p.state.force_n), metric(p.force_residual_n),
+    metric(p.state.mid_width_m), p.width_residual_m == null ? "Not observed" : metric(p.width_residual_m)]);
+  if (c.reasons.length) {
+    const reasons = document.createElement("p"); reasons.textContent = c.reasons.join(" "); parent.append(reasons);
+  }
+  const note = document.createElement("p");
+  note.textContent = "Each prediction solves the finite strip with clamped ends, free in-plane interior motion, and a prescribed planar quasistatic boundary. " +
+    "Grip extension is not treated as uniform fabric strain. A reported source contraction needs a justified mapping to the midpoint chord before use here. " +
+    "This existing reversible law cannot supply hysteresis, damage or rate dependence. FIT determines the parameters before CHECK replay. " +
+    "Search bounds, force scales and local sensitivity are not confidence intervals or a global uniqueness proof.";
+  parent.append(note);
+  detail(parent, "Decision, complete source acquisitions, physical grip reactions, deformed widths and residuals", c);
+  return { response: "Finite clamped strip", status: c.accepted ? "ACCEPTED" : "NOT ACCEPTED",
+    held_out: c.check ? "Evaluated; inspect independent residuals and acceptance reasons" : "Not supplied",
+    input_sha256: c.input_sha256, material_id: r.selection?.id,
+    allow_estimates: r.selection?.allow_estimates,
+    mechanical_coefficients_available: r.material?.capabilities.mechanical_coefficients?.ready === true,
+    mechanics_refusal: r.material?.capabilities.mechanical_coefficients?.refusal,
+    next: r.selection ? "Review capabilities and model assumptions, then assign the identified selection and bind the pattern." :
+      "Review the retained acquisition and fit diagnostics. No identified selection is available to assign." };
+}
 function calibrationResult(parent, r) {
+  if (r.calibration?.schema === "ftx-strip-calibration-report/1") return stripCalibrationResult(parent, r);
   if (r.calibration?.schema === "ftx-membrane-plasticity-calibration-report/1") return permanentStretchResult(parent, r);
   if (r.comparison) {
     const comparison = r.comparison, decision = comparison.fit_decision;

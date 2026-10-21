@@ -15,6 +15,10 @@ its own final positions. Inter-garment overlaps are neither resolved nor certifi
 absent. A successful visualization is not evidence that the combined outfit fits
 or that its layers can coexist physically.
 
+For a new joint cloth/contact solve from independent source patterns, use the
+`ftx drape` outfit-request path described in [joint-outfit-drape.md](joint-outfit-drape.md).
+It does not turn this frozen-review command into a simulation or reuse its final meshes.
+
 ## Required inputs
 
 Supply one to sixteen completed `ftx drape` directories. Each must contain its

@@ -196,6 +196,67 @@ pub fn material_calibrate_nonlinear(
         .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Identify the existing orthotropic membrane using the actual finite clamped-strip solver.
+/// Unknown, ambiguous or rejected fits retain their report without publishing a material selection.
+///
+/// # Errors
+/// Oversized or invalid input, unsupported evidence, or a shared acquisition-admission refusal.
+pub fn calibrate_strip(input: &str, allow_estimates: bool) -> Result<String, Refusal> {
+    budget(&[input])?;
+    let mut input: ftx_drape::strip::fit::Input = serde_json::from_str(input).map_err(invalid)?;
+    input.allow_estimates = allow_estimates;
+    let report = ftx_drape::strip::fit::calibrate(&input)?;
+    if !report.accepted {
+        return serde_json::to_string(&json!({"calibration":report,"selection":null,
+            "selection_json":null,"material":null,"simulation_ready":false,
+            "fit_claim":false,"empirical_validation_claim":false}))
+        .map_err(invalid);
+    }
+    let selection = report
+        .selection
+        .as_ref()
+        .ok_or_else(|| invalid("accepted strip fit lacks its frozen selection"))?;
+    let snapshot = textile_import::catalog()?.resolve(selection)?;
+    serde_json::to_string(&json!({"calibration":report,"selection":selection,
+        "selection_json":report.selection_json,"material":detail(&snapshot)?,
+        "fit_claim":false,"empirical_validation_claim":false}))
+    .map_err(invalid)
+}
+
+/// Browser clamped-strip identification through the same physical inverse solver as native code.
+///
+/// # Errors
+/// Same refusals as [`calibrate_strip`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_calibrate_strip(
+    input: &str,
+    allow_estimates: bool,
+) -> Result<String, wasm_bindgen::JsError> {
+    calibrate_strip(input, allow_estimates).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
+/// Evaluate independent finite-strip equilibria with a source-locked existing membrane law.
+/// Unrelated bending, contact, density and transport observations are not needed or inferred.
+///
+/// # Errors
+/// Input budget, source-policy, constitutive-domain, geometry or equilibrium refusals.
+pub fn strip_experiment(input: &str) -> Result<String, Refusal> {
+    budget(&[input])?;
+    let input = serde_json::from_str(input).map_err(invalid)?;
+    serde_json::to_string(&ftx_drape::strip::evaluate(&input)?).map_err(invalid)
+}
+
+/// Browser forward strip experiment using the shared physical material evaluator.
+///
+/// # Errors
+/// Same refusals as [`strip_experiment`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_strip_experiment(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    strip_experiment(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Identify a source-qualified recovery spectrum using the same timed histories as native code.
 /// Observation consent and admission of fitted estimates remain independent policies.
 ///

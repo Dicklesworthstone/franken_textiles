@@ -1,6 +1,9 @@
 //! Shape-reuse CLI against a tiny closed synthetic Anny-format model.
 //! Includes the real image-fit producer; no production-body or real-wearer accuracy claim.
 
+#[path = "accepted_body_workflow/outfit.rs"]
+mod outfit;
+
 use ftx_core::receipt::sha256_hex;
 use serde_json::{Value, json};
 use std::{

@@ -1,0 +1,122 @@
+# Joint contact simulation from independent garment patterns
+
+`ftx drape` accepts `ftx-outfit-drape/1` requests in addition to ordinary `fabric-pattern/1` inputs.
+It composes independent garment patterns and runs them **together** through the existing material-aware
+mesher, seam welding, cloth Newton solver, body contact and cloth-cloth contact. It is not the frozen
+proportions review performed by `ftx outfit`, nor a sequence of independently draped meshes.
+
+## Input and command
+
+The request embeds two to sixteen complete source patterns:
+
+```json
+{
+  "schema": "ftx-outfit-drape/1",
+  "garments": [
+    {"id": "shirt", "pattern": {"schema": "fabric-pattern/1", "...": "complete shirt pattern"}},
+    {"id": "jacket", "pattern": {"schema": "fabric-pattern/1", "...": "complete jacket pattern"}}
+  ],
+  "interfaces": []
+}
+```
+
+The abbreviated pattern objects above are structural illustrations, not runnable patterns. For existing
+files, assemble a new request without editing either original:
+
+```sh
+python3 - <<'PY'
+import json
+with open('shirt.json') as f:
+    shirt = json.load(f)
+with open('jacket.json') as f:
+    jacket = json.load(f)
+# Different material snapshots require their qualified interface entries, not guessed coefficients.
+with open('outfit-interfaces.json') as f:
+    interfaces = json.load(f)
+with open('outfit.json', 'x') as f:
+    json.dump({'schema': 'ftx-outfit-drape/1', 'garments': [
+        {'id': 'shirt', 'pattern': shirt}, {'id': 'jacket', 'pattern': jacket}
+    ], 'interfaces': interfaces}, f, indent=2)
+PY
+
+cargo run -p ftx-cli --bin ftx -- drape outfit.json \
+  --measurements measurements.json --model model.ftxbody \
+  --out new-joint-drape --self-contact-mm 2 --json
+```
+
+The usual admitted body model and measurement inputs are required. `--body-fit` can reuse an accepted
+body result through the unchanged body-selection path. No real wearer evidence is included in the
+repository. `tests/fixtures/materials/synthetic-joint-outfit.json` is a complete **synthetic two-panel**
+input exercised by the real CLI tests against a synthetic Anny-format rig; its placement and material
+numbers are not garment presets for an arbitrary body. It is not a ready-to-wear shirt/jacket example.
+
+Cloth-cloth contact must be explicitly enabled. The ordinary material resolver still supplies the actual
+sheet thicknesses and friction; the self-contact option is not permission to replace missing interface
+evidence. `--fabric` and `--two-start-sew` are refused on this scoped path. Explicit selections and one
+joint starting configuration must be retained rather than silently overridden.
+
+## Source preservation and contact
+
+Each garment receives a unique ASCII ID containing letters, digits, underscores or hyphens. Pieces and
+physical mirror/fold instances are namespaced as `shirt::front.R`; seam side references receive the same
+prefix, while their original edges, direction, ratios, notches and simulation flags are retained. No seam
+is introduced between garments. Coincident source IDs therefore cannot weld two unrelated garments.
+
+Vertices, grainlines, cuts and placements are unchanged. Every active source piece needs explicit
+placement in the **same body frame**; `sim: false` remains an explicit exclusion. Garment list order does
+not mean outer-to-inner order. The solver audits the combined starting configuration and refuses an
+intersection or invalid thickness gap. It never invents a layer offset, scales a garment or untangles an
+already intersecting assembly to manufacture a starting state. Refine or correct the authored placement
+before retrying.
+
+The garment default and all effective piece material selections are resolved and frozen before meshing.
+The composed pattern uses those exact snapshots, preserving independent evidence consent, material roles
+and existing constitutive/bending/history laws. Internal interface records and request-level additions
+are combined. Identical observations shared by different sources are retained once; conflicts and duplicate
+entries within one source refuse. Every unlike snapshot pair still needs explicit admitted friction when
+self-contact is on. A same-material pair uses the existing sheet self-friction. Stale locks, unsupported
+material laws and missing properties are not repaired by the outfit composer.
+
+## Outputs and continuation
+
+The command uses the ordinary create-only drape output directory and retains the existing numerical
+acceptance, gating flags, PC2 animation, mesh map, seam/strain OBJ meshes, body mesh and viewer. A short
+or unsettled joint run is not relabeled successful merely because its composition was valid. The report
+is written last, after all geometry and source artifacts. A failure can leave an incomplete reserved
+directory, never a partial success report; retry with a new destination.
+
+Two additional files are published:
+
+- `outfit_request.json`: exact original request bytes, unchanged;
+- `outfit_pattern.json`: the actual frozen, namespaced `fabric-pattern/1` used by this run.
+
+`sim_report.json.outfit` records original request/source hashes, the composed-pattern hash, piece/seam
+correspondence, retained instance/triangle garment ownership and mass per garment. It asserts no
+inter-garment weld and explicitly leaves `fit_claim` false. The original request can contain catalog IDs;
+for exact resolved physics, replay the saved composed pattern with the same body, fit specification and
+numerical options, including self-contact. That ordinary-pattern replay does not reconstruct the separate
+outfit ownership annotation. Keep the request, composed pattern and original report together.
+
+A caller using `ftx_drape::outfit::prepare` and `Prepared::drape` receives an ordinary `DrapeRun`. The
+existing checked body-motion API can continue its combined solver without rebuilding its material or
+contact fields. The core tests actually sew two independent bands, check their masses and separate welds,
+then advance them against a moving body. Another test changes only cross-garment friction and verifies
+changed relative slip with identical geometry, mass, membrane response and initial motion.
+
+## Scope and limits
+
+This is a simultaneous start/sew/settle solve, not sequential dressing or a physical dressing robot.
+The command accepts one shared fit specification on the composed, namespaced pattern; it does not combine
+independent source fit verdicts or infer source-specific body landmarks. Existing whole-run numerical
+acceptance is not evidence of fit on a real person, nor of plausible initial layering.
+
+The current composer refuses implicit `meta.solved.elastic_cut_mm` casings and root extensions such as
+`attached_mass`: their multi-garment transformations have not been implemented. It refuses unsupported
+root/fabric fields rather than discarding them. Per-piece supported material physics is retained, but no
+new garment-level closure, shared thermal boundary, inter-garment thermal coverage or per-garment force
+metric is inferred. No new interactive browser page or browser-runtime parity result is supplied here.
+
+Inputs are bounded to 64 MiB, 4096 source pieces/seams and the existing material/contact/meshing limits.
+Independent synthetic tests establish source isolation, contact causality and software propagation, not
+real layered-costume validation. The measured textile and fixed-garment gates in plan §25 / `ftx-tm2`
+and `ftx-tm8` remain open.

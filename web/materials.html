@@ -48,10 +48,14 @@ it solves common normal pressure between rigid parallel faces and reports signed
 Enter the exact layer ID to select; every layer's frozen selection is available for download.
 Neither operation solves 3D garment contact or qualifies presser-foot clearance.</p>
 <h3>Identify behavior from swatch measurements</h3>
-<label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch and shear</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option></select></label>
+<label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch and shear</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option><option value="clamped_strip">Clamped strip forces and transverse widths</option></select></label>
 <label>Source-bearing swatch or complete history JSON <input id="calibrationRequest" type="file" accept=".json,application/json"></label>
 <label><input id="calibrationEstimates" type="checkbox"> Admit the fitted estimates to this material selection</label>
 <button id="calibrate" data-command="calibrate" disabled>Identify material behavior</button>
+<p class="note">Clamped strips use <code>ftx-strip-calibration/1</code> to solve the finite specimen and compare total grip forces and optional mid-gauge chord widths.
+Declare the warp axis explicitly and qualify the width measurement in the acquisition method. The fitter checks independent held-out acquisitions,
+mesh refinement and replay inside the fitted strain domain. The existing orthotropic law is reversible;
+failed acceptance gates retain diagnostics without an assignable selection.</p>
 <p class="note">The request owns the specimen, acquisition method, conditioning, fit/check partitions and error budgets.
 Nonlinear swatches use <code>ftx-nonlinear-swatch-calibration/1</code>; timed histories use <code>ftx-relaxation-calibration/1</code>.
 A timed request declares its independent equilibrium response. Directional recovery uses either supplied

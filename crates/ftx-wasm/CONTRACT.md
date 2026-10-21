@@ -59,3 +59,20 @@ Obsolete synchronous solver work may finish in the worker, but its result is not
 
 **Error model.** `page` returns the reference's message as a `String` for a request it refuses, and a
 refusal's message for a draft or export the library refuses; `web` turns them into `JsError`s.
+
+**Finite-strip characterization.** `materials::strip_experiment` and `calibrate_strip` expose
+the shared `strip::evaluate` and `strip::fit` authorities without filesystem access. Their wasm32
+exports are `material_strip_experiment(input)` and `material_calibrate_strip(input, allow_estimates)`.
+Input-size, evidence, physical-model, numerical-work and constitutive-domain guards are shared with
+native consumers. Explicit output estimate consent overrides the effective request's output policy
+but does not admit estimated observations. Complete unaccepted fits retain reasons and predictions
+with null material/selection fields; exhausted work and failed solves become ordinary errors.
+
+The material workbench displays finite geometry and warp axes, FIT/CHECK residuals, search bounds,
+local strain support, mesh refinement, source-domain replay and actual reaction/width predictions.
+Accepted exact selection JSON enters the existing pattern-binding path; absent bending/contact or
+other evidence remains unavailable. Replaced, refused or unaccepted results cannot leave a stale
+selection assigned. Native adapter tests cover actual physics, immutable source identities and
+refusals; `check_materials_frontend.cjs` additionally executes the compiled WASM through the worker,
+with optional complete native calibration replay under `FTX_STRIP_REPLAY`. See
+`docs/clamped-strip-calibration.md` for the scope and executable synthetic acquisition.
