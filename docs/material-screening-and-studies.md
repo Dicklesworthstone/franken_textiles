@@ -72,8 +72,8 @@ quantity- and market-qualified offers, not a timeless material score.
 
 ## Study contract: `ftx-material-study/1`
 
-The study takes ONE original pattern and shared `cutting`, `finite_stock`, `sewing`, `assembly_mass`,
-and optional `purchasing` inputs. At least one manufacturing consumer is required; finite-stock-only
+The study takes ONE original pattern and shared `cutting`, `finite_stock`, `sewing` or
+`sewing_selection`, `assembly_mass`, and optional `purchasing` inputs. At least one manufacturing consumer is required; finite-stock-only
 and mass-only studies are allowed. Purchasing contains the existing `quotes` book and
 `market` scope and requires cutting: required stock comes from actual markers, including waste,
 width, margins, minimum orders and sale increments, never just net pattern-piece area.
@@ -99,6 +99,51 @@ frontier_only: false}` and omit `variants`. A named-piece target is
 lining/cuff materials. Named-piece substitution changes only those source IDs. It never invents
 layer stacks, remaps instance IDs, changes grainlines, rewrites pair friction or changes geometry.
 Every candidate begins from the SAME original pattern; substitutions never accumulate across rows.
+
+### Choose qualified sewing recipes for each material
+
+Use `sewing_selection` instead of `sewing` to rerun the existing `ftx-sewing-selection/1` search on
+each frozen material alternative. The same choice works with explicit variants, screening,
+heterogeneous combinations and model-backed scenario studies. The search needs a complete template,
+`require_qualification: true`, exact source-qualified stacks, and explicitly listed needle, thread,
+maximum stitch pitch and stitch-rate alternatives. It never invents a recipe from a fiber name.
+Machine limits, assemblies, pressure settings, geometry and source-admission policy remain fixed.
+
+For an executable **synthetic software example**, embed the existing selector fixture in a study:
+
+```sh
+jq -n --slurpfile search tests/fixtures/materials/synthetic-sewing-selection.json '
+  {schema: "ftx-material-study/1",
+   variants: [{key: "original", changes: {schema: "ftx-material-bindings/1"}}],
+   sewing_selection: $search[0],
+   comparison: {basis: "nominal", required_consumers: ["sewing"],
+     objectives: [{metric: "feed_seconds", direction: "minimize"}]}}
+' > /tmp/ftx-sewing-study.json
+cargo run -p ftx-cli --bin ftx -- materials study \
+  tests/fixtures/materials/synthetic-sewing-pattern.json /tmp/ftx-sewing-study.json --json
+```
+
+The example selects `faster-qualified` and reports 2 feed-only seconds. These are invented test
+windows, not empirical sewing recommendations. In a real study, supply qualifications for each
+exact material stack and candidate recipe. Replacing a material invalidates an old qualification
+even when the new material has the same nominal thickness; another admitted candidate may then
+be selected automatically. Without one, sewing stays unavailable while valid cutting, purchasing,
+mass and simulation outcomes remain visible.
+
+Each row's `sewing.result` is the unmodified selected production plan and supplies the existing
+`feed_seconds`, `stitch_intervals` and required-`sewing` comparison checks. The separate
+`sewing_selection.result` retains every trial/refusal, selected operation-to-recipe choice,
+source pattern hash and search status. Geometry is stored only once. An available search with no
+incumbent is not an available sewing plan; its missing metrics cannot win as zeroes. A bounded
+search may produce a usable complete incumbent without proving it is the best listed recipe.
+The study compares that actual plan and exposes the incomplete search, without claiming a global
+material/process optimum. The browser displays these statuses alongside the existing sewing result.
+
+Configured work across all material alternatives is capped at 256 complete-plan evaluations,
+4096 pass evaluations and 200,000 optional ordering-search nodes, before evaluating alternatives.
+The selector's per-job limits and the study's 250,000 retained-station cap also apply. Reduce the
+number of material alternatives or `max_plan_evaluations` when this combined budget is exceeded.
+Source qualifications still do not establish measured seam quality or authorize hardware execution.
 
 ### Heterogeneous material combinations
 

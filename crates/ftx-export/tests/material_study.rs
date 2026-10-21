@@ -1636,3 +1636,292 @@ fn finite_stock_only_studies_preserve_scenario_composition_and_bound_aggregate_w
             .is_none()
     );
 }
+
+fn recipe_study() -> Request {
+    let light = selection("light", 0.1, 0.4);
+    let heavy = selection("heavy", 0.1, 1.0);
+    let mut search: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-selection.json"
+    ))
+    .unwrap();
+    let catalog = ftx_pattern::textile_import::catalog().unwrap();
+    let qualification = |material: &Value, needle: &str, thread: &str| {
+        let hash = catalog
+            .resolve(&serde_json::from_value(material.clone()).unwrap())
+            .unwrap()
+            .sha256()
+            .to_owned();
+        let mut q = search["options"]["qualifications"][0].clone();
+        q["id"] = json!(format!("synthetic-{needle}"));
+        q["materials"] = json!([hash, hash]);
+        q["needle"] = json!(needle);
+        q["thread"] = json!(thread);
+        q["stitch_mm"] = json!([0.5, 4.0]);
+        q["stack_mm"] = json!([0.5, 3.0]);
+        q["stitches_per_minute"] = json!([300.0, 900.0]);
+        q
+    };
+    search["options"]["qualifications"] = json!([
+        qualification(&light, "light-needle", "light-thread"),
+        qualification(&heavy, "heavy-needle", "heavy-thread")
+    ]);
+    search["options"]["passes"][0]["needle"] = json!("light-needle");
+    search["options"]["passes"][0]["thread"] = json!("light-thread");
+    search["alternatives"][0]["recipes"] = json!([
+        {"id":"light","needle":"light-needle","thread":"light-thread",
+            "max_stitch_mm":4.0,"stitches_per_minute":750.0},
+        {"id":"heavy","needle":"heavy-needle","thread":"heavy-thread",
+            "max_stitch_mm":2.0,"stitches_per_minute":600.0}
+    ]);
+    serde_json::from_value(json!({"schema":"ftx-material-study/1",
+        "variants":[variant("light",light),variant("heavy",heavy),
+            variant("unqualified",selection("unqualified",0.1,0.4)),
+            variant("unknown",json!({"id":"no-such-material"}))],
+        "cutting":{"copies":1,"gap_mm":2.0,"edge_margin_mm":0.0,"end_margin_mm":0.0},
+        "sewing_selection":search,
+        "comparison":{"basis":"nominal","required_consumers":["sewing"],
+            "objectives":[{"metric":"feed_seconds","direction":"minimize"}]}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn material_substitution_selects_the_matching_qualified_recipe_through_real_plans() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let original = source.raw().clone();
+    let request = recipe_study();
+    let result = evaluate(&request, &source);
+    for (key, needle, seconds) in [
+        ("light", "light-needle", 2.0),
+        ("heavy", "heavy-needle", 5.0),
+    ] {
+        let r = row(&result, key);
+        let bound = Pattern::new(r["binding"]["result"]["pattern"].clone());
+        let direct = request
+            .sewing_selection
+            .as_ref()
+            .unwrap()
+            .select(&bound)
+            .unwrap();
+        let direct = serde_json::to_value(direct).unwrap();
+        assert_eq!(r["sewing"]["status"], "available");
+        assert_eq!(r["sewing"]["result"], direct["selected_plan"]);
+        assert_eq!(r["metrics"]["feed_seconds"], seconds);
+        assert_eq!(r["sewing"]["result"]["seams"][0]["pass"]["needle"], needle);
+        let search = &r["sewing_selection"]["result"];
+        for field in [
+            "request",
+            "pattern_sha256",
+            "candidate_combinations",
+            "trials",
+            "selected_choices",
+            "unresolved_trials",
+            "search_complete",
+            "budget_exhausted",
+            "optimality_proven",
+            "no_feasible_listed_recipe",
+            "tie_break",
+        ] {
+            assert_eq!(search[field], direct[field], "{key}: {field}");
+        }
+        assert!(search.get("selected_plan").is_none());
+        assert_eq!(search["selected_choices"]["side"], key);
+        assert_eq!(search["optimality_proven"], true);
+        assert_eq!(bound.raw()["pieces"], original["pieces"]);
+        assert_eq!(bound.raw()["seams"], original["seams"]);
+        assert_eq!(
+            r["sewing"]["result"]["hardware_execution_authorized"],
+            false
+        );
+    }
+    let absent = row(&result, "unqualified");
+    assert_eq!(absent["cutting"]["status"], "available");
+    assert_eq!(absent["sewing"]["status"], "refused");
+    assert_eq!(absent["sewing_selection"]["status"], "available");
+    assert_eq!(
+        absent["sewing_selection"]["result"]["no_feasible_listed_recipe"],
+        true
+    );
+    assert!(absent["metrics"]["feed_seconds"].is_null());
+    assert_eq!(
+        row(&result, "unknown")["sewing_selection"]["status"],
+        "refused"
+    );
+    assert_eq!(result["comparison"]["frontier"], json!(["light"]));
+    assert_eq!(source.raw(), &original);
+    assert_eq!(evaluate(&request, &source), result);
+}
+
+#[test]
+fn truncated_recipe_search_retains_real_incumbents_and_keeps_missing_plans_unknown() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let mut request = recipe_study();
+    request
+        .sewing_selection
+        .as_mut()
+        .unwrap()
+        .max_plan_evaluations = 1;
+    let report = evaluate(&request, &source);
+    let light = row(&report, "light");
+    assert_eq!(light["sewing"]["status"], "available");
+    assert_eq!(light["metrics"]["feed_seconds"], 4.0);
+    assert_eq!(
+        light["sewing_selection"]["result"]["selected_choices"]["side"],
+        "template"
+    );
+    assert_eq!(
+        light["sewing_selection"]["result"]["budget_exhausted"],
+        true
+    );
+    assert_eq!(
+        light["sewing_selection"]["result"]["optimality_proven"],
+        false
+    );
+    let heavy = row(&report, "heavy");
+    assert_eq!(heavy["cutting"]["status"], "available");
+    assert_eq!(heavy["sewing"]["status"], "refused");
+    assert_eq!(heavy["sewing"]["refusal"]["code"], "budget_exceeded");
+    assert_eq!(
+        heavy["sewing_selection"]["result"]["no_feasible_listed_recipe"],
+        false
+    );
+    assert!(heavy["metrics"]["feed_seconds"].is_null());
+    assert_eq!(report["comparison"]["frontier"], json!(["light"]));
+}
+
+#[test]
+fn recipe_studies_preserve_source_locks_and_independent_consumer_failures() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let mut request = recipe_study();
+    let original = evaluate(&request, &source);
+    request.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .name = "different lot with identical physical observations".into();
+    let report = evaluate(&request, &source);
+    let light = row(&report, "light");
+    assert_eq!(light["cutting"]["status"], "available");
+    assert_eq!(light["sewing"]["status"], "refused");
+    assert_eq!(
+        light["sewing_selection"]["result"]["no_feasible_listed_recipe"],
+        true
+    );
+    assert_ne!(light["binding"], row(&original, "light")["binding"]);
+    assert_eq!(row(&report, "heavy"), row(&original, "heavy"));
+
+    request
+        .sewing_selection
+        .as_mut()
+        .unwrap()
+        .options
+        .require_qualification = false;
+    let report = evaluate(&request, &source);
+    assert_eq!(row(&report, "heavy")["cutting"]["status"], "available");
+    assert_eq!(
+        row(&report, "heavy")["sewing_selection"]["status"],
+        "refused"
+    );
+    assert!(
+        report["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn recipe_study_admission_bounds_combined_work_and_rejects_ambiguous_policy() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let mut request = recipe_study();
+    request.sewing = Some(serde_json::from_str(SEW).unwrap());
+    assert!(
+        request
+            .evaluate(&source)
+            .unwrap_err()
+            .message
+            .contains("at most one")
+    );
+    request.sewing = None;
+    request
+        .sewing_selection
+        .as_mut()
+        .unwrap()
+        .max_plan_evaluations = 64;
+    let mut extra = request.variants[0].clone();
+    extra.key = "fifth".into();
+    request.variants.push(extra);
+    assert_eq!(
+        request.evaluate(&source).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    request.variants.pop();
+    let options = &mut request.sewing_selection.as_mut().unwrap().options;
+    options.passes = (0..17)
+        .map(|i| {
+            let mut pass = options.passes[0].clone();
+            pass.id = Some(format!("pass-{i}"));
+            pass
+        })
+        .collect();
+    assert_eq!(
+        request.evaluate(&source).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+
+    let mut request = recipe_study();
+    request.sewing_selection.as_mut().unwrap().options.ordering = Some(
+        serde_json::from_value(json!({
+            "objective":"minimize_setup_changes","max_search_nodes":7000
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        request.evaluate(&source).unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
+fn qualified_recipe_selection_composes_with_scenarios_and_preserves_legacy_shape() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let request = recipe_study();
+    let expected = evaluate(&request, &source);
+    let scenario = request
+        .evaluate_with(
+            &source,
+            &json!({"scenario":"synthetic unavailable drape"}),
+            |_, _| {
+                Err::<Value, _>(ftx_core::Refusal::new(
+                    ftx_core::RefusalCode::NotConverged,
+                    "independent test refusal",
+                ))
+            },
+        )
+        .unwrap();
+    let scenario = serde_json::to_value(scenario).unwrap();
+    assert_eq!(
+        scenario["manufacturing"]["alternatives"],
+        expected["alternatives"]
+    );
+    assert_eq!(
+        scenario["comparison"]["frontier"],
+        expected["comparison"]["frontier"]
+    );
+    let legacy = self::request();
+    assert!(
+        serde_json::to_value(&legacy)
+            .unwrap()
+            .get("sewing_selection")
+            .is_none()
+    );
+    assert!(
+        row(&evaluate(&legacy, &source), "wide")
+            .get("sewing_selection")
+            .is_none()
+    );
+}

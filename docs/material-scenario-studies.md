@@ -159,7 +159,7 @@ implicit substeps establish viscoelastic equilibrium or empirical garment accura
 Admission permits 1..16 endpoints through 60 seconds, 0..180-degree angles, maximum substeps in
 1e-9..1 seconds, 1..512 attempted substeps for the **entire** trajectory, up to one million pairs
 per continuous-collision query and up to two million retained sample units. Body/cloth vertex
-positions and each optional captured plastic-work scalar consume one unit, including the initial
+positions and each optional captured plastic-work or Maxwell-work scalar consume one unit, including the initial
 sample. Endpoint body meshes have an additional two-million-
 vertex allocation cap. Omitted `max_sample_vertices` defaults to 500,000. The scenario's optional
 `max_motion_trials` caps reserved trials across alternatives (default 4,096; range 1..32,768).
@@ -168,7 +168,9 @@ Static draping and motion have separate aggregate working-frame counters, each b
 Motion admission also reserves at most 2,000,000 retained vertex equivalents across the session,
 conservatively accounting for samples, captured work, endpoint heat receipt geometry and final velocities. The
 reservation uses conservative mesh counts and the requested trial/sample limits; a smaller actual
-output does not retroactively release it. Admitted attempts remain charged after a refusal.
+output does not retroactively release it. Each requested work channel is reserved once, even when both
+thermal domains consume it; exact retained-sample admission uses the sewn triangle count. Admitted
+attempts remain charged after a refusal.
 The existing transient thermal work limits remain independent. Limits produce an independent
 motion refusal instead of truncating a trajectory or erasing available static/manufacturing results.
 
@@ -249,7 +251,7 @@ final frame identities tie the thermal geometry to the retained motion. Independ
 coverage totals are alternative model domains and must not be added together.
 
 Each thermal policy permits 1..64 cells per layer, maximum substeps in 1e-9..1 seconds and up to
-10000000 cell-step units (coverage additionally counts body-face steps; opted-in plastic heating
+10000000 cell-step units (coverage additionally counts body-face steps; opted-in dissipation heating
 charges 129 units per cloth cell/substep in either domain). Whole-session reservations
 across both thermal consumers and all attempted material alternatives are capped at 20000000
 cell steps and 40000000 coverage geometry operations. Reservations persist after a later refusal;
@@ -276,17 +278,27 @@ It needs admitted evidence, matching specimen/conditioning, the irreversible mem
 and a temperature domain. Missing conversion evidence refuses this thermal consumer; it supplies
 no default fraction and does not disable otherwise valid mechanics. Explicit zero is allowed.
 
+Either domain can also request `"relaxation_dissipation_heat": "uniform_reference_thickness"`
+to convert physical Maxwell dashpot work. Each active relaxing material needs its own
+`membrane_relaxation_heat_fraction` observation in unit `1`, within [0,1], with the law's matching
+`specimen_id`/`conditioning`, `work_basis: "membrane_maxwell_viscous_dissipation"`, and finite
+`temperature_min_c`/`temperature_max_c` conditions. The ordinary material authority also checks
+the actual equilibrium tensor and every relaxation branch against that specimen. Explicit zero
+is supported; absent or mismatched evidence refuses only the requested thermal history.
+
 The consumer subtracts the accepted cumulative work at motion time zero, after initial drape.
-Only subsequent accepted increments become heat; rejected trials, initial forming work, and
-elastic/hardening storage are excluded. Work stays with its exact retained material triangle and
+Only subsequent accepted increments become heat; rejected trials, initial forming work,
+elastic/hardening storage and backward-Euler numerical spring loss are excluded. Maxwell work uses
+the accepted dashpot endpoint quadrature. Work stays with its exact retained material triangle and
 is distributed uniformly through reference thickness and over each accepted mechanical interval.
 The thermal solver still uses each sample's right-endpoint geometry. Independent sheets use
 `stored_change_j`; covered/exposed material uses `physical_stored_change_j`. The balance in either
-domain subtracts its separately supplied source energy:
+domain subtracts its separately supplied source energies (an unrequested source contributes zero):
 
 ```text
 balance_error_j = stored_change_j - net_boundary_energy_j
                   - plastic_dissipation_heat.supplied_heat_j
+                  - relaxation_dissipation_heat.supplied_heat_j
 ```
 
 Both trace entries and the final thermal result expose `plastic_dissipation_heat` with motion-only
@@ -296,6 +308,13 @@ and `samples` retain `membrane_plastic_dissipation_j` arrays in triangle order; 
 values include the excluded initial work. `retained_dissipation_scalars` reports the extra output.
 Each scalar counts as one vertex-equivalent under `max_sample_vertices` and session admission,
 once even when both histories consume it.
+
+The Maxwell receipt uses `relaxation_dissipation_heat.viscous_dissipation_j`,
+`initial_viscous_dissipation_j`, `supplied_heat_j`, and `unconverted_dissipation_j`; accepted mechanical
+arrays are named `membrane_relaxation_dissipation_j`. Plastic and Maxwell work retain independent
+source observations and ledgers. When both channels are requested, their heat is summed once before
+material-depth deposition and the physical storage balance. This permits different material triangles
+to use their respective laws; it does not enable an uncharacterized joint same-triangle viscoplastic law.
 
 With heating enabled, all cloth cells cost 129 work units per thermal substep, even for zero
 conversion or an elastic triangle. Coverage additionally charges one unit per selected body face.
@@ -316,9 +335,11 @@ receipt and the domain's energy balance before admitting thermal objectives; a f
 history does not erase an independent sheet result or successful mechanics.
 
 Both domains support the existing qualified exterior exchange. There is no temperature feedback,
-inferred layer topology, or bending/Maxwell/friction heating. The synthetic workflow checks
-exercise accepted work transfer and conservation; measured conversion laws and independent
-temperature measurements remain necessary for a physical garment claim.
+inferred layer topology, or bending/friction heating. `ftx-drape`'s `relaxation_heating` tests exercise
+the real sewn-garment consumer, independent reference-mass enthalpy across covered/exposed cloth,
+mixed-source accounting, coverage-only capture, replay, and source/temperature/budget refusals that
+preserve mechanics and independent thermal results. These are synthetic software checks; measured
+conversion laws and independent temperature measurements remain necessary for a physical garment claim.
 
 ## Independent thermal consumers
 

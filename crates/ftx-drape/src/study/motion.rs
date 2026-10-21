@@ -241,9 +241,12 @@ fn evaluate_path(
         .as_ref()
         .and_then(|h| h.as_ref().ok())
         .map_or(DissipationCapture::default(), |h| h.dissipation_capture());
-    capture.plastic |= coverage_heat
+    let coverage_capture = coverage_heat
         .as_ref()
-        .is_some_and(|h| h.as_ref().is_ok_and(|h| h.needs_dissipation()));
+        .and_then(|h| h.as_ref().ok())
+        .map_or(DissipationCapture::default(), |h| h.dissipation_capture());
+    capture.plastic |= coverage_capture.plastic;
+    capture.relaxation |= coverage_capture.relaxation;
     let channels = usize::from(capture.plastic) + usize::from(capture.relaxation);
     let history_scalars = run
         .scene
@@ -359,6 +362,7 @@ fn evaluate_path(
                     i,
                     samples.len(),
                     sample.membrane_plastic_dissipation_j.as_deref(),
+                    sample.membrane_relaxation_dissipation_j.as_deref(),
                 )
             {
                 coverage_heat = Some(Err(refusal));

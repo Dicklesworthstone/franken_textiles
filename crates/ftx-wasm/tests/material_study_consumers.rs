@@ -9,6 +9,51 @@ const PATTERN: &str =
 const STOCK: &str = include_str!("../../../tests/fixtures/materials/synthetic-stock-request.json");
 
 #[test]
+fn browser_study_selects_qualified_recipes_and_keeps_frozen_replay_and_failures() {
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let source: Value = serde_json::from_str(pattern).unwrap();
+    let original = source["fabric"]["material"].clone();
+    let mut changed = original.clone();
+    changed["record"]["name"] = json!("Different lot; identical nominal thickness");
+    let mut input = json!({"schema":"ftx-material-study/1","variants":[
+        {"key":"original","changes":{"schema":"ftx-material-bindings/1","default":original}},
+        {"key":"changed","changes":{"schema":"ftx-material-bindings/1","default":changed}}],
+        "sewing_selection":serde_json::from_str::<Value>(include_str!(
+            "../../../tests/fixtures/materials/synthetic-sewing-selection.json")).unwrap(),
+        "comparison":{"basis":"nominal","required_consumers":["sewing"],
+            "objectives":[{"metric":"feed_seconds","direction":"minimize"}]}});
+    let typed: Request = serde_json::from_value(input.clone()).unwrap();
+    let expected = serde_json::to_value(typed.evaluate(&Pattern::new(source)).unwrap()).unwrap();
+    let text = materials::study(pattern, &input.to_string()).unwrap();
+    let report: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(report, expected);
+    assert_eq!(text, materials::study(pattern, &input.to_string()).unwrap());
+    let rows = report["alternatives"].as_array().unwrap();
+    assert_eq!(rows[0]["sewing"]["status"], "refused");
+    assert_eq!(
+        rows[0]["sewing_selection"]["result"]["no_feasible_listed_recipe"],
+        true
+    );
+    assert_eq!(rows[1]["sewing"]["status"], "available");
+    assert_eq!(
+        rows[1]["sewing_selection"]["result"]["selected_choices"]["side"],
+        "faster-qualified"
+    );
+    assert_eq!(rows[1]["metrics"]["feed_seconds"], 2.0);
+    assert_eq!(report["comparison"]["frontier"], json!(["original"]));
+    for variant in input["variants"].as_array_mut().unwrap() {
+        let row = rows
+            .iter()
+            .find(|row| row["key"] == variant["key"])
+            .unwrap();
+        variant["changes"] = row["frozen_changes"].clone();
+    }
+    let replay: Value =
+        serde_json::from_str(&materials::study(pattern, &input.to_string()).unwrap()).unwrap();
+    assert_eq!(replay["alternatives"], report["alternatives"]);
+}
+
+#[test]
 fn file_free_study_expands_complete_heterogeneous_choices_without_pruning_refusals() {
     let source: Value = serde_json::from_str(PATTERN).unwrap();
     let hide = source["fabric"]["material"].clone();

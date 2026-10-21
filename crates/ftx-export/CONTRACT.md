@@ -25,6 +25,21 @@ Omitted policy preserves legacy wire output; requested policy uses `ftx-sewing-p
 through ordinary plan, stitch-program and study consumers. Tests: `sewing` and
 `sewing_program`, including independent exhaustive schedule comparisons.
 
+**Material-following recipe selection** (`material_study::recipes`, plan §25.10 / `ftx-ms2`).
+Optional `Request.sewing_selection` is exclusive with fixed `sewing` and reruns the existing
+qualified recipe selector on every freshly bound material alternative. Its unmodified selected
+`SewPlan` supplies the ordinary sewing outcome, metrics and comparison; no incumbent means a
+refused sewing outcome with unknown metrics. The separate typed receipt preserves every trial,
+source identity, choice and proof/budget flag without duplicating station geometry. A complete
+feasible incumbent remains usable after a finite search limit, with no optimum claim. An available
+search receipt alone never satisfies a required sewing consumer. At most 256 configured plan
+evaluations, 4096 pass evaluations and 200000 ordering-search nodes across the study are admitted
+before alternative evaluation; per-job limits and the existing retained-station cap still apply.
+No geometry, machine limits, qualification policy, pressure setting or unlisted recipe is changed.
+Missing/stale source qualification preserves independent manufacturing and simulation outcomes.
+Omitted selection retains legacy serialization. Tests: `material_study`, native and file-free WASM
+`material_study_consumers`; source admission is not physical seam validation or hardware permission.
+
 **Declared assembly mass** (`assembly_mass`, plan §25.10 / `ftx-ms2`). Every expanded physical
 cut instance uses the same exporter outline, fold/mirror semantics, allowances and outward tabs.
 Strictly contained disjoint closed cutouts are subtracted with the existing budgeted cutting

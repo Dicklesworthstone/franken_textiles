@@ -2164,6 +2164,44 @@ accessory thermal/contact properties remain future work. See
 
 ---
 
+### 25.34 Material substitution chooses qualified sewing recipes
+
+The material study now accepts the existing finite `ftx-sewing-selection/1` request as
+`sewing_selection`, mutually exclusive with fixed `sewing` options. Every frozen material
+alternative reruns the production selector against its own exact material identities. The
+selected needle/thread/stitch/feed recipe supplies the ordinary sewing plan and comparison
+metrics; the complete search receipt retains all tested choices, qualification refusals,
+budget exhaustion and whether the listed optimum was proved. An unfinished search may
+provide a valid incumbent, but a search without an incumbent cannot satisfy required sewing
+or become a zero-cost winner. Cutting, mass, purchasing and physical consumers stay independent.
+
+Aggregate recipe-plan, operation and ordering limits bound a whole material study, including
+Cartesian material combinations and scenario studies. Native and WASM entry points use this
+same evaluator. This closes the software gap between material substitution and automatic
+process selection (`ftx-mr1`); it does not supply missing measured seam qualification, complete
+robot cycle times, sensing, kinematics or hardware execution under `ftx-sp2`/`ftx-tm7`.
+
+### 25.35 Viscoelastic work heats moving covered and exposed textile layers
+
+`motion.transient_coverage.relaxation_dissipation_heat` now admits the same explicit
+`uniform_reference_thickness` policy as independent sheets. Source-qualified Maxwell dashpot
+work follows its retained material triangle through body coverage, layer order and exposed
+regions. Each channel needs its own conversion observations and temperature domain. Maxwell
+and permanent-stretch heating retain separate source and energy ledgers, then add heat once
+before material-depth allocation. Initial drape work, rejected trials, numerical spring loss
+and reversible stored energy do not become heat. Independent-sheet and coverage calculations
+share captured work arrays while remaining separately reported thermal domains.
+
+Missing evidence, out-of-domain temperature and work-budget failures preserve successful
+mechanics and independent consumers. Scenario comparison checks source identities and the
+full work/heat balance before admitting these outputs. Synthetic sewn-garment regressions
+independently integrate covered/exposed reference-mass enthalpy and verify shared capture,
+mixed-source conservation and refusal isolation (`ftx-vh1`). Matched empirical conversion
+laws, contact-driven local compression/recovery, moisture coupling and garment experiments
+remain open under `ftx-cp2`, `ftx-tmc` and the specimen/garment acceptance gates.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -1,4 +1,4 @@
-//! Accepted Maxwell work -> existing independent-sheet heat, on an actual sewn synthetic garment.
+//! Accepted Maxwell work -> independent-sheet and moving-coverage heat on sewn synthetic garments.
 //! No measured specimen, wearer comfort, or thermal feedback claim.
 use ftx_core::{Vec3, det};
 use ftx_drape::{
@@ -74,6 +74,25 @@ fn scenario() -> Scenario {
                 "boundaries":[{"inside_c":20.,"outside_c":20.,
                     "inside_resistance_m2_k_w":1.,"outside_resistance_m2_k_w":1.}]}}})).unwrap()
 }
+fn coverage_scenario() -> Scenario {
+    let mut s = scenario();
+    s.motion.as_mut().unwrap().transient_coverage = Some(
+        serde_json::from_value(json!({
+            "schema":"ftx-motion-coverage-heat/1","body_triangle_ids":[0],
+            "instance_layers":{"front":"shell","back":"shell"},
+            "settings":{"max_distance_m":0.08,"min_normal_cosine":0.1,
+                "separation_tolerance_m":0.00001,"cells_per_layer":2,"interfaces":[]},
+            "initial_temperature_c":20.,"max_step_s":0.00025,"max_cell_steps":5000000,
+            "max_geometry_operations":1000000,
+            "relaxation_dissipation_heat":"uniform_reference_thickness",
+            "boundaries":[{"inside_c":20.,"outside_c":20.,
+                "inside_resistance_m2_k_w":1.,"outside_resistance_m2_k_w":1.}],
+            "exposed_boundaries":[null]
+        }))
+        .unwrap(),
+    );
+    s
+}
 fn evaluate_unchecked(s: &Scenario, p: &Pattern) -> Value {
     let mut vertices = Vec::new();
     let mut triangles = Vec::new();
@@ -121,6 +140,60 @@ fn heat(result: &Value) -> &Value {
     let h = &result["motion"]["result"]["transient_surface"];
     assert_eq!(h["status"], "available", "{h}");
     &h["result"]
+}
+fn coverage_heat(result: &Value) -> &Value {
+    let h = &result["motion"]["result"]["transient_coverage"];
+    assert_eq!(h["status"], "available", "{h}");
+    &h["result"]
+}
+
+// Independently integrate constant-capacity reference mass across covered portions and remaining
+// exposed cloth, without using solver-reported heat/storage or treating current area as mass.
+fn checkpoint_enthalpy_change(checkpoint: &Value) -> f64 {
+    let source = &checkpoint["frame"]["source"];
+    let patches = source["patches"].as_array().unwrap();
+    let capacities: Vec<_> = patches
+        .iter()
+        .map(|p| {
+            let properties = &source["columns"][p["column"].as_u64().unwrap() as usize]["layers"]
+                [0]["normalized"]["properties"];
+            p["reference_area_m2"].as_f64().unwrap()
+                * properties["areal_density"]["value"].as_f64().unwrap()
+                * properties["specific_heat"]["value"].as_f64().unwrap()
+        })
+        .collect();
+    let layout = &checkpoint["frame"]["projection"]["layout"];
+    let cells = layout["cells_per_layer"].as_u64().unwrap() as usize;
+    let mut allocated = vec![0.; patches.len()];
+    let mut stored = 0.;
+    for (region, temperatures) in layout["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(checkpoint["temperature_c"].as_array().unwrap())
+    {
+        for (layer, portion) in region["layers"].as_array().unwrap().iter().enumerate() {
+            let i = portion["cloth_triangle"].as_u64().unwrap() as usize;
+            let fraction = portion["fraction"].as_f64().unwrap();
+            allocated[i] += fraction;
+            for cell in 0..cells {
+                stored += capacities[i] * fraction / cells as f64
+                    * (temperatures[layer * cells + cell].as_f64().unwrap() - 20.);
+            }
+        }
+    }
+    for (i, temperatures) in checkpoint["exposed_temperature_c"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        for t in temperatures.as_array().unwrap() {
+            stored +=
+                capacities[i] * (1. - allocated[i]) / cells as f64 * (t.as_f64().unwrap() - 20.);
+        }
+    }
+    stored
 }
 fn unchanged_mechanics(a: &Value, b: &Value) {
     assert_eq!(a["drape"], b["drape"]);
@@ -388,4 +461,219 @@ fn mixed_maxwell_and_plastic_sheets_add_only_their_own_work_and_charge_both_chan
     assert_eq!(refused["motion"]["refusal"]["code"], "budget_exceeded");
     assert!(refused["motion"].get("result").is_none());
     assert_eq!(refused["drape"], r["drape"]);
+}
+
+#[test]
+fn coverage_maxwell_heat_follows_reference_mass_and_captures_work_without_surface_history() {
+    let p = garment(maxwell(0.));
+    let s = coverage_scenario();
+    let result = evaluate(&s, &p);
+    let coverage = coverage_heat(&result);
+    let source = &coverage["relaxation_dissipation_heat"];
+    assert_eq!(source, &heat(&result)["relaxation_dissipation_heat"]);
+    assert!(source["supplied_heat_j"].as_f64().unwrap() > 0.);
+    assert!(source["initial_viscous_dissipation_j"].as_f64().unwrap() > 0.);
+    let checkpoint = &coverage["checkpoint"];
+    assert!(
+        !checkpoint["frame"]["projection"]["layout"]["regions"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "exercise covered material as well as exposed cloth"
+    );
+    assert!(
+        checkpoint["exposed_temperature_c"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| !row.as_array().unwrap().is_empty())
+    );
+    let stored = checkpoint_enthalpy_change(checkpoint);
+    assert!(
+        (stored
+            - coverage["physical_stored_change_j"].as_f64().unwrap()
+            - coverage["signed_remap_residual_j"].as_f64().unwrap())
+        .abs()
+            < 1e-10
+    );
+    for row in coverage["trace"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(std::iter::once(coverage))
+    {
+        let balance = row["physical_stored_change_j"].as_f64().unwrap()
+            - row["inside_energy_j"].as_f64().unwrap()
+            + row["outside_energy_j"].as_f64().unwrap()
+            - row["relaxation_dissipation_heat"]["supplied_heat_j"]
+                .as_f64()
+                .unwrap();
+        assert!(balance.abs() < 1e-10);
+        assert!((balance - row["balance_error_j"].as_f64().unwrap()).abs() < 1e-12);
+    }
+    let (frame, state) =
+        ftx_drape::thermal::surface::coverage::motion::Frame::from_checkpoint(checkpoint).unwrap();
+    assert_eq!(frame.checkpoint(&state).unwrap(), *checkpoint);
+    let mut only = s.clone();
+    only.motion.as_mut().unwrap().transient_surface = None;
+    let single = evaluate(&only, &p);
+    unchanged_mechanics(&result, &single);
+    for field in [
+        "relaxation_dissipation_heat",
+        "physical_stored_change_j",
+        "net_boundary_energy_j",
+        "balance_error_j",
+        "checkpoint",
+        "trace",
+    ] {
+        assert!(
+            coverage_heat(&single)[field] == coverage[field],
+            "coverage-only {field}"
+        );
+    }
+    let m = &single["motion"]["result"];
+    assert_eq!(
+        m["retained_dissipation_scalars"],
+        json!(
+            (m["samples"].as_array().unwrap().len() + 1) * m["triangles"].as_array().unwrap().len()
+        )
+    );
+    assert_eq!(
+        m["retained_dissipation_scalars"],
+        result["motion"]["result"]["retained_dissipation_scalars"],
+        "two thermal models share one captured work history"
+    );
+    let mut disabled = only;
+    disabled
+        .motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap()
+        .relaxation_dissipation_heat = None;
+    let cold = evaluate(&disabled, &p);
+    unchanged_mechanics(&single, &cold);
+    assert!(checkpoint_enthalpy_change(&coverage_heat(&cold)["checkpoint"]).abs() < 1e-10);
+    assert!(
+        coverage_heat(&cold)
+            .get("relaxation_dissipation_heat")
+            .is_none()
+    );
+    assert!(
+        cold["motion"]["result"]
+            .get("retained_dissipation_scalars")
+            .is_none()
+    );
+}
+
+#[test]
+fn mixed_sources_in_coverage_sum_once_and_each_domain_refuses_independently() {
+    use ftx_drape::study::heat::DissipationHeatDistribution::UniformReferenceThickness;
+    let p = garment(plastic());
+    let mut s = coverage_scenario();
+    s.motion
+        .as_mut()
+        .unwrap()
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .plastic_dissipation_heat = Some(UniformReferenceThickness);
+    s.motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap()
+        .plastic_dissipation_heat = Some(UniformReferenceThickness);
+    let result = evaluate(&s, &p);
+    let coverage = coverage_heat(&result);
+    let mut supplied = 0.;
+    for channel in ["plastic_dissipation_heat", "relaxation_dissipation_heat"] {
+        assert_eq!(coverage[channel], heat(&result)[channel]);
+        let value = coverage[channel]["supplied_heat_j"].as_f64().unwrap();
+        assert!(value > 0.);
+        supplied += value;
+    }
+    assert!(
+        (coverage["physical_stored_change_j"].as_f64().unwrap()
+            - coverage["net_boundary_energy_j"].as_f64().unwrap()
+            - supplied)
+            .abs()
+            < 1e-10
+    );
+    assert!(
+        (checkpoint_enthalpy_change(&coverage["checkpoint"])
+            - coverage["physical_stored_change_j"].as_f64().unwrap()
+            - coverage["signed_remap_residual_j"].as_f64().unwrap())
+        .abs()
+            < 1e-10
+    );
+    // Exhaust after the first successful sample, proving no partial coverage heat is published.
+    let first = coverage["trace"][0]["thermal_substeps"].as_u64().unwrap();
+    let all = coverage["thermal_steps"].as_u64().unwrap();
+    assert!(first < all);
+    let mut limited = s.clone();
+    limited
+        .motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap()
+        .max_cell_steps = (first * coverage["cell_steps"].as_u64().unwrap() / all) as usize;
+    let failed = evaluate(&limited, &p);
+    unchanged_mechanics(&result, &failed);
+    for field in [
+        "relaxation_dissipation_heat",
+        "plastic_dissipation_heat",
+        "stored_change_j",
+        "net_boundary_energy_j",
+        "balance_error_j",
+        "final",
+        "trace",
+    ] {
+        assert!(
+            heat(&failed)[field] == heat(&result)[field],
+            "unaffected surface {field}"
+        );
+    }
+    let refused = &failed["motion"]["result"]["transient_coverage"];
+    assert_eq!(refused["status"], "refused");
+    assert_eq!(refused["refusal"]["code"], "budget_exceeded");
+    assert!(refused.get("result").is_none());
+
+    // Coverage must inspect its own conversion evidence even if the independent-sheet channel is off.
+    s.motion
+        .as_mut()
+        .unwrap()
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .relaxation_dissipation_heat = None;
+    for missing in [false, true] {
+        let mut raw = p.raw().clone();
+        let properties = &mut raw["fabric"]["material"]["record"]["properties"];
+        if missing {
+            properties
+                .as_object_mut()
+                .unwrap()
+                .remove("membrane_relaxation_heat_fraction");
+        } else {
+            properties["membrane_relaxation_heat_fraction"]["conditions"]["temperature_max_c"] =
+                json!("20");
+        }
+        let failed = evaluate(&s, &Pattern::new(raw));
+        assert_eq!(
+            failed["motion"]["result"]["final_positions_sha256"],
+            result["motion"]["result"]["final_positions_sha256"]
+        );
+        assert_eq!(
+            failed["motion"]["result"]["transient_surface"]["status"],
+            "available"
+        );
+        let refused = &failed["motion"]["result"]["transient_coverage"];
+        assert_eq!(refused["status"], "refused", "{refused}");
+        assert!(refused.get("result").is_none());
+    }
 }
