@@ -10,6 +10,8 @@ use crate::material_catalog::Selection;
 use crate::material_friction::Interface;
 use crate::{Pattern, textile_import};
 
+mod elastic;
+
 /// Explicit edits against the original pattern; omitted pieces retain their existing selections.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,6 +29,11 @@ pub struct Changes {
     /// number representation, order and omitted defaults for exact source replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interfaces: Option<Vec<Value>>,
+    /// Replace finished bands on exact physical casing instances, not their surrounding cloth.
+    /// Only existing explicit casings or the one legacy waistband can be addressed; no lengths,
+    /// load scopes or topology are created. An empty map preserves previous binding semantics.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub elastic_casings: BTreeMap<String, Selection>,
 }
 
 fn invalid(message: impl Into<String>) -> Refusal {
@@ -92,6 +99,7 @@ impl Changes {
     pub fn apply(&self, pattern: &Pattern) -> Result<Value, Refusal> {
         if self.schema != "ftx-material-bindings/1"
             || self.pieces.len() > 4096
+            || self.elastic_casings.len() > 64
             // Existing contact authority supports at most 64 distinct materials / 2016 pairs.
             || self.interfaces.as_ref().is_some_and(|v| v.len() > 2016)
         {
@@ -174,18 +182,34 @@ impl Changes {
             validate_interfaces(interfaces, &material_hashes)?;
             raw["fabric"]["interfaces"] = Value::Array(interfaces.clone());
         }
+        let bands = if self.elastic_casings.is_empty() {
+            None
+        } else {
+            Some(elastic::apply(
+                pattern,
+                &mut raw,
+                &self.elastic_casings,
+                &catalog,
+            )?)
+        };
         // Retain Rust's numerical JSON representation through JavaScript. Parsing/stringifying a
         // geometry coordinate such as -0.0 or 1.0 in JS can change a source-bound report's identity.
         let pattern_json = serde_json::to_string(&raw).map_err(|e| invalid(e.to_string()))?;
-        Ok(
-            json!({"schema":"ftx-bound-material-pattern/1", "source_pattern_sha256":hash(source)?,
-            "pattern_sha256":hash(&raw)?, "pattern":raw, "pattern_json":pattern_json,"pieces":assignments,
-            "geometry_changed":false, "physical_validation_claim":false,
-            "note":if self.interfaces.is_some() {
-                "Only fabric selections and the explicitly supplied complete interface table changed. Geometry and roles were not rewritten; each consumer must validate its own inputs."
-            } else {
-                "Only fabric selections changed. Geometry, roles and pair-friction evidence were not rewritten; each consumer must validate its own inputs."
-            }}),
-        )
+        let mut report = json!({"schema":"ftx-bound-material-pattern/1", "source_pattern_sha256":hash(source)?,
+        "pattern_sha256":hash(&raw)?, "pattern":raw, "pattern_json":pattern_json,"pieces":assignments,
+        "geometry_changed":false, "physical_validation_claim":false,
+        "note":if self.interfaces.is_some() {
+            "Only fabric selections and the explicitly supplied complete interface table changed. Geometry and roles were not rewritten; each consumer must validate its own inputs."
+        } else {
+            "Only fabric selections changed. Geometry, roles and pair-friction evidence were not rewritten; each consumer must validate its own inputs."
+        }});
+        if let Some(bands) = bands {
+            report["frozen_elastic_casings"] =
+                serde_json::to_value(bands).map_err(|e| invalid(e.to_string()))?;
+            report["note"] = json!(
+                "Named finished bands and declared sheet/interface selections were frozen. Casing lengths, load scopes, geometry and roles were not rewritten; each consumer validates its own inputs. Band properties are not sheet properties or added mass."
+            );
+        }
+        Ok(report)
     }
 }

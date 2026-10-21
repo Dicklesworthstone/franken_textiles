@@ -668,7 +668,11 @@ impl Request {
             }
         };
         let pattern = Pattern::new(bound["pattern"].clone());
-        row.frozen_changes = Some(freeze_changes(pattern.raw(), variant.changes.interfaces)?);
+        row.frozen_changes = Some(freeze_changes(
+            pattern.raw(),
+            variant.changes.interfaces,
+            bound.get("frozen_elastic_casings"),
+        )?);
         if let Some(options) = &self.cutting {
             row.cutting = Outcome::from_result(CutPlan::build(&pattern, options));
         }
@@ -777,7 +781,11 @@ fn finite_sum(values: impl Iterator<Item = f64>) -> Result<f64, Refusal> {
     }
 }
 
-fn freeze_changes(pattern: &Value, interfaces: Option<Vec<Value>>) -> Result<Changes, Refusal> {
+fn freeze_changes(
+    pattern: &Value,
+    interfaces: Option<Vec<Value>>,
+    elastic_casings: Option<&Value>,
+) -> Result<Changes, Refusal> {
     let selection = |value: &Value| -> Result<Selection, Refusal> {
         serde_json::from_value(value.clone()).map_err(|e| invalid(e.to_string()))
     };
@@ -803,5 +811,9 @@ fn freeze_changes(pattern: &Value, interfaces: Option<Vec<Value>>) -> Result<Cha
         // Only an explicit replacement needs replaying. Inherited raw evidence remains in the
         // same original source; omitting this field preserves existing request/report identities.
         interfaces,
+        elastic_casings: elastic_casings
+            .map(|value| serde_json::from_value(value.clone()).map_err(|e| invalid(e.to_string())))
+            .transpose()?
+            .unwrap_or_default(),
     })
 }
