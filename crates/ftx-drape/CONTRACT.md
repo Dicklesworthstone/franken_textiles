@@ -82,7 +82,8 @@ from each source's original cut-minus-overlap length without changing source geo
 Each casing keeps two existing tension-only rings and its own gathered compression. Its grip report
 uses that instance's body friction and unique welded load-domain mass, including attached inertia;
 capacities are not summed and load sharing is not inferred. Frozen composed patterns replay through
-ordinary drape and study meshing. EA remains the existing caller option, not newly measured evidence.
+ordinary drape and study meshing. Unselected bands retain the caller's assumed EA; an optional frozen
+band selection supplies its own source-qualified stiffness (see `docs/elastic-band-materials.md`).
 Ambiguous legacy/explicit metadata, duplicate/inactive targets and malformed load scopes refuse.
 EA zero validates explicit declarations but disables rings and cut-length restoration. The original
 single-waistband convention and singular `elastic` report remain unchanged; explicit cases report
@@ -478,3 +479,14 @@ candidate, probe, coarse/refined FIT/CHECK evaluation and final replay; publishe
 intersected with that prior authority and includes the pristine reference. A refit cannot silently
 widen previously characterized response. `strip_identification_limits` checks both refused narrow
 support and accepted replacement with identical actual states under original and published domains.
+
+Optional `area_response` identification policy (`ftx-ai1`) explicitly preserves qualified fixed area
+coefficients or appends two nonnegative N/m coordinates to the declared-shape/signed-interval model.
+The existing production compiler evaluates every trial and clipped publication; no second optimizer
+or constitutive implementation is used. All coordinates participate in the same bounded starts,
+excitation and aggregate solve accounting. Common source conditions and the prior J interval remain
+authoritative; fixed fitted/CHECK-derived priors refuse. Only FIT states set the final strain support,
+and complete published-law replay precedes selection. Omitted policy retains the original refusal.
+`strip_nonlinear_identification` checks synthetic recovery, fixed-source preservation, actual frozen
+replay, CHECK isolation, insufficient excitation, source/domain failures and complete work budgets.
+These are conditional numerical tests, not independent empirical knit or garment validation.

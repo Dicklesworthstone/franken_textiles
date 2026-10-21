@@ -7,14 +7,16 @@ use ftx_core::{RefusalCode, receipt::sha256_hex};
 use ftx_drape::strip::{
     Request, evaluate,
     fit::{
-        Input, Observation, Report, Width, calibrate,
+        Input, Observation, Report, Width,
+        area::Area,
+        calibrate,
         family::{Family, MODEL},
     },
 };
 use ftx_pattern::{
     material_calibration::{Partition, fitted_domain},
     material_catalog::Selection,
-    material_response::{Interpolation, StressCurve, TabulatedMembrane},
+    material_response::{AREA_MODEL, AreaResponse, Interpolation, StressCurve, TabulatedMembrane},
     materials::{Evidence, Quantity, Source},
     textile_import,
 };
@@ -152,6 +154,383 @@ fn input() -> Input {
 fn baseline() -> &'static Report {
     static REPORT: OnceLock<Report> = OnceLock::new();
     REPORT.get_or_init(|| calibrate(&input()).unwrap())
+}
+
+fn area_input() -> Input {
+    let mut input = input();
+    // More Newton work for the refined joint model; retain both existing acceptance tolerances.
+    input.controls.max_newton = 300;
+    input
+        .conditions
+        .insert("specimen".into(), "invented-area-coupon".into());
+    input.conditions.insert(
+        "conditioning".into(),
+        "synthetic numerical observations only".into(),
+    );
+    let family = input.response_family.as_mut().unwrap();
+    // Linear directional stresses isolate the two nonlinear J signatures without knot crossings
+    // in the synthetic acquisition. The original signed-shape tests remain unchanged.
+    for (curve, slope) in [&mut family.warp, &mut family.weft, &mut family.shear]
+        .into_iter()
+        .zip([300.0, 200.0, 80.0])
+    {
+        curve.conditions = input.conditions.clone();
+        curve.points = vec![[-0.4, -0.4 * slope], [0.0, 0.0], [0.8, 0.8 * slope]];
+    }
+    let quantity = |value| Quantity {
+        value,
+        unit: "N/m".into(),
+        evidence: Evidence::Estimate,
+        source: "shape".into(),
+        method: "Declared synthetic generating coefficient, not an empirical textile observation"
+            .into(),
+        conditions: input.conditions.clone(),
+        bounds: None,
+    };
+    let mut response = TabulatedMembrane {
+        model: ftx_pattern::material_response::MODEL.into(),
+        interpolation: Interpolation::PiecewiseLinear,
+        warp: family.warp.clone(),
+        weft: family.weft.clone(),
+        shear: family.shear.clone(),
+        coupling: quantity(PARAMETERS[3]),
+        area_response: Some(AreaResponse {
+            model: AREA_MODEL.into(),
+            quadratic: quantity(31.0),
+            log_squared: quantity(19.0),
+            area_ratio_range: [0.65, 1.45],
+            conditions: input.conditions.clone(),
+        }),
+    };
+    for (curve, scale) in [&mut response.warp, &mut response.weft, &mut response.shear]
+        .into_iter()
+        .zip(PARAMETERS)
+    {
+        for point in &mut curve.points {
+            point[1] *= scale;
+        }
+    }
+    input.material.membrane_response = Some(response);
+    input.replace_existing = true;
+    input.area_response = Some(Area::Identify {
+        parameter_bounds: [[10.0, 50.0], [5.0, 35.0]],
+    });
+    let selected = Selection {
+        id: input.material.id.clone(),
+        record: Some(input.material.clone()),
+        allow_estimates: true,
+        ..Selection::default()
+    };
+    for experiment in &mut input.experiments {
+        // Resolve the grip boundary layer before applying the existing doubled-mesh gate.
+        experiment.fixture.cells = [4, 6];
+        let extensions = if experiment.partition == Partition::Fit {
+            vec![0.03, 0.1, 0.2, 0.3]
+        } else {
+            vec![0.08]
+        };
+        let generated = evaluate(&Request {
+            schema: "ftx-strip-experiment/1".into(),
+            material: selected.clone(),
+            fixture: experiment.fixture.clone(),
+            extensions,
+            controls: input.controls.clone(),
+        })
+        .unwrap();
+        experiment.observations = generated
+            .states
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| Observation {
+                id: format!("{}-area-{i}", experiment.id),
+                extension_fraction: s.extension_fraction,
+                force_n: s.force_n,
+                scale_n: 0.1,
+                mid_width: Some(Width {
+                    value_m: s.mid_width_m,
+                    scale_m: 0.001,
+                }),
+            })
+            .collect();
+    }
+    input
+}
+
+fn area_baseline() -> &'static Report {
+    static REPORT: OnceLock<Report> = OnceLock::new();
+    REPORT.get_or_init(|| calibrate(&area_input()).unwrap())
+}
+
+#[test]
+fn jointly_identifies_physical_area_and_directionality_with_exact_published_replay() {
+    let report = area_baseline();
+    assert!(
+        report.accepted,
+        "{:?}; {:?}; pivot {}",
+        report.reasons, report.parameters, report.excitation_pivot
+    );
+    assert!(report.domain_replay_verified);
+    for (actual, known) in report
+        .parameters
+        .iter()
+        .zip([1.1, 0.9, 1.2, 40.0, 31.0, 19.0])
+    {
+        assert!((actual - known).abs() < 1e-3, "{actual} != {known}");
+    }
+    assert_eq!(report.parameter_bounds.len(), 6);
+    let descriptors = report.parameter_descriptors.as_ref().unwrap();
+    assert_eq!(descriptors[4].id, "area_quadratic");
+    assert_eq!(descriptors[5].unit, "N/m");
+    let area = report
+        .material
+        .as_ref()
+        .unwrap()
+        .membrane_response
+        .as_ref()
+        .unwrap()
+        .area_response
+        .as_ref()
+        .unwrap();
+    assert_eq!(area.area_ratio_range, [0.65, 1.45]);
+    assert_eq!(area.quadratic.evidence, Evidence::Estimate);
+    assert_eq!(area.quadratic.bounds, None);
+    assert!(area.quadratic.source.starts_with("strip-"));
+    assert_eq!(area.conditions, report.input.conditions);
+    for experiment in &report.input.experiments {
+        let mut fixture = experiment.fixture.clone();
+        fixture.cells.iter_mut().for_each(|n| *n *= 2);
+        let replay = evaluate(&Request {
+            schema: "ftx-strip-experiment/1".into(),
+            material: report.selection.clone().unwrap(),
+            fixture,
+            extensions: experiment
+                .observations
+                .iter()
+                .map(|o| o.extension_fraction)
+                .collect(),
+            controls: report.input.controls.clone(),
+        })
+        .unwrap();
+        let predicted = report
+            .predictions
+            .iter()
+            .filter(|p| p.experiment == experiment.id);
+        for (state, prediction) in replay.states.iter().zip(predicted) {
+            assert_eq!(
+                serde_json::to_value(state).unwrap(),
+                serde_json::to_value(&prediction.state).unwrap()
+            );
+        }
+    }
+    // With --nocapture these synthetic records let the portable adapter replay the exact operation.
+    println!(
+        "FTX_AREA_INPUT={}",
+        serde_json::to_string(&report.input).unwrap()
+    );
+    println!("FTX_AREA_REPORT={}", serde_json::to_string(report).unwrap());
+}
+
+#[test]
+fn fixed_area_evidence_is_preserved_while_directional_coefficients_are_identified() {
+    let mut input = area_input();
+    input.area_response = Some(Area::Preserve {
+        allow_estimates: true,
+    });
+    let original = serde_json::to_value(
+        input
+            .material
+            .membrane_response
+            .as_ref()
+            .unwrap()
+            .area_response
+            .as_ref()
+            .unwrap(),
+    )
+    .unwrap();
+    let report = calibrate(&input).unwrap();
+    assert!(report.accepted, "{:?}", report.reasons);
+    for (actual, known) in report.parameters.iter().zip(PARAMETERS) {
+        assert!((actual - known).abs() < 1e-4, "{actual} != {known}");
+    }
+    assert_eq!(report.parameters.len(), 4);
+    assert_eq!(
+        serde_json::to_value(
+            report
+                .material
+                .as_ref()
+                .unwrap()
+                .membrane_response
+                .as_ref()
+                .unwrap()
+                .area_response
+                .as_ref()
+                .unwrap()
+        )
+        .unwrap(),
+        original
+    );
+    let mut bad = input;
+    bad.area_response = Some(Area::Preserve {
+        allow_estimates: false,
+    });
+    assert!(
+        calibrate(&bad)
+            .unwrap_err()
+            .message
+            .contains("area_response.allow_estimates")
+    );
+    let mut leaked = report.input.clone();
+    let check_source = leaked
+        .experiments
+        .iter()
+        .find(|e| e.partition == Partition::Check)
+        .unwrap()
+        .source
+        .clone();
+    leaked
+        .material
+        .membrane_response
+        .as_mut()
+        .unwrap()
+        .area_response
+        .as_mut()
+        .unwrap()
+        .quadratic
+        .source = check_source;
+    assert!(
+        calibrate(&leaked)
+            .unwrap_err()
+            .message
+            .contains("independent area prior")
+    );
+    let mut previously_fitted = report.input.clone();
+    previously_fitted
+        .material
+        .membrane_response
+        .as_mut()
+        .unwrap()
+        .area_response
+        .as_mut()
+        .unwrap()
+        .quadratic
+        .conditions
+        .insert(
+            "fitted_green_strain_range".into(),
+            "[[0,1],[0,1],[0,1]]".into(),
+        );
+    assert!(
+        calibrate(&previously_fitted)
+            .unwrap_err()
+            .message
+            .contains("independent area prior")
+    );
+}
+
+#[test]
+fn area_identification_keeps_check_isolation_and_complete_work_accounting() {
+    let baseline = area_baseline();
+    assert!(baseline.accepted, "{:?}", baseline.reasons);
+    let mut changed = baseline.input.clone();
+    changed.experiments.last_mut().unwrap().observations[0].force_n += 10.0;
+    let rejected = calibrate(&changed).unwrap();
+    unpublished(&rejected);
+    assert_eq!(rejected.parameters, baseline.parameters);
+    assert_eq!(
+        rejected.fitted_green_strain_range,
+        baseline.fitted_green_strain_range
+    );
+    let mut limited = baseline.input.clone();
+    limited.policy.max_forward_solves = baseline.forward_solves - 1;
+    assert_eq!(
+        calibrate(&limited).unwrap_err().code,
+        RefusalCode::BudgetExceeded
+    );
+    let mut stale = baseline.selection.clone().unwrap();
+    stale
+        .record
+        .as_mut()
+        .unwrap()
+        .membrane_response
+        .as_mut()
+        .unwrap()
+        .area_response
+        .as_mut()
+        .unwrap()
+        .quadratic
+        .value += 1.0;
+    assert!(
+        textile_import::catalog()
+            .unwrap()
+            .resolve(&stale)
+            .unwrap_err()
+            .message
+            .contains("expected_sha256")
+    );
+}
+
+#[test]
+fn area_policy_rejects_invalid_boxes_condition_mismatch_and_unexcited_coefficients() {
+    let original = area_input();
+    for bounds in [
+        [[-1.0, 50.0], [5.0, 35.0]],
+        [[1.0, 1.0], [5.0, 35.0]],
+        [[0.0, 50.0], [0.0, 35.0]],
+    ] {
+        let mut bad = original.clone();
+        bad.area_response = Some(Area::Identify {
+            parameter_bounds: bounds,
+        });
+        assert!(calibrate(&bad).is_err());
+    }
+    let mut bad = original.clone();
+    bad.conditions
+        .insert("conditioning".into(), "a different specimen state".into());
+    assert!(
+        calibrate(&bad)
+            .unwrap_err()
+            .message
+            .contains("matched specimen/conditioning")
+    );
+    let mut missing = original.clone();
+    missing
+        .material
+        .membrane_response
+        .as_mut()
+        .unwrap()
+        .area_response = None;
+    assert!(
+        calibrate(&missing)
+            .unwrap_err()
+            .message
+            .contains("existing source-qualified area law")
+    );
+    let mut narrow = original.clone();
+    narrow
+        .material
+        .membrane_response
+        .as_mut()
+        .unwrap()
+        .area_response
+        .as_mut()
+        .unwrap()
+        .area_ratio_range = [0.99, 1.0];
+    assert!(calibrate(&narrow).is_err());
+    let mut zero = original;
+    for e in &mut zero.experiments {
+        e.observations = vec![Observation {
+            id: format!("{}-zero-area", e.id),
+            extension_fraction: 0.0,
+            force_n: 0.0,
+            scale_n: 0.1,
+            mid_width: Some(Width {
+                value_m: e.fixture.width_m,
+                scale_m: 0.001,
+            }),
+        }];
+    }
+    let rejected = calibrate(&zero).unwrap();
+    unpublished(&rejected);
+    assert_eq!(rejected.excitation_pivot, 0.0);
 }
 
 #[test]

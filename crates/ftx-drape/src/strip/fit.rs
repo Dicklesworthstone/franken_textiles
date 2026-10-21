@@ -19,6 +19,9 @@ use crate::Membrane;
 /// Caller-declared nonlinear shapes identified through the same bounded strip experiment.
 pub mod family;
 
+/// Optional fixed or jointly identified physical-area coefficients in the same experiment.
+pub mod area;
+
 /// Independently fitted signed tangent intervals through the same strip experiment.
 pub mod nonlinear;
 use nonlinear::Nonlinear;
@@ -122,6 +125,10 @@ pub struct Input {
     /// Its own tangent/coupling bounds replace the omitted scalar parameter_bounds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonlinear: Option<Nonlinear>,
+    /// Explicitly preserve or identify the existing material's qualified area response.
+    /// Omission never permits an existing area law to be discarded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_response: Option<area::Area>,
     /// Acknowledge the planar ideal-grip elastic model; this does not assert it fits a real knit.
     pub admit_planar_elastic_model: bool,
     /// Explicit permission for estimated input observations, independently of fitted outputs.
@@ -270,8 +277,9 @@ impl Budget<'_> {
         controls: &Controls,
     ) -> Result<State, Refusal> {
         self.admit()?;
-        let response = if let Some(family) = &self.family {
-            Some(family.compile(four(parameters)?)?)
+        let base = base_parameters(self.input, parameters);
+        let mut response = if let Some(family) = &self.family {
+            Some(family.response(four(base)?))
         } else if let Some(model) = &self.input.nonlinear {
             // Trial curves remain unpublished estimates; CHECK never supplies this temporary key.
             let source = self
@@ -281,14 +289,32 @@ impl Budget<'_> {
                 .find(|e| e.partition == Partition::Fit)
                 .map(|e| &e.source)
                 .ok_or_else(|| invalid("strip acquisition source is missing"))?;
-            Some(
-                model
-                    .response(parameters, None, source, &self.input.conditions)?
-                    .compile(&self.input.material.sources, true)?,
-            )
+            Some(model.response(base, None, source, &self.input.conditions)?)
         } else {
             None
         };
+        if let (Some(mode), Some(response)) = (&self.input.area_response, &mut response) {
+            // The family candidate coupling is an unpublished coordinate, not measured evidence.
+            response.coupling.conditions = self.input.conditions.clone();
+            let source = response.coupling.source.clone();
+            mode.attach(
+                response,
+                area_template(self.input)?,
+                &parameters[base.len()..],
+                &source,
+                &self.input.conditions,
+            )?;
+        }
+        let response = response
+            .as_ref()
+            .map(|response| {
+                let sources = self
+                    .family
+                    .as_ref()
+                    .map_or(&self.input.material.sources, |f| f.sources());
+                response.compile(sources, true)
+            })
+            .transpose()?;
         let [warp, weft, nu, shear] = match &response {
             Some(response) => response.reference_moduli()?,
             None => four(parameters)?,
@@ -342,10 +368,31 @@ fn four(parameters: &[f64]) -> Result<[f64; 4], Refusal> {
 }
 
 fn bounds(input: &Input) -> Vec<[f64; 2]> {
-    input
+    let mut bounds = input
         .nonlinear
         .as_ref()
-        .map_or_else(|| input.parameter_bounds.clone(), Nonlinear::bounds)
+        .map_or_else(|| input.parameter_bounds.clone(), Nonlinear::bounds);
+    if let Some(area) = &input.area_response {
+        bounds.extend_from_slice(area.bounds());
+    }
+    bounds
+}
+
+fn base_parameters<'a>(input: &Input, parameters: &'a [f64]) -> &'a [f64] {
+    let extra = input
+        .area_response
+        .as_ref()
+        .map_or(0, |area| area.bounds().len());
+    &parameters[..parameters.len() - extra]
+}
+
+fn area_template(input: &Input) -> Result<&ftx_pattern::material_response::AreaResponse, Refusal> {
+    input
+        .material
+        .membrane_response
+        .as_ref()
+        .and_then(|r| r.area_response.as_ref())
+        .ok_or_else(|| invalid("area_response mode requires an existing source-qualified area law"))
 }
 
 fn physical<const N: usize>(input: &Input, p: [f64; N]) -> [f64; N] {
@@ -356,15 +403,41 @@ fn physical<const N: usize>(input: &Input, p: [f64; N]) -> [f64; N] {
 fn validate(input: &Input) -> Result<(), Refusal> {
     input.material.validate()?;
     input.controls.validate()?;
-    if input
-        .material
-        .membrane_response
-        .as_ref()
-        .is_some_and(|response| response.area_response.is_some())
+    if input.area_response.is_none()
+        && input
+            .material
+            .membrane_response
+            .as_ref()
+            .is_some_and(|response| response.area_response.is_some())
     {
         return Err(invalid(
             "strip identification currently fits separable membrane laws and cannot identify or discard an existing area response; use an area-capable characterization model",
         ));
+    }
+    if let Some(mode) = &input.area_response {
+        if input.response_family.is_none() && input.nonlinear.is_none() {
+            return Err(invalid(
+                "area strip identification requires a declared directional response family or signed intervals",
+            ));
+        }
+        let check_sources: Vec<_> = input
+            .experiments
+            .iter()
+            .filter(|e| e.partition == Partition::Check)
+            .filter_map(|e| {
+                input
+                    .material
+                    .sources
+                    .get(&e.source)
+                    .map(|s| s.reference.as_str())
+            })
+            .collect();
+        mode.validate(
+            area_template(input)?,
+            &input.conditions,
+            &input.material.sources,
+            &check_sources,
+        )?;
     }
     if input.response_family.is_some() && input.nonlinear.is_some() {
         return Err(invalid(
@@ -765,12 +838,15 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     validate(input)?;
     match bounds(input).len() {
         4 => calibrate_n::<4>(input),
+        6 => calibrate_n::<6>(input),
         7 => calibrate_n::<7>(input),
         8 => calibrate_n::<8>(input),
         9 => calibrate_n::<9>(input),
         10 => calibrate_n::<10>(input),
         11 => calibrate_n::<11>(input),
         12 => calibrate_n::<12>(input),
+        13 => calibrate_n::<13>(input),
+        14 => calibrate_n::<14>(input),
         _ => Err(invalid("unsupported strip identification parameter count")),
     }
 }
@@ -853,7 +929,9 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
             .push("best fit lies at a parameter bound; expand justified bounds and repeat".into());
     }
     if pivot < input.policy.min_excitation_pivot {
-        reasons.push(if input.nonlinear.is_some() {
+        reasons.push(if input.area_response.is_some() {
+            format!("FIT forces/widths do not independently identify all {} fitted directional/area coefficients", parameters.len())
+        } else if input.nonlinear.is_some() {
             "FIT forces/widths do not independently identify every signed tangent and coupling coefficient".into()
         } else {
             "FIT forces/widths do not independently identify all four coefficients".into()
@@ -1134,11 +1212,21 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
             .response_family
             .as_ref()
             .map(|_| family::descriptors().to_vec())
-            .or_else(|| input.nonlinear.as_ref().map(Nonlinear::descriptors)),
-        parameter_bounds: input
-            .nonlinear
-            .as_ref()
-            .map_or_else(Vec::new, Nonlinear::bounds),
+            .or_else(|| input.nonlinear.as_ref().map(Nonlinear::descriptors))
+            .map(|mut descriptors| {
+                if let Some(area) = &input.area_response {
+                    descriptors.extend(area.descriptors());
+                }
+                descriptors
+            }),
+        parameter_bounds: if input.area_response.is_some() {
+            bounds(input)
+        } else {
+            input
+                .nonlinear
+                .as_ref()
+                .map_or_else(Vec::new, Nonlinear::bounds)
+        },
         accepted: material.is_some(),
         reasons,
         material,
@@ -1153,16 +1241,22 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
         domain_replay_verified,
         fitted_green_strain_range: ranges,
         predictions,
-        model_scope: if input.nonlinear.is_some() {
-            format!(
-                "{SCOPE} Independent signed piecewise-linear interval tangents and constant normal coupling are identified at declared fixed Green-strain knots. Knot positions, symmetry, missing branches, history and area-preserving behavior are not identified."
-            )
-        } else if input.response_family.is_some() {
-            format!(
-                "{SCOPE} Conditional on caller-declared signed piecewise-linear shapes; only three dimensionless amplitudes and constant normal coupling are identified. Knots, relative shape, unobserved branches and area-preserving behavior are not identified."
-            )
-        } else {
-            SCOPE.into()
+        model_scope: {
+            let mut scope = if input.nonlinear.is_some() {
+                format!(
+                    "{SCOPE} Independent signed piecewise-linear interval tangents and constant normal coupling are identified at declared fixed Green-strain knots. Knot positions, symmetry, missing branches, history and area-preserving behavior are not identified."
+                )
+            } else if input.response_family.is_some() {
+                format!(
+                    "{SCOPE} Conditional on caller-declared signed piecewise-linear shapes; only three dimensionless amplitudes and constant normal coupling are identified. Knots, relative shape, unobserved branches and area-preserving behavior are not identified."
+                )
+            } else {
+                SCOPE.into()
+            };
+            if let Some(area) = &input.area_response {
+                scope.push_str(area.scope());
+            }
+            scope
         },
     })
 }
@@ -1189,7 +1283,7 @@ fn publish(
     conditions.insert("fixture_model".into(), SCOPE.into());
     if let Some(family) = family {
         material.membrane_response = Some(family.publish(
-            four(parameters)?,
+            four(base_parameters(input, parameters))?,
             StrainDomain::new(ranges)?,
             &source,
             &conditions,
@@ -1198,8 +1292,12 @@ fn publish(
             material.properties.remove(key);
         }
     } else if let Some(model) = &input.nonlinear {
-        material.membrane_response =
-            Some(model.response(parameters, Some(ranges), &source, &conditions)?);
+        material.membrane_response = Some(model.response(
+            base_parameters(input, parameters),
+            Some(ranges),
+            &source,
+            &conditions,
+        )?);
         for key in KEYS {
             material.properties.remove(key);
         }
@@ -1207,6 +1305,15 @@ fn publish(
         for (key, &value) in KEYS.into_iter().zip(parameters) {
             material.properties.insert(key.into(), Quantity { value, unit: if key == "poisson_warp_weft" { "1" } else { "N/m" }.into(), evidence: Evidence::Estimate, source: source.clone(), method: "Bounded inverse orthotropic Green-strain membrane using clamped strip equilibrium, total grip force and optional transverse width; local sensitivity and held-out doubled-mesh checks. No independent bending or contact identification.".into(), conditions: conditions.clone(), bounds: None });
         }
+    }
+    if let (Some(mode), Some(response)) = (&input.area_response, &mut material.membrane_response) {
+        mode.attach(
+            response,
+            area_template(input)?,
+            &parameters[base_parameters(input, parameters).len()..],
+            &source,
+            &conditions,
+        )?;
     }
     material.validate()?;
     Ok(material)

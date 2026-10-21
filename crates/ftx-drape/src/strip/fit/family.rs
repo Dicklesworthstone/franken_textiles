@@ -67,6 +67,10 @@ pub(super) struct Prepared {
 }
 
 impl Prepared {
+    pub(super) fn sources(&self) -> &BTreeMap<String, Source> {
+        &self.sources
+    }
+
     pub(super) fn new(
         family: &Family,
         sources: &BTreeMap<String, Source>,
@@ -139,7 +143,7 @@ impl Prepared {
         self.domain
     }
 
-    fn response(&self, parameters: [f64; 4]) -> TabulatedMembrane {
+    pub(super) fn response(&self, parameters: [f64; 4]) -> TabulatedMembrane {
         let curve = |shape: &StressCurve, scale: f64| {
             let mut curve = shape.clone();
             for point in &mut curve.points {

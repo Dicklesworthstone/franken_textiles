@@ -2472,9 +2472,10 @@ area ratio do not establish orientation preservation, global convexity or collis
 
 Reference stiffness includes the area contribution. Material reports retain the J domain only when the
 optional law is enabled, and frozen selections bind all coefficients, sources and conditions. Omission
-preserves legacy serialization and arithmetic. Existing inverse fitters refuse to discard an area law
-even when replacement is otherwise allowed; identifying its extra coefficients requires an area-capable
-extension of the existing bounded inverse solver (`ftx-ai1`).
+preserves legacy serialization and arithmetic. Inverse fitters refuse to discard an area law even when
+replacement is otherwise allowed. The bounded strip fitter (`ftx-ai1`) explicitly preserves qualified
+fixed coefficients or identifies both alongside declared directional shapes/signed intervals, through
+the same production compiler, complete work budget, FIT-only support and independent CHECK gates.
 
 The committed paired coupon requests differ only in the area law. At 10% grip extension, the synthetic
 demonstration changes reaction from 1.090489 N to 1.304122 N and midpoint width from 49.318030 mm to

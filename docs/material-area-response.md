@@ -70,8 +70,53 @@ does not establish orientation preservation, collision freedom or global convexi
 
 The area energy acts on raw physical strain even when a numerical gather/compression treatment softens
 the base directional contribution. It is stored elastic energy, not a plastic or viscoelastic heat
-source. Existing scalar/separable identification workflows refuse a material carrying this response;
-they cannot silently discard it or claim to have identified the two additional coefficients.
+source. Identification without an explicit area policy refuses a material carrying this response;
+it cannot silently discard it or claim to have identified the two additional coefficients.
+
+## Identify directionality with a physical-area law
+
+The existing `ftx-strip-calibration/1` request accepts an optional top-level `area_response` policy
+when using `response_family` or independent signed `nonlinear` intervals. The input material must
+already declare its source-qualified area model, positive J interval and matched conditions.
+The request's conditions must retain every common specimen/conditioning qualifier. Scalar-only
+calibration still refuses an area law; neither a fiber label nor nominal stretch supplies one.
+
+To retain independently qualified coefficients while identifying directionality:
+
+```json
+"area_response": { "mode": "preserve", "allow_estimates": true }
+```
+
+This leaves both quantities, sources, methods, reported bounds and J interval unchanged. Consent
+to estimated fixed coefficients is independent of estimated observations, assumed shape curves and
+fitted-output admission. Known prior fitted-law metadata and shared CHECK source references refuse:
+coefficients fitted from the validation acquisitions cannot serve as an independent fixed prior.
+Different source declarations alone do not prove physical independence; source review remains needed.
+
+To identify both coefficients jointly with the directional parameters:
+
+```json
+"area_response": { "mode": "identify", "parameter_bounds": [[10, 50], [5, 35]] }
+```
+
+These **synthetic example bounds**, in N/m, append quadratic then log-squared coordinates after the
+base parameters. Each interval is finite, nonnegative and nonempty; at least one lower endpoint
+is positive so the whole box retains a nonzero reference area tangent. Original coefficient values
+do not choose starts or priors. The same three bounded searches, complete forward-solve budget,
+column-normalized excitation, stationarity, equivalent-minimum, CHECK and doubled-mesh gates apply
+to the entire joint vector. Weak excitation returns diagnostics without a material selection.
+
+Every trial uses the production area compiler and physical Green-strain/J domain. Publication clips
+the directional law to FIT-only local strain support and retains the original J interval. It then
+replays the complete published response, including its area term, through ordinary production solves.
+Identified coefficients are estimates with their acquisition receipt; search intervals are not
+published as uncertainty bounds. Preserved coefficients retain their original evidence. Both modes
+use the existing native, portable and browser strip-calibration entry points and frozen selections.
+
+Numerical recovery of invented coefficients is software evidence. Published shell parameters fitted
+using all cut directions cannot be relabeled as an independent bias CHECK prior. Matched acquired
+transverse/biaxial observations, independent coupons and bending/contact qualification remain under
+`ftx-ki4`; this extension does not establish a solver-ready empirical garment or parameter confidence.
 
 ## Run the same coupon with two material responses
 
