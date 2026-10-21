@@ -268,6 +268,16 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     input.material.validate()?;
     if input
         .material
+        .membrane_response
+        .as_ref()
+        .is_some_and(|response| response.area_response.is_some())
+    {
+        return Err(invalid(
+            "separable nonlinear swatch calibration cannot identify or discard an existing area response; use an area-capable characterization model",
+        ));
+    }
+    if input
+        .material
         .structure
         .contains_key("membrane_plasticity_model")
     {
@@ -408,6 +418,7 @@ pub fn calibrate(input: &Input) -> Result<Report, Refusal> {
     };
     let response = TabulatedMembrane {
         model: crate::material_response::MODEL.into(), interpolation: Interpolation::PiecewiseLinear,
+        area_response: None,
         warp: curve(0), weft: curve(1), shear: curve(2),
         coupling: Quantity {
             value: values[basis.coupling], unit: "N/m".into(), evidence: Evidence::Estimate,

@@ -188,6 +188,17 @@ impl MembraneElement {
     pub fn response_energy(&self, x: &[Vec3], law: &CompiledMembrane, m: &Membrane) -> f64 {
         let e = self.strain(x);
         let (eff, _, _) = soften(e, m);
+        if law.area_ratio_range().is_some() {
+            if law.check_domain(e).is_err() {
+                return f64::NAN;
+            }
+            return law
+                .evaluate_separable(eff)
+                .zip(law.evaluate_area(e))
+                .map_or(f64::NAN, |(base, area)| {
+                    self.area * (base.energy + area.energy)
+                });
+        }
         law.evaluate(eff).map_or(f64::NAN, |r| self.area * r.energy)
     }
 
@@ -196,11 +207,34 @@ impl MembraneElement {
     /// terms remain identical to the linear element. No extrapolation is performed.
     #[must_use]
     pub fn response_local(&self, x: &[Vec3], law: &CompiledMembrane, m: &Membrane) -> Local<9, 81> {
+        if law.area_ratio_range().is_some() {
+            if law.check_domain(self.strain(x)).is_err() {
+                return self.local_with_response(x, m, |_| None);
+            }
+            let mut base = self.local_with_response(x, m, |e| law.evaluate_separable(e));
+            let raw = Membrane {
+                compression: [1.0; 2],
+                ..*m
+            };
+            let area = self.local_with_response(x, &raw, |e| law.evaluate_area(e));
+            base.energy += area.energy;
+            for (base, area) in base.grad.iter_mut().zip(area.grad) {
+                *base += area;
+            }
+            for (base, area) in base.hess.iter_mut().zip(area.hess) {
+                *base += area;
+            }
+            // Nonnegative area energy does not imply a PSD Green-strain tangent. The existing
+            // projected Newton path must see the full exact Hessian, including area geometry.
+            base.psd = false;
+            return base;
+        }
         self.local_with_response(x, m, |strain| law.evaluate(strain))
     }
 
     // Shared exact geometric/compression chain rule for equilibrium and Maxwell responses. The
-    // closure's tangent must be PSD; raw physical domains are checked before a Newton evaluation.
+    // PSD shortcut assumes a PSD closure tangent. The physical-area caller disables that shortcut
+    // explicitly; raw physical domains are checked before a Newton evaluation.
     pub(crate) fn local_with_response(
         &self,
         x: &[Vec3],

@@ -229,6 +229,11 @@ impl Relaxation {
             ] {
                 self.matching_conditions(conditions)?;
             }
+            if let Some(area) = &response.area_response {
+                for conditions in [&area.quadratic.conditions, &area.log_squared.conditions] {
+                    self.matching_conditions(conditions)?;
+                }
+            }
         } else {
             for key in [
                 "warp_stiffness",

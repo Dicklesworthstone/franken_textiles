@@ -1,8 +1,9 @@
 //! Source-bearing nonlinear sheet response, compiled once and evaluated without allocations.
 //!
 //! Work-conjugate second Piola resultants versus Green strain, NOT tensile force versus engineering
-//! extension. The separable hyperelastic model includes constant warp/weft coupling; it does not
-//! identify yarn mechanics, irreversible deformation or a loading/unloading hysteresis loop.
+//! extension. The separable hyperelastic model includes constant warp/weft coupling and an optional
+//! jointly qualified physical-area energy. It does not identify yarn mechanics, irreversible
+//! deformation or a loading/unloading hysteresis loop.
 
 use std::collections::BTreeMap;
 
@@ -10,6 +11,10 @@ use ftx_core::{Refusal, RefusalCode};
 use serde::{Deserialize, Serialize};
 
 use crate::materials::{Evidence, Quantity, Source};
+
+mod area;
+use area::CompiledArea;
+pub use area::{AREA_MODEL, AreaResponse};
 
 /// Fixes work conjugacy: [E11, E22, 2 E12] versus second-Piola sheet resultants in N/m.
 pub const MODEL: &str = "tabulated_green_strain/1";
@@ -70,7 +75,9 @@ impl Interpolation {
     }
 }
 
-/// A signed material-axis stress curve at zero strain in the other two components.
+/// A signed material-axis stress curve of the separable base, with other strains zero.
+/// With an area response, this is one contribution to the jointly qualified law, not the total
+/// measured axis response. The compiler does not infer or subtract an area contribution.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StressCurve {
@@ -97,14 +104,20 @@ pub struct TabulatedMembrane {
     /// Interpolation changes the constitutive law and therefore its source-snapshot hash.
     #[serde(default, skip_serializing_if = "Interpolation::is_default")]
     pub interpolation: Interpolation,
-    /// Warp/wale normal response, holding E22 and shear at zero.
+    /// Separable warp/wale normal response, holding E22 and shear at zero.
     pub warp: StressCurve,
-    /// Weft/course normal response, holding E11 and shear at zero.
+    /// Separable weft/course normal response, holding E11 and shear at zero.
     pub weft: StressCurve,
-    /// Signed shear response versus gamma = 2 E12, holding normal strains at zero.
+    /// Separable signed shear response versus gamma = 2 E12, holding normal strains at zero.
     pub shear: StressCurve,
-    /// Constant cross derivative dS11/dE22 = dS22/dE11 in N/m. Zero is an explicit observation.
+    /// Constant cross derivative dS11/dE22 = dS22/dE11 of the separable base in N/m.
+    /// The optional area term contributes an additional, strain-dependent cross derivative.
+    /// Zero is an explicit observation.
     pub coupling: Quantity,
+    /// Optional physical-area response, evaluated on raw Green strain before gather softening.
+    /// Omission preserves the original law and its serialized source identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_response: Option<AreaResponse>,
 }
 
 /// Energy per reference area and its exact first/second derivatives with respect to Green strain.
@@ -349,10 +362,13 @@ pub struct CompiledMembrane {
     curves: [Curve; 3],
     coupling: f64,
     interpolation: Interpolation,
+    area: Option<CompiledArea>,
 }
 
 impl TabulatedMembrane {
-    /// Compile the source-bearing curves, refusing unstable coupling throughout the full strain box.
+    /// Compile source-bearing curves, refusing unstable separable coupling throughout the strain box.
+    /// An explicit area term is nonnegative but need not be convex in Green strain; consumers must
+    /// project the full element Hessian where required instead of assuming a positive material tangent.
     ///
     /// # Errors
     /// Bad schema/knots/units/sources, unapproved estimates, overflow or a nonpositive tangent.
@@ -406,11 +422,21 @@ impl TabulatedMembrane {
                 "nonlinear membrane coupling exceeds the minimum directional tangent; law is not stable throughout its strain range",
             ));
         }
-        Ok(CompiledMembrane {
+        let area = self
+            .area_response
+            .as_ref()
+            .map(|area| area.compile(self, sources, allow_estimates))
+            .transpose()?;
+        let compiled = CompiledMembrane {
             curves,
             coupling: k,
             interpolation: self.interpolation,
-        })
+            area,
+        };
+        if compiled.origin_stiffness().iter().any(|x| !x.is_finite()) {
+            return Err(invalid("combined membrane reference tangent overflows"));
+        }
+        Ok(compiled)
     }
 }
 
@@ -437,6 +463,17 @@ impl CompiledMembrane {
                     ),
                 ));
             }
+        }
+        if let Some(area) = &self.area
+            && !area.contains(strain)
+        {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                format!(
+                    "membrane physical metric is nonpositive or J is outside characterized area-ratio range {:?}",
+                    area.range()
+                ),
+            ));
         }
         Ok(())
     }
@@ -476,9 +513,20 @@ impl CompiledMembrane {
         self.curves.each_ref().map(|c| c.range)
     }
 
+    /// Explicit additional domain for the physical, unsoftened surface-area ratio.
+    #[must_use]
+    pub fn area_ratio_range(&self) -> Option<[f64; 2]> {
+        self.area.as_ref().map(CompiledArea::range)
+    }
+
     /// Whether a complete state is inside all three characterized strain ranges.
     #[must_use]
     pub fn contains(&self, strain: [f64; 3]) -> bool {
+        self.contains_separable(strain)
+            && self.area.as_ref().is_none_or(|area| area.contains(strain))
+    }
+
+    fn contains_separable(&self, strain: [f64; 3]) -> bool {
         strain
             .iter()
             .zip(&self.curves)
@@ -488,18 +536,53 @@ impl CompiledMembrane {
     /// Small-strain [Q11,Q22,Q12,G12], used to report the tangent, not as a second constitutive law.
     #[must_use]
     pub fn origin_stiffness(&self) -> [f64; 4] {
-        [
+        let mut stiffness = [
             self.curves[0].origin_tangent,
             self.curves[1].origin_tangent,
             self.coupling,
             self.curves[2].origin_tangent,
-        ]
+        ];
+        if let Some(area) = &self.area {
+            for entry in &mut stiffness[..3] {
+                *entry += area.origin_increment();
+            }
+        }
+        stiffness
     }
 
     /// Exact integrated energy and derivatives. None is an unsupported trial state, not clamping.
     #[must_use]
     pub fn evaluate(&self, strain: [f64; 3]) -> Option<Response> {
         if !self.contains(strain) {
+            return None;
+        }
+        let mut response = self.evaluate_separable(strain)?;
+        if let Some(area) = &self.area {
+            let area = area.evaluate(strain)?;
+            response.energy += area.energy;
+            for i in 0..3 {
+                response.stress[i] += area.stress[i];
+                for j in 0..3 {
+                    response.tangent[i][j] += area.tangent[i][j];
+                }
+            }
+            if !response.energy.is_finite()
+                || response.stress.iter().any(|v| !v.is_finite())
+                || response.tangent.iter().flatten().any(|v| !v.is_finite())
+            {
+                return None;
+            }
+        }
+        Some(response)
+    }
+
+    /// Separable part only, for a numerical strain transform with its own exact chain rule.
+    /// The consumer must first check the complete raw physical strain with [`Self::check_domain`]
+    /// and add [`Self::evaluate_area`] on that raw strain. This never applies the area law to a
+    /// gather/compression-softened metric.
+    #[must_use]
+    pub fn evaluate_separable(&self, strain: [f64; 3]) -> Option<Response> {
+        if !self.contains_separable(strain) {
             return None;
         }
         let v: [[f64; 3]; 3] = std::array::from_fn(|i| self.curves[i].evaluate(strain[i]));
@@ -513,6 +596,13 @@ impl CompiledMembrane {
             && response.stress.iter().all(|v| v.is_finite())
             && response.tangent.iter().flatten().all(|v| v.is_finite()))
         .then_some(response)
+    }
+
+    /// Area energy and physical Green-strain derivatives. None means an absent area law or an
+    /// unsupported/nonrepresentable state. The base curves' physical support is checked separately.
+    #[must_use]
+    pub fn evaluate_area(&self, strain: [f64; 3]) -> Option<Response> {
+        self.area.as_ref()?.evaluate(strain)
     }
 }
 

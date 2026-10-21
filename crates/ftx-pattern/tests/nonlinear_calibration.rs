@@ -376,3 +376,32 @@ fn explicit_replacement_retains_old_evidence_and_does_not_retain_old_linear_resp
     );
     assert!(report.material.properties.is_empty());
 }
+
+#[test]
+fn explicit_replacement_cannot_discard_an_existing_area_response() {
+    let mut source = input();
+    let example: serde_json::Value =
+        serde_json::from_str(include_str!("../../../examples/area-response/enabled.json")).unwrap();
+    let selection: Selection = serde_json::from_value(example["material"].clone()).unwrap();
+    let material = selection.record.unwrap();
+    source.material.membrane_response = material.membrane_response;
+    source.material.sources.extend(material.sources);
+    source.replace_existing = true;
+    source.material.validate().unwrap();
+    assert!(
+        source
+            .material
+            .compiled_membrane(true)
+            .unwrap()
+            .unwrap()
+            .area_ratio_range()
+            .is_some()
+    );
+    let refusal = calibrate(&source).unwrap_err();
+    assert_eq!(refusal.code, ftx_core::RefusalCode::InvalidDocument);
+    assert!(
+        refusal
+            .message
+            .contains("cannot identify or discard an existing area response")
+    );
+}

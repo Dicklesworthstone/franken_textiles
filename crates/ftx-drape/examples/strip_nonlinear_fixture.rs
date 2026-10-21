@@ -86,6 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut response = TabulatedMembrane {
         model: ftx_pattern::material_response::MODEL.into(),
         interpolation: Interpolation::PiecewiseLinear,
+        area_response: None,
         warp: family.warp,
         weft: family.weft,
         shear: family.shear,

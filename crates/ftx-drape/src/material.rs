@@ -378,6 +378,14 @@ fn resolve_uniform(pattern: &Pattern, options: &DrapeOptions) -> Result<Material
         contact_materials: None,
         mechanics: Some(mechanics),
     };
+    if let Some(range) = inputs
+        .response
+        .as_ref()
+        .and_then(CompiledMembrane::area_ratio_range)
+    {
+        inputs.report["physical_area_ratio_range"] = json!(range);
+        inputs.report["area_response_model"] = json!(ftx_pattern::material_response::AREA_MODEL);
+    }
     if let Some(law) = &inputs.plasticity {
         inputs.report["bending_plasticity_law_sha256"] = json!(law.fingerprint());
         inputs.report["bending_history_initialization"] =

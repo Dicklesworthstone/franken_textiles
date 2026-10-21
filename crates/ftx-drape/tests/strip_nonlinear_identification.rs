@@ -87,6 +87,7 @@ fn input() -> Input {
     let mut response = TabulatedMembrane {
         model: ftx_pattern::material_response::MODEL.into(),
         interpolation: Interpolation::PiecewiseLinear,
+        area_response: None,
         warp: family.warp,
         weft: family.weft,
         shear: family.shear,
@@ -151,6 +152,34 @@ fn input() -> Input {
 fn baseline() -> &'static Report {
     static REPORT: OnceLock<Report> = OnceLock::new();
     REPORT.get_or_init(|| calibrate(&input()).unwrap())
+}
+
+#[test]
+fn explicit_replacement_cannot_discard_an_existing_area_response() {
+    let mut input = input();
+    let example: Request =
+        serde_json::from_str(include_str!("../../../examples/area-response/enabled.json")).unwrap();
+    let material = example.material.record.unwrap();
+    input.material.membrane_response = material.membrane_response;
+    input.material.sources.extend(material.sources);
+    input.replace_existing = true;
+    input.material.validate().unwrap();
+    assert!(
+        input
+            .material
+            .compiled_membrane(true)
+            .unwrap()
+            .unwrap()
+            .area_ratio_range()
+            .is_some()
+    );
+    let refusal = calibrate(&input).unwrap_err();
+    assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+    assert!(
+        refusal
+            .message
+            .contains("cannot identify or discard an existing area response")
+    );
 }
 
 #[test]

@@ -356,6 +356,16 @@ fn physical<const N: usize>(input: &Input, p: [f64; N]) -> [f64; N] {
 fn validate(input: &Input) -> Result<(), Refusal> {
     input.material.validate()?;
     input.controls.validate()?;
+    if input
+        .material
+        .membrane_response
+        .as_ref()
+        .is_some_and(|response| response.area_response.is_some())
+    {
+        return Err(invalid(
+            "strip identification currently fits separable membrane laws and cannot identify or discard an existing area response; use an area-capable characterization model",
+        ));
+    }
     if input.response_family.is_some() && input.nonlinear.is_some() {
         return Err(invalid(
             "response_family and independent nonlinear intervals are mutually exclusive",

@@ -2429,6 +2429,64 @@ These are software integration results; the measured-material and garment accept
 
 ---
 
+### 25.43 Whole-piece roll partitions and combined material orders
+
+**Delivered core (`ftx-rp1`, continuing `ftx-pc1`).** A caller may declare
+`maximum_marker_length_m` for the cutting table or requested continuous segments. The existing
+grain-constrained planner assigns complete physical instances to deterministic bounded shelves across
+multiple markers of the same exact material snapshot. Both end margins count on every marker; an
+oversized piece refuses. Mirroring, on-fold expansion, internal cuts, drills, notches, grain and affine
+transforms remain unchanged. Existing polygon compaction runs within each assigned marker. Counts and
+total length are heuristic; a feasible partition does not prove globally minimal waste or marker count.
+
+Purchasing groups all markers of one exact material into one whole order. Summed gross area drives
+minimum quantities, increments, prices and total observed stock; the longest actual marker drives the
+continuous-cut upper-limit check. Every marker retains its order membership and length. Costs live once
+on the material order, never once per marker, and a missing material offer keeps the total unknown.
+Different material revisions remain separate. Quoted increments describe the whole order; requested
+segmentation does not establish a supplier's per-cut charging rules, continuous inventory or fulfillment.
+
+Omitted limits preserve legacy options and `/1` plans; bounded plans use `/2`. Repeated-material
+procurement uses `/2` with explicit `material_orders`; ordinary single-marker purchasing preserves
+its existing result shape. Focused geometry, source-identity, compaction, finite-stock and preview tests
+cover the core. Native, portable and browser consumers share these same planners. Details and commands:
+[cutting-plans.md](docs/cutting-plans.md).
+
+---
+
+### 25.44 Source-qualified area response in the production membrane
+
+**Delivered software (`ftx-ar1`).** An optional `area_green_strain/1` response extends the existing
+source-bearing directional membrane with `quadratic * (J - 1)^2 + log_squared * (ln J)^2`, where
+`J = sqrt(det(C))` is the positive physical sheet-area ratio. This follows the area-energy form in
+Sperl et al. (2022), §5.1 equation (1), with no extra half factor. Its extension to authored nonlinear
+directional curves is explicit. The same material compiler, triangle assembly and production solver
+evaluate exact energy, stress and tangent; there is no separate strip-only material implementation.
+
+Both coefficients require ordinary source-bearing quantities in N/m, matching specimen and conditioning
+across the base and area observations, explicit estimate admission and a declared positive J interval.
+That interval intersects all existing strain and identification domains. The area energy acts on raw
+physical strain even when the separable contribution uses gather softening. Its tangent can be indefinite;
+the production element uses the existing full-Hessian projection path. The positive metric and unsigned
+area ratio do not establish orientation preservation, global convexity or collision freedom.
+
+Reference stiffness includes the area contribution. Material reports retain the J domain only when the
+optional law is enabled, and frozen selections bind all coefficients, sources and conditions. Omission
+preserves legacy serialization and arithmetic. Existing inverse fitters refuse to discard an area law
+even when replacement is otherwise allowed; identifying its extra coefficients requires an area-capable
+extension of the existing bounded inverse solver (`ftx-ai1`).
+
+The committed paired coupon requests differ only in the area law. At 10% grip extension, the synthetic
+demonstration changes reaction from 1.090489 N to 1.304122 N and midpoint width from 49.318030 mm to
+52.395037 mm through the ordinary production solve. Analytical derivative checks, physical-strain
+assembly, exact frozen replay and native/portable adapters cover the implementation. These numerical
+results do not qualify an empirical textile or a complete garment material. Source transverse operators,
+independent acquisitions and matched bending/contact remain open under `ftx-ki4`, `ftx-tm2` and `ftx-tm8`.
+The model, commands, source citation and executable examples are documented in
+[material-area-response.md](docs/material-area-response.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

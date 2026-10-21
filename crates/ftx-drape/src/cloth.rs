@@ -371,6 +371,9 @@ impl ClothModel {
             }
             if let Some(law) = self.membrane_response(i) {
                 let strain = e.strain(x);
+                if law.area_ratio_range().is_some() {
+                    law.check_domain(strain)?;
+                }
                 if !law.contains(strain) {
                     let ranges = law.strain_range();
                     return Err(Refusal::new(

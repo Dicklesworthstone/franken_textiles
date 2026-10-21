@@ -1,0 +1,82 @@
+{
+  "schema": "ftx-strip-experiment/1",
+  "material": {
+    "id": "synthetic-area-response-coupon",
+    "allow_estimates": true,
+    "record": {
+      "id": "synthetic-area-response-coupon",
+      "name": "Synthetic membrane area-response comparison",
+      "form": "sheet",
+      "composition": [],
+      "composition_complete": false,
+      "structure": {
+        "scope": "Synthetic numerical example; no measured textile, independent physical validation or garment readiness"
+      },
+      "properties": {},
+      "membrane_response": {
+        "model": "tabulated_green_strain/1",
+        "interpolation": "piecewise_linear",
+        "warp": {
+          "points": [[-0.45, -135.0], [0.0, 0.0], [0.6, 180.0]],
+          "source": "assumptions",
+          "evidence": "estimate",
+          "method": "Declared synthetic second-Piola sheet resultant versus Green strain; slope 300 N/m",
+          "conditions": {
+            "specimen": "synthetic-area-response-coupon",
+            "conditioning": "synthetic-reference-state"
+          }
+        },
+        "weft": {
+          "points": [[-0.45, -45.0], [0.0, 0.0], [0.6, 60.0]],
+          "source": "assumptions",
+          "evidence": "estimate",
+          "method": "Declared synthetic second-Piola sheet resultant versus Green strain; slope 100 N/m",
+          "conditions": {
+            "specimen": "synthetic-area-response-coupon",
+            "conditioning": "synthetic-reference-state"
+          }
+        },
+        "shear": {
+          "points": [[-0.8, -56.0], [0.0, 0.0], [0.8, 56.0]],
+          "source": "assumptions",
+          "evidence": "estimate",
+          "method": "Declared synthetic second-Piola shear resultant versus twice Green shear; slope 70 N/m",
+          "conditions": {
+            "specimen": "synthetic-area-response-coupon",
+            "conditioning": "synthetic-reference-state"
+          }
+        },
+        "coupling": {
+          "value": 140.0,
+          "unit": "N/m",
+          "evidence": "estimate",
+          "source": "assumptions",
+          "method": "Declared synthetic constant normal coupling",
+          "conditions": {
+            "specimen": "synthetic-area-response-coupon",
+            "conditioning": "synthetic-reference-state"
+          }
+        }
+      },
+      "sources": {
+        "assumptions": {
+          "reference": "test:synthetic-area-response-example",
+          "accessed_on": "2026-10-21",
+          "note": "Authored numerical comparison inputs, not measurements or published fabric coefficients. The baseline and enabled examples share their base membrane, geometry and loading. Missing mass, bending, contact and thermal properties remain unspecified."
+        }
+      }
+    }
+  },
+  "fixture": {
+    "cells": [4, 6],
+    "gauge_length_m": 0.1,
+    "warp_axis": [0.0, 1.0],
+    "width_m": 0.06
+  },
+  "extensions": [0.02, 0.06, 0.1],
+  "controls": {
+    "force_tolerance_n": 0.000001,
+    "max_newton": 100,
+    "tolerance_m": 0.000000001
+  }
+}

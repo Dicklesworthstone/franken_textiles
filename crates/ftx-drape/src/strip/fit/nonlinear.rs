@@ -196,6 +196,7 @@ impl Nonlinear {
         Ok(TabulatedMembrane {
             model: ftx_pattern::material_response::MODEL.into(),
             interpolation: Interpolation::PiecewiseLinear,
+            area_response: None,
             warp, weft, shear,
             coupling: Quantity {
                 value: parameters[offset], unit: "N/m".into(), evidence: Evidence::Estimate,

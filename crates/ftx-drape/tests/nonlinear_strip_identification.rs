@@ -54,6 +54,7 @@ fn planted() -> Material {
     material.membrane_response = Some(TabulatedMembrane {
         model: "tabulated_green_strain/1".into(),
         interpolation: Interpolation::PiecewiseLinear,
+        area_response: None,
         warp: curve(vec![[-0.2, -52.0], [0.0, 0.0], [0.04, 12.0], [0.25, 117.0]]),
         weft: curve(vec![[-0.2, -30.0], [0.0, 0.0], [0.04, 7.2], [0.25, 74.4]]),
         shear: curve(vec![[-0.3, -21.0], [0.0, 0.0], [0.3, 27.0]]),

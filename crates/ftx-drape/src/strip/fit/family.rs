@@ -150,6 +150,7 @@ impl Prepared {
         TabulatedMembrane {
             model: ftx_pattern::material_response::MODEL.into(),
             interpolation: Interpolation::PiecewiseLinear,
+            area_response: None,
             warp: curve(&self.family.warp, parameters[0]),
             weft: curve(&self.family.weft, parameters[1]),
             shear: curve(&self.family.shear, parameters[2]),
