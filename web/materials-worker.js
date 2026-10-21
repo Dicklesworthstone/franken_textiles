@@ -282,15 +282,20 @@ self.onmessage = async ({ data: msg }) => {
         for (const fragment of [msg.report, msg.map, msg.conditions]) json(fragment);
         raw = ftx.thermal_steady_coverage(`{"schema":"ftx-steady-coverage-request/1","report":${msg.report},"map":${msg.map},"conditions":${msg.conditions}}`);
         result = json(raw); files = [file("thermal-coverage.json", raw)]; break;
-      case "cut":
+      case "cut": {
         raw = ftx.cut_plan(msg.pattern, msg.options); result = json(raw);
         files = [file("cut-plan.json", raw)];
-        // One bounded on-demand preview rather than quadratically regenerating every roll.
+        // Compute one requested preview; never regenerate every marker's complete plan in a loop.
         if (result.rolls.length) {
-          picture = ftx.cut_svg(msg.pattern, msg.options, 0);
-          files.push(file("roll-0.svg", picture, "image/svg+xml"));
+          const index = msg.rollIndex ?? 0;
+          if (!Number.isSafeInteger(index) || index < 0 || index >= result.rolls.length) {
+            throw Error(`Preview marker number must be between 1 and ${result.rolls.length}.`);
+          }
+          picture = ftx.cut_svg(msg.pattern, msg.options, index);
+          files.push(file(`roll-${index}.svg`, picture, "image/svg+xml"));
         }
         break;
+      }
       case "stock": {
         // Older bundles keep their existing single-product contract. Unknown optimizer options
         // still fail their native request parser; the worker never removes or rewrites a policy.

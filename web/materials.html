@@ -134,6 +134,8 @@ An empty list <code>[]</code> explicitly removes all pairs; omitting a replaceme
 </div><div>
 <h3>Cutting, purchasing and sewing</h3>
 <label>Roll-planning options JSON <input id="cutOptions" type="file" accept=".json,application/json"></label>
+<p class="note">Set <code>maximum_marker_length_m</code> in the options to place complete pieces across separate markers within a cutting-table or continuous-cut limit. Purchasing combines markers of the same material into one order.</p>
+<label>Preview marker number <input id="rollPreview" type="number" min="1" step="1" value="1"></label>
 <button id="cut" data-command="cut" disabled>Plan rolls &amp; preview</button>
 <label>Finite hides / remnants with defect maps JSON <input id="stockRequest" type="file" accept=".json,application/json"></label>
 <button id="stock" data-command="stock" disabled>Allocate finite stock &amp; preview</button>

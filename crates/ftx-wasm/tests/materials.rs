@@ -682,6 +682,91 @@ fn continuous_marker_limits_reach_portable_purchasing_and_material_studies() {
 }
 
 #[test]
+fn bounded_markers_share_one_order_in_portable_consumers_and_studies() {
+    let raw: Value = serde_json::from_str(PATTERN).unwrap();
+    let bound = bind(&raw, &changes(selection(0.1, 0.4)));
+    let pattern = bound["pattern_json"].as_str().unwrap();
+    let mut options: Value = serde_json::from_str(&cut()).unwrap();
+    options["copies"] = json!(3);
+    options["maximum_marker_length_m"] = json!(0.12);
+    let plan = CutPlan::build(
+        &Pattern::from_json(pattern).unwrap(),
+        &serde_json::from_value(options.clone()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plan.rolls.len(), 3);
+    assert!(plan.rolls.iter().all(|r| r.length_m <= 0.12));
+    let portable: Value =
+        serde_json::from_str(&manufacturing::cut_plan(pattern, &options.to_string()).unwrap())
+            .unwrap();
+    assert_eq!(portable, serde_json::to_value(&plan).unwrap());
+    let svg = manufacturing::cut_svg(pattern, &options.to_string(), 2).unwrap();
+    assert_eq!(svg, ftx_export::cutting::preview::svg(&plan, 2).unwrap());
+    let mut quote = json!({"offer_id":"synthetic/partitioned","material_id":"synthetic-sewing-sheet",
+        "material_sha256":plan.rolls[0].material.sha256(),"supplier":"Synthetic supplier",
+        "sku":"partitioned","price":10.0,"quantity":1.0,"unit":"linear_meter",
+        "minimum_quantity":0.05,"order_increment":0.05,"currency":"USD","region":"US",
+        "quality":"test","terms":"test","observed_on":"2026-10-21",
+        "available":true,"available_quantity":0.4,"maximum_continuous_quantity":0.12,
+        "source":"test:partitioned","source_sha256":"0".repeat(64)});
+    let market = json!({"currency":"USD","region":"US","quality":"test","terms":"test",
+        "as_of":"2026-10-21","max_age_days":1,"require_observed_quantity":true,
+        "require_observed_continuous_length":true});
+    for enough in [true, false] {
+        if !enough {
+            quote["available_quantity"] = json!(0.2);
+        }
+        let book = json!({"schema":"ftx-textile-quotes/1","quotes":[quote]});
+        let got: Value = serde_json::from_str(
+            &manufacturing::cut_price(
+                pattern,
+                &options.to_string(),
+                &book.to_string(),
+                &market.to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            procurement::evaluate(
+                &plan,
+                &serde_json::from_value(book.clone()).unwrap(),
+                &serde_json::from_value(market.clone()).unwrap()
+            )
+            .unwrap()
+        );
+        assert_eq!(got["schema"], "ftx-cut-procurement/2");
+        assert_eq!(got["material_orders"].as_array().unwrap().len(), 1);
+        assert_eq!(got["material_orders"][0]["roll_indices"], json!([0, 1, 2]));
+        assert_eq!(got["complete_offer_coverage"], enough);
+        if enough {
+            assert!(
+                (got["least_observed_independent_order_total"]
+                    .as_f64()
+                    .unwrap()
+                    - 4.0)
+                    .abs()
+                    < 1e-10
+            );
+        } else {
+            assert!(got["least_observed_independent_order_total"].is_null());
+        }
+        let request = json!({"schema":"ftx-material-study/1","variants":[{"key":"same",
+            "changes":{"schema":"ftx-material-bindings/1"}}],"cutting":options,
+            "purchasing":{"quotes":book,"market":market}});
+        let study: Value =
+            serde_json::from_str(&materials::study(pattern, &request.to_string()).unwrap())
+                .unwrap();
+        assert_eq!(study["alternatives"][0]["purchasing"]["result"], got);
+        assert_eq!(
+            study["alternatives"][0]["metrics"]["least_observed_independent_order_total"],
+            got["least_observed_independent_order_total"]
+        );
+    }
+}
+
+#[test]
 fn intraday_procurement_and_studies_share_native_expiry_and_complete_order_semantics() {
     let raw: Value = serde_json::from_str(PATTERN).unwrap();
     let bound = bind(&raw, &changes(selection(0.1, 0.4)));

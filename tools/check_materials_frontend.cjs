@@ -179,6 +179,25 @@ test('material worker calls the shared consumers with exact current inputs and c
   assert.equal(r.files[0].name, 'round.zip'); assert.deepEqual([...r.files[0].bytes], [1, 2]);
   assert.deepEqual(w.freed, ['round']);
 });
+test('bounded-marker worker previews the selected intact marker and refuses invalid indices', async () => {
+  const w = await workerModule(), pattern = '{"origin":-0.0}',
+    options = '{"copies":3,"maximum_marker_length_m":0.12,"edge_margin_mm":-0.0}';
+  const result = await w.send({type:'cut',request:9,pattern,options,rollIndex:1});
+  assert.equal(result.type,'result',result.message);
+  assert.deepEqual(w.called.find(c=>c[0]==='cut'),['cut',pattern,options]);
+  assert.deepEqual(w.called.find(c=>c[0]==='svg'),['svg',pattern,options,1]);
+  assert.equal(result.files.length,2);
+  assert.equal(result.files[0].name,'cut-plan.json');
+  assert.equal(result.files[0].text,'{"rolls":[{},{}]}');
+  assert.equal(result.files[1].name,'roll-1.svg');
+  assert.equal(result.picture,'<svg/>');
+  for (const rollIndex of [-1,2,0.5,Infinity,Number.MAX_SAFE_INTEGER+1]) {
+    const refused = await w.send({type:'cut',pattern,options,rollIndex});
+    assert.equal(refused.type,'error');assert.match(refused.message,/between 1 and 2/);
+  }
+  assert.equal(w.called.filter(c=>c[0]==='svg').length,1);
+  assert.equal(w.sent.filter(m=>m.type==='result').length,1);
+});
 test('material worker frees model and fold on success or report failure, without caching an old drape', async () => {
   for (const failFold of [false, true]) {
     const w = await workerModule({ failFold });
@@ -1350,6 +1369,77 @@ test('purchasing displays exact intraday evidence, excluded latest offers and da
   assert.equal(p.live.has(link.href), false);
 });
 
+test('bounded-marker purchasing shows one whole order and preserves exact totals and stock exclusions', async () => {
+  const p = await pageModule();await p.load();await p.bind();
+  const options='{"copies":3,"maximum_marker_length_m":0.12,"gap_mm":1.0}', quotes='{"schema":"ftx-textile-quotes/1","quotes":[]}', market='{"as_of":"2026-10-21"}';
+  p.select('cutOptions',options);p.select('quotes',quotes);p.select('market',market);
+  await p.e.price.onclick();
+  assert.equal(p.current().messages.at(-1).options,options);
+  const quote={offer_id:'<whole order>',observed_on:'2026-10-21',unit:'linear_meter',
+    available_quantity:0.25,maximum_continuous_quantity:0.12};
+  const offer={quote,order_quantity:0.25,order_cost:2.5,quantity_sufficiency_observed:true,within_observed_continuous_limit:true};
+  const report={schema:'ftx-cut-procurement/2',currency:'USD',complete_offer_coverage:true,
+    complete_observed_quantity_coverage:true,complete_continuous_length_limit_coverage:true,
+    least_observed_independent_order_total:2.5,limits:['Requested segmentation, not guaranteed supplier fulfillment'],
+    roll_prices:[0,1].map(roll_index=>({roll_index,material_order_index:0,required_length_m:0.12,required_stock_area_m2:0.012,continuity:'within_observed_limit'})),
+    material_orders:[{material_order_index:0,material_sha256:'same-exact-material',roll_indices:[0,1],marker_lengths_m:[0.12,0.12],
+      required_length_m:0.24,required_stock_area_m2:0.024,required_continuous_length_m:0.12,least_observed_order:offer,
+      sample:{scope:{currency:'USD',region:'US',quality:'synthetic',terms:'merchandise only',as_of:'2026-10-21'},offers:[offer],
+        excluded_offers:[{quote:{...quote,offer_id:'short stock',available_quantity:0.2},reason:'insufficient_quantity',required_order_quantity:0.25}]}}]};
+  const raw=JSON.stringify(report);
+  p.emit(report,[{name:'cut-price.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'price'),tables=descendants(s).filter(n=>n.tag==='table');
+  assert.equal(tables.length,1); // Two markers consume one order and show one selected price row.
+  assert.match(tables[0].children[0].textContent,/Material order 1/);
+  assert.deepEqual(plain(tables[0].children[2].children.slice(3,7).map(n=>n.textContent)),
+    ['Eligible','0.25 linear_meter','2.5','0.12 linear_meter; within observed limit']);
+  assert.deepEqual(plain(tables[0].children[3].children.slice(3,6).map(n=>n.textContent)),
+    ['Excluded: insufficient quantity','0.25 linear_meter','Unknown']);
+  assert.match(visibleText(s),/Markers 1, 2 require 0.12, 0.12 m respectively/);
+  assert.match(visibleText(s),/total 0.24 m, longest continuous segment 0.12 m/);
+  assert.match(visibleText(s),/available stock apply once to the combined material order/);
+  assert.equal(JSON.parse(s.children[1].textContent).least_observed_independent_order_total,2.5);
+  const source=descendants(s).find(n=>n.tag==='details');source.open=true;source.handlers.toggle();
+  assert.match(visibleText(source),/"available_quantity": 0.2/);
+  assert.match(visibleText(source),/"available_quantity": 0.25/);
+  const link=descendants(s).find(n=>n.download==='cut-price.json');
+  assert.equal(await p.blobs.get(link.href).text(),raw);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  p.e.cutOptions.handlers.change();
+  assert.equal(s.hidden,true);assert.equal(p.live.has(link.href),false);
+});
+
+test('marker selection forwards a zero-based index and withdraws stale preview replies independently of price', async () => {
+  const p=await pageModule();await p.load();await p.bind();
+  p.select('cutOptions','{"copies":3,"maximum_marker_length_m":0.12}');
+  p.select('quotes');p.select('market');await p.e.price.onclick();
+  p.emit({roll_prices:[],least_observed_independent_order_total:2.5},[{name:'price.json',text:'{"total":2.5}',mime:'application/json'}]);
+  const price=section(p,'price'), priceLink=descendants(price).find(n=>n.download==='price.json');
+  p.e.rollPreview.value='2';await p.e.cut.onclick();
+  assert.equal(p.current().messages.at(-1).rollIndex,1);
+  const plan={schema:'ftx-roll-cut-plan/2',options:{maximum_marker_length_m:0.12},rolls:[{length_m:0.12},{length_m:0.12}],limitations:[]};
+  p.emit(plan,[{name:'cut-plan.json',text:JSON.stringify(plan),mime:'application/json'},
+    {name:'roll-1.svg',text:'<svg id="second"/>',mime:'image/svg+xml'}]);
+  const cut=section(p,'cut'), preview=p.e.marker.src;
+  assert.equal(p.e.marker.hidden,false);
+  assert.equal(await p.blobs.get(preview).text(),'<svg id="second"/>');
+  const summary=JSON.parse(cut.children[1].textContent);
+  assert.equal(summary.maximum_marker_length_m,0.12);
+  assert.deepEqual(summary.rolls.map(r=>r.marker_number),[1,2]);
+  p.e.rollPreview.value='1';p.e.rollPreview.handlers.change();
+  assert.equal(cut.hidden,true);assert.equal(p.e.marker.hidden,true);assert.equal(p.live.has(preview),false);
+  assert.equal(price.hidden,false);assert.equal(p.live.has(priceLink.href),true);
+  await p.e.cut.onclick();const old=p.current(), request=old.messages.at(-1).request;
+  p.e.rollPreview.value='2';p.e.rollPreview.handlers.change();assert.equal(old.dead,true);p.ready();
+  old.emit({type:'result',request,result:plan,files:[{name:'stale.svg',text:'<svg/>',mime:'image/svg+xml'}]});
+  assert.equal(cut.hidden,true);assert.equal(p.e.marker.hidden,true);
+  assert.equal(price.hidden,false);
+  for (const value of ['0','-1','1.5','Infinity','9007199254740992']) {
+    p.e.rollPreview.value=value;const before=p.current().messages.length;await p.e.cut.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/positive integer/);
+  }
+});
+
 test('screening is available without a pattern and retains excluded source evidence for inspection', async () => {
   const p = await pageModule(); assert.equal(p.e.screen.disabled, true);
   p.select('screenRequest', '{"threshold":1.0}'); p.e.screenRequest.handlers.change();
@@ -2296,4 +2386,112 @@ test('compiled WASM outfit import reaches exact material binding and complete as
     assert.equal(study.files.find(f=>f.name==='outfit-composition.json').text,outfit.composition_json);
     const refused = await w.send({type:'scenario',request:4,pattern,outfit,scenarioRequest:'{"options":{}}'});
     assert.equal(refused.type,'error');assert.match(refused.message,/options.self_contact/);
+  });
+
+test('compiled WASM bounded markers retain whole geometry, selected SVG and one finite-stock order through the worker',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx});
+    const property=(value,unit)=>({value,unit,source:'test',evidence:'estimate',method:'Synthetic bounded-marker test'});
+    const pattern=JSON.stringify({schema:'fabric-pattern/1',units:'mm',meta:{sa_mm:0},
+      fabric:{material:{id:'bounded-marker-sheet',allow_estimates:true,record:{id:'bounded-marker-sheet',name:'Synthetic sheet',form:'woven',
+        properties:{width:property(0.1,'m'),areal_density:property(0.2,'kg/m2')},
+        sources:{test:{reference:'test:bounded-marker-worker',accessed_on:'2026-10-21',note:'Synthetic software data'}}}}},
+      pieces:[{id:'front',cut:{qty:1},grain:[[0,0],[0,10]],vertices:{a:[0,0],b:[40,0],c:[40,100],d:[0,100]},
+        edges:[{id:'bottom',from:'a',to:'b'},{id:'right',from:'b',to:'c'},{id:'top',from:'c',to:'d'},{id:'left',from:'d',to:'a'}]}],seams:[]});
+    const options='{"copies":3,"gap_mm":5,"edge_margin_mm":5,"end_margin_mm":10,"maximum_marker_length_m":0.12}';
+    const cut=await w.send({type:'cut',request:51,pattern,options,rollIndex:1});
+    assert.equal(cut.type,'result',cut.message);
+    assert.equal(cut.files[0].text,ftx.cut_plan(pattern,options));
+    assert.equal(cut.result.schema,'ftx-roll-cut-plan/2');
+    assert.deepEqual(cut.result.rolls.map(r=>r.length_m),[0.12,0.12]);
+    const pieces=cut.result.rolls.flatMap(r=>r.placements.map(p=>[p.instance,p.copy]));
+    assert.deepEqual(pieces,[['front',0],['front',1],['front',2]]);
+    assert.equal(cut.files[1].name,'roll-1.svg');
+    assert.equal(cut.files[1].text,ftx.cut_svg(pattern,options,1));
+    assert.match(cut.files[1].text,/data-copy="2"/);
+    assert.doesNotMatch(cut.files[1].text,/data-copy="0"/);
+    const quote={offer_id:'short-stock',material_id:'bounded-marker-sheet',supplier:'Synthetic supplier',sku:'short-stock',
+      price:1,quantity:1,unit:'linear_meter',minimum_quantity:0.2,order_increment:0.05,currency:'USD',region:'US',quality:'test',terms:'test',
+      observed_on:'2026-10-21',available:true,available_quantity:0.2,maximum_continuous_quantity:0.12,
+      source:'test:bounded-marker-worker',source_sha256:'0'.repeat(64)};
+    const quotes=JSON.stringify({schema:'ftx-textile-quotes/1',quotes:[quote,
+      {...quote,offer_id:'whole-order',sku:'whole-order',price:10,available_quantity:0.25}]});
+    const market=JSON.stringify({currency:'USD',region:'US',quality:'test',terms:'test',as_of:'2026-10-21',max_age_days:1,
+      require_observed_quantity:true,require_observed_continuous_length:true});
+    const priced=await w.send({type:'price',request:52,pattern,options,quotes,market});
+    assert.equal(priced.type,'result',priced.message);
+    assert.equal(priced.files[0].text,ftx.cut_price(pattern,options,quotes,market));
+    assert.equal(priced.result.schema,'ftx-cut-procurement/2');
+    assert.equal(priced.result.least_observed_independent_order_total,2.5);
+    assert.equal(priced.result.material_orders.length,1);
+    const order=priced.result.material_orders[0];
+    assert.deepEqual(order.roll_indices,[0,1]);
+    assert.equal(order.required_length_m,0.24);assert.equal(order.required_continuous_length_m,0.12);
+    assert.equal(order.least_observed_order.order_quantity,0.25);
+    assert.equal(order.least_observed_order.quote.offer_id,'whole-order');
+    assert.equal(order.sample.excluded_offers[0].reason,'insufficient_quantity');
+    assert.equal(order.sample.excluded_offers[0].required_order_quantity,0.25);
+    assert.ok(priced.result.roll_prices.every(r=>r.material_order_index===0&&!('least_observed_order' in r)));
+    const studyRequest=JSON.stringify({schema:'ftx-material-study/1',variants:[{key:'unchanged',changes:{schema:'ftx-material-bindings/1'}}],
+      cutting:JSON.parse(options),purchasing:{quotes:JSON.parse(quotes),market:JSON.parse(market)}});
+    const study=await w.send({type:'study',request:53,pattern,studyRequest});
+    assert.equal(study.type,'result',study.message);
+    assert.equal(study.files[0].text,ftx.material_study(pattern,studyRequest));
+    const row=study.result.alternatives[0];
+    assert.equal(row.cutting.status,'available');assert.equal(row.cutting.result.rolls.length,2);
+    assert.equal(row.purchasing.status,'available');assert.equal(row.metrics.least_observed_independent_order_total,2.5);
+    const invalid=await w.send({type:'cut',request:54,pattern,options,rollIndex:2});
+    assert.equal(invalid.type,'error');assert.match(invalid.message,/between 1 and 2/);
+  });
+
+test('compiled WASM area response changes strip mechanics and preserves source, frozen replay and refusals through the worker',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx}), last=[];
+    let enabled;
+    for (const name of ['baseline','enabled']) {
+      const stripRequest=fs.readFileSync(path.join(__dirname,`../examples/area-response/${name}.json`),'utf8');
+      const result=await w.send({type:'stripExperiment',request:61,stripRequest});
+      assert.equal(result.type,'result',result.message);
+      assert.equal(result.files[0].text,ftx.material_strip_experiment(stripRequest));
+      assert.equal(result.files[1].text,stripRequest);
+      assert.equal(result.files.length,2); // A forward experiment does not publish a fitted selection.
+      assert.equal(result.result.states.length,3);
+      assert.ok(result.result.input.material.expected_sha256);
+      const inspected=JSON.parse(ftx.material_inspect(JSON.stringify(JSON.parse(stripRequest).material)));
+      assert.deepEqual(result.result.input.material.record,inspected.snapshot.authored);
+      const frozen=JSON.stringify(result.result.input);
+      const replay=await w.send({type:'stripExperiment',request:62,stripRequest:frozen});
+      assert.equal(replay.type,'result',replay.message);
+      assert.equal(replay.files[0].text,result.files[0].text);
+      if(process.env.FTX_AREA_REPLAY) {
+        const native=JSON.parse(fs.readFileSync(path.join(process.env.FTX_AREA_REPLAY,`${name}-report.json`),'utf8'));
+        assert.deepEqual(result.result,native);
+      }
+      last.push(result.result.states.at(-1));
+      if(name==='enabled') enabled=result.result;
+    }
+    assert.ok(Math.abs(last[1].force_n-last[0].force_n)>1e-6);
+    assert.ok(Math.abs(last[1].mid_width_m-last[0].mid_width_m)>1e-8);
+    const original=JSON.parse(fs.readFileSync(path.join(__dirname,'../examples/area-response/enabled.json'),'utf8'));
+    const denied=structuredClone(original);denied.material.allow_estimates=false;
+    const mismatch=structuredClone(original);
+    mismatch.material.record.membrane_response.area_response.quadratic.conditions.specimen='different synthetic specimen';
+    const outside=structuredClone(original);
+    outside.material.record.membrane_response.area_response.area_ratio_range=[1,1.00001];
+    const tampered=structuredClone(enabled.input);
+    tampered.material.record.membrane_response.area_response.quadratic.value=101;
+    for(const [request,reason] of [[denied,/estimate/],[mismatch,/match/],[outside,/range|domain/],[tampered,/expected_sha256/]]) {
+      const stripRequest=JSON.stringify(request);
+      let nativeBoundary;
+      assert.throws(()=>ftx.material_strip_experiment(stripRequest),error=>{nativeBoundary=error.message;return reason.test(error.message);});
+      const result=await w.send({type:'stripExperiment',request:63,stripRequest});
+      assert.equal(result.type,'error');assert.equal(result.message,nativeBoundary);
+      assert.equal(result.files,undefined);
+    }
   });

@@ -134,17 +134,22 @@ function detail(parent, title, value) {
   d.addEventListener("toggle", () => { if (d.open && !shown) { pre.textContent = text(value); shown = true; } });
 }
 function procurementResult(parent, r) {
-  for (const row of r.roll_prices || []) {
+  const grouped = Array.isArray(r.material_orders);
+  for (const row of (grouped ? r.material_orders : r.roll_prices) || []) {
     const sample = row.sample, scope = sample.scope;
+    const label = grouped ? `Material order ${row.material_order_index + 1}` : `Roll ${row.roll_index + 1}`;
     const note = document.createElement("p");
-    note.textContent = `Roll ${row.roll_index + 1}: ${metric(row.required_stock_area_m2)} m² of stock. ` +
-      (row.required_length_m == null ? "" : `The marker requires one continuous ${metric(row.required_length_m)} m cut. `) +
+    note.textContent = `${label}: ${metric(row.required_stock_area_m2)} m² of stock. ` +
+      (grouped ? `Markers ${row.roll_indices.map(i => i + 1).join(", ")} require ${row.marker_lengths_m.map(metric).join(", ")} m respectively; ` +
+        `total ${metric(row.required_length_m)} m, longest continuous segment ${metric(row.required_continuous_length_m)} m. ` +
+        "Minimum quantity, order increments and available stock apply once to the combined material order. " :
+        (row.required_length_m == null ? "" : `The marker requires one continuous ${metric(row.required_length_m)} m cut. `)) +
       `Evaluated at ${scope.as_of_at || `${scope.as_of} (date only)`} UTC. ` +
       `Market: ${scope.currency}; ${scope.region}; ${scope.quality}; ${scope.terms}. ` +
       "The report retains the latest observed offer and its exclusion; an older price is not substituted. " +
       "A source continuous-cut limit is an upper limit, not a guarantee of continuous inventory.";
     parent.append(note);
-    const t = table(parent, `Roll ${row.roll_index + 1} — latest supplier observations`,
+    const t = table(parent, `${label} — latest supplier observations`,
       ["Offer", "Observed (UTC)", "Valid through (UTC)", "Admission", "Order quantity", `Merchandise cost (${scope.currency})`, "Source continuous-cut limit"]);
     const entries = [...sample.offers.map(offer => ({ offer, quote: offer.quote })),
       ...(sample.excluded_offers || []).map(excluded => ({ excluded, quote: excluded.quote }))];
@@ -159,7 +164,7 @@ function procurementResult(parent, r) {
         typeof quantity === "number" ? `${metric(quantity)} ${q.unit}` : "Unknown", metric(offer?.order_cost), continuity]);
     }
     if (!entries.length) cells(t, ["No observation in the requested market at this time", "Unknown", "Unknown", "No eligible offer", "Unknown", "Unknown", "Not reported"]);
-    detail(parent, `Roll ${row.roll_index + 1}: selected order, source evidence and stock exclusions`, row);
+    detail(parent, `${label}: selected order, source evidence and stock exclusions`, row);
   }
   return { complete_offer_coverage: r.complete_offer_coverage,
     complete_observed_quantity_coverage: r.complete_observed_quantity_coverage, currency: r.currency,
@@ -881,7 +886,8 @@ function show(op, msg) {
       op === "calibrate" ? calibrationResult(s.comparison, r) :
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis } :
-      op === "cut" ? { pattern_sha256: r.pattern_sha256, rolls: r.rolls.map(x => ({ material: x.material?.authored?.id,
+      op === "cut" ? { pattern_sha256: r.pattern_sha256, maximum_marker_length_m: r.options?.maximum_marker_length_m,
+        rolls: r.rolls.map((x, i) => ({ marker_number: i + 1, material: x.material?.authored?.id,
         width_m: x.width_m, length_m: x.length_m, stock_mass_kg: x.stock_mass_kg, utilization: x.utilization })), limitations: r.limitations } :
       op === "price" ? procurementResult(s.comparison, r) :
       op === "stock" ? { used_stock_count: r.used_stock_count, used_gross_area_m2: r.used_gross_area_m2,
@@ -1032,6 +1038,11 @@ async function execute(op) {
         if (op === "coverage") msg.map = await read("map");
       }
       if (op === "cut" || op === "price") msg.options = await read("cutOptions");
+      if (op === "cut") {
+        const marker = Number($("rollPreview").value || "1");
+        if (!Number.isSafeInteger(marker) || marker < 1) throw Error("Preview marker number must be a positive integer.");
+        msg.rollIndex = marker - 1;
+      }
       if (op === "stock") msg.stockRequest = await read("stockRequest");
       if (op === "price") { msg.quotes = await read("quotes"); msg.market = await read("market"); }
       if (op === "sew") msg.options = await read("sewOptions");
@@ -1045,6 +1056,7 @@ async function execute(op) {
   }
 }
 for (const el of commands) el.onclick = () => execute(el.dataset.command);
+$("rollPreview").addEventListener("change", () => invalidate(["cut"]));
 $("cancel").onclick = () => { start(); $("status").textContent = "Cancelled; reloading local engine."; };
 $("catalog").onchange = () => {
   if (!$("catalog").value) return;

@@ -99,6 +99,107 @@ const PRICE: &[&str] = &[
 ];
 
 #[test]
+fn bounded_markers_and_combined_orders_reach_both_native_commands() {
+    let w = setup();
+    let mut policy = options();
+    policy["copies"] = json!(3);
+    policy["maximum_marker_length_m"] = json!(0.13);
+    w.write("options.json", &policy);
+    let plan = w.ok(PLAN);
+    assert_eq!(plan["schema"], "ftx-roll-cut-plan/2");
+    let rolls = plan["rolls"].as_array().unwrap();
+    assert_eq!(rolls.len(), 5);
+    assert!(
+        rolls
+            .iter()
+            .all(|r| r["length_m"].as_f64().unwrap() <= 0.13)
+    );
+    assert_eq!(
+        rolls
+            .iter()
+            .map(|r| r["placements"].as_array().unwrap().len())
+            .sum::<usize>(),
+        6
+    );
+    let mut quotes = vec![quote("shell", 10.0), quote("knit", 16.0)];
+    for q in &mut quotes {
+        q["maximum_continuous_quantity"] = json!(0.13);
+        q["available_quantity"] = json!(if q["material_id"] == "shell" {
+            0.4
+        } else {
+            0.2
+        });
+    }
+    w.write(
+        "quotes.json",
+        &json!({"schema":"ftx-textile-quotes/1","quotes":quotes}),
+    );
+    let result = w.ok(PRICE);
+    assert_eq!(result["schema"], "ftx-cut-procurement/2");
+    assert_eq!(result["cut_plan"], plan);
+    assert_eq!(result["material_orders"].as_array().unwrap().len(), 2);
+    assert_eq!(result["complete_observed_quantity_coverage"], true);
+    assert_eq!(result["complete_continuous_length_limit_coverage"], true);
+    assert!(
+        (result["least_observed_independent_order_total"]
+            .as_f64()
+            .unwrap()
+            - 14.4)
+            .abs()
+            < 1e-10
+    );
+    assert!(result["roll_prices"].as_array().unwrap().iter().all(|row| {
+        row.get("sample").is_none()
+            && row.get("least_observed_order").is_none()
+            && row["material_order_index"].is_u64()
+    }));
+    let primary = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&w.0)
+        .arg("materials")
+        .args(PRICE)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        primary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&primary.stderr)
+    );
+    let primary: Value = serde_json::from_slice(&primary.stdout).unwrap();
+    assert_eq!(primary["result"], result);
+    // The selected fifth marker is an actual independently rendered layout.
+    let preview = w.ok(&["cut-svg", "pattern.json", "options.json", "4", "fifth.svg"]);
+    assert_eq!(preview["roll_index"], 4);
+    assert!(
+        fs::read_to_string(w.0.join("fifth.svg"))
+            .unwrap()
+            .contains("<svg")
+    );
+    // A supplier's total stock cannot be reused for each short marker.
+    quotes[0]["available_quantity"] = json!(0.3);
+    w.write(
+        "quotes.json",
+        &json!({"schema":"ftx-textile-quotes/1","quotes":quotes}),
+    );
+    let unavailable = w.ok(PRICE);
+    assert_eq!(unavailable["complete_offer_coverage"], false);
+    assert!(unavailable["least_observed_independent_order_total"].is_null());
+    assert!(
+        unavailable["material_orders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|order| {
+                order["sample"]["excluded_offers"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|excluded| excluded["reason"] == "insufficient_quantity")
+            })
+    );
+}
+
+#[test]
 fn cli_derives_mixed_material_stock_without_requiring_mechanical_data() {
     let w = setup();
     let p = w.ok(PLAN);
