@@ -335,6 +335,198 @@ fn bands() -> Input {
     input
 }
 
+fn casing_outfit() -> Input {
+    let mut input = input();
+    for (i, garment) in input.garments.iter_mut().enumerate() {
+        let radius = [40.0, 44.0][i];
+        let width = std::f64::consts::TAU * radius;
+        let fraction = [0.9, 1.1][i];
+        let piece = &mut garment.pattern["pieces"][0];
+        piece["id"] = json!("waistband");
+        piece["role"] = json!("waistband");
+        piece["vertices"] = json!({"a":[0,0],"b":[width,0],"c":[width,20],"d":[0,20]});
+        piece["edges"] = json!([
+            {"id":"bottom","from":"a","to":"b"}, {"id":"end_r","from":"b","to":"c"},
+            {"id":"top","from":"c","to":"d"}, {"id":"end_l","from":"d","to":"a"}
+        ]);
+        piece["placement"]["x0"] = json!(width / 2.0);
+        piece["placement"]["radius_mm"] = json!(radius);
+        piece["sim_scale"] = json!([0.9, 1]);
+        garment.pattern["seams"] = json!([
+            {"id":"close","a":"waistband/end_r","b":"waistband/end_l","reverse":true}
+        ]);
+        garment.pattern["meta"] = json!({"style":{"elastic_overlap":10.0},
+            "solved":{"elastic_cut_mm":width*fraction+10.0}});
+        garment.pattern["fabric"]["material"]["record"]["properties"]["friction_skin"]["value"] =
+            json!([0.12, 0.6][i]);
+    }
+    input.interfaces.push(pair(&input, 0.2));
+    input
+}
+
+#[test]
+fn independent_casings_drive_joint_physics_and_replay_without_merging_grip_or_loads() {
+    use ftx_drape::scene::{elastic_casing, elastic_casings};
+    let mut input = casing_outfit();
+    input.garments[1].pattern["attached_mass"] = attachment(
+        0.003,
+        json!([{"instance":"waistband","vertex":"b","fraction":1.0}]),
+    );
+    let before = serde_json::to_vec(&input).unwrap();
+    let opts = DrapeOptions {
+        spacing: 24.0,
+        ..options()
+    };
+    let prepared = prepare(&input, &opts).unwrap();
+    let casings = elastic_casings(prepared.pattern(), opts.elastic_ea).unwrap();
+    assert_eq!(casings.len(), 2);
+    for (i, casing) in casings.iter().enumerate() {
+        let source = ftx_pattern::Pattern::new(input.garments[i].pattern.clone());
+        assert_eq!(
+            casing.length.to_bits(),
+            elastic_casing(&source, opts.elastic_ea)
+                .unwrap()
+                .length
+                .to_bits()
+        );
+        assert_eq!(
+            casing.load_instances,
+            [format!("{}::waistband", input.garments[i].id)]
+        );
+        assert_eq!(
+            prepared.pattern().raw()["pieces"][i]["sim_scale"],
+            json!([0.9, 1])
+        );
+    }
+    let skin = skin();
+    let run = prepared
+        .drape(&json!({}), &body(&skin), &opts, |_| {})
+        .unwrap();
+    assert_eq!(run.scene.elastic_rings.len(), 4);
+    assert_eq!(run.scene.elastic_groups.len(), 2);
+    assert!(run.report.get("elastic").is_none());
+    let rows = run.report["elastics"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for (i, group) in run.scene.elastic_groups.iter().enumerate() {
+        assert_eq!(group.rings.len(), 2);
+        for ring in &run.scene.elastic_rings[group.rings.clone()] {
+            let length: f64 = run.scene.solver.model.elastics[ring.clone()]
+                .iter()
+                .map(|s| s.rest)
+                .sum();
+            assert!((length - casings[i].length).abs() < 1e-12);
+        }
+        let expected = std::f64::consts::TAU * [40.0, 44.0][i] * 20.0 * 1e-6 * 0.2
+            + if i == 1 { 0.003 } else { 0.0 };
+        let actual: f64 = group
+            .loaded_vertices
+            .iter()
+            .map(|&v| run.scene.solver.model.mass[v])
+            .sum();
+        assert!((actual - expected).abs() < 1e-12);
+        assert_eq!(rows[i]["friction_mu"], json!([0.12, 0.6][i]));
+        assert_eq!(
+            rows[i]["weight_n"],
+            json!(ftx_core::py::round(expected * 9.81, 3))
+        );
+        assert_eq!(rows[i]["instance"], casings[i].instance);
+        assert_eq!(rows[i]["ea_n"], opts.elastic_ea);
+    }
+    assert!(run.report["elastics"][0]["tension_n"].as_f64().unwrap() > 0.0);
+    assert_eq!(run.report["elastics"][1]["tension_n"], 0.0);
+    assert!(
+        run.scene.elastic_groups[0]
+            .loaded_vertices
+            .iter()
+            .all(|v| !run.scene.elastic_groups[1].loaded_vertices.contains(v))
+    );
+    let restored = ftx_pattern::Pattern::new(
+        serde_json::from_slice(&serde_json::to_vec(prepared.pattern().raw()).unwrap()).unwrap(),
+    );
+    let replay = ftx_drape::run::drape(&restored, &json!({}), &body(&skin), &opts, |_| {}).unwrap();
+    assert_eq!(run.scene.solver.x, replay.scene.solver.x);
+    assert_eq!(
+        run.scene.solver.model.elastics,
+        replay.scene.solver.model.elastics
+    );
+    assert_eq!(run.report["elastics"], replay.report["elastics"]);
+    assert_eq!(before, serde_json::to_vec(&input).unwrap());
+    let disabled = DrapeOptions {
+        elastic_ea: 0.0,
+        ..opts
+    };
+    let no_elastic = prepared
+        .drape(&json!({}), &body(&skin), &disabled, |_| {})
+        .unwrap();
+    assert!(no_elastic.scene.solver.model.elastics.is_empty());
+    assert!(no_elastic.scene.elastic_groups.is_empty());
+    assert_ne!(run.scene.solver.x, no_elastic.scene.solver.x);
+}
+
+#[test]
+fn casing_declarations_reject_ambiguous_unknown_duplicate_and_disabled_invalid_sources() {
+    use ftx_drape::scene::elastic_casings;
+    let prepared = prepare(&casing_outfit(), &options()).unwrap();
+    for change in [
+        (|v: &mut Value| v["meta"]["solved"]["elastic_cut_mm"] = json!(200)) as fn(&mut Value),
+        |v| v["meta"]["solved"]["elastic_casings"][0]["relaxed_m"] = json!(-1),
+        |v| v["meta"]["solved"]["elastic_casings"][0]["instance"] = json!("absent"),
+        |v| {
+            v["meta"]["solved"]["elastic_casings"][0]["load_instances"] =
+                json!(["outer::waistband"])
+        },
+        |v| {
+            v["meta"]["solved"]["elastic_casings"][1] =
+                v["meta"]["solved"]["elastic_casings"][0].clone()
+        },
+        |v| v["pieces"][0]["sim"] = json!(false),
+    ] {
+        let mut raw = prepared.pattern().raw().clone();
+        change(&mut raw);
+        for ea in [0.0, 15.0] {
+            assert!(elastic_casings(&ftx_pattern::Pattern::new(raw.clone()), ea).is_err());
+        }
+    }
+}
+
+#[test]
+fn drafted_trousers_keep_their_original_casing_in_a_jacket_outfit() {
+    let drafts: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/oracle/pattern/drafts.json"
+    ))
+    .unwrap();
+    let mut input = input();
+    for (garment, id) in input
+        .garments
+        .iter_mut()
+        .zip(["zouave_bolero-920", "zouave_trousers-920"])
+    {
+        let case = drafts["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap();
+        garment.pattern = case["input"]["pattern"].clone();
+        // An explicit synthetic material only for composition software, not these garments' textiles.
+        garment.pattern["fabric"] = json!({"material":sheet()});
+    }
+    let prepared = prepare(&input, &options()).unwrap();
+    let casings = ftx_drape::scene::elastic_casings(prepared.pattern(), 15.0).unwrap();
+    assert_eq!(casings.len(), 1);
+    assert!(casings[0].instance.starts_with("outer::"));
+    assert!(
+        casings[0]
+            .load_instances
+            .iter()
+            .all(|i| i.starts_with("outer::"))
+    );
+    assert_eq!(
+        prepared.receipt()["garments"][1]["meta"],
+        input.garments[1].pattern["meta"]
+    );
+}
+
 #[test]
 fn two_sewn_bands_weld_independently_and_continue_on_the_same_moving_body() {
     let input = bands();
