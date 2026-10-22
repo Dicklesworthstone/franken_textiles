@@ -2392,11 +2392,12 @@ Detailed TODO is in the original `ftx-tm4.1` comments. At this acceptance checkp
   distinct declared/FIT/published J ranges, exact source/selection text and unchanged binding geometry.
 - [x] Execute existing core/native/portable tests, build/install/hash WASM, complete native/WASM
   comparison, compiled frontend and actual browser runs, inspect the screenshot and review failures.
-- [x] Verify unsupported models, CHECK residuals, CHECK J outside FIT but inside declared support,
+- [x] Verify missing/unsupported models, CHECK residuals, CHECK J outside FIT but inside declared support,
   estimated-observation refusal, consent changes and tampered source locks withdraw assignments.
 - [x] Review scoped scanner output and final source hashes; preserve partial outcomes below.
-- [ ] Finish fresh solo original-acceptance review, child closure/flush and scoped main handoff;
-  release only this continuation's reservations. No empirical parent is closed by these checks.
+- [x] Finish fresh solo original-acceptance review and child closure/flush; prepare the scoped main
+  handoff. Final commit and lease-release outcomes are recorded at handoff. No empirical parent is
+  closed by these checks.
 
 Rust source is frozen at `22dfe7ef214bf5ed5f105f5d9246c157d1f0d52d`, tree
 `831f0beffc77d6ebe0f7386f568aaefb774d2ffb`, with strict RCH `--clean-overlay --no-overlay`;
@@ -2404,7 +2405,9 @@ receipt fingerprint `fe0d5151031be8fda7951fe7fe1f42f7ce344018fdb3ed21e6ada866b23
 No Rust source is changed by this continuation. Both Cargo jobs run remotely on vmi1152480, with
 the required HTTP user agent forwarded and DEV/TEST debug symbols omitted, not debug assertions.
 SBH fails (5829169152 available bytes, 0.145865%): no local Rust compilation. Final browser/guide/
-example/bundle bytes are bound by eleven hashes in `out/ftx-tm4.1-20261021/delivery-final-sha256.txt`.
+example/bundle bytes are bound by eleven hashes in `out/ftx-tm4.1-20261021/delivery-acceptance-sha256.txt`.
+The earlier final manifest is retained; the acceptance review adds one missing-model negative to
+the checker without changing the product, existing assertions or requests.
 
 | Executed command / consumer | Observed result |
 | --- | --- |
@@ -2412,7 +2415,7 @@ example/bundle bytes are bound by eleven hashes in `out/ftx-tm4.1-20261021/deliv
 | `cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm` | exit 0; `checks/wasm-pinned.log` |
 | `FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs` | 90 passed, 0 failed/skipped; `checks/frontend-compiled.log` |
 | Installed WASM replay, both consent states | Full native calibration reports and selections equal, frozen selection text exact, both old no-area reports byte-exact; `checks/installed-wasm-replay.log` |
-| `tools/check_materials_web.cjs --swatch-area-proof out/ftx-tm4.1-20261021` | actual Chromium exit 0, all positive/negative/binding cases above, no console errors/external requests/non-GET; `checks/chromium-swatch-area-verified.log` |
+| `tools/check_materials_web.cjs --swatch-area-proof out/ftx-tm4.1-20261021` | actual Chromium exit 0, all positive/negative/binding cases above including missing model, no console errors/external requests/non-GET; `checks/chromium-swatch-area-acceptance.log` |
 | Existing `--compression-proof` browser flow | exit 0 against the new bundle; `checks/chromium-compression.log` |
 | `cargo fmt --check`, three `node --check` commands, `git diff --check` | exit 0; full workspace Cargo tests, Clippy, DSR quality/release and G5 are not rerun for these browser/docs changes |
 
@@ -2420,6 +2423,8 @@ Browser commands use existing `FTX_PLAYWRIGHT_MODULE=playwright-core` and
 `NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules`. No dependency was installed.
 Evidence root: `out/ftx-tm4.1-20261021/`; inspected screenshot and raw browser downloads:
 `/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-HyJ54x/swatch-area.png`.
+The final missing-model acceptance run retains its downloads and screenshot in the sibling
+`ftx-materials-browser-FzPaLa/`; production page bytes are unchanged from the inspected screenshot.
 Raw WASM `14813d24fba9d7d2c9a42efaa195d81cdbdf7e0b85a16f5bf9f435c7d31ac5be` matches the
 worker before bindgen 0.2.128; installed WASM is
 `1b63b9959b9f9555288c18f490fdb10a91d68b8e97f4be04f38bb5fc3101d0fb`. The actual native binary
@@ -2456,6 +2461,12 @@ intentional test JSON/indexing/synchronous I/O, existing page listeners/URL revo
 server constrained to `web/`, fixed artifact filenames and operator-supplied native/capture paths.
 The incomplete checker scan is not a clean scan; no new actionable defect was identified by this
 bounded review. Remote source copies remain preserved under `/data/tmp/ftx-tm4-js-ubs.YZA8dg/`.
+The mandatory final staged-file invocation contains only `tools/check_materials_web.cjs` and
+uses `ubs --no-auto-update --only=js tools/check_materials_web.cjs`. It again produces no output
+through the observed 40-second checkpoint; only its verified process group 97861 is stopped,
+exit 143. `checks/staged-checker-ubs-status.txt` records this incomplete attempt. An automatic
+shared commit consumes the staged change while that invocation runs; eleven hashes are checked
+again afterward. This is not scanner completion or independent review.
 
 Bounded no-ceremony and honesty worksheets, fresh solo (not independent verification):
 
@@ -2486,8 +2497,9 @@ Bounded no-ceremony and honesty worksheets, fresh solo (not independent verifica
   every selected test, skipped uncompiled lanes uncredited). **7:** No (checked: actual exits/logs,
   rejected setup/jobs and incomplete scans are not passes). **8:** No (checked: native captures are
   comparison inputs, browser/WASM executes live; synthetic recovery is not physical proof).
-  **9–10:** No (checked: all material failures above, stderr retained). **11:** Pending child closure
-  against original positive acceptance; parent stays open. **12:** No (checked: plan/spec/empirical
+  **9–10:** No (checked: all material failures above, stderr retained). **11:** No (checked:
+  original child acceptance, including the missing-model negative found at final review; child
+  closed and explicitly flushed, parent stays open). **12:** No (checked: plan/spec/empirical
   gates unchanged; guide describes implemented behavior).
 - **13–17:** Not applicable: no delegation/subagents; concurrent commits earn no independent-proof
   credit. **18:** No (checked: full compiled runner is fixed before execution; 90 versus earlier 88
@@ -2497,3 +2509,10 @@ Bounded no-ceremony and honesty worksheets, fresh solo (not independent verifica
   all are disclosed above. **20:** Complete native/installed-WASM calibration equality plus actual
   Chromium exact-source binding and specific CHECK-domain/refusal execution is re-executable.
   Disposition: RH-1 checker correction disclosed/corrected, old gates preserved, no claim inflation.
+
+Original `ftx-tm4.1` acceptance is met and the child is closed; `br sync --flush-only` reports
+no dirty issues after the child and parent comments. `ftx-tm4` remains open with its original
+measured-data acceptance. The active software checklist is retired at handoff. No other Bead is
+closed, no later shared Rust source is credited with this frozen run, and both unrelated untracked
+paths remain untouched. Full-project reality checking and the original empirical/release tasks
+remain broader work, not accomplishments inferred from this software delivery.
