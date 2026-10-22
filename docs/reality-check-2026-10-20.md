@@ -2371,3 +2371,129 @@ Later shared-main casing-load implementation/replay and strip-readiness work are
 the frozen compiler/browser snapshot; no claim is made that those later changes received this run.
 The two unrelated untracked paths are untouched. The active software TODO is retired at handoff;
 the remaining measured-data/physical/release work stays in its original open Beads.
+
+## 2026-10-22 continuation: joint swatch identification in the workbench (`ftx-tm4.1`)
+
+The old installed browser bundle rejects the new `area_response` request, while committed `54ca635`
+already provides joint swatch identification. This continuation makes that capability usable and
+reviewable in the browser: matching release WASM, an explicit option label, the guide, exact native
+replay and live end-to-end controls. A concurrent merge consolidated the initial result-table draft
+into `areaCalibrationResult`, including source IDs and admissible/FIT/published domains. That richer
+implementation is preserved and verified, not claimed as independently authored or independently
+reviewed here. Its automatic commits `0802dcf`/`9af05f2` and merge `4289dad` are not test results.
+
+Detailed TODO is in the original `ftx-tm4.1` comments. At this acceptance checkpoint:
+
+- [x] Read full AGENTS/README, relevant plan/spec/contracts, live Beads and history; retain empirical
+  parent acceptance and reserve the actual maintained paths.
+- [x] Preserve the old bundle and both no-area consent reports; reproduce its unknown-area-field
+  refusal. Add area-result visibility/guide and label without an alternate optimizer or JS fitting.
+- [x] Preserve the concurrent shared display; verify native coefficients, units, evidence/source,
+  distinct declared/FIT/published J ranges, exact source/selection text and unchanged binding geometry.
+- [x] Execute existing core/native/portable tests, build/install/hash WASM, complete native/WASM
+  comparison, compiled frontend and actual browser runs, inspect the screenshot and review failures.
+- [x] Verify unsupported models, CHECK residuals, CHECK J outside FIT but inside declared support,
+  estimated-observation refusal, consent changes and tampered source locks withdraw assignments.
+- [x] Review scoped scanner output and final source hashes; preserve partial outcomes below.
+- [ ] Finish fresh solo original-acceptance review, child closure/flush and scoped main handoff;
+  release only this continuation's reservations. No empirical parent is closed by these checks.
+
+Rust source is frozen at `22dfe7ef214bf5ed5f105f5d9246c157d1f0d52d`, tree
+`831f0beffc77d6ebe0f7386f568aaefb774d2ffb`, with strict RCH `--clean-overlay --no-overlay`;
+receipt fingerprint `fe0d5151031be8fda7951fe7fe1f42f7ce344018fdb3ed21e6ada866b230b195`.
+No Rust source is changed by this continuation. Both Cargo jobs run remotely on vmi1152480, with
+the required HTTP user agent forwarded and DEV/TEST debug symbols omitted, not debug assertions.
+SBH fails (5829169152 available bytes, 0.145865%): no local Rust compilation. Final browser/guide/
+example/bundle bytes are bound by eleven hashes in `out/ftx-tm4.1-20261021/delivery-final-sha256.txt`.
+
+| Executed command / consumer | Observed result |
+| --- | --- |
+| `cargo test --locked -j1 -p ftx-pattern --test area_calibration -p ftx-cli --test area_identification_workflow -p ftx-wasm --test area_identification` | 9 passed, 0 failed/ignored/filtered; `checks/native-joint-swatch-pinned.log` |
+| `cargo build --locked --release -j1 --target wasm32-unknown-unknown -p ftx-wasm` | exit 0; `checks/wasm-pinned.log` |
+| `FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs` | 90 passed, 0 failed/skipped; `checks/frontend-compiled.log` |
+| Installed WASM replay, both consent states | Full native calibration reports and selections equal, frozen selection text exact, both old no-area reports byte-exact; `checks/installed-wasm-replay.log` |
+| `tools/check_materials_web.cjs --swatch-area-proof out/ftx-tm4.1-20261021` | actual Chromium exit 0, all positive/negative/binding cases above, no console errors/external requests/non-GET; `checks/chromium-swatch-area-verified.log` |
+| Existing `--compression-proof` browser flow | exit 0 against the new bundle; `checks/chromium-compression.log` |
+| `cargo fmt --check`, three `node --check` commands, `git diff --check` | exit 0; full workspace Cargo tests, Clippy, DSR quality/release and G5 are not rerun for these browser/docs changes |
+
+Browser commands use existing `FTX_PLAYWRIGHT_MODULE=playwright-core` and
+`NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules`. No dependency was installed.
+Evidence root: `out/ftx-tm4.1-20261021/`; inspected screenshot and raw browser downloads:
+`/var/folders/vt/n2xyn_s51b97_j3yh2qbqcnc0000gn/T/ftx-materials-browser-HyJ54x/swatch-area.png`.
+Raw WASM `14813d24fba9d7d2c9a42efaa195d81cdbdf7e0b85a16f5bf9f435c7d31ac5be` matches the
+worker before bindgen 0.2.128; installed WASM is
+`1b63b9959b9f9555288c18f490fdb10a91d68b8e97f4be04f38bb5fc3101d0fb`. The actual native binary
+hash before/after captures is `84518d4eacdfd2c0a7317cb8eaf4a92d552649f7894436341503fc455aa5df5d`.
+
+The supplied synthetic example recovers 40.00000000000108 and 15.000000000000712 N/m, with 24 FIT
+and 4 CHECK force components; scaled RMS is 2.6059120526e-14 / 4.5620305602e-14, peak 8.5265128291e-14.
+Declared J `[0.7,1.5]` remains distinct from published `[0.7483314773547883,1.4491376746189437]`.
+Both consent states retain missing mass/thickness/bending/friction and unavailable mechanics.
+These are analytic software observations, not measured textile accuracy, parameter confidence,
+global uniqueness, garment acceptance or fit. The original empirical parents remain open.
+
+Failures are retained, with no solver/residual gate change. Initial Cargo attempts never execute:
+the log directory is missing, then the pinned-tree invocation lacks required `--no-overlay`.
+Corrected invocations execute as recorded. Initial DOM attempts without the required VM flag fail
+before page execution; they are not proof that the old page fails the new regression. Correctly
+configured focused checks pass; the earlier uncompiled run passes 82 and skips six, receiving no
+compiled-proof credit. Two later shared tests account for the final 90-case denominator.
+The first browser run expects obsolete draft captions after the concurrent renderer merge. The
+second correctly refuses estimated observations but the new test guesses an estimate-specific
+message; the existing validator uses the exact generic sample/evidence message. The final checker
+asserts that existing message and expands coefficient checks to native source IDs and all three
+domain rows. Both failed logs persist; no old assertion, tolerance, timeout, input or retry is relaxed.
+
+Local JS UBS stalls and is stopped only through its verified own process group (143). The attempted
+RCH scanner job is rejected before execution (`--job` conflicts with `--clean-overlay`); it is not a
+scan. The existing hz2 UBS scans three exact source copies: exit 2, **partial**, 0 critical / 567
+warnings / 1424 info; `js.taint.command` exceeds its work limit in the existing browser checker.
+No partial override/suppression is used. Separate production-page scan completes, exit 0, 0 critical /
+29 warnings / 213 info (`checks/remote-page-ubs.log`). Page hash matches final delivery. The partial
+checker snapshot precedes the label/selector/message assertion corrections; those changes receive
+direct diff and actual-browser review, not fabricated scanner credit. Reviewed findings cover
+intentional test JSON/indexing/synchronous I/O, existing page listeners/URL revocation, a loopback
+server constrained to `web/`, fixed artifact filenames and operator-supplied native/capture paths.
+The incomplete checker scan is not a clean scan; no new actionable defect was identified by this
+bounded review. Remote source copies remain preserved under `/data/tmp/ftx-tm4-js-ubs.YZA8dg/`.
+
+Bounded no-ceremony and honesty worksheets, fresh solo (not independent verification):
+
+- **Creation:** existing TODO/report is PROCESS explicitly requested by the user; consumer/gate:
+  this concrete workbench delivery and handoff, defect: the installed bundle rejects the new request
+  and the original result hides its area law/domain. Retire the active checklist at handoff, add no
+  framework. Integrity exception unnecessary. Highest ready P0 is measured `ftx-tm2`; matched data
+  stays missing. An hour of extra reporting would be lower value: stop at this bounded disposition.
+- **Real work:** actual intake history/newest commits and ready/in-progress Beads were read. Purpose:
+  patterns that sew together and fit a specific body with usable manufacturing files. Classify this
+  continuation's maintained work USER 3 (result/option/guide), ENABLER 2 (existing checkers), PROCESS 2
+  (existing Beads/report), UNKNOWN 0; concurrent core/shared display work is not authored credit here.
+  Q1: demo exact request to visible area law, binding and rejected CHECK. Q2: without PROCESS the
+  capability is identical but requested tracking absent. Q3: all enablers execute in native/compiled
+  browser consumers. Q4: oldest open G5 and highest P0 empirical material work stay open; this small
+  existing-code connection gives an immediate usable capability without invented measurements.
+  Q5: solo, no close-count/pane comparison. Q6: no parent acceptance migrated/narrowed. Verdict:
+  positive product increment; stop further scanner/tool investigation rather than maintaining tools.
+- **Honesty 1:** No (checked: old assertions/configuration/fixtures untouched; new selector/message
+  mistakes corrected without changing the accepted or rejected requests). **2–3:** No (checked:
+  DOM doubles are display-only, real native/WASM/browser proof executes, no oracle/golden changed).
+  **4:** Yes, existing checker gains an explicit focused native-capture mode and new tests. Separate
+  diff review retains default native prerequisite/old checks, bounds scope to one mode, and requires
+  exact pinned request/native calibration/selection with independent analytic coefficients. New
+  message assertion aligns to the existing refusal; no tolerance/timeout/default bypass. RH-1
+  countermeasure: record both failed attempts and review checker edits independently of success.
+- **5–6:** No (checked: no source-name special case in product, final 9/90 denominators include
+  every selected test, skipped uncompiled lanes uncredited). **7:** No (checked: actual exits/logs,
+  rejected setup/jobs and incomplete scans are not passes). **8:** No (checked: native captures are
+  comparison inputs, browser/WASM executes live; synthetic recovery is not physical proof).
+  **9–10:** No (checked: all material failures above, stderr retained). **11:** Pending child closure
+  against original positive acceptance; parent stays open. **12:** No (checked: plan/spec/empirical
+  gates unchanged; guide describes implemented behavior).
+- **13–17:** Not applicable: no delegation/subagents; concurrent commits earn no independent-proof
+  credit. **18:** No (checked: full compiled runner is fixed before execution; 90 versus earlier 88
+  comes from retained concurrent tests, not excluding failures). Older-session mining is not repeated;
+  this audit covers this continuation and examined history. **19:** Explain setup failures, source
+  consolidation, obsolete captions, guessed refusal wording and scanner partials before success;
+  all are disclosed above. **20:** Complete native/installed-WASM calibration equality plus actual
+  Chromium exact-source binding and specific CHECK-domain/refusal execution is re-executable.
+  Disposition: RH-1 checker correction disclosed/corrected, old gates preserved, no claim inflation.
