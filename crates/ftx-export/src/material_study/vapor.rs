@@ -89,12 +89,14 @@ impl Request {
                 Ok(material_vapor::Layer {
                     key: layer.key.clone(),
                     selection,
+                    area_m2: None,
                 })
             })
             .collect::<Result<_, Refusal>>()?;
         material_vapor::Request {
             schema: material_vapor::SCHEMA.into(),
             layers,
+            interface_resistance_m2_pa_w: vec![],
             area_m2: self.area_m2,
             inside_vapor_pressure_pa: self.inside_vapor_pressure_pa,
             outside_vapor_pressure_pa: self.outside_vapor_pressure_pa,

@@ -46,6 +46,85 @@ fn request() -> Request {
     .unwrap()
 }
 
+#[test]
+fn unequal_layer_areas_and_explicit_interfaces_preserve_observations_and_pressure_balance() {
+    let db = empty_catalog();
+    let mut input = request();
+    input.layers[0].area_m2 = Some(1.0);
+    input.layers[1].area_m2 = Some(0.25);
+    input.interface_resistance_m2_pa_w = vec![2.0];
+    let report = input.evaluate(&db).unwrap();
+    // Per boundary area: 1 + 2*(0.5/1) + 2 + 3*(0.5/0.25) + 4 = 14.
+    close(report.total_resistance_m2_pa_w, 14.0);
+    close(report.layer_resistance_m2_pa_w, 7.0);
+    close(report.potential_heat_flow_w, 1000.0 / 14.0 * 0.5);
+    close(report.layers[0].observation.value, 2.0);
+    close(report.layers[1].observation.value, 3.0);
+    close(report.layers[0].effective_resistance_m2_pa_w.unwrap(), 1.0);
+    close(report.layers[1].effective_resistance_m2_pa_w.unwrap(), 6.0);
+    let interface = &report.interfaces[0];
+    assert_eq!(interface.layers, ["lining", "shell"]);
+    close(
+        interface.inside_pressure_pa,
+        report.layers[0].outside_pressure_pa,
+    );
+    close(
+        interface.outside_pressure_pa,
+        report.layers[1].inside_pressure_pa,
+    );
+    close(interface.pressure_drop_pa, 1000.0 / 14.0 * 2.0);
+    close(
+        report
+            .layers
+            .iter()
+            .map(|l| l.pressure_drop_pa)
+            .sum::<f64>()
+            + interface.pressure_drop_pa
+            + report.inside_film_pressure_drop_pa
+            + report.outside_film_pressure_drop_pa,
+        1000.0,
+    );
+    assert_eq!(
+        report.effective_model,
+        ftx_pattern::material_vapor::AREA_MODEL
+    );
+    let replay: Request = serde_json::from_str(&report.replay_request_json).unwrap();
+    let replayed = replay.evaluate(&db).unwrap();
+    assert_eq!(
+        serde_json::to_value(&replayed.layers).unwrap(),
+        serde_json::to_value(&report.layers).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&replayed.interfaces).unwrap(),
+        serde_json::to_value(&report.interfaces).unwrap()
+    );
+    assert_eq!(replayed.potential_heat_flow_w, report.potential_heat_flow_w);
+}
+
+#[test]
+fn explicit_zero_interfaces_are_retained_and_invalid_area_networks_refuse() {
+    let db = empty_catalog();
+    let legacy = request().evaluate(&db).unwrap();
+    let raw = serde_json::to_value(&legacy).unwrap();
+    assert!(raw.get("interfaces").is_none());
+    assert!(raw["layers"][0].get("area_m2").is_none());
+    assert!(raw["request"].get("interface_resistance_m2_pa_w").is_none());
+    let mut input = request();
+    input.interface_resistance_m2_pa_w = vec![0.0];
+    let explicit = input.evaluate(&db).unwrap();
+    assert_eq!(explicit.potential_heat_flow_w, legacy.potential_heat_flow_w);
+    assert_eq!(explicit.interfaces[0].pressure_drop_pa, 0.0);
+    for bad in [vec![-1.0], vec![f64::INFINITY], vec![0.0, 0.0]] {
+        input.interface_resistance_m2_pa_w = bad;
+        assert!(input.evaluate(&db).is_err());
+    }
+    input.interface_resistance_m2_pa_w.clear();
+    for bad in [0.0, -1.0, f64::INFINITY, f64::MIN_POSITIVE] {
+        input.layers[0].area_m2 = Some(bad);
+        assert!(input.evaluate(&db).is_err());
+    }
+}
+
 fn close(actual: f64, expected: f64) {
     assert!(
         (actual - expected).abs() <= 1e-12 * expected.abs().max(1e-15),
@@ -134,6 +213,7 @@ fn common_area_series_network_obeys_pressure_heat_and_mass_balances() {
     steep.layers = vec![Layer {
         key: "dominant".into(),
         selection: synthetic_selection("dominant", 1e14),
+        area_m2: None,
     }];
     steep.inside_vapor_pressure_pa = 1000.;
     steep.outside_vapor_pressure_pa = 0.;
@@ -493,6 +573,7 @@ fn arithmetic_overflow_underflow_and_lost_resistance_do_not_become_results() {
     input.layers = vec![Layer {
         key: "large".into(),
         selection: synthetic_selection("large", f64::MAX),
+        area_m2: None,
     }];
     input.inside_film_resistance_m2_pa_w = f64::MAX;
     assert!(input.evaluate(&db).is_err());

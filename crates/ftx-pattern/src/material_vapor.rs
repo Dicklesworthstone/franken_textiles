@@ -20,6 +20,8 @@ use crate::{
 pub const SCHEMA: &str = "ftx-vapor-stack/1";
 /// Scope of the assumed network, independent of the evidence of its input observations.
 pub const MODEL: &str = "constant_source_resistance_isothermal_series/1";
+/// Explicit unequal conducting areas and interlayer resistances, referred to the boundary area.
+pub const AREA_MODEL: &str = "constant_source_resistance_area_aware_isothermal_series/1";
 
 /// One occurrence of a material in the ordered inside-to-outside stack.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,6 +31,10 @@ pub struct Layer {
     pub key: String,
     /// Canonical source-bearing material selection, including its own estimate policy.
     pub selection: Selection,
+    /// Optional conducting area in m². Absent uses the common boundary area; an explicit area
+    /// contributes Ret × boundary area / conducting area without altering the source observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_m2: Option<f64>,
 }
 
 /// Explicit boundaries for a common-area, fixed-resistance potential transport calculation.
@@ -61,6 +67,11 @@ pub struct Request {
     /// comparability or override required filters, source locks or estimate consent.
     #[serde(default)]
     pub allow_mixed_protocols: bool,
+    /// Optional inside-to-outside interface resistances per boundary area, in m²·Pa/W.
+    /// When supplied, exactly one finite nonnegative value per adjacent layer pair is required.
+    /// Empty retains the original no-interface model; no air-gap coefficient is inferred.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interface_resistance_m2_pa_w: Vec<f64>,
 }
 
 /// The qualified observation and potential pressure drop for one layer occurrence.
@@ -82,6 +93,27 @@ pub struct LayerReading {
     pub outside_pressure_pa: f64,
     /// Potential pressure drop across this layer, in Pa.
     pub pressure_drop_pa: f64,
+    /// Explicit conducting area, only when that layer declares one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area_m2: Option<f64>,
+    /// Area-adjusted resistance per request boundary area; never a replacement observation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_resistance_m2_pa_w: Option<f64>,
+}
+
+/// Explicit non-material interface on the request boundary area; no inferred gas-gap physics.
+#[derive(Clone, Debug, Serialize)]
+pub struct InterfaceReading {
+    /// Inner and outer material occurrence keys.
+    pub layers: [String; 2],
+    /// Declared resistance per boundary area in m²·Pa/W, including an explicitly supplied zero.
+    pub resistance_m2_pa_w: f64,
+    /// Potential vapor pressures at the interface's inner and outer boundaries, in Pa.
+    pub inside_pressure_pa: f64,
+    /// Potential vapor pressure at the outer boundary, in Pa.
+    pub outside_pressure_pa: f64,
+    /// Potential pressure drop, in Pa.
+    pub pressure_drop_pa: f64,
 }
 
 /// Conditional transport potential, never an actual sweating or comfort prediction.
@@ -99,7 +131,10 @@ pub struct Report {
     pub replay_request_json: String,
     /// Ordered observations and their potential pressure profile.
     pub layers: Vec<LayerReading>,
-    /// Sum of layer Ret observations, excluding the two explicit boundary films.
+    /// Explicit interfaces, absent from legacy reports with no requested interface terms.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub interfaces: Vec<InterfaceReading>,
+    /// Sum of layer resistances referred to the boundary area, excluding films and interfaces.
     pub layer_resistance_m2_pa_w: f64,
     /// Sum of all layer and film resistances, in m²·Pa/W.
     pub total_resistance_m2_pa_w: f64,
@@ -157,6 +192,21 @@ impl Request {
                 "vapor stack permits at most 128 layers and 64 condition filters",
             ));
         }
+        if (!self.interface_resistance_m2_pa_w.is_empty()
+            && self.interface_resistance_m2_pa_w.len() + 1 != self.layers.len())
+            || self
+                .interface_resistance_m2_pa_w
+                .iter()
+                .any(|r| !r.is_finite() || *r < 0.0)
+            || self
+                .layers
+                .iter()
+                .any(|l| l.area_m2.is_some_and(|a| !positive(a)))
+        {
+            return Err(invalid(
+                "vapor network needs positive layer areas and one explicit nonnegative interface per adjacent pair",
+            ));
+        }
         let mut keys = BTreeSet::new();
         if self.schema != SCHEMA
             || self.layers.is_empty()
@@ -206,6 +256,18 @@ impl Request {
         let mut layer_resistance = 0.0;
         let mut total_resistance = self.inside_film_resistance_m2_pa_w;
         let mut mixed_protocols = false;
+        let mut interfaces: Vec<InterfaceReading> = self
+            .interface_resistance_m2_pa_w
+            .iter()
+            .enumerate()
+            .map(|(i, &r)| InterfaceReading {
+                layers: [self.layers[i].key.clone(), self.layers[i + 1].key.clone()],
+                resistance_m2_pa_w: r,
+                inside_pressure_pa: 0.0,
+                outside_pressure_pa: 0.0,
+                pressure_drop_pa: 0.0,
+            })
+            .collect();
         for (index, layer) in self.layers.iter().enumerate() {
             let resolved = catalog.resolve(&layer.selection)?;
             let material = resolved.material();
@@ -252,8 +314,22 @@ impl Request {
                     "vapor stack mixes reported methods/conditions; explicit allow_mixed_protocols is required",
                 ));
             }
-            layer_resistance = add_resistance(layer_resistance, resistance)?;
-            total_resistance = add_resistance(total_resistance, resistance)?;
+            let effective = match layer.area_m2 {
+                Some(area) => resistance * (self.area_m2 / area),
+                None => resistance,
+            };
+            if !positive(effective) {
+                return Err(invalid(
+                    "area-adjusted vapor resistance overflows or underflows",
+                ));
+            }
+            layer_resistance = add_resistance(layer_resistance, effective)?;
+            total_resistance = add_resistance(total_resistance, effective)?;
+            if let Some(interface) = interfaces.get(index)
+                && interface.resistance_m2_pa_w > 0.0
+            {
+                total_resistance = add_resistance(total_resistance, interface.resistance_m2_pa_w)?;
+            }
             let selection = resolved.frozen_selection();
             replay_request.layers[index].selection = selection.clone();
             layers.push(LayerReading {
@@ -265,6 +341,8 @@ impl Request {
                 inside_pressure_pa: 0.0,
                 outside_pressure_pa: 0.0,
                 pressure_drop_pa: 0.0,
+                area_m2: layer.area_m2,
+                effective_resistance_m2_pa_w: layer.area_m2.map(|_| effective),
             });
         }
 
@@ -291,13 +369,16 @@ impl Request {
         // Accumulate from the outer reservoir so a small downstream pressure is not calculated
         // by subtracting a fraction near one. No saturation/condensation check is inferred.
         let mut downstream_resistance = self.outside_film_resistance_m2_pa_w;
-        for layer in layers.iter_mut().rev() {
+        for (index, layer) in layers.iter_mut().enumerate().rev() {
             layer.outside_pressure_pa =
                 self.outside_vapor_pressure_pa + heat_flux * downstream_resistance;
-            downstream_resistance += layer.observation.value;
+            let resistance = layer
+                .effective_resistance_m2_pa_w
+                .unwrap_or(layer.observation.value);
+            downstream_resistance += resistance;
             layer.inside_pressure_pa =
                 self.outside_vapor_pressure_pa + heat_flux * downstream_resistance;
-            layer.pressure_drop_pa = heat_flux * layer.observation.value;
+            layer.pressure_drop_pa = heat_flux * resistance;
             if [
                 layer.inside_pressure_pa,
                 layer.outside_pressure_pa,
@@ -309,15 +390,40 @@ impl Request {
             {
                 return Err(invalid("vapor stack pressure profile is not representable"));
             }
+            if index > 0
+                && let Some(interface) = interfaces.get_mut(index - 1)
+            {
+                interface.outside_pressure_pa = layer.inside_pressure_pa;
+                downstream_resistance += interface.resistance_m2_pa_w;
+                interface.inside_pressure_pa =
+                    self.outside_vapor_pressure_pa + heat_flux * downstream_resistance;
+                interface.pressure_drop_pa = heat_flux * interface.resistance_m2_pa_w;
+                if [
+                    interface.inside_pressure_pa,
+                    interface.outside_pressure_pa,
+                    interface.pressure_drop_pa,
+                ]
+                .iter()
+                .any(|v| !v.is_finite() || *v < 0.0)
+                    || (pressure_difference > 0.0
+                        && interface.resistance_m2_pa_w > 0.0
+                        && interface.pressure_drop_pa <= 0.0)
+                {
+                    return Err(invalid(
+                        "vapor interface pressure profile is not representable",
+                    ));
+                }
+            }
         }
-
-        Ok(Report {
+        let area_aware = self.layers.iter().any(|l| l.area_m2.is_some()) || !interfaces.is_empty();
+        let mut report = Report {
             schema: "ftx-vapor-stack-report/1",
             request: self.clone(),
             request_sha256: sha256_hex(&serde_json::to_vec(self).map_err(|e| invalid(e.to_string()))?),
             replay_request_json: serde_json::to_string(&replay_request).map_err(|e| invalid(e.to_string()))?,
             replay_request,
             layers,
+            interfaces,
             layer_resistance_m2_pa_w: layer_resistance,
             total_resistance_m2_pa_w: total_resistance,
             pressure_difference_pa: pressure_difference,
@@ -328,13 +434,17 @@ impl Request {
             potential_mass_flux_kg_m2_s: mass_flux,
             potential_mass_flow_kg_s: mass_flow,
             mixed_protocols,
-            effective_model: MODEL,
+            effective_model: if area_aware { AREA_MODEL } else { MODEL },
             physical_validation_claim: false,
             notes: vec![
                 "This common-area, isothermal series network assumes each selected nominal Ret remains constant and adds only the two explicitly supplied films. A computed assembly is not a measured assembly; layer contact, gaps, compression, swelling, advection changes and temperature/humidity extrapolation are not modeled.".into(),
                 "Heat and mass values are conditional transport potentials. Latent heat is a caller-supplied conversion assumption, not a source-certified or temperature-derived value. Water availability and sweating are unknown; these are not actual latent heat loss, wearer warmth/comfort or safety predictions. There is no dry-heat coupling, moisture storage, liquid flow or condensation calculation.".into(),
                 "Original specimen, method, conditions, evidence and reported variability remain visible. Complete method/condition equality is a conservative filter, not empirical comparability proof; admitting mixed protocols does not make their conditions equivalent. Reported bounds/SD/CV are not propagated uncertainty.".into(),
             ],
-        })
+        };
+        if area_aware {
+            report.notes[0] = "This isothermal series network retains each nominal source Ret and explicitly scales its resistance by boundary area / layer conducting area. Films and declared interfaces use boundary area. Changed conducting area does not characterize strain-dependent Ret. No air-gap, compression, swelling, advection or temperature/humidity law is inferred.".into();
+        }
+        Ok(report)
     }
 }
