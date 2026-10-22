@@ -108,6 +108,26 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <div class="scroll"><table class="tape"><tbody id="tapeRows"></tbody></table></div>
     </div>
     <div id="fileBox" class="hidden"><label>measurements.json <input type="file" id="measFile" accept=".json,application/json"></label></div>
+    <details id="calibrationSheets">
+      <summary>Print a photo scale reference</summary>
+      <p>Download a ChArUco sheet for your paper size. Print the PDF at <b>100% / Actual size</b>,
+        turn off Fit to page, and check the 100 mm and 4 in bars along both axes with a ruler.
+        Tape the sheet flat to stiff card before taking photos.</p>
+      <table>
+        <caption>Calibration sheets — 22 mm squares, 16 mm markers, DICT_4X4_50</caption>
+        <tr><th scope="col">Paper</th><th scope="col">Print</th><th scope="col">Image</th><th scope="col">Board definition</th></tr>
+        <tr><th scope="row">US Letter</th>
+          <td><a href="calibration/calib-sheet-letter.pdf" download="calib-sheet-letter.pdf" type="application/pdf">Letter PDF</a></td>
+          <td><a href="calibration/calib-sheet-letter.png" download="calib-sheet-letter.png" type="image/png">Letter PNG (300 DPI)</a></td>
+          <td><a href="calibration/calib-sheet-letter.json" download="calib-sheet-letter.json" type="application/json">Letter sidecar JSON</a></td></tr>
+        <tr><th scope="row">A4</th>
+          <td><a href="calibration/calib-sheet-a4.pdf" download="calib-sheet-a4.pdf" type="application/pdf">A4 PDF</a></td>
+          <td><a href="calibration/calib-sheet-a4.png" download="calib-sheet-a4.png" type="image/png">A4 PNG (300 DPI)</a></td>
+          <td><a href="calibration/calib-sheet-a4.json" download="calib-sheet-a4.json" type="application/json">A4 sidecar JSON</a></td></tr>
+      </table>
+      <small>These default references download locally. Check the printed scale and flatness;
+        a digital file cannot establish printer, camera or body-measurement accuracy.</small>
+    </details>
   </section>
 
   <section id="styleSection">

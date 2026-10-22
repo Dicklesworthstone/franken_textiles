@@ -1,0 +1,133 @@
+{
+  "bars": [
+    {
+      "axis": "y",
+      "end_mm": [
+        193.167,
+        112.014
+      ],
+      "length_mm": 99.991,
+      "name": "y_100mm",
+      "nominal_mm": 100.0,
+      "segment_mm": 10.0,
+      "start_mm": [
+        193.167,
+        12.023
+      ],
+      "thickness_mm": 3.5
+    },
+    {
+      "axis": "y",
+      "end_mm": [
+        202.65,
+        113.623
+      ],
+      "length_mm": 101.6,
+      "name": "y_4in",
+      "nominal_mm": 101.6,
+      "segment_mm": 12.7,
+      "start_mm": [
+        202.65,
+        12.023
+      ],
+      "thickness_mm": 3.5
+    },
+    {
+      "axis": "x",
+      "end_mm": [
+        111.421,
+        147.701
+      ],
+      "length_mm": 99.991,
+      "name": "x_100mm",
+      "nominal_mm": 100.0,
+      "segment_mm": 10.0,
+      "start_mm": [
+        11.43,
+        147.701
+      ],
+      "thickness_mm": 3.5
+    },
+    {
+      "axis": "x",
+      "end_mm": [
+        113.03,
+        156.76
+      ],
+      "length_mm": 101.6,
+      "name": "x_4in",
+      "nominal_mm": 101.6,
+      "segment_mm": 12.7,
+      "start_mm": [
+        11.43,
+        156.76
+      ],
+      "thickness_mm": 3.5
+    }
+  ],
+  "board": {
+    "dictionary": "DICT_4X4_50",
+    "frame": "board mm: x right, y down from the board's top-left outer corner; chessboard corner id i at ((i % (sx-1) + 1)·square, (i // (sx-1) + 1)·square)",
+    "legacy_pattern": false,
+    "marker_mm": 16.0,
+    "origin_mm": [
+      11.43,
+      7.959
+    ],
+    "origin_px": [
+      135,
+      94
+    ],
+    "png_scale": 1.000125,
+    "size_mm": [
+      176.0,
+      132.0
+    ],
+    "size_px": [
+      2079,
+      1559
+    ],
+    "square_mm": 22.0,
+    "squares_x": 8,
+    "squares_y": 6,
+    "type": "charuco"
+  },
+  "dpi": 300,
+  "files": {
+    "pdf": "calib-sheet-letter.pdf",
+    "png": "calib-sheet-letter.png"
+  },
+  "image_px": [
+    2550,
+    3300
+  ],
+  "paper": "letter",
+  "paper_mm": [
+    215.9,
+    279.4
+  ],
+  "pdf_lossless": true,
+  "pixel_convention": "page mm = px / (dpi/25.4) at pixel edges; OpenCV pixel centres sit at (px + 0.5)",
+  "print_instructions": "Print at 100% / Actual size. Check both bars with a ruler before use.",
+  "schema": "fabric-calib-sheet/1",
+  "test_squares": [
+    {
+      "name": "square_10cm",
+      "nominal_mm": 100.0,
+      "origin_mm": [
+        11.43,
+        166.031
+      ],
+      "size_mm": 99.991
+    },
+    {
+      "name": "square_1in",
+      "nominal_mm": 25.4,
+      "origin_mm": [
+        117.433,
+        166.031
+      ],
+      "size_mm": 25.4
+    }
+  ]
+}

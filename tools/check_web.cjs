@@ -5,6 +5,7 @@
 //   NODE_PATH=$(npm root -g) node tools/check_web.cjs [--model PATH.ftxbody] [--ftx target/release/ftx]
 //   node tools/check_web.cjs --viewer /path/to/fold_viewer.html   # offline file:// rendering and controls
 //   node tools/check_web.cjs --model PATH.ftxbody --timings 20   # browser timing lane; no native comparison
+//   node tools/check_web.cjs --calibration-sheets NATIVE_DIR  # six local downloads, without page JavaScript
 //
 // Needs Playwright with its Chromium (npm i -g playwright && npx playwright install chromium).
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
@@ -20,16 +21,77 @@ const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? pro
 const root = path.resolve(__dirname, "..");
 const model = arg("--model");
 const standalone = arg("--viewer");
+const calibrationSheets = arg("--calibration-sheets");
 const timingArg = arg("--timings");
 const timingRuns = Number(timingArg || 0);
 if (process.argv.includes("--timings") && (!model || standalone || !/^[1-9][0-9]*$/.test(timingArg || "") || timingRuns > 100)) {
   throw Error("--timings needs --model and an integer run count from 1 to 100; it is separate from --viewer");
+}
+if (process.argv.includes("--calibration-sheets") && (!calibrationSheets || model || standalone || timingArg)) {
+  throw Error("--calibration-sheets needs a native capture directory and runs separately from model/viewer/timing checks");
 }
 const userAgent = "OpenAI File Downloader, XaiImageApiFetch/1.0";
 const ftx = arg("--ftx") || path.join(root, "target/release/ftx");
 const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
+
+async function printableReferences(browser, origin, expectedDir) {
+  const assert = require("node:assert/strict");
+  const context = await browser.newContext({ javaScriptEnabled: false, acceptDownloads: true, userAgent });
+  const page = await context.newPage(), errors = [], requests = [];
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "ftx-calibration-downloads-"));
+  page.on("pageerror", e => errors.push(String(e)));
+  page.on("request", r => requests.push({ url: r.url(), method: r.method() }));
+  try {
+    await page.goto(origin);
+    await page.locator("#calibrationSheets summary").click();
+    const panel = page.locator("#calibrationSheets");
+    assert.match(await panel.textContent(), /100% \/ Actual size/);
+    assert.match(await panel.textContent(), /both axes with a ruler/);
+    assert.equal(await panel.locator("a[download]").count(), 6);
+    for (const [paper, size, rows, originPx] of [["letter", [2550, 3300], 6, [135, 94]], ["a4", [2480, 3508], 7, [100, 94]]]) {
+      for (const ext of ["pdf", "png", "json"]) {
+        const name = `calib-sheet-${paper}.${ext}`, link = panel.locator(`a[download="${name}"]`);
+        assert.equal(await link.getAttribute("href"), `calibration/${name}`);
+        const pending = page.waitForEvent("download");
+        await link.click();
+        const download = await pending;
+        assert.equal(download.suggestedFilename(), name);
+        assert.equal(await download.failure(), null);
+        const actual = fs.readFileSync(await download.path());
+        assert.ok(actual.equals(fs.readFileSync(path.join(expectedDir, name))), `${name} differs from native output`);
+        if (ext === "png") {
+          assert.equal(actual.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+          assert.deepEqual([actual.readUInt32BE(16), actual.readUInt32BE(20)], size);
+          assert.equal(actual.toString("ascii", 37, 41), "pHYs");
+          assert.deepEqual([actual.readUInt32BE(41), actual.readUInt32BE(45), actual[49]], [11811, 11811, 1]);
+        } else if (ext === "pdf") {
+          assert.equal(actual.subarray(0, 8).toString(), "%PDF-1.4");
+          assert.ok(actual.includes(Buffer.from("/BitsPerComponent 1 /Interpolate false")));
+          assert.ok(actual.includes(Buffer.from(`/MediaBox [0 0 ${(size[0] * 0.24).toFixed(6)} ${(size[1] * 0.24).toFixed(6)}]`)));
+        } else {
+          const sidecar = JSON.parse(actual);
+          assert.equal(sidecar.schema, "fabric-calib-sheet/1"); assert.equal(sidecar.paper, paper);
+          assert.equal(sidecar.dpi, 300); assert.deepEqual(sidecar.image_px, size);
+          assert.deepEqual([sidecar.board.squares_x, sidecar.board.squares_y, sidecar.board.square_mm, sidecar.board.marker_mm], [8, rows, 22, 16]);
+          assert.equal(sidecar.board.dictionary, "DICT_4X4_50"); assert.equal(sidecar.board.legacy_pattern, false);
+          assert.deepEqual(sidecar.board.origin_px, originPx); assert.equal(sidecar.pdf_lossless, true);
+          assert.deepEqual(sidecar.bars.map(b => b.nominal_mm), [100, 101.6, 100, 101.6]);
+          assert.deepEqual(sidecar.test_squares.map(s => s.nominal_mm), [100, 25.4]);
+          assert.deepEqual(sidecar.files, { png: `calib-sheet-${paper}.png`, pdf: `calib-sheet-${paper}.pdf` });
+          assert.equal(Object.hasOwn(sidecar, "paths"), false);
+        }
+        fs.writeFileSync(path.join(work, name), actual, { flag: "wx" });
+        console.log(`PASS ${name}: actual no-JavaScript browser download equals native bytes (${sha(actual)})`);
+      }
+    }
+    assert.deepEqual(errors, []);
+    assert.ok(requests.every(r => r.url.startsWith(origin + "/") && r.method === "GET"));
+    await panel.screenshot({ path: path.join(work, "references.png") });
+    console.log(`PASS: all six printable references work without page JavaScript; local GET only, no page errors. Digital interoperability only; physical print/measurement accuracy unproven. Artifacts: ${work}`);
+  } finally { await context.close(); }
+}
 
 async function offlineViewer(browser, file) {
   const html = fs.readFileSync(file, "utf8");
@@ -90,6 +152,11 @@ async function offlineViewer(browser, file) {
   const srv = spawn("python3", ["-m", "http.server", String(port), "-d", path.join(root, "web")], { stdio: ["ignore", "ignore", "inherit"] });
   await new Promise((r) => setTimeout(r, 1200));
   const browser = await chromium.launch();
+  if (calibrationSheets) {
+    try { await printableReferences(browser, `http://localhost:${port}`, path.resolve(calibrationSheets)); }
+    finally { await browser.close(); srv.kill(); }
+    return;
+  }
   const page = await browser.newPage({ userAgent });
   const errors = [];
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
