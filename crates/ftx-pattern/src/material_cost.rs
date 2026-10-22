@@ -13,9 +13,9 @@ use crate::material_catalog::ResolvedMaterial;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SaleUnit {
-    /// A linear yard at the selected material's sourced width.
+    /// A linear yard. Only area pricing requires the selected material's sourced width.
     LinearYard,
-    /// A linear metre at the selected material's sourced width.
+    /// A linear metre. Only area pricing requires the selected material's sourced width.
     LinearMeter,
     /// Area in square metres.
     SquareMeter,
@@ -23,7 +23,7 @@ pub enum SaleUnit {
     Kilogram,
 }
 
-/// Dimension of the purchase requirement, not an implicit mass-to-area conversion.
+/// Dimension of the purchase requirement; no mass/area/length conversion is inferred.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Basis {
@@ -31,6 +31,8 @@ pub enum Basis {
     Area,
     /// Material mass (kg).
     Mass,
+    /// Finished material length (m), including tape, cord and yarn sold by length; no width needed.
+    Length,
 }
 
 /// One observation of an exact supplier offer, including its selling increment and minimum order.
@@ -127,7 +129,7 @@ pub struct Scope {
     pub as_of_at: Option<String>,
     /// Maximum observation age in calendar days; stale offers are excluded.
     pub max_age_days: u32,
-    /// Requested square metres or kilograms.
+    /// Requested square metres, kilograms or linear metres, according to `basis`.
     pub requirement: f64,
     /// Dimension of `requirement` and of the returned rate.
     pub basis: Basis,
@@ -135,8 +137,9 @@ pub struct Scope {
     /// False retains legacy price observations without claiming known available stock.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_observed_quantity: bool,
-    /// Required length of one uninterrupted full-width segment, in metres. Its area must fit
-    /// inside `requirement`; omission makes no continuous-cut qualification request.
+    /// Required length of one uninterrupted segment, in metres. Its area (area basis) or length
+    /// (length basis) must fit inside `requirement`. Unsupported for mass-only purchasing.
+    /// Omission makes no continuous-cut qualification request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuous_length_m: Option<f64>,
     /// Require a source-stated continuous-cut limit. False admits an unknown limit explicitly;
@@ -150,11 +153,11 @@ pub struct Scope {
 pub struct Offer {
     /// Source observation, including the exact date and evidence hash.
     pub quote: Quote,
-    /// Currency per m² or kg, before minimum/increment rounding.
+    /// Currency per m², kg or m according to scope.basis, before minimum/increment rounding.
     pub rate: f64,
     /// Ordered quantity in this quote's original sale unit.
     pub order_quantity: f64,
-    /// Acquired area/mass after rounding, at least the requested amount.
+    /// Acquired area/mass/length after rounding, in the scope's canonical unit.
     pub acquired: f64,
     /// Merchandise cost on the quote's stated terms, not a checkout or landed-cost guarantee.
     pub order_cost: f64,
@@ -187,7 +190,7 @@ pub enum ExclusionReason {
     UnknownContinuousLength,
     /// The uninterrupted segment is longer than the source's permitted maximum cut.
     InsufficientContinuousLength,
-    /// The sale unit cannot supply the requested area/mass dimension.
+    /// The sale unit cannot supply the requested area/mass/length dimension.
     IncompatibleBasis,
 }
 
@@ -454,6 +457,7 @@ impl Quote {
     fn offer(&self, material: &ResolvedMaterial, scope: &Scope) -> Result<Option<Offer>, Refusal> {
         let factor = match (self.unit, scope.basis) {
             (SaleUnit::SquareMeter, Basis::Area) | (SaleUnit::Kilogram, Basis::Mass) => 1.0,
+            (SaleUnit::LinearYard | SaleUnit::LinearMeter, Basis::Length) => self.linear_unit_m(),
             (SaleUnit::LinearYard | SaleUnit::LinearMeter, Basis::Area) => {
                 let width =
                     material
@@ -543,7 +547,8 @@ impl QuoteBook {
         }
     }
 
-    /// Filter to a reproducible, like-for-like sample, then use material width for area pricing.
+    /// Filter to a reproducible, like-for-like sample. Only area pricing uses material width;
+    /// length pricing uses exact linear sale-unit conversion without inventing a width or density.
     /// Missing/stale/out-of-stock observations produce an explicitly empty sample, never zero cost.
     ///
     /// # Errors
@@ -562,17 +567,25 @@ impl QuoteBook {
         }
         if let Some(length) = scope.continuous_length_m {
             positive("required continuous length", length)?;
-            if scope.basis != Basis::Area {
-                return Err(invalid("continuous length requires an area purchase"));
-            }
-            let width = material
-                .material()
-                .require("width", "m", material.allows_estimates())?;
-            positive("material width", width)?;
-            let area = positive("continuous segment area", length * width)?;
-            if !within_capacity(area, scope.requirement) {
+            let quantity = match scope.basis {
+                Basis::Area => {
+                    let width =
+                        material
+                            .material()
+                            .require("width", "m", material.allows_estimates())?;
+                    positive("material width", width)?;
+                    positive("continuous segment area", length * width)?
+                }
+                Basis::Length => length,
+                Basis::Mass => {
+                    return Err(invalid(
+                        "continuous length requires an area or length purchase",
+                    ));
+                }
+            };
+            if !within_capacity(quantity, scope.requirement) {
                 return Err(invalid(
-                    "continuous segment area exceeds the complete purchase requirement",
+                    "continuous segment exceeds the complete purchase requirement",
                 ));
             }
         }
