@@ -1,5 +1,25 @@
 # Native calibration sheets and conditional 3D precision
 
+## Download a reference in the browser
+
+In the Pattern Workbench's **Body** section, open **Print a photo scale reference**.
+Letter and A4 each offer a PDF, 300-DPI PNG and matching JSON sidecar. The six
+files are local static downloads and work with page JavaScript disabled. Use the
+PDF for printing and retain its sidecar with the reference. Check both ruler
+directions and paper flatness before using a printed sheet.
+
+These are the default `DICT_4X4_50` boards: 22 mm squares and 16 mm markers.
+Custom layouts use the native command below; the browser does not generate
+custom boards or perform photo measurements through these download controls.
+The packaged bytes in `web/calibration/` come from the unchanged native generator
+at `22dfe7ef214bf5ed5f105f5d9246c157d1f0d52d` (generator source SHA-256
+`d4aa9cdca4121bea47a19181df43e443966d35a0f0d3426e780366cf8fd4d805`).
+Reproduce them with the two commands below; each output's PDF, PNG and saved
+sidecar match the distributed files exactly. Their native executable SHA-256 is
+`a0590e52110cbc9e3bcd9092eb7daa538d24bee6b2675260c639b7b138db7bc3`.
+Changing the generator requires deliberately regenerating and checking both
+paper sets; these product files are not oracle fixtures.
+
 ## Print a metric reference
 
 ```sh
@@ -31,8 +51,8 @@ Implementation boundaries relative to spec 02 A.9: the export stroke font replac
 the unpinned reference font; the PDF stores an uncompressed one-bit image rather
 than requiring CCITT. Very small boards whose vertical bars overlap lower marks
 are refused instead of drawing an ambiguous reference, and output directories
-are never reused. The generator is currently a native CLI feature, not a browser
-page control. These boundaries do not constitute completion of all FTX-19 work.
+are never reused. Native generation supplies the browser's two default download
+sets. These boundaries do not constitute completion of all FTX-19 work.
 
 Eight Rust regressions cover the D.7 physical coordinates, dictionary bits, nearest
 sampling ties, PNG round-trip and density, PDF dimensions/xref, invalid layouts,
