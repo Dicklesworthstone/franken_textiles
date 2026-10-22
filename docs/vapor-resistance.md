@@ -161,3 +161,21 @@ No body coverage, interlayer vapor paths, bare skin, water supply, humidity-depe
 moisture storage or latent heat feedback is inferred. `ftx-vc2` tracks the separate coverage coupling.
 Analytic area/pressure balances, source refusals, frozen replay and real sewn-scene material substitution
 verify this software path; physical garment acceptance remains open.
+
+### Declared scenario objectives
+
+A scenario study can explicitly optimize or constrain
+`independent_vapor_potential_heat_flow_w` and
+`independent_vapor_potential_mass_flow_kg_s`, or require the `vapor_surface` consumer
+while optimizing another quantity such as material cost or mass. These readings come from
+actual current-sheet outputs; summary fields and absent outcomes never supply a substitute.
+The existing fresh-body/pattern/scenario identities and settled, gating-clear drape requirements
+still apply. Missing or refused vapor results exclude only alternatives that require that consumer.
+
+Protocol comparison uses the consumed vapor observations' method, conditions, evidence and
+canonical unit. Different source IDs, Ret values or canonical column deduplication do not by
+themselves make otherwise matching protocols incomparable. Differences in the consumed qualifiers
+require explicit `allow_mixed_protocols`; that permission cannot bypass missing data or drape gates.
+These objectives support the declared nominal basis, without propagated uncertainty or a comfort
+interpretation. The original common-area `vapor_potential_heat_flow_w` and
+`vapor_potential_mass_flow_kg_s` objectives remain separately available.

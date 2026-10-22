@@ -274,3 +274,12 @@ outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` 
 **No claims.** GEOS's exact vertex lists for union outlines (its ring starts where its overlay starts and
 its sliver clean moves points by up to 1e-4 mm); the reference's main label anchors; zlib's compressed bytes; the reference's DXF template; a check that raises
 on a missing file.
+
+**Draped vapor comparison.** Independent-sheet vapor objectives and the optional `vapor_surface`
+required consumer use the same fresh, settled, gating-clear drape as existing numerical objectives.
+They read actual `vapor_surface` outcomes and compare consumed observation method, conditions,
+evidence and unit sets. Canonical source-column merges/splits and source IDs do not create false
+protocol incompatibility. The common-area `vapor` stack remains a separate consumer. Dry heat,
+body coverage, actual sweating and propagated uncertainty are not inferred. Three focused
+`scenario_comparison` tests exercise callback admission, explicit protocol overrides and scalar units;
+the production cloth/vapor calculation is exercised by `ftx-drape` material-scenario tests.

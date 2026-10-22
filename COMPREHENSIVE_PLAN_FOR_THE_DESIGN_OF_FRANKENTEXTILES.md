@@ -2678,6 +2678,14 @@ Two connected product slices use the same physical authority and existing solver
   and exact replay inputs. Do not silently interpret summed sheet potentials as
   whole-wearer evaporation or inject latent cooling into the separate dry solver.
 
+The same scenario comparison now accepts the independent current-sheet vapor heat and
+mass flows as explicit nominal objectives or constraints, alongside cost, mass and the
+other existing consumers. Fresh source/body/scenario identities, settled geometry and
+clear simulation gates remain required. Comparison checks the set of consumed vapor
+observation methods, conditions, evidence and units; canonical-column deduplication or
+different measured Ret values alone do not cause false protocol mismatches. Missing
+results and incompatible source qualifications remain visible exclusions.
+
 The next coupling gate (`ftx-vc2`, under `ftx-tmc`) is explicit covered-body/interlayer
 vapor topology, moisture availability/storage and conservative latent-energy feedback.
 It needs independently qualified wet/dry transport and boundary conditions, conservative

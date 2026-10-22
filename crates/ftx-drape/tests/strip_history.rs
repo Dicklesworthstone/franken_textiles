@@ -212,14 +212,13 @@ fn source_mass_changes_inertia_without_changing_fixture_and_missing_other_proper
     );
     assert!(a.states.last().unwrap().free_kinetic_energy_j > 0.);
     assert!(
-        light
+        !light
             .material
             .record
             .as_ref()
             .unwrap()
             .properties
-            .get("thickness")
-            .is_none()
+            .contains_key("thickness")
     );
 }
 

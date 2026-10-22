@@ -424,14 +424,14 @@ pub fn evaluate(input: &Request) -> Result<Report, Refusal> {
             // Only prescribed boundary coordinates move before the step; free positions retain
             // their accepted values and the existing implicit prediction. The solver's own
             // transactional step preserves history on a refusal; this whole request is atomic.
-            for i in ny * (nx + 1)..solver.x.len() {
-                solver.x[i].y = input.fixture.gauge_length_m * (1.0 + node.extension_fraction);
+            for position in &mut solver.x[ny * (nx + 1)..] {
+                position.y = input.fixture.gauge_length_m * (1.0 + node.extension_fraction);
             }
             let numerical = solver.step(h)?;
             // Fixed-coordinate velocities do not enter the solve. Retain the actual imposed
             // velocity for inspection, rather than the solver's fixed-coordinate zero increment.
-            for i in ny * (nx + 1)..solver.v.len() {
-                solver.v[i].y = grip_velocity;
+            for velocity in &mut solver.v[ny * (nx + 1)..] {
+                velocity.y = grip_velocity;
             }
             iterations += numerical.iterations;
             states.push(recorder.state(&solver, &node, h, &old_velocity, Some(numerical))?);
