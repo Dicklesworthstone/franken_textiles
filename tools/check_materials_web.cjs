@@ -130,6 +130,7 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.isDisabled('#assign'),true); assert.equal(await page.locator('a[download="calibrated-selection.json"]').count(),0);
       await page.setChecked('#calibrationEstimates',true);
       for(const mutate of [
+        v=>{delete v.area_response.model; return /missing field.*model/i;},
         v=>{v.area_response.model='unsupported'; return /area|model/i;},
         v=>{v.samples.at(-1).nominal_n_m[0][0]+=1; return /residuals|budget/i;},
         v=>{
