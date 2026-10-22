@@ -2596,6 +2596,29 @@ independent acquired textiles, transverse operators, bending/contact and garment
 
 ---
 
+### 25.49 Material-bound vapor transport in fixed-pattern studies
+
+**Delivered software (`ftx-vs1`, supporting `ftx-ms2`/`ftx-tm5`).** An optional explicit common-area
+vapor stack now follows each study alternative's final source-piece or default material assignments.
+The existing canonical vapor evaluator supplies the full source-bearing report and frozen offline
+replay. Its result or refusal remains independent of cutting, sewing, purchasing, mass and mechanical
+scenarios; missing Ret is unknown, while missing mechanics do not block the vapor consumer.
+
+Declared potential latent-power and mass-flow objectives participate in the existing bounded Pareto
+comparison. Only consumed layer occurrences supply the vapor protocol fingerprint, and differing
+reported protocols require explicit admission. Stack area, ordering, pressure boundaries, films and
+latent heat remain caller inputs, shared across alternatives; pattern membership does not establish
+overlap, body coverage, air-gap transport or actual evaporation. Source intervals do not become output
+confidence bounds. The native, portable and browser study paths reuse the same evaluator.
+
+Known series-network answers, final assignment changes, independent consumer refusals, exact frozen
+replay and protocol isolation verify this integration. The runnable example uses existing measured
+leather Ret records with explicitly illustrative boundary assumptions. Coupled moisture/heat, matched
+measured layers and garment acceptance remain open under `ftx-tmc`, `ftx-tm2` and `ftx-tm8`; a potential
+transfer comparison does not establish sweating or comfort. See [vapor-resistance.md](docs/vapor-resistance.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

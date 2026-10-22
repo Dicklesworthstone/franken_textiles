@@ -75,3 +75,50 @@ refusing an input withdraws the previous result without changing the inspected m
 Analytical layer/film balances, real catalog substitutions, source/filter refusals, offline replay and
 native/portable consumer equality verify the software path. Measured coupled transport and garment
 validation remain open under `ftx-tm5` and `ftx-tmc`.
+
+## Recompute transport in a material study
+
+The existing `materials study` commands also accept an optional `vapor` request. Its boundaries,
+area, source filters and mixed-protocol policy use the same fields above. It has no nested `schema`,
+and each layer selects an assignment from the final bound pattern:
+
+```json
+"layers": [
+  {"key": "lining", "target": {"scope": "piece", "id": "lining"}},
+  {"key": "shell", "target": {"scope": "default"}}
+]
+```
+
+A piece target names an original source-piece ID and uses its effective material, including default
+inheritance. A default target always selects the pattern default. These targets select material
+observations only: they do not infer physical overlap, coverage, area, layer order or interlayer gaps.
+The caller explicitly supplies those common-area network assumptions. Repeating a material is allowed
+only as a separately named layer occurrence, so the same material can represent two physical plies.
+
+Every alternative applies its ordinary atomic material substitution first, then invokes the canonical
+vapor evaluator with the resulting frozen selections. Its independent `vapor` outcome retains the
+complete source report or refusal. Missing Ret never becomes zero and does not erase cutting,
+sewing, mass or scenario results. Missing mechanical properties do not prevent vapor evaluation.
+Each available result's exact `replay_request_json` can be passed directly to `thermal-vapor` offline.
+
+Comparison supports `vapor_potential_heat_flow_w` (W) and `vapor_potential_mass_flow_kg_s` (kg/s),
+with optional `required_consumers: ["vapor"]`. These are nominal potential flows under the shared
+explicit network; reported material bounds are not propagated output uncertainty. Comparison checks
+the complete method, conditions and evidence of each consumed layer occurrence. Unrelated pieces'
+vapor properties do not affect that check. Admission of mixed protocols *between alternatives* is
+independent of admission of mixed protocols *within a stack*.
+
+The [leather study example](../examples/vapor-study/leather.json) changes the `front` assignment on
+the existing synthetic two-panel pattern. It uses two measured catalog observations and retains an
+uncharacterized alternative to demonstrate the missing-property outcome. Its area, vapor pressures,
+films and latent heat are illustrative assumptions, and its explicit mixed-protocol comparison is
+not physical qualification of those different specimens:
+
+```sh
+ftx-materials study tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/vapor-study/leather.json
+```
+
+Upload the same pattern and study JSON in the browser material workbench to inspect independent
+outcomes, retained source/boundary details and exact vapor replay downloads. A new or refused study
+withdraws the preceding result through the existing study lifecycle.

@@ -1,0 +1,43 @@
+{
+  "schema": "ftx-material-study/1",
+  "variants": [
+    {
+      "key": "chrome-neck",
+      "changes": {
+        "schema": "ftx-material-bindings/1",
+        "pieces": {"front": {"id": "zagreb/leather-2022/cr-neck"}}
+      }
+    },
+    {
+      "key": "synthetic-tanned-neck",
+      "changes": {
+        "schema": "ftx-material-bindings/1",
+        "pieces": {"front": {"id": "zagreb/leather-2022/syn-d-h-neck"}}
+      }
+    },
+    {
+      "key": "uncharacterized",
+      "changes": {"schema": "ftx-material-bindings/1"}
+    }
+  ],
+  "vapor": {
+    "layers": [{"key": "front", "target": {"scope": "piece", "id": "front"}}],
+    "area_m2": 0.002,
+    "inside_vapor_pressure_pa": 2000.0,
+    "outside_vapor_pressure_pa": 1000.0,
+    "inside_film_resistance_m2_pa_w": 1.0,
+    "outside_film_resistance_m2_pa_w": 4.0,
+    "latent_heat_j_kg": 2500000.0,
+    "required_conditions": {
+      "air_temperature_c": "35",
+      "relative_humidity_percent": "40",
+      "air_speed_m_s": "1"
+    }
+  },
+  "comparison": {
+    "basis": "nominal",
+    "objectives": [{"metric": "vapor_potential_mass_flow_kg_s", "direction": "maximize"}],
+    "required_consumers": ["vapor"],
+    "allow_mixed_protocols": true
+  }
+}

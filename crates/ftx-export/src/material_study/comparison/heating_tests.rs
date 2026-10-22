@@ -129,6 +129,7 @@ fn case(combined: bool) -> (Alternative, Value, Value) {
         sewing_selection: Outcome::NotRequested,
         purchasing: Outcome::NotRequested,
         assembly_mass: Outcome::NotRequested,
+        vapor: Outcome::NotRequested,
         metrics: Metrics::default(),
     };
     (

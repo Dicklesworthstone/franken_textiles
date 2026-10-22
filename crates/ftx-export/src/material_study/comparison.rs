@@ -36,6 +36,8 @@ pub enum Consumer {
     Purchasing,
     /// Complete declared pre-finishing assembly inventory, not a purchased or simulated subset.
     AssemblyMass,
+    /// Potential vapor transport through the explicitly declared common-area material stack.
+    Vapor,
     /// Fresh, geometrically settled, gating-clear production drape in the retained scenario.
     Drape,
     /// Successful independent sheet-column heat on an admitted drape, not whole-body heat.
@@ -76,6 +78,10 @@ pub enum Metric {
     StitchIntervals,
     /// Feed-only time in seconds; not a robot cycle-time estimate.
     FeedSeconds,
+    /// Potential latent power (W) through the declared stack; water supply is not modeled.
+    VaporPotentialHeatFlowW,
+    /// Potential vapor mass flow (kg/s), using the same explicit boundaries and latent heat.
+    VaporPotentialMassFlowKgS,
     /// Mass of simulated cloth only (kg); omitted pieces, trims and hardware are not included.
     SimulatedClothMassKg,
     /// Maximum absolute reported edge strain (%) across compression and extension, at report precision.
@@ -123,6 +129,7 @@ impl Metric {
             | Self::FiniteStockExternalCutAreaM2 => Consumer::FiniteStock,
             Self::ObservedOrderCost => Consumer::Purchasing,
             Self::StitchIntervals | Self::FeedSeconds => Consumer::Sewing,
+            Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
             Self::IndependentSurfacePowerW => Consumer::Surface,
             Self::BodyCoveragePowerW => Consumer::Coverage,
@@ -151,6 +158,8 @@ impl Metric {
             Self::ObservedOrderCost => currency.unwrap_or("unavailable currency"),
             Self::StitchIntervals | Self::UsedStockCount => "count",
             Self::FeedSeconds => "s",
+            Self::VaporPotentialHeatFlowW => "W",
+            Self::VaporPotentialMassFlowKgS => "kg/s",
             Self::SimulatedClothMassKg => "kg",
             Self::MaxAbsoluteEdgeStrainPct | Self::MotionMaxAbsoluteEdgeStrainPct => "%",
             Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW => "W",
@@ -182,6 +191,10 @@ impl Metric {
             Self::ObservedOrderCost => row.metrics.least_observed_independent_order_total,
             Self::StitchIntervals => row.metrics.stitch_intervals.map(|n| n as f64),
             Self::FeedSeconds => row.metrics.feed_seconds,
+            Self::VaporPotentialHeatFlowW => row.vapor.value().map(|r| r.potential_heat_flow_w),
+            Self::VaporPotentialMassFlowKgS => {
+                row.vapor.value().map(|r| r.potential_mass_flow_kg_s)
+            }
             Self::SimulatedClothMassKg => simulation["drape"]["mass_kg"].as_f64(),
             Self::MaxAbsoluteEdgeStrainPct => {
                 let strain = &simulation["drape"]["global_strain_pct"];
@@ -379,10 +392,10 @@ impl Policy {
         if self.objectives.is_empty()
             || self.objectives.len() > 16
             || self.constraints.len() > 64
-            || self.required_consumers.len() > 11
+            || self.required_consumers.len() > 12
         {
             return Err(invalid(
-                "comparison needs 1..16 objectives, at most 64 constraints and 11 consumers",
+                "comparison needs 1..16 objectives, at most 64 constraints and 12 consumers",
             ));
         }
         let mut metrics = BTreeSet::new();
@@ -420,6 +433,7 @@ impl Policy {
                 Consumer::Sewing => request.sewing.is_some() || request.sewing_selection.is_some(),
                 Consumer::Purchasing => request.purchasing.is_some(),
                 Consumer::AssemblyMass => request.assembly_mass.is_some(),
+                Consumer::Vapor => request.vapor.is_some(),
                 Consumer::Drape
                 | Consumer::Surface
                 | Consumer::Coverage
@@ -552,7 +566,7 @@ impl Policy {
             .filter(|r| r.eligible && r.dominated_by.is_empty())
             .map(|r| r.key.clone())
             .collect();
-        Report {
+        let mut report = Report {
             schema: "ftx-material-comparison/1",
             source_pattern_sha256: source.into(),
             context_sha256: context.into(),
@@ -581,7 +595,11 @@ impl Policy {
                 "Transient objectives require a complete policy/path/geometry/time-matched history at every accepted mechanical sample. Energy retains its incoming-side sign and model domain; coverage includes bare paths and explicitly exposed-cloth films, not certified whole-wearer loss. Sheet and coverage energies must not be added together.",
                 "Sample temperature extrema include the declared initial state and retained mechanical sample endpoints; final temperature extrema use only the final accepted sample. Neither is a continuous-time bound or the extrema of unreported thermal substeps. Net boundary energy excludes remap residual and cancelling bare-body paths. Numerical energy/remap residuals remain in source reports; nominal admission is not empirical accuracy, a comfort threshold, or propagated uncertainty.",
             ],
+        };
+        if self.consumers().contains(&Consumer::Vapor) {
+            report.notes.push("Vapor objectives use the declared common-area stack, pressure boundaries, films and latent heat. They describe potential transfer, not actual evaporation, sweating, condensation or wearer comfort; source protocols must be admitted independently of other thermal consumers.");
         }
+        report
     }
 
     fn candidate(
@@ -866,14 +884,33 @@ impl Policy {
                 "membrane_relaxation":if mechanics { serde_json::to_value(&material.membrane_relaxation).map_err(|e| invalid(e.to_string()))? } else { Value::Null },
                 "thermal_response":if thermal { serde_json::to_value(&material.thermal_response).map_err(|e| invalid(e.to_string()))? } else { Value::Null }}));
         }
-        hash(&(
+        let base = hash(&(
             protocols,
             if mechanics {
                 bound["pattern"]["fabric"]["interfaces"].clone()
             } else {
                 Value::Null
             },
-        ))
+        ))?;
+        if !consumers.contains(&Consumer::Vapor) {
+            return Ok(base);
+        }
+        // Only the explicitly consumed layer occurrences participate. A cuff or trim with
+        // unrelated vapor observations must not change a shell/lining comparison's protocol.
+        let vapor = row
+            .vapor
+            .value()
+            .ok_or_else(|| invalid("vapor observation protocols unavailable"))?;
+        let layers: Vec<_> = vapor
+            .layers
+            .iter()
+            .map(|layer| {
+                let q = &layer.observation;
+                json!({"key":layer.key,"unit":q.unit,"method":q.method,
+                    "conditions":q.conditions,"evidence":q.evidence})
+            })
+            .collect();
+        hash(&(base, layers))
     }
 }
 
@@ -907,6 +944,7 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
                     b["pattern_sha256"].as_str() == Some(r.pattern_sha256.as_str())
                 })
         }),
+        Consumer::Vapor => row.vapor.value().is_some(),
         Consumer::Drape => !admitted.drape.is_null(),
         Consumer::Surface => admitted.drape["surface"]["status"] == "available",
         Consumer::Coverage => admitted.drape["coverage"]["status"] == "available",

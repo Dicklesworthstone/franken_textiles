@@ -98,6 +98,16 @@ uses physical storage, never remap residual, in the balance. Conversion protocol
 when that thermal domain is consumed. A refusal preserves independent domain and manufacturing
 outputs; neither a boundary total nor the other thermal model can substitute for supplied heat.
 
+**Material-following vapor studies** (`material_study::vapor`, plan §25.49). Explicit ordered layer
+occurrences resolve the final source-piece/default selections after every atomic material substitution.
+The canonical `material_vapor` evaluator supplies its independent report/refusal and exact standalone
+replay. Common area, pressures, films and latent heat are explicit shared assumptions; source-piece
+membership does not infer geometry, coverage or gaps. Optional nominal potential-power/mass-flow
+comparison requires available vapor results and uses only the consumed observations' complete
+protocols. Missing data stays unknown; reported bounds cannot masquerade as propagated output
+uncertainty. Omission preserves existing study serialization. Tests: `material_study_vapor` and the
+native/portable `material_study_consumers`; no actual evaporation, comfort or empirical assembly claim.
+
 **Text and numbers** (`text.rs`, §2). `fnum` (fixed-point, ties to even on the exact binary value, trailing
 zeros stripped, `-0` → `0`), `ascii_text` (NFKD, `×` → `x`, `— – ·` → `-`, code points 32..126 kept),
 `safe_name`, Helvetica `text_width`, greedy `wrap`, the single-stroke font (`stroke_text`), tile column

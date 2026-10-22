@@ -29,6 +29,7 @@ use crate::{
 pub mod combinations;
 pub mod comparison;
 pub mod recipes;
+pub mod vapor;
 
 /// Explicit substitution, including heterogeneous source-piece assignments.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -125,6 +126,10 @@ pub struct Request {
     /// Optional complete cut-piece inventory plus declared extras for ONE assembly, not stock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assembly_mass: Option<assembly_mass::Request>,
+    /// Potential vapor transport through an explicit common-area stack of final piece/default
+    /// assignments. Its source observations and boundary assumptions remain independent of heat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vapor: Option<vapor::Request>,
     /// Optional explicit objectives over actual consumer outputs, not scalar catalog screening.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comparison: Option<comparison::Policy>,
@@ -230,6 +235,10 @@ pub struct Alternative {
     /// Every physical cut piece plus sourced extras; an available report can still have unknown mass.
     #[serde(skip_serializing_if = "Outcome::is_not_requested")]
     pub assembly_mass: Outcome<assembly_mass::Report>,
+    /// Canonical potential vapor transport after this alternative's material binding; never an
+    /// inferred garment coverage, actual sweating rate or heat source for another consumer.
+    #[serde(skip_serializing_if = "Outcome::is_not_requested")]
+    pub vapor: Outcome<ftx_pattern::material_vapor::Report>,
     /// Selected actual-plan numbers for side-by-side comparison, never fabricated for failed cells.
     pub metrics: Metrics,
 }
@@ -323,12 +332,13 @@ impl Request {
                 && self.finite_stock.is_none()
                 && self.sewing.is_none()
                 && self.sewing_selection.is_none()
-                && self.assembly_mass.is_none())
+                && self.assembly_mass.is_none()
+                && self.vapor.is_none())
             || (self.purchasing.is_some() && self.cutting.is_none())
             || (self.sewing.is_some() && self.sewing_selection.is_some())
         {
             return Err(invalid(
-                "study needs its schema, exactly one variant source, at least one manufacturing consumer, cutting when pricing, and at most one of sewing or sewing_selection",
+                "study needs its schema, exactly one variant source, at least one consumer, cutting when pricing, and at most one of sewing or sewing_selection",
             ));
         }
         if self.variants.len() > 32 {
@@ -585,6 +595,9 @@ impl Request {
         if self.sewing_selection.is_some() {
             notes.push("Each material alternative reruns the declared finite qualified sewing recipe search. Sewing metrics describe its complete selected incumbent, including when the search budget stops before an optimum is proven. No selected plan keeps sewing unavailable; independent consumers are preserved. Recipe qualification and manufacturing hardware permission remain separate.");
         }
+        if self.vapor.is_some() {
+            notes.push("Potential vapor transport uses explicit common-area layer occurrences resolved from each final material assignment. It infers no overlap, body coverage, air-gap resistance, sweat supply, evaporation or coupled heat; canonical source qualifications and boundary assumptions remain in every available result.");
+        }
         Ok(Report {
             schema: "ftx-material-study-report/1",
             source_pattern_sha256,
@@ -628,6 +641,7 @@ impl Request {
             sewing_selection: Outcome::NotRequested,
             purchasing: Outcome::NotRequested,
             assembly_mass: Outcome::NotRequested,
+            vapor: Outcome::NotRequested,
             metrics: Metrics::default(),
         };
         let bound = match binding {
@@ -663,6 +677,11 @@ impl Request {
                         refusal: refusal.clone(),
                     };
                 }
+                if self.vapor.is_some() {
+                    row.vapor = Outcome::Refused {
+                        refusal: refusal.clone(),
+                    };
+                }
                 row.binding = Outcome::Refused { refusal };
                 return Ok(row);
             }
@@ -673,6 +692,9 @@ impl Request {
             variant.changes.interfaces,
             bound.get("frozen_elastic_casings"),
         )?);
+        if let Some(request) = &self.vapor {
+            row.vapor = Outcome::from_result(request.evaluate(&pattern));
+        }
         if let Some(options) = &self.cutting {
             row.cutting = Outcome::from_result(CutPlan::build(&pattern, options));
         }
