@@ -2,8 +2,11 @@
 //! Synthetic acquisitions establish numerical plumbing, never measured textile or garment fit.
 
 use ftx_core::{RefusalCode, receipt::sha256_hex};
-use ftx_drape::strip::fit::Input;
-use ftx_pattern::{material_catalog::Selection, textile_import};
+use ftx_drape::strip::{
+    Request,
+    fit::{Input, Report},
+};
+use ftx_pattern::{material_calibration::Partition, material_catalog::Selection, textile_import};
 use ftx_wasm::materials;
 use serde_json::{Value, json};
 
@@ -26,6 +29,9 @@ fn portable_joint_area_identification_keeps_six_coordinates_and_the_frozen_area_
     }
     let selected: Selection =
         serde_json::from_str(result["selection_json"].as_str().unwrap()).unwrap();
+    let fitted: [f64; 2] =
+        serde_json::from_value(report["fitted_area_ratio_range"].clone()).unwrap();
+    assert!(fitted[0] > 0.65 && fitted[1] < 1.45);
     assert_eq!(
         serde_json::to_value(&selected).unwrap(),
         report["selection"]
@@ -40,8 +46,59 @@ fn portable_joint_area_identification_keeps_six_coordinates_and_the_frozen_area_
             .unwrap()
             .unwrap()
             .area_ratio_range(),
-        Some([0.65, 1.45])
+        Some(fitted)
     );
+    // The portable consumer must replay the published CHECK state through the normal solver,
+    // including the FIT-only area domain, without refitting or changing the selection.
+    let typed: Report = serde_json::from_value(report.clone()).unwrap();
+    let experiment = typed
+        .input
+        .experiments
+        .iter()
+        .find(|experiment| experiment.partition == Partition::Check)
+        .unwrap();
+    let mut fixture = experiment.fixture.clone();
+    fixture.cells.iter_mut().for_each(|cells| *cells *= 2);
+    let request = Request {
+        schema: "ftx-strip-experiment/1".into(),
+        material: selected.clone(),
+        fixture,
+        extensions: experiment
+            .observations
+            .iter()
+            .map(|state| state.extension_fraction)
+            .collect(),
+        controls: typed.input.controls.clone(),
+    };
+    let raw_forward =
+        materials::strip_experiment(&serde_json::to_string(&request).unwrap()).unwrap();
+    let forward: Value = serde_json::from_str(&raw_forward).unwrap();
+    let expected: Vec<_> = typed
+        .predictions
+        .iter()
+        .filter(|prediction| prediction.experiment == experiment.id)
+        .map(|prediction| &prediction.state)
+        .collect();
+    assert_eq!(forward["states"], serde_json::to_value(expected).unwrap());
+    assert_eq!(
+        materials::strip_experiment(&forward["input"].to_string()).unwrap(),
+        raw_forward
+    );
+    // Removing the content lock cannot turn the identified law into a broader area law.
+    let mut widened = selected.clone();
+    widened.expected_sha256 = None;
+    widened
+        .record
+        .as_mut()
+        .unwrap()
+        .membrane_response
+        .as_mut()
+        .unwrap()
+        .area_response
+        .as_mut()
+        .unwrap()
+        .area_ratio_range = [0.65, 1.45];
+    assert!(materials::inspect(&serde_json::to_string(&widened).unwrap()).is_err());
     assert!(resolved.mechanics().is_err());
     assert_eq!(result["fit_claim"], false);
     assert_eq!(result["empirical_validation_claim"], false);
@@ -64,10 +121,6 @@ fn accepted_strip_api_freezes_the_source_estimate_without_fabricating_missing_ph
     assert_eq!(identified["fit_claim"], false);
     assert_eq!(identified["empirical_validation_claim"], false);
     assert_eq!(identified["simulation_ready"], false);
-    assert_eq!(
-        identified["mechanics_refusal"]["code"], "missing_property",
-        "{identified}"
-    );
     let mut input: Input = serde_json::from_value(request).unwrap();
     input.allow_estimates = true;
     let hash = sha256_hex(&serde_json::to_vec(&input).unwrap());
@@ -120,6 +173,10 @@ fn accepted_strip_api_freezes_the_source_estimate_without_fabricating_missing_ph
     }
     let catalog = textile_import::catalog().unwrap();
     let resolved = catalog.resolve(&selection).unwrap();
+    assert_eq!(
+        identified["mechanics_refusal"],
+        serde_json::to_value(resolved.mechanics().unwrap_err()).unwrap()
+    );
     assert_eq!(
         selection.expected_sha256.as_deref(),
         Some(resolved.sha256())
