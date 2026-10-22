@@ -83,6 +83,26 @@ Both held-out predictions and simulation states must remain inside that box. Hel
 never change parameters or extend the fitted domain. The residuals are recomputed using the compiled
 production law, not a separate prediction implementation.
 
+### Joint physical-area response
+
+The same input can additionally declare `area_response` with `model: "area_green_strain/1"` and
+an admissible positive `area_ratio_range` containing one. This jointly identifies the two production
+energy coefficients of `(J-1)²` and `(ln J)²`, in N/m, alongside directional knot stresses and normal
+coupling. `J` is physical deformed area divided by reference area; no area-preserving assumption is
+introduced. See the independent analytic [swatch example](../examples/area-identification/swatch.json).
+Its observations are synthetic software inputs, not measured fabric data.
+
+The declared J range limits admitted observations. The published `fitted_area_ratio_range` comes
+only from FIT extrema including the reference state, intersected with that declaration. CHECK cannot
+expand it or alter the coefficients. The resulting area quantities retain the same source, specimen
+and conditioning as the directional law. Rank deficiency, unstable response, unsupported J or failed
+residual budgets refuse the fit; small residuals do not establish uniqueness or confidence intervals.
+
+In the workbench, choose nonlinear swatches and upload this ordinary request. The result displays
+both native area coefficients, units and evidence, plus separate declared and FIT-supported J ranges.
+The exact acquisition, full report and frozen selection use the existing downloads and assignment
+controls. Omitting `area_response` retains separable identification and its existing display.
+
 ## Evidence, acceptance and reuse
 
 `max_rms_scaled` and `max_peak_scaled` are positive acceptance budgets applied independently to the

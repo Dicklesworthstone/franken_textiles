@@ -814,8 +814,9 @@ function calibrationResult(parent, r) {
         "Review the candidate refusals and acquisition errors. This comparison has no material selection to assign." };
   }
   const c = r.calibration, nonlinear = c.schema === "ftx-nonlinear-swatch-calibration-report/1";
+  const area = nonlinear ? c.material.membrane_response?.area_response : null;
   const timeSearch = c.orthotropic_fit?.time_search;
-  const method = nonlinear ? "Nonlinear stretch and shear" : c.input.orthotropic ?
+  const method = nonlinear ? area ? "Nonlinear stretch, shear and physical-area response" : "Nonlinear stretch and shear" : c.input.orthotropic ?
     timeSearch ? "Directional relaxation with times identified within declared bounds" : "Directional relaxation at the declared times" :
     "Proportional relaxation ratios and times";
   const t = table(parent, "Observed force errors — independent partitions", ["Partition", "Measured components", "Scaled RMS", "Scaled peak"]);
@@ -827,6 +828,22 @@ function calibrationResult(parent, r) {
     ["Material direction", "Minimum Green strain", "Maximum Green strain"]);
   for (const [i, axis] of ["Warp / wale (E11)", "Weft / course (E22)", "Engineering shear (2 E12)"].entries()) {
     cells(domain, [axis, metric(range?.[i]?.[0]), metric(range?.[i]?.[1])]);
+  }
+  if (area) {
+    const coefficients = table(parent, "Jointly identified physical-area coefficients", ["Energy term", "Coefficient", "Unit", "Evidence"]);
+    for (const [label, q] of [["Quadratic (J−1)²", area.quadratic], ["Logarithmic (ln J)²", area.log_squared]]) {
+      cells(coefficients, [label, metric(q.value), q.unit, q.evidence]);
+    }
+    const support = table(parent, "Physical area ratio J — declared limit and FIT support", ["Basis", "Minimum J", "Maximum J"]);
+    cells(support, ["Declared observation limit", ...c.input.area_response.area_ratio_range.map(metric)]);
+    cells(support, ["FIT-supported publication", ...c.fitted_area_ratio_range.map(metric)]);
+    const scope = document.createElement("p");
+    scope.textContent = "J is physical deformed area divided by reference area. Area coefficients are identified jointly with the directional curves and normal coupling. " +
+      "Only FIT observations supply the published domain; held-out observations never widen it. " +
+      "The declared limit does not supply missing characterization. Local excitation and small residuals do not establish global uniqueness or confidence intervals. " +
+      "Fitted values remain estimates; measured textile and garment acceptance remain separate.";
+    parent.append(scope);
+    detail(parent, "Jointly identified area law and source qualifications", area);
   }
   if (c.orthotropic_fit) {
     const recovery = table(parent, timeSearch ? "Directional recovery — published stiffness at identified times" :

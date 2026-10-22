@@ -841,6 +841,39 @@ test('identified swatches show independent errors, retain their source across pa
   assert.equal(JSON.parse(p.current().messages.at(-1).changes).pieces.front.allow_estimates,false);
 });
 
+test('joint swatch identification displays native area coefficients and distinguishes FIT support from declared limits', async () => {
+  const p=await pageModule(); await p.load();
+  const input=' {"schema":"ftx-nonlinear-swatch-calibration/1","area_response":{"model":"area_green_strain/1"}}\n';
+  p.e.calibrationMode.value='nonlinear'; p.select('calibrationRequest',input);
+  p.e.calibrationEstimates.checked=true;
+  await p.e.calibrate.onclick();
+  const report=calibrationReport('nonlinear',true), c=report.calibration;
+  c.input.area_response={model:'area_green_strain/1',area_ratio_range:[0.7,1.5]};
+  c.fitted_area_ratio_range=[0.81,1.32];
+  c.parameter_count=9; c.excitation_pivot=0.0123;
+  c.material.membrane_response={area_response:{model:'area_green_strain/1',area_ratio_range:[0.81,1.32],
+    quadratic:{value:40.125,unit:'N/m',evidence:'estimate',source:'retained'},
+    log_squared:{value:15.75,unit:'N/m',evidence:'estimate',source:'retained'}}};
+  const raw=' '+JSON.stringify(report)+'\n';
+  p.emit(report,[{name:'material-calibration.json',text:raw,mime:'application/json'},
+    {name:'calibration-input.json',text:input,mime:'application/json'}]);
+  const s=section(p,'Identified material behavior');
+  const tables=descendants(s).filter(n=>n.tag==='table');
+  const coefficients=tables.find(n=>visibleText(n).includes('Jointly identified physical-area coefficients'));
+  assert.deepEqual(plain(coefficients.children.slice(2).map(row=>row.children.map(n=>n.textContent))),
+    [['Quadratic (J−1)²','40.125','N/m','estimate'],['Logarithmic (ln J)²','15.75','N/m','estimate']]);
+  const domain=tables.find(n=>visibleText(n).includes('Physical area ratio J — declared limit and FIT support'));
+  assert.deepEqual(plain(domain.children.slice(2).map(row=>row.children.map(n=>n.textContent))),
+    [['Declared observation limit','0.7','1.5'],['FIT-supported publication','0.81','1.32']]);
+  assert.match(visibleText(s),/do not establish global uniqueness or confidence intervals/);
+  assert.match(visibleText(s),/held-out observations never widen/);
+  assert.equal(p.e.selection.value,report.selection_json); assert.equal(p.e.assign.disabled,false);
+  for(const [name,expected] of [['material-calibration.json',raw],['calibration-input.json',input]]) {
+    const link=descendants(s).find(n=>n.download===name); assert.equal(await p.blobs.get(link.href).text(),expected);
+  }
+  p.e.calibrationEstimates.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.e.assign.disabled,true);
+});
+
 test('adaptive heat histories display native local errors and charged work without changing selections', async () => {
   const p=await pageModule(); await p.load();
   p.select('compressionRequest',' {"schema":"ftx-compressed-thermal-history/1"}\n');
