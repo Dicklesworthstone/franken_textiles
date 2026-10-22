@@ -132,7 +132,7 @@ impl PriceBasis {
 }
 
 /// Complete price coverage is independent of successful geometric allocation.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Report {
     /// `ftx-finite-stock-procurement/1`.
     pub schema: &'static str,

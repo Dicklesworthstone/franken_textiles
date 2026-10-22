@@ -2721,6 +2721,57 @@ thermal qualification or real-garment fit. See [material-area-response.md](docs/
 
 ---
 
+### 25.53 Complete cutting jobs across rolls, hides and remnants
+
+**Delivered software (`ftx-cj1`, supporting material substitution and manufacturing).** One explicit
+job now routes every original source piece to roll stock or finite stock, then checks the complete
+physical inventory of pieces, instances and copies. Both existing planners retain the same frozen
+pattern, source-piece identities, material snapshots, grain restrictions, holes, drills and cut paths.
+Copies and effective seam allowance must agree. A missing, duplicate or failed route refuses the
+complete job; a valid leather shell no longer prevents its roll-fabric lining from being planned.
+
+Optional purchasing evaluates both routes against one dated market and quote book. A finite item's
+bound offer cannot also supply roll stock. The total is available only when every engaged route has
+complete observed quantity and offer coverage in the same currency; unknown prices never become a
+partial cheap total. The result retains independent route reports, full replay inputs, finite-stock
+identities, allocated area and source-qualified stock mass. Fixed-pattern studies and their existing
+bounded comparisons recompute this complete job after each material assignment.
+
+Native commands, portable bindings and the browser workbench share this core. The executable
+`examples/mixed-cutting/` case allocates mirrored shell parts and on-fold lining across two copies.
+Its declared synthetic stock and offers demonstrate exact allocation and whole-job cost accounting,
+not supplier availability, optimal nesting, physical manufacturability or machine execution.
+See [mixed-stock-cutting.md](docs/mixed-stock-cutting.md).
+
+---
+
+### 25.54 Layered vapor paths on actual covered body regions
+
+**Delivered software (`ftx-vc3`, the geometry/network slice of `ftx-vc2`).** The existing thermal
+projection kernel now also supplies disjoint covered-body regions and ordered cloth layers without
+requiring dry conductivity or heat capacity. The canonical vapor evaluator retains each measured Ret
+and scales resistance by explicit boundary area divided by current conducting layer area. Boundary
+films and caller-declared interlayer resistances use covered body area; a geometric gap supplies no
+coefficient. Every encountered adjacency needs an explicit vapor interface, including declared zero.
+
+An optional `vapor_coverage` scenario consumer rebuilds this source-bound topology from each newly
+draped material alternative. It reports covered and uncovered body area, unallocated cloth, each
+layer's source protocol and area, pressure profiles and covered potential heat/mass subtotals. The
+complete request freezes materials and geometry for offline replay. Dry-heat or storage refusals do
+not erase an available vapor result. Declared comparisons admit these objectives only for complete
+coverage of the same explicit body domain and matching scenario/material/geometry identities;
+partial coverage cannot rank as reduced wearer evaporation.
+
+Analytical pressure/area balances, overlapping-layer geometry, nonuniform boundary identities,
+source/refusal checks and real native/portable consumers verify this software path. Browser outputs
+retain exact replay requests and distinguish independent sheets from the layered coverage result.
+This fixed-frame, isothermal potential does not infer sweat supply, bare-skin transfer, moisture
+storage, condensation, deformation-dependent Ret, comfort or empirical garment fit. Conservative
+moisture/latent feedback, motion coverage and qualified wet/dry multilayer validation remain open
+under `ftx-vc2`/`ftx-tmc`. See [vapor-coverage.md](docs/vapor-coverage.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

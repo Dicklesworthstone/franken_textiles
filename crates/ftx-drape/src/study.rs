@@ -42,6 +42,21 @@ pub struct Coverage {
     pub conditions: coverage::Conditions,
 }
 
+/// Independent potential vapor transfer through layers on the newly draped body domain.
+/// Its geometric closure and pressure boundaries do not require dry-heat or storage properties.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaporCoverage {
+    /// Nonempty, unique collision-body triangle indices, in pressure-boundary order.
+    pub body_triangle_ids: Vec<usize>,
+    /// Explicit physical layer identity for every retained drape instance.
+    pub instance_layers: BTreeMap<String, String>,
+    /// Local-normal projection controls and explicit interlayer vapor resistances.
+    pub settings: crate::vapor::coverage::Settings,
+    /// Prescribed vapor pressures, films, latent heat and source-observation filters.
+    pub conditions: crate::vapor::coverage::Conditions,
+}
+
 /// One numerical and environmental scenario shared by all material alternatives.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +88,9 @@ pub struct Scenario {
     /// Optional actual body/layer overlap and series transport on the newly draped geometry.
     #[serde(default)]
     pub coverage: Option<Coverage>,
+    /// Optional geometry-derived layered vapor potential; independent of dry heat and sweat supply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vapor_coverage: Option<VaporCoverage>,
     /// Optional source-model motion, continuing the same sewn cloth and material history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<motion::Request>,
@@ -191,6 +209,19 @@ impl<'a, 'body> Session<'a, 'body> {
         let mut descriptor = json!({"scenario":self.scenario,"body_geometry_sha256":self.body_sha256,
             "scenario_sha256":self.scenario_sha256,
             "body_policy":"one fixed caller-supplied posed body; no material-dependent refitting"});
+        if let Some(policy) = &self.scenario.vapor_coverage {
+            let faces: Option<Vec<_>> = policy
+                .body_triangle_ids
+                .iter()
+                .map(|&i| self.body.collision.1.get(i).copied())
+                .collect();
+            if let Some(faces) = faces
+                && let Ok(identity) = hash(&json!({"positions_m":self.body.collision.0,
+                    "triangles":faces}))
+            {
+                descriptor["vapor_coverage_body_mesh_sha256"] = json!(identity);
+            }
+        }
         if let Some(path) = &self.motion_path {
             descriptor["motion_path"] = match path {
                 Ok(path) => json!({"sha256":path.sha256()}),
@@ -358,6 +389,10 @@ impl<'a, 'body> Session<'a, 'body> {
             "charged_vertex_frames":charge,"physical_validation_claim":false,
             "comfort_claim":false,"hardware_execution_authorized":false,
             "note":"Heat is evaluated on this final computed frame even when drape flags require review. No scalar ranking or empirical fit/whole-wearer claim is made."});
+        if let Some(policy) = &self.scenario.vapor_coverage {
+            result["vapor_coverage"] =
+                outcome(vapor_coverage_at(policy, &run, self.body.collision));
+        }
         if let Some(vapor) = vapor {
             result["metrics"]["independent_vapor_potential_heat_flow_w"] =
                 vapor["result"]["potential_heat_flow_w"].clone();
@@ -391,6 +426,42 @@ impl<'a, 'body> Session<'a, 'body> {
         }
         Ok(result)
     }
+}
+
+fn vapor_coverage_at(
+    policy: &VaporCoverage,
+    run: &crate::run::DrapeRun,
+    body: (&[ftx_core::Vec3], &[[usize; 3]]),
+) -> Result<Value, Refusal> {
+    use crate::vapor::coverage::{Map, Request, Source};
+    let mut seen = BTreeSet::new();
+    if policy.body_triangle_ids.is_empty()
+        || policy.body_triangle_ids.len() > 4096
+        || policy
+            .body_triangle_ids
+            .iter()
+            .any(|&i| i >= body.1.len() || !seen.insert(i))
+    {
+        return Err(invalid(
+            "vapor coverage needs 1..4096 unique current collision-body triangle IDs",
+        ));
+    }
+    Request {
+        schema: "ftx-vapor-coverage/1".into(),
+        source: Source::from_scene(&run.scene, &run.report["material"])?,
+        map: Map {
+            body_positions_m: body.0.to_vec(),
+            body_triangles: policy
+                .body_triangle_ids
+                .iter()
+                .map(|&i| body.1[i])
+                .collect(),
+            instance_layers: policy.instance_layers.clone(),
+            settings: policy.settings.clone(),
+        },
+        conditions: policy.conditions.clone(),
+    }
+    .evaluate()
 }
 
 fn coverage_at(

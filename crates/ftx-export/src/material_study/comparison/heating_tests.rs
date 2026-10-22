@@ -125,6 +125,7 @@ fn case(combined: bool) -> (Alternative, Value, Value) {
         frozen_changes: Some(changes),
         cutting: Outcome::NotRequested,
         finite_stock: Outcome::NotRequested,
+        cutting_job: Outcome::NotRequested,
         sewing: Outcome::NotRequested,
         sewing_selection: Outcome::NotRequested,
         purchasing: Outcome::NotRequested,

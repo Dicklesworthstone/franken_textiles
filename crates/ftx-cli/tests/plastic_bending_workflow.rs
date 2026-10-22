@@ -433,6 +433,7 @@ fn sewn_membrane_set_stays_piece_local_and_body_motion_keeps_accepted_history() 
         surface: None,
         vapor_surface: None,
         coverage: None,
+        vapor_coverage: None,
         motion: Some(request.clone()),
     };
     let mut session = Session::new(&scenario, &body).unwrap();

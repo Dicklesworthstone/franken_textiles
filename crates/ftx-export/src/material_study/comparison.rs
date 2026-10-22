@@ -2,7 +2,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::Refusal;
-use ftx_pattern::{material_catalog::property_unit, material_screen::Direction};
+use ftx_pattern::{
+    material_catalog::{Selection, property_unit},
+    material_screen::Direction,
+    materials::{CATALOG_SCHEMA, Catalog},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -30,6 +34,10 @@ pub enum Consumer {
     Cutting,
     /// Complete allocation on the shared, individually identified hide/remnant inventory.
     FiniteStock,
+    /// Complete, exactly-once physical allocation across explicitly routed roll and finite stock.
+    CuttingJob,
+    /// Complete observed independent order cost across both stock routes in one declared market.
+    CuttingJobPurchasing,
     /// Production seam/stack/recipe admission, not physical seam qualification.
     Sewing,
     /// Complete marker-derived whole-order offer coverage in the request's dated market scope.
@@ -46,6 +54,8 @@ pub enum Consumer {
     VaporSurface,
     /// Successful declared body-patch/layer coverage heat on an admitted drape.
     Coverage,
+    /// Potential vapor transfer on an admitted drape with every declared body patch covered.
+    VaporCoverage,
     /// Complete prescribed motion starting at this admitted drape, not independent static poses.
     Motion,
     /// Complete independent-sheet temperature history on every admitted mechanical sample.
@@ -74,6 +84,14 @@ pub enum Metric {
     UsedStockMassKg,
     /// Newly allocated external cutter area on finite stock, in square metres.
     FiniteStockExternalCutAreaM2,
+    /// Complete external cutter area across roll and finite-stock routes, in square metres.
+    CuttingJobExternalCutAreaM2,
+    /// Gross roll stock plus whole used finite-stock items, in square metres.
+    CuttingJobStockAreaM2,
+    /// Complete gross stock mass across both routes, including waste, in kilograms.
+    CuttingJobStockMassKg,
+    /// Complete observed independent order cost across both routes in the job's market currency.
+    CuttingJobObservedOrderCost,
     /// Least observed independent whole-order total in the explicit market currency.
     ObservedOrderCost,
     /// Traversed stitch intervals, including declared locks and repeated passes.
@@ -96,6 +114,10 @@ pub enum Metric {
     IndependentVaporPotentialMassFlowKgS,
     /// Signed heat through the declared body coverage domain (W), not assumed whole-wearer heat.
     BodyCoveragePowerW,
+    /// Potential latent power over the fully covered declared body domain, in W.
+    CoveredVaporPotentialHeatFlowW,
+    /// Potential water-vapor flow over the fully covered declared body domain, in kg/s.
+    CoveredVaporPotentialMassFlowKgS,
     /// Peak absolute original-panel edge strain (%) over the initial state and accepted motion samples.
     MotionMaxAbsoluteEdgeStrainPct,
     /// Signed incoming-side energy (J) for all independent sheets over the whole requested motion.
@@ -133,6 +155,10 @@ impl Metric {
             | Self::UsedStockGrossAreaM2
             | Self::UsedStockMassKg
             | Self::FiniteStockExternalCutAreaM2 => Consumer::FiniteStock,
+            Self::CuttingJobExternalCutAreaM2
+            | Self::CuttingJobStockAreaM2
+            | Self::CuttingJobStockMassKg => Consumer::CuttingJob,
+            Self::CuttingJobObservedOrderCost => Consumer::CuttingJobPurchasing,
             Self::ObservedOrderCost => Consumer::Purchasing,
             Self::StitchIntervals | Self::FeedSeconds => Consumer::Sewing,
             Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
@@ -141,6 +167,9 @@ impl Metric {
             Self::IndependentVaporPotentialHeatFlowW
             | Self::IndependentVaporPotentialMassFlowKgS => Consumer::VaporSurface,
             Self::BodyCoveragePowerW => Consumer::Coverage,
+            Self::CoveredVaporPotentialHeatFlowW | Self::CoveredVaporPotentialMassFlowKgS => {
+                Consumer::VaporCoverage
+            }
             Self::MotionMaxAbsoluteEdgeStrainPct => Consumer::Motion,
             Self::TransientSurfaceInsideEnergyJ
             | Self::TransientSurfaceMinSampleTemperatureC
@@ -161,13 +190,24 @@ impl Metric {
             Self::StockAreaM2
             | Self::ExternalCutAreaM2
             | Self::UsedStockGrossAreaM2
-            | Self::FiniteStockExternalCutAreaM2 => "m2",
-            Self::StockMassKg | Self::AssemblyMassKg | Self::UsedStockMassKg => "kg",
-            Self::ObservedOrderCost => currency.unwrap_or("unavailable currency"),
+            | Self::FiniteStockExternalCutAreaM2
+            | Self::CuttingJobExternalCutAreaM2
+            | Self::CuttingJobStockAreaM2 => "m2",
+            Self::StockMassKg
+            | Self::AssemblyMassKg
+            | Self::UsedStockMassKg
+            | Self::CuttingJobStockMassKg => "kg",
+            Self::ObservedOrderCost | Self::CuttingJobObservedOrderCost => {
+                currency.unwrap_or("unavailable currency")
+            }
             Self::StitchIntervals | Self::UsedStockCount => "count",
             Self::FeedSeconds => "s",
-            Self::VaporPotentialHeatFlowW | Self::IndependentVaporPotentialHeatFlowW => "W",
-            Self::VaporPotentialMassFlowKgS | Self::IndependentVaporPotentialMassFlowKgS => "kg/s",
+            Self::VaporPotentialHeatFlowW
+            | Self::CoveredVaporPotentialHeatFlowW
+            | Self::IndependentVaporPotentialHeatFlowW => "W",
+            Self::VaporPotentialMassFlowKgS
+            | Self::CoveredVaporPotentialMassFlowKgS
+            | Self::IndependentVaporPotentialMassFlowKgS => "kg/s",
             Self::SimulatedClothMassKg => "kg",
             Self::MaxAbsoluteEdgeStrainPct | Self::MotionMaxAbsoluteEdgeStrainPct => "%",
             Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW => "W",
@@ -196,6 +236,10 @@ impl Metric {
             Self::UsedStockGrossAreaM2 => row.metrics.used_stock_gross_area_m2,
             Self::UsedStockMassKg => row.metrics.used_stock_mass_kg,
             Self::FiniteStockExternalCutAreaM2 => row.metrics.finite_stock_external_cut_area_m2,
+            Self::CuttingJobExternalCutAreaM2 => row.metrics.cutting_job_external_cut_area_m2,
+            Self::CuttingJobStockAreaM2 => row.metrics.cutting_job_stock_area_m2,
+            Self::CuttingJobStockMassKg => row.metrics.cutting_job_stock_mass_kg,
+            Self::CuttingJobObservedOrderCost => row.metrics.cutting_job_observed_order_cost,
             Self::ObservedOrderCost => row.metrics.least_observed_independent_order_total,
             Self::StitchIntervals => row.metrics.stitch_intervals.map(|n| n as f64),
             Self::FeedSeconds => row.metrics.feed_seconds,
@@ -221,6 +265,12 @@ impl Metric {
             }
             Self::BodyCoveragePowerW => {
                 simulation["coverage"]["result"]["steady"]["power_w"].as_f64()
+            }
+            Self::CoveredVaporPotentialHeatFlowW => {
+                admitted.vapor_coverage?["coverage"]["covered_potential_heat_flow_w"].as_f64()
+            }
+            Self::CoveredVaporPotentialMassFlowKgS => {
+                admitted.vapor_coverage?["coverage"]["covered_potential_mass_flow_kg_s"].as_f64()
             }
             Self::MotionMaxAbsoluteEdgeStrainPct => {
                 admitted.motion["metrics"]["max_absolute_edge_strain_pct"].as_f64()
@@ -406,10 +456,10 @@ impl Policy {
         if self.objectives.is_empty()
             || self.objectives.len() > 16
             || self.constraints.len() > 64
-            || self.required_consumers.len() > 13
+            || self.required_consumers.len() > 16
         {
             return Err(invalid(
-                "comparison needs 1..16 objectives, at most 64 constraints and 13 consumers",
+                "comparison needs 1..16 objectives, at most 64 constraints and 16 consumers",
             ));
         }
         let mut metrics = BTreeSet::new();
@@ -444,6 +494,11 @@ impl Policy {
             let requested = match consumer {
                 Consumer::Cutting => request.cutting.is_some(),
                 Consumer::FiniteStock => request.finite_stock.is_some(),
+                Consumer::CuttingJob => request.cutting_job.is_some(),
+                Consumer::CuttingJobPurchasing => request
+                    .cutting_job
+                    .as_ref()
+                    .is_some_and(|job| job.purchasing.is_some()),
                 Consumer::Sewing => request.sewing.is_some() || request.sewing_selection.is_some(),
                 Consumer::Purchasing => request.purchasing.is_some(),
                 Consumer::AssemblyMass => request.assembly_mass.is_some(),
@@ -452,6 +507,7 @@ impl Policy {
                 | Consumer::Surface
                 | Consumer::VaporSurface
                 | Consumer::Coverage
+                | Consumer::VaporCoverage
                 | Consumer::Motion
                 | Consumer::TransientSurface
                 | Consumer::TransientCoverage => additional_consumer,
@@ -487,6 +543,7 @@ impl Policy {
                     | Consumer::Surface
                     | Consumer::VaporSurface
                     | Consumer::Coverage
+                    | Consumer::VaporCoverage
                     | Consumer::Motion
                     | Consumer::TransientSurface
                     | Consumer::TransientCoverage
@@ -615,6 +672,14 @@ impl Policy {
         if self.consumers().contains(&Consumer::Vapor) {
             report.notes.push("Vapor objectives use the declared common-area stack, pressure boundaries, films and latent heat. They describe potential transfer, not actual evaporation, sweating, condensation or wearer comfort; source protocols must be admitted independently of other thermal consumers.");
         }
+        if self.consumers().contains(&Consumer::VaporCoverage) {
+            report.notes.push("Covered vapor objectives require the whole declared body domain to be covered on the admitted drape. Partial covered subtotals stay visible but cannot be ranked as complete-domain transfer. Actual layer areas, explicit interlayer resistance, pressure boundaries and films define the potential network; no sweat supply, condensation, thermal feedback or comfort is inferred.");
+        }
+        if self.consumers().contains(&Consumer::CuttingJob)
+            || self.consumers().contains(&Consumer::CuttingJobPurchasing)
+        {
+            report.notes.push("Cutting-job objectives cover every routed physical piece exactly once. Gross stock includes roll-marker waste and entire used finite-stock items; complete same-market observed costs do not reserve inventory or include undeclared shipping/handling.");
+        }
         if self.consumers().contains(&Consumer::VaporSurface) {
             report.notes.push("Independent-sheet vapor objectives use current draped sheet areas and their explicitly requested pressure/film/latent-heat model. They are separate from the common-area stack and dry heat, and are not body coverage, actual evaporation, sweat supply, condensation or comfort. Only consumed vapor observation protocol sets qualify comparison; column deduplication and source IDs do not establish incompatibility.");
         }
@@ -654,10 +719,17 @@ impl Policy {
         };
         let mut admitted = Numerical {
             drape: simulation,
+            vapor_coverage: None,
             motion: &Value::Null,
             transient_surface: None,
             transient_coverage: None,
         };
+        if self.consumers().contains(&Consumer::VaporCoverage) && !simulation.is_null() {
+            match admit_vapor_coverage(descriptor, simulation) {
+                Ok(vapor) => admitted.vapor_coverage = Some(vapor),
+                Err(e) => result.exclusions.push(e),
+            }
+        }
         if self.needs_motion() && !simulation.is_null() {
             match admit_motion(descriptor, simulation) {
                 Ok(motion) => admitted.motion = motion,
@@ -805,11 +877,12 @@ impl Policy {
         if consumers.contains(&Consumer::Sewing) {
             keys.insert("thickness");
         }
-        if self
-            .metrics()
-            .iter()
-            .any(|m| matches!(m, Metric::StockMassKg | Metric::UsedStockMassKg))
-            || consumers.contains(&Consumer::AssemblyMass)
+        if self.metrics().iter().any(|m| {
+            matches!(
+                m,
+                Metric::StockMassKg | Metric::UsedStockMassKg | Metric::CuttingJobStockMassKg
+            )
+        }) || consumers.contains(&Consumer::AssemblyMass)
         {
             keys.insert("areal_density");
         }
@@ -874,6 +947,16 @@ impl Policy {
                 .as_ref()
                 .ok_or_else(|| invalid("frozen source record unavailable"))?;
             let mut relevant = keys.clone();
+            if (consumers.contains(&Consumer::CuttingJob)
+                || consumers.contains(&Consumer::CuttingJobPurchasing))
+                && row.cutting_job.value().is_some_and(|job| {
+                    job.inventory.iter().any(|entry| {
+                        entry.piece == id && entry.stock == crate::cutting::job::StockKind::Roll
+                    })
+                })
+            {
+                relevant.insert("width");
+            }
             if mechanics {
                 relevant.extend(
                     material
@@ -916,6 +999,14 @@ impl Policy {
                 Value::Null
             },
         ))?;
+        let base = if consumers.contains(&Consumer::VaporCoverage) {
+            let vapor = admitted
+                .vapor_coverage
+                .ok_or_else(|| invalid("covered vapor observation protocols unavailable"))?;
+            hash(&(base, covered_vapor_protocols(vapor)?))?
+        } else {
+            base
+        };
         let base = if consumers.contains(&Consumer::Vapor) {
             // Only explicitly consumed layer occurrences participate in the common-area stack.
             let vapor = row
@@ -980,6 +1071,7 @@ impl Policy {
 // static reading vanish, and an available status alone must not admit stale numerical results.
 struct Numerical<'a> {
     drape: &'a Value,
+    vapor_coverage: Option<&'a Value>,
     motion: &'a Value,
     transient_surface: Option<Heat<'a>>,
     transient_coverage: Option<Heat<'a>>,
@@ -995,6 +1087,13 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
     match consumer {
         Consumer::Cutting => row.cutting.value().is_some(),
         Consumer::FiniteStock => row.finite_stock.value().is_some(),
+        Consumer::CuttingJob => row
+            .cutting_job
+            .value()
+            .is_some_and(|r| r.complete_inventory),
+        Consumer::CuttingJobPurchasing => row.cutting_job.value().is_some_and(|r| {
+            r.complete_inventory && row.metrics.cutting_job_observed_order_cost.is_some()
+        }),
         Consumer::Sewing => row.sewing.value().is_some(),
         Consumer::Purchasing => row
             .purchasing
@@ -1011,6 +1110,7 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
         Consumer::Surface => admitted.drape["surface"]["status"] == "available",
         Consumer::VaporSurface => admitted.drape["vapor_surface"]["status"] == "available",
         Consumer::Coverage => admitted.drape["coverage"]["status"] == "available",
+        Consumer::VaporCoverage => admitted.vapor_coverage.is_some(),
         Consumer::Motion => !admitted.motion.is_null(),
         Consumer::TransientSurface => admitted.transient_surface.is_some(),
         Consumer::TransientCoverage => admitted.transient_coverage.is_some(),
@@ -1057,6 +1157,258 @@ fn same_identity(actual: &Value, expected: &Value) -> bool {
     expected
         .as_str()
         .is_some_and(|s| !s.is_empty() && actual.as_str() == Some(s))
+}
+
+fn vapor_array<'a>(value: &'a Value, key: &str) -> Result<&'a [Value], Refusal> {
+    value[key]
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| invalid(format!("covered vapor needs retained {key}")))
+}
+
+fn vapor_index(value: &Value) -> Result<usize, Refusal> {
+    value
+        .as_u64()
+        .and_then(|i| usize::try_from(i).ok())
+        .ok_or_else(|| invalid("covered vapor needs an integer retained index"))
+}
+
+// A caller-supplied material-report digest is not evidence that the embedded source still uses
+// that report's selections. Resolve only the frozen inputs and compare the complete canonical
+// receipts, including estimate policy, before accepting each original instance's assignment.
+fn admit_vapor_material(source: &Value, report: &Value) -> Result<(), Refusal> {
+    let instances = vapor_array(source, "instances")?;
+    let owners = vapor_array(source, "triangle_instance")?;
+    let patches = vapor_array(source, "patches")?;
+    let selections = vapor_array(source, "materials")?;
+    if source["schema"] != "ftx-vapor-coverage-source/1"
+        || instances.is_empty()
+        || instances.len() > 65_536
+        || patches.is_empty()
+        || patches.len() > 65_536
+        || owners.len() != patches.len()
+        || selections.is_empty()
+        || selections.len() > patches.len()
+    {
+        return Err(invalid("covered vapor source ownership is incomplete"));
+    }
+    let names: BTreeSet<_> = instances.iter().filter_map(Value::as_str).collect();
+    if names.len() != instances.len() || names.iter().any(|name| name.trim().is_empty()) {
+        return Err(invalid("covered vapor source instances must be distinct"));
+    }
+    let instance_hashes: Vec<_> = match report["basis"].as_str() {
+        Some("characterized_record") => {
+            let id = report["record_sha256"]
+                .as_str()
+                .ok_or_else(|| invalid("covered vapor material receipt has no identity"))?;
+            vec![id; instances.len()]
+        }
+        Some("per_piece_characterization") => {
+            let receipts = vapor_array(report, "instances")?;
+            if receipts.len() != instances.len()
+                || report["triangle_instance"] != source["triangle_instance"]
+                || receipts
+                    .iter()
+                    .zip(instances)
+                    .any(|(r, id)| r["instance"] != *id)
+            {
+                return Err(invalid(
+                    "covered vapor source ownership differs from the retained drape",
+                ));
+            }
+            receipts
+                .iter()
+                .map(|r| {
+                    r["record_sha256"].as_str().ok_or_else(|| {
+                        invalid("covered vapor instance receipt has no material identity")
+                    })
+                })
+                .collect::<Result<_, _>>()?
+        }
+        _ => {
+            return Err(invalid(
+                "covered vapor needs characterized drape material receipts",
+            ));
+        }
+    };
+    let catalog = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    };
+    let mut hashes = Vec::with_capacity(selections.len());
+    for value in selections {
+        let selection: Selection = serde_json::from_value(value.clone())
+            .map_err(|e| invalid(format!("covered vapor frozen material: {e}")))?;
+        if selection.record.is_none() || selection.expected_sha256.is_none() {
+            return Err(invalid(
+                "covered vapor material must be frozen and digest-locked",
+            ));
+        }
+        let resolved = catalog.resolve(&selection)?;
+        let receipt = if report["basis"] == "characterized_record" {
+            &report["record"]
+        } else {
+            &report["records"][resolved.sha256()]["record"]
+        };
+        if serde_json::to_value(&resolved).map_err(|e| invalid(e.to_string()))? != *receipt
+            || serde_json::to_value(resolved.frozen_selection())
+                .map_err(|e| invalid(e.to_string()))?
+                != *value
+        {
+            return Err(invalid(
+                "covered vapor frozen selection differs from its canonical drape receipt",
+            ));
+        }
+        hashes.push(resolved.sha256().to_string());
+    }
+    let mut used = BTreeSet::new();
+    for (patch, owner) in patches.iter().zip(owners) {
+        let column = vapor_index(&patch["column"])?;
+        let owner = vapor_index(owner)?;
+        let actual = hashes.get(column);
+        let expected = instance_hashes.get(owner);
+        if actual.is_none() || expected.is_none() || actual.map(String::as_str) != expected.copied()
+        {
+            return Err(invalid(
+                "covered vapor patch material differs from its retained instance receipt",
+            ));
+        }
+        used.insert(column);
+    }
+    if used.len() != selections.len() {
+        return Err(invalid(
+            "covered vapor source has unassigned material columns",
+        ));
+    }
+    Ok(())
+}
+
+fn covered_vapor_protocols(vapor: &Value) -> Result<BTreeSet<String>, Refusal> {
+    let regions = vapor_array(&vapor["coverage"], "regions")?;
+    let projected = vapor_array(&vapor["projection"], "regions")?;
+    let source = &vapor["request"]["source"];
+    let instances = vapor_array(source, "instances")?;
+    let owners = vapor_array(source, "triangle_instance")?;
+    if regions.len() != projected.len() {
+        return Err(invalid(
+            "covered vapor regions differ from their retained projection",
+        ));
+    }
+    let mut protocols = BTreeSet::new();
+    for (region, geometry) in regions.iter().zip(projected) {
+        let layers = vapor_array(&region["vapor"], "layers")?;
+        let portions = vapor_array(geometry, "layers")?;
+        if region["id"].as_str().is_none()
+            || region["id"] != geometry["id"]
+            || region["body_triangle"] != geometry["body_triangle"]
+            || layers.len() != portions.len()
+        {
+            return Err(invalid(
+                "covered vapor layer occurrences differ from their projection",
+            ));
+        }
+        for (layer, portion) in layers.iter().zip(portions) {
+            let triangle = vapor_index(&portion["cloth_triangle"])?;
+            let owner = owners
+                .get(triangle)
+                .ok_or_else(|| invalid("covered vapor occurrence has no retained triangle"))?;
+            let instance = instances
+                .get(vapor_index(owner)?)
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("covered vapor occurrence has no retained instance"))?;
+            if layer["key"] != portion["layer"]
+                || layer["key"] != vapor["request"]["map"]["instance_layers"][instance]
+            {
+                return Err(invalid(
+                    "covered vapor occurrence differs from its physical layer",
+                ));
+            }
+            let q = &layer["observation"];
+            // Triangulation and region count may change, but swapping protocols between two
+            // original instances in the same physical layer must not become protocol equality.
+            protocols.insert(
+                serde_json::to_string(&json!({"instance":instance,"key":layer["key"],
+                "unit":q["unit"],"method":q["method"],"conditions":q["conditions"],
+                "evidence":q["evidence"]}))
+                .map_err(|e| invalid(e.to_string()))?,
+            );
+        }
+    }
+    Ok(protocols)
+}
+
+fn admit_vapor_coverage<'a>(
+    descriptor: &Value,
+    simulation: &'a Value,
+) -> Result<&'a Value, Refusal> {
+    let policy = &descriptor["scenario"]["vapor_coverage"];
+    let result = &simulation["vapor_coverage"]["result"];
+    let request = &result["request"];
+    let source = &request["source"];
+    let mut expected_conditions = policy["conditions"].clone();
+    if let Some(conditions) = expected_conditions.as_object_mut() {
+        conditions.insert(
+            "body_mesh_sha256".into(),
+            descriptor["vapor_coverage_body_mesh_sha256"].clone(),
+        );
+    }
+    if !policy.is_object()
+        || simulation["vapor_coverage"]["status"] != "available"
+        || result["schema"] != "ftx-vapor-coverage-report/1"
+        || request["schema"] != "ftx-vapor-coverage/1"
+        || !same_identity(
+            &result["body_mesh_sha256"],
+            &descriptor["vapor_coverage_body_mesh_sha256"],
+        )
+        || request["map"]["instance_layers"] != policy["instance_layers"]
+        || request["map"]["settings"] != policy["settings"]
+        || request["conditions"] != expected_conditions
+        || result["request_sha256"].as_str() != Some(hash(request)?.as_str())
+        || result["body_mesh_sha256"].as_str()
+            != Some(
+                hash(&json!({"positions_m":request["map"]["body_positions_m"],
+                "triangles":request["map"]["body_triangles"]}))?
+                .as_str(),
+            )
+        || source["positions_m"] != simulation["positions_m"]
+        || result["source_sha256"].as_str() != Some(hash(source)?.as_str())
+        || source["material_report_sha256"].as_str()
+            != Some(hash(&simulation["drape"]["material"])?.as_str())
+    {
+        return Err(invalid(
+            "covered vapor comparison needs the current material/geometry and exact requested body domain, projection and pressure conditions",
+        ));
+    }
+    let patches = source["patches"]
+        .as_array()
+        .ok_or_else(|| invalid("covered vapor source patches unavailable"))?;
+    let triangles = simulation["triangles"]
+        .as_array()
+        .ok_or_else(|| invalid("current drape triangles unavailable"))?;
+    if patches.len() != triangles.len()
+        || patches
+            .iter()
+            .zip(triangles)
+            .any(|(p, t)| p["vertices"] != *t)
+    {
+        return Err(invalid(
+            "covered vapor topology differs from the current drape",
+        ));
+    }
+    admit_vapor_material(source, &simulation["drape"]["material"])?;
+    let coverage = &result["coverage"];
+    let body_area = coverage["body_area_m2"]
+        .as_f64()
+        .filter(|a| a.is_finite() && *a > 0.)
+        .ok_or_else(|| invalid("covered vapor body area unavailable"))?;
+    if coverage["uncovered_area_m2"].as_f64() != Some(0.)
+        || coverage["covered_area_m2"].as_f64() != Some(body_area)
+    {
+        return Err(invalid(
+            "covered vapor objective requires complete declared body coverage; a partial subtotal cannot stand in for unavailable bare-body transfer",
+        ));
+    }
+    Ok(result)
 }
 
 fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Value, Refusal> {

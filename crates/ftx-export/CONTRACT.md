@@ -267,6 +267,16 @@ ranges produce `ftx-sewing-plan/10` and a `source_span` with original ranges/ful
 one-way traveled lengths. Whole-seam source acceptance and hardware refusal remain intact. Omitted
 ranges retain legacy serialization/arithmetic. See `docs/material-sewing-plans.md`.
 
+**Complete mixed-stock cutting.** `cutting::job::Request` routes every original source piece to the
+existing roll or finite-stock planner while retaining the complete frozen pattern. Matching copies
+and effective seam allowance, bounded combined inventory, and exact instance/copy/material coverage
+are mandatory. The canonical scoped subplans retain original geometry and whole-pattern digests;
+the job's pattern/request JSON strings replay the full route. Same-market procurement adds whole
+roll orders and used exact finite items only with complete offer coverage. Physical-item-bound
+offers cannot also supply rolls. Missing prices preserve geometry and stay unknown. Material studies
+rerun the complete job after substitution, independently of sewing and physics. See
+`docs/mixed-stock-cutting.md` and `tests/cutting_job.rs`; synthetic verification is not machine approval.
+
 **Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve, a seam allowance
 outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` for a projector page over
 200 in; `io` for an unreadable output directory.

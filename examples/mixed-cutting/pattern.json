@@ -1,0 +1,28 @@
+{
+  "schema": "fabric-pattern/1",
+  "units": "mm",
+  "meta": {"sa_mm": 0, "note": "Synthetic miniature mixed-stock garment; numerical manufacturing example, not a measured textile or garment"},
+  "fabric": {"material": {
+    "id": "mixed-example-hide", "allow_estimates": true,
+    "record": {"id": "mixed-example-hide", "name": "Synthetic finite hide", "form": "hide",
+      "properties": {"areal_density": {"value": 0.5, "unit": "kg/m2", "evidence": "estimate", "source": "test", "method": "Synthetic numerical observation"}},
+      "sources": {"test": {"reference": "test:mixed-cutting", "accessed_on": "2026-10-22", "note": "Synthetic material and geometry for software checks only"}}
+    }
+  }},
+  "pieces": [
+    {"id": "shell", "cut": {"qty": 2}, "grain": [[5,5],[5,15]],
+      "vertices": {"a": [0,0], "b": [20,0], "c": [20,25], "d": [0,25]},
+      "edges": [{"id":"bottom","from":"a","to":"b"},{"id":"right","from":"b","to":"c"},{"id":"top","from":"c","to":"d"},{"id":"left","from":"d","to":"a"}],
+      "internal": [{"kind":"cut","pts":[[5,8],[10,8]]}], "drills": [{"p":[8,12],"d":2}]
+    },
+    {"id": "lining", "cut": {"qty": 1,"on_fold":"left"}, "sim": false, "grain": [[5,5],[5,15]],
+      "fabric": {"material": {"id":"mixed-example-lining","allow_estimates":true,
+        "record":{"id":"mixed-example-lining","name":"Synthetic roll lining","form":"woven",
+          "properties":{"width":{"value":0.1,"unit":"m","evidence":"estimate","source":"test","method":"Synthetic numerical observation"},"areal_density":{"value":0.2,"unit":"kg/m2","evidence":"estimate","source":"test","method":"Synthetic numerical observation"}},
+          "sources":{"test":{"reference":"test:mixed-cutting","accessed_on":"2026-10-22","note":"Synthetic material and geometry for software checks only"}}}}},
+      "vertices": {"a": [0,0], "b": [10,0], "c": [10,25], "d": [0,25]},
+      "edges": [{"id":"bottom","from":"a","to":"b"},{"id":"right","from":"b","to":"c"},{"id":"top","from":"c","to":"d"},{"id":"left","from":"d","to":"a"}]
+    }
+  ],
+  "seams": []
+}

@@ -19,6 +19,7 @@ use crate::{
     cutting::{
         CutOptions, CutPlan,
         geometry::Work,
+        job,
         procurement::{self, Market},
         stock,
     },
@@ -113,6 +114,10 @@ pub struct Request {
     /// inventory; evaluating alternatives does not reserve stock or consume earlier rows' remnants.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finite_stock: Option<stock::Request>,
+    /// Complete explicitly routed roll/finite-stock job. Exclusive with the separate legacy
+    /// cutting, finite_stock and purchasing requests, so no physical part is ordered twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cutting_job: Option<job::Request>,
     /// Shared machine/assembly/seam policy, checked separately for every substituted material.
     #[serde(default)]
     pub sewing: Option<SewOptions>,
@@ -197,6 +202,18 @@ pub struct Metrics {
     /// New external cutter area allocated by the finite-stock planner, separate from roll cutting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finite_stock_external_cut_area_m2: Option<f64>,
+    /// Complete mixed-job new external cut area, across its roll and finite-stock routes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_job_external_cut_area_m2: Option<f64>,
+    /// Gross roll area plus whole used finite-item area, including waste, defects and prior cuts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_job_stock_area_m2: Option<f64>,
+    /// Complete engaged mixed-job stock mass; unknown if any used stock lacks mass evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_job_stock_mass_kg: Option<f64>,
+    /// Complete same-market whole-job order total; never a subtotal of only available prices.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_job_observed_order_cost: Option<f64>,
     /// Least observed independent whole-order total in the request currency; absent for any
     /// missing offer. Neither a live quote guarantee nor a market-population percentile.
     pub least_observed_independent_order_total: Option<f64>,
@@ -224,6 +241,9 @@ pub struct Alternative {
     /// Real finite-hide/remnant allocation, independent of roll cutting, sewing and roll pricing.
     #[serde(skip_serializing_if = "Outcome::is_not_requested")]
     pub finite_stock: Outcome<stock::Plan>,
+    /// Complete mixed roll/hide/remnant cutting, with exact expanded inventory and source replay.
+    #[serde(skip_serializing_if = "Outcome::is_not_requested")]
+    pub cutting_job: Outcome<job::Plan>,
     /// Real sewing plan output or refusal; preserves uncompressed-stack and recipe limitations.
     pub sewing: Outcome<SewPlan>,
     /// Complete finite recipe-search receipt; the selected plan is stored once in `sewing`.
@@ -311,6 +331,19 @@ fn hash<T: Serialize>(value: &T) -> Result<String, Refusal> {
 }
 
 impl Request {
+    fn purchasing_currency(&self) -> Option<&str> {
+        self.purchasing
+            .as_ref()
+            .map(|p| p.market.currency.as_str())
+            .or_else(|| {
+                self.cutting_job
+                    .as_ref()?
+                    .purchasing
+                    .as_ref()
+                    .map(|p| p.market.currency.as_str())
+            })
+    }
+
     fn variants(
         &self,
         pattern: &Pattern,
@@ -330,15 +363,20 @@ impl Request {
             || (!additional_consumer
                 && self.cutting.is_none()
                 && self.finite_stock.is_none()
+                && self.cutting_job.is_none()
                 && self.sewing.is_none()
                 && self.sewing_selection.is_none()
                 && self.assembly_mass.is_none()
                 && self.vapor.is_none())
             || (self.purchasing.is_some() && self.cutting.is_none())
+            || (self.cutting_job.is_some()
+                && (self.cutting.is_some()
+                    || self.finite_stock.is_some()
+                    || self.purchasing.is_some()))
             || (self.sewing.is_some() && self.sewing_selection.is_some())
         {
             return Err(invalid(
-                "study needs its schema, exactly one variant source, at least one consumer, cutting when pricing, and at most one of sewing or sewing_selection",
+                "study needs its schema, exactly one variant source, at least one consumer, cutting when pricing, at most one of sewing or sewing_selection, and cutting_job exclusive with separate cutting/finite_stock/purchasing",
             ));
         }
         if self.variants.len() > 32 {
@@ -460,7 +498,7 @@ impl Request {
                     &scenario,
                     &manufacturing.source_pattern_sha256,
                     &request_sha256,
-                    self.purchasing.as_ref().map(|p| p.market.currency.as_str()),
+                    self.purchasing_currency(),
                 )
             })
             .transpose()?;
@@ -502,6 +540,7 @@ impl Request {
             .as_ref()
             .map_or(0, |c| c.copies)
             .saturating_add(self.finite_stock.as_ref().map_or(0, |s| s.options.copies))
+            .saturating_add(self.cutting_job.as_ref().map_or(0, job::Request::copies))
             .max(1);
         if pattern
             .instances
@@ -528,7 +567,14 @@ impl Request {
         }
         if self.finite_stock.as_ref().is_some_and(|stock| {
             stock.options.work_limit.saturating_mul(variants.len()) > 20_000_000
-        }) {
+        }) || self
+            .cutting_job
+            .as_ref()
+            .and_then(|j| j.finite_stock.as_ref())
+            .is_some_and(|stock| {
+                stock.options.work_limit.saturating_mul(variants.len()) > 20_000_000
+            })
+        {
             return Err(budget(
                 "material study exceeds 20000000 aggregate finite-stock work units; reduce alternatives or the per-plan work limit",
             ));
@@ -574,7 +620,7 @@ impl Request {
                     &alternatives,
                     &source_pattern_sha256,
                     &request_sha256,
-                    self.purchasing.as_ref().map(|p| p.market.currency.as_str()),
+                    self.purchasing_currency(),
                 )
             });
         let mut notes = vec![
@@ -588,6 +634,9 @@ impl Request {
         }
         if self.finite_stock.is_some() {
             notes.push("Finite-stock alternatives independently start with the same physical inventory. Used-item area/mass includes defects and prior occupied regions; newly allocated cut area is separate. Alternatives neither reserve inventory nor create hide purchase quotes.");
+        }
+        if self.cutting_job.is_some() {
+            notes.push("The cutting job routes every original physical instance and copy exactly once across roll and finite stock. Its gross stock includes waste, defects and prior cuts; complete purchasing adds whole roll orders and used physical items only when all same-market prices are known. No stock is reserved and no machine is driven.");
         }
         if self.combinations.is_some() {
             notes.push("Every declared material combination is evaluated through the same production consumers. The frontier is conditional on this finite choice set and the declared comparison policy, not a global material/design optimum. Explicit interface pools select exact assigned snapshot pairs only; missing pair evidence remains a consumer refusal.");
@@ -637,6 +686,7 @@ impl Request {
             frozen_changes: None,
             cutting: Outcome::NotRequested,
             finite_stock: Outcome::NotRequested,
+            cutting_job: Outcome::NotRequested,
             sewing: Outcome::NotRequested,
             sewing_selection: Outcome::NotRequested,
             purchasing: Outcome::NotRequested,
@@ -654,6 +704,11 @@ impl Request {
                 }
                 if self.finite_stock.is_some() {
                     row.finite_stock = Outcome::Refused {
+                        refusal: refusal.clone(),
+                    };
+                }
+                if self.cutting_job.is_some() {
+                    row.cutting_job = Outcome::Refused {
                         refusal: refusal.clone(),
                     };
                 }
@@ -701,6 +756,9 @@ impl Request {
         if let Some(request) = &self.finite_stock {
             row.finite_stock = Outcome::from_result(request.build(&pattern));
         }
+        if let Some(request) = &self.cutting_job {
+            row.cutting_job = Outcome::from_result(request.build(&pattern));
+        }
         if let Some(options) = &self.sewing {
             row.sewing = Outcome::from_result(SewPlan::build(&pattern, options));
         }
@@ -720,6 +778,18 @@ impl Request {
                         self.finite_stock
                             .as_ref()
                             .map(|s| s.options.seam_allowance_mm),
+                    )
+                    .chain(
+                        self.cutting_job
+                            .as_ref()
+                            .and_then(|j| j.roll.as_ref())
+                            .map(|o| o.seam_allowance_mm),
+                    )
+                    .chain(
+                        self.cutting_job
+                            .as_ref()
+                            .and_then(|j| j.finite_stock.as_ref())
+                            .map(|r| r.options.seam_allowance_mm),
                     )
                 {
                     let allowance = |sa| {
@@ -784,6 +854,16 @@ impl Request {
                 row.metrics.used_stock_mass_kg =
                     Some(finite_sum(used().filter_map(|m| m.stock_mass_kg))?);
             }
+        }
+        if let Some(plan) = row.cutting_job.value() {
+            row.metrics.cutting_job_external_cut_area_m2 = Some(plan.external_cut_area_m2);
+            row.metrics.cutting_job_stock_area_m2 = Some(plan.stock_area_m2);
+            row.metrics.cutting_job_stock_mass_kg = plan.stock_mass_kg;
+            row.metrics.cutting_job_observed_order_cost = plan
+                .purchasing
+                .as_ref()
+                .filter(|p| p.complete_offer_coverage)
+                .and_then(|p| p.least_observed_independent_order_total);
         }
         if let Some(priced) = row.purchasing.value() {
             row.metrics.least_observed_independent_order_total =

@@ -1,0 +1,30 @@
+{
+  "schema": "ftx-material-study/1",
+  "variants": [{"key":"mixed-shell-and-lining","changes":{"schema":"ftx-material-bindings/1"}}],
+  "cutting_job": {
+    "schema": "ftx-cutting-job/1",
+    "routes": [{"piece":"shell","stock":"finite_stock"},{"piece":"lining","stock":"roll"}],
+    "roll": {"copies":2,"gap_mm":2,"edge_margin_mm":2,"end_margin_mm":2},
+    "finite_stock": {
+      "schema": "ftx-finite-stock-request/1",
+      "stocks": [{
+        "id": "hide-001",
+        "material": {"id":"mixed-example-hide","allow_estimates":true,
+          "record":{"id":"mixed-example-hide","name":"Synthetic finite hide","form":"hide",
+            "properties":{"areal_density":{"value":0.5,"unit":"kg/m2","evidence":"estimate","source":"test","method":"Synthetic numerical observation"}},
+            "sources":{"test":{"reference":"test:mixed-cutting","accessed_on":"2026-10-22","note":"Synthetic material and geometry for software checks only"}}}},
+        "outline_mm": [[0,0],[100,0],[100,100],[0,100]],
+        "defects_mm": [[[75,75],[85,75],[85,85],[75,85]]],
+        "grain_mm": [[0,0],[0,10]],
+        "geometry_source": {"reference":"test:mixed-cutting-stock","accessed_on":"2026-10-22","note":"Synthetic physical boundary and defect; not a hide scan"}
+      }],
+      "options":{"copies":2,"gap_mm":2,"boundary_margin_mm":2,"step_mm":2,"work_limit":1000000}
+    }
+  },
+  "comparison": {
+    "basis":"nominal",
+    "required_consumers":["cutting_job"],
+    "objectives":[{"metric":"cutting_job_stock_area_m2","direction":"minimize"}],
+    "constraints":[]
+  }
+}

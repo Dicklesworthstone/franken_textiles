@@ -418,6 +418,14 @@ indices, retains declared body geometry and mapping, and emits regional/bare hea
 transient histories. See `docs/thermal-coverage.md` and the actual sewn-drape CLI regressions in
 `crates/ftx-cli/tests/thermal_coverage_workflow.rs`.
 
+**Geometry-derived vapor coverage** (`vapor::coverage`, `tests/vapor_coverage.rs`). Frozen retained
+material selections and current body/cloth geometry feed the same projection/order/allocation kernel
+without requiring dry resistance or heat capacity. Each disjoint covered region invokes canonical Ret
+transport with actual allocated layer areas and explicitly supplied vapor interfaces and films.
+Covered potential-flow subtotals exclude unknown uncovered body fractions; no sweat, latent-heat
+coupling, comfort or measured garment claim is made. Complete source geometry and exact offline replay
+are bounded; missing Ret refuses only this consumer. See `docs/vapor-coverage.md`.
+
 **Geometry-derived thermal correspondence** (`thermal::surface::projection`, `ftx-tmb`).
 `project` partitions body triangles by local-normal cloth projection using bounded convex clipping,
 retains inverse-mapped cloth subpolygons and mid-surface distance ranges, and emits the existing

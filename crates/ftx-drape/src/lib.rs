@@ -42,6 +42,7 @@ pub mod study;
 pub mod study_input;
 pub mod thermal;
 pub mod two_start;
+pub mod vapor;
 
 pub use cloth::{ClothModel, SettleReport, SolveReport, Solver, Tube, grid, hex_grid, hex_tube};
 pub use contact::{Body, Contact, ContactParams, Intersection};

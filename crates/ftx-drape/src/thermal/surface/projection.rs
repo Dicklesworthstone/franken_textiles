@@ -317,6 +317,35 @@ pub(crate) fn project_source(
     faces: &[[usize; 3]],
     request: &Request,
 ) -> Result<Projection, Refusal> {
+    project_source_mode(source, cloth, body, faces, request, true)
+}
+
+/// Geometry-only reuse for non-thermal transport. The private intermediate Layout uses zero
+/// placeholders solely to reuse its topology/allocation validator; callers must discard its
+/// thermal interface fields and explicitly qualify their own transport interfaces.
+pub(crate) fn project_geometry(
+    source: &ProjectionSource<'_>,
+    cloth: &[Vec3],
+    body: &[Vec3],
+    faces: &[[usize; 3]],
+    request: &Request,
+) -> Result<Projection, Refusal> {
+    if !request.settings.interfaces.is_empty() {
+        return Err(invalid(
+            "geometry-only projection cannot consume thermal interfaces",
+        ));
+    }
+    project_source_mode(source, cloth, body, faces, request, false)
+}
+
+fn project_source_mode(
+    source: &ProjectionSource<'_>,
+    cloth: &[Vec3],
+    body: &[Vec3],
+    faces: &[[usize; 3]],
+    request: &Request,
+    thermal_interfaces: bool,
+) -> Result<Projection, Refusal> {
     if source.layers.iter().any(|layers| layers.len() != 1) {
         return Err(invalid("projection requires single-layer source triangles"));
     }
@@ -527,31 +556,36 @@ pub(crate) fn project_source(
                             ));
                         }
                     }
-                    let key = (request.cloth_layers[prev.id].as_str(), name.as_str());
-                    let interface = interfaces.get(&key).ok_or_else(|| {
-                        invalid(format!(
-                            "missing explicit projection interface {} -> {}",
-                            key.0, key.1
-                        ))
-                    })?;
-                    let mut resistance = interface.resistance_m2_k_w;
-                    if let Some(law) = &interface.stagnant_gap {
-                        let resolved = gap::resolve(
-                            source,
-                            cloth,
-                            face.map(|i| body[i]),
-                            &cell.polygon,
-                            [prev.id, c.id],
-                            law,
-                            &mut work,
-                            &id,
-                        )?;
-                        resistance += resolved.resistance_m2_k_w;
-                        gap_interfaces.push(resolved);
-                    }
-                    if !resistance.is_finite() {
-                        return Err(invalid("gap and fixed interface resistance overflow"));
-                    }
+                    let resistance = if thermal_interfaces {
+                        let key = (request.cloth_layers[prev.id].as_str(), name.as_str());
+                        let interface = interfaces.get(&key).ok_or_else(|| {
+                            invalid(format!(
+                                "missing explicit projection interface {} -> {}",
+                                key.0, key.1
+                            ))
+                        })?;
+                        let mut resistance = interface.resistance_m2_k_w;
+                        if let Some(law) = &interface.stagnant_gap {
+                            let resolved = gap::resolve(
+                                source,
+                                cloth,
+                                face.map(|i| body[i]),
+                                &cell.polygon,
+                                [prev.id, c.id],
+                                law,
+                                &mut work,
+                                &id,
+                            )?;
+                            resistance += resolved.resistance_m2_k_w;
+                            gap_interfaces.push(resolved);
+                        }
+                        if !resistance.is_finite() {
+                            return Err(invalid("gap and fixed interface resistance overflow"));
+                        }
+                        resistance
+                    } else {
+                        0.0 // Topology-only placeholder; never used as a physical interface.
+                    };
                     region.interface_resistance_m2_k_w.push(resistance);
                 }
                 let polygon = ccw(cell

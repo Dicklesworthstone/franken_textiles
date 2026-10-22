@@ -1,7 +1,7 @@
 # Potential evaporative transfer from measured vapor resistance
 
 `ftx materials thermal-vapor REQUEST.json --json` and the companion
-`ftx-materials thermal-vapor REQUEST.json` evaluate an ordered, common-area stack through
+`ftx-materials thermal-vapor REQUEST.json` evaluate an ordered series stack through
 `ftx_pattern::material_vapor::Request`. The file-free WASM export is `thermal_vapor(input)`.
 Each layer resolves the existing canonical `vapor_resistance` observation in m²·Pa/W. Missing
 mechanics, dry conductivity and heat capacity do not prevent this resistance-only calculation.
@@ -25,8 +25,9 @@ The `ftx-vapor-stack/1` request contains these fields:
 
 | Field | Meaning |
 |---|---|
-| `layers` | One to 128 ordered `{key, selection}` occurrences, inside to outside; keys are unique even when a material repeats. |
-| `area_m2` | Positive common area for the entire stack and both films. |
+| `layers` | One to 128 ordered `{key, selection, area_m2?}` occurrences, inside to outside; keys are unique even when a material repeats. An omitted layer area uses the boundary area. |
+| `area_m2` | Positive reference area for both films and any interfaces; also the default layer area. |
+| `interface_resistance_m2_pa_w` | Optional nonnegative resistances per boundary area, exactly one per adjacent layer pair when supplied. Empty preserves the original model without interface terms. A supplied zero is retained explicitly. |
 | `inside_vapor_pressure_pa`, `outside_vapor_pressure_pa` | Prescribed absolute vapor partial pressures; inside ≥ outside ≥ 0. No relative-humidity or saturation conversion is inferred. |
 | `inside_film_resistance_m2_pa_w`, `outside_film_resistance_m2_pa_w` | Positive boundary-film resistances, separate from material Ret; no wind or contact model supplies them. |
 | `latent_heat_j_kg` | Positive caller-supplied conversion from potential latent heat to potential mass transfer. |
@@ -63,6 +64,27 @@ The Ret relation follows the definition in ISO 11092:2014 §2.2
 Adding separately measured layers into a constant series network is the declared effective model,
 not a measured assembly. Output includes both film drops and every layer's face pressures and drop.
 Equal boundary pressures give zero transfer. Reversed transport is outside this request's scope.
+
+### Unequal layer areas and explicit interfaces
+
+A layer may declare a positive `area_m2` when its actual conducting area differs from the boundary
+area. The canonical evaluator keeps the original Ret observation and computes its effective
+resistance per boundary area as `Ret * boundary_area / layer_area`. The total resistance then adds
+these effective layer terms, the two boundary films and every explicitly declared interface term.
+Potential heat and mass **flows** are conserved along the entire path; their fluxes per individual
+layer area can differ. Output fluxes remain per request boundary area.
+
+For example, boundary area 0.5 m², layer areas 1 and 0.25 m², synthetic Ret values 2 and 3 m²·Pa/W,
+films 1 and 4 m²·Pa/W, and a declared interface 2 m²·Pa/W give
+`R_total = 1 + 2*(0.5/1) + 2 + 3*(0.5/0.25) + 4 = 14 m²·Pa/W`.
+These numbers are an analytical software example, not textile measurements.
+
+The report retains each explicit layer area and effective resistance separately from the source
+observation. Interface results retain their two layer keys, resistance, face pressures and pressure
+drop. Frozen replay preserves the exact areas and interface values. When both extensions are absent,
+the previous arithmetic and omitted-field serialization remain unchanged. Rescaling area does not
+provide a strain-dependent material law, and an interface coefficient is not inferred from a
+geometric air gap, fiber name or dry thermal resistance.
 
 The model is isothermal and assumes no condensation. It does not determine water availability,
 actual sweating, liquid flow, moisture storage, interface gaps, compression changes or a humidity/
@@ -158,7 +180,9 @@ describe the initial settled-or-flagged computed frame, while motion endpoints r
 These are **independent sheet potentials**: a lining under a shell still counts as a separately
 prescribed sheet, so their sum is not garment evaporation, exposed-area transfer or wearer heat loss.
 No body coverage, interlayer vapor paths, bare skin, water supply, humidity-dependent Ret, condensation,
-moisture storage or latent heat feedback is inferred. `ftx-vc2` tracks the separate coverage coupling.
+moisture storage or latent heat feedback is inferred by this independent-sheet calculation. For declared
+body geometry and interlayer vapor paths, use the separate
+[layered vapor coverage](vapor-coverage.md) request and its `vapor_coverage` scenario consumer.
 Analytic area/pressure balances, source refusals, frozen replay and real sewn-scene material substitution
 verify this software path; physical garment acceptance remains open.
 

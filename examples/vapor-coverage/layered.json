@@ -1,0 +1,160 @@
+{
+  "schema": "ftx-vapor-coverage/1",
+  "source": {
+    "schema": "ftx-vapor-coverage-source/1",
+    "positions_m": [[0, 0, 0.01], [0.1, 0, 0.01], [0, 0.04, 0.01], [0, 0, 0.02], [0.1, 0, 0.02], [0, 0.04, 0.02]],
+    "patches": [
+      {"vertices": [0, 1, 2], "reference_area_m2": 0.002, "column": 0},
+      {"vertices": [3, 4, 5], "reference_area_m2": 0.002, "column": 0}
+    ],
+    "materials": [
+      {
+        "allow_estimates": false,
+        "expected_sha256": "eff0bd747a1818b5b6178312fcf99be1e418a322787fbe6e2719a7351e1f59d1",
+        "id": "zagreb/leather-2022/cr-neck",
+        "overrides": {},
+        "record": {
+          "composition": [],
+          "composition_complete": false,
+          "form": "hide",
+          "id": "zagreb/leather-2022/cr-neck",
+          "name": "Bovine leather Cr: neck sample",
+          "properties": {
+            "thermal_conductivity": {
+              "bounds": null,
+              "conditions": {
+                "air_speed_m_s": "1",
+                "air_temperature_c": "20",
+                "applicability": "Rounded tabulated conductivity; measured Rct takes precedence in thermal consumers",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported; test air conditions recorded separately",
+                "relative_humidity_percent": "65",
+                "reported_unit": "W/(m*degC) (temperature difference)",
+                "sampling_region": "neck",
+                "specimen": "Kopitar2022:Cr:neck"
+              },
+              "evidence": "published",
+              "method": "Table 5 reported effective conductivity; no independent conductivity test specified",
+              "source": "paper",
+              "unit": "W/(m*K)",
+              "value": 0.068
+            },
+            "thermal_resistance": {
+              "bounds": null,
+              "conditions": {
+                "aggregation": "arithmetic mean of three individual specimens",
+                "air_speed_m_s": "1",
+                "air_temperature_c": "20",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported; test air conditions recorded separately",
+                "relative_humidity_percent": "65",
+                "reported_coefficient_of_variation_percent": "12.7",
+                "reported_standard_deviation": "0.002 m2*K/W",
+                "reported_unit": "m2*degC/W (temperature difference)",
+                "sample_count": "3",
+                "sampling_region": "neck",
+                "specimen": "Kopitar2022:Cr:neck",
+                "temperature_scope": "Single test protocol; no temperature-dependent law or validity interval reported",
+                "variability_scope": "Reported SD and CV retained independently with source rounding; neither is a tolerance, confidence interval or propagated uncertainty"
+              },
+              "evidence": "measured",
+              "method": "ISO 11092:2014 sweating guarded hotplate; Table 5 Rct mean",
+              "source": "paper",
+              "unit": "m2*K/W",
+              "value": 0.015
+            },
+            "thickness": {
+              "bounds": null,
+              "conditions": {
+                "applicability": "Protocol thickness; not unloaded loft or a presser-foot compression law",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported; test air conditions recorded separately",
+                "measurement_pressure": "ISO 2589:2016 cited; pressure not numerically reported in article",
+                "reported_coefficient_of_variation_percent": "4.97",
+                "reported_standard_deviation": "0.05 mm",
+                "sample_count": "not reported for thickness",
+                "sampling_region": "neck",
+                "specimen": "Kopitar2022:Cr:neck",
+                "variability_scope": "Reported SD and CV retained independently with source rounding; neither is a tolerance, confidence interval or propagated uncertainty"
+              },
+              "evidence": "measured",
+              "method": "ISO 2589:2016; Table 4 reported thickness mean",
+              "source": "paper",
+              "unit": "mm",
+              "value": 1.02
+            },
+            "vapor_resistance": {
+              "bounds": null,
+              "conditions": {
+                "aggregation": "arithmetic mean of three individual specimens",
+                "air_speed_m_s": "1",
+                "air_temperature_c": "35",
+                "conditioning": "Preconditioning duration and specimen moisture content not reported; test air conditions recorded separately",
+                "relative_humidity_percent": "40",
+                "reported_coefficient_of_variation_percent": "8.9",
+                "reported_standard_deviation": "0.99 m2*Pa/W",
+                "sample_count": "3",
+                "sampling_region": "neck",
+                "specimen": "Kopitar2022:Cr:neck",
+                "variability_scope": "Reported SD and CV retained independently with source rounding; neither is a tolerance, confidence interval or propagated uncertainty"
+              },
+              "evidence": "measured",
+              "method": "ISO 11092:2014 sweating guarded hotplate; Table 5 Ret mean",
+              "source": "paper",
+              "unit": "m2*Pa/W",
+              "value": 11.27
+            }
+          },
+          "sources": {
+            "paper": {
+              "accessed_on": "2026-10-18",
+              "note": "Kopitar, Zuvela Bosnjak, Akalovic and Skenderi (2022), Thermophysiological properties of bovine leather in dependence on the sampling point, tanning and finishing agents. Journal of Industrial Textiles 51(5S), 8906S–8924S. DOI 10.1177/15280837221077048. Tables 1, 4–5 and Test methods; verified against publisher PDF pages 10–11. Source rounding and independently printed SD/CV retained without reconciliation. Thickness sample count, test-pressure value and specimen preconditioning not reported; thermal and vapor test climates differ.",
+              "reference": "https://journals.sagepub.com/doi/full/10.1177/15280837221077048"
+            }
+          },
+          "structure": {
+            "animal": "bovine",
+            "composition_scope": "Tanning and finish are treatments of animal hide; synthetic tanning does not mean synthetic leather; mass fractions unreported",
+            "finish": "split leather",
+            "identity_scope": "Study sample group; supplier, hide identity and lot are unreported; not a retail product specification",
+            "retention": "Attributed numerical facts only; no article text, images or source archive redistributed; no general redistribution license asserted",
+            "sampling_region": "neck",
+            "source_sample_mark": "Cr",
+            "specimen": "Kopitar2022:Cr:neck",
+            "tanning": "chrome",
+            "thermal_model_scope": "One hotplate protocol; existing scalar consumers use constant-property semantics, not a measured temperature range or wearer comfort model"
+          }
+        },
+        "sources": {}
+      }
+    ],
+    "instances": ["inner-example", "outer-example"],
+    "triangle_instance": [0, 1],
+    "material_report_sha256": "771177c8341aba7c8b5c1f73d5ec0998dc18774abec7691f0cf73cf17497ad60"
+  },
+  "map": {
+    "body_positions_m": [[0, 0, 0], [0.1, 0, 0], [0, 0.04, 0]],
+    "body_triangles": [[0, 1, 2]],
+    "instance_layers": {"inner-example": "inner", "outer-example": "outer"},
+    "settings": {
+      "max_distance_m": 0.1,
+      "min_normal_cosine": 0.5,
+      "separation_tolerance_m": 0.000001,
+      "interfaces": [{
+        "inner": "inner",
+        "outer": "outer",
+        "resistance_m2_pa_w": 0,
+        "basis": "Explicit zero-interface assumption for synthetic example geometry; no measured layered specimen or inferred air-gap transport"
+      }]
+    }
+  },
+  "conditions": {
+    "boundaries": [{
+      "inside_vapor_pressure_pa": 2000,
+      "outside_vapor_pressure_pa": 1000,
+      "inside_film_resistance_m2_pa_w": 1,
+      "outside_film_resistance_m2_pa_w": 4,
+      "latent_heat_j_kg": 2500000
+    }],
+    "required_conditions": {"specimen": "Kopitar2022:Cr:neck"},
+    "required_method": "ISO 11092:2014 sweating guarded hotplate; Table 5 Ret mean",
+    "allow_mixed_protocols": false
+  }
+}

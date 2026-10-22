@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Affine, Ctx, ExportOptions, Geom, Source, cutter::cutter_ring, layout::rotation};
 
 pub(crate) mod geometry;
+pub mod job;
 pub mod nesting;
 pub mod preview;
 pub mod procurement;
@@ -101,6 +102,10 @@ pub struct CutPlan {
     pub schema: &'static str,
     /// Hash of the source pattern document, including material declarations and geometry.
     pub pattern_sha256: String,
+    /// Explicit source-piece scope of a subplan in a complete mixed-stock job.
+    /// Omitted for the ordinary all-piece planner; the pattern hash always names the whole source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_piece_ids: Option<Vec<String>>,
     /// Caller-selected allowances and garment quantity.
     pub options: CutOptions,
     /// Hash-ordered material-specific markers; one material may occupy several bounded markers.
@@ -334,6 +339,14 @@ impl CutPlan {
     /// Invalid/unscaled patterns, unsupported sheet forms, missing width/grain, partial assignments,
     /// oversized pieces, arithmetic overflow, or more than 4096 expanded cut pieces.
     pub fn build(pattern: &Pattern, options: &CutOptions) -> Result<Self, Refusal> {
+        Self::build_scoped(pattern, options, None)
+    }
+
+    pub(super) fn build_scoped(
+        pattern: &Pattern,
+        options: &CutOptions,
+        scope: Option<&BTreeSet<usize>>,
+    ) -> Result<Self, Refusal> {
         options.validate()?;
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
@@ -343,7 +356,13 @@ impl CutPlan {
         let pieces = raw["pieces"]
             .as_array()
             .ok_or_else(|| bad("pattern needs pieces"))?;
-        let count = pattern.instances.len().checked_mul(options.copies);
+        let indices = piece_scope(pattern, scope)?;
+        let instances: Vec<_> = pattern
+            .instances
+            .iter()
+            .filter(|i| indices.contains(&i.piece_index))
+            .collect();
+        let count = instances.len().checked_mul(options.copies);
         if count.is_none_or(|n| n == 0 || n > 4096) || pieces.len() > 4096 {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,
@@ -365,9 +384,9 @@ impl CutPlan {
         if !ctx.sa.is_finite() || ctx.sa < 0.0 {
             return Err(bad("invalid export seam allowance"));
         }
-        let mut materials = Vec::with_capacity(pieces.len());
+        let mut materials = BTreeMap::new();
         let mut groups: BTreeMap<String, (ResolvedMaterial, Vec<Shape>)> = BTreeMap::new();
-        for i in 0..pieces.len() {
+        for &i in &indices {
             let record = resolve_fabric(piece_fabric(pattern, i)?)?.ok_or_else(|| {
                 bad(format!(
                     "piece {i} needs an explicit material selection, not a cutting label"
@@ -387,14 +406,17 @@ impl CutPlan {
                     .material()
                     .require("width", "m", record.allows_estimates())?,
             )?;
-            materials.push(record);
+            materials.insert(i, record);
         }
         if let Some(search) = &options.nesting {
-            grain_reversal(&search.grain_reversal_materials, &materials)?;
+            grain_reversal(
+                &search.grain_reversal_materials,
+                &materials.values().cloned().collect::<Vec<_>>(),
+            )?;
         }
-        for instance in &pattern.instances {
+        for instance in instances {
             let shape = cut_shape(&ctx, instance)?;
-            let record = &materials[instance.piece_index];
+            let record = &materials[&instance.piece_index];
             groups
                 .entry(record.sha256().to_owned())
                 .or_insert_with(|| (record.clone(), Vec::new()))
@@ -413,6 +435,7 @@ impl CutPlan {
                 "ftx-roll-cut-plan/1"
             },
             pattern_sha256,
+            source_piece_ids: scope.map(|_| scope_names(pattern, &indices)),
             options: options.clone(),
             rolls,
             limitations: {
@@ -432,6 +455,35 @@ impl CutPlan {
             },
         })
     }
+}
+
+fn piece_scope(
+    pattern: &Pattern,
+    scope: Option<&BTreeSet<usize>>,
+) -> Result<BTreeSet<usize>, Refusal> {
+    let count = pattern.raw()["pieces"]
+        .as_array()
+        .ok_or_else(|| bad("pattern needs source pieces"))?
+        .len();
+    let indices = scope.cloned().unwrap_or_else(|| (0..count).collect());
+    if indices.is_empty() || indices.iter().any(|&i| i >= count) {
+        return Err(bad(
+            "cutting scope needs existing nonempty source-piece indices",
+        ));
+    }
+    Ok(indices)
+}
+
+fn scope_names(pattern: &Pattern, indices: &BTreeSet<usize>) -> Vec<String> {
+    indices
+        .iter()
+        .map(|&i| {
+            pattern.raw()["pieces"][i]["id"]
+                .as_str()
+                .unwrap_or_default()
+                .into()
+        })
+        .collect()
 }
 
 fn pack(

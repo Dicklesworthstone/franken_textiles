@@ -18,9 +18,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     CutPlacement, bad, bbox, cut_shape,
     geometry::{Work, clear, enclosed, simple},
-    grain_reversal, half_turn, place, positive,
+    grain_reversal, half_turn, piece_scope, place, positive,
     procurement::finite,
-    relocate,
+    relocate, scope_names,
 };
 use crate::{Ctx, ExportOptions, layout::rotation};
 
@@ -153,6 +153,8 @@ pub struct Marker {
 pub struct Plan {
     schema: &'static str,
     pattern_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_piece_ids: Option<Vec<String>>,
     request_sha256: String,
     request: Request,
     markers: Vec<Marker>,
@@ -310,6 +312,14 @@ impl Request {
     /// Invalid/ambiguous geometry, source/evidence mismatch, incomplete assignments, no candidate
     /// placement, or exceeded bounds: 128 stocks, 4096 instances, 32768 stock vertices, 20M work units.
     pub fn build(&self, pattern: &Pattern) -> Result<Plan, Refusal> {
+        self.build_scoped(pattern, None)
+    }
+
+    pub(super) fn build_scoped(
+        &self,
+        pattern: &Pattern,
+        scope: Option<&BTreeSet<usize>>,
+    ) -> Result<Plan, Refusal> {
         let o = &self.options;
         if self.schema != "ftx-finite-stock-request/1"
             || self.stocks.is_empty()
@@ -372,8 +382,13 @@ impl Request {
         let pieces = raw["pieces"]
             .as_array()
             .ok_or_else(|| bad("pattern needs pieces"))?;
-        if pattern
+        let indices = piece_scope(pattern, scope)?;
+        let instances: Vec<_> = pattern
             .instances
+            .iter()
+            .filter(|i| indices.contains(&i.piece_index))
+            .collect();
+        if instances
             .len()
             .checked_mul(o.copies)
             .is_none_or(|n| n == 0 || n > 4096)
@@ -382,6 +397,15 @@ impl Request {
             return Err(budget());
         }
         zones::validate_assignments(o, pieces)?;
+        if scope.is_some()
+            && o.piece_zones
+                .keys()
+                .any(|id| !indices.iter().any(|&i| pieces[i]["id"] == *id))
+        {
+            return Err(bad(
+                "finite-stock zones must name pieces routed to finite stock",
+            ));
+        }
         if raw["fabric"].get("layers").is_some() {
             return Err(bad(
                 "implicit layers need explicit cut pieces; finite stock cannot invent them",
@@ -423,8 +447,8 @@ impl Request {
                 .map(|s| s.least_observed_order_cost)
                 .collect::<Vec<_>>()
         });
-        let mut materials = Vec::new();
-        for i in 0..pieces.len() {
+        let mut materials = BTreeMap::new();
+        for &i in &indices {
             let m = resolve_fabric(piece_fabric(pattern, i)?)?
                 .ok_or_else(|| bad(format!("piece {i} needs an explicit material selection")))?;
             sheet(&m)?;
@@ -434,10 +458,10 @@ impl Request {
                     m.material().id
                 )));
             }
-            materials.push(m);
+            materials.insert(i, m);
         }
         if let Some(costs) = &costs {
-            for (i, material) in materials.iter().enumerate() {
+            for (i, material) in &materials {
                 if !markers
                     .iter()
                     .zip(costs)
@@ -449,10 +473,11 @@ impl Request {
                 }
             }
         }
-        for (i, piece) in pieces.iter().enumerate() {
+        for &i in &indices {
+            let piece = &pieces[i];
             if let Some(zone) = piece["id"].as_str().and_then(|id| o.piece_zones.get(id))
                 && !markers.iter().any(|stock| {
-                    same_material(&stock.material, &materials[i])
+                    same_material(&stock.material, &materials[&i])
                         && stock.zones.iter().any(|z| z.id == *zone)
                 })
             {
@@ -462,9 +487,11 @@ impl Request {
                 )));
             }
         }
-        let reversible = grain_reversal(&o.grain_reversal_materials, &materials)?;
-        let shapes = pattern
-            .instances
+        let reversible = grain_reversal(
+            &o.grain_reversal_materials,
+            &materials.values().cloned().collect::<Vec<_>>(),
+        )?;
+        let shapes = instances
             .iter()
             .map(|i| cut_shape(&ctx, i))
             .collect::<Result<Vec<_>, _>>()?;
@@ -511,7 +538,7 @@ impl Request {
                 .iter()
                 .map(|&(index, copy)| {
                     let shape = &shapes[index];
-                    let material = &materials[pattern.instances[index].piece_index];
+                    let material = &materials[&instances[index].piece_index];
                     search::Task {
                         shape,
                         material,
@@ -528,7 +555,7 @@ impl Request {
         } else {
             for (index, copy) in order {
                 let s = &shapes[index];
-                let m = &materials[pattern.instances[index].piece_index];
+                let m = &materials[&instances[index].piece_index];
                 let required_zone = o.piece_zones.get(&s.geom.pid).map(String::as_str);
                 let cutter = place(s, copy, Vec2::ZERO)?;
                 let turned = if reversible.contains(m.sha256()) {
@@ -598,6 +625,7 @@ impl Request {
         Ok(Plan {
             schema: "ftx-finite-stock-plan/1",
             pattern_sha256: hash(raw)?,
+            source_piece_ids: scope.map(|_| scope_names(pattern, &indices)),
             request_sha256: hash(&frozen)?,
             request: frozen,
             markers,
@@ -806,7 +834,9 @@ impl Plan {
     pub fn markers(&self) -> &[Marker] {
         &self.markers
     }
-    /// Portable, frozen stock request; apply to the SAME original pattern for replay.
+    /// Portable, frozen stock request; apply to the SAME original pattern for ordinary replay.
+    /// A scoped mixed-job subplan must instead replay its enclosing job request, which retains
+    /// the explicit piece route; this stock request alone does not encode a subset of the pattern.
     #[must_use]
     pub fn request(&self) -> &Request {
         &self.request
