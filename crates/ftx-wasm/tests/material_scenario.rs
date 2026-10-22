@@ -137,6 +137,98 @@ fn file_free_study_matches_real_consumers_and_keeps_manufacturing_after_drape_re
     assert_eq!(p.raw(), &serde_json::from_str::<Value>(PATTERN).unwrap());
 }
 #[test]
+fn material_substitution_recomputes_draped_vapor_without_dry_thermal_readiness() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let mut pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    pattern["fabric"]["material"]["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("thermal_conductivity");
+    let missing = pattern["fabric"]["material"].clone();
+    let mut low = missing.clone();
+    low["record"]["properties"]["vapor_resistance"] = json!({
+        "value":20.0,"unit":"m2*Pa/W","source":"test","evidence":"estimate",
+        "method":"Synthetic geometry-coupling test",
+        "conditions":{"specimen":"synthetic-scenario-sheet","conditioning":"synthetic"}});
+    let mut high = low.clone();
+    high["record"]["properties"]["vapor_resistance"]["value"] = json!(40.0);
+    let request = json!({"schema":"ftx-material-study/1","variants":[
+        {"key":"low","changes":{"schema":"ftx-material-bindings/1","default":low}},
+        {"key":"high","changes":{"schema":"ftx-material-bindings/1","default":high}},
+        {"key":"missing","changes":{"schema":"ftx-material-bindings/1","default":missing}}]});
+    let mut scenario: Value = serde_json::from_str(SCENARIO).unwrap();
+    scenario["vapor_coverage"] = json!({
+        "body_triangle_ids":[0],"instance_layers":{"band":"shell"},
+        "settings":{"max_distance_m":0.08,"min_normal_cosine":0.1,
+            "separation_tolerance_m":0.00001,"interfaces":[]},
+        "conditions":{"boundaries":[{"inside_vapor_pressure_pa":2000.0,
+            "outside_vapor_pressure_pa":1000.0,"inside_film_resistance_m2_pa_w":1.0,
+            "outside_film_resistance_m2_pa_w":4.0,"latent_heat_j_kg":2_500_000.0}]}});
+    let raw_pattern = pattern.to_string();
+    let result: Value = serde_json::from_str(
+        &on_body(
+            &body,
+            &raw_pattern,
+            &request.to_string(),
+            &scenario.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let rows = result["simulations"].as_array().unwrap();
+    let row = |key: &str| {
+        let row = rows.iter().find(|row| row["key"] == key).unwrap();
+        assert_eq!(row["evaluation"]["status"], "available");
+        &row["evaluation"]["result"]
+    };
+    let a = row("low");
+    let b = row("high");
+    assert_eq!(a["positions_sha256"], b["positions_sha256"]);
+    assert_eq!(a["surface"]["status"], "refused");
+    assert_eq!(a["coverage"]["status"], "refused");
+    for simulated in [a, b] {
+        let vapor = &simulated["vapor_coverage"];
+        assert_eq!(vapor["status"], "available", "{vapor}");
+        let report = &vapor["result"];
+        assert!(report["coverage"]["covered_area_m2"].as_f64().unwrap() > 0.0);
+        assert!(report["coverage"]["uncovered_area_m2"].as_f64().unwrap() > 0.0);
+        let replay = report["replay_request_json"].as_str().unwrap();
+        let standalone: Value =
+            serde_json::from_str(&ftx_wasm::thermal::vapor_coverage(replay).unwrap()).unwrap();
+        assert_eq!(&standalone, report);
+    }
+    let flow = |v: &Value| {
+        v["vapor_coverage"]["result"]["coverage"]["covered_potential_mass_flow_kg_s"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!(flow(a) > flow(b));
+    assert_ne!(
+        a["vapor_coverage"]["result"]["source_sha256"],
+        b["vapor_coverage"]["result"]["source_sha256"]
+    );
+    assert_eq!(row("missing")["vapor_coverage"]["status"], "refused");
+    for alternative in result["manufacturing"]["alternatives"].as_array().unwrap() {
+        assert_eq!(alternative["binding"]["status"], "available");
+        assert_eq!(
+            alternative["binding"]["result"]["pattern"]["pieces"],
+            pattern["pieces"]
+        );
+        assert_eq!(
+            alternative["binding"]["result"]["pattern"]["seams"],
+            pattern["seams"]
+        );
+    }
+}
+
+#[test]
 fn aggregate_budget_refusals_do_not_create_free_successful_cells() {
     let form = form();
     let body = DrapeBody {

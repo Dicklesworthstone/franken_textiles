@@ -21,10 +21,11 @@ mod thermal;
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
-    if matches!(action, "cut-plan" | "cut-price" | "cut-svg") {
+    if matches!(action, "cut-plan" | "cut-job" | "cut-price" | "cut-svg") {
         known_options(args, "materials", &[])?;
         let result = match (action, &args.positional[2..]) {
             ("cut-plan", [pattern, options]) => cutting::plan(pattern, options)?,
+            ("cut-job", [pattern, request]) => cutting::job(pattern, request)?,
             ("cut-price", [pattern, options, quotes, market]) => {
                 cutting::price(pattern, options, quotes, market)?
             }
@@ -33,7 +34,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             }
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials cut-plan PATTERN.json OPTIONS.json | cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json | cut-svg PATTERN.json OPTIONS.json INDEX NEW.svg",
+                    "usage: ftx materials cut-plan PATTERN.json OPTIONS.json | cut-job PATTERN.json REQUEST.json | cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json | cut-svg PATTERN.json OPTIONS.json INDEX NEW.svg",
                 ));
             }
         };
@@ -159,6 +160,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         action,
         "thermal-compression"
             | "thermal-vapor"
+            | "thermal-vapor-coverage"
             | "thermal-vapor-surface"
             | "thermal-steady"
             | "thermal-steady-surface"
@@ -168,6 +170,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let result = match (action, &args.positional[2..]) {
             ("thermal-compression", [path]) => thermal::compression_history(path)?,
             ("thermal-vapor", [path]) => thermal::vapor(path)?,
+            ("thermal-vapor-coverage", [path]) => thermal::vapor_coverage(path)?,
             ("thermal-vapor-surface", [report, conditions]) => {
                 thermal::vapor_surface(report, conditions)?
             }
@@ -181,7 +184,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             }
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials thermal-compression HISTORY.json | thermal-vapor STACK.json | thermal-vapor-surface SIM_REPORT.json CONDITIONS.json | thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
+                    "usage: ftx materials thermal-compression HISTORY.json | thermal-vapor STACK.json | thermal-vapor-coverage REQUEST.json | thermal-vapor-surface SIM_REPORT.json CONDITIONS.json | thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
                 ));
             }
         };

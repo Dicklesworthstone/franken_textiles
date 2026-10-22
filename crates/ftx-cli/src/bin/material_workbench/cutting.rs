@@ -43,6 +43,12 @@ pub(super) fn plan(pattern: &str, options: &str) -> Result<Value, Refusal> {
     serde_json::to_value(build(pattern, options)?).map_err(|e| invalid(e.to_string()))
 }
 
+pub(super) fn job(pattern: &str, request: &str) -> Result<Value, Refusal> {
+    let request: ftx_export::cutting::job::Request = read(request)?;
+    serde_json::to_value(request.build(&Pattern::new(read(pattern)?))?)
+        .map_err(|e| invalid(e.to_string()))
+}
+
 pub(super) fn price(
     pattern: &str,
     options: &str,

@@ -10,6 +10,28 @@ use serde_json::{Value, json};
 const INPUT: &str = include_str!("../../../tests/fixtures/materials/leather-vapor-stack.json");
 
 #[test]
+fn portable_coverage_matches_the_canonical_geometry_network_and_exact_frozen_replay() {
+    let input = include_str!("../../../examples/vapor-coverage/layered.json");
+    let request: ftx_drape::vapor::coverage::Request = serde_json::from_str(input).unwrap();
+    let expected = serde_json::to_string(&request.evaluate().unwrap()).unwrap();
+    let output = thermal::vapor_coverage(input).unwrap();
+    assert_eq!(output, expected);
+    let report: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(
+        thermal::vapor_coverage(report["replay_request_json"].as_str().unwrap()).unwrap(),
+        output
+    );
+    let mut changed: Value =
+        serde_json::from_str(report["replay_request_json"].as_str().unwrap()).unwrap();
+    changed["source"]["materials"][0]["record"]["name"] = json!("Unmatched source revision");
+    assert!(thermal::vapor_coverage(&changed.to_string()).is_err());
+    assert_eq!(
+        thermal::vapor_coverage("{oops").unwrap_err().code,
+        RefusalCode::InvalidDocument
+    );
+}
+
+#[test]
 fn portable_entry_returns_the_exact_shared_report_and_frozen_offline_replay() {
     let request: Request = serde_json::from_str(INPUT).unwrap();
     let report = request

@@ -1823,6 +1823,51 @@ test('manufacturing studies use original lossless source, not bound previews, an
   p.windowEvents.pagehide(); assert.equal(p.live.size, 0);
 });
 
+test('mixed cutting jobs retain complete inventory, independent pricing and exact replay in both study workflows', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const a=studyRow('<mixed job>'), b=studyRow('unpriced'), c=studyRow('missing inventory');
+  const job={complete_inventory:true,inventory:[{piece:'shell',stock:'finite_stock'},{piece:'lining',stock:'roll'}],
+    roll:{rolls:[{}]},finite_stock:{used_stock_count:1},
+    stock_area_m2:0.1,external_cut_area_m2:0.03,stock_mass_kg:null,
+    purchasing:{currency:'USD',complete_offer_coverage:true,least_observed_independent_order_total:12.5,
+      roll:outcome({complete_offer_coverage:true}),finite_stock:outcome({complete_offer_coverage:true})},
+    pattern_json:'{"source":"<locked pattern>","x":-0.0,"value":1.0}',
+    replay_request_json:'{"schema":"ftx-cutting-job/1","source":"<locked inventory>","x":-0.0}',
+    hardware_execution_authorized:false};
+  a.cutting_job=outcome(job);
+  b.cutting_job=outcome({...job,purchasing:{currency:'USD',complete_offer_coverage:false,
+    least_observed_independent_order_total:null,roll:outcome({complete_offer_coverage:false}),
+    finite_stock:refused('No matching dated offer')}});
+  c.cutting_job=refused('No finite stock matches the substituted shell');
+  for (const row of [a,b,c]) { row.cutting=omitted(); row.finite_stock=omitted(); row.purchasing=omitted(); }
+  for (const op of ['study','scenario']) {
+    await p.e[op].onclick(); const report=studyReport([a,b,c]);
+    p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const t=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Complete cutting jobs — rolls, hides and remnants');
+    assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
+      ['<mixed job>','Available','Yes','2','1','1','0.1','0.03','Unknown','Complete offer coverage','12.5 USD']);
+    assert.deepEqual(plain(t.children[3].children.map(n=>n.textContent)),
+      ['unpriced','Available','Yes','2','1','1','0.1','0.03','Unknown','Incomplete offer coverage','Unknown']);
+    assert.deepEqual(plain(t.children[4].children.map(n=>n.textContent)),
+      ['missing inventory','Refused: No finite stock matches the substituted shell','Unknown','Unknown','Unknown','Unknown','Unknown','Unknown','Unknown','Unknown','Unknown']);
+    for (const [suffix,expected] of [['pattern',job.pattern_json],['request',job.replay_request_json]]) {
+      const download=descendants(s).find(n=>n.download===`alternative-1-cut-job-${suffix}.json`);
+      assert.equal(await p.blobs.get(download.href).text(),expected);
+    }
+    assert.equal(descendants(s).some(n=>n.download==='alternative-3-cut-job-request.json'),false);
+    const evidence=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('unpriced: routed physical inventory'));
+    evidence.open=true; evidence.handlers.toggle(); assert.match(visibleText(evidence),/No matching dated offer/);
+    assert.match(visibleText(s),/same original inventory/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  p.e.studyRequest.handlers.change(); assert.equal(p.live.size,0);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+  await p.e.study.onclick(); p.emit(studyReport());
+  assert.doesNotMatch(visibleText(section(p,'Fixed-pattern manufacturing alternatives')),/Complete cutting jobs/);
+});
+
 test('material studies display independent vapor outcomes and exact source-frozen replay in both workflows', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const a=studyRow('<vapor-source>'), b=studyRow('missing'), c=studyRow('omitted');
@@ -1893,6 +1938,40 @@ test('scenario comparisons join keys, preserve signed values, and distinguish ga
   assert.equal(t.children[3].children[3].textContent, 'Unknown');
   const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('A: simulation'));
   d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /unsettled/); assert.match(visibleText(d), /body-lock/);
+});
+
+test('draped vapor coverage keeps uncovered area, source replay and independent failures visible', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
+  const report=scenarioReport(); report.scenario.scenario={vapor_coverage:{body_triangle_ids:[2]}};
+  const a=report.simulations.find(row=>row.key==='A').evaluation.result;
+  const replay='{"schema":"ftx-vapor-coverage/1","source":"<retained geometry>","value":1.0,"x":-0.0}';
+  a.vapor_coverage=outcome({replay_request_json:replay,source_sha256:'source-lock',
+    coverage:{body_area_m2:2,covered_area_m2:1.5,uncovered_area_m2:0.5,unassigned_cloth_reference_area_m2:0.25,
+      covered_potential_heat_flow_w:3,covered_potential_mass_flow_kg_s:0.0000012,
+      regions:[{id:'body-2-region-0',body_triangle:2,vapor:vaporReport()}]}});
+  report.manufacturing.alternatives.push(studyRow('C'));
+  report.simulations.push({key:'C',evaluation:outcome({vapor_coverage:refused('Missing Ret for outer layer'),
+    surface:outcome({}),coverage:outcome({}),drape:{settled:true,flags:[]}})});
+  p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const t=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Draped layered vapor coverage — covered-region potentials');
+  assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
+    ['A','Available','2','1.5','0.5','0.25','3','0.0000012']);
+  assert.equal(t.children[3].children[1].textContent,'Refused: missing mechanics');
+  assert.equal(t.children[4].children[1].textContent,'Refused: Missing Ret for outer layer');
+  assert.equal(t.children[4].children.slice(2).every(n=>n.textContent==='Unknown'),true);
+  assert.match(visibleText(s),/missing conductivity/);
+  assert.match(visibleText(s),/covered subtotal is not whole-body transfer/);
+  const details=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('A: vapor coverage regions'));
+  details.open=true; details.handlers.toggle(); assert.match(visibleText(details),/body-2-region-0/);
+  assert.match(visibleText(details),/Original <measurement>/);
+  const download=descendants(s).find(n=>n.download==='alternative-1-vapor-coverage-replay.json');
+  assert.equal(await p.blobs.get(download.href).text(),replay);
+  assert.equal(descendants(s).some(n=>n.download==='alternative-3-vapor-coverage-replay.json'),false);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+  await p.e.scenario.onclick(); p.emit(scenarioReport());
+  assert.doesNotMatch(visibleText(section(p,'Fresh drape and heat alternatives')),/Draped layered vapor coverage/);
 });
 
 test('scenario attachment reports preserve physical mass scopes, source targets and independent refusals', async () => {
@@ -2257,6 +2336,75 @@ test('compiled WASM explicit extensometers retain acquired widths, frozen forwar
     p.emit(rejected.result,rejected.files);
     assert.equal(p.e.assign.disabled,true); assert.equal(p.e.selection.value,'');
     assert.match(visibleText(sectionResult),/No identified selection is available/);
+  });
+
+test('compiled WASM draped vapor coverage preserves source geometry, replay and unknown uncovered area',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const input=fs.readFileSync(path.join(__dirname,'../examples/vapor-coverage/layered.json'),'utf8');
+    const raw=ftx.thermal_vapor_coverage(input), report=JSON.parse(raw);
+    if(process.env.FTX_VAPOR_COVERAGE_REPLAY) {
+      assert.deepEqual(report,JSON.parse(fs.readFileSync(process.env.FTX_VAPOR_COVERAGE_REPLAY,'utf8')));
+    }
+    assert.equal(ftx.thermal_vapor_coverage(report.replay_request_json),raw);
+    assert.ok(report.coverage.covered_area_m2>0);
+    assert.ok(report.coverage.covered_potential_mass_flow_kg_s>0);
+    assert.ok(report.coverage.uncovered_area_m2>=0);
+    assert.ok(report.coverage.regions.some(region=>region.vapor.layers.length>1));
+    const changed=JSON.parse(report.replay_request_json);
+    changed.source.materials[0].record.name+=' changed';
+    assert.throws(()=>ftx.thermal_vapor_coverage(JSON.stringify(changed)));
+    const p=await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
+    const scenario=scenarioReport(); scenario.scenario.scenario={vapor_coverage:{}};
+    scenario.simulations.find(row=>row.key==='A').evaluation.result.vapor_coverage=outcome(report);
+    p.emit(scenario);
+    const s=section(p,'Fresh drape and heat alternatives');
+    assert.match(visibleText(s),/Draped layered vapor coverage/);
+    const download=descendants(s).find(n=>n.download==='alternative-1-vapor-coverage-replay.json');
+    assert.equal(await p.blobs.get(download.href).text(),report.replay_request_json);
+    p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+  });
+
+test('compiled WASM mixed cutting jobs cover every part and replay the frozen complete allocation',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const pattern=fs.readFileSync(path.join(__dirname,'../examples/mixed-cutting/pattern.json'),'utf8');
+    const request=fs.readFileSync(path.join(__dirname,'../examples/mixed-cutting/study.json'),'utf8');
+    const w=await workerModule({bindings:ftx});
+    const result=await w.send({type:'study',request:61,pattern,studyRequest:request});
+    assert.equal(result.type,'result',result.message);
+    assert.equal(result.files[0].text,ftx.material_study(pattern,request));
+    assert.equal(result.files.find(f=>f.name==='original-pattern.json').text,pattern);
+    assert.equal(result.files.find(f=>f.name==='study-request.json').text,request);
+    if(process.env.FTX_MIXED_CUTTING_REPLAY) {
+      assert.deepEqual(result.result,JSON.parse(fs.readFileSync(process.env.FTX_MIXED_CUTTING_REPLAY,'utf8')));
+    }
+    const row=result.result.alternatives[0], job=row.cutting_job.result;
+    assert.equal(row.cutting_job.status,'available'); assert.equal(job.complete_inventory,true);
+    assert.equal(job.inventory.length,6); assert.equal(job.hardware_execution_authorized,false);
+    assert.deepEqual(job.roll.source_piece_ids,['lining']);
+    assert.deepEqual(job.finite_stock.source_piece_ids,['shell']);
+    assert.equal(new Set(job.inventory.map(i=>`${i.instance}/${i.copy}`)).size,6);
+    assert.deepEqual(JSON.parse(ftx.material_cut_job(job.pattern_json,job.replay_request_json)),job);
+    assert.equal(job.roll.pattern_sha256,job.pattern_sha256);
+    assert.equal(job.finite_stock.pattern_sha256,job.pattern_sha256);
+    const p=await pageModule(); await p.load(); p.select('studyRequest',request); await p.e.study.onclick();
+    p.emit(result.result,result.files);
+    const s=section(p,'Fixed-pattern manufacturing alternatives');
+    assert.match(visibleText(s),/Complete cutting jobs/);
+    const download=descendants(s).find(n=>n.download==='alternative-1-cut-job-request.json');
+    assert.equal(await p.blobs.get(download.href).text(),job.replay_request_json);
+    const bad=JSON.parse(request); bad.cutting_job.routes.pop();
+    const refusedStudy=await w.send({type:'study',request:62,pattern,studyRequest:JSON.stringify(bad)});
+    assert.equal(refusedStudy.type,'result',refusedStudy.message);
+    assert.equal(refusedStudy.result.alternatives[0].binding.status,'available');
+    assert.equal(refusedStudy.result.alternatives[0].cutting_job.status,'refused');
+    assert.deepEqual(refusedStudy.result.comparison.frontier,[]);
+    assert.throws(()=>ftx.material_cut_job(pattern,JSON.stringify(bad.cutting_job)));
   });
 
 test('compiled WASM material studies recompute vapor from final assignments and retain independent refusals',

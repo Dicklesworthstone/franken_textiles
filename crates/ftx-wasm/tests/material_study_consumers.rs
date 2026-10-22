@@ -9,6 +9,48 @@ const PATTERN: &str =
 const STOCK: &str = include_str!("../../../tests/fixtures/materials/synthetic-stock-request.json");
 
 #[test]
+fn portable_mixed_job_replays_every_physical_part_and_refuses_an_unmatched_material() {
+    let pattern = include_str!("../../../examples/mixed-cutting/pattern.json");
+    let input = include_str!("../../../examples/mixed-cutting/study.json");
+    let request: Request = serde_json::from_str(input).unwrap();
+    let expected = serde_json::to_value(
+        request
+            .evaluate(&Pattern::from_json(pattern).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let output = materials::study(pattern, input).unwrap();
+    let report: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(report, expected);
+    let job = &report["alternatives"][0]["cutting_job"]["result"];
+    assert_eq!(job["complete_inventory"], true);
+    assert_eq!(job["inventory"].as_array().unwrap().len(), 6);
+    assert_eq!(job["hardware_execution_authorized"], false);
+    let replay: Value = serde_json::from_str(
+        &ftx_wasm::manufacturing::cut_job(
+            job["pattern_json"].as_str().unwrap(),
+            job["replay_request_json"].as_str().unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(&replay, job);
+    let mut unavailable: Value = serde_json::from_str(input).unwrap();
+    let mut changed = serde_json::from_str::<Value>(pattern).unwrap()["fabric"]["material"].clone();
+    changed["record"]["name"] = json!("Different synthetic hide; unqualified physical inventory");
+    unavailable["variants"][0]["changes"]["default"] = changed;
+    let refused: Value =
+        serde_json::from_str(&materials::study(pattern, &unavailable.to_string()).unwrap())
+            .unwrap();
+    let row = &refused["alternatives"][0];
+    assert_eq!(row["binding"]["status"], "available");
+    assert_eq!(row["cutting_job"]["status"], "refused");
+    assert!(row["cutting_job"].get("result").is_none());
+    assert_eq!(refused["comparison"]["frontier"], json!([]));
+    assert_eq!(output, materials::study(pattern, input).unwrap());
+}
+
+#[test]
 fn portable_study_rebinds_vapor_layers_and_replays_each_exact_standalone_request() {
     let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
     let raw = include_str!("../../../examples/vapor-study/leather.json");

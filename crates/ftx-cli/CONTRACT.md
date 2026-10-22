@@ -82,6 +82,14 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   Canonical measured Ret and explicit area, vapor pressures, films and latent heat determine
   conditional steady heat/water transfer; exact frozen replay and source refusals are retained.
   This is independent of dry thermal storage and mechanical readiness; see `docs/vapor-resistance.md`.
+- `ftx materials thermal-vapor-coverage REQUEST.json [--json]` and the companion command
+  replay the shared geometry-derived layered vapor network. Frozen sources, declared body/cloth
+  geometry and vapor boundaries determine covered-region potential flows; uncovered fractions
+  remain explicit and no sweat supply or coupled evaporative cooling is inferred.
+- `ftx materials cut-job PATTERN.json REQUEST.json [--json]` and the companion command
+  route every physical cut instance/copy exactly once to roll or finite stock through the existing
+  planners. Complete geometry and independent purchasing outcomes retain frozen pattern/request
+  replay. Missing stock refuses the complete job; missing offers do not erase an allocated job.
 - `ftx materials strip-experiment REQUEST.json [--json]` and
   `calibrate-strip ACQUISITION.json [--allow-estimates] [--json]` expose the shared finite-strip
   forward and inverse experiment. The companion `ftx-materials` accepts the same commands.

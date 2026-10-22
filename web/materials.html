@@ -230,6 +230,11 @@ inventory to compare actual hides or remnants, including defects and prior cuts.
 one alternative does not consume another's stock. Roll and finite-stock results remain independent, and purchasing uses roll markers.
 The study does not use the single-preview process files above. Up to 32 alternatives;
 scalar-frontier pruning requires explicit consent. Download source-locked alternative patterns from the results.</p>
+<p class="note">For one complete job combining roll textiles with hides or remnants, supply <code>cutting_job</code>
+with schema <code>ftx-cutting-job/1</code>, explicit <code>routes</code> for every source piece and its own <code>roll</code>
+and <code>finite_stock</code> inputs. This replaces separate <code>cutting</code>, <code>finite_stock</code> and
+<code>purchasing</code> inputs. Each physical cut instance and copy is allocated exactly once; optional job purchasing
+retains incomplete offers independently. Download the frozen job pattern and request to replay using <code>cut-job</code>.</p>
 <p class="note">Add optional <code>vapor</code> to recompute potential vapor transfer for each material alternative.
 Its ordered <code>layers</code> name occurrence keys and targets such as <code>{"scope":"piece","id":"front"}</code>
 or <code>{"scope":"default"}</code>; the final pattern assignments supply their materials.
@@ -266,6 +271,11 @@ The scenario itself owns the fit specification, numerical options, surface condi
 the single-preview fit, self-contact checkbox and thermal files above do not override it. Shape selection runs once;
 the chosen standing straight-arm pose does not change that shape. Each alternative gets a fresh production drape and
 current-geometry heat evaluation. Without a <code>motion</code> request this remains a static pose.</p>
+<p class="note">Optional scenario <code>vapor_coverage</code> computes layer paths from each new drape, using explicit
+body-triangle IDs, instance-to-layer names, geometric projection settings and vapor-pressure boundaries.
+The result reports covered-region potential transfer separately from uncovered body area and unassigned cloth.
+It does not infer sweat supply or add evaporative cooling to dry heat. Download its frozen request for
+<code>thermal-vapor-coverage</code> replay.</p>
 <p class="note">Optional <code>motion</code> in the scenario (<code>ftx-drape-motion/1</code>) continues that same sewn cloth through
 declared time/arm-angle keyframes, preserving velocities and material history. It uses the selected shape without refitting.
 Each interval follows checked linear body-vertex chords, not a certified anatomical joint path. The report retains every accepted

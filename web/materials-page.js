@@ -464,7 +464,7 @@ function comparison(op, r) {
     detail(parent, `${row.key}: frozen assignments and source observations (display only)`, {
       pattern_sha256: binding?.pattern_sha256, choices: row.choices, frozen_changes: row.frozen_changes, pieces: binding?.pieces,
       refusals: { binding: row.binding.refusal, cutting: row.cutting.refusal, finite_stock: row.finite_stock?.refusal,
-        sewing: row.sewing.refusal, purchasing: row.purchasing.refusal } });
+        cutting_job: row.cutting_job?.refusal, sewing: row.sewing.refusal, purchasing: row.purchasing.refusal } });
   }
   if (study.alternatives.some(row => row.finite_stock && row.finite_stock.status !== "not_requested")) {
     const stock = table(parent, "Finite hides and remnants — used physical inventory", ["Alternative", "Finite stock",
@@ -492,6 +492,7 @@ function comparison(op, r) {
         plan || { refusal: row.sewing_selection?.refusal });
     }
   }
+  cuttingJobComparison(op, parent, study.alternatives);
   assemblyMassComparison(parent, study.alternatives);
   vaporComparison(op, parent, study.alternatives);
   if (study.screening) screening(parent, study.screening);
@@ -510,6 +511,7 @@ function comparison(op, r) {
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
     }
+    vaporCoverageComparison(op, parent, study.alternatives, simulations, r.scenario?.scenario?.vapor_coverage);
     if ([...simulations.values()].some(o => {
       const vapor = available(o)?.vapor_surface;
       return vapor && vapor.status !== "not_requested";
@@ -536,6 +538,58 @@ function comparison(op, r) {
       "Declared assembly mass ranges evaluated by Rust with fixed authored geometry and inventory; unresolved overlap and unknown ranges remain explicit." :
       "Declared nominal objectives evaluated by Rust; conditional Pareto set, not an empirical fit/warmth claim or global optimum.") :
       "Actual consumer results; no computed objectives requested. Unknowns are not zero, and no ranking is inferred by this page." };
+}
+function cuttingJobComparison(op, parent, alternatives) {
+  if (!alternatives.some(row => row.cutting_job && row.cutting_job.status !== "not_requested")) return;
+  const note = document.createElement("p");
+  note.textContent = "A complete cutting job allocates each physical instance and copy once, using its declared roll or finite-stock route. " +
+    "Each alternative starts from the same original inventory. Purchasing is separate: an allocated job can retain incomplete or refused offers. " +
+    "Download both frozen job files to replay with cut-job; the result does not authorize machine execution.";
+  parent.append(note);
+  const t = table(parent, "Complete cutting jobs — rolls, hides and remnants", ["Alternative", "Cutting job", "Complete inventory",
+    "Allocated instances / copies", "Roll markers", "Used finite items", "Engaged stock area (m²)",
+    "External cut area (m²)", "Complete engaged-stock mass (kg)", "Purchasing", "Observed complete order cost"]);
+  for (const [i, row] of alternatives.entries()) {
+    const r = available(row.cutting_job), purchase = r?.purchasing;
+    const cost = metric(purchase?.least_observed_independent_order_total);
+    cells(t, [row.key, state(row.cutting_job), r ? (r.complete_inventory ? "Yes" : "Incomplete") : "Unknown",
+      metric(r?.inventory?.length), r ? (r.roll ? metric(r.roll.rolls?.length) : "0") : "Unknown",
+      r ? (r.finite_stock ? metric(r.finite_stock.used_stock_count) : "0") : "Unknown",
+      metric(r?.stock_area_m2), metric(r?.external_cut_area_m2), metric(r?.stock_mass_kg),
+      purchase ? (purchase.complete_offer_coverage ? "Complete offer coverage" : "Incomplete offer coverage") : r ? "Not requested" : "Unknown",
+      cost === "Unknown" ? cost : `${cost} ${purchase.currency}`]);
+    detail(parent, `${row.key}: routed physical inventory, source materials and purchasing outcomes (display only)`,
+      r || { refusal: row.cutting_job?.refusal });
+    if (!r) continue;
+    const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
+    if (typeof r.pattern_json === "string") link(op, actions,
+      { name: `alternative-${i + 1}-cut-job-pattern.json`, text: r.pattern_json, mime: "application/json" });
+    if (typeof r.replay_request_json === "string") link(op, actions,
+      { name: `alternative-${i + 1}-cut-job-request.json`, text: r.replay_request_json, mime: "application/json" });
+  }
+}
+function vaporCoverageComparison(op, parent, alternatives, simulations, requested) {
+  if (!requested && ![...simulations.values()].some(value => available(value)?.vapor_coverage)) return;
+  const note = document.createElement("p");
+  note.textContent = "Vapor paths use this alternative's draped geometry, declared physical layers and source-qualified vapor resistance. " +
+    "Only covered regions contribute to the reported potential transfer. Uncovered body fractions and unassigned cloth remain explicit; " +
+    "the covered subtotal is not whole-body transfer, actual sweat evaporation or cooling supplied to the dry heat simulation.";
+  parent.append(note);
+  const t = table(parent, "Draped layered vapor coverage — covered-region potentials", ["Alternative", "Vapor coverage", "Body area (m²)",
+    "Covered area (m²)", "Uncovered area (m²)", "Unassigned cloth reference area (m²)",
+    "Covered potential latent power (W)", "Covered potential water flow (kg/s)"]);
+  for (const [i, row] of alternatives.entries()) {
+    const evaluation = simulations.get(row.key), initial = available(evaluation), r = available(initial?.vapor_coverage), c = r?.coverage;
+    cells(t, [row.key, initial ? state(initial.vapor_coverage) : state(evaluation), metric(c?.body_area_m2),
+      metric(c?.covered_area_m2), metric(c?.uncovered_area_m2), metric(c?.unassigned_cloth_reference_area_m2),
+      metric(c?.covered_potential_heat_flow_w), metric(c?.covered_potential_mass_flow_kg_s)]);
+    detail(parent, `${row.key}: vapor coverage regions, source observations and boundary assumptions (display only)`,
+      r || { refusal: initial?.vapor_coverage?.refusal || evaluation?.refusal });
+    if (typeof r?.replay_request_json === "string") {
+      const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
+      link(op, actions, { name: `alternative-${i + 1}-vapor-coverage-replay.json`, text: r.replay_request_json, mime: "application/json" });
+    }
+  }
 }
 function vaporComparison(op, parent, alternatives) {
   if (!alternatives.some(row => row.vapor && row.vapor.status !== "not_requested")) return;

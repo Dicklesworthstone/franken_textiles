@@ -13,6 +13,10 @@ use std::{
 const INPUT: &str = include_str!("../../../tests/fixtures/materials/leather-vapor-stack.json");
 
 fn invoke(main: bool, input: &str, extra: &[&str]) -> Output {
+    invoke_action(main, "thermal-vapor", input, extra)
+}
+
+fn invoke_action(main: bool, action: &str, input: &str, extra: &[&str]) -> Output {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let path = std::env::temp_dir().join(format!(
         "ftx-vapor-{}-{}-{}.json",
@@ -32,12 +36,7 @@ fn invoke(main: bool, input: &str, extra: &[&str]) -> Output {
     if main {
         command.args(["materials", "--json"]);
     }
-    let output = command
-        .arg("thermal-vapor")
-        .arg(&path)
-        .args(extra)
-        .output()
-        .unwrap();
+    let output = command.arg(action).arg(&path).args(extra).output().unwrap();
     assert_eq!(fs::read_to_string(path).unwrap(), input);
     output
 }
@@ -67,6 +66,38 @@ fn refusal(main: bool, output: &Output) {
     assert!(value.get("result").is_none());
     if !main {
         assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+fn both_binaries_replay_geometry_derived_vapor_without_a_body_model_or_dry_heat_data() {
+    let input = include_str!("../../../examples/vapor-coverage/layered.json");
+    let request: ftx_drape::vapor::coverage::Request = serde_json::from_str(input).unwrap();
+    let expected = serde_json::to_value(request.evaluate().unwrap()).unwrap();
+    let replay = expected["replay_request_json"].as_str().unwrap();
+    assert!(expected["coverage"]["covered_area_m2"].as_f64().unwrap() > 0.0);
+    assert!(
+        expected["coverage"]["covered_potential_mass_flow_kg_s"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    let mut tampered: Value = serde_json::from_str(replay).unwrap();
+    tampered["source"]["materials"][0]["record"]["properties"]["vapor_resistance"]["value"] =
+        json!(999.0);
+    for main in [false, true] {
+        assert_eq!(
+            success(&invoke_action(main, "thermal-vapor-coverage", input, &[])),
+            expected
+        );
+        assert_eq!(
+            success(&invoke_action(main, "thermal-vapor-coverage", replay, &[])),
+            expected
+        );
+        refusal(
+            main,
+            &invoke_action(main, "thermal-vapor-coverage", &tampered.to_string(), &[]),
+        );
     }
 }
 

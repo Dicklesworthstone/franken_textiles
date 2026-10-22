@@ -52,6 +52,75 @@ fn run(main: bool, dir: &Path) -> Value {
 }
 
 #[test]
+fn both_study_commands_and_cut_job_replay_allocate_the_complete_mixed_inventory() {
+    let pattern = include_str!("../../../examples/mixed-cutting/pattern.json");
+    let input = include_str!("../../../examples/mixed-cutting/study.json");
+    let request: Request = serde_json::from_str(input).unwrap();
+    let expected = serde_json::to_value(
+        request
+            .evaluate(&Pattern::from_json(pattern).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-mixed-cutting-consumer-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), pattern).unwrap();
+    fs::write(dir.join("study.json"), input).unwrap();
+    let job = &expected["alternatives"][0]["cutting_job"]["result"];
+    assert_eq!(job["complete_inventory"], true);
+    assert_eq!(job["inventory"].as_array().unwrap().len(), 6);
+    assert_eq!(job["roll"]["source_piece_ids"], json!(["lining"]));
+    assert_eq!(job["finite_stock"]["source_piece_ids"], json!(["shell"]));
+    let replay_pattern = job["pattern_json"].as_str().unwrap();
+    let replay_request = job["replay_request_json"].as_str().unwrap();
+    fs::write(dir.join("job-pattern.json"), replay_pattern).unwrap();
+    fs::write(dir.join("job-request.json"), replay_request).unwrap();
+    for main in [false, true] {
+        assert_eq!(run(main, &dir), expected);
+        let mut command = Command::new(if main {
+            env!("CARGO_BIN_EXE_ftx")
+        } else {
+            env!("CARGO_BIN_EXE_ftx-materials")
+        });
+        command.current_dir(&dir);
+        if main {
+            command.args(["--json", "materials"]);
+        }
+        let output = command
+            .args(["cut-job", "job-pattern.json", "job-request.json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let replayed: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(replayed.get("result").unwrap_or(&replayed), job);
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("pattern.json")).unwrap(),
+        pattern
+    );
+    assert_eq!(fs::read_to_string(dir.join("study.json")).unwrap(), input);
+    assert_eq!(
+        fs::read_to_string(dir.join("job-pattern.json")).unwrap(),
+        replay_pattern
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("job-request.json")).unwrap(),
+        replay_request
+    );
+}
+
+#[test]
 fn both_study_commands_recompute_measured_vapor_transport_from_piece_substitutions() {
     let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
     let input = include_str!("../../../examples/vapor-study/leather.json");

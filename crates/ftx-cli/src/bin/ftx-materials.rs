@@ -82,6 +82,7 @@ ftx-materials calibrate-friction SLIDING.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
 ftx-materials thermal-compression HISTORY.json
 ftx-materials thermal-vapor STACK.json
+ftx-materials thermal-vapor-coverage REQUEST.json
 ftx-materials thermal-vapor-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-steady STACK.json
 ftx-materials thermal-steady-surface SIM_REPORT.json CONDITIONS.json
@@ -92,6 +93,7 @@ ftx-materials thermal-coverage SIM_REPORT.json COVERAGE.json CONDITIONS.json
 ftx-materials thermal-map SIM_REPORT.json BODY.obj PROJECTION.json
 ftx-materials thermal-motion MOTION.json
 ftx-materials cut-plan PATTERN.json OPTIONS.json
+ftx-materials cut-job PATTERN.json REQUEST.json
 ftx-materials cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json
 ftx-materials cut-svg PATTERN.json OPTIONS.json ROLL-INDEX NEW.svg
 ftx-materials sew-plan PATTERN.json OPTIONS.json
@@ -106,6 +108,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `thermal-compression` retains material heat state across qualified gap changes and thermal holds; mechanical work is not converted to heat.
 `thermal-vapor` computes potential evaporative exchange from source-qualified vapor resistances and explicit boundary pressures; it does not infer sweat availability, condensation or wearer comfort.
+`thermal-vapor-coverage` recomputes layered vapor paths from declared body/cloth geometry and source-locked materials; uncovered body fractions remain unknown.
 `thermal-vapor-surface` evaluates independent sheet potentials on retained current drape geometry, without requiring dry heat or storage data; it does not establish actual wearer evaporation.
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `pressure-condition` prepares a frozen material at a declared normal pressure from qualified observations; it does not infer contact pressure.
@@ -127,6 +130,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-map` derives coverage polygons from actual cloth and body geometry under a local-normal closure.
 `thermal-motion` evolves a timed sequence of verified maps, conservatively remaps heat, and can resume saved states.
 `cut-plan` derives material-specific roll requirements from real cut instances and sourced width.
+`cut-job` routes every source piece to roll or finite inventory and produces one complete allocation with independent purchasing outcomes.
 `stock-plan` allocates every cutter to finite hide/remnant polygons, with defect exclusions and exact material matching.
 `stock-residual` emits the next frozen request with accepted cuts retained as occupied physical stock.
 `stock-svg` writes a new finite-stock review; stock boundaries/defects are not machine cut paths.
@@ -315,6 +319,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
             relaxation_calibration::run(path, true)
         }
         ["cut-plan", pattern, options] => cutting::plan(pattern, options),
+        ["cut-job", pattern, request] => cutting::job(pattern, request),
         ["sew-plan", pattern, options] => {
             let pattern = Pattern::new(read::<Value>(pattern)?);
             let options = read::<ftx_export::sewing::SewOptions>(options)?;
@@ -356,6 +361,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-transient", path] => thermal_transient::run(path),
         ["thermal-compression", path] => steady_workbench::compression_history(path),
         ["thermal-vapor", path] => steady_workbench::vapor(path),
+        ["thermal-vapor-coverage", path] => steady_workbench::vapor_coverage(path),
         ["thermal-vapor-surface", report, conditions] => {
             steady_workbench::vapor_surface(report, conditions)
         }

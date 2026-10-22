@@ -205,6 +205,29 @@ pub fn cut_plan(pattern: &str, options: &str) -> Result<String, Refusal> {
     serde_json::to_string(&cut_inputs(pattern, options)?).map_err(|e| invalid(e.to_string()))
 }
 
+/// Route every physical cut instance to declared roll or finite inventory in one complete job.
+/// Source-frozen replay and independent purchasing outcomes come from the native planner.
+///
+/// # Errors
+/// Combined input over 64 MiB, invalid routes, missing source evidence or refused allocation.
+pub fn cut_job(pattern: &str, request: &str) -> Result<String, Refusal> {
+    budget(&[pattern, request])?;
+    let pattern = Pattern::from_json(pattern).map_err(|e| invalid(e.to_string()))?;
+    let request: ftx_export::cutting::job::Request =
+        serde_json::from_str(request).map_err(|e| invalid(e.to_string()))?;
+    serde_json::to_string(&request.build(&pattern)?).map_err(|e| invalid(e.to_string()))
+}
+
+/// Browser export of the shared complete mixed-stock cutting job.
+///
+/// # Errors
+/// The same input, source and allocation refusals as [`cut_job`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = material_cut_job)]
+pub fn web_cut_job(pattern: &str, request: &str) -> Result<String, wasm_bindgen::JsError> {
+    cut_job(pattern, request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Dated offer comparison for actual marker stock, including waste/minima; never a checkout.
 ///
 /// # Errors

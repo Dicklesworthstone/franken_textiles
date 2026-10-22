@@ -78,6 +78,17 @@ observations, source/evidence refusals, explicit boundaries and exact frozen rep
 potential heat/water outputs do not establish sweat supply, comfort or coupled dry/wet histories.
 See `docs/vapor-resistance.md`.
 
+`thermal::vapor_coverage` / wasm32 `thermal_vapor_coverage(input)` expose the same bounded
+geometry-derived layered coverage consumer as the native command. Retained material selections,
+body/cloth geometry, explicit vapor boundaries and frozen replay stay with the report. Missing dry
+thermal properties do not prevent this independent consumer; uncovered body transfer remains unknown.
+
+**Complete mixed-stock jobs.** `manufacturing::cut_job` / wasm32
+`material_cut_job(pattern, request)` invoke the canonical explicit roll/finite-stock routing planner.
+The combined JSON input limit is 64 MiB. Every original instance/copy is accounted for once; pricing
+is independently reported, and the exact frozen pattern/request strings can replay the result offline.
+Existing material-study/scenario transports expose this outcome without another browser planner.
+
 **Finite-strip characterization.** `materials::strip_experiment` and `calibrate_strip` expose
 the shared `strip::evaluate` and `strip::fit` authorities without filesystem access. Their wasm32
 exports are `material_strip_experiment(input)` and `material_calibrate_strip(input, allow_estimates)`.
