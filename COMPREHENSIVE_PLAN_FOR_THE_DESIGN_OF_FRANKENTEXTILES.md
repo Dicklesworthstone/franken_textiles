@@ -2773,6 +2773,32 @@ under `ftx-vc2`/`ftx-tmc`. See [vapor-coverage.md](docs/vapor-coverage.md).
 
 ---
 
+### 25.55 Bind vapor optimization to the actual material assignments and sewn geometry
+
+**Delivered software (`ftx-vc4`, supporting `ftx-ms2`/`ftx-vc1`).** Building on the independent-sheet
+vapor objective names in §25.51, scenario comparison now admits those readings only from a complete
+source- and geometry-matched result for the newly computed initial drape. Explicit constraints and
+the required `vapor_surface` consumer share these checks alongside the ordinary missing-data and
+settled/gating-clear admission. No surrogate area, second transport model or dry-heat dependency is
+introduced.
+
+Every reading stays tied to the bound pattern, body, scenario, material, current triangle geometry
+and ownership, frozen boundary conditions and canonical Ret result. Only source protocols consumed
+by each stable cloth-instance identity govern cross-alternative compatibility; column reordering,
+deduplication and unused observations do not change that meaning. Explicit mixed-protocol consent
+does not override stale results or unavailable inputs. Independent manufacturing and thermal results
+remain available after another consumer refuses.
+
+This completes the result-admission path for nominal initial-frame sheet potential. It does not infer
+overlap, covered-body evaporation, moisture supply, latent cooling, motion-integrated transfer or
+propagated uncertainty. The distinct §25.54 coverage topology and remaining `ftx-vc2` coupling and
+empirical transport gates retain their own scope.
+Source/freshness refusals, protocol ownership, exact frozen replay and actual production scene
+substitution are exercised at the existing core and portable seams. See
+[material-scenario-studies.md](docs/material-scenario-studies.md#vapor-potential-on-the-current-sewn-geometry).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

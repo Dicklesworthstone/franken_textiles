@@ -108,6 +108,20 @@ protocols. Missing data stays unknown; reported bounds cannot masquerade as prop
 uncertainty. Omission preserves existing study serialization. Tests: `material_study_vapor` and the
 native/portable `material_study_consumers`; no actual evaporation, comfort or empirical assembly claim.
 
+**Draped vapor comparison** (`material_study::comparison`, plan §25.55 / `ftx-vc4`). Nominal
+`independent_vapor_potential_heat_flow_w` and `independent_vapor_potential_mass_flow_kg_s` objectives
+consume the initial scenario's actual independent-sheet vapor result. Optional required consumer
+`vapor_surface` uses the same gates. Pattern/body/scenario, settledness, retained frame/material,
+current geometry/ownership, frozen boundary policy, canonical column reports and area-integrated
+totals must agree. Cross-alternative protocols follow consumed columns by stable cloth-instance
+identity, independent of internal column order or unused columns. Explicit mixed-protocol consent
+cannot bypass missing data or freshness checks. Dry heat/storage remain independent; motion endpoints
+do not supply static readings or an inferred time integral. Source bounds are not propagated
+uncertainty, summed sheets are not covered-body evaporation, and no physical comfort claim follows.
+Canonical source-column merges/splits and source IDs do not create false protocol incompatibility;
+the common-area `vapor` stack remains a separate consumer. Tests: `scenario_comparison`, production
+file-free `material_scenario`, and the `ftx-drape` material-scenario tests.
+
 **Text and numbers** (`text.rs`, §2). `fnum` (fixed-point, ties to even on the exact binary value, trailing
 zeros stripped, `-0` → `0`), `ascii_text` (NFKD, `×` → `x`, `— – ·` → `-`, code points 32..126 kept),
 `safe_name`, Helvetica `text_width`, greedy `wrap`, the single-stroke font (`stroke_text`), tile column
@@ -284,12 +298,3 @@ outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` 
 **No claims.** GEOS's exact vertex lists for union outlines (its ring starts where its overlay starts and
 its sliver clean moves points by up to 1e-4 mm); the reference's main label anchors; zlib's compressed bytes; the reference's DXF template; a check that raises
 on a missing file.
-
-**Draped vapor comparison.** Independent-sheet vapor objectives and the optional `vapor_surface`
-required consumer use the same fresh, settled, gating-clear drape as existing numerical objectives.
-They read actual `vapor_surface` outcomes and compare consumed observation method, conditions,
-evidence and unit sets. Canonical source-column merges/splits and source IDs do not create false
-protocol incompatibility. The common-area `vapor` stack remains a separate consumer. Dry heat,
-body coverage, actual sweating and propagated uncertainty are not inferred. Three focused
-`scenario_comparison` tests exercise callback admission, explicit protocol overrides and scalar units;
-the production cloth/vapor calculation is exercised by `ftx-drape` material-scenario tests.

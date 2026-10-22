@@ -511,12 +511,17 @@ mod tests {
         stale["vapor_surface"]["positions_m"][1][0] = json!(2.);
         assert!(c.evaluate(&stale).is_err());
         let mut stale = source.clone();
+        // Columns follow canonical hash order, not the order of the input record slice.
         let column = stale["vapor_surface"]["model"]["patches"][0]["column"]
             .as_u64()
             .unwrap();
-        // Canonical columns follow source hashes, so the first patch may already use column 1.
-        stale["vapor_surface"]["model"]["patches"][0]["column"] = json!(1 - column);
-        assert!(c.evaluate(&stale).is_err());
+        stale["vapor_surface"]["model"]["patches"][0]["column"] =
+            json!(if column == 0 { 1 } else { 0 });
+        assert_ne!(stale["vapor_surface"], source["vapor_surface"]);
+        assert_eq!(
+            c.evaluate(&stale).unwrap_err().message,
+            "vapor patch material differs from retained instance assignment"
+        );
         let mut stale = source.clone();
         stale["vapor_surface"]["surprise"] = json!(true);
         assert!(c.evaluate(&stale).is_err());
@@ -576,14 +581,37 @@ mod tests {
             materials: vec![],
         };
         let missing = report(&[empty.resolve(&selection).unwrap()]);
-        assert!(conditions().evaluate(&missing).is_err());
+        assert!(Surface::restore(&missing).is_ok());
+        assert!(
+            conditions()
+                .evaluate(&missing)
+                .unwrap_err()
+                .message
+                .contains("missing textile property vapor_resistance")
+        );
         let mut denied = record("denied", 7., "synthetic Ret").frozen_selection();
+        let original_hash = denied.expected_sha256.clone().unwrap();
         denied.allow_estimates = false;
-        assert!(empty.resolve(&denied).is_err());
-        // A deliberate new policy gets a fresh identity before testing its Ret refusal.
+        // Consent participates in the frozen identity; an old lock cannot authorize a new policy.
+        assert!(
+            empty
+                .resolve(&denied)
+                .unwrap_err()
+                .message
+                .contains("expected_sha256")
+        );
         denied.expected_sha256 = None;
-        let denied = report(&[empty.resolve(&denied).unwrap()]);
-        assert!(conditions().evaluate(&denied).is_err());
+        let denied = empty.resolve(&denied).unwrap();
+        assert_ne!(denied.sha256(), original_hash);
+        let denied = report(&[denied]);
+        assert!(Surface::restore(&denied).is_ok());
+        assert!(
+            conditions()
+                .evaluate(&denied)
+                .unwrap_err()
+                .message
+                .contains("vapor_resistance is an estimate; explicit opt-in required")
+        );
     }
 
     #[test]

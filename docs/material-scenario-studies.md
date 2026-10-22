@@ -411,8 +411,58 @@ missing-value checks. Nominal comparison requires explicit consent: source range
 drape/thermal objective intervals. Reported assembly-mass bounds hold authored geometry and inventory
 fixed and do not establish general scenario uncertainty. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
 comfort or proof that the requested run duration was physically sufficient. Positive admission tests
-use explicitly synthetic callback outcomes; the actual cylinder integration test demonstrates that
-clear-gating but drifting cloth is excluded. No settled anatomical garment experiment is claimed.
+use synthetic callback outcomes and an actual production sewing-only band after 120 sewing steps;
+the latter explicitly reports that gravity was not simulated. The short cylinder integration also
+demonstrates that clear-gating but drifting cloth is excluded. Neither establishes a gravity-settled
+anatomical garment or measured fit.
+
+### Vapor potential on the current sewn geometry
+
+With `scenario.vapor_surface` declared, comparisons can use the actual initial drape's independent
+sheet vapor totals. These metrics differ from `vapor_potential_*`, which use an explicitly authored
+common-area stack in the manufacturing study:
+
+| Metric | Unit | Meaning |
+|---|---|---|
+| `independent_vapor_potential_heat_flow_w` | W | Potential heat flow integrated over current retained cloth triangles. |
+| `independent_vapor_potential_mass_flow_kg_s` | kg/s | Potential mass flow using the explicitly supplied latent heat. |
+
+For example, given common vapor pressure, film and latent-heat conditions:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [
+    {"metric": "independent_vapor_potential_heat_flow_w", "direction": "maximize"}
+  ],
+  "constraints": [
+    {"metric": "independent_vapor_potential_mass_flow_kg_s", "minimum": 0}
+  ],
+  "required_consumers": ["vapor_surface"],
+  "allow_mixed_protocols": false
+}
+```
+
+The objective direction and zero lower bound are authored requirements, not a comfort recommendation.
+The underlying model requires inside vapor pressure at least as large as outside pressure; reverse
+transport and condensation remain outside its domain.
+Either metric automatically requires the vapor consumer. Adding `vapor_surface` explicitly also lets
+a cost or mass comparison require successful draped vapor evaluation. Missing Ret, a refused result,
+an unfinished drape or a mismatched material/geometry/condition receipt excludes the alternative;
+the comparison cannot borrow an older frame or substitute zero. Dry conductivity and heat capacity
+are not requirements for this independent consumer, and their refusals do not erase valid vapor output.
+
+Admission checks the retained source selection, frame, current positions and triangle ownership,
+frozen conditions, canonical column results and integrated totals. Only protocols of columns actually
+consumed by each stable cloth-instance identity participate in cross-alternative matching. Column
+reordering or deduplication does not change protocol meaning; exchanging protocols between different
+instances does. Unused columns do not disqualify a pair. Cross-alternative `allow_mixed_protocols`
+remains separate from the vapor request's within-column source admission.
+
+These objectives are nominal, initial-frame sheet potentials. Source ranges are not propagated output
+intervals, and motion endpoints do not become an unrequested time integral. Overlapping lining and
+shell sheets remain separately prescribed surfaces; their sum does not represent covered-body
+evaporation, water availability or latent cooling. See [vapor-resistance.md](vapor-resistance.md).
 
 ### Motion-qualified objectives
 

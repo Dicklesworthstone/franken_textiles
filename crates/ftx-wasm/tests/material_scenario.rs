@@ -137,6 +137,158 @@ fn file_free_study_matches_real_consumers_and_keeps_manufacturing_after_drape_re
     assert_eq!(p.raw(), &serde_json::from_str::<Value>(PATTERN).unwrap());
 }
 #[test]
+fn draped_vapor_objectives_use_real_sewn_geometry_and_independent_material_evidence() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let mut fast = pattern["fabric"]["material"].clone();
+    fast["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("thermal_conductivity");
+    let missing = fast.clone();
+    fast["record"]["properties"]["vapor_resistance"] = json!({
+        "value":7.,"unit":"m2*Pa/W","source":"test","evidence":"estimate",
+        "method":"Synthetic constant Ret for production comparison regression",
+        "conditions":{"conditioning":"synthetic dry coupon"}});
+    let mut slow = fast.clone();
+    slow["record"]["properties"]["vapor_resistance"]["value"] = json!(17.);
+    let input = json!({"schema":"ftx-material-study/1","variants":[
+        {"key":"a-fast","changes":{"schema":"ftx-material-bindings/1","default":fast}},
+        {"key":"b-slow","changes":{"schema":"ftx-material-bindings/1","default":slow}},
+        {"key":"c-missing","changes":{"schema":"ftx-material-bindings/1","default":missing}}],
+        "cutting":{"copies":1,"gap_mm":1.,"edge_margin_mm":0.,"end_margin_mm":0.,"seam_allowance_mm":0.},
+        "comparison":{"basis":"nominal","required_consumers":["vapor_surface"],
+            "objectives":[{"metric":"independent_vapor_potential_heat_flow_w","direction":"maximize"}],
+            "constraints":[{"metric":"independent_vapor_potential_mass_flow_kg_s","minimum":0.}]}});
+    let mut scenario: Value = serde_json::from_str(SCENARIO).unwrap();
+    // This is an explicitly sewing-only geometry comparison, not gravity-settled garment evidence.
+    scenario["options"]["sew_steps"] = json!(120);
+    scenario["options"]["drape_steps"] = json!(0);
+    scenario["vapor_surface"] = json!({"schema":"ftx-vapor-surface-conditions/1","boundaries":[{
+        "inside_vapor_pressure_pa":2000.,"outside_vapor_pressure_pa":1000.,
+        "inside_film_resistance_m2_pa_w":1.,"outside_film_resistance_m2_pa_w":2.,
+        "latent_heat_j_kg":2_500_000.}]});
+    let raw = on_body(
+        &body,
+        PATTERN,
+        &input.to_string(),
+        &scenario.to_string(),
+        |_| {},
+    )
+    .unwrap();
+    let result: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        result["comparison"]["frontier"],
+        json!(["a-fast"]),
+        "comparison: {}; drape: {}",
+        result["comparison"],
+        result["simulations"][0]["evaluation"]["result"]["drape"]
+    );
+    assert!(
+        result["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let compared = result["comparison"]["alternatives"].as_array().unwrap();
+    let simulations = result["simulations"].as_array().unwrap();
+    let mut heat = Vec::new();
+    for (candidate, simulation) in compared.iter().zip(simulations) {
+        let actual = &simulation["evaluation"]["result"];
+        assert_eq!(simulation["evaluation"]["status"], "available");
+        assert_eq!(actual["drape"]["settled"], true);
+        assert_eq!(actual["drape"]["numerical"]["gravity_simulated"], false);
+        assert!(actual["drape"]["numerical"]["settled"].is_null());
+        assert_eq!(actual["metrics"]["simulation_gating_clear"], true);
+        assert_eq!(actual["surface"]["status"], "refused");
+        assert_eq!(actual["coverage"]["status"], "refused");
+        if candidate["key"] == "c-missing" {
+            assert_eq!(candidate["eligible"], false);
+            assert_eq!(actual["vapor_surface"]["status"], "refused");
+            assert!(
+                candidate["readings"]
+                    .get("independent_vapor_potential_heat_flow_w")
+                    .is_none()
+            );
+            continue;
+        }
+        assert_eq!(candidate["eligible"], true, "{candidate}");
+        let vapor = &actual["vapor_surface"]["result"];
+        for (metric, field, unit) in [
+            (
+                "independent_vapor_potential_heat_flow_w",
+                "potential_heat_flow_w",
+                "W",
+            ),
+            (
+                "independent_vapor_potential_mass_flow_kg_s",
+                "potential_mass_flow_kg_s",
+                "kg/s",
+            ),
+        ] {
+            assert_eq!(candidate["readings"][metric]["value"], vapor[field]);
+            assert_eq!(candidate["readings"][metric]["unit"], unit);
+        }
+        let watts = vapor["potential_heat_flow_w"].as_f64().unwrap();
+        let flux = if candidate["key"] == "a-fast" {
+            100.
+        } else {
+            50.
+        };
+        assert!((watts - flux * vapor["area_m2"].as_f64().unwrap()).abs() < 1e-12);
+        heat.push(watts);
+        let replay: Value =
+            serde_json::from_str(vapor["replay_request_json"].as_str().unwrap()).unwrap();
+        let conditions: ftx_drape::thermal::vapor::Conditions =
+            serde_json::from_value(replay["conditions"].clone()).unwrap();
+        assert_eq!(conditions.evaluate(&replay["report"]).unwrap(), *vapor);
+    }
+    assert!((heat[0] - 2. * heat[1]).abs() < 1e-12);
+    assert_eq!(
+        simulations[0]["evaluation"]["result"]["positions_m"],
+        simulations[1]["evaluation"]["result"]["positions_m"]
+    );
+    for row in result["manufacturing"]["alternatives"].as_array().unwrap() {
+        assert_eq!(row["cutting"]["status"], "available");
+    }
+    let mut frozen = input;
+    for (variant, row) in frozen["variants"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(result["manufacturing"]["alternatives"].as_array().unwrap())
+    {
+        variant["changes"] = row["frozen_changes"].clone();
+    }
+    let replay: Value = serde_json::from_str(
+        &on_body(
+            &body,
+            PATTERN,
+            &frozen.to_string(),
+            &scenario.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(replay["simulations"], result["simulations"]);
+    assert_eq!(
+        replay["comparison"]["alternatives"],
+        result["comparison"]["alternatives"]
+    );
+    assert_eq!(
+        replay["comparison"]["frontier"],
+        result["comparison"]["frontier"]
+    );
+}
+
+#[test]
 fn material_substitution_recomputes_draped_vapor_without_dry_thermal_readiness() {
     let form = form();
     let body = DrapeBody {

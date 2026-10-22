@@ -50,7 +50,7 @@ pub enum Consumer {
     Drape,
     /// Successful independent sheet-column heat on an admitted drape, not whole-body heat.
     Surface,
-    /// Successful independent-sheet vapor potential on an admitted drape.
+    /// Potential vapor transfer over current independent sheets on an admitted initial drape.
     VaporSurface,
     /// Successful declared body-patch/layer coverage heat on an admitted drape.
     Coverage,
@@ -108,9 +108,9 @@ pub enum Metric {
     MaxAbsoluteEdgeStrainPct,
     /// Signed independent sheet-column power (W), not an absolute value or warmth rating.
     IndependentSurfacePowerW,
-    /// Potential latent power (W) integrated over current draped independent sheets.
+    /// Potential latent transfer (W) over current independent draped sheets, not wearer heat loss.
     IndependentVaporPotentialHeatFlowW,
-    /// Potential vapor mass flow (kg/s) over current draped independent sheets.
+    /// Potential vapor transfer (kg/s) over those sheets, with explicit reservoirs and latent heat.
     IndependentVaporPotentialMassFlowKgS,
     /// Signed heat through the declared body coverage domain (W), not assumed whole-wearer heat.
     BodyCoveragePowerW,
@@ -258,10 +258,10 @@ impl Metric {
                 simulation["surface"]["result"]["steady"]["power_w"].as_f64()
             }
             Self::IndependentVaporPotentialHeatFlowW => {
-                simulation["vapor_surface"]["result"]["potential_heat_flow_w"].as_f64()
+                admitted.vapor_surface["potential_heat_flow_w"].as_f64()
             }
             Self::IndependentVaporPotentialMassFlowKgS => {
-                simulation["vapor_surface"]["result"]["potential_mass_flow_kg_s"].as_f64()
+                admitted.vapor_surface["potential_mass_flow_kg_s"].as_f64()
             }
             Self::BodyCoveragePowerW => {
                 simulation["coverage"]["result"]["steady"]["power_w"].as_f64()
@@ -672,6 +672,9 @@ impl Policy {
         if self.consumers().contains(&Consumer::Vapor) {
             report.notes.push("Vapor objectives use the declared common-area stack, pressure boundaries, films and latent heat. They describe potential transfer, not actual evaporation, sweating, condensation or wearer comfort; source protocols must be admitted independently of other thermal consumers.");
         }
+        if self.consumers().contains(&Consumer::VaporSurface) {
+            report.notes.push("Independent draped-sheet vapor objectives use the admitted initial geometry, retained source Ret and declared pressure/film/latent-heat conditions. Overlapping sheets remain independent; these potentials are not covered-body evaporation, water supply, latent cooling, continuous motion totals or comfort. Consumed column protocols require separate cross-alternative admission.");
+        }
         if self.consumers().contains(&Consumer::VaporCoverage) {
             report.notes.push("Covered vapor objectives require the whole declared body domain to be covered on the admitted drape. Partial covered subtotals stay visible but cannot be ranked as complete-domain transfer. Actual layer areas, explicit interlayer resistance, pressure boundaries and films define the potential network; no sweat supply, condensation, thermal feedback or comfort is inferred.");
         }
@@ -679,9 +682,6 @@ impl Policy {
             || self.consumers().contains(&Consumer::CuttingJobPurchasing)
         {
             report.notes.push("Cutting-job objectives cover every routed physical piece exactly once. Gross stock includes roll-marker waste and entire used finite-stock items; complete same-market observed costs do not reserve inventory or include undeclared shipping/handling.");
-        }
-        if self.consumers().contains(&Consumer::VaporSurface) {
-            report.notes.push("Independent-sheet vapor objectives use current draped sheet areas and their explicitly requested pressure/film/latent-heat model. They are separate from the common-area stack and dry heat, and are not body coverage, actual evaporation, sweat supply, condensation or comfort. Only consumed vapor observation protocol sets qualify comparison; column deduplication and source IDs do not establish incompatibility.");
         }
         report
     }
@@ -719,11 +719,18 @@ impl Policy {
         };
         let mut admitted = Numerical {
             drape: simulation,
+            vapor_surface: &Value::Null,
             vapor_coverage: None,
             motion: &Value::Null,
             transient_surface: None,
             transient_coverage: None,
         };
+        if self.consumers().contains(&Consumer::VaporSurface) && !simulation.is_null() {
+            match admit_vapor_surface(descriptor, simulation) {
+                Ok(vapor) => admitted.vapor_surface = vapor,
+                Err(e) => result.exclusions.push(e),
+            }
+        }
         if self.consumers().contains(&Consumer::VaporCoverage) && !simulation.is_null() {
             match admit_vapor_coverage(descriptor, simulation) {
                 Ok(vapor) => admitted.vapor_coverage = Some(vapor),
@@ -991,7 +998,7 @@ impl Policy {
                 "membrane_relaxation":if mechanics { serde_json::to_value(&material.membrane_relaxation).map_err(|e| invalid(e.to_string()))? } else { Value::Null },
                 "thermal_response":if thermal { serde_json::to_value(&material.thermal_response).map_err(|e| invalid(e.to_string()))? } else { Value::Null }}));
         }
-        let base = hash(&(
+        let mut base = hash(&(
             protocols,
             if mechanics {
                 bound["pattern"]["fabric"]["interfaces"].clone()
@@ -999,16 +1006,15 @@ impl Policy {
                 Value::Null
             },
         ))?;
-        let base = if consumers.contains(&Consumer::VaporCoverage) {
+        if consumers.contains(&Consumer::VaporCoverage) {
             let vapor = admitted
                 .vapor_coverage
                 .ok_or_else(|| invalid("covered vapor observation protocols unavailable"))?;
-            hash(&(base, covered_vapor_protocols(vapor)?))?
-        } else {
-            base
-        };
-        let base = if consumers.contains(&Consumer::Vapor) {
-            // Only explicitly consumed layer occurrences participate in the common-area stack.
+            base = hash(&(base, covered_vapor_protocols(vapor)?))?;
+        }
+        // Only the explicitly consumed layer occurrences participate. A cuff or trim with
+        // unrelated vapor observations must not change a shell/lining comparison's protocol.
+        if consumers.contains(&Consumer::Vapor) {
             let vapor = row
                 .vapor
                 .value()
@@ -1022,48 +1028,30 @@ impl Policy {
                         "conditions":q.conditions,"evidence":q.evidence})
                 })
                 .collect();
-            hash(&(base, layers))?
-        } else {
-            base
-        };
-        if !consumers.contains(&Consumer::VaporSurface) {
-            return Ok(base);
+            base = hash(&(base, layers))?;
         }
-        let columns = admitted.drape["vapor_surface"]["result"]["columns"]
-            .as_array()
-            .filter(|columns| !columns.is_empty())
-            .ok_or_else(|| invalid("independent vapor observation protocols unavailable"))?;
-        // Material substitution may merge or split canonical source columns. Compare the
-        // consumed qualification set, never source IDs, column indices, areas or Ret values.
-        let profiles = columns
-            .iter()
-            .map(|column| {
-                let layers = column["layers"]
-                    .as_array()
-                    .filter(|layers| layers.len() == 1)
-                    .ok_or_else(|| {
-                        invalid("independent vapor needs one source layer per column")
-                    })?;
-                let q: ftx_pattern::materials::Quantity =
-                    serde_json::from_value(layers[0]["observation"].clone()).map_err(|e| {
-                        invalid(format!("independent vapor observation unavailable: {e}"))
-                    })?;
-                if q.unit != "m2*Pa/W"
-                    || !q.value.is_finite()
-                    || q.value <= 0.
-                    || q.method.trim().is_empty()
-                    || q.source.trim().is_empty()
-                {
-                    return Err(invalid(
-                        "independent vapor needs a complete canonical observation",
-                    ));
-                }
-                serde_json::to_string(&json!({"unit":q.unit,"method":q.method,
-                    "conditions":q.conditions,"evidence":q.evidence}))
-                .map_err(|e| invalid(e.to_string()))
-            })
-            .collect::<Result<BTreeSet<_>, Refusal>>()?;
-        hash(&(base, profiles))
+        if consumers.contains(&Consumer::VaporSurface) {
+            let vapor = admitted.vapor_surface;
+            let patches = vapor["patch_topology"]
+                .as_array()
+                .ok_or_else(|| invalid("admitted draped vapor protocols unavailable"))?;
+            let mut owners: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+            for (i, patch) in patches.iter().enumerate() {
+                // Column order/deduplication can change with substitution. Protocols belong to
+                // stable physical instances; unconsumed records and triangle counts do not rank.
+                let column = patch["column"].as_u64().unwrap_or(u64::MAX) as usize;
+                let owner = vapor["triangle_instance"][i].as_u64().unwrap_or(u64::MAX) as usize;
+                let instance = vapor["instances"][owner]
+                    .as_str()
+                    .ok_or_else(|| invalid("admitted draped vapor owner unavailable"))?;
+                let q = &vapor["columns"][column]["layers"][0]["observation"];
+                owners.entry(instance).or_default().insert(hash(&json!({
+                    "unit":q["unit"],"method":q["method"],
+                    "conditions":q["conditions"],"evidence":q["evidence"]}))?);
+            }
+            base = hash(&(base, owners))?;
+        }
+        Ok(base)
     }
 }
 
@@ -1071,6 +1059,7 @@ impl Policy {
 // static reading vanish, and an available status alone must not admit stale numerical results.
 struct Numerical<'a> {
     drape: &'a Value,
+    vapor_surface: &'a Value,
     vapor_coverage: Option<&'a Value>,
     motion: &'a Value,
     transient_surface: Option<Heat<'a>>,
@@ -1108,7 +1097,7 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
         Consumer::Vapor => row.vapor.value().is_some(),
         Consumer::Drape => !admitted.drape.is_null(),
         Consumer::Surface => admitted.drape["surface"]["status"] == "available",
-        Consumer::VaporSurface => admitted.drape["vapor_surface"]["status"] == "available",
+        Consumer::VaporSurface => !admitted.vapor_surface.is_null(),
         Consumer::Coverage => admitted.drape["coverage"]["status"] == "available",
         Consumer::VaporCoverage => admitted.vapor_coverage.is_some(),
         Consumer::Motion => !admitted.motion.is_null(),
@@ -1151,6 +1140,218 @@ fn admit_simulation(
         ));
     }
     Ok(())
+}
+
+fn admit_vapor_surface<'a>(
+    descriptor: &Value,
+    simulation: &'a Value,
+) -> Result<&'a Value, Refusal> {
+    let fail = || {
+        invalid(
+            "draped vapor comparison needs the requested source/geometry-matched complete initial-sheet result",
+        )
+    };
+    let requested = &descriptor["scenario"]["vapor_surface"];
+    let vapor = &simulation["vapor_surface"]["result"];
+    let frame = &simulation["drape"]["vapor_surface"];
+    let model = &frame["model"];
+    if requested["schema"] != "ftx-vapor-surface-conditions/1"
+        || simulation["vapor_surface"]["status"] != "available"
+        || vapor["schema"] != "ftx-vapor-surface-result/1"
+        || frame["schema"] != "ftx-drape-vapor-surface/1"
+        || frame["available"] != true
+        || model["schema"] != "ftx-vapor-surface/1"
+        || !same_identity(&vapor["model_sha256"], &model["sha256"])
+        || !same_identity(&vapor["drape_vapor_frame_sha256"], &frame["sha256"])
+        || (!requested["model_sha256"].is_null() && requested["model_sha256"] != model["sha256"])
+    {
+        return Err(fail());
+    }
+    // The evaluator freezes the model identity even for uniform caller boundaries. Other
+    // conditions must remain exactly the same; mixed-column consent is not comparison consent.
+    let mut expected_conditions = requested.clone();
+    expected_conditions["model_sha256"] = model["sha256"].clone();
+    if vapor["request"]["conditions"] != expected_conditions
+        || vapor["request"]["report"]
+            != json!({"material":simulation["drape"]["material"],"vapor_surface":frame})
+        || !same_identity(&vapor["request_sha256"], &json!(hash(&vapor["request"])?))
+        || frame["material_report_sha256"] != json!(hash(&simulation["drape"]["material"])?)
+        || vapor["positions_m"] != simulation["positions_m"]
+        || frame["positions_m"] != simulation["positions_m"]
+        || !same_identity(
+            &simulation["positions_sha256"],
+            &json!(hash(&simulation["positions_m"])?),
+        )
+        || vapor["patch_topology"] != model["patches"]
+        || vapor["triangle_instance"] != frame["triangle_instance"]
+        || vapor["instances"] != frame["instances"]
+    {
+        return Err(fail());
+    }
+    for retained in [model, frame] {
+        let mut unhashed = retained.clone();
+        unhashed.as_object_mut().ok_or_else(fail)?.remove("sha256");
+        if !same_identity(&retained["sha256"], &json!(hash(&unhashed)?)) {
+            return Err(fail());
+        }
+    }
+    let patches = model["patches"]
+        .as_array()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(fail)?;
+    let triangles = simulation["triangles"].as_array().ok_or_else(fail)?;
+    let columns = vapor["columns"].as_array().ok_or_else(fail)?;
+    let selections = model["columns"].as_array().ok_or_else(fail)?;
+    let readings = vapor["patches"].as_array().ok_or_else(fail)?;
+    let owners = vapor["triangle_instance"].as_array().ok_or_else(fail)?;
+    let instances = vapor["instances"].as_array().ok_or_else(fail)?;
+    let positions: Vec<ftx_core::Vec3> =
+        serde_json::from_value(simulation["positions_m"].clone()).map_err(|_| fail())?;
+    let mut instance_ids = BTreeSet::new();
+    if patches.len() != triangles.len()
+        || readings.len() != patches.len()
+        || owners.len() != patches.len()
+        || columns.len() != selections.len()
+        || instances.iter().any(|id| {
+            id.as_str()
+                .is_none_or(|id| id.is_empty() || !instance_ids.insert(id))
+        })
+        || model["vertex_count"].as_u64() != Some(positions.len() as u64)
+        || positions.iter().any(|p| !p.is_finite())
+    {
+        return Err(fail());
+    }
+    let mut consumed = BTreeMap::new();
+    let mut totals = [0.0; 3];
+    for (((patch, triangle), reading), owner) in
+        patches.iter().zip(triangles).zip(readings).zip(owners)
+    {
+        let column = patch["column"]
+            .as_u64()
+            .and_then(|i| usize::try_from(i).ok())
+            .filter(|&i| i < columns.len())
+            .ok_or_else(fail)?;
+        let vertices: [usize; 3] = serde_json::from_value(triangle.clone()).map_err(|_| fail())?;
+        if patch["vertices"] != *triangle
+            || reading["column"] != patch["column"]
+            || reading["instance"] != *owner
+            || !owner.as_u64().is_some_and(|i| i < instances.len() as u64)
+            || vertices.iter().any(|&v| v >= positions.len())
+        {
+            return Err(fail());
+        }
+        let owner = owner
+            .as_u64()
+            .and_then(|i| usize::try_from(i).ok())
+            .ok_or_else(fail)?;
+        let material = &simulation["drape"]["material"];
+        let (identity, record) = match material["basis"].as_str() {
+            Some("characterized_record") => (&material["record_sha256"], &material["record"]),
+            Some("per_piece_characterization") => {
+                let receipt = &material["instances"][owner];
+                if receipt["instance"] != instances[owner]
+                    || !material["instances"]
+                        .as_array()
+                        .is_some_and(|r| r.len() == instances.len())
+                {
+                    return Err(fail());
+                }
+                let identity = receipt["record_sha256"].as_str().ok_or_else(fail)?;
+                (
+                    &receipt["record_sha256"],
+                    &material["records"][identity]["record"],
+                )
+            }
+            _ => return Err(fail()),
+        };
+        if !same_identity(&columns[column]["layers"][0]["material_sha256"], identity)
+            || consumed
+                .insert(column, record)
+                .is_some_and(|previous| previous != record)
+        {
+            return Err(fail());
+        }
+        let [a, b, c] = vertices.map(|v| positions[v]);
+        let area = 0.5 * (b - a).cross(c - a).norm();
+        if finite(&reading["area_m2"]) != Some(area) {
+            return Err(fail());
+        }
+        for (flux, flow) in [
+            ("potential_heat_flux_w_m2", "potential_heat_flow_w"),
+            ("potential_mass_flux_kg_m2_s", "potential_mass_flow_kg_s"),
+        ] {
+            let value = finite(&columns[column][flux]).ok_or_else(fail)?;
+            if reading[flux] != columns[column][flux]
+                || finite(&reading[flow]) != Some(value * area)
+            {
+                return Err(fail());
+            }
+        }
+        for (i, key) in [
+            "area_m2",
+            "potential_heat_flow_w",
+            "potential_mass_flow_kg_s",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let value = finite(&reading[*key])
+                .filter(|&v| if i == 0 { v > 0.0 } else { v >= 0.0 })
+                .ok_or_else(fail)?;
+            totals[i] += value;
+        }
+    }
+    for (total, key) in totals.into_iter().zip([
+        "area_m2",
+        "potential_heat_flow_w",
+        "potential_mass_flow_kg_s",
+    ]) {
+        if !total.is_finite() || finite(&vapor[key]) != Some(total) {
+            return Err(fail());
+        }
+    }
+    // Reuse the existing source-qualified column consumer. This checks frozen source policy and
+    // declared boundary arithmetic without adding another transport model or requiring dry heat.
+    let catalog = ftx_pattern::materials::Catalog {
+        schema: ftx_pattern::materials::CATALOG_SCHEMA.into(),
+        materials: Vec::new(),
+    };
+    let boundaries = requested["boundaries"].as_array().ok_or_else(fail)?;
+    if boundaries.len() != 1
+        && (boundaries.len() != columns.len() || requested["model_sha256"].is_null())
+    {
+        return Err(fail());
+    }
+    let mut protocols = BTreeSet::new();
+    for (index, retained_record) in consumed {
+        let mut request = boundaries[if boundaries.len() == 1 { 0 } else { index }].clone();
+        request.as_object_mut().ok_or_else(fail)?.extend(
+            json!({"schema":"ftx-vapor-stack/1","area_m2":1.0,
+                "layers":[{"key":"sheet","selection":selections[index]}],
+                "required_conditions":requested["required_conditions"],
+                "required_method":requested["required_method"],
+                "allow_mixed_protocols":requested["allow_mixed_protocols"]})
+            .as_object()
+            .ok_or_else(fail)?
+            .clone(),
+        );
+        let request: ftx_pattern::material_vapor::Request =
+            serde_json::from_value(request).map_err(|_| fail())?;
+        if serde_json::to_value(catalog.resolve(&request.layers[0].selection)?)
+            .map_err(|_| fail())?
+            != *retained_record
+            || columns[index]
+                != serde_json::to_value(request.evaluate(&catalog)?).map_err(|_| fail())?
+        {
+            return Err(fail());
+        }
+        let q = &columns[index]["layers"][0]["observation"];
+        protocols.insert(hash(&(&q["method"], &q["conditions"]))?);
+    }
+    if protocols.len() > 1 && requested["allow_mixed_protocols"] != true {
+        return Err(fail());
+    }
+    Ok(vapor)
 }
 
 fn same_identity(actual: &Value, expected: &Value) -> bool {

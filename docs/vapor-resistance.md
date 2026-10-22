@@ -191,6 +191,15 @@ cloth geometry. It reports an independent `available` or `refused` outcome. Scen
 `independent_vapor_potential_heat_flow_w` and `independent_vapor_potential_mass_flow_kg_s`; these
 describe the initial settled-or-flagged computed frame, while motion endpoints retain their own results.
 
+The material study's optional nominal `comparison` can rank or constrain those two initial-frame
+metrics, or require `"required_consumers": ["vapor_surface"]` while optimizing another quantity.
+Ranking additionally requires a geometrically settled, gating-clear drape and a source/geometry/
+condition-matched vapor result. It retains only protocols actually consumed by each stable cloth
+instance, so internal material-column ordering cannot alter comparison admission. Missing Ret stays
+unknown even when unrelated cutting or dry-heat consumers succeed. Conversely, unavailable dry heat
+does not block this independent vapor objective. The complete policy example and admission rules are
+in [material-scenario-studies.md](material-scenario-studies.md#vapor-potential-on-the-current-sewn-geometry).
+
 These are **independent sheet potentials**: a lining under a shell still counts as a separately
 prescribed sheet, so their sum is not garment evaporation, exposed-area transfer or wearer heat loss.
 No body coverage, interlayer vapor paths, bare skin, water supply, humidity-dependent Ret, condensation,
