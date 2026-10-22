@@ -218,6 +218,8 @@ fn area_input() -> Input {
     input.replace_existing = true;
     input.area_response = Some(Area::Identify {
         parameter_bounds: [[10.0, 50.0], [5.0, 35.0]],
+        area_ratio_range: None,
+        scalar_green_strain_range: None,
     });
     let selected = Selection {
         id: input.material.id.clone(),
@@ -264,6 +266,284 @@ fn area_input() -> Input {
 fn area_baseline() -> &'static Report {
     static REPORT: OnceLock<Report> = OnceLock::new();
     REPORT.get_or_init(|| calibrate(&area_input()).unwrap())
+}
+
+fn fresh_area_input() -> Input {
+    let mut input: Input = serde_json::from_str(include_str!(
+        "../../../examples/area-response/identify.json"
+    ))
+    .unwrap();
+    input.material.membrane_response = None;
+    input.replace_existing = false;
+    input.area_response = Some(Area::Identify {
+        parameter_bounds: [[10.0, 50.0], [5.0, 35.0]],
+        area_ratio_range: Some([0.65, 1.45]),
+        scalar_green_strain_range: None,
+    });
+    input
+}
+
+fn scalar_area_input() -> Input {
+    serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json"
+    ))
+    .unwrap()
+}
+
+fn frozen_area_replays(report: &Report) {
+    assert!(report.domain_replay_verified);
+    let area = report
+        .material
+        .as_ref()
+        .unwrap()
+        .membrane_response
+        .as_ref()
+        .unwrap()
+        .area_response
+        .as_ref()
+        .unwrap();
+    assert_eq!(Some(area.area_ratio_range), report.fitted_area_ratio_range);
+    assert!(area.area_ratio_range[0] > 0.65 && area.area_ratio_range[1] < 1.45);
+    assert!(
+        report
+            .input
+            .conditions
+            .iter()
+            .all(|(key, value)| area.conditions.get(key) == Some(value))
+    );
+    assert_eq!(
+        area.conditions["fitted_area_ratio_range"],
+        serde_json::to_string(&area.area_ratio_range).unwrap()
+    );
+    for experiment in &report.input.experiments {
+        let mut fixture = experiment.fixture.clone();
+        fixture.cells.iter_mut().for_each(|n| *n *= 2);
+        let replay = evaluate(&Request {
+            schema: "ftx-strip-experiment/1".into(),
+            material: report.selection.clone().unwrap(),
+            fixture,
+            extensions: experiment
+                .observations
+                .iter()
+                .map(|o| o.extension_fraction)
+                .collect(),
+            controls: report.input.controls.clone(),
+        })
+        .unwrap();
+        let predictions: Vec<_> = report
+            .predictions
+            .iter()
+            .filter(|p| p.experiment == experiment.id)
+            .collect();
+        assert_eq!(replay.states.len(), predictions.len());
+        for (state, prediction) in replay.states.iter().zip(predictions) {
+            assert_eq!(
+                serde_json::to_value(state).unwrap(),
+                serde_json::to_value(&prediction.state).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn fresh_area_identification_needs_no_prefilled_material_coefficients() {
+    let input = fresh_area_input();
+    assert!(input.material.membrane_response.is_none());
+    assert!(input.material.properties.is_empty());
+    let report = calibrate(&input).unwrap();
+    assert!(
+        report.accepted,
+        "{:?}; {:?}",
+        report.reasons, report.parameters
+    );
+    assert_eq!(report.parameters.len(), 6);
+    for (actual, known) in report
+        .parameters
+        .iter()
+        .zip([1.1, 0.9, 1.2, -80.0, 31.0, 19.0])
+    {
+        assert!((actual - known).abs() < 1e-3, "{actual} != {known}");
+    }
+    let area = report
+        .material
+        .as_ref()
+        .unwrap()
+        .membrane_response
+        .as_ref()
+        .unwrap()
+        .area_response
+        .as_ref()
+        .unwrap();
+    for coefficient in [&area.quadratic, &area.log_squared] {
+        assert_eq!(coefficient.evidence, Evidence::Estimate);
+        assert!(coefficient.source.starts_with("strip-"));
+        assert!(
+            coefficient
+                .conditions
+                .contains_key("fitted_green_strain_range")
+        );
+        assert_eq!(
+            coefficient.conditions["fitted_area_ratio_range"],
+            area.conditions["fitted_area_ratio_range"]
+        );
+    }
+    frozen_area_replays(&report);
+}
+
+#[test]
+fn scalar_area_identification_recovers_base_q_without_double_counting_area_energy() {
+    let input = scalar_area_input();
+    assert!(input.material.membrane_response.is_none());
+    assert!(input.material.properties.is_empty());
+    assert!(input.response_family.is_none() && input.nonlinear.is_none());
+    let report = calibrate(&input).unwrap();
+    assert!(
+        report.accepted,
+        "{:?}; {:?}; pivot {}",
+        report.reasons, report.parameters, report.excitation_pivot
+    );
+    assert_eq!(report.parameters.len(), 6);
+    // Convert the independent generating Q block back to engineering constants.
+    let expected = [
+        330.0 - 6400.0 / 180.0,
+        180.0 - 6400.0 / 330.0,
+        -80.0 / 180.0,
+        96.0,
+        31.0,
+        19.0,
+    ];
+    for (actual, known) in report.parameters.iter().zip(expected) {
+        assert!((actual - known).abs() < 1e-3, "{actual} != {known}");
+    }
+    let descriptors = report.parameter_descriptors.as_ref().unwrap();
+    assert_eq!(descriptors[0].id, "warp_stiffness");
+    assert_eq!(descriptors[2].id, "poisson_warp_weft");
+    assert_eq!(descriptors[2].unit, "1");
+    assert_eq!(descriptors[4].id, "area_quadratic");
+    assert_eq!(report.parameter_bounds.len(), 6);
+    let material = report.material.as_ref().unwrap();
+    assert!(material.properties.is_empty());
+    let response = material.membrane_response.as_ref().unwrap();
+    assert!((response.coupling.value + 80.0).abs() < 1e-3);
+    for (curve, slope) in [&response.warp, &response.weft, &response.shear]
+        .into_iter()
+        .zip([330.0, 180.0, 96.0])
+    {
+        for [strain, stress] in &curve.points {
+            assert!((stress - strain * slope).abs() < 1e-3);
+        }
+    }
+    let compiled = material.compiled_membrane(true).unwrap().unwrap();
+    assert_eq!(compiled.strain_range(), report.fitted_green_strain_range);
+    assert_eq!(
+        fitted_domain(material).unwrap().unwrap().ranges(),
+        report.fitted_green_strain_range
+    );
+    assert_ne!(report.fitted_green_strain_range, [[-0.4, 0.8]; 3]);
+
+    // Independent exact Q + W(J), using the planted coefficients instead of fitted metadata.
+    let strain: [f64; 3] = [0.03, 0.02, 0.01];
+    let j = ((1.0 + 2.0 * strain[0]) * (1.0 + 2.0 * strain[1]) - strain[2].powi(2)).sqrt();
+    let energy = 0.5
+        * (330.0 * strain[0].powi(2) + 180.0 * strain[1].powi(2) + 96.0 * strain[2].powi(2))
+        - 80.0 * strain[0] * strain[1]
+        + 31.0 * (j - 1.0).powi(2)
+        + 19.0 * j.ln().powi(2);
+    let first = 62.0 * (j - 1.0) + 38.0 * j.ln() / j;
+    let stress = [
+        330.0 * strain[0] - 80.0 * strain[1] + first * (1.0 + 2.0 * strain[1]) / j,
+        180.0 * strain[1] - 80.0 * strain[0] + first * (1.0 + 2.0 * strain[0]) / j,
+        96.0 * strain[2] - first * strain[2] / j,
+    ];
+    let actual = compiled.try_evaluate(strain).unwrap();
+    assert!((actual.energy - energy).abs() < 1e-5);
+    for (actual, known) in actual.stress.into_iter().zip(stress) {
+        assert!((actual - known).abs() < 1e-4, "{actual} != {known}");
+    }
+    frozen_area_replays(&report);
+}
+
+#[test]
+fn fresh_area_identification_requires_declared_support_and_matched_specimen() {
+    let original = fresh_area_input();
+    let mut no_j = original.clone();
+    if let Some(Area::Identify {
+        area_ratio_range, ..
+    }) = &mut no_j.area_response
+    {
+        *area_ratio_range = None;
+    }
+    assert!(
+        calibrate(&no_j)
+            .unwrap_err()
+            .message
+            .contains("area_ratio_range")
+    );
+    for key in ["specimen", "conditioning"] {
+        let mut incomplete = original.clone();
+        incomplete.conditions.remove(key);
+        assert!(
+            calibrate(&incomplete)
+                .unwrap_err()
+                .message
+                .contains("matched specimen/conditioning")
+        );
+    }
+    let mut bad_j = original.clone();
+    if let Some(Area::Identify {
+        area_ratio_range, ..
+    }) = &mut bad_j.area_response
+    {
+        *area_ratio_range = Some([0.0, 1.45]);
+    }
+    assert!(
+        calibrate(&bad_j)
+            .unwrap_err()
+            .message
+            .contains("positive finite J")
+    );
+    let mut ambiguous = original;
+    if let Some(Area::Identify {
+        scalar_green_strain_range,
+        ..
+    }) = &mut ambiguous.area_response
+    {
+        *scalar_green_strain_range = Some([[-0.4, 0.8]; 3]);
+    }
+    assert!(
+        calibrate(&ambiguous)
+            .unwrap_err()
+            .message
+            .contains("must be omitted")
+    );
+
+    let mut scalar = scalar_area_input();
+    if let Some(Area::Identify {
+        scalar_green_strain_range,
+        ..
+    }) = &mut scalar.area_response
+    {
+        *scalar_green_strain_range = None;
+    }
+    assert!(
+        calibrate(&scalar)
+            .unwrap_err()
+            .message
+            .contains("explicit signed scalar_green_strain_range")
+    );
+    if let Some(Area::Identify {
+        scalar_green_strain_range,
+        ..
+    }) = &mut scalar.area_response
+    {
+        *scalar_green_strain_range = Some([[0.0, 0.8]; 3]);
+    }
+    assert!(
+        calibrate(&scalar)
+            .unwrap_err()
+            .message
+            .contains("negative and positive")
+    );
 }
 
 #[test]
@@ -351,6 +631,7 @@ fn fixed_area_evidence_is_preserved_while_directional_coefficients_are_identifie
     let mut input = area_input();
     input.area_response = Some(Area::Preserve {
         allow_estimates: true,
+        scalar_green_strain_range: None,
     });
     let original = serde_json::to_value(
         input
@@ -388,6 +669,7 @@ fn fixed_area_evidence_is_preserved_while_directional_coefficients_are_identifie
     let mut bad = input;
     bad.area_response = Some(Area::Preserve {
         allow_estimates: false,
+        scalar_green_strain_range: None,
     });
     assert!(
         calibrate(&bad)
@@ -495,6 +777,8 @@ fn area_policy_rejects_invalid_boxes_condition_mismatch_and_unexcited_coefficien
         let mut bad = original.clone();
         bad.area_response = Some(Area::Identify {
             parameter_bounds: bounds,
+            area_ratio_range: None,
+            scalar_green_strain_range: None,
         });
         assert!(calibrate(&bad).is_err());
     }
@@ -518,7 +802,7 @@ fn area_policy_rejects_invalid_boxes_condition_mismatch_and_unexcited_coefficien
         calibrate(&missing)
             .unwrap_err()
             .message
-            .contains("existing source-qualified area law")
+            .contains("area_ratio_range")
     );
     let mut narrow = original.clone();
     narrow
@@ -531,6 +815,17 @@ fn area_policy_rejects_invalid_boxes_condition_mismatch_and_unexcited_coefficien
         .unwrap()
         .area_ratio_range = [0.99, 1.0];
     assert!(calibrate(&narrow).is_err());
+    // Explicit new support cannot widen the authority of an existing area law.
+    if let Some(Area::Identify {
+        area_ratio_range, ..
+    }) = &mut narrow.area_response
+    {
+        *area_ratio_range = Some([0.65, 1.45]);
+    }
+    assert_eq!(
+        calibrate(&narrow).unwrap_err().code,
+        RefusalCode::OutOfRange
+    );
     let mut zero = original;
     for e in &mut zero.experiments {
         e.observations = vec![Observation {

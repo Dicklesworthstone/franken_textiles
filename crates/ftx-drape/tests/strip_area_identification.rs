@@ -211,14 +211,14 @@ fn fit_only_physical_area_support_survives_check_changes_and_cannot_be_erased() 
 }
 
 #[test]
-fn area_identification_requires_the_declared_family_and_qualified_conditions() {
+fn area_identification_requires_declared_support_and_qualified_conditions() {
     let mut candidate = input();
     candidate.response_family = None;
     assert!(
         calibrate(&candidate)
             .unwrap_err()
             .message
-            .contains("directional response family")
+            .contains("scalar_green_strain_range")
     );
     candidate = input();
     candidate.conditions.remove("specimen");
@@ -231,6 +231,8 @@ fn area_identification_requires_the_declared_family_and_qualified_conditions() {
     candidate = input();
     candidate.area_response = Some(Area::Identify {
         parameter_bounds: [[-1.0, 50.0], [5.0, 35.0]],
+        area_ratio_range: None,
+        scalar_green_strain_range: None,
     });
     assert!(
         calibrate(&candidate)

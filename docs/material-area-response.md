@@ -157,10 +157,12 @@ mass, bending, thickness, friction or thermal evidence, so full garment mechanic
 ## Identify directionality with a physical-area law
 
 The existing `ftx-strip-calibration/1` request accepts an optional top-level `area_response` policy
-when using `response_family` or independent signed `nonlinear` intervals. The input material must
-already declare its source-qualified area model, positive J interval and matched conditions.
-The request's conditions must retain every common specimen/conditioning qualifier. Scalar-only
-calibration still refuses an area law; neither a fiber label nor nominal stretch supplies one.
+with a scalar orthotropic base, `response_family`, or independent signed `nonlinear` intervals.
+An existing source-qualified area law supplies its positive J interval and matched conditions.
+Fresh identification instead requires an explicit `area_ratio_range`; no prior coefficient values
+are needed. The request's conditions must retain every common specimen/conditioning qualifier.
+A scalar base also requires explicit signed trial support, as described below. Neither a fiber
+label nor nominal stretch supplies missing coefficients or domains.
 
 To retain independently qualified coefficients while identifying directionality:
 
@@ -186,6 +188,61 @@ is positive so the whole box retains a nonzero reference area tangent. Original 
 do not choose starts or priors. The same three bounded searches, complete forward-solve budget,
 column-normalized excitation, stationarity, equivalent-minimum, CHECK and doubled-mesh gates apply
 to the entire joint vector. Weak excitation returns diagnostics without a material selection.
+
+### Start from acquisitions without prefilled material coefficients
+
+For fresh identification, add `area_ratio_range` to the Identify policy. It declares admissible
+trial area ratios, not measured support or an output confidence interval. If the input already
+has an area law, the explicit interval intersects the inherited interval and cannot enlarge it.
+Preserve mode still requires an independently qualified existing law.
+
+With a scalar orthotropic base, omit `response_family` and `nonlinear`, supply the ordinary four
+`parameter_bounds` for `[E1, E2, nu12, G12]`, and declare negative and positive trial support for
+`[E11, E22, 2 E12]`:
+
+```json
+"parameter_bounds": [[270, 320], [145, 180], [-0.52, -0.37], [80, 112]],
+"area_response": {
+  "mode": "identify",
+  "parameter_bounds": [[10, 50], [5, 35]],
+  "area_ratio_range": [0.65, 1.45],
+  "scalar_green_strain_range": [[-0.4, 0.8], [-0.4, 0.8], [-0.4, 0.8]]
+}
+```
+
+These bounds are **synthetic software-example assumptions**. Scalar trial support is also required
+for scalar Preserve mode, and must be omitted when a declared family or independent intervals already
+define the base domain. Missing, unsigned, nonfinite or incompatible support refuses before fitting.
+Fresh area identification requires explicit nonempty `specimen` and `conditioning` declarations.
+
+The four scalar coefficients describe the **base** orthotropic law. Its exact constitutive matrix
+is represented by ordinary signed linear curves and constant coupling; the separate physical-area
+energy then uses the existing production compiler. The reported base Poisson ratio is therefore not
+the effective Poisson ratio of the combined area-augmented material. No second solver or approximate
+conversion is used, and publication replaces the scalar mechanical properties with the complete
+canonical response so consumers cannot accidentally omit its area contribution.
+
+The [fresh scalar request](../tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json)
+contains all 13 observation rows and fixtures from the existing synthetic strip example, with no
+prefilled mechanical properties, membrane response or shape family. It recovers the six coordinates
+`[294.44444444444446, 160.6060606060606, -0.4444444444444444, 96, 31, 19]`: the first four are
+base `E1, E2, nu12, G12`, followed by the quadratic and log-squared area coefficients. The base matrix
+has `Q11 = 330`, `Q22 = 180`, `Q12 = -80`, and `Q33 = 96` N/m. The returned frozen selection can be
+used directly by `strip-experiment` and other compatible material consumers:
+
+```sh
+ftx --json materials calibrate-strip \
+  tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json --allow-estimates
+ftx-materials calibrate-strip \
+  tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json --allow-estimates
+```
+
+The same request works with the existing WASM `material_calibrate_strip` export and browser strip-fit
+controls. The report retains the input trial domains, fitted physical-area support, coefficient units,
+independent residuals and exact frozen selection. The fixture supplies no empirical fabric, bending,
+mass, contact or thermal qualification.
+
+### Publish only observed FIT support and replay the complete law
 
 Every trial uses the production area compiler and physical Green-strain/J domain. Publication clips
 the directional law to FIT-only local strain support. Identify mode also clips its J interval to the

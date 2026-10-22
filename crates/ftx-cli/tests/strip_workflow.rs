@@ -21,6 +21,8 @@ const NONLINEAR: &str =
     include_str!("../../../examples/strip-identification/synthetic-nonlinear-calibration.json");
 const INDEPENDENT_INTERVALS: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-nonlinear-clamped-strip.json");
+const SCALAR_AREA: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json");
 
 fn workspace() -> PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -528,6 +530,147 @@ fn independent_interval_strip_commands_match_core_and_replay_exact_selection() {
     assert_eq!(
         fs::read(dir.join("intervals.json")).unwrap(),
         INDEPENDENT_INTERVALS.as_bytes()
+    );
+}
+
+#[test]
+fn fresh_scalar_area_commands_publish_a_usable_law_without_prefilled_coefficients() {
+    let dir = workspace();
+    write(&dir, "fresh-area.json", SCALAR_AREA.as_bytes());
+    let input: strip::fit::Input = serde_json::from_str(SCALAR_AREA).unwrap();
+    assert!(input.material.properties.is_empty());
+    assert!(input.material.membrane_response.is_none());
+    assert!(input.response_family.is_none());
+    let mut previous = None;
+    for unified in [false, true] {
+        let report = success(
+            &run(
+                &dir,
+                unified,
+                &["calibrate-strip", "fresh-area.json", "--allow-estimates"],
+            ),
+            unified,
+        );
+        if let Some(previous) = &previous {
+            assert_eq!(&report, previous);
+        }
+        let calibration = &report["calibration"];
+        assert_eq!(calibration["accepted"], true, "{calibration}");
+        assert_eq!(calibration["domain_replay_verified"], true);
+        let parameters = calibration["parameters"].as_array().unwrap();
+        assert_eq!(parameters.len(), 6);
+        for (actual, expected) in parameters.iter().zip([
+            294.44444444444446,
+            160.6060606060606,
+            -0.4444444444444444,
+            96.0,
+            31.0,
+            19.0,
+        ]) {
+            assert!((actual.as_f64().unwrap() - expected).abs() < 1e-4);
+        }
+        assert_eq!(calibration["parameter_descriptors"][2]["unit"], "1");
+        assert_eq!(
+            calibration["parameter_descriptors"][4]["id"],
+            "area_quadratic"
+        );
+        assert_eq!(report["simulation_ready"], false);
+        assert_eq!(report["fit_claim"], false);
+        let selection: Selection =
+            serde_json::from_str(report["selection_json"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&selection).unwrap(),
+            report["selection"]
+        );
+        let record = selection.record.as_ref().unwrap();
+        assert!(record.properties.is_empty());
+        let area = record
+            .membrane_response
+            .as_ref()
+            .unwrap()
+            .area_response
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            json!(area.area_ratio_range),
+            calibration["fitted_area_ratio_range"]
+        );
+        assert!(area.area_ratio_range[0] > 0.65 && area.area_ratio_range[1] < 1.45);
+        assert!(record.sources.contains_key(&area.quadratic.source));
+
+        let acquired = input
+            .experiments
+            .iter()
+            .find(|e| e.partition == ftx_pattern::material_calibration::Partition::Check)
+            .unwrap();
+        let mut fixture = acquired.fixture.clone();
+        fixture.cells.iter_mut().for_each(|cells| *cells *= 2);
+        let request = Request {
+            schema: "ftx-strip-experiment/1".into(),
+            material: selection,
+            fixture,
+            extensions: acquired
+                .observations
+                .iter()
+                .map(|o| o.extension_fraction)
+                .collect(),
+            controls: input.controls.clone(),
+        };
+        let name = format!("fresh-forward-{unified}.json");
+        write(&dir, &name, &serde_json::to_vec(&request).unwrap());
+        let forward = success(&run(&dir, unified, &["strip-experiment", &name]), unified);
+        let prediction = calibration["predictions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["experiment"] == acquired.id)
+            .unwrap();
+        assert!(
+            (forward["states"][0]["force_n"].as_f64().unwrap()
+                - prediction["state"]["force_n"].as_f64().unwrap())
+            .abs()
+                < 1e-7
+        );
+        let replay = format!("fresh-replay-{unified}.json");
+        write(
+            &dir,
+            &replay,
+            &serde_json::to_vec(&forward["input"]).unwrap(),
+        );
+        assert_eq!(
+            success(&run(&dir, unified, &["strip-experiment", &replay]), unified),
+            forward
+        );
+        previous = Some(report);
+    }
+    let mut missing: Value = serde_json::from_str(SCALAR_AREA).unwrap();
+    missing["area_response"]
+        .as_object_mut()
+        .unwrap()
+        .remove("area_ratio_range");
+    write(
+        &dir,
+        "missing-support.json",
+        &serde_json::to_vec(&missing).unwrap(),
+    );
+    for unified in [false, true] {
+        refused(
+            &run(
+                &dir,
+                unified,
+                &[
+                    "calibrate-strip",
+                    "missing-support.json",
+                    "--allow-estimates",
+                ],
+            ),
+            unified,
+            "invalid_document",
+        );
+    }
+    assert_eq!(
+        fs::read(dir.join("fresh-area.json")).unwrap(),
+        SCALAR_AREA.as_bytes()
     );
 }
 

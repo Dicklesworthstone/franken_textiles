@@ -17,6 +17,8 @@ const NONLINEAR: &str =
     include_str!("../../../examples/strip-identification/synthetic-nonlinear-calibration.json");
 const INDEPENDENT_INTERVALS: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-nonlinear-clamped-strip.json");
+const SCALAR_AREA: &str =
+    include_str!("../../../tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json");
 
 fn forward() -> Request {
     let fixture: Value = serde_json::from_str(include_str!(
@@ -432,6 +434,123 @@ fn independent_interval_strip_api_matches_core_and_replays_exact_selection() {
         assert!((state.force_n - prediction.state.force_n).abs() < 1e-7);
         assert!((state.mid_width_m - prediction.state.mid_width_m).abs() < 1e-9);
     }
+}
+
+#[test]
+fn fresh_scalar_area_api_publishes_the_complete_frozen_law_and_replays_it() {
+    let input: strip::fit::Input = serde_json::from_str(SCALAR_AREA).unwrap();
+    assert!(input.material.properties.is_empty());
+    assert!(input.material.membrane_response.is_none());
+    assert!(input.response_family.is_none());
+    let result: Value =
+        serde_json::from_str(&materials::calibrate_strip(SCALAR_AREA, true).unwrap()).unwrap();
+    let calibration = &result["calibration"];
+    assert_eq!(calibration["accepted"], true, "{calibration}");
+    assert_eq!(calibration["domain_replay_verified"], true);
+    let parameters = calibration["parameters"].as_array().unwrap();
+    assert_eq!(parameters.len(), 6);
+    for (actual, expected) in parameters.iter().zip([
+        294.44444444444446,
+        160.6060606060606,
+        -0.4444444444444444,
+        96.0,
+        31.0,
+        19.0,
+    ]) {
+        assert!((actual.as_f64().unwrap() - expected).abs() < 1e-4);
+    }
+    assert_eq!(calibration["parameter_descriptors"][2]["unit"], "1");
+    assert_eq!(
+        calibration["parameter_descriptors"][4]["id"],
+        "area_quadratic"
+    );
+    assert_eq!(result["simulation_ready"], false);
+    assert_eq!(result["fit_claim"], false);
+    let frozen = result["selection_json"].as_str().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&materials::inspect(frozen).unwrap()).unwrap(),
+        result["material"]
+    );
+    let selection: Selection = serde_json::from_str(frozen).unwrap();
+    assert_eq!(
+        serde_json::to_value(&selection).unwrap(),
+        result["selection"]
+    );
+    let record = selection.record.as_ref().unwrap();
+    assert!(record.properties.is_empty());
+    let area = record
+        .membrane_response
+        .as_ref()
+        .unwrap()
+        .area_response
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        json!(area.area_ratio_range),
+        calibration["fitted_area_ratio_range"]
+    );
+    assert!(area.area_ratio_range[0] > 0.65 && area.area_ratio_range[1] < 1.45);
+    assert_eq!(
+        area.quadratic.evidence,
+        ftx_pattern::materials::Evidence::Estimate
+    );
+
+    let acquired = input
+        .experiments
+        .iter()
+        .find(|e| e.partition == ftx_pattern::material_calibration::Partition::Check)
+        .unwrap();
+    let mut fixture = acquired.fixture.clone();
+    fixture.cells.iter_mut().for_each(|cells| *cells *= 2);
+    let request = Request {
+        schema: "ftx-strip-experiment/1".into(),
+        material: selection,
+        fixture,
+        extensions: acquired
+            .observations
+            .iter()
+            .map(|o| o.extension_fraction)
+            .collect(),
+        controls: input.controls.clone(),
+    };
+    let raw_forward =
+        materials::strip_experiment(&serde_json::to_string(&request).unwrap()).unwrap();
+    let forward: Value = serde_json::from_str(&raw_forward).unwrap();
+    let prediction = calibration["predictions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["experiment"] == acquired.id)
+        .unwrap();
+    assert!(
+        (forward["states"][0]["force_n"].as_f64().unwrap()
+            - prediction["state"]["force_n"].as_f64().unwrap())
+        .abs()
+            < 1e-7
+    );
+    assert_eq!(
+        materials::strip_experiment(&forward["input"].to_string()).unwrap(),
+        raw_forward
+    );
+    let mut denied = request;
+    denied.material.allow_estimates = false;
+    assert_eq!(
+        materials::strip_experiment(&serde_json::to_string(&denied).unwrap())
+            .unwrap_err()
+            .code,
+        RefusalCode::InvalidDocument
+    );
+    let mut missing: Value = serde_json::from_str(SCALAR_AREA).unwrap();
+    missing["area_response"]
+        .as_object_mut()
+        .unwrap()
+        .remove("area_ratio_range");
+    assert_eq!(
+        materials::calibrate_strip(&missing.to_string(), true)
+            .unwrap_err()
+            .code,
+        RefusalCode::InvalidDocument
+    );
 }
 
 #[test]

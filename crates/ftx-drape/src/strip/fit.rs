@@ -130,7 +130,7 @@ pub struct Input {
     /// Its own tangent/coupling bounds replace the omitted scalar parameter_bounds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonlinear: Option<Nonlinear>,
-    /// Explicitly preserve or identify the existing material's qualified area response.
+    /// Explicitly preserve a qualified area law or identify it from declared J support.
     /// Omission never permits an existing area law to be discarded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub area_response: Option<area::Area>,
@@ -302,6 +302,23 @@ impl Budget<'_> {
                 .map(|e| &e.source)
                 .ok_or_else(|| invalid("strip acquisition source is missing"))?;
             Some(model.response(base, None, source, &self.input.conditions)?)
+        } else if let Some(mode) = &self.input.area_response {
+            // Scalar coordinates supply the base Q exactly; area energy remains a separate term.
+            let source = self
+                .input
+                .experiments
+                .iter()
+                .find(|e| e.partition == Partition::Fit)
+                .map(|e| &e.source)
+                .ok_or_else(|| invalid("strip acquisition source is missing"))?;
+            Some(area::scalar_response(
+                four(base)?,
+                mode.scalar_range().ok_or_else(|| {
+                    invalid("scalar area base requires explicit Green-strain support")
+                })?,
+                source,
+                &self.input.conditions,
+            )?)
         } else {
             None
         };
@@ -311,7 +328,7 @@ impl Budget<'_> {
             let source = response.coupling.source.clone();
             mode.attach(
                 response,
-                area_template(self.input)?,
+                area_template(self.input),
                 &parameters[base.len()..],
                 &source,
                 &self.input.conditions,
@@ -408,13 +425,12 @@ fn base_parameters<'a>(input: &Input, parameters: &'a [f64]) -> &'a [f64] {
     &parameters[..parameters.len() - extra]
 }
 
-fn area_template(input: &Input) -> Result<&ftx_pattern::material_response::AreaResponse, Refusal> {
+fn area_template(input: &Input) -> Option<&ftx_pattern::material_response::AreaResponse> {
     input
         .material
         .membrane_response
         .as_ref()
         .and_then(|r| r.area_response.as_ref())
-        .ok_or_else(|| invalid("area_response mode requires an existing source-qualified area law"))
 }
 
 fn physical<const N: usize>(input: &Input, p: [f64; N]) -> [f64; N] {
@@ -442,11 +458,7 @@ fn validate(input: &Input) -> Result<(), Refusal> {
         ));
     }
     if let Some(mode) = &input.area_response {
-        if input.response_family.is_none() && input.nonlinear.is_none() {
-            return Err(invalid(
-                "area strip identification requires a declared directional response family or signed intervals",
-            ));
-        }
+        mode.validate_base(input.response_family.is_none() && input.nonlinear.is_none())?;
         let check_sources: Vec<_> = input
             .experiments
             .iter()
@@ -460,7 +472,7 @@ fn validate(input: &Input) -> Result<(), Refusal> {
             })
             .collect();
         mode.validate(
-            area_template(input)?,
+            area_template(input),
             &input.conditions,
             &input.material.sources,
             &check_sources,
@@ -476,7 +488,8 @@ fn validate(input: &Input) -> Result<(), Refusal> {
         || input.experiments.len() > 16
         || (input.material.membrane_response.is_some()
             && input.response_family.is_none()
-            && input.nonlinear.is_none())
+            && input.nonlinear.is_none()
+            && input.area_response.is_none())
         || input.material.membrane_relaxation.is_some()
         || input
             .material
@@ -967,6 +980,12 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
             .as_ref()
             .map(Nonlinear::domain)
             .transpose()?,
+        input
+            .area_response
+            .as_ref()
+            .and_then(area::Area::scalar_range)
+            .map(StrainDomain::new)
+            .transpose()?,
     ]
     .into_iter()
     .flatten()
@@ -1127,7 +1146,13 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
         .within_inherited_domain(StrainDomain::new(ranges)?)?
         .ranges();
     if let Some(range) = &mut area_range {
-        let support = area_template(input)?.area_ratio_range;
+        let support = input
+            .area_response
+            .as_ref()
+            .ok_or_else(|| {
+                invalid("physical-area support requires an explicit identification mode")
+            })?
+            .range(area_template(input))?;
         range[0] = range[0].max(support[0]);
         range[1] = range[1].min(support[1]);
         if range[0] >= range[1] {
@@ -1190,7 +1215,9 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
     }
     let digest = sha256_hex(&serde_json::to_vec(input).map_err(invalid)?);
     let mut nonlinear_material = None;
-    if reasons.is_empty() && (budget.family.is_some() || input.nonlinear.is_some()) {
+    if reasons.is_empty()
+        && (budget.family.is_some() || input.nonlinear.is_some() || input.area_response.is_some())
+    {
         match publish(input, &digest, &parameters, ranges, area_range, budget.family.as_ref()) {
             Ok(material) => nonlinear_material = Some(material),
             Err(refusal) => reasons.push(format!(
@@ -1354,6 +1381,12 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
             .as_ref()
             .map(|_| family::descriptors().to_vec())
             .or_else(|| input.nonlinear.as_ref().map(Nonlinear::descriptors))
+            .or_else(|| {
+                input
+                    .area_response
+                    .as_ref()
+                    .map(|_| area::scalar_descriptors())
+            })
             .map(|mut descriptors| {
                 if let Some(area) = &input.area_response {
                     descriptors.extend(area.descriptors());
@@ -1389,9 +1422,13 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
                     format!(
                         "{SCOPE} Independent signed piecewise-linear interval tangents and constant normal coupling are identified at declared fixed Green-strain knots. Knot positions, symmetry, missing branches and history are not identified."
                     )
-                } else {
+                } else if input.response_family.is_some() {
                     format!(
                         "{SCOPE} Conditional on caller-declared signed piecewise-linear shapes; three dimensionless amplitudes and constant normal coupling are identified. Knots, relative shape and unobserved branches are not identified."
+                    )
+                } else {
+                    format!(
+                        "{SCOPE} Four scalar orthotropic base parameters are identified under explicit signed trial support. The base Q and separate physical-area energy are published through the canonical membrane response."
                     )
                 }
             } else if input.nonlinear.is_some() {
@@ -1465,6 +1502,16 @@ fn publish(
         for key in KEYS {
             material.properties.remove(key);
         }
+    } else if input.area_response.is_some() {
+        material.membrane_response = Some(area::scalar_response(
+            four(base_parameters(input, parameters))?,
+            ranges,
+            &source,
+            &conditions,
+        )?);
+        for key in KEYS {
+            material.properties.remove(key);
+        }
     } else {
         for (key, &value) in KEYS.into_iter().zip(parameters) {
             material.properties.insert(key.into(), Quantity { value, unit: if key == "poisson_warp_weft" { "1" } else { "N/m" }.into(), evidence: Evidence::Estimate, source: source.clone(), method: "Bounded inverse orthotropic Green-strain membrane using clamped strip equilibrium, total grip force and optional transverse width; local sensitivity and held-out doubled-mesh checks. No independent bending or contact identification.".into(), conditions: conditions.clone(), bounds: None });
@@ -1473,7 +1520,7 @@ fn publish(
     if let (Some(mode), Some(response)) = (&input.area_response, &mut material.membrane_response) {
         mode.attach(
             response,
-            area_template(input)?,
+            area_template(input),
             &parameters[base_parameters(input, parameters).len()..],
             &source,
             &conditions,

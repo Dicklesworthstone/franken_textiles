@@ -1,0 +1,210 @@
+{
+  "schema": "ftx-strip-calibration/1",
+  "material": {
+    "id": "synthetic-scalar-area-clamped-strip",
+    "name": "Synthetic scalar and physical-area identification software test",
+    "form": "woven",
+    "composition": [],
+    "composition_complete": false,
+    "structure": {},
+    "properties": {},
+    "sources": {
+      "check-warp": {
+        "reference": "test:synthetic-strip-limits/check-warp",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic numerical acquisition copied from examples/area-response/identify.json; no measured coupon or empirical independence claim"
+      },
+      "fit-bias": {
+        "reference": "test:synthetic-strip-limits/fit-bias",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic numerical acquisition copied from examples/area-response/identify.json; no measured coupon or empirical independence claim"
+      },
+      "fit-warp": {
+        "reference": "test:synthetic-strip-limits/fit-warp",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic numerical acquisition copied from examples/area-response/identify.json; no measured coupon or empirical independence claim"
+      },
+      "fit-weft": {
+        "reference": "test:synthetic-strip-limits/fit-weft",
+        "accessed_on": "2026-10-21",
+        "note": "Synthetic numerical acquisition copied from examples/area-response/identify.json; no measured coupon or empirical independence claim"
+      }
+    }
+  },
+  "method": "Synthetic clamped-strip force and midpoint chord-width observations from examples/area-response/identify.json. The generating base has Q11=330, Q22=180, Q12=-80, Q33=96 N/m and separate area coefficients [31,19] N/m. This is a numerical parameter-recovery test without prior coefficients, not empirical textile validation.",
+  "conditions": {
+    "conditioning": "synthetic numerical observations only",
+    "provenance": "Synthetic scalar-plus-area software test; no physical specimen or measured textile",
+    "specimen": "invented-area-coupon"
+  },
+  "fitted_on": "2026-10-21",
+  "experiments": [
+    {
+      "id": "fit-warp",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [0.0, 1.0],
+        "cells": [4, 6]
+      },
+      "source": "fit-warp",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-warp-area-0",
+          "extension_fraction": 0.03,
+          "force_n": 0.7961124167524884,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.05987216205174974, "scale_m": 0.001}
+        },
+        {
+          "id": "fit-warp-area-1",
+          "extension_fraction": 0.1,
+          "force_n": 2.8500278881463137,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.05957454906058427, "scale_m": 0.001}
+        },
+        {
+          "id": "fit-warp-area-2",
+          "extension_fraction": 0.2,
+          "force_n": 6.304332246528546,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.05914838952746302, "scale_m": 0.001}
+        },
+        {
+          "id": "fit-warp-area-3",
+          "extension_fraction": 0.3,
+          "force_n": 10.435469280714356,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.05871856081442181, "scale_m": 0.001}
+        }
+      ]
+    },
+    {
+      "id": "fit-weft",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [1.0, 0.0],
+        "cells": [4, 6]
+      },
+      "source": "fit-weft",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-weft-area-0",
+          "extension_fraction": 0.03,
+          "force_n": 0.5144475858344218,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.05991531498054243, "scale_m": 0.001}
+        },
+        {
+          "id": "fit-weft-area-1",
+          "extension_fraction": 0.1,
+          "force_n": 1.8124415384041848,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.05971446407728506, "scale_m": 0.001}
+        },
+        {
+          "id": "fit-weft-area-2",
+          "extension_fraction": 0.2,
+          "force_n": 3.931920835501561,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.059416152524556565, "scale_m": 0.001}
+        },
+        {
+          "id": "fit-weft-area-3",
+          "extension_fraction": 0.3,
+          "force_n": 6.404044927466715,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.059100471205250554, "scale_m": 0.001}
+        }
+      ]
+    },
+    {
+      "id": "fit-bias",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [0.7071067811865476, 0.7071067811865476],
+        "cells": [4, 6]
+      },
+      "source": "fit-bias",
+      "evidence": "estimate",
+      "partition": "fit",
+      "observations": [
+        {
+          "id": "fit-bias-area-0",
+          "extension_fraction": 0.03,
+          "force_n": 0.47670242588526046,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.0594237347240627, "scale_m": 0.001}
+        },
+        {
+          "id": "fit-bias-area-1",
+          "extension_fraction": 0.1,
+          "force_n": 1.678953066037979,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.058056109614749614, "scale_m": 0.001}
+        },
+        {
+          "id": "fit-bias-area-2",
+          "extension_fraction": 0.2,
+          "force_n": 3.6439434097818095,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.05605946553523676, "scale_m": 0.001}
+        },
+        {
+          "id": "fit-bias-area-3",
+          "extension_fraction": 0.3,
+          "force_n": 5.942856181024303,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.05403663076553293, "scale_m": 0.001}
+        }
+      ]
+    },
+    {
+      "id": "check-warp",
+      "fixture": {
+        "gauge_length_m": 0.1,
+        "width_m": 0.06,
+        "warp_axis": [0.0, 1.0],
+        "cells": [4, 6]
+      },
+      "source": "check-warp",
+      "evidence": "estimate",
+      "partition": "check",
+      "observations": [
+        {
+          "id": "check-warp-area-0",
+          "extension_fraction": 0.08,
+          "force_n": 2.2341001459298737,
+          "scale_n": 0.1,
+          "mid_width": {"value_m": 0.059659558527637054, "scale_m": 0.001}
+        }
+      ]
+    }
+  ],
+  "parameter_bounds": [[270.0, 320.0], [145.0, 180.0], [-0.52, -0.37], [80.0, 112.0]],
+  "area_response": {
+    "mode": "identify",
+    "parameter_bounds": [[10.0, 50.0], [5.0, 35.0]],
+    "area_ratio_range": [0.65, 1.45],
+    "scalar_green_strain_range": [[-0.4, 0.8], [-0.4, 0.8], [-0.4, 0.8]]
+  },
+  "admit_planar_elastic_model": true,
+  "allow_estimated_observations": true,
+  "replace_existing": false,
+  "allow_estimates": true,
+  "controls": {"tolerance_m": 1e-9, "force_tolerance_n": 1e-6, "max_newton": 100},
+  "policy": {
+    "max_rms_scaled": 1.0,
+    "max_peak_scaled": 1.0,
+    "max_mesh_scaled": 1.0,
+    "min_excitation_pivot": 0.0001,
+    "max_iterations": 40,
+    "max_forward_solves": 8000
+  }
+}

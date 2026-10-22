@@ -2688,6 +2688,31 @@ finite-stock supplier qualification and physical sewing/robot qualification rema
 
 ---
 
+### 25.52 Fresh strip identification without prior material coefficients
+
+**Delivered software (`ftx-ai4`, supporting `ftx-ki4`/`ftx-tm4`).** The bounded clamped-strip fitter
+can identify physical-area response directly from acquisitions and explicit trial domains without
+requiring a prior membrane or fabricated area observations. The same area policy now supports a
+scalar orthotropic base as well as declared shapes and independent nonlinear intervals. Four scalar
+base coordinates convert exactly to the ordinary canonical directional law; the two area coordinates
+remain separate and every trial uses the existing production compiler and equilibrium solver.
+
+Explicit J support intersects inherited qualification. Scalar bases require signed Green-strain
+trial support; specimen and conditioning remain explicit. All coordinates retain the existing work,
+excitation, stationarity, independent CHECK and mesh gates. Only actual FIT states determine published
+Green-strain and physical-area support, and ordinary frozen-law replay precedes selection. Preserve
+mode still retains independent original area observations unchanged. The complete published response
+replaces the base scalar properties so downstream consumers cannot silently lose the area term.
+
+An executable synthetic request retains all thirteen observations from the prior area example while
+removing prefilled properties and response shapes. Recovery, independent analytic energy/stress,
+source/domain refusals and frozen forward replay cover the new path. Existing native and portable
+entry points expose the resulting material and its explicit base-coefficient descriptors. This
+software prerequisite does not close matched empirical knit characterization, bending/contact,
+thermal qualification or real-garment fit. See [material-area-response.md](docs/material-area-response.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

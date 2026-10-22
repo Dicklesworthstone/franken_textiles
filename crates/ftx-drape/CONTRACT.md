@@ -502,8 +502,13 @@ intersected with that prior authority and includes the pristine reference. A ref
 widen previously characterized response. `strip_identification_limits` checks both refused narrow
 support and accepted replacement with identical actual states under original and published domains.
 
-Optional `area_response` identification policy (`ftx-ai1`) explicitly preserves qualified fixed area
-coefficients or appends two nonnegative N/m coordinates to the declared-shape/signed-interval model.
+Optional `area_response` identification policy (`ftx-ai1`, `ftx-ai4`) explicitly preserves qualified
+fixed area coefficients or appends two nonnegative N/m coordinates to the scalar, declared-shape or
+signed-interval base. Fresh Identify mode needs explicit positive J trial support and matched
+specimen/conditioning but no prefilled coefficient observations. Explicit J intersects any inherited
+area interval. Scalar bases additionally require signed Green-strain trial support and convert their
+exact base Q to canonical curves/coupling; the physical-area term stays separate. Scalar coordinates
+are labeled as base coefficients, and publication carries the complete area-augmented response.
 The existing production compiler evaluates every trial and clipped publication; no second optimizer
 or constitutive implementation is used. All coordinates participate in the same bounded starts,
 excitation and aggregate solve accounting. Common source conditions and the prior J interval remain
