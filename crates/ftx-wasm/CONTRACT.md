@@ -60,6 +60,18 @@ Obsolete synchronous solver work may finish in the worker, but its result is not
 **Error model.** `page` returns the reference's message as a `String` for a request it refuses, and a
 refusal's message for a draft or export the library refuses; `web` turns them into `JsError`s.
 
+**Local photo measurements.** `photo::Photo` and wasm32 `WebPhoto` share the native strict photo
+decoder, plain Letter/A4/auto detector and unrounded uncertainty calibration. `report` retains
+scale diagnostics and exact source hash/orientation without a filesystem path. `preview` encodes
+the actual oriented pixels losslessly; `measure` accepts full-resolution named point pairs and
+native uncertainty options, producing ordinary `fabric-measurements/1` PHOTO_ESTIMATED records
+with unknown capture date. JSON is limited to 256 KiB per document; encoded images to 64 MiB and
+decoded images to 16 million pixels. Existing engine bootstrap/point/detector limits still apply.
+The disposable worker/page in `web/photo*` keeps source pixels local, cancels old requests and
+withdraws affected downloads on edits. Plain-paper detection does not identify physical paper,
+body landmarks or girths. ChArUco/lens controls, empirical camera/print accuracy and fit remain
+outside this browser slice; see `docs/photo-measurement.md`.
+
 **Potential vapor transport.** `thermal::vapor` and wasm32 `thermal_vapor(input)` delegate the
 bounded `ftx-vapor-stack/1` request to `ftx_pattern::material_vapor`. They preserve canonical Ret
 observations, source/evidence refusals, explicit boundaries and exact frozen replay JSON. Their

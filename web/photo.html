@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Local photo measurements — FrankenTextiles</title>
+<style>
+body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:24px auto;padding:0 18px;color:#17252d;background:#fafbfc}
+section{background:white;border:1px solid #ccd5db;border-radius:8px;padding:16px;margin:18px 0}
+h1,h2{line-height:1.2}label{display:inline-block;margin:6px 14px 6px 0}input,select,button,textarea{font:inherit;padding:6px}
+button{cursor:pointer}button:disabled{cursor:default;opacity:.5}textarea{width:100%;box-sizing:border-box;font:14px monospace}
+canvas{display:block;width:100%;height:auto;cursor:crosshair}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
+table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px;border-bottom:1px solid #ddd}
+a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error{color:#a02020}small{color:#42515a}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<h1>Photo measurements</h1>
+<p>Measure lengths or angles using a flat, blank US Letter or A4 sheet in the photo.
+  Photos and clicks stay in this browser; nothing is uploaded or saved in browser storage.
+  <a href="index.html">Return to the Pattern Workbench</a>.</p>
+<section>
+  <h2>1. Find the reference sheet</h2>
+  <p>Show all four paper edges against a darker background. Verify the actual paper size and keep
+    the sheet flat, square to the camera and near the landmarks' plane. A detected rectangle cannot
+    prove its size or remove depth error. ChArUco boards and calibrated lenses use the CLI workflow.</p>
+  <label>Photo <input id="photo" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg"></label>
+  <label>Paper <select id="paper"><option value="auto">Detect Letter or A4</option><option value="letter">US Letter</option><option value="a4">A4</option></select></label>
+  <p><button id="analyze" disabled>Analyze photo</button> <button id="cancel" disabled>Cancel</button></p>
+  <p id="status" role="status" aria-live="polite">Choose a photo. PNG must be opaque, already oriented 8-bit gray/RGB; JPEG EXIF is applied once.</p>
+  <p><small>Limit: 64 MiB encoded and 16 million pixels. Unsupported HEIC/WebP, transparency and animation require conversion; images are never silently resized.</small></p>
+  <pre id="error" role="alert"></pre>
+</section>
+<section id="preview" hidden>
+  <h2>2. Review the sheet and choose points</h2>
+  <p id="summary"></p>
+  <p>The cyan outline is the detected sheet. Click two landmarks to add a pair under the name below.
+    Coordinates refer to the full-resolution oriented pixels, regardless of display size.</p>
+  <label>Measurement name <input id="name" value="across_back" maxlength="128"></label>
+  <button id="clearPoints">Clear points</button>
+  <canvas id="image" aria-label="Oriented photo with detected paper outline; click two landmarks, or enter coordinates below"></canvas>
+  <p id="clickStatus" aria-live="polite"></p>
+  <label for="points">Named point pairs (editable JSON)</label>
+  <textarea id="points" rows="5" spellcheck="false">{}</textarea>
+  <p><small>Use lengths such as across_back or arm_length; names ending in _deg measure angles below horizontal.
+    Two clicks do not measure a body girth. Unknown names are retained with the native catalogue warning.</small></p>
+  <div id="sourceDownloads" class="files"></div>
+  <details><summary>Scale diagnostics and source identity</summary><pre id="scale"></pre></details>
+</section>
+<section>
+  <h2>3. Measurement uncertainty</h2>
+  <label>Camera to sheet (mm) <input id="distance" type="number" value="2500" min="1"></label>
+  <label>Possible depth offset (mm) <input id="depth" type="number" value="0"></label>
+  <label>Click σ (full-resolution pixels) <input id="click" type="number" value="3" min="0" step="0.1"></label>
+  <label>Sheet-level σ for angles (degrees) <input id="level" type="number" value="1.5" min="0" step="0.1"></label>
+  <label>Bootstrap draws <input id="bootstrap" type="number" value="200" min="20" max="2000" step="1"></label>
+  <p>These are explicit assumptions, not values inferred from the photo. Depth offset contributes
+    uncertainty; it does not correct a length. Print error, lens drift and missed anatomy remain outside this estimate.</p>
+  <button id="measure" disabled>Measure point pairs</button>
+</section>
+<section id="result" hidden>
+  <h2>Photo-estimated evidence</h2>
+  <p>These records remain PHOTO_ESTIMATED. They do not establish readiness, body girths or garment fit.
+    Capture date is unknown. Combine these records with stature and the other required measurements
+    using <code>ftx measure fuse</code>, then load the combined file through the Pattern Workbench's
+    <b>Measurements file</b> option.</p>
+  <table><thead><tr><th>Name</th><th>Value</th><th>σ</th><th>Units</th></tr></thead><tbody id="values"></tbody></table>
+  <div id="downloads" class="files"></div>
+  <details><summary>Complete native measurement report</summary><pre id="report"></pre></details>
+</section>
+<script type="module" src="photo-page.js"></script>
+</body></html>

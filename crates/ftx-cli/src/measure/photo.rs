@@ -15,7 +15,7 @@ use ftx_measure::photo::{
     MAX_PHOTO_PIXELS, PhotoOptions, analyze_plain_sheet, analyze_reference,
     intrinsics::IntrinsicUncertainty, measure_photo,
 };
-use ftx_trace::raster::{Bgr, image::load_png_with_limit, jpeg::decode_photo};
+use ftx_trace::raster::{Bgr, image::load_photo_with_limit};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -181,72 +181,8 @@ pub(super) fn load_image(path: &str, max_pixels: usize) -> Result<(Bgr, Value), 
     if bytes.len() as u64 > MAX_BYTES {
         return Err(budget());
     }
-    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-        // One complete frame, its EXIF orientation applied once without resampling (Pillow's
-        // ImageOps.exif_transpose), no repaired or smoothed pixels: clicks are in this frame.
-        let photo = decode_photo(&bytes, max_pixels)?;
-        let receipt = json!({"path":path, "sha256":sha256_hex(&bytes),
-            "image_size_px":[photo.image.w,photo.image.h],
-            "orientation":if photo.exif_orientation.is_some() {"exif_applied"} else {"stored_pixels_without_exif"},
-            "exif_orientation":photo.exif_orientation, "stored_size_px":photo.stored_size_px,
-            "stored_to_oriented_px":photo.stored_to_oriented_px, "encoding":"jpeg"});
-        return Ok((photo.image, receipt));
-    }
-    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err(bad_input(
-            "photo input must be a PNG or a JPEG; convert HEIC or WebP first",
-        ));
-    }
-    let mut pos = 8usize;
-    while bytes.len() - pos >= 12 {
-        let len = u32::from_be_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
-        let end = pos
-            .checked_add(12)
-            .and_then(|n| n.checked_add(len))
-            .filter(|&n| n <= bytes.len())
-            .ok_or_else(|| bad_input("truncated PNG chunk"))?;
-        match &bytes[pos + 4..pos + 8] {
-            b"IHDR" if len == 13 => {
-                let width =
-                    u32::from_be_bytes(bytes[pos + 8..pos + 12].try_into().unwrap()) as usize;
-                let height =
-                    u32::from_be_bytes(bytes[pos + 12..pos + 16].try_into().unwrap()) as usize;
-                if width.checked_mul(height).is_none_or(|n| n > max_pixels) {
-                    return Err(Refusal::new(
-                        RefusalCode::BudgetExceeded,
-                        format!(
-                            "photo exceeds {max_pixels} pixels; resize and click on the same oriented image"
-                        ),
-                    ));
-                }
-                if bytes[pos + 16] != 8 || !matches!(bytes[pos + 17], 0 | 2) {
-                    return Err(bad_input("photo PNG must be opaque 8-bit grayscale or RGB"));
-                }
-            }
-            b"eXIf" => {
-                return Err(bad_input(
-                    "apply EXIF orientation to pixels and export a PNG without EXIF before measuring",
-                ));
-            }
-            b"tRNS" => {
-                return Err(bad_input(
-                    "transparent PNG pixels cannot supply photo evidence; export opaque RGB",
-                ));
-            }
-            b"acTL" => {
-                return Err(bad_input(
-                    "animated PNG is not one identified photo; export the selected frame",
-                ));
-            }
-            b"IEND" => break,
-            _ => {}
-        }
-        pos = end;
-    }
-    let image = load_png_with_limit(&bytes, max_pixels).map_err(bad_input)?;
-    let receipt = json!({"path":path, "sha256":sha256_hex(&bytes),
-        "image_size_px":[image.w,image.h], "orientation":"stored_pixels_without_exif",
-        "encoding":"opaque_8_bit_png"});
+    let (image, mut receipt) = load_photo_with_limit(&bytes, max_pixels)?;
+    receipt["path"] = json!(path);
     Ok((image, receipt))
 }
 

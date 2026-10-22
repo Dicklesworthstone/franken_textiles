@@ -6,6 +6,37 @@ images. Supply a photo (an oriented PNG or a phone's JPEG) and a calibration-she
 ChArUco detection, a photo for plain-paper detection, or explicit reference coordinates. None of
 these paths infers body landmarks or establishes fit.
 
+## Measure locally in the browser
+
+Open **Measure photo landmarks locally** from the Pattern Workbench's Body section
+(`web/photo.html`). Choose an opaque oriented PNG or supported EXIF JPEG and plain
+Letter/A4/auto detection, then **Analyze photo**. Review the cyan paper outline,
+warnings and source identity before clicking landmarks. The preview contains the
+same full-resolution oriented pixels used by Rust, with no browser-decoder resampling.
+Changing its displayed size does not change point coordinates.
+
+Give a measurement name and click its two points, or edit the named-pair JSON directly.
+Review camera distance, possible depth offset, click uncertainty and bootstrap settings,
+then **Measure point pairs**. Download the ordinary `photo-measurements.json`, exact
+point pairs and explicit options. Combine these records with stature and the other
+required measurements using `ftx measure fuse` (see below), then load the combined
+file through the Pattern Workbench's **Measurements file** body mode. A photo-only
+file with no stature cannot draft a garment. The records retain PHOTO_ESTIMATED
+provenance, source image hash/orientation and decomposed conditional uncertainty;
+the capture date remains unknown. Two point clicks do not establish a girth.
+
+Source/paper changes remove the old scale, preview and measurements. Point/uncertainty
+edits remove the old measurement downloads. Cancellation terminates the disposable
+worker; superseded asynchronous reads/replies cannot publish a result. Photos and
+measurements are neither uploaded nor written to browser storage. Source/preview
+downloads are user actions, so retain them privately.
+
+This page connects the existing native plain-paper and uncertainty engines. Its limits
+are the same 64 MiB/16-million-pixel photo boundary and native bootstrap/point limits,
+plus 256 KiB per JSON input. ChArUco boards, calibrated lenses and other native photo
+options below remain CLI features. Digital synthetic tests establish numerical and
+workflow behavior, not physical paper size/flatness, camera accuracy or real-person fit.
+
 ## Detect plain paper directly from a photo
 
 Show a whole, flat Letter or A4 sheet on a darker background, then click landmarks on the image as

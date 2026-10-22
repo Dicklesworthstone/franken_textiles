@@ -13,6 +13,15 @@ and lossy VP8/VP8L/VP8X WebP inputs decode in pure Rust (`raster::jpeg`, `raster
 piece coordinates back to source pixels and is kept current through mirroring and scaling. After scale-fit
 the pattern is in millimetres (`meta.scale_status` FITTED).
 
+**Photo evidence decoding.** `raster::image::load_photo_with_limit` is the shared, file-free
+decoder for native and browser measurement adapters. It accepts only opaque, already-oriented
+8-bit gray/RGB PNG without transparency/animation/EXIF, or the existing strict complete JPEG
+decoder with one exact EXIF pixel permutation. Caller pixel limits and 64 MiB encoded input
+are checked before decoded allocation. The source receipt retains SHA-256, actual oriented
+dimensions and JPEG stored-to-oriented mapping; a filesystem path is added only by a file
+adapter. Tracing's more permissive image semantics are unchanged. Decoding establishes neither
+physical image identity nor reference scale, camera accuracy or body measurement validity.
+
 **Reading documents.** Drafts and patterns are typed `PatternDoc`s parsed from text (vertex order and unknown
 keys such as `trace` survive); `names.json` is an `OValue`, a JSON value whose objects keep their order,
 because renames, splits and the reference's error messages follow it (a `serde_json::Value` sorts keys).

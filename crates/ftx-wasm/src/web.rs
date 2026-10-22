@@ -6,6 +6,44 @@ use wasm_bindgen::prelude::*;
 
 use crate::{fold, page};
 
+/// Local photo evidence; the same strict pixels and unrounded calibration as the native commands.
+#[wasm_bindgen]
+pub struct WebPhoto {
+    inner: crate::photo::Photo,
+}
+
+#[wasm_bindgen]
+impl WebPhoto {
+    /// Decode one opaque oriented PNG or supported EXIF JPEG and detect plain paper.
+    #[wasm_bindgen(constructor)]
+    pub fn new(bytes: &[u8], paper: &str) -> Result<WebPhoto, JsError> {
+        crate::photo::Photo::new(bytes, paper)
+            .map(|inner| Self { inner })
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Scale diagnostics and source identity; an `ok: false` result cannot measure points.
+    #[must_use]
+    pub fn report(&self) -> String {
+        self.inner.report().to_string()
+    }
+
+    /// Lossless full-resolution oriented preview for pixel-coordinate clicks.
+    pub fn preview(&self) -> Result<Vec<u8>, JsError> {
+        self.inner
+            .preview()
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Native PHOTO_ESTIMATED records, never a fit or readiness verdict.
+    pub fn measure(&self, points: &str, options: &str) -> Result<String, JsError> {
+        self.inner
+            .measure(points, options)
+            .map(|v| v.to_string())
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+}
+
 /// `{program: {label, style}}` as JSON text.
 #[wasm_bindgen]
 #[must_use]

@@ -5,7 +5,91 @@
 //! [`load_image`] also takes JPEG ([`super::jpeg`], libjpeg-turbo's decode path) and WebP ([`super::webp`],
 //! libwebp's).
 
+use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
+use serde_json::{Value, json};
+
+/// Decode measurement evidence without changing brightness or estimating missing pixels.
+/// JPEG orientation is applied once; PNG must already be oriented, opaque 8-bit gray/RGB.
+/// The receipt has no filesystem path; callers may add their explicit source label.
+///
+/// # Errors
+/// Unsupported/ambiguous encoding or metadata, corrupt pixels, or encoded/decoded budgets.
+pub fn load_photo_with_limit(bytes: &[u8], max_pixels: usize) -> Result<(Bgr, Value), Refusal> {
+    let bad = |message: &str| Refusal::new(RefusalCode::InvalidDocument, message);
+    if bytes.len() > 64 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "photo exceeds 64 MiB encoded input",
+        ));
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        let photo = super::jpeg::decode_photo(bytes, max_pixels)?;
+        let receipt = json!({"sha256":sha256_hex(bytes),
+            "image_size_px":[photo.image.w,photo.image.h],
+            "orientation":if photo.exif_orientation.is_some() {"exif_applied"} else {"stored_pixels_without_exif"},
+            "exif_orientation":photo.exif_orientation, "stored_size_px":photo.stored_size_px,
+            "stored_to_oriented_px":photo.stored_to_oriented_px, "encoding":"jpeg"});
+        return Ok((photo.image, receipt));
+    }
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(bad(
+            "photo input must be a PNG or a JPEG; convert HEIC or WebP first",
+        ));
+    }
+    let mut pos = 8usize;
+    while bytes.len() - pos >= 12 {
+        let len = u32::from_be_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
+        let end = pos
+            .checked_add(12)
+            .and_then(|n| n.checked_add(len))
+            .filter(|&n| n <= bytes.len())
+            .ok_or_else(|| bad("truncated PNG chunk"))?;
+        match &bytes[pos + 4..pos + 8] {
+            b"IHDR" if len == 13 => {
+                let width =
+                    u32::from_be_bytes(bytes[pos + 8..pos + 12].try_into().unwrap()) as usize;
+                let height =
+                    u32::from_be_bytes(bytes[pos + 12..pos + 16].try_into().unwrap()) as usize;
+                if width.checked_mul(height).is_none_or(|n| n > max_pixels) {
+                    return Err(Refusal::new(
+                        RefusalCode::BudgetExceeded,
+                        format!(
+                            "photo exceeds {max_pixels} pixels; resize and click on the same oriented image"
+                        ),
+                    ));
+                }
+                if bytes[pos + 16] != 8 || !matches!(bytes[pos + 17], 0 | 2) {
+                    return Err(bad("photo PNG must be opaque 8-bit grayscale or RGB"));
+                }
+            }
+            b"eXIf" => {
+                return Err(bad(
+                    "apply EXIF orientation to pixels and export a PNG without EXIF before measuring",
+                ));
+            }
+            b"tRNS" => {
+                return Err(bad(
+                    "transparent PNG pixels cannot supply photo evidence; export opaque RGB",
+                ));
+            }
+            b"acTL" => {
+                return Err(bad(
+                    "animated PNG is not one identified photo; export the selected frame",
+                ));
+            }
+            b"IEND" => break,
+            _ => {}
+        }
+        pos = end;
+    }
+    let image = load_png_with_limit(bytes, max_pixels)
+        .map_err(|message| Refusal::new(RefusalCode::InvalidDocument, message))?;
+    let receipt = json!({"sha256":sha256_hex(bytes),
+        "image_size_px":[image.w,image.h], "orientation":"stored_pixels_without_exif",
+        "encoding":"opaque_8_bit_png"});
+    Ok((image, receipt))
+}
 
 /// A single-channel 8-bit image, row-major.
 #[derive(Clone, Debug, PartialEq, Eq)]
