@@ -130,6 +130,17 @@ particularly for bias cuts. There is no interpolation or silent match between ne
 force and compression nodes. The retained terminal extensions can exceed the paper's
 stated 5 N working range and are not automatically qualified for use.
 
+A fresh inspection of the author archive on 2026-10-21 confirms all eighteen retained
+force/transverse CSV hashes, metadata and README unchanged. The archive SHA-256 is
+`4ef059e1a33844fbd082c3662ac2df4444ab9b5280b0f1be49f66b11c44d7b8d`.
+Its only Python helper, `explore.py` (SHA-256
+`337b48a649a3fa5d6bb7f8f518cb471c0b3305824a6c72fe3cf7959b483465e6`),
+loads and plots the supplied columns; it contains no width-acquisition algorithm or
+loading-branch assignment for the transverse data. The notebook only invokes that
+helper. Paper §4.3/Figure 4 and the supplementary specimen tables do not resolve the
+material-point/edge sampling. This inspection supplies no new width qualification;
+the original `ftx-ki4` acceptance remains open.
+
 Paper §5.1, equations (1)–(2), fits both force and transverse compression using finite
 swatch equilibrium and six parameters: four orthotropic StVK coefficients plus two
 area-preservation terms. The existing four-coefficient orthotropic sheet law is a
