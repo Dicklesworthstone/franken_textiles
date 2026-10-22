@@ -163,6 +163,20 @@ the saved frame. The same `required_method`, `required_conditions` and `allow_mi
 policy applies. Every material retains its own estimate policy. Material substitution invalidates
 nonuniform assignments tied to the old column ordering; uniform policies can evaluate the new material.
 
+The [uniform conditions example](../tests/fixtures/materials/vapor-surface-conditions.json)
+uses explicit illustrative pressures of 2000/1000 Pa, film resistances of 1/2 m² Pa/W and
+latent heat of 2,500,000 J/kg. These are caller assumptions for exercising the software;
+they do not represent measured wearer conditions. With a current source-qualified drape report:
+
+```sh
+ftx-materials thermal-vapor-surface drape-report.json \
+  tests/fixtures/materials/vapor-surface-conditions.json
+```
+
+The browser workbench accepts the same conditions file. Frozen replay retains the exact evaluated
+report and resolved model identity, so edits to positions, material assignment or estimate policy
+cannot silently reuse an earlier result.
+
 Each distinct column uses the canonical one-square-metre stack calculation. Per-triangle and
 per-piece reports integrate its flux over actual current cloth area, counting each triangle once,
 and expose separate potential heat (W) and mass (kg/s) totals. The original reference area remains

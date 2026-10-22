@@ -1,0 +1,12 @@
+{
+  "schema": "ftx-vapor-surface-conditions/1",
+  "boundaries": [
+    {
+      "inside_vapor_pressure_pa": 2000.0,
+      "outside_vapor_pressure_pa": 1000.0,
+      "inside_film_resistance_m2_pa_w": 1.0,
+      "outside_film_resistance_m2_pa_w": 2.0,
+      "latent_heat_j_kg": 2500000.0
+    }
+  ]
+}

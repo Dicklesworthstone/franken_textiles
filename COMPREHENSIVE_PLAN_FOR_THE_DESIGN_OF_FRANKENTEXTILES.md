@@ -2643,7 +2643,7 @@ constitutive model, garment-fit claim or source-data substitution. See
 
 ### 25.51 Measured yarn-to-knit construction matrix and the next coupled consumers
 
-The next materials delivery adds the 2022 Salopek Čubrić et al. sportswear matrix
+The delivered materials expansion adds the 2022 Salopek Čubrić et al. sportswear matrix
 (DOI `10.3390/ma15093306`) to the existing catalog: five separately characterized yarns
 and 25 knit constructions, taking the built-in corpus from 221 to 251 records. Cotton,
 wool, PAN bouclé, wool/PAN blend and PA filament each retain single plain, single miss,
@@ -2660,7 +2660,7 @@ missing. Loaded gauge thickness cannot become sewing/contact clearance, and volu
 airflow measured through different areas cannot become unqualified permeability.
 See `docs/sportswear-knit-materials.md`; the delivered slice is tracked as `ftx-kn2`.
 
-Two connected product slices use the same physical authority and existing solvers:
+Two delivered product slices use the same physical authority and existing solvers:
 
 - **Timed production strip experiments (`ftx-sh1`).** Prescribed grip loading,
   holding and unloading must preserve accepted Maxwell or permanent-strain history,
@@ -2686,8 +2686,9 @@ observation methods, conditions, evidence and units; canonical-column deduplicat
 different measured Ret values alone do not cause false protocol mismatches. Missing
 results and incompatible source qualifications remain visible exclusions.
 
-The next coupling gate (`ftx-vc2`, under `ftx-tmc`) is explicit covered-body/interlayer
-vapor topology, moisture availability/storage and conservative latent-energy feedback.
+The next coupling gate (`ftx-vc2`, under `ftx-tmc`) builds on the fixed-frame covered-body
+and interlayer vapor topology now delivered by `ftx-vc3` (§25.54). Remaining work includes
+moisture availability/storage, moving layered coverage and conservative latent-energy feedback.
 It needs independently qualified wet/dry transport and boundary conditions, conservative
 moving-area/mass accounting and held-out layer validation. Existing geometry-derived
 thermal coverage is the shared geometry authority; a second body mapping or material

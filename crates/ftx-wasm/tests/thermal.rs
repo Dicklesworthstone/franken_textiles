@@ -122,3 +122,104 @@ fn exterior_entry_uses_same_material_policy_replay_and_finish_sensitive_equation
             .unwrap()
     );
 }
+
+const VAPOR_SURFACE_CONDITIONS: &str =
+    include_str!("../../../tests/fixtures/materials/vapor-surface-conditions.json");
+
+#[test]
+fn vapor_surface_entry_preserves_canonical_source_replay_and_geometry_refusal() {
+    use ftx_core::receipt::sha256_hex;
+    use ftx_drape::thermal::vapor::Conditions;
+    use ftx_pattern::material_catalog::Selection;
+
+    fn digest(value: &Value) -> String {
+        sha256_hex(&serde_json::to_vec(value).unwrap())
+    }
+
+    fn with_digest(mut value: Value) -> Value {
+        value["sha256"] = json!(digest(&value));
+        value
+    }
+
+    // A source-only synthetic sheet on one declared triangle exercises the portable receipt
+    // contract. It supplies no mechanical coefficients or fabricated dry-heat/storage data.
+    let selection: Selection = serde_json::from_value(json!({
+        "id":"synthetic-wasm-vapor-sheet",
+        "allow_estimates":true,
+        "record":{
+            "id":"synthetic-wasm-vapor-sheet",
+            "name":"Synthetic WASM vapor sheet",
+            "form":"knit",
+            "properties":{
+                "vapor_resistance":{
+                    "value":7.0,
+                    "unit":"m2*Pa/W",
+                    "source":"test",
+                    "evidence":"estimate",
+                    "method":"Synthetic fixed resistance; not a measured textile"
+                }
+            },
+            "sources":{
+                "test":{
+                    "reference":"test:wasm-vapor-surface",
+                    "accessed_on":"2026-10-22",
+                    "note":"Synthetic source and geometry for a software regression only"
+                }
+            }
+        }
+    }))
+    .unwrap();
+    let empty = Catalog::from_json(r#"{"schema":"ftx-textile-catalog/1","materials":[]}"#).unwrap();
+    let record = empty.resolve(&selection).unwrap();
+    let material = json!({
+        "basis":"characterized_record",
+        "record_sha256":record.sha256(),
+        "record":record
+    });
+    let model = with_digest(json!({
+        "schema":"ftx-vapor-surface/1",
+        "columns":[record.frozen_selection()],
+        "vertex_count":3,
+        "patches":[{
+            "vertices":[0,1,2],
+            "reference_area_m2":0.5,
+            "column":0
+        }],
+        "geometry_policy":"fixed source Ret per current cloth area; independent sheets"
+    }));
+    let frame = with_digest(json!({
+        "schema":"ftx-drape-vapor-surface/1",
+        "available":true,
+        "model":model,
+        "positions_m":[[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0]],
+        "material_report_sha256":digest(&material),
+        "triangle_instance":[0],
+        "instances":["sheet"],
+        "scope":"retained independent sheet geometry; transport requires explicit vapor conditions; no inferred body coverage"
+    }));
+    let report = json!({"material":material,"vapor_surface":frame});
+    let conditions: Conditions = serde_json::from_str(VAPOR_SURFACE_CONDITIONS).unwrap();
+    let expected = conditions.evaluate(&report).unwrap();
+    let output = thermal::vapor_surface(&report.to_string(), VAPOR_SURFACE_CONDITIONS).unwrap();
+    let actual: Value = serde_json::from_str(&output).unwrap();
+
+    assert_eq!(actual, expected);
+    assert_eq!(actual["area_m2"], 0.5);
+    assert_eq!(actual["potential_heat_flow_w"], 50.0);
+    assert_eq!(actual["pieces"][0]["instance"], "sheet");
+    assert_eq!(actual["dry_transport_required"], false);
+    assert_eq!(actual["storage_required"], false);
+    assert_eq!(actual["physical_validation_claim"], false);
+    assert_eq!(
+        output,
+        thermal::vapor_surface(
+            &actual["request"]["report"].to_string(),
+            &actual["request"]["conditions"].to_string(),
+        )
+        .unwrap()
+    );
+
+    let mut stale = report;
+    stale["vapor_surface"]["positions_m"][1][0] = json!(2.0);
+    assert!(thermal::vapor_surface(&stale.to_string(), VAPOR_SURFACE_CONDITIONS).is_err());
+}

@@ -511,7 +511,11 @@ mod tests {
         stale["vapor_surface"]["positions_m"][1][0] = json!(2.);
         assert!(c.evaluate(&stale).is_err());
         let mut stale = source.clone();
-        stale["vapor_surface"]["model"]["patches"][0]["column"] = json!(1);
+        let column = stale["vapor_surface"]["model"]["patches"][0]["column"]
+            .as_u64()
+            .unwrap();
+        // Canonical columns follow source hashes, so the first patch may already use column 1.
+        stale["vapor_surface"]["model"]["patches"][0]["column"] = json!(1 - column);
         assert!(c.evaluate(&stale).is_err());
         let mut stale = source.clone();
         stale["vapor_surface"]["surprise"] = json!(true);
@@ -575,6 +579,9 @@ mod tests {
         assert!(conditions().evaluate(&missing).is_err());
         let mut denied = record("denied", 7., "synthetic Ret").frozen_selection();
         denied.allow_estimates = false;
+        assert!(empty.resolve(&denied).is_err());
+        // A deliberate new policy gets a fresh identity before testing its Ret refusal.
+        denied.expected_sha256 = None;
         let denied = report(&[empty.resolve(&denied).unwrap()]);
         assert!(conditions().evaluate(&denied).is_err());
     }
