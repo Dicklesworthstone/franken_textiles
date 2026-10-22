@@ -752,7 +752,9 @@ function permanentStretchResult(parent, r) {
 }
 function areaCalibrationResult(parent, c) {
   const area = c.material?.membrane_response?.area_response, fittedRange = c.fitted_area_ratio_range;
-  if (!area && !fittedRange) return;
+  const declared = c.input.area_response?.area_ratio_range;
+  const inherited = c.input.material?.membrane_response?.area_response?.area_ratio_range;
+  if (!area && !fittedRange && !declared && !inherited) return;
   const preserved = c.input.area_response?.mode === "preserve";
   if (area) {
     const parameters = table(parent, preserved ? "Area coefficients — preserved source observations" :
@@ -770,9 +772,8 @@ function areaCalibrationResult(parent, c) {
     });
   }
   const domain = table(parent, "Physical area ratio J — applicability", ["Domain", "Minimum J", "Maximum J"]);
-  const declared = c.input.area_response?.area_ratio_range ??
-    c.input.material?.membrane_response?.area_response?.area_ratio_range;
   if (declared) cells(domain, ["Admissible input domain", ...declared.map(metric)]);
+  if (inherited) cells(domain, [declared ? "Inherited material domain" : "Admissible input domain", ...inherited.map(metric)]);
   if (fittedRange) cells(domain, ["FIT observations and undeformed reference", ...fittedRange.map(metric)]);
   if (area) cells(domain, ["Published material domain", ...area.area_ratio_range.map(metric)]);
   if (c.parameter_count != null) {
@@ -784,7 +785,8 @@ function areaCalibrationResult(parent, c) {
   note.textContent = "J is deformed area divided by reference area. " + (preserved ?
     "The area coefficients, source evidence and area-ratio interval are retained from the supplied material. " :
     fittedRange ? "FIT observations determine the area coefficients and their supported J range, including the undeformed reference. CHECK cannot widen that range. " :
-      "The area coefficients are identified within the supplied material's declared J range. ") +
+      "Only an accepted result publishes area coefficients and a supported J range. ") +
+    (declared && inherited ? "Trials must satisfy both the declared and inherited J intervals. " : "") +
     "The area domain also intersects the directional Green-strain limits. An area-energy response does not impose constant area.";
   parent.append(note);
 }
@@ -795,8 +797,10 @@ function stripCalibrationResult(parent, r) {
   for (const [name, q] of [["FIT", c.fit], ["CHECK", c.check]]) {
     cells(quality, [name, metric(q?.components), metric(q?.rms_scaled), metric(q?.peak_scaled)]);
   }
-  const area = c.input.area_response;
-  const parameterTitle = area?.mode === "identify" ? "directional and physical-area coefficients" :
+  const area = c.input.area_response, scalarArea = area && !family && !nonlinear;
+  const parameterTitle = area?.mode === "identify" ? scalarArea ? "scalar base and physical-area coefficients" :
+    "directional and physical-area coefficients" :
+    scalarArea ? "scalar orthotropic base coefficients" :
     nonlinear ? "nonlinear sheet tangents and coupling" :
     family ? "nonlinear shape scales and coupling" : "orthotropic sheet coefficients";
   const parameters = table(parent, `${c.accepted ? "Identified" : "Candidate"} ${parameterTitle}`,
@@ -811,6 +815,18 @@ function stripCalibrationResult(parent, r) {
   for (const [i, descriptor] of descriptors.entries()) {
     cells(parameters, [descriptor.label, metric(c.parameters[i]), descriptor.unit,
       ...parameterBounds[i].map(metric)]);
+  }
+  if (scalarArea) {
+    const support = table(parent, "Scalar base — declared trial strain support",
+      ["Material direction", "Minimum Green strain", "Maximum Green strain"]);
+    for (const [i, axis] of ["Warp / wale (E11)", "Weft / course (E22)", "Engineering shear (2 E12)"].entries()) {
+      cells(support, [axis, ...area.scalar_green_strain_range[i].map(metric)]);
+    }
+    const scope = document.createElement("p");
+    scope.textContent = "The four scalar coefficients describe the orthotropic base; physical-area energy is a separate contribution. " +
+      "The base Poisson ratio is not the transverse response of the combined law. " +
+      "These signed intervals constrain trials. Published support comes from FIT element strains and production replay.";
+    parent.append(scope);
   }
   if (nonlinear) {
     const knots = table(parent, "Declared nonlinear Green-strain intervals",
@@ -838,7 +854,8 @@ function stripCalibrationResult(parent, r) {
     const scope = document.createElement("p");
     scope.textContent = area.mode === "identify" ?
       "The physical-area coefficients participate in the same joint fit, excitation and work limits. " +
-        "Their declared J domain and FIT-only strain support remain authoritative; search bounds are not confidence intervals." :
+        "Their declared J domain and FIT-only strain support remain authoritative; search bounds are not confidence intervals. " +
+        (!c.input.material?.membrane_response?.area_response ? "No prior area coefficients were supplied." : "") :
       "The physical-area coefficients, J domain and source evidence remain fixed while directionality is identified.";
     parent.append(scope);
     const model = c.input.material?.membrane_response?.area_response;

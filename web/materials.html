@@ -75,6 +75,13 @@ Curve shapes and strain knots are supplied assumptions, not learned from these s
 Estimated shapes require <code>response_family.allow_estimated_shapes</code> independently of observation and fitted-output consent.
 Both scalar and nonlinear laws are reversible;
 failed acceptance gates retain diagnostics without an assignable selection.</p>
+<p class="note">To identify physical-area response jointly with the directional law, add
+<code>area_response: {"mode":"identify","parameter_bounds":[[10,50],[5,35]],"area_ratio_range":[0.65,1.45]}</code>.
+These illustrative search bounds are not textile measurements. A fresh fit needs the explicit positive J interval containing one;
+any existing area law further restricts it. With a scalar orthotropic base, also supply
+<code>scalar_green_strain_range</code> with three trial intervals spanning negative and positive Green strain. Omit that field when supplying
+<code>response_family</code> or <code>nonlinear</code>. Accepted support comes from FIT observations and verified replay;
+CHECK cannot widen it. Use <code>mode: "preserve"</code> only with an independently qualified existing area law.</p>
 <p class="note">The request owns the specimen, acquisition method, conditioning, fit/check partitions and error budgets.
 Nonlinear swatches use <code>ftx-nonlinear-swatch-calibration/1</code>; timed histories use <code>ftx-relaxation-calibration/1</code>.
 A timed request declares its independent equilibrium response. Directional recovery uses either supplied

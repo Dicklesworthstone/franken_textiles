@@ -1105,7 +1105,7 @@ test('strip area reports display all six search bounds or retained source coeffi
     const report=nonlinearStripCalibration(),c=report.calibration;
     c.material=areaCalibrationReport().calibration.material;
     const area=c.material.membrane_response.area_response;
-    c.input.area_response=mode==='identify'?{mode,parameter_bounds:[[10,80],[5,30]]}:{mode,allow_estimates:true};
+    c.input.area_response=mode==='identify'?{mode,parameter_bounds:[[10,80],[5,30]],area_ratio_range:[0.7,1.5]}:{mode,allow_estimates:true};
     if(mode==='identify') {
       c.parameters.push(40,15);c.parameter_bounds=[...c.input.parameter_bounds,[10,80],[5,30]];
       c.parameter_descriptors.push({id:'area_quadratic',label:'Quadratic area coefficient',unit:'N/m'},
@@ -1124,6 +1124,10 @@ test('strip area reports display all six search bounds or retained source coeffi
         ['Quadratic area coefficient','40','N/m','10','80'],['Log-squared area coefficient','15','N/m','5','30']]);
       assert.match(visibleText(s),/jointly with the two physical-area coefficients/);
       assert.match(visibleText(s),/FIT observations and undeformed reference/);
+      const domain=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Physical area ratio J — applicability');
+      assert.deepEqual(plain(domain.children.slice(2,4).map(n=>n.children.map(v=>v.textContent))),[
+        ['Admissible input domain','0.7','1.5'],['Inherited material domain','0.75','1.45']]);
+      assert.match(visibleText(s),/both the declared and inherited J intervals/);
       await p.e[operation].onclick();
       c.accepted=false;c.material=null;report.material=null;report.selection=null;report.selection_json=null;
       p.emit(report);
@@ -1138,6 +1142,54 @@ test('strip area reports display all six search bounds or retained source coeffi
       assert.doesNotMatch(visibleText(s),/FIT observations and undeformed reference/);
       assert.equal(p.e.selection.value,report.selection_json);
     }
+  }
+});
+
+test('fresh scalar and area identification retains separate trial domains and withdraws rejected material in both controls', async () => {
+  for(const dedicated of [false,true]) {
+    const p=await pageModule();await p.load();
+    const operation=dedicated?'stripFit':'calibrate';
+    p.e.calibrationMode.value='clamped_strip';p.e.calibrationEstimates.checked=true;
+    p.select(dedicated?'stripFitRequest':'calibrationRequest');await p.e[operation].onclick();
+    const result=stripCalibration('ACCEPTED',true),c=result.calibration;
+    c.input.material={properties:{},sources:{}};
+    c.input.area_response={mode:'identify',parameter_bounds:[[10,50],[5,35]],area_ratio_range:[0.65,1.45],
+      scalar_green_strain_range:[[-0.4,0.8],[-0.3,0.7],[-0.2,0.6]]};
+    c.input.parameter_bounds=[[270,320],[145,180],[-0.52,-0.37],[80,112]];
+    c.parameters=[290,160,-0.44,96,31,19];
+    c.parameter_bounds=[...c.input.parameter_bounds,...c.input.area_response.parameter_bounds];
+    c.parameter_descriptors=[
+      {label:'Base warp stiffness',unit:'N/m'},{label:'Base weft stiffness',unit:'N/m'},
+      {label:'Base major Poisson ratio',unit:'1'},{label:'Base shear stiffness',unit:'N/m'},
+      {label:'Physical-area quadratic coefficient',unit:'N/m'},{label:'Physical-area log-squared coefficient',unit:'N/m'}];
+    c.material=areaCalibrationReport().calibration.material;c.fitted_area_ratio_range=[0.75,1.45];
+    c.material.membrane_response.area_response.quadratic.value=31;
+    c.material.membrane_response.area_response.log_squared.value=19;
+    const raw=' '+JSON.stringify(result)+'\n';
+    p.emit(result,[{name:'fresh-area-report.json',text:raw,mime:'application/json'}]);
+    const s=section(p,dedicated?'Clamped-strip identification':'Identified material behavior');
+    const tables=()=>descendants(s).filter(n=>n.tag==='table');
+    const parameters=tables().find(t=>t.children[0].textContent==='Identified scalar base and physical-area coefficients');
+    assert.equal(parameters.children.length,8);
+    assert.equal(parameters.children[4].children[1].textContent,'-0.44');
+    const support=tables().find(t=>t.children[0].textContent==='Scalar base — declared trial strain support');
+    assert.deepEqual(plain(support.children.slice(2).map(n=>n.children.map(v=>v.textContent))),[
+      ['Warp / wale (E11)','-0.4','0.8'],['Weft / course (E22)','-0.3','0.7'],['Engineering shear (2 E12)','-0.2','0.6']]);
+    assert.match(visibleText(s),/No prior area coefficients were supplied/);
+    assert.match(visibleText(s),/base Poisson ratio is not the transverse response of the combined law/);
+    assert.equal(p.e.selection.value,result.selection_json);assert.equal(p.e.assign.disabled,false);
+    const download=descendants(s).find(n=>n.download==='fresh-area-report.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    await p.e[operation].onclick();
+    c.accepted=false;c.material=null;c.fitted_area_ratio_range=null;
+    result.material=null;result.selection=null;result.selection_json=null;p.emit(result);
+    assert.match(visibleText(s),/Candidate scalar base and physical-area coefficients/);
+    assert.match(visibleText(s),/Only an accepted result publishes area coefficients/);
+    const domain=tables().find(t=>t.children[0].textContent==='Physical area ratio J — applicability');
+    assert.deepEqual(plain(domain.children.slice(2).map(n=>n.children.map(v=>v.textContent))),[
+      ['Admissible input domain','0.65','1.45']]);
+    assert.doesNotMatch(visibleText(s),/Published material domain/);
+    assert.equal(p.e.assign.disabled,true);assert.equal(p.e.selection.value,'');assert.equal(p.live.size,0);
   }
 });
 
@@ -2929,6 +2981,56 @@ test('compiled WASM bounded markers retain whole geometry, selected SVG and one 
     assert.equal(row.purchasing.status,'available');assert.equal(row.metrics.least_observed_independent_order_total,2.5);
     const invalid=await w.send({type:'cut',request:54,pattern,options,rollIndex:2});
     assert.equal(invalid.type,'error');assert.match(invalid.message,/between 1 and 2/);
+  });
+
+test('compiled WASM fresh scalar and area identification publishes a reusable law with exact CHECK replay',
+  {skip:process.env.FTX_REAL_WASM!=='1'},async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx});
+    const request=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json'),'utf8');
+    const result=await w.send({type:'stripFit',request:81,stripRequest:request});
+    assert.equal(result.type,'result',result.message);
+    assert.equal(result.files.find(f=>f.name==='strip-calibration-input.json').text,request);
+    assert.equal(result.files.find(f=>f.name==='strip-calibrated-selection.json').text,result.result.selection_json);
+    const c=result.result.calibration;
+    assert.equal(c.accepted,true);assert.equal(c.domain_replay_verified,true);
+    assert.equal(c.input.material.membrane_response,undefined);
+    assert.equal(c.parameters.length,6);assert.equal(c.parameter_bounds.length,6);
+    assert.deepEqual(c.parameter_descriptors.map(d=>d.id),['warp_stiffness','weft_stiffness',
+      'poisson_warp_weft','shear_stiffness','area_quadratic','area_log_squared']);
+    assert.deepEqual(c.material.membrane_response.area_response.area_ratio_range,c.fitted_area_ratio_range);
+    assert.equal(c.material.membrane_response.area_response.quadratic.evidence,'estimate');
+    assert.equal(result.result.fit_claim,false);
+    assert.deepEqual(result.result.material,JSON.parse(ftx.material_inspect(result.result.selection_json)));
+    if(process.env.FTX_SCALAR_AREA_REPLAY) {
+      const raw=JSON.parse(fs.readFileSync(process.env.FTX_SCALAR_AREA_REPLAY,'utf8')),native=raw.result??raw;
+      for(const key of ['calibration','selection','selection_json','fit_claim']) assert.deepEqual(result.result[key],native[key]);
+    }
+    const check=c.input.experiments.find(e=>e.partition==='check');
+    const forwardRequest={schema:'ftx-strip-experiment/1',material:result.result.selection,
+      fixture:{...check.fixture,cells:check.fixture.cells.map(n=>2*n)},
+      extensions:check.observations.map(o=>o.extension_fraction),controls:c.input.controls};
+    const forward=await w.send({type:'stripExperiment',request:82,stripRequest:JSON.stringify(forwardRequest)});
+    assert.equal(forward.type,'result',forward.message);
+    assert.deepEqual(forward.result.states,c.predictions.filter(p=>p.experiment===check.id).map(p=>p.state));
+    const replay=await w.send({type:'stripExperiment',request:83,stripRequest:JSON.stringify(forward.result.input)});
+    assert.equal(replay.type,'result',replay.message);assert.equal(replay.files[0].text,forward.files[0].text);
+    for(const dedicated of [false,true]) {
+      const p=await pageModule();await p.load();p.e.calibrationMode.value='clamped_strip';p.e.calibrationEstimates.checked=true;
+      p.select(dedicated?'stripFitRequest':'calibrationRequest',request);await p.e[dedicated?'stripFit':'calibrate'].onclick();
+      p.emit(result.result,result.files);
+      const s=section(p,dedicated?'Clamped-strip identification':'Identified material behavior');
+      assert.match(visibleText(s),/Identified scalar base and physical-area coefficients/);
+      assert.match(visibleText(s),/Scalar base — declared trial strain support/);
+      assert.match(visibleText(s),/No prior area coefficients were supplied/);
+      assert.equal(p.e.selection.value,result.result.selection_json);assert.equal(p.e.assign.disabled,false);
+    }
+    const missing=JSON.parse(request);delete missing.area_response.scalar_green_strain_range;
+    const refused=await w.send({type:'stripFit',request:84,stripRequest:JSON.stringify(missing)});
+    assert.equal(refused.type,'error');assert.match(refused.message,/scalar_green_strain_range/);
+    assert.equal(refused.files,undefined);
   });
 
 test('compiled WASM joint area identification publishes the fitted law and exact frozen strip replay',
