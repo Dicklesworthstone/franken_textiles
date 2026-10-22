@@ -104,4 +104,4 @@ construction/yarn identity, dimensional refusals, capability limits, source-filt
 screening and actual dry/vapor consumer calculations with frozen offline replay.
 The scenario boundary values in those tests are synthetic; they do not establish
 experimental agreement for a garment, outdoor temperature ratings or machine
-process qualification. Tracked as `ftx-kn1`; broader physical acceptance stays open.
+process qualification. Tracked as `ftx-kn2`; broader physical acceptance stays open.

@@ -382,8 +382,12 @@ fn evaluate_path(
             samples.push(retained);
         }
         // Rebuild source-locked heat input from the NEW solver geometry; never patch an old receipt.
-        let snapshot = json!({"material":run.report["material"],
+        let mut snapshot = json!({"material":run.report["material"],
             "steady_thermal_surface":crate::thermal::steady::surface::for_drape(&run.scene, &run.report["material"])});
+        if scenario.vapor_surface.is_some() {
+            snapshot["vapor_surface"] =
+                crate::thermal::vapor::for_drape(&run.scene, &run.report["material"]);
+        }
         let surface = scenario
             .surface
             .as_ref()
@@ -395,12 +399,14 @@ fn evaluate_path(
                 (&path.vertices[i], body.collision.1),
             ))
         });
-        endpoints.push(
-            json!({"time_s":frame.time_s,"arm_abduction_deg":frame.arm_abduction_deg,
+        let mut endpoint = json!({"time_s":frame.time_s,"arm_abduction_deg":frame.arm_abduction_deg,
             "sample_index":samples.len()-1,"positions_sha256":hash(&run.scene.solver.x)?,
             "body_collision_sha256":hash(&(&path.vertices[i],body.collision.1))?,
-            "surface":surface,"coverage":coverage}),
-        );
+            "surface":surface,"coverage":coverage});
+        if let Some(conditions) = &scenario.vapor_surface {
+            endpoint["vapor_surface"] = outcome(conditions.evaluate(&snapshot));
+        }
+        endpoints.push(endpoint);
         previous_time = frame.time_s;
     }
     let mut result = json!({"schema":"ftx-drape-motion-result/1","path_sha256":path.sha256,

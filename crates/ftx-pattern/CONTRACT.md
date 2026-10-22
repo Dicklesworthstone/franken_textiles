@@ -156,3 +156,10 @@ revives an older price. Distinct records at the same instant conflict. Quote fie
 source identity and estimates are not made into purchases or reserved inventory. The same evaluator
 feeds ordinary price commands, marker procurement and native/WASM studies; see
 `docs/textile-price-refresh.md` and the `material_cost` unit tests.
+
+**Membrane-only history compilation** (`material_relaxation::binding`). Resolving an optional Maxwell
+law checks the same source policy, equilibrium specimen/conditions, supported sheet form and stable
+reference tangent as full garment mechanics, while requiring only the membrane observations it uses.
+It does not require mass, bending, thickness or friction. Dynamic consumers independently require
+source-qualified mass. This allows timed coupon experiments on incompletely characterized sheets
+without declaring them garment-ready; unsupported joint permanent-strain/Maxwell models still refuse.

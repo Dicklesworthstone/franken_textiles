@@ -16,6 +16,7 @@ mod heating;
 mod nonlinear;
 pub mod steady;
 pub mod surface;
+pub mod vapor;
 
 /// Prescribed temperatures and film resistances. A zero film means a prescribed surface temperature,
 /// not a guessed convective coefficient. Resistance is per unit area, in m² K/W.

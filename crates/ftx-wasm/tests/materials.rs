@@ -1005,3 +1005,25 @@ fn study_comparison_is_shared_with_native_and_retains_unknown_values() {
             .any(|r| r["eligible"] == false)
     );
 }
+
+#[test]
+fn timed_strip_adapter_preserves_production_dynamics_and_exact_frozen_replay() {
+    let input = include_str!("../../../tests/fixtures/materials/synthetic-strip-history.json");
+    let request = serde_json::from_str(input).unwrap();
+    let expected = ftx_drape::strip::history::evaluate(&request).unwrap();
+    let actual = materials::strip_history(input).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&actual).unwrap(),
+        serde_json::to_value(&expected).unwrap()
+    );
+    assert_eq!(
+        actual,
+        materials::strip_history(&expected.replay_request_json).unwrap()
+    );
+    let mut denied: Value = serde_json::from_str(input).unwrap();
+    denied["material"]["allow_estimates"] = json!(false);
+    assert!(materials::strip_history(&denied.to_string()).is_err());
+    let mut changed: Value = serde_json::from_str(&expected.replay_request_json).unwrap();
+    changed["material"]["record"]["properties"]["areal_density"]["value"] = json!(9.0);
+    assert!(materials::strip_history(&changed.to_string()).is_err());
+}

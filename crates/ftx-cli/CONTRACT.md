@@ -181,3 +181,10 @@ frames stay within 40 million pixels. Tests in `video_selection_workflow` cover 
 selection equality, absent/identity orientation, source preservation and create-only outputs, and
 nonidentity/corrupt/mask refusals. JPEG quality is decoded-pixel quality, not stillness, frame decoding,
 segmentation or measurement accuracy.
+
+**Timed strips and draped vapor.** Both native material entry points accept
+`strip-history REQUEST.json` and `thermal-vapor-surface SIM_REPORT.json CONDITIONS.json`.
+They delegate to the production history and canonical vapor surface consumers, enforcing the same
+64 MiB input limit, source policies, physical/numerical refusals and exact frozen replay as the library.
+Strip reactions exclude imposed-node/hardware inertia; sheet vapor totals remain conditional
+independent-sheet potentials. See the existing strip and vapor documents for examples and scope.

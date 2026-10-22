@@ -56,6 +56,42 @@ pub fn thermal_vapor(input: &str) -> Result<String, wasm_bindgen::JsError> {
     vapor(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Potential vapor transfer on source-locked current drape geometry, independent of dry heat.
+/// No body coverage, moisture supply or latent feedback is inferred.
+///
+/// # Errors
+/// Combined input over 64 MiB, invalid evidence/boundaries, changed receipts or unavailable Ret.
+pub fn vapor_surface(report: &str, conditions: &str) -> Result<String, Refusal> {
+    if report
+        .len()
+        .checked_add(conditions.len())
+        .is_none_or(|n| n > 64 * 1024 * 1024)
+    {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "combined vapor input exceeds 64 MiB",
+        ));
+    }
+    let invalid = |e: serde_json::Error| Refusal::new(RefusalCode::InvalidDocument, e.to_string());
+    let conditions: ftx_drape::thermal::vapor::Conditions =
+        serde_json::from_str(conditions).map_err(invalid)?;
+    let report = serde_json::from_str(report).map_err(invalid)?;
+    serde_json::to_string(&conditions.evaluate(&report)?).map_err(invalid)
+}
+
+/// Browser binding for independent sheet vapor potentials on the current retained drape.
+///
+/// # Errors
+/// Same refusals as [`vapor_surface`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn thermal_vapor_surface(
+    report: &str,
+    conditions: &str,
+) -> Result<String, wasm_bindgen::JsError> {
+    vapor_surface(report, conditions).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Evaluate `ftx-thermal-steady/1` JSON and return the shared source-locked result as JSON text.
 /// Input is neither uploaded nor edited; missing heat capacity is not replaced with a default.
 ///

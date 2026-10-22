@@ -165,3 +165,67 @@ No built-in measured knit is promoted to a simulation-ready law by this interfac
 Independent coupon data, source-specific model adequacy, matched bending/contact/thermal
 properties and actual garment validation remain acceptance work under `ftx-ki1` and the
 materials/garment gates in the comprehensive plan.
+
+## Timed loading, holds and unloading
+
+`ftx_drape::strip::history::evaluate` accepts a separate `ftx-strip-history/1` request for
+experiments where the time path and material memory matter. It uses the same production membrane,
+implicit dynamic solver, source-qualified Maxwell spectrum or permanent-strain return map as draping.
+The elastic strip and inverse-identification interfaces retain their existing static meaning.
+
+```json
+{
+  "schema": "ftx-strip-history/1",
+  "material": { "id": "your-characterized-sheet", "allow_estimates": false },
+  "fixture": {
+    "gauge_length_m": 0.1,
+    "width_m": 0.06,
+    "warp_axis": [0, 1],
+    "cells": [2, 2]
+  },
+  "loading": [
+    { "time_s": 0, "extension_fraction": 0 },
+    { "time_s": 0.05, "extension_fraction": 0.02 },
+    { "time_s": 0.15, "extension_fraction": 0.02 },
+    { "time_s": 0.2, "extension_fraction": 0 }
+  ],
+  "controls": {
+    "max_step_s": 0.005,
+    "max_steps": 512,
+    "velocity_tolerance_m_s": 1e-9,
+    "force_tolerance_n": 1e-6,
+    "max_newton": 100
+  }
+}
+```
+
+The material ID above is a placeholder; provide an actual frozen selection. The geometry and loading
+numbers illustrate a synthetic experiment, not a measured acquisition. The first loading point is
+always the stationary, pristine `(0 s, 0 extension)` state. Increasing extensions load, repeated
+extensions hold, and decreasing extensions unload. Separation changes linearly between the supplied
+times. Every interval is subdivided to the explicit maximum step; the complete path shares one step
+budget. At most 1,024 steps, 262,144 retained vertex states and 2,097,152 retained
+geometry/material-history values are admitted; the last budget also counts Maxwell branches.
+
+Real source-qualified **areal density** is required because interior sheet inertia is active. Missing
+bending, contact, thickness or thermal observations do not prevent this membrane-only experiment.
+The material's evidence policy, strain domain and specimen-qualified history remain authoritative.
+The currently unsupported simultaneous Maxwell/permanent-strain law still refuses.
+
+The returned `ftx-strip-history-report/1` freezes the complete input and records every accepted time
+step, both grip reactions, midpoint width, positions, velocities, local Green-strain bounds, independent
+momentum residuals and Newton diagnostics. Stored membrane energy, free-interior kinetic energy,
+physical Maxwell dissipation and irreversible plastic work are distinct ledgers. Grip reactions are
+membrane forces and exclude fixture/grip inertia. The existing backward-Euler material work is not
+silently turned into thermal heating or exact external boundary work. A late domain, numerical or
+budget failure returns a refusal without a successful partial report or modified input.
+
+This experiment constrains out-of-plane motion. Negative reactions during unloading describe that
+planar constraint; they do not predict free-sheet wrinkles or buckling. Refine time step and mesh
+independently. The tests compare low-inertia synthetic coupons with analytical Green-strain bar
+reactions, storage and irreversible work, and compare step refinement with the continuous Maxwell
+finite-ramp/hold solution. They also check actual density-dependent dynamics and frozen replay.
+These are numerical checks, not acquired-textile identification or garment validation.
+
+The timed report's `replay_request_json` contains the exact Rust-serialized frozen request used by
+`input_sha256`; browser downloads preserve that string without reserializing its floating-point values.

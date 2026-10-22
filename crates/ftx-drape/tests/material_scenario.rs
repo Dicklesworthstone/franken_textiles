@@ -104,6 +104,105 @@ fn changed(pattern: &Pattern, key: &str, value: f64) -> Pattern {
 }
 
 #[test]
+fn vapor_substitution_uses_current_sewn_geometry_without_dry_heat_or_storage() {
+    let form = form();
+    let body = body(&form);
+    let mut raw = pattern().raw().clone();
+    raw["fabric"]["material"]["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("thermal_conductivity");
+    raw["fabric"]["material"]["record"]["properties"]["vapor_resistance"] = json!({
+        "value":7.,"unit":"m2*Pa/W","source":"test","evidence":"estimate",
+        "method":"Synthetic software gate; not measured textile data"});
+    let p = Pattern::new(raw);
+    let mut s = scenario();
+    s.vapor_surface = Some(
+        serde_json::from_value(json!({
+        "schema":"ftx-vapor-surface-conditions/1","boundaries":[{
+            "inside_vapor_pressure_pa":2000.,"outside_vapor_pressure_pa":1000.,
+            "inside_film_resistance_m2_pa_w":1.,"outside_film_resistance_m2_pa_w":2.,
+            "latent_heat_j_kg":2_500_000.}]}))
+        .unwrap(),
+    );
+    let ordinary = drape(&p, &s.fit_spec, &body, &s.options, |_| {}).unwrap();
+    let direct = s
+        .vapor_surface
+        .as_ref()
+        .unwrap()
+        .evaluate(&ordinary.report)
+        .unwrap();
+    let mut session = Session::new(&s, &body).unwrap();
+    let a = session.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(a["vapor_surface"]["status"], "available");
+    assert_eq!(a["vapor_surface"]["result"], direct);
+    assert_eq!(a["surface"]["status"], "refused");
+    assert_eq!(a["coverage"]["status"], "refused");
+    assert_eq!(a["drape"]["thermal_surface"]["available"], false);
+    let current_area: f64 = ordinary
+        .scene
+        .solver
+        .model
+        .membranes
+        .iter()
+        .map(|m| {
+            let [a, b, c] = m.v.map(|i| ordinary.scene.solver.x[i]);
+            0.5 * (b - a).cross(c - a).norm()
+        })
+        .sum();
+    let heat = a["metrics"]["independent_vapor_potential_heat_flow_w"]
+        .as_f64()
+        .unwrap();
+    assert!((heat - current_area * 100.).abs() < 1e-12);
+    let b = session
+        .evaluate(&changed(&p, "vapor_resistance", 17.), |_| {})
+        .unwrap();
+    assert_eq!(a["positions_m"], b["positions_m"]);
+    assert_eq!(a["metrics"]["cloth_mass_kg"], b["metrics"]["cloth_mass_kg"]);
+    assert_ne!(
+        a["vapor_surface"]["result"]["model_sha256"],
+        b["vapor_surface"]["result"]["model_sha256"]
+    );
+    let changed_heat = b["metrics"]["independent_vapor_potential_heat_flow_w"]
+        .as_f64()
+        .unwrap();
+    assert!((changed_heat - heat / 2.).abs() < 1e-12);
+    assert_eq!(a, session.evaluate(&p, |_| {}).unwrap());
+
+    let no_vapor = session.evaluate(&pattern(), |_| {}).unwrap();
+    assert_eq!(no_vapor["vapor_surface"]["status"], "refused");
+    assert!(no_vapor["metrics"]["independent_vapor_potential_heat_flow_w"].is_null());
+    assert!(no_vapor["metrics"]["cloth_mass_kg"].is_number());
+    assert_eq!(no_vapor["surface"]["status"], "available");
+
+    s.motion = motion_scenario().motion;
+    s.max_vertex_frames = 2_000_000;
+    let mut moving = Session::new(&s, &body).unwrap();
+    moving.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let moved = moving.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(
+        moved["motion"]["status"], "available",
+        "{}",
+        moved["motion"]
+    );
+    let motion = &moved["motion"]["result"];
+    for endpoint in motion["keyframes"].as_array().unwrap() {
+        let sample = endpoint["sample_index"].as_u64().unwrap() as usize;
+        let vapor = &endpoint["vapor_surface"];
+        assert_eq!(vapor["status"], "available");
+        assert_eq!(
+            vapor["result"]["positions_m"],
+            motion["samples"][sample]["positions_m"]
+        );
+        assert_ne!(vapor["result"]["request_sha256"], direct["request_sha256"]);
+        assert_eq!(vapor["result"]["model_sha256"], direct["model_sha256"]);
+        let area = vapor["result"]["area_m2"].as_f64().unwrap();
+        let heat = vapor["result"]["potential_heat_flow_w"].as_f64().unwrap();
+        assert!((heat - area * 100.).abs() < 1e-12);
+    }
+}
+
+#[test]
 fn composed_evaluation_equals_real_drape_surface_and_projected_coverage() {
     let form = form();
     let body = body(&form);

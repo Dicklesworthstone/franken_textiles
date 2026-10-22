@@ -1,5 +1,17 @@
 # ftx-drape contract
 
+**Source-qualified vapor potentials** (`thermal::vapor`, `ftx-vc1`). Characterized drapes retain an
+independent material/ownership/geometry frame without requiring dry conductivity or heat capacity.
+Explicit vapor conditions reuse `ftx-pattern::material_vapor` per source-locked material column,
+then integrate potential heat and mass flux over current cloth triangles once, with piece totals.
+Nonuniform conditions require the exact column-model identity; stale geometry/material receipts,
+unadmitted source protocols and missing Ret refuse independently of mechanical/dry-heat results.
+Optional study evaluation uses each freshly draped alternative and each actual motion endpoint.
+Frozen replay preserves exact source policy and current/reference area distinctions. Independent
+sheet sums are not covered-body evaporation, water availability, latent heat feedback or a warmth/
+comfort/physical-validation claim. See `docs/vapor-resistance.md`; analytical/source-only tests and
+`material_scenario` exercise canonical consumer equality and real sewn geometry.
+
 **Purpose.** The cloth solver that replaces Blender's (plan §11): an orthotropic Green-strain membrane
 rotated to the grain, quadratic hinge bending, lumped inertia, and implicit Euler solved by Newton on a
 sparse LDLᵀ with an Armijo line search; a static solve; and contact with a static body (IPC barrier on the
@@ -511,3 +523,15 @@ omitted-field serialization remain unchanged. Force remains required; unknown so
 not guessed. `strip_measurements` checks independent affine/interpolation answers, actual inverse
 recovery, sensitivity, held-out isolation and exact frozen forward replay. Numerical recovery does not
 qualify a measured coupon or supply missing material properties.
+
+**Timed clamped-strip history** (`strip::history`, `ftx-sh1`). `ftx-strip-history/1` loads, holds and
+unloads a planar, fully gripped sheet through the existing implicit dynamic solver. Canonical membrane
+observations and real reference areal mass are required; unrelated bending/contact/thermal evidence
+is not fabricated. The pristine stationary initialization, explicit increasing clock, piecewise-linear
+grip motion and globally bounded subdivisions preserve one accepted Maxwell or permanent-strain
+history throughout. Every accepted step reports membrane reactions, interior momentum residuals,
+stored/kinetic energy and separate existing physical viscous/plastic work. A failed complete request
+publishes no partial success. Frozen inputs replay offline. Synthetic analytical Green-strain bar
+reactions/work, continuous Maxwell ramp/hold refinement, mass-dependent dynamics and refusal tests
+are in `tests/strip_history.rs`. This is constrained planar dynamics, not buckling, parameter fitting,
+measured coupon qualification, inferred heat or actual garment fit.

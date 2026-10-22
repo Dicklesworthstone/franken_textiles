@@ -289,6 +289,27 @@ pub fn material_strip_experiment(input: &str) -> Result<String, wasm_bindgen::Js
     strip_experiment(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Run the production membrane through a prescribed grip history with material memory and inertia.
+/// The frozen input and complete accepted history are returned only after every step succeeds.
+///
+/// # Errors
+/// Input budget, source/domain, loading-program, time/iteration budget or solver refusals.
+pub fn strip_history(input: &str) -> Result<String, Refusal> {
+    budget(&[input])?;
+    let input = serde_json::from_str(input).map_err(invalid)?;
+    serde_json::to_string(&ftx_drape::strip::history::evaluate(&input)?).map_err(invalid)
+}
+
+/// Browser timed-strip experiment using the same production material history as native code.
+///
+/// # Errors
+/// Same refusals as [`strip_history`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_strip_history(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    strip_history(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Identify a source-qualified recovery spectrum using the same timed histories as native code.
 /// Observation consent and admission of fitted estimates remain independent policies.
 ///

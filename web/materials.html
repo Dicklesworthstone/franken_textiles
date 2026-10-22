@@ -99,6 +99,12 @@ Grip extension, total force and transverse compression fractions remain their or
 solver width or Poisson ratio is inferred.</p>
 <label>Forward strip request JSON (<code>ftx-strip-experiment/1</code>) <input id="stripExperimentRequest" type="file" accept=".json,application/json"></label>
 <button id="stripExperiment" data-command="stripExperiment" disabled>Simulate the declared strip experiment</button>
+<label>Timed strip request JSON (<code>ftx-strip-history/1</code>) <input id="stripHistoryRequest" type="file" accept=".json,application/json"></label>
+<button id="stripHistory" data-command="stripHistory" disabled>Load, hold and release a strip</button>
+<p class="note">Declare grip extension over time to inspect force relaxation, recovery and permanent stretch.
+The same cloth solver retains material history and inertia at each accepted step. Source-qualified mass
+and a supported membrane law are required; a grip history does not identify missing material properties.
+The complete report separates stored energy, free-vertex motion and physical dissipation.</p>
 <label>Inverse strip request JSON (<code>ftx-strip-calibration/1</code>) <input id="stripFitRequest" type="file" accept=".json,application/json"></label>
 <button id="stripFit" data-command="stripFit" disabled>Identify a candidate from grip measurements</button>
 <p class="note">Each request supplies its specimen, gauge, width, material-axis orientation and numerical controls.
@@ -169,7 +175,12 @@ original and selected change counts and whether the minimum was proven. Supply a
 <h3>Thermal exchange on this drape</h3>
 <p class="note">Run a fresh drape above first. These conditions use the existing native JSON schemas; no air-gap, body-layer or environmental data is inferred by the page.</p>
 <div class="grid"><div><label>Steady surface conditions JSON <input id="heatConditions" type="file" accept=".json,application/json"></label>
-<button id="heat" data-command="heat" disabled>Evaluate independent sheet heat</button></div>
+<button id="heat" data-command="heat" disabled>Evaluate independent sheet heat</button>
+<label>Vapor conditions JSON (<code>ftx-vapor-surface-conditions/1</code>) <input id="vaporSurfaceConditions" type="file" accept=".json,application/json"></label>
+<button id="vaporSurface" data-command="vaporSurface" disabled>Evaluate vapor transfer on this drape</button>
+<p class="note">Uses each piece's retained vapor resistance and current draped area with the supplied vapor
+pressures and boundary films. Results are independent sheet potentials; they do not establish sweat
+availability, layered body evaporation or cooling feedback into the dry-heat simulation.</p></div>
 <div><label>Body geometry / instance layer map JSON <input id="map" type="file" accept=".json,application/json"></label>
 <label>Coverage conditions JSON <input id="coverageConditions" type="file" accept=".json,application/json"></label>
 <button id="coverage" data-command="coverage" disabled>Recompute layered body coverage</button></div></div>

@@ -1,0 +1,139 @@
+{
+  "schema": "ftx-strip-history/1",
+  "material": {
+    "id": "synthetic-timed-coupon",
+    "allow_estimates": true,
+    "record": {
+      "id": "synthetic-timed-coupon",
+      "name": "Synthetic timed strip; NOT measured textile data",
+      "form": "woven",
+      "properties": {
+        "areal_density": {
+          "value": 0.2,
+          "unit": "kg/m2",
+          "source": "test",
+          "evidence": "estimate",
+          "method": "Synthetic reference sheet mass"
+        },
+        "warp_stiffness": {
+          "value": 1000,
+          "unit": "N/m",
+          "source": "test",
+          "evidence": "estimate",
+          "method": "Synthetic equilibrium warp modulus"
+        },
+        "weft_stiffness": {
+          "value": 500,
+          "unit": "N/m",
+          "source": "test",
+          "evidence": "estimate",
+          "method": "Synthetic equilibrium weft modulus"
+        },
+        "poisson_warp_weft": {
+          "value": 0.1,
+          "unit": "1",
+          "source": "test",
+          "evidence": "estimate",
+          "method": "Synthetic normal coupling"
+        },
+        "shear_stiffness": {
+          "value": 200,
+          "unit": "N/m",
+          "source": "test",
+          "evidence": "estimate",
+          "method": "Synthetic equilibrium shear modulus"
+        }
+      },
+      "membrane_relaxation": {
+        "model": "green_maxwell/1",
+        "initialization": "stress_free_reference",
+        "strain_range": [
+          [
+            -0.49,
+            2
+          ],
+          [
+            -0.49,
+            2
+          ],
+          [
+            -2,
+            2
+          ]
+        ],
+        "source": "test",
+        "method": "Synthetic Maxwell spectrum for forward software demonstration",
+        "conditions": {
+          "scope": "Artificial constant-condition example only"
+        },
+        "branches": [
+          {
+            "id": "recovery",
+            "stiffness_ratio": {
+              "value": 2,
+              "unit": "1",
+              "source": "test",
+              "evidence": "estimate",
+              "method": "Synthetic branch ratio"
+            },
+            "relaxation_time": {
+              "value": 0.05,
+              "unit": "s",
+              "source": "test",
+              "evidence": "estimate",
+              "method": "Synthetic relaxation time"
+            }
+          }
+        ]
+      },
+      "sources": {
+        "test": {
+          "reference": "test:ftx-timed-strip",
+          "accessed_on": "2026-10-22",
+          "note": "Every number is synthetic. No measured material, parameter-identification, garment-fit or manufacturing claim."
+        }
+      }
+    }
+  },
+  "fixture": {
+    "gauge_length_m": 0.1,
+    "width_m": 0.06,
+    "warp_axis": [
+      0,
+      1
+    ],
+    "cells": [
+      2,
+      2
+    ]
+  },
+  "loading": [
+    {
+      "time_s": 0,
+      "extension_fraction": 0
+    },
+    {
+      "time_s": 0.02,
+      "extension_fraction": 0.01
+    },
+    {
+      "time_s": 0.06,
+      "extension_fraction": 0.01
+    },
+    {
+      "time_s": 0.08,
+      "extension_fraction": 0
+    },
+    {
+      "time_s": 0.1,
+      "extension_fraction": 0
+    }
+  ],
+  "controls": {
+    "max_step_s": 0.01,
+    "max_steps": 32,
+    "velocity_tolerance_m_s": 1e-9,
+    "force_tolerance_n": 0.000001,
+    "max_newton": 100
+  }
+}

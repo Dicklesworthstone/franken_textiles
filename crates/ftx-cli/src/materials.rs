@@ -60,14 +60,18 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         };
         return sewing_selection::run(pattern, request);
     }
-    if action == "strip-experiment" {
+    if matches!(action, "strip-experiment" | "strip-history") {
         known_options(args, "materials", &[])?;
         let [path] = &args.positional[2..] else {
             return Err(bad_input(
-                "usage: ftx materials strip-experiment REQUEST.json",
+                "usage: ftx materials strip-experiment|strip-history REQUEST.json",
             ));
         };
-        let result = strip::experiment(path)?;
+        let result = if action == "strip-history" {
+            strip::history(path)?
+        } else {
+            strip::experiment(path)?
+        };
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
@@ -155,6 +159,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         action,
         "thermal-compression"
             | "thermal-vapor"
+            | "thermal-vapor-surface"
             | "thermal-steady"
             | "thermal-steady-surface"
             | "thermal-steady-coverage"
@@ -163,6 +168,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let result = match (action, &args.positional[2..]) {
             ("thermal-compression", [path]) => thermal::compression_history(path)?,
             ("thermal-vapor", [path]) => thermal::vapor(path)?,
+            ("thermal-vapor-surface", [report, conditions]) => {
+                thermal::vapor_surface(report, conditions)?
+            }
             ("thermal-steady", [path]) => thermal::stack(path)?,
             ("thermal-steady-surface", [report, conditions]) => {
                 thermal::surface(report, conditions)?
@@ -173,7 +181,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             }
             _ => {
                 return Err(bad_input(
-                    "usage: ftx materials thermal-compression HISTORY.json | thermal-vapor STACK.json | thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
+                    "usage: ftx materials thermal-compression HISTORY.json | thermal-vapor STACK.json | thermal-vapor-surface SIM_REPORT.json CONDITIONS.json | thermal-steady STACK.json | thermal-steady-surface SIM_REPORT.json CONDITIONS.json | thermal-steady-coverage REQUEST.json | thermal-steady-coverage SIM_REPORT.json MAP.json CONDITIONS.json",
                 ));
             }
         };

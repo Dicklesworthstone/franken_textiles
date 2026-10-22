@@ -30,6 +30,11 @@ pub(super) fn experiment(path: &str) -> Result<Value, Refusal> {
     serde_json::to_value(strip::evaluate(&input)?).map_err(invalid)
 }
 
+pub(super) fn history(path: &str) -> Result<Value, Refusal> {
+    let input = serde_json::from_str(&read(path)?).map_err(invalid)?;
+    serde_json::to_value(strip::history::evaluate(&input)?).map_err(invalid)
+}
+
 pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
     let mut input: strip::fit::Input = serde_json::from_str(&read(path)?).map_err(invalid)?;
     // Output estimate admission is explicit command policy. Observation evidence has its own

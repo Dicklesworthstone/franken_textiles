@@ -40,6 +40,13 @@ pub(crate) fn vapor(path: &str) -> Result<Value, Refusal> {
         .map_err(invalid)
 }
 
+pub(crate) fn vapor_surface(report: &str, conditions: &str) -> Result<Value, Refusal> {
+    let report = read(report, MAX_INPUT)?;
+    let conditions: ftx_drape::thermal::vapor::Conditions =
+        serde_json::from_str(&read(conditions, MAX_INPUT - report.len())?).map_err(invalid)?;
+    conditions.evaluate(&serde_json::from_str(&report).map_err(invalid)?)
+}
+
 pub(crate) fn stack(path: &str) -> Result<Value, Refusal> {
     let request: Request = serde_json::from_str(&read(path, MAX_INPUT)?).map_err(invalid)?;
     request.evaluate(&ftx_pattern::textile_import::catalog()?)

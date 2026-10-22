@@ -441,6 +441,7 @@ pub fn drape(
         report["thermal_surface"] = crate::thermal::surface::for_drape(&scene, &report["material"]);
         report["steady_thermal_surface"] =
             crate::thermal::steady::surface::for_drape(&scene, &report["material"]);
+        report["vapor_surface"] = crate::thermal::vapor::for_drape(&scene, &report["material"]);
     }
     Ok(DrapeRun {
         scene,

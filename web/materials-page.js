@@ -1,9 +1,9 @@
 // State is local to this tab. Epoch/request checks cover worker responses AND delayed file reads.
 const $ = id => document.getElementById(id);
 const commands = [...document.querySelectorAll("[data-command]")];
-const boundOperations = ["exports", "fold", "heat", "coverage", "cut", "stock", "price", "sew"];
+const boundOperations = ["exports", "fold", "heat", "vaporSurface", "coverage", "cut", "stock", "price", "sew"];
 const operations = [...boundOperations, "screen", "study", "scenario", "pressure", "vapor", "calibrate",
-  "stripAcquisition", "stripExperiment", "stripFit", "outfit"];
+  "stripAcquisition", "stripExperiment", "stripHistory", "stripFit", "outfit"];
 const selectionOperations = ["inspect", "pressure", "calibrate", "stripFit"];
 let worker, epoch = 0, sequence = 0, pending = null, ready = false;
 let source = null, inspected = null, bound = null, drape = null;
@@ -22,6 +22,7 @@ for (const op of operations) {
     study: "Fixed-pattern manufacturing alternatives", scenario: "Fresh drape and heat alternatives",
     pressure: "Pressure-conditioned material", vapor: "Potential evaporative transfer", calibrate: "Identified material behavior",
     stripAcquisition: "Complete clamped-strip acquisitions", stripExperiment: "Clamped-strip experiment",
+    stripHistory: "Strip loading and recovery", vaporSurface: "Vapor transfer on this drape",
     stripFit: "Clamped-strip identification", outfit: "Imported joint outfit" })[op] || op;
   const summary = document.createElement("pre"), links = document.createElement("div"); links.className = "links";
   const comparison = document.createElement("div"); comparison.className = "comparison";
@@ -43,7 +44,7 @@ function controls() {
   $("pressure").disabled ||= !has("compressionRequest");
   $("vapor").disabled ||= !has("vaporRequest");
   $("calibrate").disabled ||= !has("calibrationRequest");
-  for (const op of ["stripAcquisition", "stripExperiment", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
+  for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
   $("study").disabled ||= !source || !has("studyRequest");
   $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || (!has("scenarioBody") && !has("measurements"));
   if ($("combinationMode").checked && !combinationGroups.size) {
@@ -57,6 +58,7 @@ function controls() {
   $("price").disabled ||= !has("cutOptions") || !has("quotes") || !has("market");
   $("sew").disabled ||= !has("sewOptions");
   $("heat").disabled ||= !drape || !has("heatConditions");
+  $("vaporSurface").disabled ||= !drape || !has("vaporSurfaceConditions");
   $("coverage").disabled ||= !drape || !has("map") || !has("coverageConditions");
   $("cancel").disabled = !pending;
 }
@@ -409,6 +411,15 @@ function motionComparison(parent, rows, simulations, requested) {
       cells(endpoints, [metric(endpoint.time_s), metric(endpoint.arm_abduction_deg), state(endpoint.surface),
         metric(available(endpoint.surface)?.steady?.power_w), state(endpoint.coverage), metric(available(endpoint.coverage)?.steady?.power_w)]);
     }
+    if (result.keyframes.some(e => e.vapor_surface && e.vapor_surface.status !== "not_requested")) {
+      const vapor = table(parent, `${row.key}: endpoint vapor potentials — independent sheets`,
+        ["Time (s)", "Vapor transfer", "Current sheet area (m²)", "Potential heat transfer (W)", "Potential mass transfer (kg/s)"]);
+      for (const endpoint of result.keyframes) {
+        const transfer = available(endpoint.vapor_surface);
+        cells(vapor, [metric(endpoint.time_s), state(endpoint.vapor_surface), metric(transfer?.area_m2),
+          metric(transfer?.potential_heat_flow_w), metric(transfer?.potential_mass_flow_kg_s)]);
+      }
+    }
     detail(parent, `${row.key}: motion identities, material history and endpoint refusals (display only)`, {
       path_sha256: result.path_sha256, initial_positions_sha256: result.initial_positions_sha256,
       initial_body_collision_sha256: result.initial_body_collision_sha256, initial_drape_gating: result.initial_drape_gating,
@@ -416,7 +427,7 @@ function motionComparison(parent, rows, simulations, requested) {
       membrane_history: result.membrane_history, bending_history: result.bending_history,
       membrane_plasticity_history: result.membrane_plasticity_history,
       endpoints: result.keyframes.map(e => ({ time_s: e.time_s, positions_sha256: e.positions_sha256,
-        body_collision_sha256: e.body_collision_sha256, surface_refusal: e.surface?.refusal, coverage_refusal: e.coverage?.refusal })),
+        body_collision_sha256: e.body_collision_sha256, surface_refusal: e.surface?.refusal, coverage_refusal: e.coverage?.refusal, vapor_refusal: e.vapor_surface?.refusal })),
       scope: result.scope, thermal_basis: result.thermal_basis });
     motionSamples(parent, row.key, result);
   }
@@ -498,6 +509,20 @@ function comparison(op, r) {
         scenario_sha256: result?.scenario_sha256, body_geometry_sha256: result?.body_geometry_sha256,
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
+    }
+    if ([...simulations.values()].some(o => {
+      const vapor = available(o)?.vapor_surface;
+      return vapor && vapor.status !== "not_requested";
+    })) {
+      const vapor = table(parent, "Initial drape vapor potentials — independent sheets",
+        ["Alternative", "Vapor transfer", "Current sheet area (m²)", "Potential heat transfer (W)", "Potential mass transfer (kg/s)"]);
+      for (const row of study.alternatives) {
+        const outcome = simulations.get(row.key), initial = available(outcome), transfer = available(initial?.vapor_surface);
+        cells(vapor, [row.key, initial ? state(initial.vapor_surface) : state(outcome), metric(transfer?.area_m2),
+          metric(transfer?.potential_heat_flow_w), metric(transfer?.potential_mass_flow_kg_s)]);
+        detail(parent, `${row.key}: vapor conditions, source columns and refusal (display only)`,
+          transfer || { refusal: initial?.vapor_surface?.refusal || outcome?.refusal });
+      }
     }
     attachedMassComparison(parent, study.alternatives, simulations);
     motionComparison(parent, study.alternatives, simulations, r.scenario?.scenario?.motion);
@@ -610,6 +635,26 @@ function vaporResult(parent, r) {
   return { schema: r.schema, request_sha256: r.request_sha256, mixed_protocols: r.mixed_protocols,
     physical_validation_claim: r.physical_validation_claim, notes: r.notes,
     next: "Download the exact report, original input and frozen replay request to repeat this calculation." };
+}
+function vaporSurfaceResult(parent, r) {
+  const note = document.createElement("p");
+  note.textContent = "Independent sheet potentials use each piece's current draped area and retained vapor resistance. " +
+    "Overlapping sheets are evaluated independently. These totals do not establish body coverage, available sweat, " +
+    "actual wearer evaporation or latent cooling of the dry-heat model.";
+  parent.append(note);
+  const totals = table(parent, "Potential transfer on current cloth geometry", ["Quantity", "Value", "Unit"]);
+  for (const [label, value, unit] of [
+    ["Current cloth area", r.area_m2, "m²"],
+    ["Potential latent heat flow", r.potential_heat_flow_w, "W"],
+    ["Potential water mass flow", r.potential_mass_flow_kg_s, "kg/s"]
+  ]) cells(totals, [label, metric(value), unit]);
+  const pieces = table(parent, "Independent piece potentials", ["Piece", "Area (m²)", "Potential heat (W)", "Potential water (kg/s)"]);
+  for (const row of r.pieces) cells(pieces, [row.instance, metric(row.area_m2),
+    metric(row.potential_heat_flow_w), metric(row.potential_mass_flow_kg_s)]);
+  detail(parent, "Original resistance observations, boundaries and source protocols", r.columns);
+  return { schema: r.schema, model_sha256: r.model_sha256, request_sha256: r.request_sha256,
+    scope: r.scope, physical_validation_claim: r.physical_validation_claim,
+    next: "Download the complete report, frozen replay, original conditions and retained drape below." };
 }
 function sewingResult(parent, r) {
   const plan = r.plan, order = plan?.ordering;
@@ -973,6 +1018,23 @@ function calibrationResult(parent, r) {
     error_budgets: { max_rms_scaled: c.input.max_rms_scaled, max_peak_scaled: c.input.max_peak_scaled },
     next: "Review capabilities, then assign the identified selection above and bind the pattern." };
 }
+function stripHistoryResult(parent, r) {
+  const note = document.createElement("p");
+  note.textContent = "The prescribed grips load, hold and unload one material specimen. Accepted material history " +
+    "persists throughout the program. Stored energy, free-vertex motion and dissipated work remain separate; " +
+    "these values do not establish total actuator work, out-of-plane buckling or measured garment behavior.";
+  parent.append(note);
+  const states = table(parent, "Loading and recovery history", ["Time (s)", "Grip extension fraction",
+    "Moving-grip force (N)", "Mid-gauge width (m)", "Dynamic residual (N)", "Stored energy (J)",
+    "Free kinetic energy (J)", "Maxwell dissipation (J)", "Plastic dissipation (J)"]);
+  for (const state of r.states) cells(states, [state.time_s, state.extension_fraction, state.force_n,
+    state.mid_width_m, state.free_dynamic_residual_n, state.stored_membrane_energy_j,
+    state.free_kinetic_energy_j, state.maxwell_dissipation_j, state.plastic_dissipation_j].map(metric));
+  detail(parent, "Frozen material, fixture and complete loading program", r.input);
+  return { schema: r.schema, input_sha256: r.input_sha256, steps: r.states.length,
+    model_scope: r.model_scope,
+    next: "Download the original request, complete report and exact frozen replay below." };
+}
 function stripResult(parent, op, r) {
   if (op === "stripAcquisition") {
     const curves = table(parent, "Original complete force acquisitions", ["Specimen", "Cut direction", "Original rows", "Archive entry", "Source SHA-256"]);
@@ -1051,6 +1113,7 @@ function show(op, msg) {
     const s = sections.get(op); s.section.hidden = false;
     const summary = ["screen", "study", "scenario"].includes(op) ? comparison(op, r) :
       op === "calibrate" ? calibrationResult(s.comparison, r) :
+      op === "stripHistory" ? stripHistoryResult(s.comparison, r) :
       ["stripAcquisition", "stripExperiment", "stripFit"].includes(op) ? stripResult(s.comparison, op, r) :
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, maximum_marker_length_m: r.options?.maximum_marker_length_m,
@@ -1063,6 +1126,7 @@ function show(op, msg) {
           stock_mass_kg: m.stock_mass_kg, mass_unavailable: m.mass_unavailable })), limitations: r.limitations } :
       op === "sew" ? sewingResult(s.comparison, r) :
       op === "vapor" ? vaporResult(s.comparison, r) :
+      op === "vaporSurface" ? vaporSurfaceResult(s.comparison, r) :
       op === "heat" || op === "coverage" ? { steady: r.steady, comfort_claim: r.comfort_claim, empirical_validation_claim: r.empirical_validation_claim } :
       op === "pressure" && ["ftx-compressed-thermal-history-report/1", "ftx-compressed-thermal-history-report/2"].includes(r.schema) ? compressionHistoryResult(s.comparison, r) :
       op === "pressure" && r.schema === "ftx-compression-stack-report/1" ? {
@@ -1158,7 +1222,7 @@ function resetInterfaces() {
 async function execute(op) {
   if (!ready || pending) return;
   if (op === "bind") clear(["bind", ...boundOperations]);
-  else if (op === "fold") clear(["fold", "heat", "coverage"]);
+  else if (op === "fold") clear(["fold", "heat", "vaporSurface", "coverage"]);
   else if (sections.has(op)) clear([op]);
   if (selectionOperations.includes(op)) { ++selectionRead; preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); }
   const id = ++sequence; pending = { id, op }; $("error").hidden = true;
@@ -1181,7 +1245,7 @@ async function execute(op) {
       msg.allowEstimates = $("calibrationEstimates").checked;
       msg.calibrationRequest = await read("calibrationRequest");
     }
-    else if (["stripAcquisition", "stripExperiment", "stripFit"].includes(op)) msg.stripRequest = await read(`${op}Request`);
+    else if (["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"].includes(op)) msg.stripRequest = await read(`${op}Request`);
     else if (op === "screen") msg.screenRequest = await read("screenRequest");
     else if (op === "study" || op === "scenario") {
       if (!sourceText) throw Error("Load the original pattern first.");
@@ -1201,9 +1265,9 @@ async function execute(op) {
       if (op === "exports") { const d = new Date(), pad = n => String(n).padStart(2, "0");
         msg.today = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
         msg.created = `${msg.today}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
-      if (op === "heat" || op === "coverage") {
+      if (op === "heat" || op === "vaporSurface" || op === "coverage") {
         if (!drape) throw Error("Re-drape the current material first."); msg.report = drape;
-        msg.conditions = await read(op === "heat" ? "heatConditions" : "coverageConditions");
+        msg.conditions = await read(op === "heat" ? "heatConditions" : op === "vaporSurface" ? "vaporSurfaceConditions" : "coverageConditions");
         if (op === "coverage") msg.map = await read("map");
       }
       if (op === "cut" || op === "price") msg.options = await read("cutOptions");
@@ -1351,10 +1415,11 @@ for (const [id, operation] of [["compressionRequest", "pressure"], ["compression
     invalidate([operation]);
   });
 }
-for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","coverage","scenario"], fit:["exports","fold","heat","coverage"],
-  body:["fold","heat","coverage","scenario"], selfContact:["fold","heat","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
+for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat","vaporSurface","coverage","scenario"], fit:["exports","fold","heat","vaporSurface","coverage"],
+  body:["fold","heat","vaporSurface","coverage","scenario"], selfContact:["fold","heat","vaporSurface","coverage"], cutOptions:["cut","price"], quotes:["price"], market:["price"],
   stockRequest:["stock"], sewOptions:["sew"], heatConditions:["heat"], map:["coverage"], coverageConditions:["coverage"], vaporRequest:["vapor"],
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
+  stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
   $(id).addEventListener("change", () => invalidate(id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : keys));
 }

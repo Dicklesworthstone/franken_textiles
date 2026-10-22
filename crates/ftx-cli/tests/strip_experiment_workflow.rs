@@ -41,7 +41,12 @@ fn call(dir: &Path, input: &Value, main: bool) -> Result<Value, Value> {
     if main {
         command.args(["--json", "materials"]);
     }
-    let output = command.arg("strip-experiment").arg(&path).output().unwrap();
+    let operation = if input["schema"] == "ftx-strip-history/1" {
+        "strip-history"
+    } else {
+        "strip-experiment"
+    };
+    let output = command.arg(operation).arg(&path).output().unwrap();
     assert_eq!(fs::read_to_string(path).unwrap(), original);
     if output.status.success() {
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -142,5 +147,27 @@ fn native_consumers_preserve_real_source_domain_and_numerical_work_refusals() {
         for main in [false, true] {
             assert_eq!(call(&dir, &input, main).unwrap_err(), expected);
         }
+    }
+}
+
+#[test]
+fn both_native_history_entry_points_replay_the_complete_source_locked_loading_program() {
+    let text = include_str!("../../../tests/fixtures/materials/synthetic-strip-history.json");
+    let input: Value = serde_json::from_str(text).unwrap();
+    let request = serde_json::from_str(text).unwrap();
+    let direct = ftx_drape::strip::history::evaluate(&request).unwrap();
+    assert_eq!(
+        direct.input_sha256,
+        sha256_hex(direct.replay_request_json.as_bytes())
+    );
+    let replay: Value = serde_json::from_str(&direct.replay_request_json).unwrap();
+    let expected = serde_json::to_value(direct).unwrap();
+    let dir = directory();
+    for main in [false, true] {
+        assert_eq!(call(&dir, &input, main).unwrap(), expected);
+        assert_eq!(call(&dir, &replay, main).unwrap(), expected);
+        let mut denied = input.clone();
+        denied["material"]["allow_estimates"] = json!(false);
+        assert!(call(&dir, &denied, main).is_err());
     }
 }

@@ -66,6 +66,10 @@ pub struct Scenario {
     /// Independent sheet-column heat exchange. Missing storage does not block steady transport.
     #[serde(default)]
     pub surface: Option<SurfaceConditions>,
+    /// Optional source-qualified vapor-transfer potential on independent current cloth sheets.
+    /// Does not require dry heat data or infer covered-body evaporation or latent heat feedback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vapor_surface: Option<crate::thermal::vapor::Conditions>,
     /// Optional actual body/layer overlap and series transport on the newly draped geometry.
     #[serde(default)]
     pub coverage: Option<Coverage>,
@@ -284,11 +288,14 @@ impl<'a, 'body> Session<'a, 'body> {
             let count = geometry_count.saturating_add(history_points);
             let samples = count.saturating_mul(request.max_trials + 1)
                 .min(request.max_sample_vertices);
-            let endpoint_copies = if self.scenario.surface.is_some() || self.scenario.coverage.is_some() {
+            let mut endpoint_copies = if self.scenario.surface.is_some() || self.scenario.coverage.is_some() {
                 7 * request.keyframes.len()
             } else {
                 0
             };
+            if self.scenario.vapor_surface.is_some() {
+                endpoint_copies += 4 * request.keyframes.len();
+            }
             // Endpoint heat receipts duplicate geometry; final velocities retain one more array.
             let retained = samples.saturating_add(count.saturating_mul(endpoint_copies + 1));
             let work = samples.saturating_mul(8).max(retained);
@@ -327,6 +334,11 @@ impl<'a, 'body> Session<'a, 'body> {
             .map_or_else(omitted, |policy| {
                 outcome(coverage_at(policy, &run.report, self.body.collision))
             });
+        let vapor = self
+            .scenario
+            .vapor_surface
+            .as_ref()
+            .map(|conditions| outcome(conditions.evaluate(&run.report)));
         let positions_sha256 = hash(&run.scene.solver.x)?;
         // Exact resolved placement data disambiguates callers with equal skins but different frames.
         let placements: Vec<_> = run.scene.placements.iter().map(|p| json!({
@@ -346,6 +358,13 @@ impl<'a, 'body> Session<'a, 'body> {
             "charged_vertex_frames":charge,"physical_validation_claim":false,
             "comfort_claim":false,"hardware_execution_authorized":false,
             "note":"Heat is evaluated on this final computed frame even when drape flags require review. No scalar ranking or empirical fit/whole-wearer claim is made."});
+        if let Some(vapor) = vapor {
+            result["metrics"]["independent_vapor_potential_heat_flow_w"] =
+                vapor["result"]["potential_heat_flow_w"].clone();
+            result["metrics"]["independent_vapor_potential_mass_flow_kg_s"] =
+                vapor["result"]["potential_mass_flow_kg_s"].clone();
+            result["vapor_surface"] = vapor;
+        }
         if let Some(request) = &self.scenario.motion {
             result["motion"] = outcome((|| {
                 let (work, retained) = motion_admission.expect("requested motion has admission")?;

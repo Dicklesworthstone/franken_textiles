@@ -5,6 +5,9 @@
 `ftx_pattern::material_vapor::Request`. The file-free WASM export is `thermal_vapor(input)`.
 Each layer resolves the existing canonical `vapor_resistance` observation in m²·Pa/W. Missing
 mechanics, dry conductivity and heat capacity do not prevent this resistance-only calculation.
+Fiber and yarn records are constituent observations, so they cannot be promoted to vapor-transport
+layers merely by carrying a Ret field. Source-qualified sheet, woven, knit, nonwoven, hide, laminate
+and fill/batt records remain supported; the stated specimen/layer conditions stay authoritative.
 
 ```sh
 cargo run -p ftx-cli --bin ftx-materials -- thermal-vapor \
@@ -122,3 +125,39 @@ ftx-materials study tests/fixtures/materials/synthetic-sewing-pattern.json \
 Upload the same pattern and study JSON in the browser material workbench to inspect independent
 outcomes, retained source/boundary details and exact vapor replay downloads. A new or refused study
 withdraws the preceding result through the existing study lifecycle.
+
+## Material-following potential on sewn cloth
+
+`ftx materials thermal-vapor-surface SIM_REPORT.json CONDITIONS.json --json` evaluates the
+same canonical Ret observations over the **current retained cloth triangles**. Each characterized
+drape now retains a `vapor_surface` geometry/material receipt independently of dry conductivity,
+thermal resistance, density or heat capacity readiness. The vapor calculation itself still requires
+admitted Ret observations. Missing vapor data never removes a supported mechanical or dry-heat result.
+
+The `ftx-vapor-surface-conditions/1` request supplies `boundaries`, each containing the stack request's
+two vapor pressures, two film resistances and latent heat. One entry applies uniformly to all sheets;
+otherwise supply exactly one entry per retained material column and its exact `model_sha256` from
+the saved frame. The same `required_method`, `required_conditions` and `allow_mixed_protocols` source
+policy applies. Every material retains its own estimate policy. Material substitution invalidates
+nonuniform assignments tied to the old column ordering; uniform policies can evaluate the new material.
+
+Each distinct column uses the canonical one-square-metre stack calculation. Per-triangle and
+per-piece reports integrate its flux over actual current cloth area, counting each triangle once,
+and expose separate potential heat (W) and mass (kg/s) totals. The original reference area remains
+in the receipt. A source-only Ret edit changes transport and material identity; it does not change
+mechanical coefficients. Changes to cloth geometry produce fresh areas and a new frame/request
+identity. Exact frozen `replay_request_json` retains only the source material, vapor frame and
+conditions needed to replay, without an external catalog or unrelated wearer metadata.
+
+An optional `vapor_surface` field in `ftx-drape-scenario/1` applies this same calculation to every
+material alternative after its actual drape, and to every completed motion endpoint using the new
+cloth geometry. It reports an independent `available` or `refused` outcome. Scenario metrics are
+`independent_vapor_potential_heat_flow_w` and `independent_vapor_potential_mass_flow_kg_s`; these
+describe the initial settled-or-flagged computed frame, while motion endpoints retain their own results.
+
+These are **independent sheet potentials**: a lining under a shell still counts as a separately
+prescribed sheet, so their sum is not garment evaporation, exposed-area transfer or wearer heat loss.
+No body coverage, interlayer vapor paths, bare skin, water supply, humidity-dependent Ret, condensation,
+moisture storage or latent heat feedback is inferred. `ftx-vc2` tracks the separate coverage coupling.
+Analytic area/pressure balances, source refusals, frozen replay and real sewn-scene material substitution
+verify this software path; physical garment acceptance remains open.

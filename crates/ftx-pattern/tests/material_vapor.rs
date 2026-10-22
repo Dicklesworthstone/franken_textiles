@@ -5,7 +5,7 @@ use ftx_pattern::{
     material_catalog::Selection,
     material_thermal::ThermalLaw,
     material_vapor::{Layer, MODEL, Request},
-    materials::{Catalog, Evidence},
+    materials::{Catalog, Evidence, Form},
 };
 use serde_json::json;
 
@@ -149,6 +149,43 @@ fn common_area_series_network_obeys_pressure_heat_and_mass_balances() {
             + report.outside_film_pressure_drop_pa,
         1000.,
     );
+}
+
+#[test]
+fn constituent_ret_cannot_be_promoted_to_a_sheet_but_characterized_fill_is_supported() {
+    for form in [Form::Fiber, Form::Yarn] {
+        let mut input = request();
+        input.layers[0].selection.record.as_mut().unwrap().form = form;
+        let refusal = input.evaluate(&empty_catalog()).unwrap_err();
+        assert_eq!(refusal.code, RefusalCode::InvalidDocument);
+        assert!(refusal.message.contains("fiber/yarn"));
+    }
+    for form in [
+        Form::Sheet,
+        Form::Woven,
+        Form::Knit,
+        Form::Nonwoven,
+        Form::Hide,
+        Form::Fill,
+        Form::Laminate,
+    ] {
+        let mut input = request();
+        input.layers[0].selection.record.as_mut().unwrap().form = form;
+        let result = input.evaluate(&empty_catalog()).unwrap();
+        close(result.potential_heat_flow_w, 50.);
+        let frozen: Request = serde_json::from_str(&result.replay_request_json).unwrap();
+        assert_eq!(
+            frozen.layers[0].selection.record.as_ref().unwrap().form,
+            form
+        );
+        close(
+            frozen
+                .evaluate(&empty_catalog())
+                .unwrap()
+                .potential_heat_flow_w,
+            50.,
+        );
+    }
 }
 
 #[test]

@@ -2,7 +2,8 @@
 //!
 //! Grip displacement is a boundary condition, not a homogeneous material strain. All interior
 //! in-plane coordinates relax; both end edges retain their transverse coordinates. This is a
-//! membrane-only experiment: no gravity, grip slip, wrinkling, bending or material history.
+//! membrane-only experiment: no gravity, grip slip, wrinkling or bending. The static paths have no
+//! material history; [`history`] runs prescribed timed loading through the production dynamic solver.
 
 use ftx_core::{Refusal, RefusalCode, Vec2, Vec3, det};
 use ftx_pattern::{material_catalog::ResolvedMaterial, materials::Form};
@@ -13,6 +14,8 @@ use crate::{ClothModel, Membrane, SolveReport, Solver, grid};
 mod experiment;
 /// Bounded identification from independent source-bearing clamped-strip experiments.
 pub mod fit;
+/// Timed loading, holds and unloading with retained membrane history and physical sheet inertia.
+pub mod history;
 /// Explicit material-following virtual extensometers for declared strip observations.
 pub mod measurement;
 /// Independent-equilibrium experiment report; `Report` remains the continuation-path report.

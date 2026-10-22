@@ -431,6 +431,7 @@ fn sewn_membrane_set_stays_piece_local_and_body_motion_keeps_accepted_history() 
         max_vertex_frames: 2_000_000,
         max_motion_trials: 4096,
         surface: None,
+        vapor_surface: None,
         coverage: None,
         motion: Some(request.clone()),
     };

@@ -3024,3 +3024,87 @@ test('compiled WASM area response changes strip mechanics and preserves source, 
       assert.equal(result.files,undefined);
     }
   });
+
+
+test('timed strip and draped vapor workers preserve exact source and frozen replay bytes', async () => {
+  const input='{"extension_fraction":1.0,"coordinate":-0.0}', conditions='{"pressure":2000.0}';
+  const replay='{"source":{"coordinate":-0.0},"coefficient":1.0}';
+  const raw=JSON.stringify({replay_request_json:replay}), calls=[];
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),
+    material_strip_history:(...args)=>{calls.push(['strip',...args]);return raw;},
+    thermal_vapor_surface:(...args)=>{calls.push(['vapor',...args]);return raw;}}});
+  const strip=await w.send({type:'stripHistory',stripRequest:input,request:104});
+  assert.equal(strip.type,'result',strip.message); assert.deepEqual(calls.at(-1),['strip',input]);
+  assert.deepEqual(plain(strip.files.map(f=>f.text)),[raw,input,replay]);
+  assert.equal(strip.files[2].name,'strip-history-replay.json');
+  const vapor=await w.send({type:'vaporSurface',report:input,conditions,request:105});
+  assert.equal(vapor.type,'result',vapor.message); assert.deepEqual(calls.at(-1),['vapor',input,conditions]);
+  assert.deepEqual(plain(vapor.files.map(f=>f.text)),[raw,replay,conditions,input]);
+  for (const type of ['stripHistory','vaporSurface']) {
+    const bad=await workerModule({bindings:{default:()=>Promise.resolve(),
+      material_strip_history:()=> '{}',thermal_vapor_surface:()=> '{}'}});
+    const denied=await bad.send({type,stripRequest:input,report:input,conditions});
+    assert.equal(denied.type,'error'); assert.match(denied.message,/frozen.*replay/);
+    assert.equal(bad.sent.some(m=>m.type==='result'),false);
+  }
+});
+
+test('timed strip page keeps prior material assignment and invalidates only its experiment', async () => {
+  const p=await pageModule(); await p.load(); await p.inspect('source-material');
+  const selection=p.e.selection.value, input='{"schema":"ftx-strip-history/1","value":-0.0}';
+  p.select('stripHistoryRequest',input); p.e.stripHistoryRequest.handlers.change();
+  await p.e.stripHistory.onclick();
+  assert.equal(p.current().messages.at(-1).stripRequest,input);
+  p.emit({schema:'ftx-strip-history-report/1',input:{material:{id:'test'}},states:[
+    {time_s:1,extension_fraction:0.1,force_n:2,mid_width_m:0.06,
+      free_dynamic_residual_n:1e-9,stored_membrane_energy_j:0.02,free_kinetic_energy_j:0.001,
+      maxwell_dissipation_j:0.003,plastic_dissipation_j:0}]});
+  const s=section(p,'Strip loading and recovery');
+  assert.match(visibleText(s),/Maxwell dissipation/); assert.match(visibleText(s),/Dynamic residual/);
+  const t=descendants(s).find(n=>n.tag==='table');
+  assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
+    ['1','0.1','2','0.06','1e-9','0.02','0.001','0.003','0']);
+  assert.equal(p.e.selection.value,selection); assert.equal(p.e.assign.disabled,false);
+  p.e.stripHistoryRequest.handlers.change(); assert.equal(s.hidden,true);
+});
+
+test('drape vapor page uses retained original JSON and withdraws stale geometry results', async () => {
+  const p=await pageModule(); await p.load(); await p.bind();
+  for (const id of ['measurements','fit','body','vaporSurfaceConditions']) p.select(id);
+  p.e.body.files[0].arrayBuffer=async()=>new ArrayBuffer(8);
+  p.e.measurements.handlers.change();
+  assert.equal(p.e.vaporSurface.disabled,true);
+  await p.e.fold.onclick();
+  const raw='{"material":{"basis":"test"},"coordinate":-0.0,"coefficient":1.0}';
+  p.emit(JSON.parse(raw),[],raw);
+  assert.equal(p.e.vaporSurface.disabled,false); await p.e.vaporSurface.onclick();
+  assert.equal(p.current().messages.at(-1).report,raw);
+  p.emit({schema:'ftx-vapor-surface-result/1',area_m2:0.5,potential_heat_flow_w:25,
+    potential_mass_flow_kg_s:0.00001,columns:[],pieces:[{instance:'<shell>',area_m2:0.5,
+      potential_heat_flow_w:25,potential_mass_flow_kg_s:0.00001}]});
+  const s=section(p,'Vapor transfer on this drape');
+  assert.match(visibleText(s),/Independent piece potentials/);
+  assert.match(visibleText(s),/<shell>/); assert.match(visibleText(s),/actual wearer evaporation/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  p.e.vaporSurfaceConditions.handlers.change(); assert.equal(s.hidden,true);
+  assert.equal(p.e.vaporSurface.disabled,false);
+  p.e.fit.handlers.change(); assert.equal(p.e.vaporSurface.disabled,true);
+});
+
+test('scenario displays independent vapor refusals and freshly evaluated motion endpoints', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
+  const report=scenarioReport(), initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  const transfer={area_m2:0.5,potential_heat_flow_w:25,potential_mass_flow_kg_s:0.00001};
+  initial.vapor_surface=outcome(transfer);
+  initial.motion=outcome({duration_s:1,trials:1,samples:[],keyframes:[
+    {time_s:1,arm_abduction_deg:40,surface:refused('no dry heat'),coverage:refused('no coverage'),
+      vapor_surface:outcome({...transfer,area_m2:0.6,potential_heat_flow_w:30})}]});
+  p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=label=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===label);
+  assert.deepEqual(plain(table('Initial drape vapor potentials — independent sheets').children[2].children.map(n=>n.textContent)),
+    ['A','Available','0.5','25','0.00001']);
+  assert.deepEqual(plain(table('A: endpoint vapor potentials — independent sheets').children[2].children.map(n=>n.textContent)),
+    ['1','Available','0.6','30','0.00001']);
+  assert.match(visibleText(table('Initial drape vapor potentials — independent sheets')),/missing mechanics/);
+});

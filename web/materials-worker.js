@@ -210,9 +210,11 @@ self.onmessage = async ({ data: msg }) => {
       }
       case "stripAcquisition":
       case "stripExperiment":
+      case "stripHistory":
       case "stripFit": {
         const api = ({ stripAcquisition: ftx.material_strip_acquisition,
-          stripExperiment: ftx.material_strip_experiment, stripFit: ftx.material_calibrate_strip })[msg.type];
+          stripExperiment: ftx.material_strip_experiment, stripHistory: ftx.material_strip_history,
+          stripFit: ftx.material_calibrate_strip })[msg.type];
         if (typeof api !== "function") throw Error("Rebuild web/pkg: missing clamped-strip engine.");
         // The dedicated request owns its output-estimate permission as well as observation
         // consent. Pass that explicit policy to the shared public calibration API without
@@ -225,8 +227,12 @@ self.onmessage = async ({ data: msg }) => {
         } else raw = api(msg.stripRequest);
         result = json(raw);
         const stem = ({ stripAcquisition: "strip-acquisition", stripExperiment: "strip-experiment",
-          stripFit: "strip-calibration" })[msg.type];
+          stripHistory: "strip-history", stripFit: "strip-calibration" })[msg.type];
         files = [file(`${stem}-report.json`, raw), file(`${stem}-input.json`, msg.stripRequest)];
+        if (msg.type === "stripHistory") {
+          if (typeof result.replay_request_json !== "string") throw Error("Rebuild web/pkg: missing frozen strip-history replay.");
+          files.push(file("strip-history-replay.json", result.replay_request_json));
+        }
         if (msg.type === "stripFit") {
           if (result.calibration?.schema !== "ftx-strip-calibration-report/1" || typeof result.calibration.accepted !== "boolean") {
             throw Error("Rebuild web/pkg: incomplete strip calibration decision.");
@@ -279,6 +285,14 @@ self.onmessage = async ({ data: msg }) => {
           finally { fold.free(); }
         } finally { model.free(); }
         files = [file("sim_report.json", reportText), file("fold_viewer.html", viewer, "text/html")];
+        break;
+      }
+      case "vaporSurface": {
+        if (typeof ftx.thermal_vapor_surface !== "function") throw Error("Rebuild web/pkg: missing draped vapor engine.");
+        raw = ftx.thermal_vapor_surface(msg.report, msg.conditions); result = json(raw);
+        if (typeof result.replay_request_json !== "string") throw Error("Rebuild web/pkg: missing frozen vapor-surface replay.");
+        files = [file("vapor-surface-report.json", raw), file("vapor-surface-replay.json", result.replay_request_json),
+          file("vapor-surface-conditions.json", msg.conditions), file("vapor-source-drape.json", msg.report)];
         break;
       }
       case "heat":

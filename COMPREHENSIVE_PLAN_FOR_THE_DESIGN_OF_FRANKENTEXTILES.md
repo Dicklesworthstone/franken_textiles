@@ -2641,6 +2641,53 @@ constitutive model, garment-fit claim or source-data substitution. See
 
 ---
 
+### 25.51 Measured yarn-to-knit construction matrix and the next coupled consumers
+
+The next materials delivery adds the 2022 Salopek Čubrić et al. sportswear matrix
+(DOI `10.3390/ma15093306`) to the existing catalog: five separately characterized yarns
+and 25 knit constructions, taking the built-in corpus from 221 to 251 records. Cotton,
+wool, PAN bouclé, wool/PAN blend and PA filament each retain single plain, single miss,
+single tuck/piqué, double plain and double Milano rib variants. Tables 2–7 supply
+measured yarn and construction observations; original units, specimen identities,
+protocols and unresolved source discrepancies remain attached to every selection.
+
+This closes a concrete coverage gap in `ftx-tm2`, without turning constituent yarn
+tenacity into a fabric modulus. Shared mass, screening, dry steady-resistance and
+vapor-resistance consumers use the new records immediately. The executable
+`screen-sportswear.json` comparison shows the measured mass/insulation/vapor tradeoff
+between wool plain and piqué constructions. Missing mechanics and heat storage stay
+missing. Loaded gauge thickness cannot become sewing/contact clearance, and volume
+airflow measured through different areas cannot become unqualified permeability.
+See `docs/sportswear-knit-materials.md`; the delivered slice is tracked as `ftx-kn2`.
+
+Two connected product slices use the same physical authority and existing solvers:
+
+- **Timed production strip experiments (`ftx-sh1`).** Prescribed grip loading,
+  holding and unloading must preserve accepted Maxwell or permanent-strain history,
+  report dynamic residuals and separate stored energy, free-vertex inertia and
+  dissipated work, and reject an entire failed request. Source-qualified areal mass
+  is required; unrelated contact, bending and thermal properties are not. Native and
+  browser consumers must replay the same frozen material and complete time program.
+  Independent analytic responses and time refinement establish software behavior;
+  measured history identification and garment adequacy remain separate gates.
+- **Material-following vapor potential (`ftx-vc1`).** Reuse canonical measured `Ret`
+  observations and explicit vapor pressures/films on retained drape triangles.
+  Fixed-pattern and moving scenario studies must recompute the current surface area
+  after each material substitution/pose, without requiring dry conductivity or heat
+  capacity. Report independent-sheet potential heat and mass flow, source conditions
+  and exact replay inputs. Do not silently interpret summed sheet potentials as
+  whole-wearer evaporation or inject latent cooling into the separate dry solver.
+
+The next coupling gate (`ftx-vc2`, under `ftx-tmc`) is explicit covered-body/interlayer
+vapor topology, moisture availability/storage and conservative latent-energy feedback.
+It needs independently qualified wet/dry transport and boundary conditions, conservative
+moving-area/mass accounting and held-out layer validation. Existing geometry-derived
+thermal coverage is the shared geometry authority; a second body mapping or material
+database is not warranted. The broader linen/leather/performance-knit garment gate,
+finite-stock supplier qualification and physical sewing/robot qualification remain open.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -75,12 +75,14 @@ ftx-materials calibrate-relaxation HISTORIES.json [--allow-estimates]
 ftx-materials calibrate-membrane-plasticity HISTORIES.json [--allow-estimates]
 ftx-materials strip-acquisition ACQUISITION.json
 ftx-materials strip-experiment REQUEST.json
+ftx-materials strip-history REQUEST.json
 ftx-materials calibrate-strip REQUEST.json [--allow-estimates]
 ftx-materials calibrate-bending COUPONS.json [--allow-estimates]
 ftx-materials calibrate-friction SLIDING.json [--allow-estimates]
 ftx-materials thermal-transient STACK.json
 ftx-materials thermal-compression HISTORY.json
 ftx-materials thermal-vapor STACK.json
+ftx-materials thermal-vapor-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-steady STACK.json
 ftx-materials thermal-steady-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-steady-coverage REQUEST.json
@@ -104,6 +106,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal` is a dry 1D layer calculation, not a human comfort or survival rating.
 `thermal-compression` retains material heat state across qualified gap changes and thermal holds; mechanical work is not converted to heat.
 `thermal-vapor` computes potential evaporative exchange from source-qualified vapor resistances and explicit boundary pressures; it does not infer sweat availability, condensation or wearer comfort.
+`thermal-vapor-surface` evaluates independent sheet potentials on retained current drape geometry, without requiring dry heat or storage data; it does not establish actual wearer evaporation.
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `pressure-condition` prepares a frozen material at a declared normal pressure from qualified observations; it does not infer contact pressure.
 `compression-stack` infers common pressure from a rigid-face stack clearance and qualified branches, returning one frozen selection per layer; it is not a garment-contact or recovery simulation.
@@ -115,6 +118,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `calibrate-membrane-plasticity` identifies permanent stretch and hardening from source-qualified loading cycles; unresolved fits retain their report without publishing a selection.
 `strip-acquisition` preserves the complete retained source curves, protocol, metadata and hashes without inferring local strain or transverse width.
 `strip-experiment` runs the production planar membrane with declared ideal grips and reports total reactions and equilibrium residuals.
+`strip-history` retains production membrane history and inertia through prescribed grip loading, holds and unloading, with separate stored energy and physical dissipation.
 `calibrate-strip` identifies bounded coefficients from grip forces and optional measured widths; rejected candidates retain their diagnostics without a selection. --allow-estimates controls admission of fitted coefficients; the request separately owns allow_estimated_observations.
 `calibrate-bending` fits source-bearing moment/curvature coupons into the panel-bending tensor.
 `calibrate-friction` identifies explicit pair/self/body kinetic coefficients from corrected steady sliding forces.
@@ -273,6 +277,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["screen", path] => screening::run(path),
         ["strip-acquisition", path] => strips::acquisition(path),
         ["strip-experiment", path] => strips::experiment(path),
+        ["strip-history", path] => strips::history(path),
         ["calibrate-strip", path] => strips::run(path, false),
         ["calibrate-strip", path, "--allow-estimates"] => strips::run(path, true),
         ["pressure-condition", path] => screening::pressure_condition(path),
@@ -351,6 +356,9 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-transient", path] => thermal_transient::run(path),
         ["thermal-compression", path] => steady_workbench::compression_history(path),
         ["thermal-vapor", path] => steady_workbench::vapor(path),
+        ["thermal-vapor-surface", report, conditions] => {
+            steady_workbench::vapor_surface(report, conditions)
+        }
         ["thermal-steady", path] => steady_workbench::stack(path),
         ["thermal-steady-surface", report, conditions] => {
             steady_workbench::surface(report, conditions)
