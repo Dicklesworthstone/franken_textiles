@@ -63,7 +63,7 @@ require their own selection consent. This fixed-resistance, isothermal calculati
 sweat availability, actual wearer cooling, condensation or garment comfort; it does not add an
 evaporation term to the separate dry-heat simulation.</p>
 <h3>Identify behavior from swatch measurements</h3>
-<label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch and shear</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option><option value="clamped_strip">Clamped strip forces and transverse widths</option></select></label>
+<label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch, shear and optional area response</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option><option value="clamped_strip">Clamped strip forces and transverse widths</option></select></label>
 <label>Source-bearing swatch or complete history JSON <input id="calibrationRequest" type="file" accept=".json,application/json"></label>
 <label><input id="calibrationEstimates" type="checkbox"> Admit the fitted estimates to this material selection</label>
 <button id="calibrate" data-command="calibrate" disabled>Identify material behavior</button>

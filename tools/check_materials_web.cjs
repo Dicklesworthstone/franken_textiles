@@ -8,6 +8,7 @@
 // --compression-proof checks real history controls, heat/work answers and final material binding.
 // --purchasing-proof checks bounded marker previews and combined whole-order purchasing.
 // --area-proof DIR checks six-parameter area fitting against native-input.json/native-report.json.
+// --swatch-area-proof DIR checks joint swatch identification against retained native consent reports.
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
@@ -28,7 +29,10 @@ const purchasingProof = process.argv.includes('--purchasing-proof');
 const areaIndex = process.argv.indexOf('--area-proof');
 if (areaIndex >= 0 && !process.argv[areaIndex + 1]) throw Error('--area-proof requires a native capture directory');
 const areaProof = areaIndex < 0 ? null : path.resolve(process.argv[areaIndex + 1]);
-assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+const swatchAreaIndex = process.argv.indexOf('--swatch-area-proof');
+if (swatchAreaIndex >= 0 && !process.argv[swatchAreaIndex + 1]) throw Error('--swatch-area-proof requires a native capture directory');
+const swatchAreaProof = swatchAreaIndex < 0 ? null : path.resolve(process.argv[swatchAreaIndex + 1]);
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof,swatchAreaProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -53,7 +57,7 @@ const server = http.createServer((req, res) => {
 });
 (async () => {
   assert.ok(fs.existsSync(path.join(web, 'pkg/ftx_wasm_bg.wasm')), 'Build web/pkg first');
-  if (!stripProof && !outfitProof && !compressionProof && !purchasingProof && !areaProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
+  if (!stripProof && !outfitProof && !compressionProof && !purchasingProof && !areaProof && !swatchAreaProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
@@ -78,6 +82,80 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (swatchAreaProof) {
+      const raw=fs.readFileSync(path.join(root,'examples/area-identification/swatch.json'),'utf8');
+      assert.equal(raw,fs.readFileSync(path.join(swatchAreaProof,'native-input.json'),'utf8'));
+      const original=load('synthetic-sewing-pattern.json');
+      await input('patternFile',original); await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      await page.selectOption('#calibrationMode','nonlinear');
+      assert.match(await page.locator('#calibrationMode option[value="nonlinear"]').textContent(),/optional area response/);
+      const upload=async value=>page.setInputFiles('#calibrationRequest',{name:'swatch.json',mimeType:'application/json',buffer:Buffer.from(value)});
+      let accepted;
+      for (const consent of [false,true]) {
+        await page.setChecked('#calibrationEstimates',consent); await upload(raw);
+        assert.equal(await run('calibrate'),'');
+        const reportRaw=await download('material-calibration.json'), report=JSON.parse(reportRaw);
+        const expected=JSON.parse(fs.readFileSync(path.join(swatchAreaProof,`native-admission-${consent}-report.json`),'utf8'));
+        assert.deepEqual(report.calibration,expected.calibration);
+        assert.deepEqual(report.selection,expected.selection); assert.equal(report.selection_json,expected.selection_json);
+        assert.equal(report.selection.allow_estimates,consent);
+        assert.equal(report.material.capabilities.mechanical_coefficients.ready,false,'Missing independent mechanics remain missing');
+        assert.equal(report.fit_claim,false); assert.equal(report.calibration.parameter_count,9);
+        const c=report.calibration, area=c.material.membrane_response.area_response;
+        assert.deepEqual(area.area_ratio_range,c.fitted_area_ratio_range);
+        const coefficients=page.locator('table').filter({has:page.locator('caption',{hasText:'Area coefficients — joint identification'})});
+        assert.equal(await coefficients.count(),1);
+        for(const [i,q] of [area.quadratic,area.log_squared].entries()) {
+          assert.deepEqual((await coefficients.locator('tr').nth(i+1).locator('td').allTextContents()).slice(1),[q.value,q.unit,q.evidence,q.source].map(String));
+          assert.ok(Math.abs(q.value-[40,15][i])<1e-7);
+        }
+        const domain=page.locator('table').filter({has:page.locator('caption',{hasText:'Physical area ratio J — applicability'})});
+        assert.equal(await domain.count(),1);
+        assert.deepEqual(await domain.locator('tr').nth(1).locator('td').allTextContents(),['Admissible input domain',...c.input.area_response.area_ratio_range.map(String)]);
+        assert.deepEqual(await domain.locator('tr').nth(2).locator('td').allTextContents(),['FIT observations and undeformed reference',...c.fitted_area_ratio_range.map(String)]);
+        assert.deepEqual(await domain.locator('tr').nth(3).locator('td').allTextContents(),['Published material domain',...area.area_ratio_range.map(String)]);
+        assert.notDeepEqual(c.input.area_response.area_ratio_range,c.fitted_area_ratio_range);
+        assert.equal(await download('calibration-input.json'),raw);
+        assert.equal(await download('calibrated-selection.json'),report.selection_json);
+        assert.equal(await page.inputValue('#selection'),report.selection_json);
+        await page.click('#assign'); assert.equal(await run('bind'),'');
+        const bound=JSON.parse(await download('pattern.json'));
+        assert.deepEqual(bound.pieces,original.pieces); assert.deepEqual(bound.seams,original.seams);
+        assert.equal(bound.fabric.material.expected_sha256,report.selection.expected_sha256);
+        fs.writeFileSync(path.join(work,`swatch-area-${consent}-report.json`),reportRaw,{flag:'wx'});
+        fs.writeFileSync(path.join(work,`swatch-area-${consent}-bound.json`),await download('pattern.json'),{flag:'wx'});
+        accepted=report;
+      }
+      await page.setChecked('#calibrationEstimates',false);
+      assert.equal(await page.isDisabled('#assign'),true); assert.equal(await page.locator('a[download="calibrated-selection.json"]').count(),0);
+      await page.setChecked('#calibrationEstimates',true);
+      for(const mutate of [
+        v=>{v.area_response.model='unsupported'; return /area|model/i;},
+        v=>{v.samples.at(-1).nominal_n_m[0][0]+=1; return /residuals|budget/i;},
+        v=>{
+          const a=Math.sqrt(0.72),b=0.18/a,d=Math.sqrt(0.82-b*b);
+          assert.ok(a*d>v.area_response.area_ratio_range[0] && a*d<accepted.calibration.fitted_area_ratio_range[0]);
+          for(const [i,e] of [-0.14,-0.09,0.18].entries()) assert.ok(e>accepted.calibration.fitted_strain_range[i][0] && e<accepted.calibration.fitted_strain_range[i][1]);
+          v.samples.at(-1).deformation=[[a,b],[0,d]];
+          return /area-ratio domain/i;
+        },
+        v=>{v.allow_estimated_observations=false; return /invalid sample identity, source, evidence, observed forces or scale/;}
+      ]) {
+        const invalid=JSON.parse(raw), expectedError=mutate(invalid); await upload(JSON.stringify(invalid));
+        assert.match(await run('calibrate'),expectedError);
+        assert.equal(await page.isDisabled('#assign'),true); assert.equal(await page.locator('a[download="calibrated-selection.json"]').count(),0);
+        await upload(raw); assert.equal(await run('calibrate'),'');
+        assert.equal(await download('calibrated-selection.json'),accepted.selection_json);
+      }
+      fs.writeFileSync(path.join(work,'swatch-area-input.json'),raw,{flag:'wx'});
+      await page.locator('#outputs').screenshot({path:path.join(work,'swatch-area.png')});
+      const changed=structuredClone(accepted.selection); changed.record.name+=' changed';
+      await page.fill('#selection',JSON.stringify(changed)); assert.notEqual(await run('inspect'),'');
+      assert.equal(await page.isDisabled('#assign'),true);
+      assert.deepEqual(errors,[]); assert.deepEqual(external,[]); assert.ok(methods.every(m=>m==='GET'));
+      console.log('PASS: actual Chromium matches complete native joint-swatch calibration, displays authoritative coefficients and FIT-only J support, retains exact source/selection, binds unchanged geometry and withdraws failed/changed-consent/tampered selections. Synthetic software evidence only; no confidence or empirical textile/fit claim. Artifacts:',work);
+      return;
+    }
     if (areaProof) {
       const raw=fs.readFileSync(path.join(areaProof,'native-input.json'),'utf8');
       const expected=JSON.parse(fs.readFileSync(path.join(areaProof,'native-report.json'),'utf8'));
