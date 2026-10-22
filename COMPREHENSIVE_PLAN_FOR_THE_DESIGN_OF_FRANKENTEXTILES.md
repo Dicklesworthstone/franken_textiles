@@ -2619,6 +2619,28 @@ transfer comparison does not establish sweating or comfort. See [vapor-resistanc
 
 ---
 
+### 25.50 Source-declared virtual extensometers in strip identification
+
+**Delivered software (`ftx-vo1`, supporting `ftx-ki4`/`ftx-tm4`).** Strip observations can now declare
+up to eight transverse channels at explicit original-gauge stations. Each measures a Euclidean
+side-material-point chord or its signed projection on an explicit unit axis in the strip frame.
+The production displacement field supplies the observations; refinement preserves their material
+stations. The existing midpoint channel and omitted-field behavior remain unchanged.
+
+Every explicit channel participates in the existing FIT objective, sensitivities, mesh checks,
+independent CHECK and final published-law replay. IDs, operators, predictions and residuals travel
+through the ordinary native/portable reports and browser display. Bounded channels, finite coordinates,
+valid axes and positive scales are required; neither missing source operators nor forces are inferred.
+
+Independent affine/interpolation answers and synthetic inverse/forward regressions establish the
+software behavior, including signed projections away from the midpoint and held-out isolation.
+The retained real-knit transverse curves still need their actual acquisition definition and branch
+qualification, so `ftx-ki4` remains open. This extension introduces no measured coefficients, new
+constitutive model, garment-fit claim or source-data substitution. See
+[clamped-strip-identification.md](docs/clamped-strip-identification.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

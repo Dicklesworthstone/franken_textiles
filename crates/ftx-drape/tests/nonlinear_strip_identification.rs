@@ -173,6 +173,7 @@ fn input() -> Input {
                     value_m: state.mid_width_m,
                     scale_m: 0.002,
                 }),
+                extensometers: vec![],
             })
             .collect();
         input.material.sources.insert(id.into(), Source {

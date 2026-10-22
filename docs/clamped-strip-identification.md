@@ -89,6 +89,54 @@ The returned material contains only the four identified membrane properties. Mis
 bending, thickness and friction remain missing, so this successful membrane example still cannot
 be presented as a complete garment material.
 
+## Explicit transverse measurement operators
+
+Each observation may supply up to eight named `extensometers` in addition to its required force.
+Use the spatial definition actually established by the acquisition. A material-point chord, a
+projected width and an image-wide edge statistic are different observations; the fitter does not
+choose or infer an operator from a source label.
+
+This schema example uses illustrative values only:
+
+```json
+"extensometers": [
+  {
+    "id": "quarter-chord",
+    "operator": {"kind": "edge_chord", "station_fraction": 0.25},
+    "value_m": 0.058,
+    "scale_m": 0.001
+  },
+  {
+    "id": "signed-transverse",
+    "operator": {
+      "kind": "edge_projection", "station_fraction": 0.75, "axis": [-1, 0]
+    },
+    "value_m": -0.058,
+    "scale_m": 0.001
+  }
+]
+```
+
+`station_fraction` lies in `[0,1]` along the original free gauge, from the fixed grip to the moving
+grip. Both endpoints follow the left/right material points at that reference station; intermediate
+stations interpolate on the actual piecewise-linear side edges. Refinement preserves the reference
+station. `edge_chord` reports Euclidean distance; `edge_projection` reports the signed left-to-right
+chord dotted with the explicit `[x,y]` unit axis in the strip frame. It is not an image-pixel axis or
+an automatically grain-rotated material axis. Nonfinite or non-unit axes refuse without normalization.
+
+Channel IDs must be nonempty and unique within an observed state. `value_m` is in metres and may be
+negative for a projection; chord observations must be positive. `scale_m` is a positive residual
+scale, not an uncertainty interval. All channels participate in the same FIT objective, sensitivities,
+refinement checks, independent CHECK residuals and final frozen-material replay. Each prediction
+retains its `id`, `operator`, `predicted_m` and signed `residual_m`.
+
+The legacy `mid_width` still means a Euclidean chord at half the original free gauge and retains its
+existing arithmetic. Omitted `extensometers` preserve legacy request/report serialization. To express
+that same measurement explicitly, replace `mid_width` with one `edge_chord` at `station_fraction: 0.5`,
+retaining its original value and scale; supplying both would deliberately count two residual channels.
+Force remains required at every observed extension in this version. Unspecified source locations,
+loading branches or missing force samples are not filled in by this interface.
+
 ## Identify amplitudes of declared nonlinear shapes
 
 The same `ftx-strip-calibration/1` request can include an optional `response_family` with

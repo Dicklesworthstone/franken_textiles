@@ -71,6 +71,7 @@ fn synthetic(parameters: [f64; 4]) -> Input {
                         value_m: state.mid_width_m,
                         scale_m: 0.001,
                     }),
+                    extensometers: vec![],
                 }
             })
             .collect();
@@ -119,6 +120,7 @@ fn many_exact_zero_load_channels_cannot_identify_any_stiffness() {
                 value_m: experiment.fixture.width_m,
                 scale_m: 0.001,
             }),
+            extensometers: vec![],
         }];
     }
     // Six FIT scalar channels and independent CHECK evidence do not create load excitation.

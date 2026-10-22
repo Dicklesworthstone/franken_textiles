@@ -44,6 +44,7 @@ fn observation(id: &str, fixture: &Fixture, extension: f64) -> Observation {
             value_m: state.mid_width_m,
             scale_m: 0.001,
         }),
+        extensometers: vec![],
     }
 }
 

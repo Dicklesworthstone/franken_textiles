@@ -141,6 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     value_m: state.mid_width_m,
                     scale_m: 0.001,
                 }),
+                extensometers: vec![],
             })
             .collect();
     }

@@ -145,6 +145,7 @@ fn input() -> Input {
                     value_m: state.mid_width_m,
                     scale_m: 0.001,
                 }),
+                extensometers: vec![],
             })
             .collect();
     }
@@ -253,6 +254,7 @@ fn area_input() -> Input {
                     value_m: s.mid_width_m,
                     scale_m: 0.001,
                 }),
+                extensometers: vec![],
             })
             .collect();
     }
@@ -540,6 +542,7 @@ fn area_policy_rejects_invalid_boxes_condition_mismatch_and_unexcited_coefficien
                 value_m: e.fixture.width_m,
                 scale_m: 0.001,
             }),
+            extensometers: vec![],
         }];
     }
     let rejected = calibrate(&zero).unwrap();
@@ -767,6 +770,7 @@ fn zero_load_channels_cannot_identify_declared_shape_amplitudes() {
                 value_m: experiment.fixture.width_m,
                 scale_m: 0.001,
             }),
+            extensometers: vec![],
         }];
     }
     let rejected = calibrate(&input).unwrap();

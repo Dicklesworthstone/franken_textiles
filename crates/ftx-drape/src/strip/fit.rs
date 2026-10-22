@@ -14,6 +14,7 @@ use ftx_pattern::{
 use serde::{Deserialize, Serialize};
 
 use super::experiment::{Controls, Fixture, SCOPE, State, invalid, solve_law};
+use super::measurement::{self, Extensometer, ExtensometerPrediction, Operator};
 use crate::Membrane;
 
 /// Caller-declared nonlinear shapes identified through the same bounded strip experiment.
@@ -58,6 +59,10 @@ pub struct Observation {
     /// Optional transverse observation; missing width never means no contraction.
     #[serde(default)]
     pub mid_width: Option<Width>,
+    /// Additional explicitly located transverse channels, at most eight per observed state.
+    /// Omission preserves the original midpoint-only observation and serialization.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensometers: Vec<Extensometer>,
 }
 
 /// A matched specimen/cut/fixture acquisition under one method and conditioning state.
@@ -188,6 +193,9 @@ pub struct Prediction {
     pub force_residual_n: f64,
     /// Predicted minus measured width, m, only when measured.
     pub width_residual_m: Option<f64>,
+    /// Actual spatial observations; omitted when the input uses only legacy force/midpoint channels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensometers: Vec<ExtensometerPrediction>,
 }
 
 /// Reviewable candidate, diagnostics and conditional material publication.
@@ -609,8 +617,30 @@ fn validate(input: &Input) -> Result<(), Refusal> {
                     "strip observation needs a unique ID/extension, finite force and positive residual scales/observed width",
                 ));
             }
+            if point.extensometers.len() > 8 {
+                return Err(invalid(
+                    "strip observation supports at most eight declared extensometers",
+                ));
+            }
+            let mut channel_ids = BTreeSet::new();
+            for channel in &point.extensometers {
+                channel.operator.validate()?;
+                if channel.id.trim().is_empty()
+                    || !channel_ids.insert(&channel.id)
+                    || !channel.value_m.is_finite()
+                    || (matches!(channel.operator, Operator::EdgeChord { .. })
+                        && channel.value_m <= 0.0)
+                    || !channel.scale_m.is_finite()
+                    || channel.scale_m <= 0.0
+                {
+                    return Err(invalid(
+                        "strip extensometers need unique nonempty channel IDs, finite readings, positive chord lengths and positive residual scales",
+                    ));
+                }
+            }
             if experiment.partition == Partition::Fit {
-                fit_channels += 1 + usize::from(point.mid_width.is_some());
+                fit_channels +=
+                    1 + usize::from(point.mid_width.is_some()) + point.extensometers.len();
             }
         }
     }
@@ -661,6 +691,32 @@ fn observe_area(range: &mut Option<[f64; 2]>, state: &State) {
     }
 }
 
+fn extensometer_predictions(
+    observation: &Observation,
+    coarse: (&Fixture, &State),
+    refined: (&Fixture, &State),
+    errors: &mut Vec<f64>,
+    mesh_peak: &mut f64,
+) -> Result<Vec<ExtensometerPrediction>, Refusal> {
+    observation
+        .extensometers
+        .iter()
+        .map(|channel| {
+            let coarse_m = measurement::evaluate(&channel.operator, coarse.0, coarse.1)?;
+            let predicted_m = measurement::evaluate(&channel.operator, refined.0, refined.1)?;
+            let residual_m = predicted_m - channel.value_m;
+            errors.push(residual_m / channel.scale_m);
+            *mesh_peak = mesh_peak.max((predicted_m - coarse_m).abs() / channel.scale_m);
+            Ok(ExtensometerPrediction {
+                id: channel.id.clone(),
+                operator: channel.operator.clone(),
+                predicted_m,
+                residual_m,
+            })
+        })
+        .collect()
+}
+
 fn evaluate<const N: usize>(
     input: &Input,
     p: [f64; N],
@@ -683,6 +739,11 @@ fn evaluate<const N: usize>(
             residuals.push((state.force_n - point.force_n) / point.scale_n);
             if let Some(width) = &point.mid_width {
                 residuals.push((state.mid_width_m - width.value_m) / width.scale_m);
+            }
+            for channel in &point.extensometers {
+                let predicted =
+                    measurement::evaluate(&channel.operator, &experiment.fixture, &state)?;
+                residuals.push((predicted - channel.value_m) / channel.scale_m);
             }
         }
     }
@@ -1030,6 +1091,13 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
                 mesh_peak =
                     mesh_peak.max((state.mid_width_m - coarse.mid_width_m).abs() / width.scale_m);
             }
+            let extensometers = extensometer_predictions(
+                observation,
+                (&experiment.fixture, &coarse),
+                (&refined, &state),
+                errors,
+                &mut mesh_peak,
+            )?;
             if experiment.partition == Partition::Fit {
                 observe_area(&mut area_range, &coarse);
                 observe_area(&mut area_range, &state);
@@ -1051,6 +1119,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
                 state,
                 force_residual_n: error,
                 width_residual_m: width_error,
+                extensometers,
             });
         }
     }
@@ -1192,8 +1261,8 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
             let observations = input
                 .experiments
                 .iter()
-                .flat_map(|e| e.observations.iter().map(move |o| (e.partition, o)));
-            for ((prediction, (coarse, state)), (partition, observation)) in
+                .flat_map(|e| e.observations.iter().map(move |o| (e, o)));
+            for ((prediction, (coarse, state)), (experiment, observation)) in
                 predictions.iter_mut().zip(replayed).zip(observations)
             {
                 mesh_peak =
@@ -1203,7 +1272,7 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
                     .mid_width
                     .as_ref()
                     .map(|width| state.mid_width_m - width.value_m);
-                let errors = if partition == Partition::Fit {
+                let errors = if experiment.partition == Partition::Fit {
                     &mut fit_errors
                 } else {
                     &mut check_errors
@@ -1214,6 +1283,15 @@ fn calibrate_n<const N: usize>(input: &Input) -> Result<Report, Refusal> {
                     mesh_peak = mesh_peak
                         .max((state.mid_width_m - coarse.mid_width_m).abs() / width.scale_m);
                 }
+                let mut refined = experiment.fixture.clone();
+                refined.cells.iter_mut().for_each(|n| *n *= 2);
+                prediction.extensometers = extensometer_predictions(
+                    observation,
+                    (&experiment.fixture, &coarse),
+                    (&refined, &state),
+                    errors,
+                    &mut mesh_peak,
+                )?;
                 prediction.state = state;
                 prediction.force_residual_n = error;
                 prediction.width_residual_m = width_error;

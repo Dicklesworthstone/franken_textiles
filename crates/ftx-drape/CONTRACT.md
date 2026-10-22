@@ -500,3 +500,14 @@ and complete published-law replay precedes selection. Omitted policy retains the
 `strip_nonlinear_identification` checks synthetic recovery, fixed-source preservation, actual frozen
 replay, CHECK isolation, insufficient excitation, source/domain failures and complete work budgets.
 These are conditional numerical tests, not independent empirical knit or garment validation.
+
+**Explicit strip extensometers** (`strip::measurement`, plan §25.50). Optional bounded observation
+channels declare a reference side-edge station and either its Euclidean material-point chord or
+signed projection on an explicit strip-frame unit axis. The same evaluator uses actual production
+positions in fitting, sensitivities, refinement, CHECK and published-law replay. Stations interpolate
+in the original mesh coordinates and remain fixed through refinement. Nonfinite coordinates, invalid
+axes, incompatible meshes, duplicate IDs and invalid scales refuse. The original midpoint channel and
+omitted-field serialization remain unchanged. Force remains required; unknown source operators are
+not guessed. `strip_measurements` checks independent affine/interpolation answers, actual inverse
+recovery, sensitivity, held-out isolation and exact frozen forward replay. Numerical recovery does not
+qualify a measured coupon or supply missing material properties.
