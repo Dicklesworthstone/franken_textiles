@@ -14,6 +14,7 @@ mod loaded_insulation;
 mod mit;
 mod neoprene;
 mod nist;
+mod sportswear;
 mod thermal_apparel;
 mod wet_denim;
 
@@ -107,12 +108,15 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         | "membrane_accumulation_limit_shear"
         | "membrane_plastic_heat_fraction"
         | "membrane_relaxation_heat_fraction"
+        | "yarn_elongation_break"
+        | "yarn_mass_cv"
         | "limiting_oxygen_index" => "1",
         "thermal_conductivity" => "W/(m*K)",
         "thermal_resistance" => "m2*K/W",
         "specific_heat" => "J/(kg*K)",
         "vapor_resistance" => "m2*Pa/W",
         "air_permeability" => "m/s",
+        "air_volume_flow" => "m3/s",
         "axial_stiffness"
         | "breaking_force_warp"
         | "breaking_force_weft"
@@ -124,7 +128,12 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         | "bending_yield_twist" => "N",
         "abrasion_cycles" => "cycles",
         "yarn_linear_density" => "kg/m",
-        "thread_density_warp" | "thread_density_weft" | "twist" => "1/m",
+        "yarn_tenacity" => "N*m/kg",
+        "thread_density_warp"
+        | "thread_density_weft"
+        | "knit_wale_density"
+        | "knit_course_density"
+        | "twist" => "1/m",
         _ => return None,
     })
 }
@@ -150,6 +159,8 @@ fn factor(unit: &str, expected: &str) -> Option<f64> {
         ("tog", "m2*K/W") => 0.1,
         ("tex", "kg/m") => 1e-6,
         ("denier", "kg/m") => 1e-3 / 9000.0,
+        ("cN/tex", "N*m/kg") => 10_000.0,
+        ("L/min", "m3/s") => 1e-3 / 60.0,
         ("1/in", "1/m") => 1.0 / 0.0254,
         ("1/cm", "1/m") => 100.0,
         ("1/mm", "1/m") => 1000.0,
@@ -206,6 +217,7 @@ impl Catalog {
         let hfm = Self::from_json(include_str!("material_catalog/hfm-runs.json"))?;
         catalog.materials.extend(hfm.materials);
         catalog.materials.extend(nist::records());
+        catalog.materials.extend(sportswear::records());
         catalog.materials.extend(mit::records());
         catalog.materials.extend(mit::raw_records());
         catalog.materials.extend(leather::records());

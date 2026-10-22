@@ -1,0 +1,47 @@
+{
+  "schema": "ftx-material-screen/1",
+  "basis": "nominal",
+  "allow_mixed_protocols": true,
+  "candidates": [
+    {
+      "key": "wool-single-plain",
+      "selection": {"id": "zagreb/sportswear-2022/y2-sp"}
+    },
+    {
+      "key": "wool-single-tuck",
+      "selection": {"id": "zagreb/sportswear-2022/y2-st"}
+    }
+  ],
+  "forms": ["knit"],
+  "objectives": [
+    {
+      "attribute": {"key": "areal_density", "unit": "kg/m2"},
+      "direction": "minimize"
+    },
+    {
+      "attribute": {
+        "key": "thermal_resistance",
+        "unit": "m2*K/W",
+        "conditions": {
+          "air_temperature_c": "20",
+          "relative_humidity_percent": "65",
+          "air_speed_m_s": "1"
+        }
+      },
+      "direction": "maximize"
+    },
+    {
+      "attribute": {
+        "key": "vapor_resistance",
+        "unit": "m2*Pa/W",
+        "conditions": {
+          "air_temperature_c": "35",
+          "relative_humidity_percent": "40",
+          "air_speed_m_s": "1"
+        }
+      },
+      "direction": "minimize"
+    }
+  ],
+  "required_capabilities": ["steady_conduction"]
+}
