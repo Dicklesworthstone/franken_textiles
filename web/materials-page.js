@@ -681,6 +681,44 @@ function permanentStretchResult(parent, r) {
     next: r.selection ? "Review capabilities, then assign the identified selection above and bind the pattern." :
       "Review the retained diagnostics and source histories. No identified selection is available to assign." };
 }
+function areaCalibrationResult(parent, c) {
+  const area = c.material?.membrane_response?.area_response, fittedRange = c.fitted_area_ratio_range;
+  if (!area && !fittedRange) return;
+  const preserved = c.input.area_response?.mode === "preserve";
+  if (area) {
+    const parameters = table(parent, preserved ? "Area coefficients — preserved source observations" :
+      "Area coefficients — joint identification", ["Energy term", "Coefficient", "Unit", "Evidence", "Source"]);
+    for (const [label, quantity] of [["(J − 1)²", area.quadratic], ["(ln J)²", area.log_squared]]) {
+      cells(parameters, [label, metric(quantity.value), quantity.unit, quantity.evidence, quantity.source]);
+    }
+    const conditions = document.createElement("p");
+    conditions.textContent = `Area specimen: ${area.conditions.specimen}. Conditioning: ${area.conditions.conditioning}.`;
+    parent.append(conditions);
+    detail(parent, "Area response, complete applicability conditions and source evidence", {
+      response: area,
+      sources: Object.fromEntries([...new Set([area.quadratic.source, area.log_squared.source])]
+        .map(source => [source, c.material.sources?.[source] ?? null]))
+    });
+  }
+  const domain = table(parent, "Physical area ratio J — applicability", ["Domain", "Minimum J", "Maximum J"]);
+  const declared = c.input.area_response?.area_ratio_range ??
+    c.input.material?.membrane_response?.area_response?.area_ratio_range;
+  if (declared) cells(domain, ["Admissible input domain", ...declared.map(metric)]);
+  if (fittedRange) cells(domain, ["FIT observations and undeformed reference", ...fittedRange.map(metric)]);
+  if (area) cells(domain, ["Published material domain", ...area.area_ratio_range.map(metric)]);
+  if (c.parameter_count != null) {
+    const excitation = table(parent, "Joint identification diagnostics", ["Diagnostic", "Value"]);
+    cells(excitation, ["Identified coefficients", metric(c.parameter_count)]);
+    cells(excitation, ["Normalized FIT excitation pivot", metric(c.excitation_pivot)]);
+  }
+  const note = document.createElement("p");
+  note.textContent = "J is deformed area divided by reference area. " + (preserved ?
+    "The area coefficients, source evidence and area-ratio interval are retained from the supplied material. " :
+    fittedRange ? "FIT observations determine the area coefficients and their supported J range, including the undeformed reference. CHECK cannot widen that range. " :
+      "The area coefficients are identified within the supplied material's declared J range. ") +
+    "The area domain also intersects the directional Green-strain limits. An area-energy response does not impose constant area.";
+  parent.append(note);
+}
 function stripCalibrationResult(parent, r) {
   const c = r.calibration, family = c.input.response_family, nonlinear = c.input.nonlinear;
   const quality = table(parent, "Clamped strip observations — independent partitions",
@@ -752,6 +790,7 @@ function stripCalibrationResult(parent, r) {
       cells(domain, [axis, ...c.fitted_green_strain_range[i].map(metric)]);
     }
   }
+  areaCalibrationResult(parent, c);
   const work = table(parent, "Inverse solve and excitation diagnostics", ["Diagnostic", "Value"]);
   for (const row of [
     ["Identification outcome", c.accepted ? "ACCEPTED" : "NOT ACCEPTED"],
@@ -814,9 +853,9 @@ function calibrationResult(parent, r) {
         "Review the candidate refusals and acquisition errors. This comparison has no material selection to assign." };
   }
   const c = r.calibration, nonlinear = c.schema === "ftx-nonlinear-swatch-calibration-report/1";
-  const area = nonlinear ? c.material.membrane_response?.area_response : null;
   const timeSearch = c.orthotropic_fit?.time_search;
-  const method = nonlinear ? area ? "Nonlinear stretch, shear and physical-area response" : "Nonlinear stretch and shear" : c.input.orthotropic ?
+  const method = nonlinear ? c.material?.membrane_response?.area_response ? "Nonlinear stretch, shear and area response" :
+    "Nonlinear stretch and shear" : c.input.orthotropic ?
     timeSearch ? "Directional relaxation with times identified within declared bounds" : "Directional relaxation at the declared times" :
     "Proportional relaxation ratios and times";
   const t = table(parent, "Observed force errors — independent partitions", ["Partition", "Measured components", "Scaled RMS", "Scaled peak"]);
@@ -829,22 +868,7 @@ function calibrationResult(parent, r) {
   for (const [i, axis] of ["Warp / wale (E11)", "Weft / course (E22)", "Engineering shear (2 E12)"].entries()) {
     cells(domain, [axis, metric(range?.[i]?.[0]), metric(range?.[i]?.[1])]);
   }
-  if (area) {
-    const coefficients = table(parent, "Jointly identified physical-area coefficients", ["Energy term", "Coefficient", "Unit", "Evidence"]);
-    for (const [label, q] of [["Quadratic (J−1)²", area.quadratic], ["Logarithmic (ln J)²", area.log_squared]]) {
-      cells(coefficients, [label, metric(q.value), q.unit, q.evidence]);
-    }
-    const support = table(parent, "Physical area ratio J — declared limit and FIT support", ["Basis", "Minimum J", "Maximum J"]);
-    cells(support, ["Declared observation limit", ...c.input.area_response.area_ratio_range.map(metric)]);
-    cells(support, ["FIT-supported publication", ...c.fitted_area_ratio_range.map(metric)]);
-    const scope = document.createElement("p");
-    scope.textContent = "J is physical deformed area divided by reference area. Area coefficients are identified jointly with the directional curves and normal coupling. " +
-      "Only FIT observations supply the published domain; held-out observations never widen it. " +
-      "The declared limit does not supply missing characterization. Local excitation and small residuals do not establish global uniqueness or confidence intervals. " +
-      "Fitted values remain estimates; measured textile and garment acceptance remain separate.";
-    parent.append(scope);
-    detail(parent, "Jointly identified area law and source qualifications", area);
-  }
+  if (nonlinear) areaCalibrationResult(parent, c);
   if (c.orthotropic_fit) {
     const recovery = table(parent, timeSearch ? "Directional recovery — published stiffness at identified times" :
       "Directional recovery — published stiffness at supplied times", ["Time (s)", "Retained branch",
