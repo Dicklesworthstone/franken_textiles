@@ -11,6 +11,57 @@ use serde_json::{Value, json};
 const INPUT: &str = include_str!("../../../tests/fixtures/materials/synthetic-clamped-strip.json");
 
 #[test]
+fn both_commands_preserve_explicit_extensometers_through_identification() {
+    let mut input: Value = serde_json::from_str(include_str!(
+        "../../../examples/strip-identification/synthetic-calibration.json"
+    ))
+    .unwrap();
+    for experiment in input["experiments"].as_array_mut().unwrap() {
+        for observation in experiment["observations"].as_array_mut().unwrap() {
+            let width = observation
+                .as_object_mut()
+                .unwrap()
+                .remove("mid_width")
+                .unwrap();
+            observation["extensometers"] = json!([{
+                "id":"midpoint", "operator":{"kind":"edge_chord","station_fraction":0.5},
+                "value_m":width["value_m"], "scale_m":width["scale_m"]
+            }]);
+        }
+    }
+    let workspace = Workspace::new();
+    fs::write(workspace.0.join("acquisition.json"), input.to_string()).unwrap();
+    let primary = workspace.identify(true, true);
+    let companion = workspace.identify(false, true);
+    assert_eq!(primary["calibration"], companion["calibration"]);
+    assert_eq!(primary["selection_json"], companion["selection_json"]);
+    let report = &primary["calibration"];
+    assert_eq!(report["accepted"], true, "{report}");
+    assert_eq!(report["domain_replay_verified"], true);
+    let typed: Input = serde_json::from_value(input).unwrap();
+    assert_eq!(
+        report["input"]["experiments"],
+        serde_json::to_value(&typed.experiments).unwrap()
+    );
+    for prediction in report["predictions"].as_array().unwrap() {
+        assert_eq!(prediction["extensometers"][0]["id"], "midpoint");
+        assert_eq!(
+            prediction["extensometers"][0]["operator"],
+            json!({"kind":"edge_chord","station_fraction":0.5})
+        );
+        assert!(
+            prediction["extensometers"][0]["predicted_m"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+        assert!(prediction["extensometers"][0]["residual_m"].is_number());
+    }
+    assert_eq!(primary["simulation_ready"], false);
+    assert_eq!(primary["empirical_validation_claim"], false);
+}
+
+#[test]
 fn both_commands_identify_the_joint_area_example_without_claiming_complete_garment_physics() {
     let workspace = Workspace::new();
     fs::write(

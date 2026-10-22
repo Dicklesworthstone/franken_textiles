@@ -15,6 +15,47 @@ const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
 
 #[test]
+fn portable_extensometer_identification_matches_the_shared_engine_and_keeps_operators() {
+    let mut input: Value = serde_json::from_str(include_str!(
+        "../../../examples/strip-identification/synthetic-calibration.json"
+    ))
+    .unwrap();
+    for experiment in input["experiments"].as_array_mut().unwrap() {
+        for observation in experiment["observations"].as_array_mut().unwrap() {
+            let width = observation
+                .as_object_mut()
+                .unwrap()
+                .remove("mid_width")
+                .unwrap();
+            observation["extensometers"] = json!([{
+                "id":"midpoint", "operator":{"kind":"edge_chord","station_fraction":0.5},
+                "value_m":width["value_m"], "scale_m":width["scale_m"]
+            }]);
+        }
+    }
+    let mut typed: Input = serde_json::from_value(input.clone()).unwrap();
+    typed.allow_estimates = true;
+    let expected = ftx_drape::strip::fit::calibrate(&typed).unwrap();
+    let result: Value =
+        serde_json::from_str(&materials::calibrate_strip(&input.to_string(), true).unwrap())
+            .unwrap();
+    assert!(expected.accepted);
+    assert_eq!(
+        result["calibration"],
+        serde_json::to_value(&expected).unwrap()
+    );
+    assert_eq!(result["selection_json"], expected.selection_json.unwrap());
+    assert_eq!(result["simulation_ready"], false);
+    for prediction in &expected.predictions {
+        assert_eq!(prediction.extensometers.len(), 1);
+        assert_eq!(prediction.extensometers[0].id, "midpoint");
+    }
+    input["experiments"][0]["observations"][0]["extensometers"][0]["operator"] =
+        json!({"kind":"edge_projection","station_fraction":0.5,"axis":[2.0,0.0]});
+    assert!(materials::calibrate_strip(&input.to_string(), true).is_err());
+}
+
+#[test]
 fn portable_joint_area_identification_keeps_six_coordinates_and_the_frozen_area_law() {
     let raw = include_str!("../../../examples/area-response/identify.json");
     let result: Value =

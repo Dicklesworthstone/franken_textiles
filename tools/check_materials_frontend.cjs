@@ -1023,6 +1023,46 @@ test('clamped-strip results show geometry and operator assumptions and withdraw 
   p.e.calibrationMode.value='nonlinear';p.e.calibrationMode.handlers.change();assert.equal(s.hidden,true);
 });
 
+test('declared strip extensometers retain station, signed axis and observed residuals in both controls', async () => {
+  for (const dedicated of [false,true]) {
+    const p=await pageModule(); await p.load();
+    p.e.calibrationMode.value='clamped_strip'; p.e.calibrationEstimates.checked=true;
+    const operation=dedicated?'stripFit':'calibrate', inputControl=dedicated?'stripFitRequest':'calibrationRequest';
+    const input=' {"schema":"ftx-strip-calibration/1","operator_origin":-0.0}\n';
+    p.select(inputControl,input); await p.e[operation].onclick();
+    const report=stripCalibration('ACCEPTED',true), c=report.calibration;
+    const chord={kind:'edge_chord',station_fraction:0.25};
+    const projection={kind:'edge_projection',station_fraction:0.75,axis:[-1,0]};
+    c.input.experiments[0].observations=[{id:'point-1',mid_width:null,extensometers:[
+      {id:'<chord>',operator:chord,value_m:0.058,scale_m:0.001},
+      {id:'signed',operator:projection,value_m:-0.04,scale_m:0.002}]}];
+    c.predictions[0].width_residual_m=null;
+    c.predictions[0].extensometers=[
+      {id:'<chord>',operator:chord,predicted_m:0.059,residual_m:0.001},
+      {id:'signed',operator:projection,predicted_m:-0.039,residual_m:0.001}];
+    const raw=JSON.stringify(report);
+    p.emit(report,[{name:'extensometer-report.json',text:raw,mime:'application/json'}]);
+    const s=section(p,dedicated?'Clamped-strip identification':'Identified material behavior');
+    const tables=descendants(s).filter(n=>n.tag==='table');
+    const acquisition=tables.find(t=>t.children[0].textContent==='Declared transverse extensometer acquisitions');
+    assert.deepEqual(plain(acquisition.children.slice(2).map(n=>n.children.map(v=>v.textContent))),[
+      ['strip-source / point-1','fit','<chord>','Euclidean edge chord','0.25','Not applicable','0.058','0.001'],
+      ['strip-source / point-1','fit','signed','Signed edge projection','0.75','-1, 0','-0.04','0.002']]);
+    const predictions=tables.find(t=>t.children[0].textContent==='Refined extensometer predictions and residuals');
+    assert.deepEqual(plain(predictions.children[3].children.map(v=>v.textContent)),
+      ['strip-source / point-1','fit','signed','Signed edge projection','0.75','-1, 0','-0.039','0.001']);
+    const geometry=tables.find(t=>t.children[0].textContent==='Actual strip geometry and declared width comparison');
+    assert.equal(geometry.children[2].children[6].textContent,'Declared extensometers (see below)');
+    assert.match(visibleText(s),/no source contraction is mapped automatically/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    assert.equal(p.e.selection.value,report.selection_json);
+    const download=descendants(s).find(n=>n.download==='extensometer-report.json');
+    assert.equal(await p.blobs.get(download.href).text(),raw);
+    p.e[inputControl].handlers.change(); assert.equal(s.hidden,true);
+    assert.equal(p.e.assign.disabled,true); assert.equal(p.live.size,0);
+  }
+});
+
 test('nonlinear strip coefficients retain declared shape assumptions, physical units and rejection gates in both controls', async () => {
   for (const dedicated of [false,true]) {
     const p=await pageModule();await p.load();
@@ -1731,6 +1771,37 @@ test('manufacturing studies use original lossless source, not bound previews, an
   p.windowEvents.pagehide(); assert.equal(p.live.size, 0);
 });
 
+test('material studies display independent vapor outcomes and exact source-frozen replay in both workflows', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const a=studyRow('<vapor-source>'), b=studyRow('missing'), c=studyRow('omitted');
+  a.vapor=outcome(vaporReport()); b.vapor=refused('Missing source-qualified vapor resistance'); c.vapor=omitted();
+  for (const op of ['study','scenario']) {
+    await p.e[op].onclick();
+    const report=studyReport([a,b,c]);
+    p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const t=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Material-following potential vapor transfer');
+    assert.deepEqual(plain(t.children[2].children.map(n=>n.textContent)),
+      ['<vapor-source>','Available','1','40','50','0.00002','Reported protocols match']);
+    assert.deepEqual(plain(t.children[3].children.map(n=>n.textContent)),
+      ['missing','Refused: Missing source-qualified vapor resistance','Unknown','Unknown','Unknown','Unknown','Unknown']);
+    assert.equal(t.children[4].children[1].textContent,'Not requested');
+    assert.match(visibleText(s),/not actual sweat evaporation/);
+    assert.match(visibleText(s),/Missing vapor observations do not erase independent/);
+    const evidence=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('<vapor-source>: vapor layers'));
+    evidence.open=true; evidence.handlers.toggle();
+    assert.match(visibleText(evidence),/"air_temperature_c": "35"/);
+    assert.match(visibleText(evidence),/Original <measurement>/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    const download=descendants(s).find(n=>n.download==='alternative-1-vapor-replay.json');
+    assert.equal(await p.blobs.get(download.href).text(),a.vapor.result.replay_request_json);
+    assert.equal(descendants(s).some(n=>n.download==='alternative-2-vapor-replay.json'),false);
+  }
+  p.e.studyRequest.handlers.change(); assert.equal(p.live.size,0);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
 test('material study sewing choices retain bounded search status separately from unavailable plans', async () => {
   const p = await pageModule(); await p.load(); p.select('studyRequest', '{}');
   const bounded = studyRow('bounded'), missing = studyRow('missing');
@@ -2072,6 +2143,113 @@ test('assembly mass and finite stock retain independent totals and refusals in m
 // Opt in after tools/build_web.sh. This executes the real production WASM through the actual
 // worker module, with only the Node transport/module loader adapted. It is not HTTP/browser or
 // native parity, successful anatomical body fitting, or empirical textile validation.
+test('compiled WASM explicit extensometers retain acquired widths, frozen forward replay and CHECK rejection',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    // Retain the existing numerical acquisitions exactly; explicitly name their existing operator.
+    // These are synthetic software observations, not new measured data or a regenerated oracle.
+    const input=JSON.parse(fs.readFileSync(path.join(__dirname,'../examples/strip-identification/synthetic-calibration.json'),'utf8'));
+    for(const experiment of input.experiments) for(const observation of experiment.observations) {
+      const width=observation.mid_width;
+      observation.extensometers=[{id:'midpoint',operator:{kind:'edge_chord',station_fraction:0.5},
+        value_m:width.value_m,scale_m:width.scale_m}];
+      delete observation.mid_width;
+    }
+    const request=process.env.FTX_EXTENSOMETER_INPUT?
+      fs.readFileSync(process.env.FTX_EXTENSOMETER_INPUT,'utf8'):JSON.stringify(input);
+    assert.deepEqual(JSON.parse(request),input);
+    const w=await workerModule({bindings:ftx});
+    const result=await w.send({type:'stripFit',request:47,stripRequest:request});
+    assert.equal(result.type,'result',result.message);
+    assert.equal(result.files.find(f=>f.name==='strip-calibration-input.json').text,request);
+    assert.equal(result.files.find(f=>f.name==='strip-calibrated-selection.json').text,result.result.selection_json);
+    if(process.env.FTX_EXTENSOMETER_REPLAY) {
+      const {material,...nativeFields}=result.result;
+      assert.deepEqual(nativeFields,JSON.parse(fs.readFileSync(process.env.FTX_EXTENSOMETER_REPLAY,'utf8')));
+    }
+    assert.deepEqual(result.result.material,JSON.parse(ftx.material_inspect(result.result.selection_json)));
+    const c=result.result.calibration;
+    assert.equal(c.accepted,true); assert.equal(c.domain_replay_verified,true);
+    for(const prediction of c.predictions) {
+      assert.equal(prediction.width_residual_m,null);
+      assert.deepEqual(prediction.extensometers[0].operator,{kind:'edge_chord',station_fraction:0.5});
+      assert.equal(prediction.extensometers[0].predicted_m,prediction.state.mid_width_m);
+    }
+    const check=c.input.experiments.find(e=>e.partition==='check');
+    const forwardRequest={schema:'ftx-strip-experiment/1',material:result.result.selection,
+      fixture:{...check.fixture,cells:check.fixture.cells.map(n=>2*n)},
+      extensions:check.observations.map(o=>o.extension_fraction),controls:c.input.controls};
+    const forward=await w.send({type:'stripExperiment',request:48,stripRequest:JSON.stringify(forwardRequest)});
+    assert.equal(forward.type,'result',forward.message);
+    assert.deepEqual(forward.result.states,c.predictions.filter(p=>p.experiment===check.id).map(p=>p.state));
+    assert.equal(ftx.material_strip_experiment(JSON.stringify(forward.result.input)),forward.files[0].text);
+    const p=await pageModule(); await p.load(); p.select('stripFitRequest',request); await p.e.stripFit.onclick();
+    p.emit(result.result,result.files);
+    const sectionResult=section(p,'Clamped-strip identification');
+    assert.match(visibleText(sectionResult),/Declared transverse extensometer acquisitions/);
+    assert.match(visibleText(sectionResult),/Refined extensometer predictions and residuals/);
+    assert.equal(p.e.assign.disabled,false); assert.equal(p.e.selection.value,result.result.selection_json);
+    const bad=JSON.parse(request);
+    bad.experiments.find(e=>e.partition==='check').observations[0].extensometers[0].value_m+=0.1;
+    const badRequest=JSON.stringify(bad);
+    const rejected=await w.send({type:'stripFit',request:49,stripRequest:badRequest});
+    assert.equal(rejected.type,'result',rejected.message);
+    assert.equal(rejected.result.calibration.accepted,false);
+    assert.deepEqual(rejected.result.calibration.parameters,c.parameters);
+    assert.ok(rejected.result.calibration.check.peak_scaled>1);
+    assert.equal(rejected.result.selection_json,null);
+    assert.equal(rejected.files.some(f=>f.name==='strip-calibrated-selection.json'),false);
+    p.select('stripFitRequest',badRequest); p.e.stripFitRequest.handlers.change(); p.ready(); await p.e.stripFit.onclick();
+    p.emit(rejected.result,rejected.files);
+    assert.equal(p.e.assign.disabled,true); assert.equal(p.e.selection.value,'');
+    assert.match(visibleText(sectionResult),/No identified selection is available/);
+  });
+
+test('compiled WASM material studies recompute vapor from final assignments and retain independent refusals',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const w=await workerModule({bindings:ftx});
+    const pattern=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8');
+    const request=fs.readFileSync(path.join(__dirname,'../examples/vapor-study/leather.json'),'utf8');
+    const result=await w.send({type:'study',request:45,pattern,studyRequest:request});
+    assert.equal(result.type,'result',result.message);
+    assert.equal(result.files[0].text,ftx.material_study(pattern,request));
+    assert.equal(result.files.find(f=>f.name==='study-request.json').text,request);
+    if(process.env.FTX_VAPOR_STUDY_REPLAY) {
+      assert.deepEqual(result.result,JSON.parse(fs.readFileSync(process.env.FTX_VAPOR_STUDY_REPLAY,'utf8')));
+    }
+    const rows=Object.fromEntries(result.result.alternatives.map(row=>[row.key,row]));
+    const chrome=rows['chrome-neck'].vapor.result, alternate=rows['synthetic-tanned-neck'].vapor.result;
+    assert.equal(chrome.layers[0].observation.value,11.27);
+    assert.equal(alternate.layers[0].observation.value,30.38);
+    assert.ok(chrome.potential_mass_flow_kg_s>alternate.potential_mass_flow_kg_s);
+    assert.notEqual(chrome.layers[0].material_sha256,alternate.layers[0].material_sha256);
+    assert.equal(rows.uncharacterized.binding.status,'available');
+    assert.equal(rows.uncharacterized.vapor.status,'refused');
+    assert.deepEqual(result.result.comparison.frontier,['chrome-neck']);
+    assert.equal(result.result.geometry_changed,false);
+    assert.equal(result.result.physical_validation_claim,false);
+    for(const key of ['chrome-neck','synthetic-tanned-neck']) {
+      const row=rows[key], vapor=row.vapor.result;
+      const bound=JSON.parse(ftx.material_bind(pattern,JSON.stringify(row.frozen_changes)));
+      assert.equal(bound.pattern_json,row.binding.result.pattern_json);
+      const replay=JSON.parse(ftx.thermal_vapor(vapor.replay_request_json));
+      assert.deepEqual(replay.layers,vapor.layers);
+      assert.equal(replay.potential_heat_flow_w,vapor.potential_heat_flow_w);
+      assert.equal(replay.potential_mass_flow_kg_s,vapor.potential_mass_flow_kg_s);
+      assert.equal(vapor.layers[0].observation.conditions.air_temperature_c,'35');
+    }
+    const missing=JSON.parse(request); missing.vapor.layers[0].target.id='absent-source-piece';
+    const refusedStudy=await w.send({type:'study',request:46,pattern,studyRequest:JSON.stringify(missing)});
+    assert.equal(refusedStudy.type,'result',refusedStudy.message);
+    assert.ok(refusedStudy.result.alternatives.every(row=>row.binding.status==='available'&&row.vapor.status==='refused'));
+    assert.deepEqual(refusedStudy.result.comparison.frontier,[]);
+  });
+
 test('compiled WASM vapor exchange preserves source-qualified substitutions and frozen replay',
   { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');

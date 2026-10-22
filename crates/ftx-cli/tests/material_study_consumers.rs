@@ -52,6 +52,51 @@ fn run(main: bool, dir: &Path) -> Value {
 }
 
 #[test]
+fn both_study_commands_recompute_measured_vapor_transport_from_piece_substitutions() {
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let input = include_str!("../../../examples/vapor-study/leather.json");
+    let request: Request = serde_json::from_str(input).unwrap();
+    let expected = serde_json::to_value(
+        request
+            .evaluate(&Pattern::from_json(pattern).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-vapor-study-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), pattern).unwrap();
+    fs::write(dir.join("study.json"), input).unwrap();
+    for main in [false, true] {
+        let report = run(main, &dir);
+        assert_eq!(report, expected);
+        let rows = report["alternatives"].as_array().unwrap();
+        assert_eq!(rows[0]["vapor"]["status"], "available");
+        assert_eq!(rows[1]["vapor"]["status"], "available");
+        assert_eq!(rows[2]["vapor"]["status"], "refused");
+        assert_eq!(rows[2]["binding"]["status"], "available");
+        assert_eq!(report["comparison"]["frontier"], json!(["chrome-neck"]));
+        assert_eq!(
+            rows[0]["vapor"]["result"]["layers"][0]["observation"]["evidence"],
+            "measured"
+        );
+        assert_eq!(report["geometry_changed"], false);
+        assert_eq!(report["physical_validation_claim"], false);
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("pattern.json")).unwrap(),
+        pattern
+    );
+    assert_eq!(fs::read_to_string(dir.join("study.json")).unwrap(), input);
+}
+
+#[test]
 fn both_study_binaries_select_qualified_recipes_per_material_without_stale_reuse() {
     let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
     let source: Value = serde_json::from_str(pattern).unwrap();

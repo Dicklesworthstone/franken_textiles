@@ -482,6 +482,7 @@ function comparison(op, r) {
     }
   }
   assemblyMassComparison(parent, study.alternatives);
+  vaporComparison(op, parent, study.alternatives);
   if (study.screening) screening(parent, study.screening);
   if (op === "scenario") {
     const simulations = new Map(r.simulations.map(row => [row.key, row.evaluation]));
@@ -510,6 +511,29 @@ function comparison(op, r) {
       "Declared assembly mass ranges evaluated by Rust with fixed authored geometry and inventory; unresolved overlap and unknown ranges remain explicit." :
       "Declared nominal objectives evaluated by Rust; conditional Pareto set, not an empirical fit/warmth claim or global optimum.") :
       "Actual consumer results; no computed objectives requested. Unknowns are not zero, and no ranking is inferred by this page." };
+}
+function vaporComparison(op, parent, alternatives) {
+  if (!alternatives.some(row => row.vapor && row.vapor.status !== "not_requested")) return;
+  const note = document.createElement("p");
+  note.textContent = "Each alternative resolves the declared vapor-stack layers from its final pattern assignments. " +
+    "The common area and boundary pressures, films and latent heat are supplied assumptions. " +
+    "These are potential transfer rates, not actual sweat evaporation, garment comfort or heat supplied to the separate thermal simulation. " +
+    "Missing vapor observations do not erase independent manufacturing or simulation results.";
+  parent.append(note);
+  const t = table(parent, "Material-following potential vapor transfer", ["Alternative", "Vapor evaluation", "Declared area (m²)",
+    "Total Ret (m²·Pa/W)", "Potential latent heat flow (W)", "Potential water mass flow (kg/s)", "Layer protocols"]);
+  for (const [i, row] of alternatives.entries()) {
+    const r = available(row.vapor);
+    cells(t, [row.key, state(row.vapor), metric(r?.request.area_m2), metric(r?.total_resistance_m2_pa_w),
+      metric(r?.potential_heat_flow_w), metric(r?.potential_mass_flow_kg_s),
+      r ? (r.mixed_protocols ? "Mixed; explicitly admitted" : "Reported protocols match") : "Unknown"]);
+    detail(parent, `${row.key}: vapor layers, source observations and boundary assumptions (display only)`,
+      r || { refusal: row.vapor?.refusal });
+    if (typeof r?.replay_request_json === "string") {
+      const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
+      link(op, actions, { name: `alternative-${i + 1}-vapor-replay.json`, text: r.replay_request_json, mime: "application/json" });
+    }
+  }
 }
 function inspectResult(r, selectionJson) {
   inspected = selectionJson || r.selection_json || text(r.selection);
@@ -778,9 +802,24 @@ function stripCalibrationResult(parent, r) {
   const geometry = table(parent, "Actual strip geometry and declared width comparison",
     ["Experiment", "Partition", "Width (m)", "Free gauge (m)", "Warp axis [across, along]", "Authored mesh cells", "Width observation"]);
   for (const e of c.input.experiments) {
+    const observed = [];
+    if (e.observations.some(o => o.mid_width != null)) observed.push("Chord at half the reference gauge");
+    if (e.observations.some(o => o.extensometers?.length)) observed.push("Declared extensometers (see below)");
     cells(geometry, [e.id, e.partition, metric(e.fixture.width_m), metric(e.fixture.gauge_length_m),
       e.fixture.warp_axis.map(metric).join(", "), e.fixture.cells.join(" × "),
-      e.observations.some(o => o.mid_width != null) ? "Chord at half the reference gauge" : "Not observed"]);
+      observed.join("; ") || "Not observed"]);
+  }
+  if (c.input.experiments.some(e => e.observations.some(o => o.extensometers?.length))) {
+    const measured = table(parent, "Declared transverse extensometer acquisitions",
+      ["Experiment / observation", "Partition", "Channel", "Operator", "Reference station fraction", "Projection axis [across, along]",
+        "Observed value (m)", "Residual scale (m)"]);
+    for (const e of c.input.experiments) for (const o of e.observations) for (const channel of o.extensometers || []) {
+      const operator = channel.operator;
+      cells(measured, [`${e.id} / ${o.id}`, e.partition, channel.id,
+        operator.kind === "edge_chord" ? "Euclidean edge chord" : "Signed edge projection",
+        metric(operator.station_fraction), operator.axis?.map(metric).join(", ") || "Not applicable",
+        metric(channel.value_m), metric(channel.scale_m)]);
+    }
   }
   const method = document.createElement("p"); method.textContent = c.input.method; parent.append(method);
   if (c.fitted_green_strain_range) {
@@ -805,12 +844,24 @@ function stripCalibrationResult(parent, r) {
   for (const p of c.predictions) cells(predictions, [`${p.experiment} / ${p.observation}`, p.partition,
     metric(p.state.extension_fraction), metric(p.state.force_n), metric(p.force_residual_n),
     metric(p.state.mid_width_m), p.width_residual_m == null ? "Not observed" : metric(p.width_residual_m)]);
+  if (c.predictions.some(p => p.extensometers?.length)) {
+    const measured = table(parent, "Refined extensometer predictions and residuals",
+      ["Experiment / observation", "Partition", "Channel", "Operator", "Reference station fraction", "Projection axis [across, along]",
+        "Predicted value (m)", "Residual (m)"]);
+    for (const p of c.predictions) for (const channel of p.extensometers || []) {
+      const operator = channel.operator;
+      cells(measured, [`${p.experiment} / ${p.observation}`, p.partition, channel.id,
+        operator.kind === "edge_chord" ? "Euclidean edge chord" : "Signed edge projection",
+        metric(operator.station_fraction), operator.axis?.map(metric).join(", ") || "Not applicable",
+        metric(channel.predicted_m), metric(channel.residual_m)]);
+    }
+  }
   if (c.reasons.length) {
     const reasons = document.createElement("p"); reasons.textContent = c.reasons.join(" "); parent.append(reasons);
   }
   const note = document.createElement("p");
   note.textContent = "Each prediction solves the finite strip with clamped ends, free in-plane interior motion, and a prescribed planar quasistatic boundary. " +
-    "Grip extension is not treated as uniform fabric strain. A reported source contraction needs a justified mapping to the midpoint chord before use here. " +
+    "Grip extension is not treated as uniform fabric strain. Transverse measurements need the declared reference station and chord or signed-projection definition; no source contraction is mapped automatically. " +
     "This existing reversible law cannot supply hysteresis, damage or rate dependence. FIT determines the parameters before CHECK replay. " +
     "Search bounds, force scales and local sensitivity are not confidence intervals or a global uniqueness proof.";
   parent.append(note);

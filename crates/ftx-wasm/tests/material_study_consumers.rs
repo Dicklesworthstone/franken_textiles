@@ -9,6 +9,61 @@ const PATTERN: &str =
 const STOCK: &str = include_str!("../../../tests/fixtures/materials/synthetic-stock-request.json");
 
 #[test]
+fn portable_study_rebinds_vapor_layers_and_replays_each_exact_standalone_request() {
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let raw = include_str!("../../../examples/vapor-study/leather.json");
+    let request: Request = serde_json::from_str(raw).unwrap();
+    let expected = serde_json::to_value(
+        request
+            .evaluate(&Pattern::from_json(pattern).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let output = materials::study(pattern, raw).unwrap();
+    let report: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(report, expected);
+    assert_eq!(output, materials::study(pattern, raw).unwrap());
+    assert_eq!(report["comparison"]["frontier"], json!(["chrome-neck"]));
+    let rows = report["alternatives"].as_array().unwrap();
+    let mut replay: Value = serde_json::from_str(raw).unwrap();
+    for (variant, row) in replay["variants"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(rows)
+    {
+        assert_eq!(variant["key"], row["key"]);
+        variant["changes"] = row["frozen_changes"].clone();
+        if row["vapor"]["status"] != "available" {
+            assert_eq!(row["vapor"]["status"], "refused");
+            assert_eq!(row["binding"]["status"], "available");
+            continue;
+        }
+        let vapor = &row["vapor"]["result"];
+        let standalone: Value = serde_json::from_str(
+            &ftx_wasm::thermal::vapor(vapor["replay_request_json"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&standalone, vapor);
+        assert_eq!(vapor["physical_validation_claim"], false);
+    }
+    let replayed: Value =
+        serde_json::from_str(&materials::study(pattern, &replay.to_string()).unwrap()).unwrap();
+    assert_eq!(replayed["alternatives"], report["alternatives"]);
+    let original: Value = serde_json::from_str(pattern).unwrap();
+    for row in rows {
+        assert_eq!(
+            row["binding"]["result"]["pattern"]["seams"],
+            original["seams"]
+        );
+        assert_eq!(
+            row["binding"]["result"]["pattern"]["pieces"][0]["vertices"],
+            original["pieces"][0]["vertices"]
+        );
+    }
+}
+
+#[test]
 fn browser_study_selects_qualified_recipes_and_keeps_frozen_replay_and_failures() {
     let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
     let source: Value = serde_json::from_str(pattern).unwrap();
