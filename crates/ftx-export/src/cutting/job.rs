@@ -1,5 +1,5 @@
 //! Complete garment cutting across roll stock and individually identified hides/remnants.
-//! Routes are explicit source-piece assignments. Both planners keep the whole source pattern;
+//! Routes are explicit source-piece or exact-material assignments. Both planners keep the whole source pattern;
 //! a final inventory equality check prevents omitted, duplicated or silently rerouted cut parts.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,6 +32,37 @@ pub struct Route {
     pub stock: StockKind,
 }
 
+/// One explicitly admitted supply route for an exact material revision.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialChoice {
+    /// Exact lowercase SHA-256 from the shared material resolver, never a material/fiber label.
+    pub material_sha256: String,
+    /// Declared physical supply route for this snapshot.
+    pub stock: StockKind,
+}
+
+/// Route a source piece after resolving its actual material assignment.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialRoute {
+    /// Source-piece ID, disjoint from every fixed route and other material route.
+    pub piece: String,
+    /// Complete allowed alternatives. An unlisted revision refuses instead of borrowing a route.
+    pub choices: Vec<MaterialChoice>,
+}
+
+/// Selected route and material identity for one original source piece.
+#[derive(Clone, Debug, Serialize)]
+pub struct ResolvedRoute {
+    /// Original source-piece ID.
+    pub piece: String,
+    /// Planner selected by the declared fixed or exact-material rule.
+    pub stock: StockKind,
+    /// Actual frozen material revision used by that source piece.
+    pub material_sha256: String,
+}
+
 /// One dated comparable market, using the existing quote and exact-stock binding authorities.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,14 +91,18 @@ impl Purchasing {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// `ftx-cutting-job/1`.
+    /// `ftx-cutting-job/1` for fixed routes, or `/2` for exact-material route alternatives.
     pub schema: String,
-    /// Exactly one route per source piece, including unsimulated lining and reinforcement.
+    /// Fixed routes; together with `material_routes`, exactly one rule per original source piece.
+    #[serde(default)]
     pub routes: Vec<Route>,
-    /// Required iff at least one piece uses roll stock.
+    /// Exact-material alternatives in schema `/2`; no material name or stock-form inference.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_routes: Vec<MaterialRoute>,
+    /// Required iff at least one declared route or alternative uses roll stock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roll: Option<CutOptions>,
-    /// Required iff at least one piece uses physical finite stock.
+    /// Required iff at least one declared route or alternative uses physical finite stock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finite_stock: Option<stock::Request>,
     /// Missing or invalid prices do not erase an otherwise complete geometric allocation.
@@ -118,7 +153,7 @@ pub struct PriceReport {
 /// Atomic complete geometric job with independent commercial evidence.
 #[derive(Clone, Debug, Serialize)]
 pub struct Plan {
-    /// `ftx-cutting-job-plan/1`.
+    /// `ftx-cutting-job-plan/1`, or `/2` when material-following routes are requested.
     pub schema: &'static str,
     /// Whole frozen pattern identity, shared by both scoped subplans.
     pub pattern_sha256: String,
@@ -130,6 +165,9 @@ pub struct Plan {
     pub replay_request_json: String,
     /// Routes, allowances, dated prices and frozen physical inventory.
     pub request: Request,
+    /// Actual selected source-piece routes in `/2`; full alternatives remain in `request`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub resolved_routes: Vec<ResolvedRoute>,
     /// Complete deterministic original-piece/instance/copy/material inventory.
     pub inventory: Vec<Item>,
     /// Canonical roll subplan, explicitly scoped to its routed source pieces.
@@ -166,6 +204,152 @@ fn result<T>(value: Result<T, Refusal>) -> Outcome<T> {
     }
 }
 
+struct Routing {
+    routes: BTreeMap<String, StockKind>,
+    materials: BTreeMap<String, String>,
+    permitted: BTreeMap<StockKind, BTreeSet<String>>,
+    finite_pieces: BTreeSet<String>,
+}
+
+impl Routing {
+    fn compile(request: &Request, pattern: &Pattern) -> Result<Self, Refusal> {
+        let pieces = pattern.raw()["pieces"]
+            .as_array()
+            .ok_or_else(|| invalid("cutting job needs source pieces"))?;
+        let mut result = Self {
+            routes: BTreeMap::new(),
+            materials: BTreeMap::new(),
+            permitted: BTreeMap::new(),
+            finite_pieces: BTreeSet::new(),
+        };
+        for (i, piece) in pieces.iter().enumerate() {
+            let id = piece["id"]
+                .as_str()
+                .ok_or_else(|| invalid("cutting job needs source-piece IDs"))?;
+            let material =
+                textile_import::resolve_fabric(textile_import::piece_fabric(pattern, i)?)?
+                    .ok_or_else(|| invalid("cutting job needs an explicit material selection"))?;
+            if id.trim().is_empty()
+                || result
+                    .materials
+                    .insert(id.into(), material.sha256().into())
+                    .is_some()
+            {
+                return Err(invalid(
+                    "cutting job needs unique nonempty source-piece IDs",
+                ));
+            }
+        }
+        let mut assigned = BTreeSet::new();
+        for route in &request.routes {
+            let material = result
+                .materials
+                .get(&route.piece)
+                .ok_or_else(|| invalid("cutting routes must name original source pieces"))?;
+            if !assigned.insert(route.piece.clone()) {
+                return Err(invalid(
+                    "each source piece needs exactly one cutting route rule",
+                ));
+            }
+            result.routes.insert(route.piece.clone(), route.stock);
+            result
+                .permitted
+                .entry(route.stock)
+                .or_default()
+                .insert(material.clone());
+            if route.stock == StockKind::FiniteStock {
+                result.finite_pieces.insert(route.piece.clone());
+            }
+        }
+        let mut choice_count = 0usize;
+        for route in &request.material_routes {
+            let material = result
+                .materials
+                .get(&route.piece)
+                .ok_or_else(|| invalid("material routes must name original source pieces"))?;
+            if !assigned.insert(route.piece.clone()) || route.choices.is_empty() {
+                return Err(invalid(
+                    "material routes need unique pieces and nonempty exact choices",
+                ));
+            }
+            choice_count = choice_count.saturating_add(route.choices.len());
+            if choice_count > 4096 {
+                return Err(Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "cutting route choices exceed 4096 exact material alternatives",
+                ));
+            }
+            let mut choices = BTreeSet::new();
+            for choice in &route.choices {
+                let hash = &choice.material_sha256;
+                if hash.len() != 64
+                    || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                    || !choices.insert(hash)
+                {
+                    return Err(invalid(
+                        "material route choices need unique exact lowercase SHA-256 identities",
+                    ));
+                }
+                result
+                    .permitted
+                    .entry(choice.stock)
+                    .or_default()
+                    .insert(hash.clone());
+                if choice.stock == StockKind::FiniteStock {
+                    result.finite_pieces.insert(route.piece.clone());
+                }
+                if hash == material {
+                    result.routes.insert(route.piece.clone(), choice.stock);
+                }
+            }
+            if !result.routes.contains_key(&route.piece) {
+                return Err(invalid(format!(
+                    "{}: no cutting route declares material snapshot {material}; review the new material revision",
+                    route.piece
+                )));
+            }
+        }
+        if assigned.len() != pieces.len() {
+            return Err(invalid(
+                "cutting routes must cover every original source piece exactly once",
+            ));
+        }
+        if request.roll.is_some() != result.permitted.contains_key(&StockKind::Roll)
+            || request.finite_stock.is_some()
+                != result.permitted.contains_key(&StockKind::FiniteStock)
+        {
+            return Err(invalid(
+                "supply exactly the planner options used by the declared cutting routes",
+            ));
+        }
+        Ok(result)
+    }
+
+    fn scope_permissions(
+        &self,
+        permissions: &mut Vec<String>,
+        kind: StockKind,
+    ) -> Result<(), Refusal> {
+        let allowed = self.permitted.get(&kind);
+        let mut seen = BTreeSet::new();
+        if permissions.len() > 4096
+            || permissions.iter().any(|hash| {
+                !seen.insert(hash.clone()) || allowed.is_none_or(|pool| !pool.contains(hash))
+            })
+        {
+            return Err(invalid(
+                "grain-reversal pools need unique exact materials declared for that stock route",
+            ));
+        }
+        permissions.retain(|hash| {
+            self.routes
+                .iter()
+                .any(|(piece, route)| *route == kind && self.materials[piece] == *hash)
+        });
+        Ok(())
+    }
+}
+
 impl Request {
     /// The complete garment count, checked by [`Self::build`] for equality between routes.
     #[must_use]
@@ -184,35 +368,39 @@ impl Request {
     /// Invalid or incomplete routes, mismatched copies/effective allowances, unsupported material
     /// forms, exhausted canonical planning budgets, or failed exact inventory coverage.
     pub fn build(&self, pattern: &Pattern) -> Result<Plan, Refusal> {
-        if self.schema != "ftx-cutting-job/1" || self.routes.len() > 4096 {
+        let material_following = self.schema == "ftx-cutting-job/2";
+        if (!material_following && self.schema != "ftx-cutting-job/1")
+            || (!material_following && !self.material_routes.is_empty())
+            || self.routes.len().saturating_add(self.material_routes.len()) > 4096
+        {
             return Err(invalid("invalid cutting-job schema or route budget"));
+        }
+        if material_following && let Some(inventory) = &self.finite_stock {
+            inventory.validate_geometry_budget()?;
         }
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
         }
+        let bound = Changes {
+            schema: "ftx-material-bindings/1".into(),
+            ..Changes::default()
+        }
+        .apply(pattern)?;
+        let pattern = Pattern::new(bound["pattern"].clone());
+        let pattern_json = bound["pattern_json"]
+            .as_str()
+            .ok_or_else(|| invalid("frozen cutting pattern lost its JSON"))?
+            .to_owned();
+        let pattern_sha256 = bound["pattern_sha256"]
+            .as_str()
+            .ok_or_else(|| invalid("frozen cutting pattern lost its identity"))?
+            .to_owned();
         let pieces = pattern.raw()["pieces"]
             .as_array()
             .ok_or_else(|| invalid("cutting job needs source pieces"))?;
-        let mut routes = BTreeMap::new();
-        for route in &self.routes {
-            if route.piece.trim().is_empty()
-                || routes.insert(route.piece.as_str(), route.stock).is_some()
-            {
-                return Err(invalid(
-                    "cutting routes need unique nonempty source-piece IDs",
-                ));
-            }
-        }
-        if pieces.len() != routes.len()
-            || pieces
-                .iter()
-                .any(|p| p["id"].as_str().is_none_or(|id| !routes.contains_key(id)))
-        {
-            return Err(invalid(
-                "cutting routes must cover every original source piece exactly once",
-            ));
-        }
+        let routing = Routing::compile(self, &pattern)?;
+        let routes = &routing.routes;
         let indices = |kind| {
             pieces
                 .iter()
@@ -222,13 +410,6 @@ impl Request {
         };
         let roll_indices = indices(StockKind::Roll);
         let finite_indices = indices(StockKind::FiniteStock);
-        if self.roll.is_some() != !roll_indices.is_empty()
-            || self.finite_stock.is_some() != !finite_indices.is_empty()
-        {
-            return Err(invalid(
-                "supply exactly the planner options used by the explicit cutting routes",
-            ));
-        }
         let copies = self.copies();
         if !(1..=4096).contains(&copies)
             || pattern
@@ -245,7 +426,7 @@ impl Request {
         if let (Some(roll), Some(finite)) = (&self.roll, &self.finite_stock) {
             let allowance = |sa| {
                 Ctx::new(
-                    pattern,
+                    &pattern,
                     ExportOptions {
                         sa,
                         ..ExportOptions::default()
@@ -262,25 +443,6 @@ impl Request {
                 ));
             }
         }
-        let bound = Changes {
-            schema: "ftx-material-bindings/1".into(),
-            ..Changes::default()
-        }
-        .apply(pattern)?;
-        let pattern = Pattern::new(bound["pattern"].clone());
-        let pattern_json = bound["pattern_json"]
-            .as_str()
-            .ok_or_else(|| invalid("frozen cutting pattern lost its JSON"))?
-            .to_owned();
-        let pattern_sha256 = bound["pattern_sha256"]
-            .as_str()
-            .ok_or_else(|| invalid("frozen cutting pattern lost its identity"))?
-            .to_owned();
-        let roll = self
-            .roll
-            .as_ref()
-            .map(|o| CutPlan::build_scoped(&pattern, o, Some(&roll_indices)))
-            .transpose()?;
         let mut frozen = self.clone();
         if let Some(request) = &mut frozen.finite_stock
             && request.options.optimize == Some(stock::search::Objective::MinimizePurchaseCost)
@@ -296,13 +458,80 @@ impl Request {
             }
             request.pricing = Some(common);
         }
-        let finite_stock = frozen
-            .finite_stock
+        if material_following && let Some(request) = &mut frozen.finite_stock {
+            if request.schema != "ftx-finite-stock-request/1"
+                || request.stocks.is_empty()
+                || request.stocks.len() > 128
+                || !(1..=20_000_000).contains(&request.options.work_limit)
+            {
+                return Err(invalid(
+                    "material-following inventory needs the finite-stock schema, 1..128 physical items and bounded work inputs",
+                ));
+            }
+            let db = textile_import::catalog()?;
+            let mut ids = BTreeSet::new();
+            for stock in &mut request.stocks {
+                if stock.id.trim().is_empty() || !ids.insert(stock.id.clone()) {
+                    return Err(invalid("physical stock IDs must be nonempty and unique"));
+                }
+                stock.material = db.resolve(&stock.material)?.frozen_selection();
+            }
+        }
+        let mut scoped_roll = frozen.roll.clone();
+        let mut scoped_finite = frozen.finite_stock.clone();
+        if material_following {
+            if let Some(options) = &mut scoped_roll {
+                options.validate()?;
+                if let Some(nesting) = &mut options.nesting {
+                    routing.scope_permissions(
+                        &mut nesting.grain_reversal_materials,
+                        StockKind::Roll,
+                    )?;
+                }
+            }
+            if let Some(request) = &mut scoped_finite {
+                routing.scope_permissions(
+                    &mut request.options.grain_reversal_materials,
+                    StockKind::FiniteStock,
+                )?;
+                if !request.options.zone_margin_mm.is_finite()
+                    || request.options.zone_margin_mm < 0.0
+                    || (request.options.zone_margin_mm > 0.0
+                        && request.options.piece_zones.is_empty())
+                    || request.options.piece_zones.iter().any(|(piece, zone)| {
+                        !routing.finite_pieces.contains(piece) || zone.trim().is_empty()
+                    })
+                {
+                    return Err(invalid(
+                        "finite-stock zone pools need declared finite-route pieces, nonempty zones and a finite nonnegative margin",
+                    ));
+                }
+                request
+                    .options
+                    .piece_zones
+                    .retain(|piece, _| routes[piece] == StockKind::FiniteStock);
+                if request.options.piece_zones.is_empty() {
+                    request.options.zone_margin_mm = 0.0;
+                }
+            }
+        }
+        let roll = scoped_roll
             .as_ref()
+            .filter(|_| !roll_indices.is_empty())
+            .map(|o| CutPlan::build_scoped(&pattern, o, Some(&roll_indices)))
+            .transpose()?;
+        let finite_stock = scoped_finite
+            .as_ref()
+            .filter(|_| !finite_indices.is_empty())
             .map(|r| r.build_scoped(&pattern, Some(&finite_indices)))
             .transpose()?;
         if let Some(plan) = &finite_stock {
-            frozen.finite_stock = Some(plan.request().clone());
+            if material_following {
+                // Freeze inventory without losing permissions for the other declared alternatives.
+                frozen.finite_stock.as_mut().unwrap().stocks = plan.request().stocks.clone();
+            } else {
+                frozen.finite_stock = Some(plan.request().clone());
+            }
         }
         let finite_stock_identities = finite_stock
             .as_ref()
@@ -311,11 +540,6 @@ impl Request {
             .unwrap_or_default();
         let mut expected = BTreeSet::new();
         for instance in &pattern.instances {
-            let material = textile_import::resolve_fabric(textile_import::piece_fabric(
-                &pattern,
-                instance.piece_index,
-            )?)?
-            .ok_or_else(|| invalid("cutting job lost a material selection"))?;
             let piece = pattern.raw()["pieces"][instance.piece_index]["id"]
                 .as_str()
                 .unwrap();
@@ -325,7 +549,7 @@ impl Request {
                     instance: instance.id.clone(),
                     copy,
                     stock: routes[piece],
-                    material_sha256: material.sha256().into(),
+                    material_sha256: routing.materials[piece].clone(),
                 }) {
                     return Err(invalid("ambiguous duplicate physical cut instance"));
                 }
@@ -379,18 +603,39 @@ impl Request {
         {
             return Err(invalid("complete cutting job stock metrics overflow"));
         }
-        let purchasing = self
-            .purchasing
-            .as_ref()
-            .map(|p| price(roll.as_ref(), finite_stock.as_ref(), p));
+        let purchasing = self.purchasing.as_ref().map(|p| {
+            price(
+                roll.as_ref(),
+                finite_stock.as_ref(),
+                p,
+                frozen.finite_stock.as_ref().filter(|_| material_following),
+            )
+        });
         let replay_request_json = encode(&frozen)?;
+        let resolved_routes = if material_following {
+            routes
+                .iter()
+                .map(|(piece, stock)| ResolvedRoute {
+                    piece: piece.clone(),
+                    stock: *stock,
+                    material_sha256: routing.materials[piece].clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ok(Plan {
-            schema: "ftx-cutting-job-plan/1",
+            schema: if material_following {
+                "ftx-cutting-job-plan/2"
+            } else {
+                "ftx-cutting-job-plan/1"
+            },
             pattern_sha256,
             request_sha256: sha256_hex(replay_request_json.as_bytes()),
             pattern_json,
             replay_request_json,
             request: frozen,
+            resolved_routes,
             inventory: actual.into_iter().collect(),
             roll,
             finite_stock,
@@ -409,7 +654,33 @@ fn price(
     roll: Option<&CutPlan>,
     finite: Option<&stock::Plan>,
     request: &Purchasing,
+    dormant_inventory: Option<&stock::Request>,
 ) -> PriceReport {
+    if finite.is_none()
+        && let Some(inventory) = dormant_inventory
+    {
+        let ids = inventory.stocks.iter().map(|s| s.id.as_str()).collect();
+        if let Err(refusal) =
+            procurement::finite::validate_bindings(&request.quotes, &request.finite_bindings, &ids)
+        {
+            return PriceReport {
+                schema: "ftx-cutting-job-procurement/1",
+                request: request.clone(),
+                roll: Outcome::Refused {
+                    refusal: refusal.clone(),
+                },
+                finite_stock: Outcome::Refused {
+                    refusal: refusal.clone(),
+                },
+                currency: request.market.currency.clone(),
+                complete_offer_coverage: false,
+                complete_observed_quantity_coverage: false,
+                least_observed_independent_order_total: None,
+                aggregation_refusal: Some(refusal),
+                execution_authorized: false,
+            };
+        }
+    }
     // A quote explicitly bound to a physical remnant cannot also supply a fungible roll order.
     // Without this separation, two routes using the same sheet snapshot could buy one item twice.
     let physical_offers: BTreeSet<_> = request
@@ -436,9 +707,11 @@ fn price(
             plan,
             &request.finite_request(),
         )),
-        None if !request.finite_bindings.is_empty() => Outcome::Refused {
-            refusal: invalid("finite offer bindings require finite-stock routes"),
-        },
+        None if dormant_inventory.is_none() && !request.finite_bindings.is_empty() => {
+            Outcome::Refused {
+                refusal: invalid("finite offer bindings require finite-stock routes"),
+            }
+        }
         None => Outcome::NotRequested,
     };
     let mut total = Some(0.0);

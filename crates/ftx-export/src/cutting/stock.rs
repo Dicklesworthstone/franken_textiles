@@ -304,6 +304,28 @@ fn marker(stock: &Stock, material: ResolvedMaterial, work: &mut Work) -> Result<
 }
 
 impl Request {
+    /// Bound retained source geometry even when material routing leaves this inventory dormant.
+    pub(super) fn validate_geometry_budget(&self) -> Result<(), Refusal> {
+        let vertices = self.stocks.iter().try_fold(0usize, |n, s| {
+            s.defects_mm
+                .iter()
+                .chain(&s.occupied_mm)
+                .chain(s.zones.iter().map(|z| &z.outline_mm))
+                .try_fold(n.checked_add(s.outline_mm.len())?, |n, p| {
+                    n.checked_add(p.len())
+                })
+        });
+        if vertices.is_none_or(|n| n > 32768)
+            || self.stocks.iter().any(|s| {
+                s.defects_mm.len() > 256 || s.occupied_mm.len() > 4096 || s.zones.len() > 256
+            })
+            || self.options.piece_zones.len() > 4096
+        {
+            return Err(budget());
+        }
+        Ok(())
+    }
+
     /// Allocate every physical pattern instance to individually identified finite stock, atomically.
     /// Width, constitutive moduli and thermal storage are not needed to cut an identified hide.
     /// Frozen replay uses the same original pattern and emitted request; no files are modified.
@@ -357,23 +379,7 @@ impl Request {
                 ));
             }
         }
-        let vertices = self.stocks.iter().try_fold(0usize, |n, s| {
-            s.defects_mm
-                .iter()
-                .chain(&s.occupied_mm)
-                .chain(s.zones.iter().map(|z| &z.outline_mm))
-                .try_fold(n.checked_add(s.outline_mm.len())?, |n, p| {
-                    n.checked_add(p.len())
-                })
-        });
-        if vertices.is_none_or(|n| n > 32768)
-            || self.stocks.iter().any(|s| {
-                s.defects_mm.len() > 256 || s.occupied_mm.len() > 4096 || s.zones.len() > 256
-            })
-            || o.piece_zones.len() > 4096
-        {
-            return Err(budget());
-        }
+        self.validate_geometry_budget()?;
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
             return Err(bad(errors.join("; ")));

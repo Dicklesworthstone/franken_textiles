@@ -390,3 +390,349 @@ fn a_bound_physical_remnant_offer_cannot_also_supply_the_roll_route() {
         "item/hide-001"
     );
 }
+
+fn material_routing_inputs() -> (Pattern, job::Request, [Value; 2]) {
+    let (pattern, request) = inputs();
+    let mut request = value(&priced(&pattern, &request));
+    let db = textile_import::catalog().unwrap();
+    let hide: Selection =
+        serde_json::from_value(pattern.raw()["fabric"]["material"].clone()).unwrap();
+    let hide_hash = db.resolve(&hide).unwrap().sha256().to_owned();
+    let mut choices = vec![json!({"material_sha256":hide_hash,"stock":"finite_stock"})];
+    let mut roll_hashes = Vec::new();
+    let materials = ["woven-linen", "performance-knit"].map(|name| {
+        let mut selection = pattern.raw()["pieces"][1]["fabric"]["material"].clone();
+        let id = format!("synthetic-{name}");
+        selection["id"] = json!(id);
+        selection["record"]["id"] = json!(id);
+        selection["record"]["name"] = json!(format!("Synthetic {name} routing test, not measured"));
+        if name == "performance-knit" {
+            selection["record"]["form"] = json!("knit");
+            selection["record"]["properties"]["width"]["value"] = json!(0.07);
+        }
+        let resolved = db
+            .resolve(&serde_json::from_value(selection.clone()).unwrap())
+            .unwrap();
+        let hash = resolved.sha256().to_owned();
+        roll_hashes.push(hash.clone());
+        choices.push(json!({"material_sha256":hash,"stock":"roll"}));
+        let mut quote = request["purchasing"]["quotes"]["quotes"][1].clone();
+        quote["offer_id"] = json!(format!("roll/{name}"));
+        quote["sku"] = json!(name);
+        quote["material_id"] = json!(id);
+        quote["material_sha256"] = json!(hash);
+        quote["price"] = json!(if name == "performance-knit" { 6.0 } else { 4.0 });
+        request["purchasing"]["quotes"]["quotes"]
+            .as_array_mut()
+            .unwrap()
+            .push(quote);
+        selection
+    });
+    request["schema"] = json!("ftx-cutting-job/2");
+    request["routes"] = json!([{"piece":"lining","stock":"roll"}]);
+    request["material_routes"] = json!([{"piece":"shell","choices":choices}]);
+    request["roll"]["nesting"] =
+        json!({"passes":1,"work_limit":100000,"grain_reversal_materials":roll_hashes});
+    request["finite_stock"]["options"]["grain_reversal_materials"] = json!([hide_hash]);
+    (pattern, serde_json::from_value(request).unwrap(), materials)
+}
+
+#[test]
+fn exact_material_choices_reroute_the_same_shell_and_price_only_engaged_stock() {
+    let (pattern, request, materials) = material_routing_inputs();
+    let original = pattern.raw().clone();
+    let mut study: Value = serde_json::from_str(STUDY).unwrap();
+    study["cutting_job"] = value(&request);
+    study["variants"] = json!([
+        {"key":"hide","changes":{"schema":"ftx-material-bindings/1"}},
+        {"key":"linen","changes":{"schema":"ftx-material-bindings/1","default":materials[0]}},
+        {"key":"knit","changes":{"schema":"ftx-material-bindings/1","default":materials[1]}}
+    ]);
+    // This explicit synthetic study compares unlike width/finite-stock acquisition protocols.
+    study["comparison"] = json!({"basis":"nominal","allow_mixed_protocols":true,"required_consumers":["cutting_job","cutting_job_purchasing"],
+        "objectives":[{"metric":"cutting_job_observed_order_cost","direction":"minimize"}],"constraints":[]});
+    let study: material_study::Request = serde_json::from_value(study).unwrap();
+    let report = value(&study.evaluate(&pattern).unwrap());
+    assert_eq!(pattern.raw(), &original);
+    assert_eq!(report["geometry_changed"], false);
+    for alternative in report["alternatives"].as_array().unwrap() {
+        assert_eq!(alternative["cutting_job"]["status"], "available");
+        let plan = &alternative["cutting_job"]["result"];
+        assert_eq!(plan["schema"], "ftx-cutting-job-plan/2");
+        assert_eq!(plan["inventory"].as_array().unwrap().len(), 6);
+        assert_eq!(
+            plan["purchasing"]["complete_observed_quantity_coverage"],
+            true
+        );
+        let shell = plan["resolved_routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["piece"] == "shell")
+            .unwrap();
+        let is_hide = alternative["key"] == "hide";
+        assert_eq!(
+            shell["stock"],
+            if is_hide { "finite_stock" } else { "roll" }
+        );
+        assert_eq!(plan["finite_stock"].is_null(), !is_hide);
+        assert_eq!(
+            plan["purchasing"]["finite_stock"]["status"],
+            if is_hide {
+                "available"
+            } else {
+                "not_requested"
+            }
+        );
+        near(
+            alternative["metrics"]["cutting_job_observed_order_cost"]
+                .as_f64()
+                .unwrap(),
+            match alternative["key"].as_str().unwrap() {
+                "hide" => 8.0,
+                "linen" => 1.4,
+                "knit" => 1.6,
+                _ => unreachable!(),
+            },
+        );
+        let active_permissions =
+            plan["roll"]["options"]["nesting"]["grain_reversal_materials"].as_array();
+        assert_eq!(
+            active_permissions.map_or(0, Vec::len),
+            usize::from(!is_hide)
+        );
+        if let Some(permissions) = active_permissions {
+            assert_eq!(permissions[0], shell["material_sha256"]);
+        }
+        assert_eq!(
+            plan["request"]["roll"]["nesting"]["grain_reversal_materials"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let replay: job::Request =
+            serde_json::from_str(plan["replay_request_json"].as_str().unwrap()).unwrap();
+        let frozen_pattern = Pattern::from_json(plan["pattern_json"].as_str().unwrap()).unwrap();
+        assert_eq!(value(&replay.build(&frozen_pattern).unwrap()), *plan);
+        if !is_hide {
+            // The complete job scopes its explicit pool; the standalone roll planner stays strict.
+            assert!(CutPlan::build(&frozen_pattern, request.roll.as_ref().unwrap()).is_err());
+            let direct = procurement::evaluate(
+                &replay.build(&frozen_pattern).unwrap().roll.unwrap(),
+                &request.purchasing.as_ref().unwrap().quotes,
+                &request.purchasing.as_ref().unwrap().market,
+            )
+            .unwrap();
+            assert_eq!(plan["purchasing"]["roll"]["result"], direct);
+        }
+    }
+    assert_eq!(report["comparison"]["frontier"], json!(["linen"]));
+}
+
+#[test]
+fn routing_never_reuses_a_changed_same_id_snapshot_or_ambiguous_choice() {
+    let (pattern, request, _) = material_routing_inputs();
+    let mut changed = pattern.raw().clone();
+    changed["fabric"]["material"]["record"]["properties"]["areal_density"]["value"] = json!(0.51);
+    let refusal = request.build(&Pattern::new(changed)).unwrap_err();
+    assert!(
+        refusal
+            .message
+            .contains("no cutting route declares material snapshot")
+    );
+    for case in 0..11 {
+        let mut bad = value(&request);
+        match case {
+            0 => {
+                let duplicate = bad["material_routes"][0]["choices"][0].clone();
+                bad["material_routes"][0]["choices"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(duplicate);
+            }
+            1 => bad["routes"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"piece":"shell","stock":"roll"})),
+            2 => bad["material_routes"][0]["piece"] = json!("unknown"),
+            3 => bad["material_routes"][0]["choices"][0]["material_sha256"] = json!("0".repeat(64)),
+            4 => bad["schema"] = json!("ftx-cutting-job/1"),
+            5 => bad["roll"] = Value::Null,
+            6 => bad["roll"]["nesting"]["grain_reversal_materials"] = json!(["0".repeat(64)]),
+            7 => {
+                bad["finite_stock"]["options"]["piece_zones"] =
+                    json!({"lining":"wrong-stock-route"})
+            }
+            8 => {
+                bad["material_routes"][0]["choices"][1]["material_sha256"] =
+                    json!("ABCDEF".repeat(10) + "ABCD")
+            }
+            9 => bad["finite_stock"]["options"]["zone_margin_mm"] = json!(-1.0),
+            _ => bad["finite_stock"]["options"]["zone_margin_mm"] = json!(1.0),
+        }
+        assert!(
+            serde_json::from_value::<job::Request>(bad)
+                .unwrap()
+                .build(&pattern)
+                .is_err(),
+            "case {case}"
+        );
+    }
+}
+
+#[test]
+fn material_routing_keeps_dormant_planner_copy_allowance_and_inventory_locks() {
+    let (pattern, request, materials) = material_routing_inputs();
+    let mut raw = pattern.raw().clone();
+    raw["fabric"]["material"] = materials[0].clone();
+    let pattern = Pattern::new(raw);
+    for case in 0..4 {
+        let mut bad = request.clone();
+        let stock = bad.finite_stock.as_mut().unwrap();
+        match case {
+            0 => stock.options.copies = 1,
+            1 => stock.options.seam_allowance_mm = Some(1.0),
+            2 => {
+                let mut selection = value(&stock.stocks[0].material);
+                selection["expected_sha256"] = json!("0".repeat(64));
+                stock.stocks[0].material = serde_json::from_value(selection).unwrap();
+            }
+            _ => stock.stocks.push(stock.stocks[0].clone()),
+        }
+        assert!(bad.build(&pattern).is_err(), "case {case}");
+    }
+    let (legacy_pattern, legacy) = inputs();
+    let plan = value(&legacy.build(&legacy_pattern).unwrap());
+    assert_eq!(plan["schema"], "ftx-cutting-job-plan/1");
+    assert!(plan.get("resolved_routes").is_none());
+    assert!(plan["request"].get("material_routes").is_none());
+}
+
+#[test]
+fn material_routes_can_leave_roll_options_dormant_without_omitting_lining() {
+    let (pattern, request, _) = material_routing_inputs();
+    let db = textile_import::catalog().unwrap();
+    let mut raw = pattern.raw().clone();
+    let hide = raw["fabric"]["material"].clone();
+    let hide_hash = db
+        .resolve(&serde_json::from_value(hide.clone()).unwrap())
+        .unwrap()
+        .sha256()
+        .to_owned();
+    let lining_hash = db
+        .resolve(&serde_json::from_value(raw["pieces"][1]["fabric"]["material"].clone()).unwrap())
+        .unwrap()
+        .sha256()
+        .to_owned();
+    raw["pieces"][1]["fabric"]["material"] = hide;
+    let mut request = value(&request);
+    request["routes"] = json!([]);
+    request["material_routes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"piece":"lining","choices":[
+            {"material_sha256":hide_hash,"stock":"finite_stock"},
+            {"material_sha256":lining_hash,"stock":"roll"}
+        ]}));
+    let request: job::Request = serde_json::from_value(request).unwrap();
+    let plan = request.build(&Pattern::new(raw)).unwrap();
+    assert!(plan.roll.is_none());
+    assert_eq!(plan.inventory.len(), 6);
+    assert!(
+        plan.inventory
+            .iter()
+            .all(|i| i.stock == job::StockKind::FiniteStock)
+    );
+    assert_eq!(
+        value(&plan.purchasing.as_ref().unwrap().roll)["status"],
+        "not_requested"
+    );
+    near(
+        plan.purchasing
+            .unwrap()
+            .least_observed_independent_order_total
+            .unwrap(),
+        7.0,
+    );
+}
+
+#[test]
+fn dormant_finite_inventory_retains_canonical_geometry_budgets() {
+    let (pattern, request, materials) = material_routing_inputs();
+    let mut raw = pattern.raw().clone();
+    raw["fabric"]["material"] = materials[0].clone();
+    let pattern = Pattern::new(raw);
+    assert!(request.build(&pattern).unwrap().finite_stock.is_none());
+    let polygon = vec![
+        Vec2::new(1.0, 1.0),
+        Vec2::new(2.0, 1.0),
+        Vec2::new(1.0, 2.0),
+    ];
+    for case in 0..4 {
+        let mut bad = request.clone();
+        let stock = &mut bad.finite_stock.as_mut().unwrap().stocks[0];
+        let zone = stock::zones::Zone {
+            id: "synthetic-budget-zone".into(),
+            outline_mm: polygon.clone(),
+            geometry_source: stock.geometry_source.clone(),
+        };
+        match case {
+            0 => {
+                stock.outline_mm = vec![polygon[0]; 8192];
+                stock.defects_mm = vec![vec![polygon[0]; 8192]];
+                stock.occupied_mm = vec![vec![polygon[0]; 8192]];
+                stock.zones = vec![stock::zones::Zone {
+                    outline_mm: vec![polygon[0]; 8193],
+                    ..zone
+                }];
+            }
+            1 => stock.defects_mm = vec![polygon.clone(); 257],
+            2 => stock.occupied_mm = vec![polygon.clone(); 4097],
+            _ => stock.zones = vec![zone; 257],
+        }
+        assert_eq!(
+            bad.build(&pattern).unwrap_err().code,
+            RefusalCode::BudgetExceeded,
+            "case {case} must refuse even when every selected route is roll stock"
+        );
+    }
+}
+
+#[test]
+fn dormant_finite_pricing_retains_canonical_binding_and_work_limits() {
+    let (pattern, request, materials) = material_routing_inputs();
+    let mut raw = pattern.raw().clone();
+    raw["fabric"]["material"] = materials[0].clone();
+    let pattern = Pattern::new(raw);
+    for case in 0..6 {
+        let mut bad = request.clone();
+        let pricing = bad.purchasing.as_mut().unwrap();
+        match case {
+            0 => pricing.finite_bindings = vec![pricing.finite_bindings[0].clone(); 129],
+            1 => pricing
+                .finite_bindings
+                .push(pricing.finite_bindings[0].clone()),
+            2 => pricing.finite_bindings[0].stock_id = "unknown-stock".into(),
+            3 => pricing.finite_bindings[0].offer_ids = vec!["item/hide-001".into(); 4097],
+            4 => pricing.quotes.quotes = vec![pricing.quotes.quotes[0].clone(); 16385],
+            _ => pricing.finite_bindings[0].offer_ids = vec!["unknown-offer".into()],
+        }
+        let plan = bad.build(&pattern).unwrap();
+        assert!(plan.complete_inventory);
+        assert!(plan.finite_stock.is_none());
+        assert_eq!(plan.inventory.len(), 6);
+        let price = plan.purchasing.unwrap();
+        assert!(!price.complete_offer_coverage);
+        assert!(price.least_observed_independent_order_total.is_none());
+        let refusal = price.aggregation_refusal.unwrap();
+        assert_eq!(
+            refusal.code,
+            if matches!(case, 0 | 3 | 4) {
+                RefusalCode::BudgetExceeded
+            } else {
+                RefusalCode::InvalidDocument
+            }
+        );
+    }
+}

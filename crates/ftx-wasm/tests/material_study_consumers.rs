@@ -51,6 +51,116 @@ fn portable_mixed_job_replays_every_physical_part_and_refuses_an_unmatched_mater
 }
 
 #[test]
+fn portable_study_follows_material_routes_and_keeps_all_source_choices_for_replay() {
+    let pattern = include_str!("../../../examples/mixed-cutting/pattern.json");
+    let source: Value = serde_json::from_str(pattern).unwrap();
+    let mut request: Value =
+        serde_json::from_str(include_str!("../../../examples/mixed-cutting/study.json")).unwrap();
+    let catalog = ftx_pattern::textile_import::catalog().unwrap();
+    let hide = source["fabric"]["material"].clone();
+    let mut linen = source["pieces"][1]["fabric"]["material"].clone();
+    linen["id"] = json!("synthetic-linen-shell");
+    linen["record"]["id"] = linen["id"].clone();
+    let mut knit = linen.clone();
+    knit["id"] = json!("synthetic-knit-shell");
+    knit["record"]["id"] = knit["id"].clone();
+    knit["record"]["form"] = json!("knit");
+    let mut variants = Vec::new();
+    let mut choices = Vec::new();
+    for (key, selection, stock) in [
+        ("hide", hide, "finite_stock"),
+        ("linen", linen, "roll"),
+        ("knit", knit, "roll"),
+    ] {
+        let material = catalog
+            .resolve(&serde_json::from_value(selection.clone()).unwrap())
+            .unwrap();
+        choices.push(json!({"material_sha256":material.sha256(),"stock":stock}));
+        variants.push(
+            json!({"key":key,"changes":{"schema":"ftx-material-bindings/1","default":selection}}),
+        );
+    }
+    request["variants"] = json!(variants);
+    request["cutting_job"]["schema"] = json!("ftx-cutting-job/2");
+    request["cutting_job"]["routes"] = json!([{"piece":"lining","stock":"roll"}]);
+    request["cutting_job"]["material_routes"] = json!([{"piece":"shell","choices":choices}]);
+    request["comparison"]["allow_mixed_protocols"] = json!(true);
+    let input = serde_json::to_string(&request).unwrap();
+    let output = materials::study(pattern, &input).unwrap();
+    let report: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(report["geometry_changed"], false);
+    for row in report["alternatives"].as_array().unwrap() {
+        assert_eq!(row["cutting_job"]["status"], "available");
+        let job = &row["cutting_job"]["result"];
+        let shell = job["resolved_routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|route| route["piece"] == "shell")
+            .unwrap();
+        assert_eq!(
+            shell["stock"],
+            if row["key"] == "hide" {
+                "finite_stock"
+            } else {
+                "roll"
+            }
+        );
+        assert_eq!(job["inventory"].as_array().unwrap().len(), 6);
+        assert_eq!(
+            job["request"]["material_routes"][0]["choices"],
+            request["cutting_job"]["material_routes"][0]["choices"]
+        );
+        let frozen: Value = serde_json::from_str(job["pattern_json"].as_str().unwrap()).unwrap();
+        for (after, before) in frozen["pieces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(source["pieces"].as_array().unwrap())
+        {
+            for field in [
+                "id", "cut", "grain", "vertices", "edges", "internal", "drills", "sim",
+            ] {
+                assert_eq!(
+                    after[field], before[field],
+                    "unchanged pattern field {field}"
+                );
+            }
+        }
+        assert_eq!(frozen["seams"], source["seams"]);
+        let replay: Value = serde_json::from_str(
+            &ftx_wasm::manufacturing::cut_job(
+                job["pattern_json"].as_str().unwrap(),
+                job["replay_request_json"].as_str().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&replay, job);
+    }
+    let mut changed = request;
+    changed["variants"][1]["changes"]["default"]["record"]["properties"]["width"]["value"] =
+        json!(0.11);
+    let refused: Value =
+        serde_json::from_str(&materials::study(pattern, &changed.to_string()).unwrap()).unwrap();
+    let row = refused["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "linen")
+        .unwrap();
+    assert_eq!(row["binding"]["status"], "available");
+    assert_eq!(row["cutting_job"]["status"], "refused");
+    assert!(
+        row["cutting_job"]["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no cutting route declares material snapshot")
+    );
+    assert_eq!(output, materials::study(pattern, &input).unwrap());
+}
+
+#[test]
 fn portable_study_rebinds_vapor_layers_and_replays_each_exact_standalone_request() {
     let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
     let raw = include_str!("../../../examples/vapor-study/leather.json");

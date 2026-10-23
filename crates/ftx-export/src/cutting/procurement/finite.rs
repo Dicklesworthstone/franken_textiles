@@ -233,19 +233,16 @@ pub(crate) fn assess_inventory(
     })
 }
 
-fn price_inventory(
-    inventory: &[Stock],
-    markers: &[Marker],
-    request: &Request,
-    include_unused: bool,
-) -> Result<Vec<StockPrice>, Refusal> {
-    if request.schema != "ftx-finite-stock-pricing/1" {
-        return Err(invalid("unsupported finite-stock pricing schema"));
-    }
-    if request.bindings.len() > 128
-        || request.quotes.quotes.len() > 16384
-        || request
-            .bindings
+// Shared with complete jobs whose finite inventory is dormant for the current material choice.
+// Namespace/budget validity is independent of whether an item is selected or price-qualified.
+pub(crate) fn validate_bindings<'a>(
+    quotes: &QuoteBook,
+    input: &'a [Binding],
+    stock_ids: &BTreeSet<&str>,
+) -> Result<BTreeMap<&'a str, &'a Binding>, Refusal> {
+    if input.len() > 128
+        || quotes.quotes.len() > 16384
+        || input
             .iter()
             .try_fold(0usize, |n, b| n.checked_add(b.offer_ids.len()))
             .is_none_or(|n| n > 4096)
@@ -255,18 +252,11 @@ fn price_inventory(
             "finite-stock quote/link budget exceeded",
         ));
     }
-    request.quotes.validate()?;
-    let ids = inventory_identities(inventory, markers)?;
-    let stock_ids: BTreeSet<_> = ids.iter().map(|i| i.stock_id.as_str()).collect();
-    let quoted_ids: BTreeSet<_> = request
-        .quotes
-        .quotes
-        .iter()
-        .map(|q| q.offer_id.as_str())
-        .collect();
+    quotes.validate()?;
+    let quoted_ids: BTreeSet<_> = quotes.quotes.iter().map(|q| q.offer_id.as_str()).collect();
     let mut bindings = BTreeMap::new();
     let mut used_offers = BTreeSet::new();
-    for binding in &request.bindings {
+    for binding in input {
         if !stock_ids.contains(binding.stock_id.as_str())
             || bindings
                 .insert(binding.stock_id.as_str(), binding)
@@ -287,6 +277,21 @@ fn price_inventory(
             }
         }
     }
+    Ok(bindings)
+}
+
+fn price_inventory(
+    inventory: &[Stock],
+    markers: &[Marker],
+    request: &Request,
+    include_unused: bool,
+) -> Result<Vec<StockPrice>, Refusal> {
+    if request.schema != "ftx-finite-stock-pricing/1" {
+        return Err(invalid("unsupported finite-stock pricing schema"));
+    }
+    let ids = inventory_identities(inventory, markers)?;
+    let stock_ids: BTreeSet<_> = ids.iter().map(|i| i.stock_id.as_str()).collect();
+    let bindings = validate_bindings(&request.quotes, &request.bindings, &stock_ids)?;
     let market = &request.market;
     let mut stocks = Vec::new();
     for identity in ids {
