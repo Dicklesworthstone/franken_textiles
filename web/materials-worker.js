@@ -298,7 +298,7 @@ self.onmessage = async ({ data: msg }) => {
         break;
       case "study":
         raw = ftx.material_study(msg.pattern, msg.studyRequest); result = json(raw);
-        files = [file("material-study.json", raw), file("original-pattern.json", msg.pattern),
+        files = [file(result.schema === "ftx-design-study-report/1" ? "design-study.json" : "material-study.json", raw), file("original-pattern.json", msg.pattern),
           file("study-request.json", msg.studyRequest)];
         break;
       case "scenario": {
@@ -310,8 +310,12 @@ self.onmessage = async ({ data: msg }) => {
         } finally { model.free(); }
         // Save original JSON text, not the display objects: number spellings participate in locks.
         // The large local model stays with its owner; the report identifies its exact source hash.
-        const matrix = result.schema === "ftx-material-scenario-matrix-study/1";
-        files = [file(matrix ? "material-scenario-matrix-study.json" : "material-scenario-study.json", raw), file("original-pattern.json", msg.pattern),
+        const reportName = {
+          "ftx-design-scenario-matrix-study/1": "design-scenario-matrix-study.json",
+          "ftx-design-scenario-study/1": "design-scenario-study.json",
+          "ftx-material-scenario-matrix-study/1": "material-scenario-matrix-study.json"
+        }[result.schema] || "material-scenario-study.json";
+        files = [file(reportName, raw), file("original-pattern.json", msg.pattern),
           file("study-request.json", msg.studyRequest), file("scenario-request.json", msg.scenarioRequest),
           file("body-input.json", msg.measurements)];
         break;

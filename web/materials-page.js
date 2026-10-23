@@ -637,7 +637,9 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
     return { schema: r.schema, basis: r.basis, allow_mixed_protocols: r.allow_mixed_protocols,
       scalar_frontier: r.frontier, request_sha256: r.request_sha256, notes: r.notes };
   }
-  if (r.schema === "ftx-material-scenario-matrix-study/1") return scenarioMatrixComparison(op, parent, r);
+  if (["ftx-material-scenario-matrix-study/1", "ftx-design-scenario-matrix-study/1"].includes(r.schema)) {
+    return scenarioMatrixComparison(op, parent, r);
+  }
   if (r.comparison) objectiveComparison(parent, r.comparison);
   const study = r.manufacturing || r;
   if (!skipManufacturing) manufacturingComparison(op, parent, study, r.comparison);
@@ -687,7 +689,7 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
 }
 function scenarioMatrixComparison(op, parent, r) {
   const note = document.createElement("p");
-  note.textContent = "Named scenarios share the same original pattern, material alternatives and body source. " +
+  note.textContent = "Named scenarios share the same original pattern, declared design and material alternatives, and body source. " +
     "Manufacturing is evaluated once; each case starts a fresh drape with its own conditions and optional motion. " +
     "Case decisions and physical units remain separate. No browser score or average replaces the native comparison.";
   parent.append(note);
@@ -736,7 +738,8 @@ function scenarioMatrixComparison(op, parent, r) {
   for (const [index, item] of r.cases.entries()) {
     const group = document.createElement("section"), heading = document.createElement("h4");
     heading.textContent = `Case ${index + 1}: ${item.key}`; group.append(heading); parent.append(group);
-    comparison(op, { ...item, schema: "ftx-material-scenario-study/1", manufacturing: r.manufacturing }, group,
+    comparison(op, { ...item, schema: r.schema === "ftx-design-scenario-matrix-study/1" ?
+      "ftx-design-scenario-study/1" : "ftx-material-scenario-study/1", manufacturing: r.manufacturing }, group,
       { skipManufacturing: true, filePrefix: `case-${index + 1}-` });
     detail(group, "Case request identity (display only)", { key: item.key, request_sha256: item.request_sha256 });
   }
@@ -747,7 +750,35 @@ function scenarioMatrixComparison(op, parent, r) {
     physical_validation_claim: r.manufacturing.physical_validation_claim,
     scope: "Fixed-input named cases, with their native outcomes, refusals and policies retained independently." };
 }
+function designComparison(op, parent, study) {
+  if (!study.alternatives.some(row => row.design)) return;
+  const note = document.createElement("p");
+  note.textContent = "Each pattern design starts from the original source, then applies its explicit alterations and material choices. " +
+    "The baseline retains the source geometry. Cutting, sewing and requested simulations use each candidate's actual pattern. " +
+    "Review alteration validation and consumer refusals before interpreting the computed comparison.";
+  parent.append(note);
+  const t = table(parent, "Pattern designs and material choices",
+    ["Alternative", "Pattern design", "Material choice", "Alteration operations", "Geometry"]);
+  for (const [i, row] of study.alternatives.entries()) {
+    const design = row.design;
+    cells(t, [row.key, design?.key ?? "Unknown", design?.material_key ?? "Unknown",
+      Array.isArray(design?.operations) ? String(design.operations.length) : "Unknown",
+      design?.geometry_changed === true ? "Changed" : design?.geometry_changed === false ? "Unchanged" : "Unavailable"]);
+    if (!design) continue;
+    if (typeof design.altered_pattern_json === "string") {
+      const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
+      link(op, actions, { name: `alternative-${i + 1}-design-pattern.json`,
+        text: design.altered_pattern_json, mime: "application/json" });
+    }
+    detail(parent, `${row.key}: exact alteration inputs, geometry identities and validation (display only)`, {
+      key: design.key, material_key: design.material_key, operations: design.operations,
+      source_pattern_sha256: design.source_pattern_sha256, altered_pattern_sha256: design.altered_pattern_sha256,
+      geometry_changed: design.geometry_changed, validation: design.validation,
+      refusal: row.binding?.refusal });
+  }
+}
 function manufacturingComparison(op, parent, study, computed) {
+  designComparison(op, parent, study);
   if (study.alternatives.some(row => row.choices)) {
     const choices = table(parent, "Material combinations evaluated by the study", ["Alternative", "Group choices"]);
     for (const row of study.alternatives) cells(choices, [row.key,

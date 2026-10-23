@@ -423,6 +423,31 @@ test('screening and studies call production entry points and download unmodified
   assert.match(study.files[0].text, /-0\.0/);
 });
 
+test('design studies use the canonical study APIs and retain exact source, operations and report bytes', async () => {
+  const schemas = [
+    ['ftx-design-study-report/1', 'study', 'design-study.json'],
+    ['ftx-design-scenario-study/1', 'scenario', 'design-scenario-study.json'],
+    ['ftx-design-scenario-matrix-study/1', 'scenario', 'design-scenario-matrix-study.json']
+  ];
+  for (const [schema, type, name] of schemas) {
+    const calls = [], freed = [], raw = ` {"schema":"${schema}","coefficient":1.0,"x":-0.0}\n`;
+    const w = await workerModule({ bindings: { default: () => Promise.resolve(),
+      WebBody: class { free() { freed.push('body'); } },
+      material_study: (...args) => { calls.push(args); return raw; },
+      material_scenario_study: (_body, ...args) => { calls.push(args); return raw; } } });
+    const msg = { type, bytes: new ArrayBuffer(8), pattern: ' {"x":-0.0}\n',
+      studyRequest: ' {"schema":"ftx-design-study/1","designs":[{"key":"wider","operations":[{"op":"move","dx_mm":1.0}]}]}\n',
+      scenarioRequest: '{"temperature":293.0}', measurements: '{"length":10.0}' };
+    const result = await w.send(msg);
+    assert.equal(result.type, 'result', result.message);
+    assert.deepEqual(calls, [type === 'study' ? [msg.pattern, msg.studyRequest] :
+      [msg.pattern, msg.studyRequest, msg.scenarioRequest, msg.measurements]]);
+    assert.deepEqual(freed, type === 'study' ? [] : ['body']);
+    assert.deepEqual(plain(result.files.slice(0, 3).map(f => [f.name, f.text])),
+      [[name, raw], ['original-pattern.json', msg.pattern], ['study-request.json', msg.studyRequest]]);
+  }
+});
+
 test('pressure conditioning preserves exact request and frozen selection through the shared worker', async () => {
   const w = await workerModule(), request = '{"pressure_pa":250.0,"coordinate":-0.0}';
   const result = await w.send({ type: 'pressure', request: 24, compressionRequest: request });
@@ -1933,6 +1958,23 @@ const studyRow = (key = 'A', pattern = '{"pieces":[],"x":-0.0,"value":1.0}') => 
 });
 const studyReport = (rows = [studyRow()]) => ({ schema: 'ftx-material-study/1', alternatives: rows,
   source_pattern_sha256: 'original-lock', geometry_changed: false, physical_validation_claim: false, hardware_execution_authorized: false });
+function designReport() {
+  const designs = ['baseline', '<wider & longer>', 'invalid'];
+  const rows = designs.map((key, i) => {
+    const row = studyRow(JSON.stringify([key, '<source choice>']));
+    row.design = { key, material_key: '<source choice>', source_pattern_sha256: 'original-lock',
+      operations: i ? [{ op: 'slash_spread', piece: '<front>', axis: 'x', at_mm: 10, add_mm: 20 }] : [],
+      altered_pattern_sha256: i === 2 ? null : `design-lock-${i}`,
+      altered_pattern_json: i === 2 ? null : ` {"pieces":[],"x":-0.0,"width":${i ? '120.0' : '100.0'}}\n`,
+      geometry_changed: i === 2 ? null : i !== 0, validation: i === 2 ? null : { passed: true } };
+    if (i === 2) {
+      row.binding = refused('Alteration refused: missing piece <front>');
+      row.cutting = row.sewing = row.purchasing = omitted();
+    }
+    return row;
+  });
+  return { ...studyReport(rows), schema: 'ftx-design-study-report/1', geometry_changed: true };
+}
 const screenReport = () => ({ schema: 'ftx-material-screen-report/1', basis: 'reported_bounds', allow_mixed_protocols: false, frontier: ['A'],
   alternatives: [{ key: 'A', eligible: true, dominated_by: [], exclusions: [],
     readings: { areal_density: { value: 0.2, unit: 'kg/m2', bounds: [0.19, 0.21] } }, selection: { id: 'source-A' } },
@@ -2342,6 +2384,51 @@ test('manufacturing studies use original lossless source, not bound previews, an
   assert.equal(a.download, 'alternative-1-pattern.json');
   assert.equal(await p.blobs.get(a.href).text(), row.binding.result.pattern_json);
   p.windowEvents.pagehide(); assert.equal(p.live.size, 0);
+});
+
+test('design alternatives retain baseline, refused geometry and exact altered and material-bound patterns', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const report = designReport(); await p.e.study.onclick(); p.emit(report);
+  const s = section(p, 'Fixed-pattern manufacturing alternatives');
+  const designs = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'Pattern designs and material choices');
+  assert.ok(designs); assert.equal(designs.children.length, 5);
+  assert.deepEqual(plain(designs.children[2].children.map(n => n.textContent)),
+    [report.alternatives[0].key, 'baseline', '<source choice>', '0', 'Unchanged']);
+  assert.equal(designs.children[3].children[1].textContent, '<wider & longer>');
+  assert.equal(designs.children[3].children[4].textContent, 'Changed');
+  assert.equal(designs.children[4].children[4].textContent, 'Unavailable');
+  assert.match(visibleText(s), /Alteration refused: missing piece <front>/);
+  assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+  for (const [index, row] of report.alternatives.entries()) {
+    for (const [suffix, text] of [['design-pattern', row.design.altered_pattern_json], ['pattern', row.binding.result?.pattern_json]]) {
+      const links = descendants(s).filter(n => n.download === `alternative-${index + 1}-${suffix}.json`);
+      assert.equal(links.length, text == null ? 0 : 1);
+      if (text != null) assert.equal(await p.blobs.get(links[0].href).text(), text);
+    }
+  }
+  const urls = new Set(p.live); assert.equal(urls.size, 4);
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
+  assert.ok([...urls].every(url => !p.live.has(url)));
+});
+
+test('design scenario matrices display shared geometry once and keep every case separate', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const report = scenarioMatrixReport(), designs = designReport();
+  report.schema = 'ftx-design-scenario-matrix-study/1';
+  report.manufacturing = designs; report.comparison = null;
+  for (const item of report.cases) {
+    item.comparison = null;
+    item.simulations = designs.alternatives.map(row => ({ key: row.key, evaluation: refused(`Case ${item.key}: geometry gate`) }));
+  }
+  await p.e.scenario.onclick(); p.emit(report);
+  const s = section(p, 'Fresh drape and heat alternatives');
+  assert.equal(descendants(s).filter(n => n.tag === 'table' && n.children[0].textContent === 'Pattern designs and material choices').length, 1);
+  assert.equal(descendants(s).filter(n => n.download?.endsWith('-design-pattern.json')).length, 2);
+  assert.match(visibleText(s), /Case <cold>: geometry gate/); assert.match(visibleText(s), /Case warm: geometry gate/);
+  assert.equal(JSON.parse(s.children[1].textContent).schema, 'ftx-design-scenario-matrix-study/1');
+  const downloads = descendants(s).filter(n => n.download).map(n => n.download);
+  assert.equal(new Set(downloads).size, downloads.length);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
 });
 
 test('mixed cutting jobs retain complete inventory, independent pricing and exact replay in both study workflows', async () => {

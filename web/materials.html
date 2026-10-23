@@ -230,7 +230,13 @@ No binding step is required. Refused consumers remain visible; missing prices, m
 <button id="screen" data-command="screen" disabled>Screen source-qualified materials</button>
 <p class="note">The request declares units, constraints, objectives, nominal or reported-bound comparison and estimate consent.
 Its scalar frontier is not a garment ranking. Original observations and protocols remain inspectable for excluded candidates too.</p>
-<label>Study request JSON (<code>ftx-material-study/1</code>) <input id="studyRequest" type="file" accept=".json,application/json"></label>
+<label>Study request JSON (<code>ftx-material-study/1</code> or <code>ftx-design-study/1</code>) <input id="studyRequest" type="file" accept=".json,application/json"></label>
+<p class="note">Use <code>ftx-design-study/1</code> to compare pattern alterations alongside material choices.
+Each named entry in <code>designs</code> contains explicit <code>operations</code>: <code>slash_spread</code>,
+<code>move</code>, <code>true_seam</code> or <code>cap_ease</code>. Each starts from the original pattern;
+the unchanged <code>baseline</code> is included automatically. Every design is crossed with the requested material
+alternatives, up to 32 total candidates. Invalid alterations retain their refusal and cannot win a comparison.
+Download each exact altered pattern, final material-bound pattern, and original study inputs for replay.</p>
 <details><summary>Build combinations of shell, lining, cuffs and other material choices</summary>
 <p>Inspect a material in section 1, select the source pieces that share a choice, and add it to a named group.
 Add more choices to that group, then create groups for other pieces. Every combination runs through the requested consumers.</p>
@@ -305,7 +311,7 @@ undeclared handling or establish total production time.</p>
 <label>Scenario or named matrix JSON (<code>ftx-drape-scenario/1</code> or <code>ftx-drape-scenario-matrix/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
 <label>Optional body-source request JSON (<code>ftx-scenario-body/1</code>) <input id="scenarioBody" type="file" accept=".json,application/json"></label>
 <button id="scenario" data-command="scenario" disabled>Recompute every alternative in the requested scenarios</button>
-<p class="note">A named matrix evaluates the same material alternatives and body under 1–8 declared scenarios.
+<p class="note">A named matrix evaluates the same design and material alternatives and body under 1–8 declared scenarios.
 Use <code>{"schema":"ftx-drape-scenario-matrix/1","max_evaluations":16,"cases":[{"key":"case name","scenario":{…}}]}</code>,
 with each <code>scenario</code> containing an ordinary scenario request. Set <code>max_evaluations</code> from 1 to 64
 to cover the complete alternative × case count. Each case can override <code>comparison</code>; otherwise it uses the study policy.
