@@ -1643,7 +1643,11 @@ fn admit_vapor_coverage<'a>(
             triangles: &simulation["triangles"],
             material: &simulation["drape"]["material"],
         },
-    )
+    )?;
+    // Geometry/source receipts do not establish the reported transport. Static objectives need
+    // the same canonical regional networks and complete area/rate accounting as moving ones.
+    covered_vapor_potential(result)?;
+    Ok(result)
 }
 
 struct VaporFrame<'a> {
@@ -1936,7 +1940,7 @@ fn admit_motion_vapor_coverage<'a>(
 fn covered_vapor_potential(result: &Value) -> Result<(f64, f64), Refusal> {
     let fail = || {
         invalid(
-            "moving covered vapor needs canonical source-qualified regional transport and complete potential totals",
+            "covered vapor needs canonical source-qualified regional transport and complete potential totals",
         )
     };
     let regions = vapor_array(&result["coverage"], "regions")?;
@@ -2111,7 +2115,7 @@ fn covered_vapor_potential(result: &Value) -> Result<(f64, f64), Refusal> {
 }
 
 fn vapor_triangle_area(positions: &Value, vertices: &Value) -> Result<f64, Refusal> {
-    let fail = || invalid("moving covered vapor needs finite retained triangle geometry");
+    let fail = || invalid("covered vapor needs finite retained triangle geometry");
     let vertices = vertices
         .as_array()
         .filter(|v| v.len() == 3)
