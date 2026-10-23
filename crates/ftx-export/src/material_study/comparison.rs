@@ -23,8 +23,8 @@ mod wet_film;
 pub enum Basis {
     /// Explicitly compare nominal computed results, without a propagated uncertainty claim.
     Nominal,
-    /// Require complete source-reported endpoints for assembly mass or vapor potential.
-    /// Geometry, inventory, pressure/film/interface boundaries and the sampled path stay fixed.
+    /// Require complete source-reported endpoints for assembly mass, vapor or final body water.
+    /// Geometry, inventory, boundaries, initial liquid, supply and the sampled path stay fixed.
     ReportedBounds,
 }
 
@@ -419,6 +419,11 @@ impl Metric {
                 | Self::CoveredVaporPotentialMassFlowKgS
                 | Self::MotionCoveredVaporPotentialEnergyJ
                 | Self::MotionCoveredVaporPotentialMassKg
+                | Self::MotionWetFilmEvaporatedMassKg
+                | Self::MotionWetFilmRemainingLiquidMassKg
+                | Self::MotionWetFilmUnmetDemandMassKg
+                | Self::MotionWetFilmSuppliedMassKg
+                | Self::MotionWetFilmBodyReservoirLatentEnergyJ
         )
     }
 
@@ -426,6 +431,7 @@ impl Metric {
         self,
         row: &Alternative,
         derived: &BTreeMap<Consumer, TransferBounds>,
+        water: &BTreeMap<Metric, [f64; 2]>,
     ) -> Option<[f64; 2]> {
         match self {
             Self::AssemblyMassKg => row.assembly_mass.value()?.assembly_mass.reported_bounds_kg,
@@ -441,6 +447,11 @@ impl Metric {
             Self::IndependentVaporPotentialMassFlowKgS
             | Self::CoveredVaporPotentialMassFlowKgS
             | Self::MotionCoveredVaporPotentialMassKg => Some(derived.get(&self.consumer())?[1]),
+            Self::MotionWetFilmEvaporatedMassKg
+            | Self::MotionWetFilmRemainingLiquidMassKg
+            | Self::MotionWetFilmUnmetDemandMassKg
+            | Self::MotionWetFilmSuppliedMassKg
+            | Self::MotionWetFilmBodyReservoirLatentEnergyJ => water.get(&self).copied(),
             _ => None,
         }
     }
@@ -472,7 +483,7 @@ pub struct Constraint {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    /// Explicit nominal outputs or supported conditional mass/vapor source bounds.
+    /// Explicit nominal outputs or supported conditional mass/vapor/body-water source bounds.
     pub basis: Basis,
     /// One to sixteen unique objective metrics. No hidden scalarization or automatic winner.
     pub objectives: Vec<Objective>,
@@ -592,17 +603,10 @@ impl Policy {
             }
         }
         if matches!(self.basis, Basis::ReportedBounds)
-            && self.consumers().contains(&Consumer::MotionWetFilm)
-        {
-            return Err(invalid(
-                "finite-water comparison requires nominal basis; source Ret bounds do not propagate through evolving body liquid and supply",
-            ));
-        }
-        if matches!(self.basis, Basis::ReportedBounds)
             && self.metrics().iter().any(|m| !m.supports_bounds())
         {
             return Err(invalid(
-                "reported_bounds comparison supports assembly_mass_kg and vapor potential metrics only; other computed objectives and constraints have no propagated reported bounds",
+                "reported_bounds comparison supports assembly_mass_kg, vapor potential and final finite-water metrics only; other computed objectives and constraints have no propagated reported bounds",
             ));
         }
         let unique: BTreeSet<_> = self.required_consumers.iter().collect();
@@ -809,7 +813,15 @@ impl Policy {
             report.notes.push("Moving covered vapor objectives require complete declared body coverage at the initial state and every accepted mechanical sample, with the current material, path and prescribed conditions. Potential energy and mass integrate sampled power and flow over the actual intervals using the declared right-endpoint or composite-trapezoid rule; they do not establish water availability, actual evaporation, latent cooling, continuous-time accuracy or comfort.");
         }
         if self.consumers().contains(&Consumer::MotionWetFilm) {
-            report.notes.push("Finite-water objectives require complete declared body coverage throughout the admitted motion and the exact sourced initial liquid and supply on its stable body triangles. Each retained step and cumulative ledger is checked against canonical regional demand, the declared quadrature and finite liquid. Evaporation is modeled covered transfer; latent energy comes from the prescribed body reservoir and does not cool textile storage. No wearer physiology, physical garment performance, unsampled-motion accuracy or propagated water-state uncertainty is inferred.");
+            report.notes.push("Finite-water objectives require complete declared body coverage throughout the admitted motion and the exact sourced initial liquid and supply on its stable body triangles. Each retained step and cumulative ledger is checked against canonical regional demand, the declared quadrature and finite liquid. Evaporation is modeled covered transfer; latent energy comes from the prescribed body reservoir and does not cool textile storage. No wearer physiology, physical garment performance, unsampled-motion accuracy or physiological supply model is inferred.");
+            if matches!(self.basis, Basis::ReportedBounds)
+                && self
+                    .metrics()
+                    .iter()
+                    .any(|metric| metric.consumer() == Consumer::MotionWetFilm)
+            {
+                report.notes.push("Final finite-water ranges replay complete canonical source Ret endpoints separately on every body triangle through the same liquid reducer, with fixed initial liquid, constant supply, geometry, boundaries, latent heat and integration rule. Cumulative evaporation, unmet demand and prescribed-reservoir latent energy increase with covered demand; remaining liquid reverses endpoint order. Fixed supplied mass has a singleton range independently of Ret bounds. These are conditional final ranges only: nominal per-interval ledgers remain unchanged, and interval evaporation may reverse after prior depletion. Missing or unrepresentable response endpoints stay unavailable rather than becoming nominal singletons.");
+            }
         }
         if self.metrics().iter().any(|metric| {
             matches!(
@@ -934,6 +946,7 @@ impl Policy {
             }
         }
         let mut derived_bounds = BTreeMap::new();
+        let mut water_bounds = BTreeMap::new();
         if matches!(self.basis, Basis::ReportedBounds) {
             for consumer in [
                 Consumer::VaporSurface,
@@ -966,6 +979,32 @@ impl Policy {
                     Err(e) => result.exclusions.push(e),
                 }
             }
+            if self
+                .metrics()
+                .iter()
+                .any(|metric| metric.consumer() == Consumer::MotionWetFilm)
+                && let Some(water) = admitted.motion_wet_film
+            {
+                if let Some(supplied) =
+                    finite(&water["totals"]["supplied_mass_kg"]).filter(|value| *value >= 0.)
+                {
+                    water_bounds.insert(Metric::MotionWetFilmSuppliedMassKg, [supplied, supplied]);
+                }
+                if self.metrics().iter().any(|metric| {
+                    metric.consumer() == Consumer::MotionWetFilm
+                        && *metric != Metric::MotionWetFilmSuppliedMassKg
+                }) {
+                    match wet_film::reported_bounds(
+                        admitted
+                            .motion_vapor_coverage
+                            .expect("admitted moving water"),
+                    ) {
+                        Ok(Some(ranges)) => water_bounds.extend(ranges),
+                        Ok(None) => {}
+                        Err(e) => result.exclusions.push(e),
+                    }
+                }
+            }
         }
         for metric in self.metrics() {
             match metric
@@ -976,7 +1015,7 @@ impl Policy {
                     let reported_bounds = match self.basis {
                         Basis::Nominal => None,
                         Basis::ReportedBounds => metric
-                            .reported_bounds(row, &derived_bounds)
+                            .reported_bounds(row, &derived_bounds, &water_bounds)
                             .filter(|[lo, hi]| {
                                 lo.is_finite()
                                     && hi.is_finite()

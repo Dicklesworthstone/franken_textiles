@@ -4,9 +4,16 @@
 evaporated, remaining, unmet-demand and supplied mass plus prescribed-body latent energy from a
 complete admitted moving-coverage history. It verifies exact authored body-bound liquid/supply,
 canonical regional demand, per-step and cumulative conservation, source protocols and retention
-limits. These are nominal quantities; conditional Ret ranges do not become evolving water-state
-intervals. The consumer shares the ordinary single-case and matrix decision rules and preserves
-independent outputs on refusal. It introduces no wet-textile law or textile-temperature feedback.
+limits. Nominal producer histories remain unchanged. For `basis: "reported_bounds"`, the comparator
+replays complete canonical Ret demand endpoints through the same finite-water state authority to
+derive conditional final cumulative ranges: evaporation, unmet demand and latent energy follow
+low-to-high demand, while remaining liquid reverses that endpoint order. Supplied water has a fixed
+singleton range and needs no Ret bounds, but still requires complete nominal history admission.
+Missing Ret endpoints exclude the other bounded water metrics while preserving nominal readings.
+Geometry, boundaries, initial liquid, supply, latent heat and integration stay fixed; these final
+comparison ranges do not establish per-interval water bounds, general water-state uncertainty or
+confidence intervals. The consumer shares the ordinary single-case and matrix decision rules and
+preserves independent outputs on refusal. It introduces no wet-textile law or textile-temperature feedback.
 
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
 number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the

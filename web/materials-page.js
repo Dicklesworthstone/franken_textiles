@@ -276,6 +276,7 @@ function objectiveComparison(parent, r) {
     (r.policy.allow_mixed_protocols ? "Mixed source protocols explicitly admitted. " : "Reported input protocols must match. ") +
     (reportedBounds ? "Limits and dominance use complete source-reported ranges: mass at fixed authored geometry and inventory, " +
       "and vapor potential at fixed geometry, boundaries and retained sampling. " +
+      "Final cumulative finite-water ranges, when requested, additionally hold the declared initial liquid and supply fixed. " +
       "Conditional on these inputs and evaluated alternatives; no general scenario uncertainty, confidence level, empirical fit or global optimum claim." :
       "Conditional on these inputs and evaluated alternatives; no propagated uncertainty, empirical fit or global optimum claim.");
   parent.append(note);
@@ -296,12 +297,22 @@ function objectiveComparison(parent, r) {
     motion_wet_film_supplied_mass_kg: "Declared supplied body water",
     motion_wet_film_body_reservoir_latent_energy_j: "Prescribed-body latent energy"
   };
-  if (metrics.some(o => Object.hasOwn(wetFilmLabels, o.metric)) || r.policy.required_consumers?.includes("motion_wet_film")) {
+  const waterMetrics = metrics.filter(o => Object.hasOwn(wetFilmLabels, o.metric));
+  if (waterMetrics.length || r.policy.required_consumers?.includes("motion_wet_film")) {
     const water = document.createElement("p");
     water.textContent = "Finite body water comparison requires complete covered motion and the exact declared film policy. " +
       "Modeled evaporation is limited by each triangle's initial liquid and prescribed supply; water is not pooled between triangles. " +
+      (reportedBounds && waterMetrics.length ?
+        (waterMetrics.some(o => o.metric !== "motion_wet_film_supplied_mass_kg") ?
+          "Final cumulative source ranges replay low- and high-demand Ret endpoints with geometry, boundaries, initial liquid, supply and integration fixed. " +
+          "Remaining liquid reverses the demand endpoint order; evaporation, unmet demand and latent energy follow low to high demand. " +
+          "Missing Ret bounds exclude these bounded water metrics while retaining nominal readings. " : "") +
+        "Declared supplied water, when requested, has a fixed singleton range and needs no Ret bounds. " +
+        "Accepted-sample water ledgers and replay remain nominal, without per-interval water bounds. " +
+        "These conditional ranges do not establish general water-state uncertainty or confidence intervals. " :
+        "These nominal results do not propagate water-state uncertainty. ") +
       "Prescribed-body latent energy does not include textile-temperature feedback or establish wearer cooling. " +
-      "These nominal results do not propagate water-state uncertainty or describe bare-body transfer or physiological sweating.";
+      "Neither basis describes bare-body transfer or physiological sweating.";
     parent.append(water);
   }
   const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",

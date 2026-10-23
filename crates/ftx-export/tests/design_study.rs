@@ -181,12 +181,16 @@ fn self_intersection_is_blocked_even_when_canonical_signed_area_remains_positive
     let pattern = Pattern::new(source);
     let mut input = request();
     input["designs"] = json!([{"key":"crossed","operations":[
-        {"op":"move","piece":"front","vertex":"b","dx_mm":-30.0,"dy_mm":60.0}]}]);
+        {"op":"move","piece":"front","vertex":"b","dx_mm":-30.0,"dy_mm":40.0}]}]);
     input.as_object_mut().unwrap().remove("sewing");
     input["comparison"] =
         json!({"basis":"nominal","objectives":[{"metric":"stock_mass_kg","direction":"minimize"}]});
     let report = evaluate(input, &pattern);
     let crossed = row(&report, "crossed", "light-sheet");
+    let altered =
+        Pattern::from_json(crossed["design"]["altered_pattern_json"].as_str().unwrap()).unwrap();
+    // The right and left edges cross at (0, 60), despite a positive signed area.
+    assert_eq!(altered.instance("front").unwrap().area().unwrap(), 100.0);
     assert_eq!(
         crossed["design"]["validation"]["flat"]["status"],
         "CONVERGED"

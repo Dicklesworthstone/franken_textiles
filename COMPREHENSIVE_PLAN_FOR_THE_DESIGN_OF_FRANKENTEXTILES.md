@@ -2983,8 +2983,9 @@ Independent analytical and real sewn-motion tests check depletion, source substi
 coverage, nonuniform boundaries, carryover and transactional rejection.
 
 This does not couple latent energy into textile temperature or infer textile moisture laws,
-physiological sweating, bare-body transfer, water redistribution or whole-wearer heat loss. Ret ranges
-remain conditional potential ranges; uncertainty in the evolving film is not propagated. Source-qualified
+physiological sweating, bare-body transfer, water redistribution or whole-wearer heat loss. Producer
+water histories remain nominal; conditional final cumulative Ret comparison ranges (§25.69) do not
+establish per-interval film bounds or general water-state uncertainty. Source-qualified
 textile storage/sorption, conservative temperature feedback and held-out wet/dry garment experiments
 remain open under `ftx-vc2`/`ftx-tmc`. See [vapor-coverage.md](docs/vapor-coverage.md).
 
@@ -3018,7 +3019,8 @@ the measured textile, moisture coupling, sewn-garment or machine qualification g
 
 **Delivered software (`ftx-wf2`).** Single-case and named-case studies can require the existing
 `motion_wet_film` consumer and use modeled evaporation, remaining liquid, unmet demand, prescribed
-supply and body-reservoir latent energy as nominal objectives or inclusive constraints. Admission
+supply and body-reservoir latent energy as objectives or inclusive constraints, with nominal values
+or conditional final cumulative Ret ranges (§25.69). Admission
 requires complete covered motion and the exact authored source, initial liquid and supply. Every
 body-triangle step and cumulative receipt must conserve liquid and agree with canonical regional
 demand, the declared quadrature and latent conversion. Altered, incomplete or refused histories
@@ -3030,9 +3032,10 @@ and the prescribed liquid policy, including residuals and retention charges. Fin
 different transport potentials tie in modeled evaporation; missing film evidence never becomes an
 assumed dry film. Native and portable model-backed studies retain the same exact replay and decisions.
 
-The two quadratures retain their own declared sampled-time meaning. Water-state uncertainty is not
-propagated, so these objectives refuse `reported_bounds`; source Ret protocols still govern
-comparability. This advances decisions about the conditional body-film model without claiming
+The two quadratures retain their own declared sampled-time meaning. Conditional `reported_bounds`
+comparison fixes the declared water inventory, supply and sampling; it does not propagate general
+water-state uncertainty. Source Ret protocols still govern comparability. This advances decisions
+about the conditional body-film model without claiming
 physiological sweating, textile-temperature feedback or empirical wearer cooling. See
 [material-scenario-studies.md](docs/material-scenario-studies.md).
 
@@ -3104,6 +3107,31 @@ safe ease or empirical garment performance. `ftx-ds2` remains open for bounded s
 alterations from accepted body evidence and explicit design variables, with real sewn feasibility
 constraints and held-out checks. See [material-screening-and-studies.md](docs/material-screening-and-studies.md)
 and the synthetic runnable request [design-study.json](examples/design-study.json).
+
+---
+
+### 25.69 Compare final finite-water outcomes across source Ret endpoints
+
+**Delivered software (`ftx-ms2`, supporting `ftx-wf2`).** All five finite-water decision quantities
+support `basis: "reported_bounds"` through the existing single-case and named-matrix comparators.
+After complete nominal history admission, the comparator replays canonical low- and high-demand Ret
+endpoints through the same per-triangle finite-water authority. Final cumulative evaporation, unmet
+demand and body-reservoir latent energy use low-to-high demand totals; remaining liquid reverses
+that endpoint order. Liquid depletion remains part of the calculation, rather than treating
+potential vapor demand as available water.
+
+Declared supplied water is a fixed singleton range and needs no reported Ret bounds, while retaining
+complete nominal source and history admission. Missing Ret endpoints exclude the other bounded water
+metrics without erasing their nominal readings or independent consumers. Inclusive constraints must
+contain the complete final range; overlapping or touching ranges remain unresolved under the ordinary
+strict range-dominance rules. The browser displays native readings and decisions without reranking.
+
+These final comparison ranges hold geometry, boundaries, coverage, latent heat, initial liquid,
+supply and temporal integration fixed. Producer cumulative and accepted-sample water ledgers, and
+their exact frozen replays, remain nominal; no per-interval water bounds are introduced. The ranges
+are conditional source-endpoint consequences, not confidence intervals or general water-supply or
+film uncertainty. They do not close measured moisture coupling, empirical wearer cooling, garment
+fit or process qualification gates. See [material-scenario-studies.md](docs/material-scenario-studies.md).
 
 ## Appendix A. Sources
 

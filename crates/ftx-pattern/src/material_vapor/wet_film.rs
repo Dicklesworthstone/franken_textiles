@@ -385,4 +385,48 @@ mod tests {
             assert_eq!(state.report().unwrap(), before);
         }
     }
+
+    #[test]
+    fn separate_reservoirs_retain_supply_depletion_and_nonuniform_latent_energy() {
+        let mut policy = policy();
+        policy.initial_liquid_mass_kg = vec![2., 0.];
+        let initial = State::new(&policy, &policy.body_mesh_sha256, &[10., 20.]).unwrap();
+        let before = initial.report().unwrap();
+        let (first, step) = initial.advance(&[1.5, 0.5], None, 2.).unwrap();
+        assert_eq!(step["totals"]["evaporated_mass_kg"], 4.);
+        assert_eq!(step["totals"]["remaining_liquid_mass_kg"], 1.);
+        assert_eq!(step["totals"]["body_reservoir_latent_energy_j"], 50.);
+        assert_eq!(step["body"][0]["remaining_liquid_mass_kg"], 0.);
+        assert_eq!(step["body"][1]["remaining_liquid_mass_kg"], 1.);
+        assert_eq!(initial.report().unwrap(), before);
+        let (second, _) = first.advance(&[0.5, 20.], None, 0.5).unwrap();
+        let report = second.report().unwrap();
+        let totals = &report["totals"];
+        assert_eq!(totals["starting_liquid_mass_kg"], 2.);
+        assert_eq!(totals["supplied_mass_kg"], 3.75);
+        assert_eq!(totals["evaporated_mass_kg"], 5.75);
+        assert_eq!(totals["remaining_liquid_mass_kg"], 0.);
+        assert_eq!(totals["potential_evaporation_mass_kg"], 14.25);
+        assert_eq!(totals["unmet_demand_mass_kg"], 8.5);
+        assert_eq!(totals["body_reservoir_latent_energy_j"], 82.5);
+        assert_eq!(totals["mass_balance_error_kg"], 0.);
+        assert_eq!(totals["demand_balance_error_kg"], 0.);
+    }
+
+    #[test]
+    fn invalid_inputs_and_unrepresentable_steps_do_not_consume_liquid() {
+        let policy = policy();
+        assert!(State::new(&policy, &"b".repeat(64), &[10., 20.]).is_err());
+        assert!(State::new(&policy, &policy.body_mesh_sha256, &[10.]).is_err());
+        assert!(State::new(&policy, &policy.body_mesh_sha256, &[10., 0.]).is_err());
+        let state = State::new(&policy, &policy.body_mesh_sha256, &[10., 20.]).unwrap();
+        let before = state.report().unwrap();
+        for rates in [vec![1.], vec![-1., 0.], vec![f64::NAN, 0.]] {
+            assert!(state.advance(&rates, None, 1.).is_err());
+        }
+        for seconds in [0., -1., f64::INFINITY, f64::from_bits(1)] {
+            assert!(state.advance(&[1., 1.], None, seconds).is_err());
+        }
+        assert_eq!(state.report().unwrap(), before);
+    }
 }

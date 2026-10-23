@@ -10,6 +10,11 @@ use ftx_pattern::{
 };
 use serde_json::{Value, json};
 
+#[path = "scenario_comparison/wet_film.rs"]
+mod wet_film;
+#[path = "scenario_comparison/wet_film_bounds.rs"]
+mod wet_film_bounds;
+
 const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-scenario-pattern.json");
 fn descriptor() -> Value {
@@ -2641,6 +2646,18 @@ fn synthetic_moving_wet_film(pattern: &Pattern, descriptor: &Value) -> Value {
     history["wet_film"] = json!({"schema":"ftx-body-wet-film-report/1","body":[body],"totals":balance,
         "source":policy["source"],"basis":policy["basis"],"body_mesh_sha256":policy["body_mesh_sha256"],
         "textile_temperature_coupled":false,"uncertainty_propagated":false});
+    // Retain canonical metadata alongside the independently calculated numerical ledger.
+    let declaration: ftx_pattern::material_vapor::wet_film::WetFilm =
+        serde_json::from_value(policy).unwrap();
+    history["wet_film"]["notes"] = ftx_pattern::material_vapor::wet_film::State::new(
+        &declaration,
+        &declaration.body_mesh_sha256,
+        &[latent],
+    )
+    .unwrap()
+    .report()
+    .unwrap()["notes"]
+        .clone();
     history["retained_vertex_samples"] = json!(18);
     history["retained_wet_film_scalar_equivalents"] = json!(48);
     for key in [
@@ -2822,7 +2839,7 @@ fn finite_water_refuses_forged_ledgers_and_recomputed_replacement_inputs() {
 }
 
 #[test]
-fn finite_water_comparison_is_opt_in_nominal_and_keeps_ret_protocol_admission() {
+fn finite_water_comparison_is_opt_in_and_keeps_ret_protocol_admission() {
     let (mut request, descriptor) = wet_film_inputs();
     request.comparison.as_mut().unwrap().objectives.truncate(1);
     request.variants[0]
@@ -2865,16 +2882,17 @@ fn finite_water_comparison_is_opt_in_nominal_and_keeps_ret_protocol_admission() 
     );
     request.comparison.as_mut().unwrap().basis =
         ftx_export::material_study::comparison::Basis::ReportedBounds;
-    assert!(
-        request
-            .comparison
-            .as_ref()
-            .unwrap()
-            .validate(&request, true)
-            .unwrap_err()
-            .message
-            .contains("finite-water")
-    );
+    request
+        .comparison
+        .as_ref()
+        .unwrap()
+        .validate(&request, true)
+        .unwrap();
+    let unbounded = evaluate(&request, false);
+    assert_eq!(unbounded["comparison"]["frontier"], json!([]));
+    let reading = &unbounded["comparison"]["alternatives"][0]["readings"]["motion_wet_film_evaporated_mass_kg"];
+    assert!(reading["value"].as_f64().unwrap() > 0.);
+    assert!(reading["reported_bounds"].is_null());
     request.comparison = Some(serde_json::from_value(json!({"basis":"nominal","objectives":[
         {"metric":"stock_mass_kg","direction":"minimize"}],"required_consumers":["motion_wet_film"]})).unwrap());
     assert_eq!(
@@ -2924,7 +2942,7 @@ fn finite_body_water_preserves_protocol_gates_and_rejects_invented_uncertainty()
     request.comparison.as_mut().unwrap().basis =
         ftx_export::material_study::comparison::Basis::ReportedBounds;
     let mut called = false;
-    assert!(
+    let unbounded = serde_json::to_value(
         request
             .evaluate_with(
                 &Pattern::from_json(PATTERN).unwrap(),
@@ -2932,11 +2950,16 @@ fn finite_body_water_preserves_protocol_gates_and_rejects_invented_uncertainty()
                 |_, pattern| {
                     called = true;
                     Ok(synthetic_body_water(pattern, &descriptor))
-                }
+                },
             )
-            .is_err()
-    );
-    assert!(!called);
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(called);
+    assert_eq!(unbounded["comparison"]["frontier"], json!([]));
+    let reading = &unbounded["comparison"]["alternatives"][0]["readings"]["motion_wet_film_evaporated_mass_kg"];
+    assert!(reading["value"].as_f64().unwrap() > 0.);
+    assert!(reading["reported_bounds"].is_null());
 }
 
 #[test]

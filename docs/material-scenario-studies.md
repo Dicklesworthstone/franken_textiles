@@ -480,10 +480,11 @@ anatomical garment or measured fit.
 ### Finite body water through complete motion
 
 When `scenario.motion.vapor_coverage_history.wet_film` declares an exact body-bound initial liquid
-inventory and supply, the `motion_wet_film` consumer makes its conservative water results available
-to nominal objectives and constraints. It reuses the actual moving layered coverage, source Ret,
-body identities, pressure boundaries and requested quadrature. The same metrics can participate in
-individual cases of a scenario matrix.
+inventory and constant supply, the `motion_wet_film` consumer makes its conservative water results
+available to nominal or conditional reported-bound objectives and constraints. It reuses the actual
+moving layered coverage, source Ret, body identities, pressure boundaries and requested quadrature. The nominal readings use
+`motion.result.vapor_coverage_history.result.wet_film.totals` and can also participate in individual
+cases of a scenario matrix.
 
 | Metric | Unit | Meaning |
 |---|---|---|
@@ -505,36 +506,71 @@ some liquid to remain:
   ],
   "constraints": [
     {"metric": "motion_wet_film_remaining_liquid_mass_kg", "minimum": 0.00001}
-  ]
+  ],
+  "allow_mixed_protocols": false
 }
 ```
 
-The threshold above is an illustrative decision input, not a physiological recommendation or
-textile measurement. A material that transfers more water can also exhaust its supply earlier;
-multiple objectives preserve that tradeoff instead of introducing an undisclosed score.
+The threshold and direction above are illustrative decision inputs, not physiological
+recommendations or textile measurements. A material that transfers more water can also exhaust its
+supply earlier; multiple objectives preserve that tradeoff instead of introducing an undisclosed
+score. Any of these objectives or constraints automatically requires `motion_wet_film`. Adding it
+only to `required_consumers` lets a cost or mass objective require a complete finite-water history
+without ranking its evaporation and sets `comparison.motion_required: true`. Missing film evidence
+never becomes an assumed dry film or zero evaporation.
 
-All alternatives in a case use that case's identical prescribed water inputs. Distinct named cases
-retain their own water policy, climate, readings and exclusions. A greater vapor potential alone
-cannot rank an alternative above another after both have exhausted the same available water:
-their finite evaporation may tie. Higher unmet demand is not automatically better or worse; the
-request must declare its direction. Existing potential metrics retain their separate meaning.
+Admission requires the ordinary settled, gating-clear initial drape, complete prescribed motion,
+and complete declared body coverage initially and at every retained mechanical sample. Unknown
+uncovered evaporation cannot be treated as zero. It verifies the bound material assignments,
+source protocols, boundary conditions, geometry, sample times and declared right-endpoint or
+composite-trapezoid integrals, then checks the exact authored film, per-triangle supply and
+finite-inventory limits, step and cumulative mass/demand balances, latent conversion, and
+retained-state budget. Each liquid step is replayed through the same canonical finite-water
+`State` authority used by production. Different projected regions and layers never receive separate
+copies of a triangle's water.
 
-Admission requires complete declared body coverage initially and at every retained mechanical
-sample. It replays every triangle's water state through the **same canonical reducer used by
-production motion**, checking the exact authored film, per-triangle supply and finite-inventory
-limits, every step and cumulative receipt, mass/demand residuals, latent conversion and retained-state
-budget. Altering a
-request and recomputing a receipt hash cannot substitute a different initial inventory, supply or
-body owner. Source protocol mismatches remain explicit. Failed water admission preserves other
-independent outputs and excludes the candidate only from policies requiring that consumer.
-Missing film evidence never becomes an assumed dry film or zero evaporation. The film consumer can
-be required independently of a water objective, and sets `comparison.motion_required: true`.
+Altering a request and recomputing a receipt hash cannot substitute a different initial inventory,
+supply or body owner. The declared source and basis remain part of the retained inputs, and source
+protocol mismatches remain explicit. Missing or stale water inputs, incomplete coverage or a refused
+history exclude the candidate from policies requiring that consumer while preserving independent
+manufacturing, mechanics and available thermal outputs.
 
-These metrics require `basis: "nominal"`. Source Ret ranges do not establish uncertainty bounds
-for evolving water inventories. The model does not cool textile heat storage, add wet textile mass,
-infer sweating, bare-body transfer, sorption, condensation or whole-wearer loss. Its ledger remains
-available for inspection, and exact retained histories replay through the ordinary coverage API.
-See [vapor-coverage.md](vapor-coverage.md) for the source and physical-domain contract.
+Two materials with different potential vapor transfer can tie in realized evaporation when both
+exhaust the same small initial film. With more available water, their realized amounts can differ
+again. Unmet demand and remaining liquid retain those distinctions when explicitly requested; the
+comparator does not choose a hidden preference among them. Higher unmet demand is not automatically
+better or worse. Existing potential metrics retain their separate meaning.
+
+These metrics also work in named scenario matrices. Each case can prescribe its own film, supply
+and vapor conditions, with all alternatives in that case using identical prescribed water inputs.
+Distinct cases retain their own climate, readings and exclusions. The combined frontier still
+requires every case and uses the existing no-worse-in-all-cases relation; a water-limited tie in one
+case can coexist with a strict improvement in another. Cases do not share liquid state.
+
+With `basis: "reported_bounds"`, all five metrics also support conditional ranges for their final
+cumulative results. The comparator replays low- and high-demand histories through the same canonical
+finite-water `State`, using complete consumed source Ret endpoints. Geometry, body ownership,
+coverage assignments, pressure boundaries, latent heat, initial liquid, prescribed supply and temporal
+integration remain fixed. The result accounts for liquid depletion; it does not treat potential
+vapor demand as available water or infer uncertainty in the declared water inputs.
+
+Evaporation, unmet demand and latent energy use `[low-demand total, high-demand total]`. Remaining
+liquid reverses that order: `[high-demand remaining, low-demand remaining]`. Declared supplied water
+has the singleton range `[supplied total, supplied total]` and needs no Ret bounds, but still requires
+complete canonical nominal coverage and water-history admission. If any of the other requested water
+metrics lacks complete Ret bounds, the alternative is excluded from bounded ranking while its
+available nominal readings remain visible. Inclusive constraints must contain the entire range;
+strictly separated ranges can establish dominance, while overlapping or touching ranges remain
+unresolved under the existing comparator. The same rules apply within each named matrix case.
+
+Only comparator `readings.reported_bounds` carry these final ranges. The producer's cumulative
+`wet_film` report and accepted-sample liquid ledgers remain nominal, with no per-interval water bounds.
+These are conditional Ret-endpoint consequences, not confidence intervals or general water-state
+uncertainty. The model does not cool textile heat storage, evolve body temperature, add wet textile
+mass, infer sweating, bare-body transfer, sorption, condensation or whole-wearer loss. Its ledger
+remains available for inspection, and exact retained histories replay the same nominal liquid
+declaration and canonical balances through the ordinary coverage API. See
+[vapor-coverage.md](vapor-coverage.md) for the source and physical-domain contract.
 
 ### Vapor potential on the current sewn geometry
 

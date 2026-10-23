@@ -4375,6 +4375,63 @@ test('material scenarios retain finite body water separately from potential dema
   assert.equal(descendants(s).some(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json'),false);
 });
 
+test('finite-water endpoint comparisons display native final ranges, unresolved pairs and unavailable bounds without altering nominal histories', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const report=scenarioReport(), history=wetFilmHistoryReport();
+  report.scenario.scenario={motion:{vapor_coverage_history:{wet_film:{}}}};
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome({duration_s:1,trials:2,
+    samples:[{},{}],keyframes:[],vapor_coverage_history:outcome(history)});
+  const fields=['evaporated_mass_kg','remaining_liquid_mass_kg','unmet_demand_mass_kg','supplied_mass_kg','body_reservoir_latent_energy_j'];
+  const ranges=[[0.000003,0.000004],[0,0.000001],[0,0.000006],[0.000001,0.000001],[7.5,10]];
+  const readings=Object.fromEntries(fields.map((field,i)=>[`motion_wet_film_${field}`,
+    {value:history.wet_film.totals[field],unit:field.endsWith('_j')?'J':'kg',reported_bounds:ranges[i]}]));
+  const comparison=report.comparison={policy:{basis:'reported_bounds',allow_mixed_protocols:false,
+    required_consumers:['motion_wet_film'],objectives:fields.map(field=>({metric:`motion_wet_film_${field}`,direction:'minimize'})),constraints:[]},
+    motion_required:true,frontier:['B','A'],incomparable:[{alternatives:['A','B'],reason:'Final water ranges overlap; native decision unresolved'}],
+    alternatives:['A','B'].map(key=>({key,eligible:true,dominated_by:[],exclusions:[],readings:plain(readings)}))};
+  await p.e.scenario.onclick(); p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=label=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===label);
+  const decisions=()=>table('Declared computed objectives — authoritative Rust comparison');
+  assert.deepEqual(plain(decisions().children[2].children.slice(3).map(n=>n.textContent)),[
+    '0.000004 kg; reported range [0.000003, 0.000004] kg','0 kg; reported range [0, 0.000001] kg',
+    '0.000003 kg; reported range [0, 0.000006] kg','0.000001 kg; reported range [0.000001, 0.000001] kg',
+    '10 J; reported range [7.5, 10] J']);
+  assert.match(visibleText(s),/Computed reported_bounds frontier: B, A/);
+  assert.match(visibleText(s),/A \/ B: Final water ranges overlap; native decision unresolved/);
+  assert.match(visibleText(s),/initial liquid, supply and integration fixed/);
+  assert.match(visibleText(s),/Remaining liquid reverses the demand endpoint order/);
+  assert.match(visibleText(s),/replay remain nominal, without per-interval water bounds/);
+  assert.match(visibleText(s),/do not establish general water-state uncertainty or confidence intervals/);
+  assert.equal(table('A: finite body water and latent energy').children[5].children[1].textContent,'0.000004');
+  assert.doesNotMatch(visibleText(table('A: body water at accepted motion samples')),/reported range/);
+  const replay=descendants(s).find(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json');
+  assert.equal(await p.blobs.get(replay.href).text(),history.replay_request_json);
+
+  const missing=comparison.alternatives[1];
+  missing.eligible=false; missing.exclusions=[{message:'Consumed Ret endpoints unavailable for final finite-water ranges'}];
+  for (const field of fields.filter(field=>field!=='supplied_mass_kg')) delete missing.readings[`motion_wet_film_${field}`].reported_bounds;
+  comparison.frontier=['A']; comparison.incomparable=[];
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.match(decisions().children[3].children[1].textContent,/Excluded: Consumed Ret endpoints unavailable/);
+  assert.equal(decisions().children[3].children[3].textContent,'0.000004 kg; reported range unknown');
+  assert.equal(decisions().children[3].children[6].textContent,'0.000001 kg; reported range [0.000001, 0.000001] kg');
+  assert.equal(table('A: finite body water and latent energy').children[8].children[1].textContent,'10');
+
+  // Fixed supply does not require Ret endpoints, and consumer-only water qualification does not compute water ranges.
+  comparison.policy.objectives=[{metric:'motion_wet_film_supplied_mass_kg',direction:'minimize'}];
+  missing.eligible=true; missing.exclusions=[]; comparison.frontier=['A','B'];
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.match(visibleText(s),/fixed singleton range and needs no Ret bounds/);
+  assert.doesNotMatch(visibleText(s),/source ranges replay low- and high-demand Ret endpoints/);
+  comparison.policy.objectives=[{metric:'assembly_mass_kg',direction:'minimize'}];
+  for (const row of comparison.alternatives) row.readings={assembly_mass_kg:{value:0.2,unit:'kg',reported_bounds:[0.19,0.21]}};
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.match(visibleText(s),/These nominal results do not propagate water-state uncertainty/);
+  assert.doesNotMatch(visibleText(s),/source ranges replay low- and high-demand Ret endpoints|replay remain nominal, without per-interval water bounds/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
 function splitPurchaseReport() {
   const scope={currency:'USD',region:'US',quality:'test',terms:'merchandise only',as_of:'2026-10-22'};
   const offer=(supplier,offer_id,cost,quantity)=>({quote:{supplier,offer_id,sku:`${offer_id}/base`,unit:'linear_meter',

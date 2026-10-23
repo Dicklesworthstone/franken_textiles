@@ -289,9 +289,10 @@ not stock waste, a simulated subset or a weighed finished garment. Mass and ever
 <p class="note">Add an optional <code>comparison</code> to the study request with explicit <code>basis: "nominal"</code>,
 <code>objectives</code>, inclusive <code>constraints</code> and <code>required_consumers</code>. The shared Rust engine reports
 the computed Pareto alternatives, exclusions and protocol-incomparable pairs separately from scalar screening.
-Use <code>basis: "reported_bounds"</code> for <code>assembly_mass_kg</code> or the vapor-potential objectives.
+Use <code>basis: "reported_bounds"</code> for <code>assembly_mass_kg</code>, vapor-potential objectives or final cumulative finite-water outcomes.
 Mass ranges retain fixed authored geometry and inventory. Vapor ranges propagate complete source-reported Ret endpoints
-with fixed geometry, boundary pressures, films, interfaces, latent heat and motion sampling. Limits must contain the
+with fixed geometry, boundary pressures, films, interfaces, latent heat and motion sampling. Finite-water ranges also hold
+the declared initial liquid and supply fixed. Limits must contain the
 whole range, and overlapping or touching ranges remain unresolved. Missing bounds exclude an alternative while its
 nominal result remains visible. These are conditional reported ranges, not confidence intervals; other computed metrics
 still require the nominal basis.</p>
@@ -348,14 +349,19 @@ per selected body triangle. The same policy works in standalone history replay. 
 through pose and coverage changes; modeled evaporation consumes only available liquid. Results show liquid supply,
 depletion, unmet demand and latent energy supplied by the prescribed body reservoir. These inputs do not infer
 sweating, bare-body transfer, wet textile properties or latent feedback into textile temperatures.</p>
-<p class="note">To compare these finite-water outcomes, use nominal objectives or inclusive constraints named
+<p class="note">To compare these finite-water outcomes, use nominal or <code>reported_bounds</code> objectives or inclusive constraints named
 <code>motion_wet_film_evaporated_mass_kg</code>, <code>motion_wet_film_body_reservoir_latent_energy_j</code>,
 <code>motion_wet_film_unmet_demand_mass_kg</code>, <code>motion_wet_film_supplied_mass_kg</code> or
 <code>motion_wet_film_remaining_liquid_mass_kg</code>.
 Requiring <code>motion_wet_film</code> also admits the complete source-bound water balance when optimizing another metric.
 Every selected body triangle must remain covered throughout the declared history. The same metrics work inside named matrices;
-an unavailable or inconsistent film excludes that case while its independent results remain visible. Potential Ret ranges do not
-become uncertainty bounds for the evolving water state.</p>
+an unavailable or inconsistent film excludes that case while its independent results remain visible.
+For <code>reported_bounds</code>, the native comparator replays low- and high-demand Ret endpoints through the finite-liquid model
+to bound final cumulative evaporation, unmet demand and latent energy; remaining liquid uses the reversed endpoints.
+Declared supplied water is a fixed singleton range and needs no Ret bounds, although its complete nominal history must still pass admission.
+Missing Ret bounds exclude the other bounded water metrics while preserving their nominal readings.
+Geometry, boundaries, initial liquid, supply and integration stay fixed. These conditional final ranges are not confidence intervals
+or general water-state uncertainty: the displayed history, accepted-sample ledgers and replay remain nominal, without per-interval water bounds.</p>
 <p class="note">Optional <code>motion</code> in the scenario (<code>ftx-drape-motion/1</code>) continues that same sewn cloth through
 declared time/arm-angle keyframes, preserving velocities and material history. It uses the selected shape without refitting.
 Each interval follows checked linear body-vertex chords, not a certified anatomical joint path. The report retains every accepted
