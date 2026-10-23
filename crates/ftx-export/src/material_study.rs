@@ -250,6 +250,14 @@ pub struct Metrics {
     /// Excludes handling, acceleration, final reset and other unmodeled production work.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sewing_feed_and_setup_seconds: Option<f64>,
+    /// Complete source-qualified thread demand for the selected sewing plan, across every channel.
+    /// Cutting copies do not multiply this one declared sewing job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_required_length_m: Option<f64>,
+    /// Complete independent thread orders in the sewing consumer's own declared currency.
+    /// Separate from cut-stock purchasing; missing channels or offers never produce a subtotal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_observed_order_cost: Option<f64>,
 }
 
 /// One source-locked alternative, with independent production-planner results.
@@ -370,6 +378,14 @@ fn hash<T: Serialize>(value: &T) -> Result<String, Refusal> {
 impl Request {
     fn is_design(&self) -> bool {
         self.schema == "ftx-design-study/1"
+    }
+
+    fn sewing_options(&self) -> Option<&SewOptions> {
+        self.sewing.as_ref().or_else(|| {
+            self.sewing_selection
+                .as_ref()
+                .map(|selection| &selection.options)
+        })
     }
 
     fn manufacturing_identity(
@@ -705,6 +721,28 @@ impl Request {
         if let Some(selection) = &self.sewing_selection {
             recipes::check_budget(selection, variants.len())?;
         }
+        if let Some(options) = self.sewing_options() {
+            let per_plan = match crate::sewing::consumables::purchasing_work_bound(options) {
+                Ok(work) => work,
+                Err(refusal) if refusal.code == RefusalCode::BudgetExceeded => return Err(refusal),
+                // Invalid source/market options remain the independent sewing consumer's refusal;
+                // its admission fails before the purchasing evaluator can perform quote work.
+                Err(_) => 0,
+            };
+            let trials = self
+                .sewing_selection
+                .as_ref()
+                .map_or(1, |s| s.max_plan_evaluations);
+            if per_plan
+                .saturating_mul(trials)
+                .saturating_mul(variants.len())
+                > 200_000
+            {
+                return Err(budget(
+                    "material/design study exceeds 200000 aggregate thread-purchasing work units; reduce variants, recipe trials or quote observations",
+                ));
+            }
+        }
         let allocation_work = [
             self.purchasing.as_ref().map(|p| &p.market),
             self.cutting_job
@@ -795,6 +833,12 @@ impl Request {
         }
         if self.sewing_selection.is_some() {
             notes.push("Each material alternative reruns the declared finite qualified sewing recipe search. Sewing metrics describe its complete selected incumbent, including when the search budget stops before an optimum is proven. No selected plan keeps sewing unavailable; independent consumers are preserved. Recipe qualification and manufacturing hardware permission remain separate.");
+        }
+        if self
+            .sewing_options()
+            .is_some_and(|s| s.consumables.is_some())
+        {
+            notes.push("Thread demand uses the selected plan's actual traversals, independently qualified channel coefficients and once-per-operation allowances. Each exact yarn is aggregated before canonical whole-order pricing. Missing consumption or offers keep the complete metric unknown. Thread purchasing uses its own declared market and describes one sewing job, independently of cutting copies; it is not retained assembly mass or a combined cut-and-sew cost. Recipe selection still optimizes its declared time objective, not thread cost.");
         }
         if self.vapor.is_some() {
             notes.push("Potential vapor transport uses explicit common-area layer occurrences resolved from each final material assignment. It infers no overlap, body coverage, air-gap resistance, sweat supply, evaporation or coupled heat; canonical source qualifications and boundary assumptions remain in every available result.");
@@ -1042,6 +1086,18 @@ impl Request {
         if let Some(plan) = row.sewing.value() {
             row.metrics.stitch_intervals = Some(plan.stitch_intervals);
             row.metrics.feed_seconds = Some(plan.feed_seconds);
+            if let Some(consumables) = plan
+                .consumables
+                .as_ref()
+                .filter(|r| r.complete_consumption_coverage)
+            {
+                row.metrics.thread_required_length_m = consumables.total_required_length_m;
+                row.metrics.thread_observed_order_cost = consumables
+                    .purchasing
+                    .as_ref()
+                    .filter(|p| p.complete_offer_coverage)
+                    .and_then(|p| p.least_observed_independent_order_total);
+            }
             if let Some(timing) = plan
                 .ordering
                 .as_ref()

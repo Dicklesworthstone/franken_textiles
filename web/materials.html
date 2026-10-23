@@ -206,6 +206,11 @@ a work-limited feasible result does not prove an optimum. These are dated observ
 The bounded planner preserves declared predecessors and every stitch pass. The result shows the
 original and selected change counts and whether the minimum was proven. Supply an optional
 <code>initial_setup</code> with exact needle and thread identities to include the first change.</p>
+<p class="note">Add <code>consumables: {}</code> to request thread quantities from the selected sewing plan.
+Each admitted qualification needs independently sourced <code>thread_consumption</code> with every required channel,
+an exact frozen yarn selection, consumption per traversed interval and explicit start/end allowances.
+Optional <code>consumables.purchasing</code> supplies its own dated quote book and market.
+Missing channels or eligible offers keep complete quantities or prices unknown; partial diagnostic rows are retained.</p>
 </div></div>
 <h3>Thermal exchange on this drape</h3>
 <p class="note">Run a fresh drape above first. These conditions use the existing native JSON schemas; no air-gap, body-layer or environmental data is inferred by the page.</p>
@@ -307,6 +312,13 @@ and the selected plan. If no listed recipe qualifies, sewing remains unavailable
 or <code>sewing_feed_and_setup_seconds</code> as objectives or constraints. The existing <code>feed_seconds</code>
 remains feed-only duration. Missing setup evidence leaves the new durations unknown; they do not include
 undeclared handling or establish total production time.</p>
+<p class="note">When <code>sewing</code> or the selected <code>sewing_selection</code> recipe requests <code>consumables</code>,
+use nominal <code>thread_required_length_m</code> and <code>thread_observed_order_cost</code> as objectives or constraints.
+Require <code>sewing_consumables</code> for complete channel quantities or <code>sewing_purchasing</code> for complete exact-yarn orders.
+The workbench shows the actual selected operation/channel requirements and retains qualified sources and canonical order details.
+Thread purchasing has its own currency and market, which may differ from cutting. It describes one sewing job;
+cutting copies do not multiply thread demand. Prices are not combined with cutting costs, purchased length is not retained garment mass,
+and time-based recipe selection does not prove a thread-cost optimum.</p>
 </div><div>
 <h3>Fresh body, drape and heat studies</h3>
 <label>Scenario or named matrix JSON (<code>ftx-drape-scenario/1</code> or <code>ftx-drape-scenario-matrix/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
@@ -374,9 +386,15 @@ Optional <code>motion.transient_surface</code> and <code>motion.transient_covera
 They require sourced heat capacity plus their own initial temperatures, interval films and budgets. Coverage also requires exact body/layer assignments
 and explicit exposed-cloth conditions. The results separately report physical stored heat, signed boundary energy and remap error;
 these histories are not interchangeable with each other or steady power snapshots. A heat refusal preserves successful mechanics.
-Either thermal history can request <code>plastic_dissipation_heat: "uniform_reference_thickness"</code> and/or
-<code>relaxation_dissipation_heat: "uniform_reference_thickness"</code> when its materials supply independent conversion observations
-for permanent yielding or Maxwell dashpot work. Accepted work follows the material through covered and exposed regions; each source keeps
+Either thermal history can independently request <code>plastic_dissipation_heat: "uniform_reference_thickness"</code>,
+<code>relaxation_dissipation_heat: "uniform_reference_thickness"</code> and/or
+<code>bending_plastic_dissipation_heat: "uniform_reference_thickness"</code> when its materials supply independent conversion observations
+for membrane yielding, Maxwell dashpot work or irreversible panel bending. Bending heat requires the material's
+<code>bending_plastic_heat_fraction</code> in [0,1], matching specimen and conditioning, work basis
+<code>irreversible_bending_plastic_dissipation</code> and an explicit qualified temperature domain. An explicit zero is supported;
+an absent observation supplies no conversion. Set each option inside the thermal domain that should consume it;
+the uploaded scenario owns these choices and the original JSON is retained for replay.
+Accepted work follows the material through covered and exposed regions; each source keeps
 its own work ledger and their heat is summed once. Initial forming work, reversible storage, numerical loss and bare body are excluded.
 Motion heat objectives use <code>transient_surface_</code> or <code>transient_coverage_</code> with <code>inside_energy_j</code>,
 <code>net_boundary_energy_j</code>, <code>final_min_temperature_c</code> or <code>final_max_temperature_c</code>.

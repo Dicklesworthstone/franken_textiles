@@ -91,6 +91,80 @@ not reinterpret the source's test, infer pucker/strength/needle damage, or verif
 workholding, accessibility or operator setup. Consequently `hardware_execution_authorized` and
 `physical_seam_quality_validated` remain false even when every operation has a qualification.
 
+## Source-qualified thread inventory and purchasing
+
+Add `"consumables": {}` to the ordinary sewing options to compute a thread bill of materials from
+the **actual selected production plan**. The same opt-in works through `sew-plan`, `sew-stitches`,
+the shared native/WASM consumers and recipe selection. It selects `ftx-sewing-plan/11`; omitted
+consumption data and policy preserve existing outputs. No new stitch geometry or price engine is used.
+
+Each applicable `SewingQualification` supplies an optional `thread_consumption` object. Its
+`evidence`, `source`, `method`, `conditions` and `allow_estimates` describe consumption independently
+of the parent process envelope. Permission to use estimated process or material data does not grant
+permission to use estimated thread consumption. The method must support the declared effective
+coefficient over the qualification's actual stitch/feed/stack/rate/reverse/pressure envelope.
+
+`channels_complete` explicitly states whether the source represents **every required thread channel**.
+Each entry in `channels` has these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Unique channel identity, such as needle, bobbin or a named looper. |
+| `material` | Complete embedded, digest-locked `Selection` of a yarn record. |
+| `metres_per_traversal` | Positive, finite thread metres per generated stitch interval. |
+| `start_allowance_m` | Explicit nonnegative metres added once at this operation/channel's start. |
+| `end_allowance_m` | Explicit nonnegative metres added once at this operation/channel's end. |
+
+A traversal is **one generated station interval**, counted every time the program traverses it.
+Reverse travel, both legs of each backtack and separate reinforcement passes therefore consume
+thread. Reversing direction does not subtract consumption. Start/end allowances apply once per
+complete operation/channel, not per station or directed run. The channel list is explicit: a needle
+thread never silently implies an identical bobbin thread, another looper or an unreported channel.
+The source must qualify the supplied coefficients; no universal stitch-class ratio is inferred.
+
+The report retains each operation/channel contribution and its exact qualification, all frozen yarn
+selections, and complete requirements aggregated by material SHA-256. Repeated channels or operations
+using the same snapshot share one requirement; different snapshots stay separate even when their
+thread/setup identifiers or material IDs match. Accumulation uses stable operation/channel order so
+changing the sewing schedule does not change quantities. `total_required_length_m` is absent when
+any operation lacks admitted consumption or when any channel inventory is incomplete. Known
+contributions remain inspectable, but no partial aggregate is published as a whole-job requirement.
+
+For dated purchasing, set `consumables.purchasing.quote_book` to an existing `ftx-textile-quotes/1`
+or `/2` book, and `consumables.purchasing.market` to the ordinary procurement market. Each complete
+yarn requirement goes through `QuoteBook` with `basis: "length"`; no sheet width or inferred
+mass-to-length conversion is needed. Supplier minimums, increments, all-unit price thresholds,
+available quantities, exact dates and validity limits apply **after** all matching channels and
+operations have been aggregated. Each operation/channel's complete demand, including allowances,
+is one uninterrupted segment; the largest determines the existing continuous-length check.
+The market's quantity and continuity policies retain their meanings. Supplier splitting is not
+supported by this consumer and a supplied `split_orders` policy refuses explicitly.
+
+Only currently eligible offers locking the exact consumed yarn hash can be selected. An unlocked
+latest observation cannot revive an older locked price. Supplier/base/tier SKU aliases are connected
+across canonical latest observations in the exact market at the requested time, including unused
+bridging offers. Future observations and superseded aliases cannot change an earlier purchase.
+A component that could supply different consumed snapshots is excluded from separate independent
+orders, preventing the same inventory from being counted twice. This is conservative: ambiguous
+current stock identity may withhold a total rather than prove that no real purchase is possible.
+Other independent offers remain eligible. Retained canonical samples and excluded offer IDs explain
+those decisions.
+
+`purchasing.least_observed_independent_order_total` is present only when every required material has
+an eligible complete order. Missing consumption prevents pricing altogether; missing eligible prices
+keep the whole-job total unknown. This value is merchandise on the declared comparable terms, not a
+checkout price, shipping calculation, reserved inventory or supplier-bundle optimum. Consumption
+models and complete-channel assertions are source declarations, not physical seam validation.
+
+Limits are eight channels per qualification, 32 declared yarn snapshots, 4096 quote observations and
+200000 preflight quote/stock-alias work units. The public `purchasing_work_bound` permits a study or
+recipe search to reserve the work for all possible plan evaluations; recipe selection enforces the
+same 200000-unit ceiling across its entire configured trial budget. Existing operation/station and
+output-size limits also apply. In `sewing_consumables` synthetic regressions, 90 actual intervals
+across two passes and two declared channels require 3.7 metres after the explicit operation
+allowances; one four-metre rounded order reaches its declared price threshold. Those invented
+coefficients exercise arithmetic and source propagation, not real thread consumption.
+
 ## Geometry, feed and sequencing
 
 ### Optional setup-change optimization
@@ -172,7 +246,7 @@ seams. Unscaled patterns refuse. Every pattern seam must have at least one pass.
 
 The plan reports all traversed stitch intervals and continuous feed seconds at the chosen
 stitch rate, including repeated backtack/reinforcement travel but excluding acceleration, loading, handling,
-repositioning and changes of thread/needle. It reports neither thread consumption
+repositioning and changes of thread/needle. Without the explicit consumption policy above it reports neither thread consumption
 nor an entire garment's production time. Budgets are 4096 passes and 250000
 conservative station/travel slots; repeated lock travel consumes budget and oversized
 requests refuse before station allocation.
@@ -279,7 +353,7 @@ source intervals and full/selected lengths without recomputing the geometry.
 
 Unchanged legacy jobs still serialize as `ftx-sewing-plan/1`, without added default
 fields or altered arithmetic. Jobs requesting operation IDs, reverse capability,
-direction or locks use `ftx-sewing-plan/2`; explicit offset paths use `ftx-sewing-plan/3`, explicit folded assemblies use `/4`, and source-qualified jobs use `/5`.
+direction or locks use `ftx-sewing-plan/2`; explicit offset paths use `ftx-sewing-plan/3`, explicit folded assemblies use `/4`, and source-qualified jobs use `/5`. Source-qualified thread consumption/purchasing uses `/11` while retaining those geometric capabilities.
 An explicit ordering policy uses `/6`, retaining any requested offsets, assemblies
 and qualifications alongside its search result.
 Each operation contains ordered `runs`

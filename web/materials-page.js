@@ -297,6 +297,18 @@ function objectiveComparison(parent, r) {
     motion_wet_film_supplied_mass_kg: "Declared supplied body water",
     motion_wet_film_body_reservoir_latent_energy_j: "Prescribed-body latent energy"
   };
+  const threadLabels = {
+    thread_required_length_m: "Required thread length",
+    thread_observed_order_cost: "Complete thread order cost"
+  };
+  if (metrics.some(o => Object.hasOwn(threadLabels, o.metric)) ||
+      r.policy.required_consumers?.some(name => ["sewing_consumables", "sewing_purchasing"].includes(name))) {
+    const thread = document.createElement("p");
+    thread.textContent = "Thread comparison uses the selected sewing plan's complete, source-qualified channels and exact yarn orders. " +
+      "Thread purchasing retains its own currency and dated market, independently of cutting purchases. " +
+      "Missing channels or offers leave the corresponding complete metric unknown. Recipe selection by time does not prove a thread-cost optimum.";
+    parent.append(thread);
+  }
   const waterMetrics = metrics.filter(o => Object.hasOwn(wetFilmLabels, o.metric));
   if (waterMetrics.length || r.policy.required_consumers?.includes("motion_wet_film")) {
     const water = document.createElement("p");
@@ -316,7 +328,7 @@ function objectiveComparison(parent, r) {
     parent.append(water);
   }
   const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",
-    ...metrics.map(o => `${wetFilmLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
+    ...metrics.map(o => `${wetFilmLabels[o.metric] || threadLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
   for (const row of r.alternatives) {
     cells(t, [row.key, row.eligible ? "Eligible" : `Excluded: ${row.exclusions.map(e => e.message).join("; ")}`,
       row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
@@ -385,7 +397,8 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
     const channels = [
       ["plastic_dissipation_heat", "Plastic yield", "plastic_dissipation_j", "initial_plastic_dissipation_j"],
-      ["relaxation_dissipation_heat", "Maxwell dashpots", "viscous_dissipation_j", "initial_viscous_dissipation_j"]
+      ["relaxation_dissipation_heat", "Maxwell dashpots", "viscous_dissipation_j", "initial_viscous_dissipation_j"],
+      ["bending_plastic_dissipation_heat", "Bending yield", "plastic_dissipation_j", "initial_plastic_dissipation_j"]
     ].filter(([field]) => h?.[field]);
     if (channels.length) {
       const domain = name === "transient_surface" ? "independent-sheet heat" : "coverage and exposed-cloth heat";
@@ -395,6 +408,10 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         const source = h[field];
         cells(work, [label, metric(source[total]), metric(source.supplied_heat_j),
           metric(source.unconverted_dissipation_j), metric(source[initial])]);
+        detail(parent, `${key}: ${label} conversion observations for ${domain} (display only)`, {
+          distribution: source.distribution, temporal_distribution: source.temporal_distribution,
+          material_fractions: source.material_fractions ?? null
+        });
       }
       const scope = document.createElement("p");
       scope.textContent = "The energy residual is physical stored change minus net boundary energy minus the sum of qualified source heat. " +
@@ -403,6 +420,8 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
           "Converted heat is distributed uniformly through each sheet's reference thickness and over its accepted motion interval. " :
           "Inspect the retained report for the declared heat distribution. ") +
         (name === "transient_coverage" ? "Source heat follows covered and exposed reference material; bare body receives none. " : "") +
+        (channels.some(([field]) => field === "bending_plastic_dissipation_heat") ?
+          "Bending work uses each source triangle's reference area; overlapping reconstruction stencils do not multiply deposited heat. " : "") +
         "Temperatures do not feed back into mechanics. " +
         "The temperature-history report retains the material fractions and their source evidence.";
       parent.append(scope);
@@ -896,10 +915,59 @@ function manufacturingComparison(op, parent, study, computed) {
       "A feasible bounded-search result does not prove an optimal schedule.";
     parent.append(note);
   }
+  sewingConsumablesComparison(parent, study.alternatives, computed);
   cuttingJobComparison(op, parent, study.alternatives);
   assemblyMassComparison(parent, study.alternatives);
   vaporComparison(op, parent, study.alternatives);
   if (study.screening) screening(parent, study.screening);
+}
+function sewingConsumablesComparison(parent, alternatives, computed) {
+  const metrics = ["thread_required_length_m", "thread_observed_order_cost"];
+  const requested = [...(computed?.policy?.objectives || []), ...(computed?.policy?.constraints || [])]
+    .some(item => metrics.includes(item.metric)) ||
+    computed?.policy?.required_consumers?.some(name => ["sewing_consumables", "sewing_purchasing"].includes(name));
+  if (!requested && !alternatives.some(row => available(row.sewing)?.consumables ||
+      metrics.some(name => row.metrics?.[name] != null))) return;
+  const totals = table(parent, "Thread for the selected sewing plan — complete or unknown",
+    ["Alternative", "Thread quantities", "Required length (m)", "Thread purchasing", "Thread currency", "Complete order cost"]);
+  for (const row of alternatives) {
+    const plan = available(row.sewing), report = plan?.consumables, purchase = report?.purchasing;
+    const complete = report?.complete_consumption_coverage === true;
+    const quantity = report ? (complete ? "Complete channel coverage" : "Incomplete channel coverage") :
+      plan ? "Not requested" : state(row.sewing);
+    const pricing = purchase ? (purchase.complete_offer_coverage === true ? "Complete offer coverage" :
+      "Incomplete offer coverage") : report || plan ? "Not requested" : state(row.sewing);
+    const cost = metric(complete && purchase?.complete_offer_coverage === true ?
+      purchase.least_observed_independent_order_total : null);
+    cells(totals, [row.key, quantity, metric(complete ? report.total_required_length_m : null), pricing,
+      purchase?.currency || "Unknown", cost === "Unknown" ? cost : `${cost} ${purchase?.currency || "(currency unavailable)"}`]);
+    if (report?.operation_channels?.length) {
+      const channels = table(parent, `${row.key}: selected operation and thread channel requirements`,
+        ["Operation", "Qualification", "Channel", "Exact yarn snapshot", "Traversed intervals", "Required length (m)"]);
+      for (const channel of report.operation_channels) cells(channels, [channel.operation_id, channel.qualification_id,
+        channel.channel_id, channel.material_sha256, metric(channel.stitch_intervals), metric(channel.required_length_m)]);
+    }
+    if (report?.missing_operations?.length || purchase?.unavailable_reason) {
+      const missing = document.createElement("p");
+      missing.textContent = `${row.key}: ` + (report.missing_operations || [])
+        .map(item => `${item.operation_id}: ${item.reason}`).join("; ") +
+        (purchase?.unavailable_reason ? ` ${purchase.unavailable_reason}` : "");
+      parent.append(missing);
+    }
+    detail(parent, `${row.key}: selected thread channels, exact yarns and order evidence (display only)`, {
+      selected_recipe_choices: available(row.sewing_selection)?.selected_choices,
+      consumables: report || null, qualifications: plan?.options?.qualifications,
+      request: plan?.options?.consumables, sewing_refusal: row.sewing?.refusal
+    });
+  }
+  const note = document.createElement("p");
+  note.textContent = "Thread demand follows every traversal in the selected sewing plan, with each declared start/end allowance applied once per operation and channel. " +
+    "Partial channel rows are diagnostic; they are never a complete bill of materials or a priced subtotal. " +
+    "Exact yarn requirements aggregate before supplier minimums, increments and observed stock are applied. " +
+    "This is one sewing job: cutting copies do not multiply its demand, and purchased thread is not retained assembly mass. " +
+    "Thread prices retain their own currency and market; they are not combined with cutting costs. " +
+    "Time-based recipe selection does not prove the least thread cost.";
+  parent.append(note);
 }
 function cuttingJobComparison(op, parent, alternatives) {
   if (!alternatives.some(row => row.cutting_job && row.cutting_job.status !== "not_requested")) return;
@@ -1158,6 +1226,8 @@ function sewingResult(parent, r) {
       "These ranges preserve the declared notch correspondence and do not authorize a physical fold transition or machine execution.";
     parent.append(note);
   }
+  if (plan?.consumables) sewingConsumablesComparison(parent,
+    [{ key: "Selected sewing plan", sewing: { status: "available", result: plan } }]);
   return { schema: r.schema, stitches: r.stitches?.length, feed_seconds: plan?.feed_seconds,
     setup_changes: order?.selected_changes, minimum_setup_changes_proven: order?.optimality_proven,
     search_nodes: order?.search_nodes, hardware_execution_authorized: plan?.hardware_execution_authorized };

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Ctx, ExportOptions, edge_sa};
 
 pub mod assembly;
+pub mod consumables;
 pub mod ordering;
 pub mod pressure;
 pub mod preview;
@@ -113,6 +114,9 @@ pub struct SewOptions {
     /// Require every pass to match exactly one qualification; false preserves legacy planning.
     #[serde(default, skip_serializing_if = "is_false")]
     pub require_qualification: bool,
+    /// Optional source-qualified thread inventory and dated purchasing from actual traversals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumables: Option<consumables::Request>,
     /// Default flat seam-walk tolerance in mm; existing per-seam tolerances take precedence.
     pub seam_tolerance_mm: f64,
     /// Default export allowance override; edge and piece allowances still take precedence.
@@ -148,6 +152,9 @@ pub struct SewingQualification {
     /// A pressure-bearing operation needs a pressure-bearing qualification; omission is not consent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presser_foot: Option<pressure::Qualification>,
+    /// Independently sourced consumption applicable only within this exact admitted envelope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_consumption: Option<consumables::Consumption>,
     /// Evidence class of this qualification record.
     pub evidence: Evidence,
     /// Exact external source or retained local measurement identity.
@@ -219,7 +226,8 @@ pub struct PlannedSeam {
 #[derive(Clone, Debug, Serialize)]
 pub struct SewPlan {
     /// `/1` legacy, `/2` directed, `/3` offsets, `/4` assemblies, `/5` qualifications, `/6` ordering,
-    /// `/7` pressure, `/8` clearance, `/9` timed ordering, `/10` partial source spans.
+    /// `/7` pressure, `/8` clearance, `/9` timed ordering, `/10` partial source spans,
+    /// `/11` source-qualified thread consumption and purchasing.
     /// Capabilities compose rather than replace.
     pub schema: &'static str,
     /// Digest of the complete original pattern JSON, including material assignments.
@@ -233,6 +241,9 @@ pub struct SewPlan {
     /// Setup counts, optional times and bounded-search result; absent without an ordering policy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ordering: Option<ordering::Report>,
+    /// Optional complete thread BOM; missing consumption never becomes a zero requirement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumables: Option<consumables::Report>,
     /// Total traversed stitch intervals, including locks; not thread consumption.
     pub stitch_intervals: usize,
     /// Sum of the continuous feed times, never a complete manufacturing cycle-time estimate.
@@ -277,6 +288,9 @@ impl SewingQualification {
     fn validate(&self) -> Result<(), Refusal> {
         if let Some(foot) = &self.presser_foot {
             foot.validate()?;
+        }
+        if let Some(consumption) = &self.thread_consumption {
+            consumption.validate()?;
         }
         if !qualified_text(&self.id)
             || self.materials.is_empty()
@@ -365,6 +379,8 @@ impl SewPlan {
     /// passes; failed flat seam checks; machine/allowance limits; more than 4096 passes or 250000
     /// conservative station slots. Refusal publishes no partial plan.
     pub fn build(pattern: &Pattern, options: &SewOptions) -> Result<Self, Refusal> {
+        // Reserve finite quote/alias work before generating any geometry or pricing a prefix.
+        consumables::purchasing_work_bound(options)?;
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
             return Err(bad(errors.join("; ")));
@@ -512,7 +528,14 @@ impl SewPlan {
                 .iter()
                 .any(|p| p.id.is_some() || !p.direction.is_forward() || !p.backtack.is_empty());
         let mut out = Self {
-            schema: if options.passes.iter().any(|p| p.source_range.is_some()) {
+            schema: if options.consumables.is_some()
+                || options
+                    .qualifications
+                    .iter()
+                    .any(|q| q.thread_consumption.is_some())
+            {
+                "ftx-sewing-plan/11"
+            } else if options.passes.iter().any(|p| p.source_range.is_some()) {
                 "ftx-sewing-plan/10"
             } else if options
                 .ordering
@@ -564,6 +587,7 @@ impl SewPlan {
             materials: BTreeMap::new(),
             seams: Vec::new(),
             ordering: None,
+            consumables: None,
             stitch_intervals: 0,
             feed_seconds: 0.0,
             hardware_execution_authorized: false,
@@ -847,6 +871,9 @@ impl SewPlan {
             out.seams
                 .sort_by_key(|seam| ranks[seam.pass.operation_id()]);
             out.ordering = Some(report);
+        }
+        if let Some(request) = &options.consumables {
+            out.consumables = Some(consumables::evaluate(&out, request)?);
         }
         Ok(out)
     }

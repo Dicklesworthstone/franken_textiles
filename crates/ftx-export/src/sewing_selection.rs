@@ -9,13 +9,14 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_pattern::Pattern;
 use serde::{Deserialize, Serialize};
 
-use crate::sewing::{SewOptions, SewPlan, SewingPass, ordering};
+use crate::sewing::{SewOptions, SewPlan, SewingPass, consumables, ordering};
 
 const MAX_TRIALS: usize = 64;
 const MAX_OPERATIONS: usize = 64;
 const MAX_GROUPS: usize = 12;
 const MAX_ALTERNATIVES: usize = 15;
 const MAX_ORDERING_NODES: usize = 200_000;
+const MAX_PURCHASING_WORK: usize = 200_000;
 const TEMPLATE: &str = "template";
 const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
 
@@ -188,6 +189,17 @@ impl Request {
             return Err(Refusal::new(
                 RefusalCode::BudgetExceeded,
                 "combined recipe/ordering search exceeds 200000 configured ordering nodes",
+            ));
+        }
+        let purchasing_work = consumables::purchasing_work_bound(&self.options)?;
+        if self
+            .max_plan_evaluations
+            .checked_mul(purchasing_work)
+            .is_none_or(|n| n > MAX_PURCHASING_WORK)
+        {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "combined recipe/thread purchasing exceeds 200000 configured quote/stock-alias work units",
             ));
         }
         let mut ids = BTreeMap::new();

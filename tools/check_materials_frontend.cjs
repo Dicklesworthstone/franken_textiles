@@ -2567,6 +2567,120 @@ test('study timing separates sourced setup duration from feed time and preserves
   assert.equal(section(p, 'Fresh drape and heat alternatives').hidden, true);
 });
 
+function selectedThreadPlan() {
+  const channels=['needle','bobbin'].map((channel,i)=>({operation_id:'hem <selected>',qualification_id:'qualified-recipe',
+    channel_id:channel,material_sha256:`exact-${channel}`,stitch_intervals:10,metres_per_traversal:i?0.1:0.2,
+    traversal_length_m:i?1:2,start_allowance_m:0.1,end_allowance_m:0.1,required_length_m:i?1.2:2.2}));
+  const requirements=channels.map(c=>({material_sha256:c.material_sha256,required_length_m:c.required_length_m,
+    required_continuous_length_m:c.required_length_m}));
+  const orders=requirements.map((requirement,i)=>({requirement,excluded_unlocked_offer_ids:['unlocked-offer'],
+    excluded_shared_stock_offer_ids:[],sample:{scope:{currency:'EUR'},offers:[]},
+    least_observed_order:{quote:{offer_id:`observed-${i}`,currency:'EUR',unit:'linear_meter',
+      material_sha256:requirement.material_sha256,source:{reference:'fixture:thread-order'}},
+      order_quantity:5,order_cost:i?2:4,quantity_sufficiency_observed:true,within_observed_continuous_limit:true}}));
+  return {seams:[{pass:{id:'hem <selected>'},qualification_id:'qualified-recipe'}],options:{consumables:{purchasing:{
+      market:{currency:'EUR',as_of:'2026-10-23'},quote_book:{source:'<original thread offers>'}}},
+    qualifications:[{id:'qualified-recipe',thread_consumption:{channels_complete:true,channels,
+      method:'<independent consumption observation>',source:{reference:'fixture:thread-acquisition'}}}]},
+    consumables:{schema:'ftx-sewing-consumables/1',complete_consumption_coverage:true,missing_operations:[],
+      operation_channels:channels,materials:Object.fromEntries(channels.map(c=>[c.material_sha256,
+        {id:c.channel_id,expected_sha256:c.material_sha256,record:{form:'yarn'}}])),
+      material_requirements:requirements,total_required_length_m:3.4,purchasing:{currency:'EUR',
+        complete_offer_coverage:true,complete_observed_quantity_coverage:true,
+        complete_continuous_length_limit_coverage:true,material_orders:orders,
+        least_observed_independent_order_total:6,unavailable_reason:null}}};
+}
+
+test('selected thread study quantities and orders retain independent currencies, unknowns and source invalidation', async()=>{
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const selected=studyRow('selected'), unpriced=studyRow('unpriced'), missing=studyRow('missing offer'),
+    partial=studyRow('partial channels'), failed=studyRow('failed'), omittedRow=studyRow('not requested');
+  for(const row of [selected,unpriced,missing,partial]) {
+    row.sewing=outcome(selectedThreadPlan()); row.metrics.thread_required_length_m=3.4;
+    row.metrics.thread_observed_order_cost=6;
+  }
+  selected.sewing_selection=outcome({selected_choices:{'hem <selected>':'qualified-recipe'},
+    trials:[{choice:'unused recipe',thread_required_length_m:0.1}],search_complete:true,
+    budget_exhausted:false,optimality_proven:true,unresolved_trials:0});
+  selected.purchasing=outcome({currency:'USD',complete_offer_coverage:true});
+  selected.metrics.least_observed_independent_order_total=14;
+  delete unpriced.sewing.result.consumables.purchasing; delete unpriced.metrics.thread_observed_order_cost;
+  Object.assign(missing.sewing.result.consumables.purchasing,{complete_offer_coverage:false,
+    least_observed_independent_order_total:null,unavailable_reason:'No eligible exact-yarn offer'});
+  delete missing.metrics.thread_observed_order_cost;
+  Object.assign(partial.sewing.result.consumables,{complete_consumption_coverage:false,total_required_length_m:null,
+    material_requirements:[],operation_channels:partial.sewing.result.consumables.operation_channels.slice(0,1),
+    missing_operations:[{operation_id:'hem <selected>',reason:'Bobbin consumption is not qualified'}]});
+  Object.assign(partial.sewing.result.consumables.purchasing,{complete_offer_coverage:false,
+    least_observed_independent_order_total:null,material_orders:[],unavailable_reason:'Partial requirements are not priced'});
+  delete partial.metrics.thread_required_length_m; delete partial.metrics.thread_observed_order_cost;
+  failed.sewing=refused('No qualified selected sewing recipe');
+  const rows=[selected,unpriced,missing,partial,failed,omittedRow];
+  const policy={basis:'nominal',allow_mixed_protocols:false,required_consumers:['sewing_consumables','sewing_purchasing'],
+    objectives:[{metric:'thread_required_length_m',direction:'minimize'},{metric:'thread_observed_order_cost',direction:'minimize'},
+      {metric:'observed_order_cost',direction:'minimize'}],constraints:[]};
+  const computed={policy,frontier:['selected'],incomparable:[],alternatives:rows.map(row=>({key:row.key,
+    eligible:row===selected,dominated_by:[],exclusions:row===selected?[]:[{message:'Complete thread offers required'}],
+    readings:row===selected?{thread_required_length_m:{value:3.4,unit:'m'},thread_observed_order_cost:{value:6,unit:'EUR'},
+      observed_order_cost:{value:14,unit:'USD'}}:{}}))};
+  for(const op of ['study','scenario']) {
+    const report={...studyReport(rows),comparison:computed};
+    await p.e[op].onclick(); p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report,comparison:computed});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    const totals=table('Thread for the selected sewing plan — complete or unknown');
+    assert.deepEqual(plain(totals.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+      ['selected','Complete channel coverage','3.4','Complete offer coverage','EUR','6 EUR'],
+      ['unpriced','Complete channel coverage','3.4','Not requested','Unknown','Unknown'],
+      ['missing offer','Complete channel coverage','3.4','Incomplete offer coverage','EUR','Unknown'],
+      ['partial channels','Incomplete channel coverage','Unknown','Incomplete offer coverage','EUR','Unknown'],
+      ['failed','Refused: No qualified selected sewing recipe','Unknown','Refused: No qualified selected sewing recipe','Unknown','Unknown'],
+      ['not requested','Not requested','Unknown','Not requested','Unknown','Unknown']]);
+    assert.equal(table('Independent manufacturing outcomes').children[2].children[8].textContent,'14 USD');
+    assert.deepEqual(plain(table('Declared computed objectives — authoritative Rust comparison').children[2].children.slice(3).map(n=>n.textContent)),
+      ['3.4 m','6 EUR','14 USD']);
+    assert.match(visibleText(s),/Required thread length \(minimize\)/);
+    assert.deepEqual(plain(table('selected: selected operation and thread channel requirements').children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+      ['hem <selected>','qualified-recipe','needle','exact-needle','10','2.2'],
+      ['hem <selected>','qualified-recipe','bobbin','exact-bobbin','10','1.2']]);
+    assert.match(visibleText(s),/Bobbin consumption is not qualified/); assert.match(visibleText(s),/No eligible exact-yarn offer/);
+    assert.match(visibleText(s),/cutting copies do not multiply/); assert.doesNotMatch(visibleText(s),/unused recipe/);
+    const receipt=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='selected: selected thread channels, exact yarns and order evidence (display only)');
+    receipt.open=true; receipt.handlers.toggle(); assert.match(visibleText(receipt),/<independent consumption observation>/);
+    assert.match(visibleText(receipt),/fixture:thread-order/); assert.match(visibleText(receipt),/unlocked-offer/);
+    assert.match(visibleText(receipt),/"order_quantity": 5/); assert.doesNotMatch(visibleText(receipt),/unused recipe/);
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  }
+  p.e.sewOptions.handlers.change();
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,false);
+  p.e.studyRequest.handlers.change(); assert.equal(p.live.size,0);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+  await p.e.study.onclick(); const stale=p.current(), request=stale.messages.at(-1).request;
+  await p.load(); p.ready(); stale.emit({type:'result',request,result:studyReport(rows),files:[]});
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+});
+
+test('required thread consumers reveal unknown quantities without hiding successful sewing and standalone source changes withdraw receipts', async()=>{
+  const p=await pageModule(); await p.load(); p.select('studyRequest','{}');
+  const report=studyReport(); report.comparison={policy:{basis:'nominal',allow_mixed_protocols:false,
+    required_consumers:['sewing_consumables','sewing_purchasing'],objectives:[{metric:'feed_seconds',direction:'minimize'}],constraints:[]},
+    frontier:[],incomparable:[],alternatives:[{key:'A',eligible:false,dominated_by:[],
+      exclusions:[{message:'Thread consumption was not requested'}],readings:{feed_seconds:{value:0,unit:'s'}}}]};
+  await p.e.study.onclick(); p.emit(report);
+  let s=section(p,'Fixed-pattern manufacturing alternatives');
+  const totals=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Thread for the selected sewing plan — complete or unknown');
+  assert.deepEqual(plain(totals.children[2].children.map(n=>n.textContent)),['A','Not requested','Unknown','Not requested','Unknown','Unknown']);
+  assert.match(visibleText(s),/Thread consumption was not requested/);
+  const manufacturing=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Independent manufacturing outcomes');
+  assert.equal(manufacturing.children[2].children[3].textContent,'Available');
+  await p.bind(); p.select('sewOptions','{"consumables":{}}'); await p.e.sew.onclick();
+  p.emit({schema:'ftx-sewing-program/1',plan:selectedThreadPlan(),stitches:[]});
+  s=section(p,'sew'); assert.match(visibleText(s),/6 EUR/);
+  assert.match(visibleText(s),/Selected sewing plan: selected operation and thread channel requirements/);
+  p.e.sewOptions.handlers.change(); assert.equal(s.hidden,true);
+});
+
 test('scenario comparisons join keys, preserve signed values, and distinguish gating and independent refusals', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   assert.equal(p.e.scenario.disabled, false); assert.equal(p.e.fold.disabled, true); // no bind or single-preview fit
@@ -3867,6 +3981,75 @@ test('plastic and relaxation heat display each domain source separately and pres
   assert.match(visibleText(s), /Refused: missing source-qualified plastic heat fraction/);
   assert.match(visibleText(s), /Body coverage \+ exposed cloth/);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
+});
+
+test('bending heat authored domain opt-ins reach the worker and replay without rewriting another source policy', async () => {
+  for (const domain of ['transient_surface','transient_coverage']) {
+    const other = domain === 'transient_surface' ? 'transient_coverage' : 'transient_surface';
+    const scenario = ` {"schema":"ftx-drape-scenario/1","motion":{"${domain}":{"bending_plastic_dissipation_heat":"uniform_reference_thickness","initial_temperature_c":20.0},"${other}":{"plastic_dissipation_heat":"uniform_reference_thickness","relaxation_dissipation_heat":"uniform_reference_thickness","origin":-0.0}}}\n`;
+    const p = await pageModule(); await p.load(); scenarioInputs(p);
+    p.select('scenarioRequest',scenario); p.e.scenarioRequest.handlers.change(); await p.e.scenario.onclick();
+    const stale = p.current(), msg = stale.messages.at(-1);
+    assert.equal(msg.scenarioRequest,scenario);
+    const w = await workerModule(), result = await w.send(msg);
+    assert.equal(result.type,'result',result.message);
+    assert.equal(w.called.find(row=>row[0]==='scenario')[4],scenario);
+    assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenario);
+    assert.deepEqual(w.freed,['body']);
+    const policy = JSON.parse(scenario).motion;
+    assert.equal(policy[other].bending_plastic_dissipation_heat,undefined);
+    assert.equal(policy[domain].plastic_dissipation_heat,undefined);
+    assert.equal(policy[domain].relaxation_dissipation_heat,undefined);
+    p.e.scenarioRequest.handlers.change(); p.ready();
+    stale.emit({type:'result',request:msg.request,result:scenarioReport(),files:[]});
+    assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+  }
+});
+
+test('bending heat displays independent source receipts, zero conversion and domain refusals without stale results', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const report=scenarioReport(); report.scenario.scenario={motion:{transient_surface:{},transient_coverage:{}}};
+  const surface={duration_s:1,thermal_steps:2,trace:[{temperature_range_c:[20,20]}],
+    net_boundary_energy_j:0,stored_change_j:0,balance_error_j:0};
+  const source={distribution:'uniform_reference_thickness',temporal_distribution:'uniform_over_accepted_interval',
+    plastic_dissipation_j:12,supplied_heat_j:0,unconverted_dissipation_j:12,initial_plastic_dissipation_j:5,
+    material_fractions:[{material_sha256:'qualified-bending-material',law_sha256:'qualified-curvature-law',
+      fraction:0,temperature_range_c:[0,80],observation:{method:'<explicit zero conversion>',
+        conditions:{work_basis:'irreversible_bending_plastic_dissipation'}}}]};
+  const coverage={duration_s:1,thermal_steps:2,trace:[{temperature_range_c:[20,20]}],
+    net_boundary_energy_j:0,physical_stored_change_j:0,balance_error_j:0,signed_remap_residual_j:0,
+    bending_plastic_dissipation_heat:source};
+  const motion={samples:[{}],keyframes:[],transient_surface:outcome(surface),transient_coverage:outcome(coverage)};
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome(motion);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const work=domain=>descendants(s).find(n=>n.tag==='table' && n.children[0].textContent===`A: material work supplied to ${domain}`);
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.equal(work('independent-sheet heat'),undefined);
+  assert.deepEqual(plain(work('coverage and exposed-cloth heat').children[2].children.map(n=>n.textContent)),['Bending yield','12','0','12','5']);
+  assert.match(visibleText(s),/Bending work uses each source triangle's reference area/);
+  const receipt=descendants(s).find(n=>n.tag==='details' && n.children[0].textContent==='A: Bending yield conversion observations for coverage and exposed-cloth heat (display only)');
+  receipt.open=true; receipt.handlers.toggle();
+  assert.match(visibleText(receipt),/<explicit zero conversion>/);
+  assert.match(visibleText(receipt),/qualified-curvature-law/);
+  assert.match(visibleText(receipt),/irreversible_bending_plastic_dissipation/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+
+  surface.bending_plastic_dissipation_heat={...source,supplied_heat_j:3,unconverted_dissipation_j:9,
+    material_fractions:source.material_fractions.map(row=>({...row,fraction:0.25}))};
+  surface.stored_change_j=3;
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.deepEqual(plain(work('independent-sheet heat').children[2].children.map(n=>n.textContent)),['Bending yield','12','3','9','5']);
+  assert.deepEqual(plain(work('coverage and exposed-cloth heat').children[2].children.map(n=>n.textContent)),['Bending yield','12','0','12','5']);
+  motion.transient_coverage=refused('missing source-qualified bending heat fraction');
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.equal(work('coverage and exposed-cloth heat'),undefined);
+  assert.ok(work('independent-sheet heat'));
+  assert.match(visibleText(s),/Refused: missing source-qualified bending heat fraction/);
+  surface.bending_plastic_dissipation_heat.unconverted_dissipation_j=null;
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.equal(work('independent-sheet heat').children[2].children[3].textContent,'Unknown');
+  p.e.scenarioRequest.handlers.change();
+  assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
 test('compiled WASM outfit import reaches exact material binding and complete assembly studies',

@@ -42,6 +42,10 @@ pub enum Consumer {
     CuttingJobPurchasing,
     /// Production seam/stack/recipe admission, not physical seam qualification.
     Sewing,
+    /// Complete independently qualified thread channels for the actual selected sewing plan.
+    SewingConsumables,
+    /// Complete exact-yarn whole orders in the sewing consumer's dated market.
+    SewingPurchasing,
     /// Complete marker-derived whole-order offer coverage in the request's dated market scope.
     Purchasing,
     /// Complete declared pre-finishing assembly inventory, not a purchased or simulated subset.
@@ -112,6 +116,10 @@ pub enum Metric {
     SewingSetupSeconds,
     /// Generated feed plus source-qualified setup time, excluding undeclared handling, in seconds.
     SewingFeedAndSetupSeconds,
+    /// Complete thread length across the selected job's channels, including operation allowances.
+    ThreadRequiredLengthM,
+    /// Complete independent thread orders in their own currency; never a cut-and-sew subtotal.
+    ThreadObservedOrderCost,
     /// Potential latent power (W) through the declared stack; water supply is not modeled.
     VaporPotentialHeatFlowW,
     /// Potential vapor mass flow (kg/s), using the same explicit boundaries and latent heat.
@@ -194,6 +202,8 @@ impl Metric {
             | Self::FeedSeconds
             | Self::SewingSetupSeconds
             | Self::SewingFeedAndSetupSeconds => Consumer::Sewing,
+            Self::ThreadRequiredLengthM => Consumer::SewingConsumables,
+            Self::ThreadObservedOrderCost => Consumer::SewingPurchasing,
             Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
             Self::IndependentSurfacePowerW => Consumer::Surface,
@@ -246,7 +256,9 @@ impl Metric {
             Self::ObservedOrderCost
             | Self::SelectedObservedOrderCost
             | Self::CuttingJobObservedOrderCost
-            | Self::CuttingJobSelectedOrderCost => currency.unwrap_or("unavailable currency"),
+            | Self::CuttingJobSelectedOrderCost
+            | Self::ThreadObservedOrderCost => currency.unwrap_or("unavailable currency"),
+            Self::ThreadRequiredLengthM => "m",
             Self::StitchIntervals | Self::UsedStockCount => "count",
             Self::FeedSeconds | Self::SewingSetupSeconds | Self::SewingFeedAndSetupSeconds => "s",
             Self::VaporPotentialHeatFlowW
@@ -296,6 +308,8 @@ impl Metric {
             Self::FeedSeconds => row.metrics.feed_seconds,
             Self::SewingSetupSeconds => row.metrics.sewing_setup_seconds,
             Self::SewingFeedAndSetupSeconds => row.metrics.sewing_feed_and_setup_seconds,
+            Self::ThreadRequiredLengthM => row.metrics.thread_required_length_m,
+            Self::ThreadObservedOrderCost => row.metrics.thread_observed_order_cost,
             Self::VaporPotentialHeatFlowW => row.vapor.value().map(|r| r.potential_heat_flow_w),
             Self::VaporPotentialMassFlowKgS => {
                 row.vapor.value().map(|r| r.potential_mass_flow_kg_s)
@@ -387,6 +401,25 @@ impl Metric {
             }
         }
     }
+    fn currency<'a>(
+        self,
+        row: &'a Alternative,
+        cutting_currency: Option<&'a str>,
+    ) -> Option<&'a str> {
+        if self == Self::ThreadObservedOrderCost {
+            row.sewing
+                .value()?
+                .options
+                .consumables
+                .as_ref()?
+                .purchasing
+                .as_ref()
+                .map(|p| p.market.currency.as_str())
+        } else {
+            cutting_currency
+        }
+    }
+
     fn signed(self) -> bool {
         matches!(
             self,
@@ -623,6 +656,13 @@ impl Policy {
                     .as_ref()
                     .is_some_and(|job| job.purchasing.is_some()),
                 Consumer::Sewing => request.sewing.is_some() || request.sewing_selection.is_some(),
+                Consumer::SewingConsumables => request
+                    .sewing_options()
+                    .is_some_and(|s| s.consumables.is_some()),
+                Consumer::SewingPurchasing => request
+                    .sewing_options()
+                    .and_then(|s| s.consumables.as_ref())
+                    .is_some_and(|c| c.purchasing.is_some()),
                 Consumer::Purchasing => request.purchasing.is_some(),
                 Consumer::AssemblyMass => request.assembly_mass.is_some(),
                 Consumer::Vapor => request.vapor.is_some(),
@@ -841,6 +881,11 @@ impl Policy {
         {
             report.notes.push("Selected order cost objectives admit only complete feasible orders. A bounded split-supplier search may retain such an incumbent without proving it cheapest; the observed_order_cost and cutting_job_observed_order_cost objectives require the corresponding allocation minimum. Source quantity and continuous-cut limits apply to each selected aggregate supplier order, without splitting markers or reserving stock.");
         }
+        if self.consumers().contains(&Consumer::SewingConsumables)
+            || self.consumers().contains(&Consumer::SewingPurchasing)
+        {
+            report.notes.push("Thread objectives use the selected production plan's complete, independently qualified channel consumption. Exact yarn demands aggregate before supplier rounding and stock admission. Costs retain the thread market's own currency and date; they are independent of cut-stock copies, retained garment mass and a combined assembly purchase total. Missing consumption or any eligible whole order remains unavailable, and time-based recipe selection does not prove a thread-cost optimum.");
+        }
         report
     }
 
@@ -1007,6 +1052,7 @@ impl Policy {
             }
         }
         for metric in self.metrics() {
+            let currency = metric.currency(row, currency);
             match metric
                 .value(row, &admitted)
                 .filter(|v| v.is_finite() && (metric.signed() || *v >= 0.))
@@ -1127,7 +1173,9 @@ impl Policy {
         if consumers.contains(&Consumer::Cutting) || consumers.contains(&Consumer::Purchasing) {
             keys.insert("width");
         }
-        if consumers.contains(&Consumer::Sewing) {
+        let thread = consumers.contains(&Consumer::SewingConsumables)
+            || consumers.contains(&Consumer::SewingPurchasing);
+        if consumers.contains(&Consumer::Sewing) || thread {
             keys.insert("thickness");
         }
         if self.metrics().iter().any(|m| {
@@ -1267,6 +1315,33 @@ impl Policy {
                 Value::Null
             },
         ))?;
+        if thread {
+            let plan = row
+                .sewing
+                .value()
+                .ok_or_else(|| invalid("selected sewing plan for thread protocols unavailable"))?;
+            let mut consumption_protocols = BTreeMap::new();
+            for seam in &plan.seams {
+                let q = plan
+                    .options
+                    .qualifications
+                    .iter()
+                    .find(|q| Some(q.id.as_str()) == seam.qualification_id.as_deref())
+                    .ok_or_else(|| {
+                        invalid("admitted sewing qualification for thread protocols unavailable")
+                    })?;
+                let model = q.thread_consumption.as_ref().ok_or_else(|| {
+                    invalid("independent thread consumption protocol unavailable")
+                })?;
+                let channels: BTreeSet<_> = model.channels.iter().map(|c| c.id.as_str()).collect();
+                consumption_protocols.insert(seam.pass.operation_id(), json!({
+                    "process":{"method":q.method,"conditions":q.conditions,"evidence":q.evidence},
+                    "consumption":{"method":model.method,"conditions":model.conditions,"evidence":model.evidence},
+                    "channels":channels,
+                }));
+            }
+            base = hash(&(base, consumption_protocols))?;
+        }
         if self.metrics().iter().any(|metric| {
             matches!(
                 metric,
@@ -1388,6 +1463,22 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
             r.complete_inventory && row.metrics.cutting_job_selected_order_cost.is_some()
         }),
         Consumer::Sewing => row.sewing.value().is_some(),
+        Consumer::SewingConsumables => row
+            .sewing
+            .value()
+            .and_then(|p| p.consumables.as_ref())
+            .is_some_and(|c| {
+                c.complete_consumption_coverage && c.total_required_length_m.is_some()
+            }),
+        Consumer::SewingPurchasing => row
+            .sewing
+            .value()
+            .and_then(|p| p.consumables.as_ref())
+            .filter(|c| c.complete_consumption_coverage)
+            .and_then(|c| c.purchasing.as_ref())
+            .is_some_and(|p| {
+                p.complete_offer_coverage && p.least_observed_independent_order_total.is_some()
+            }),
         Consumer::Purchasing => row
             .purchasing
             .value()

@@ -200,6 +200,53 @@ The selector's per-job limits and the study's 250,000 retained-station cap also 
 number of material alternatives or `max_plan_evaluations` when this combined budget is exceeded.
 Source qualifications still do not establish measured seam quality or authorize hardware execution.
 
+### Thread quantities and dated whole orders
+
+Set `sewing.consumables` (or `sewing_selection.options.consumables`) to `{}` to evaluate the
+selected plan's thread demand. Each admitted process qualification must supply its independently
+sourced `thread_consumption` model: a complete channel assertion, exact frozen yarn selections,
+metres per traversed stitch interval, and separate start/end allowances. See
+[the sewing consumption contract](material-sewing-plans.md#source-qualified-thread-inventory-and-purchasing)
+for the input fields. Reverse travel, backtacks and reinforcement count every traversal; allowances
+apply once per operation and channel. A recipe search reports the consumption of its actual selected
+plan, even when a faster recipe requires more thread.
+
+Add `consumables.purchasing` with `quote_book` and the existing purchasing `market` to request
+dated orders. Each exact yarn's complete demand is aggregated before the canonical length-price
+engine applies supplier minimums, increments, price tiers, availability and requested stock limits.
+Missing qualifications, incomplete channel lists or missing eligible offers leave complete quantities
+or prices unknown. Known contributions remain inspectable in `sewing.result.consumables`.
+
+Two nominal comparison metrics are available:
+
+| Metric | Required consumer | Meaning |
+| --- | --- | --- |
+| `thread_required_length_m` | `sewing_consumables` | Complete metres across every selected operation and thread channel, including declared allowances |
+| `thread_observed_order_cost` | `sewing_purchasing` | Complete independent whole-yarn orders in the thread market's own currency |
+
+For example, this policy minimizes complete thread cost subject to a declared demand cap:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [{"metric": "thread_observed_order_cost", "direction": "minimize"}],
+  "constraints": [{"metric": "thread_required_length_m", "maximum": 40}],
+  "required_consumers": ["sewing_consumables", "sewing_purchasing"]
+}
+```
+
+Protocol comparison includes the independently reported consumption method, conditions, evidence
+and channel identities, plus the methods and evidence of the process qualifications actually used.
+Unused candidate models do not change the selected plan's protocol. Reported bounds are not inferred
+for these computed quantities or costs.
+
+Thread and cutting costs remain separate, with their own currencies and complete-coverage checks.
+The thread consumer describes one declared sewing job; cutting copies do not multiply it. Neither
+thread demand nor purchased cone length establishes retained garment mass or a complete combined
+assembly purchase total. Recipe selection continues to optimize its explicit time objective.
+At most 200,000 configured thread-purchasing work units are admitted across all expanded material
+and design alternatives and recipe trials. Named scenario cases reuse the manufacturing result.
+
 ### Heterogeneous material combinations
 
 `combinations` is a third alternative source, exclusive with `variants` and `screened`. It evaluates

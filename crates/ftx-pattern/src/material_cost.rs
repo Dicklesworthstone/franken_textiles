@@ -320,6 +320,9 @@ struct Instant {
     nanosecond: u32,
 }
 
+// Exact comparison time and latest market observations, paired with their retrieval instants.
+type ScopedQuoteObservations<'a> = (Instant, Vec<(&'a Quote, Instant)>);
+
 // A bounded UTC spelling avoids platform clocks, timezone databases and precision loss. Integer
 // components compare instants exactly across native/WASM, including fractional-second boundaries.
 fn instant(s: &str) -> Result<Instant, Refusal> {
@@ -609,6 +612,80 @@ impl QuoteBook {
         }
     }
 
+    fn latest_in_scope(&self, scope: &Scope) -> Result<ScopedQuoteObservations<'_>, Refusal> {
+        let as_of_day = day(&scope.as_of)?;
+        let intraday = self.intraday()?;
+        let as_of = if intraday {
+            let at = instant(
+                scope
+                    .as_of_at
+                    .as_deref()
+                    .ok_or_else(|| invalid("version-2 prices require as_of_at"))?,
+            )?;
+            if at.day != as_of_day {
+                return Err(invalid("as_of_at UTC date must equal as_of"));
+            }
+            at
+        } else {
+            if scope.as_of_at.is_some() {
+                return Err(invalid("as_of_at requires a version-2 quote book"));
+            }
+            Instant {
+                day: as_of_day,
+                second: 0,
+                nanosecond: 0,
+            }
+        };
+        if scope.currency.len() != 3
+            || !scope.currency.bytes().all(|b| b.is_ascii_uppercase())
+            || [&scope.region, &scope.quality, &scope.terms]
+                .iter()
+                .any(|s| s.trim().is_empty())
+        {
+            return Err(invalid("invalid price sample scope"));
+        }
+        let mut latest = BTreeMap::<&str, (&Quote, Instant)>::new();
+        for q in &self.quotes {
+            let observed = q.observation(intraday)?;
+            if q.currency != scope.currency
+                || q.region != scope.region
+                || q.quality != scope.quality
+                || q.terms != scope.terms
+                || observed > as_of
+            {
+                continue;
+            }
+            if latest
+                .get(q.offer_id.as_str())
+                .is_none_or(|(_, old)| *old < observed)
+            {
+                latest.insert(&q.offer_id, (q, observed));
+            }
+        }
+        Ok((as_of, latest.into_values().collect()))
+    }
+
+    /// Select the latest observation of every offer in the exact market at the requested time,
+    /// across all material IDs. The same selection precedes order admission in [`Self::evaluate`].
+    /// This permits consumers to connect supplier inventory identities through unused offers
+    /// without importing future or superseded observations. Results are in stable offer-ID order.
+    ///
+    /// This is observation membership, not order eligibility: expiry, age, availability, material
+    /// locks and quantities are deliberately not filtered, and no purchase amount is calculated.
+    /// Only the scope's market and as-of fields are used; quantity admission belongs to `evaluate`.
+    ///
+    /// # Errors
+    /// Invalid quote history, unsupported schema, market scope or exact as-of time.
+    pub fn latest_observations(&self, scope: &Scope) -> Result<Vec<&Quote>, Refusal> {
+        self.validate()?;
+        Ok(self
+            .latest_in_scope(scope)?
+            .1
+            .into_iter()
+            .map(|(q, _)| q)
+            .collect())
+    }
+
     /// Filter to a reproducible, like-for-like sample. Only area pricing uses material width;
     /// length pricing uses exact linear sale-unit conversion without inventing a width or density.
     /// Missing/stale/out-of-stock observations produce an explicitly empty sample, never zero cost.
@@ -651,59 +728,13 @@ impl QuoteBook {
                 ));
             }
         }
-        let as_of_day = day(&scope.as_of)?;
-        let intraday = self.intraday()?;
-        let as_of = if intraday {
-            let at = instant(
-                scope
-                    .as_of_at
-                    .as_deref()
-                    .ok_or_else(|| invalid("version-2 prices require as_of_at"))?,
-            )?;
-            if at.day != as_of_day {
-                return Err(invalid("as_of_at UTC date must equal as_of"));
-            }
-            at
-        } else {
-            if scope.as_of_at.is_some() {
-                return Err(invalid("as_of_at requires a version-2 quote book"));
-            }
-            Instant {
-                day: as_of_day,
-                second: 0,
-                nanosecond: 0,
-            }
-        };
-        if scope.currency.len() != 3
-            || !scope.currency.bytes().all(|b| b.is_ascii_uppercase())
-            || [&scope.region, &scope.quality, &scope.terms]
-                .iter()
-                .any(|s| s.trim().is_empty())
-        {
-            return Err(invalid("invalid price sample scope"));
-        }
-        let mut latest = BTreeMap::<&str, (&Quote, Instant)>::new();
-        for q in &self.quotes {
-            let observed = q.observation(intraday)?;
-            if q.material_id != material.authored().id
-                || q.currency != scope.currency
-                || q.region != scope.region
-                || q.quality != scope.quality
-                || q.terms != scope.terms
-                || observed > as_of
-            {
-                continue;
-            }
-            if latest
-                .get(q.offer_id.as_str())
-                .is_none_or(|(_, old)| *old < observed)
-            {
-                latest.insert(&q.offer_id, (q, observed));
-            }
-        }
+        let (as_of, latest) = self.latest_in_scope(scope)?;
         let mut offers = Vec::new();
         let mut excluded_offers = Vec::new();
-        for &(q, observed) in latest.values() {
+        for (q, observed) in latest {
+            if q.material_id != material.authored().id {
+                continue;
+            }
             // Apply expiry AFTER selecting the latest observation: expired prices must not revive
             // an older unbounded quote. Do this before width/order arithmetic for ineligible data.
             let reason = if q
@@ -876,6 +907,58 @@ mod tests {
             schema: "ftx-textile-quotes/2".into(),
             quotes,
         }
+    }
+
+    #[test]
+    fn latest_observations_share_canonical_market_time_without_claiming_order_eligibility() {
+        let old = timed_quote("2026-10-13T08:00:00Z");
+        let mut current = timed_quote("2026-10-13T09:00:00Z");
+        current.available = false;
+        current.available_quantity = Some(0.0);
+        current.valid_through_at = Some("2026-10-13T09:30:00Z".into());
+        let later = timed_quote("2026-10-13T10:00:00Z");
+        let mut unused = old.clone();
+        unused.offer_id = "unused-bridge".into();
+        unused.material_id = "another-material".into();
+        unused.sku = "another-sku".into();
+        let mut quotes = vec![later.clone(), current.clone(), old.clone(), unused.clone()];
+        for index in 0..4 {
+            let mut foreign = unused.clone();
+            foreign.offer_id = format!("foreign-{index}");
+            match index {
+                0 => foreign.currency = "EUR".into(),
+                1 => foreign.region = "another-region".into(),
+                2 => foreign.quality = "another-quality".into(),
+                _ => foreign.terms = "another-terms".into(),
+            }
+            quotes.push(foreign);
+        }
+        let history = timed_book(quotes);
+        let at = timed_scope("2026-10-13T09:30:00.000000001Z");
+        let selected = history.latest_observations(&at).unwrap();
+        assert_eq!(selected, [&current, &unused]);
+        let priced = history.evaluate(&material(), &at).unwrap();
+        assert!(priced.offers.is_empty());
+        assert_eq!(priced.excluded_offers[0].quote, current);
+        assert_eq!(priced.excluded_offers[0].reason, ExclusionReason::Expired);
+        assert_eq!(
+            history
+                .latest_observations(&timed_scope("2026-10-13T08:00:00Z"))
+                .unwrap(),
+            [&old, &unused]
+        );
+        assert_eq!(
+            history
+                .latest_observations(&timed_scope("2026-10-13T10:00:00Z"))
+                .unwrap(),
+            [&later, &unused]
+        );
+        let mut invalid_scope = at;
+        invalid_scope.as_of_at = None;
+        assert!(history.latest_observations(&invalid_scope).is_err());
+        let mut invalid_history = history;
+        invalid_history.quotes[0].source_sha256 = "invalid".into();
+        assert!(invalid_history.latest_observations(&scope()).is_err());
     }
 
     #[test]

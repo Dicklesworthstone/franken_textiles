@@ -234,7 +234,9 @@ fn blur(bgr: &[u8], width: usize, height: usize, reference: &Value, square_px: f
         return None;
     }
     let gray: Vec<u8> = bgr
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|p| {
             ((u32::from(p[0]) * 1868 + u32::from(p[1]) * 9617 + u32::from(p[2]) * 4899 + (1 << 13))
                 >> 14) as u8
@@ -289,7 +291,7 @@ pub fn analyze_charuco_detection(
 ) -> Result<(PhotoScale, Value), Refusal> {
     if width
         .checked_mul(height)
-        .is_none_or(|n| n > MAX_PHOTO_PIXELS || n < 4)
+        .is_none_or(|n| !(4..=MAX_PHOTO_PIXELS).contains(&n))
         || width < 2
         || height < 2
         || bgr.len() != width * height * 3

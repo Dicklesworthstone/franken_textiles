@@ -255,6 +255,7 @@ fn qualification_for(plan: &SewPlan) -> SewingQualification {
         stitches_per_minute: [500.0, 700.0],
         allow_reverse: false,
         presser_foot: None,
+        thread_consumption: None,
         evidence: Evidence::Measured,
         source: Source {
             reference: "test:sewing-coupon".into(),

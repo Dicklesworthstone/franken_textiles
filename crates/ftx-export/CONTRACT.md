@@ -67,6 +67,21 @@ Missing/stale source qualification preserves independent manufacturing and simul
 Omitted selection retains legacy serialization. Tests: `material_study`, native and file-free WASM
 `material_study_consumers`; source admission is not physical seam validation or hardware permission.
 
+**Qualified sewing consumables** (`sewing::consumables`, `ftx-tm6` / `ftx-tm7`). Optional
+`SewOptions.consumables` produces `ftx-sewing-plan/11` from the actual selected operation traversals.
+Independently sourced consumption models require a complete channel declaration, frozen yarn
+selections, positive metres per traversal and explicit start/end allowances. Reverse travel and
+reinforcement count every interval; allowances apply once per operation/channel. Missing models or
+channels keep complete demand and purchasing unknown. Exact yarn demands aggregate before canonical
+length orders apply dated quotes, minimums, increments, price tiers, capacity and continuity policies.
+Transitive supplier aliases across current market observations cannot duplicate cross-yarn inventory.
+No splitting, universal thread ratio or retained-mass conversion is inferred. Studies expose nominal
+`thread_required_length_m` and `thread_observed_order_cost`, with independent required consumers and
+the thread market's own currency; cutting copies do not multiply this one sewing job. Comparison
+protocols use only selected qualifications. All expanded material/design rows and configured recipe
+trials reserve at most 200000 purchasing work units. Tests: `sewing_consumables`, canonical
+`material_cost` units and workbench lifecycle checks. See `docs/material-sewing-plans.md`.
+
 **Declared assembly mass** (`assembly_mass`, plan §25.10 / `ftx-ms2`). Every expanded physical
 cut instance uses the same exporter outline, fold/mirror semantics, allowances and outward tabs.
 Strictly contained disjoint closed cutouts are subtracted with the existing budgeted cutting
