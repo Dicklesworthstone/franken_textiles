@@ -6,7 +6,7 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_measure::{
     camera::Camera,
     photo::intrinsics::{
-        CalibrationInput, CalibrationReport, calibrate_camera,
+        CalibrationInput, calibrate_camera,
         uncertainty::{CalibrationNoise, calibrate_camera_with_uncertainty},
     },
 };
@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 
 use super::{no_files, option, photo, single};
 use crate::{Args, bad_input, known_options, required};
+
+pub(super) use ftx_measure::photo::intrinsics::checked_calibration;
 
 pub(super) fn read_document(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
     const LIMIT: u64 = 16 * 1024 * 1024;
@@ -129,56 +131,6 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         eprintln!("wrote {path}");
     }
     Ok((value, code, text))
-}
-
-// Both photo measurement and sheet poses consume the same checked source, not a stored
-// success flag or manually copied matrix. Capture matching remains mandatory at each boundary.
-pub(super) fn checked_calibration(saved: &Value) -> Result<CalibrationReport, Refusal> {
-    if saved["schema"] != "ftx-camera-calibration/1"
-        || saved["status"] != "ACCEPTED"
-        || !saved["flags"].as_array().is_some_and(Vec::is_empty)
-    {
-        return Err(bad_input(
-            "expected a saved ACCEPTED camera calibration, not a failed report or CLI envelope",
-        ));
-    }
-    let input: CalibrationInput = serde_json::from_value(saved["input"].clone())
-        .map_err(|e| bad_input(format!("invalid saved calibration input: {e}")))?;
-    // Reuse the real calibration algorithm instead of trusting a stored success flag. This
-    // checks internal consistency, not authenticity or whether the actual lens settings changed.
-    let noise = saved
-        .get("corner_noise_input")
-        .or_else(|| saved.get("conditional_uncertainty"));
-    let checked = if let Some(source) = noise {
-        let noise: CalibrationNoise = serde_json::from_value(source["input"].clone())
-            .map_err(|e| bad_input(format!("invalid saved calibration noise: {e}")))?;
-        calibrate_camera_with_uncertainty(&input, &noise)?
-    } else {
-        calibrate_camera(&input)?
-    };
-    let solution = checked
-        .solution
-        .as_ref()
-        .ok_or_else(|| bad_input("saved calibration no longer passes its input checks"))?;
-    let k = serde_json::to_value(solution.intrinsics).map_err(|e| bad_input(e.to_string()))?;
-    if saved["solution"]["intrinsics"] != k {
-        return Err(bad_input(
-            "stored intrinsics differ from calibration inputs; regenerate the calibration report",
-        ));
-    }
-    let uncertainty = checked.uncertainty.as_ref().map(|u| json!(u));
-    if saved.get("uncertainty") != uncertainty.as_ref() {
-        return Err(bad_input(
-            "stored intrinsic uncertainty differs from calibration inputs; regenerate the calibration report",
-        ));
-    }
-    let conditional = checked.conditional_uncertainty.as_ref().map(|u| json!(u));
-    if saved.get("conditional_uncertainty") != conditional.as_ref() {
-        return Err(bad_input(
-            "stored conditional uncertainty differs from calibration inputs; regenerate the calibration report",
-        ));
-    }
-    Ok(checked)
 }
 
 pub(super) fn sheet_pose(args: &Args) -> Result<(Value, i32), Refusal> {

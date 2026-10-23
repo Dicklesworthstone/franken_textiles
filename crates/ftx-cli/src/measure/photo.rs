@@ -8,47 +8,22 @@ mod charuco_image;
 use std::io::Read;
 use std::path::Path;
 
-use ftx_core::receipt::sha256_hex;
 use ftx_core::{Refusal, RefusalCode};
-use ftx_measure::camera::{Camera, Intrinsics};
+use ftx_measure::camera::Camera;
 use ftx_measure::photo::{
-    MAX_PHOTO_PIXELS, PhotoOptions, analyze_plain_sheet, analyze_reference,
-    intrinsics::IntrinsicUncertainty, measure_photo,
+    MAX_PHOTO_PIXELS, PhotoOptions, acquisition::PhotoLens, analyze_plain_sheet, analyze_reference,
+    measure_photo,
 };
 use ftx_trace::raster::{Bgr, image::load_photo_with_limit};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{Args, bad_input, known_options, read_json, required, workspace};
 
 use super::{date, no_files, numeric, option};
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LensInput {
-    schema: String,
-    lens_id: String,
-    image_size_px: [u32; 2],
-    rotation_cw_deg: u16,
-    calibration_evidence: String,
-    intrinsics: Intrinsics,
-}
-
 struct LensSource {
-    lens: LensInput,
+    lens: PhotoLens,
     receipt: Value,
-    uncertainty: Option<IntrinsicUncertainty>,
-}
-
-impl LensInput {
-    fn check_image(&self, size: &Value) -> Result<(), Refusal> {
-        if *size != json!(self.image_size_px) {
-            return Err(bad_input(
-                "lens image_size_px must match the original oriented image exactly; no crop or rescaling is inferred",
-            ));
-        }
-        Ok(())
-    }
 }
 
 fn read_lens(args: &Args) -> Result<Option<LensSource>, Refusal> {
@@ -77,82 +52,16 @@ fn read_lens(args: &Args) -> Result<Option<LensSource>, Refusal> {
     if ![0, 90, 180, 270].contains(&rotation) {
         return Err(bad_input("--rotation-cw-deg must be 0, 90, 180 or 270"));
     }
-    let (value, bytes) = super::intrinsics::read_document(path)?;
-    let recomputed = value["schema"] == "ftx-camera-calibration/1";
-    let mut uncertainty = None;
-    let lens: LensInput = if recomputed {
-        let checked = super::intrinsics::checked_calibration(&value)?;
-        uncertainty = checked.uncertainty.clone().map_or_else(
-            || {
-                checked
-                    .conditional_uncertainty
-                    .as_ref()
-                    .map(IntrinsicUncertainty::from_calibration)
-                    .transpose()
-            },
-            |u| Ok(Some(u)),
-        )?;
-        LensInput {
-            schema: "ftx-photo-lens/1".into(),
-            lens_id: checked.input.lens_id,
-            image_size_px: checked.input.image_size_px,
-            rotation_cw_deg: checked.input.rotation_cw_deg,
-            calibration_evidence: checked
-                .input
-                .distortion_fit
-                .map_or(checked.input.pinhole_evidence, |fit| fit.model_evidence),
-            intrinsics: checked.solution.unwrap().intrinsics,
-        }
-    } else {
-        serde_json::from_value(value.clone())
-            .map_err(|e| bad_input(format!("invalid photo lens: {e}")))?
-    };
-    if lens.schema != "ftx-photo-lens/1"
-        || lens.lens_id.trim().is_empty()
-        || lens.lens_id.len() > 256
-        || lens.calibration_evidence.trim().is_empty()
-        || lens.calibration_evidence.len() > 4096
-        || lens
-            .image_size_px
-            .iter()
-            .any(|n| !(2..=1_000_000).contains(n))
-    {
-        return Err(bad_input(
-            "lens requires ftx-photo-lens/1, a lens_id, calibrated image geometry and nonempty calibration_evidence",
-        ));
-    }
-    if lens.lens_id != id || lens.rotation_cw_deg != rotation {
-        return Err(bad_input(
-            "lens identifier and already-applied rotation must match the lens calibration exactly",
-        ));
-    }
-    lens.intrinsics.validate()?;
-    let independence = option(args, "independent-calibration-evidence");
-    if uncertainty.is_some() {
-        if independence.is_none_or(|s| s.trim().is_empty() || s.len() > 4096) {
-            return Err(bad_input(
-                "calibration carries intrinsic uncertainty: supply --independent-calibration-evidence explaining independent acquisition of this photo; correlated calibration/photo noise is not supported",
-            ));
-        }
-    } else if independence.is_some() {
-        return Err(bad_input(
-            "independent-calibration-evidence requires a verified Brown calibration report with declared corner_noise and intrinsic uncertainty",
-        ));
-    }
-    let mut receipt = json!({"path":path,"sha256":sha256_hex(&bytes),"calibration":value,
-        "capture_lens_id":id,"rotation_applied_degrees":rotation,"recomputed":recomputed,
-        "no_claim":"Metadata matching does not prove unchanged physical lens settings; intrinsic uncertainty is not estimated."});
-    if uncertainty.is_some() {
-        receipt["independence_evidence"] = json!(independence.unwrap());
-        receipt["no_claim"] = json!(
-            "Conditional first-order intrinsic covariance under declared corner-noise and independent-photo assumptions. No print/flatness error, lens drift or real-camera accuracy claim."
-        );
-    }
-    Ok(Some(LensSource {
-        lens,
-        receipt,
-        uncertainty,
-    }))
+    let (_, bytes) = super::intrinsics::read_document(path)?;
+    let lens = PhotoLens::from_bytes(
+        &bytes,
+        id,
+        rotation,
+        option(args, "independent-calibration-evidence"),
+    )?;
+    let mut receipt = lens.receipt().clone();
+    receipt["path"] = json!(path);
+    Ok(Some(LensSource { lens, receipt }))
 }
 
 /// Bound both encoded input and decoded storage. Opaque 8-bit pixels preserve photo brightness;
@@ -281,7 +190,7 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
                 }
                 lens.check_image(&reference["image_size_px"])?;
                 let mut calibrated = reference.clone();
-                calibrated["intrinsics"] = json!(lens.intrinsics);
+                calibrated["intrinsics"] = json!(lens.intrinsics());
                 analyze_reference(&calibrated)?
             } else {
                 analyze_reference(&reference)?
@@ -295,30 +204,16 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
             }
             let (image, mut receipt) = load_image(path, MAX_PHOTO_PIXELS)?;
             if let Some(source) = &lens {
-                source.lens.check_image(&json!([image.w, image.h]))?;
-                if source.uncertainty.is_some() {
-                    let digest = sha256_hex(&image.data);
-                    let reused = source.receipt["calibration"]["image_acquisition"]["views"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .any(|v| {
-                            v["pixels_bgr_sha256"] == digest || v["sha256"] == receipt["sha256"]
-                        });
-                    if reused {
-                        return Err(bad_input(
-                            "photo reuses a calibration image: independent lens/photo uncertainty is not supported for this acquisition",
-                        ));
-                    }
-                    receipt["pixels_bgr_sha256"] = json!(digest);
-                }
+                source
+                    .lens
+                    .check_acquisition(&image.data, [image.w, image.h], &mut receipt)?;
             }
             let scale = if let Some(sheet) = option(args, "sheet") {
                 let (scale, detection) = charuco_image::analyze(
                     &image,
                     sheet,
                     option(args, "detector-python"),
-                    lens.as_ref().map(|s| s.lens.intrinsics),
+                    lens.as_ref().map(|s| s.lens.intrinsics()),
                 )?;
                 receipt["charuco_detection"] = detection;
                 scale
@@ -333,11 +228,8 @@ pub(super) fn run(args: &Args, command: &str) -> Result<(Value, i32), Refusal> {
             ));
         }
     };
-    let scale = if let Some(uncertainty) = lens.as_ref().and_then(|s| s.uncertainty.as_ref()) {
-        scale.with_lens_uncertainty(
-            uncertainty,
-            required(args, "independent-calibration-evidence")?,
-        )?
+    let scale = if let Some(source) = &lens {
+        source.lens.apply_uncertainty(scale)?
     } else {
         scale
     };

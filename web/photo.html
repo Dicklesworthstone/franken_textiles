@@ -17,29 +17,52 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error{color
 </head>
 <body>
 <h1>Photo measurements</h1>
-<p>Measure lengths or angles using a flat, blank US Letter or A4 sheet in the photo.
+<p>Measure lengths or angles using a flat reference sheet in the photo: blank US Letter/A4
+  or a printed ChArUco calibration board, with optional existing lens calibration.
   Photos and clicks stay in this browser; nothing is uploaded or saved in browser storage.
   <a href="index.html">Return to the Pattern Workbench</a>.</p>
 <section>
   <h2>1. Find the reference sheet</h2>
   <p>Show all four paper edges against a darker background. Verify the actual paper size and keep
-    the sheet flat, square to the camera and near the landmarks' plane. A detected rectangle cannot
-    prove its size or remove depth error. ChArUco boards and calibrated lenses use the CLI workflow.</p>
+    the sheet flat, square to the camera and near the landmarks' plane. A detected reference cannot
+    prove its printed size or remove depth error.</p>
   <label>Photo <input id="photo" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg"></label>
-  <label>Paper <select id="paper"><option value="auto">Detect Letter or A4</option><option value="letter">US Letter</option><option value="a4">A4</option></select></label>
+  <label>Reference <select id="referenceMode"><option value="plain">Blank paper</option><option value="charuco">ChArUco board</option></select></label>
+  <label id="plainControls">Paper <select id="paper"><option value="auto">Detect Letter or A4</option><option value="letter">US Letter</option><option value="a4">A4</option></select></label>
+  <div id="charucoControls" hidden>
+    <label>Original sheet description <input id="sheet" type="file" accept="application/json,.json"></label>
+    <p><small>Use the JSON sidecar belonging to the printed board. The sheet supplies its physical dimensions and marker IDs.
+      Print at actual size and check its ruler bars. Download a matching <a href="calibration/calib-sheet-letter.pdf" download>Letter board</a>
+      and <a href="calibration/calib-sheet-letter.json" download>Letter sidecar</a>, or
+      <a href="calibration/calib-sheet-a4.pdf" download>A4 board</a> and <a href="calibration/calib-sheet-a4.json" download>A4 sidecar</a>.</small></p>
+    <label>Existing lens calibration (optional) <input id="calibration" type="file" accept="application/json,.json"></label>
+    <button id="clearCalibration" type="button">Remove calibration</button>
+    <div id="lensControls" hidden>
+      <label>Lens/settings ID for this photo <input id="lensId" maxlength="256" autocomplete="off"></label>
+      <label>Already-applied clockwise rotation <select id="rotation"><option value="">Choose rotation</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+      <label for="independence">Independent acquisition evidence (required when the calibration carries intrinsic uncertainty)</label>
+      <textarea id="independence" rows="3" maxlength="4096" placeholder="Describe why this measurement photo is independent of the calibration photographs."></textarea>
+      <p><small>Use a saved ftx-camera-calibration/1 report or ftx-photo-lens/1 document for the exact lens, focus, zoom,
+        resolution and orientation. Retained calibration is checked against its saved observations. These fields assert
+        the current capture settings; they do not rotate or resize the photo. Known calibration-photo reuse is refused
+        when uncertainty requires independence. This page consumes calibration; identify the camera with the native workflow.</small></p>
+    </div>
+  </div>
   <p><button id="analyze" disabled>Analyze photo</button> <button id="cancel" disabled>Cancel</button></p>
   <p id="status" role="status" aria-live="polite">Choose a photo. PNG must be opaque, already oriented 8-bit gray/RGB; JPEG EXIF is applied once.</p>
-  <p><small>Limit: 64 MiB encoded and 16 million pixels. Unsupported HEIC/WebP, transparency and animation require conversion; images are never silently resized.</small></p>
+  <p><small>Limits: 64 MiB encoded and 16 million pixels per photo; 256 KiB sheet/point JSON; 16 MiB retained calibration.
+    Unsupported HEIC/WebP, transparency and animation require conversion; images are never silently resized.</small></p>
   <pre id="error" role="alert"></pre>
 </section>
 <section id="preview" hidden>
   <h2>2. Review the sheet and choose points</h2>
   <p id="summary"></p>
-  <p>The cyan outline is the detected sheet. Click two landmarks to add a pair under the name below.
+  <p>Cyan marks show the detected paper outline or accepted ChArUco corners; amber marks show rejected corners.
+    Click two landmarks to add a pair under the name below.
     Coordinates refer to the full-resolution oriented pixels, regardless of display size.</p>
   <label>Measurement name <input id="name" value="across_back" maxlength="128"></label>
   <button id="clearPoints">Clear points</button>
-  <canvas id="image" aria-label="Oriented photo with detected paper outline; click two landmarks, or enter coordinates below"></canvas>
+  <canvas id="image" aria-label="Oriented photo with detected reference; click two landmarks, or enter coordinates below"></canvas>
   <p id="clickStatus" aria-live="polite"></p>
   <label for="points">Named point pairs (editable JSON)</label>
   <textarea id="points" rows="5" spellcheck="false">{}</textarea>

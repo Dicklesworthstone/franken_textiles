@@ -5,7 +5,11 @@ self.onmessage = async ({data: m}) => {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
-    photo = new ftx.WebPhoto(new Uint8Array(m.bytes),m.paper);
+    if (m.referenceMode === "charuco") {
+      photo = ftx.WebPhoto.from_reference(new Uint8Array(m.bytes),m.sheet,m.calibration,m.capture);
+    } else if (m.referenceMode === "plain" || m.referenceMode === undefined) {
+      photo = new ftx.WebPhoto(new Uint8Array(m.bytes),m.paper);
+    } else throw Error("Unknown photo reference mode");
     const scaleText = photo.report(), scale = JSON.parse(scaleText);
     if (m.op === "analyze") {
       const preview = photo.preview();

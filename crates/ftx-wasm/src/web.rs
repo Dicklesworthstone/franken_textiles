@@ -22,6 +22,18 @@ impl WebPhoto {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Local ChArUco detection with an original sheet and optional checked lens calibration.
+    pub fn from_reference(
+        bytes: &[u8],
+        sheet: &str,
+        calibration: &str,
+        capture: &str,
+    ) -> Result<WebPhoto, JsError> {
+        crate::photo::Photo::with_reference(bytes, sheet, calibration, capture)
+            .map(|inner| Self { inner })
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
     /// Scale diagnostics and source identity; an `ok: false` result cannot measure points.
     #[must_use]
     pub fn report(&self) -> String {

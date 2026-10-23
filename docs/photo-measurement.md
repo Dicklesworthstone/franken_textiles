@@ -9,11 +9,30 @@ these paths infers body landmarks or establishes fit.
 ## Measure locally in the browser
 
 Open **Measure photo landmarks locally** from the Pattern Workbench's Body section
-(`web/photo.html`). Choose an opaque oriented PNG or supported EXIF JPEG and plain
-Letter/A4/auto detection, then **Analyze photo**. Review the cyan paper outline,
-warnings and source identity before clicking landmarks. The preview contains the
+(`web/photo.html`). Choose an opaque oriented PNG or supported EXIF JPEG. Select
+**Blank paper** for Letter/A4/auto detection, or **ChArUco board** and the original
+`fabric-calib-sheet/1` JSON sidecar belonging to your printed board, then **Analyze photo**.
+The page links matching Letter/A4 boards and sidecars. Review the cyan paper outline
+or accepted ChArUco corners, warnings and source identity before clicking landmarks.
+Amber marks identify detected corners rejected by the native fit. The preview contains the
 same full-resolution oriented pixels used by Rust, with no browser-decoder resampling.
 Changing its displayed size does not change point coordinates.
+
+For ChArUco, optionally select an existing `ftx-camera-calibration/1` report or
+`ftx-photo-lens/1` file. Explicitly enter the lens/settings ID and already-applied
+clockwise rotation for **this photo**; these assertions are not filled from the
+calibration. Image size, lens ID and rotation must match exactly. The browser reuses
+the native retained-report verifier, detector, inverse lens geometry and uncertainty
+engine. It does not estimate a new camera model or infer unchanged focus/zoom settings.
+Use `ftx measure calibrate-camera` to identify the camera first.
+
+When the retained calibration carries intrinsic covariance, describe the measurement
+photo's independent acquisition in the evidence field. The full covariance contributes
+to the decomposed measurement uncertainty; it is never silently dropped. Known reuse
+of calibration photos is refused using both encoded-image and decoded-pixel hashes.
+A declaration cannot prove physical independence, and a raw lens file does not gain
+covariance from an evidence string. The original image, sidecar and calibration hashes,
+capture assertions and checked calibration document remain in the downloaded reports.
 
 Give a measurement name and click its two points, or edit the named-pair JSON directly.
 Review camera distance, possible depth offset, click uncertainty and bootstrap settings,
@@ -25,16 +44,24 @@ file with no stature cannot draft a garment. The records retain PHOTO_ESTIMATED
 provenance, source image hash/orientation and decomposed conditional uncertainty;
 the capture date remains unknown. Two point clicks do not establish a girth.
 
-Source/paper changes remove the old scale, preview and measurements. Point/uncertainty
+Source, reference mode, sidecar, calibration or capture-evidence changes remove the old
+scale, preview and measurements. Point/uncertainty
 edits remove the old measurement downloads. Cancellation terminates the disposable
 worker; superseded asynchronous reads/replies cannot publish a result. Photos and
 measurements are neither uploaded nor written to browser storage. Source/preview
 downloads are user actions, so retain them privately.
 
-This page connects the existing native plain-paper and uncertainty engines. Its limits
+For ChArUco, downloads also retain the exact original sidecar and calibration JSON plus
+the explicit capture assertions. **Remove calibration** clears the selected lens and
+its assertions, after which the current photo must be analyzed again. A rejected lens
+or ChArUco reference never falls back to plain-paper detection.
+
+This page connects the existing native plain-paper, ChArUco and calibrated uncertainty engines. Its limits
 are the same 64 MiB/16-million-pixel photo boundary and native bootstrap/point limits,
-plus 256 KiB per JSON input. ChArUco boards, calibrated lenses and other native photo
-options below remain CLI features. Digital synthetic tests establish numerical and
+plus 256 KiB for sidecar/points/options JSON and 16 MiB for retained calibration JSON.
+Invalid UTF-8 source bytes are refused; JSON is not normalized before hashing. Camera
+identification, imported-coordinate acquisition and the additional native photo options
+below remain CLI workflows. Digital synthetic tests establish numerical and
 workflow behavior, not physical paper size/flatness, camera accuracy or real-person fit.
 
 ## Detect plain paper directly from a photo

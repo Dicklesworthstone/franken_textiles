@@ -3,7 +3,11 @@ let worker = null, ticket = 0, busy = false, scale = null, bitmap = null, pendin
 let sourceUrls = [], resultUrls = [];
 const status = text => {$("status").textContent=text;};
 function controls() {
-  $("analyze").disabled=busy || !$("photo").files.length;
+  const charuco=$("referenceMode").value==="charuco", calibrated=charuco && $("calibration").files.length>0;
+  $("plainControls").hidden=charuco; $("charucoControls").hidden=!charuco; $("lensControls").hidden=!calibrated;
+  $("paper").disabled=charuco; $("sheet").disabled=!charuco; $("calibration").disabled=!charuco;
+  $("clearCalibration").disabled=!calibrated;
+  $("analyze").disabled=busy || !$("photo").files.length || (charuco && !$("sheet").files.length);
   $("measure").disabled=busy || scale?.ok !== true;
   $("cancel").disabled=!busy;
 }
@@ -31,6 +35,11 @@ function draw() {
     c.strokeStyle="#00cddd"; c.lineWidth=Math.max(2,canvas.width/400); c.beginPath();
     corners.forEach(([x,y],i)=>i?c.lineTo(x+.5,y+.5):c.moveTo(x+.5,y+.5)); c.closePath(); c.stroke();
   }
+  const detected=scale.image_input?.charuco_detection?.reference_input?.corners || [], inliers=new Set(scale.inlier_ids || []);
+  for(const {id,point_px:p} of detected) if(Array.isArray(p) && p.length===2 && p.every(Number.isFinite)) {
+    c.strokeStyle=inliers.has(id)?"#00cddd":"#b66d00"; c.lineWidth=Math.max(2,canvas.width/600);
+    c.beginPath(); c.arc(p[0]+.5,p[1]+.5,Math.max(4,canvas.width/250),0,2*Math.PI); c.stroke();
+  }
   c.fillStyle="#dc3030";
   let pairs=[];
   try { pairs=Object.values(JSON.parse($("points").value)).flatMap(p=>Array.isArray(p)?p:(p.points||[])); } catch {}
@@ -42,15 +51,35 @@ function options() {
   return JSON.stringify({depth_offset_mm:Number($("depth").value),camera_distance_mm:Number($("distance").value),
     click_px:Number($("click").value),sheet_level_sigma_deg:Number($("level").value),bootstrap:Number($("bootstrap").value),seed:0});
 }
+async function readJsonFile(file) {
+  if(!file) return "";
+  // Preserve the exact UTF-8 source, including a BOM (which the Rust JSON parser will reject).
+  // Replacing invalid bytes or stripping a BOM would change the source identity before hashing.
+  return new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
+}
 async function run(op) {
   const file=$("photo").files[0], points=$("points").value, opts=options(), paper=$("paper").value;
+  const referenceMode=$("referenceMode").value, charuco=referenceMode==="charuco";
+  const sheetFile=charuco?$("sheet").files[0]:null, calibrationFile=charuco?$("calibration").files[0]:null;
+  const captureFields={};
+  if(calibrationFile) {
+    captureFields.capture_lens_id=$("lensId").value;
+    if($("rotation").value!=="") captureFields.rotation_cw_deg=Number($("rotation").value);
+    if($("independence").value!=="") captureFields.independent_calibration_evidence=$("independence").value;
+  }
+  const capture=JSON.stringify(captureFields);
   withdraw(op==="analyze");
   const id=ticket;
   if(!file) return;
   if(file.size>64*1024*1024) {$("error").textContent="Photo exceeds 64 MiB; no image was read."; return;}
+  if(charuco && !sheetFile) {$("error").textContent="Choose the original ChArUco sheet description."; return;}
+  if(sheetFile?.size>256*1024 || calibrationFile?.size>16*1024*1024) {
+    $("error").textContent="Sheet JSON must be at most 256 KiB; retained calibration at most 16 MiB. No source was read."; return;
+  }
   busy=true; controls(); status("Reading the local photo…");
   try {
-    const bytes=await file.arrayBuffer(); if(id!==ticket) return;
+    const [bytes,sheet,calibration]=await Promise.all([file.arrayBuffer(),readJsonFile(sheetFile),readJsonFile(calibrationFile)]);
+    if(id!==ticket) return;
     const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); worker=current;
     current.onmessage=async ({data:m})=>{
       if(current!==worker || m.request!==ticket) return;
@@ -63,10 +92,18 @@ async function run(op) {
           if(id!==ticket) {decoded.close(); return;}
           bitmap=decoded; scale=m.scale; $("image").width=bitmap.width; $("image").height=bitmap.height;
           $("preview").hidden=false; $("scale").textContent=m.scaleText;
-          $("summary").textContent=scale.ok ? `${scale.paper}: ${scale.mm_per_px} mm/px. ${(scale.warnings||[]).join(" ")}`
+          const reference=scale.reference==="charuco" ? `ChArUco: ${scale.inliers ?? 0}/${scale.corners_detected ?? 0} accepted corners`
+            : scale.paper;
+          const lens=scale.lens_input ? (scale.intrinsic_uncertainty ? "Verified conditional lens uncertainty included. " : "Supplied lens applied; intrinsic uncertainty is not estimated. ") : "";
+          $("summary").textContent=scale.ok ? `${reference}: ${scale.mm_per_px} mm/px. ${lens}${(scale.warnings||[]).join(" ")}`
             : `Reference rejected. ${(scale.warnings||[]).join(" ")}`;
           link($("sourceDownloads"),m.scaleText,"photo-scale.json","application/json",sourceUrls);
           link($("sourceDownloads"),m.preview,"oriented-photo.png","image/png",sourceUrls); draw();
+          if(charuco) {
+            link($("sourceDownloads"),sheet,"photo-sheet.json","application/json",sourceUrls);
+            link($("sourceDownloads"),capture,"photo-capture.json","application/json",sourceUrls);
+            if(calibrationFile) link($("sourceDownloads"),calibration,"photo-calibration.json","application/json",sourceUrls);
+          }
           status(scale.ok?"Review the detected sheet, then choose point pairs.":"Reference rejected; no measurement calibration available.");
         } else {
           const result=JSON.parse(m.report); $("report").textContent=m.report; $("result").hidden=false;
@@ -82,16 +119,18 @@ async function run(op) {
           link($("downloads"),opts,"photo-options.json","application/json",resultUrls);
           status("Photo-estimated records available; review uncertainty before use.");
         }
-      } catch(e) {withdraw(); $("error").textContent=String(e.message||e); status("No measurements published.");}
+      } catch(e) {if(id!==ticket)return; withdraw(); $("error").textContent=String(e.message||e); status("No measurements published.");}
       controls();
     };
     current.onerror=e=>{if(worker!==current)return; withdraw(); $("error").textContent=e.message; status("Worker stopped; analyze again.");};
-    current.postMessage({request:id,op,bytes,paper,points,options:opts},[bytes]);
+    current.postMessage({request:id,op,bytes,paper,referenceMode,sheet,calibration,capture,points,options:opts},[bytes]);
   } catch(e) {if(id!==ticket)return; withdraw(); $("error").textContent=String(e.message||e); status("No measurements published.");}
 }
 $("analyze").onclick=()=>run("analyze"); $("measure").onclick=()=>run("measure");
 $("cancel").onclick=()=>{withdraw(); status("Cancelled; no measurements published.");};
-for(const id of ["photo","paper"]) $(id).addEventListener("change",()=>{withdraw(true); status("Source changed; analyze the current photo.");});
+for(const id of ["photo","paper","referenceMode","sheet","calibration","rotation"]) $(id).addEventListener("change",()=>{withdraw(true); status("Source changed; analyze the current photo.");});
+for(const id of ["lensId","independence"]) $(id).addEventListener("input",()=>{withdraw(true); status("Capture evidence changed; analyze the current photo.");});
+$("clearCalibration").onclick=()=>{$("calibration").value=""; $("lensId").value=""; $("rotation").value=""; $("independence").value=""; withdraw(true); status("Calibration removed; analyze the current photo.");};
 for(const id of ["distance","depth","click","level","bootstrap","points"]) $(id).addEventListener("input",()=>{withdraw(); draw(); status("Inputs changed; measure again.");});
 $("name").addEventListener("input",()=>{pending=[]; withdraw(); draw();});
 $("clearPoints").onclick=()=>{$("points").value="{}"; pending=[]; withdraw(); draw();};

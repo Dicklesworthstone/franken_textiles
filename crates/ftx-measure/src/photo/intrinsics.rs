@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Mat3, Refusal, RefusalCode, Vec2, Vec3, linalg::lstsq};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::{
     camera::{Camera, Distortion, Intrinsics},
@@ -23,6 +24,55 @@ use super::geometry;
 
 const MIN_PIVOT_RATIO: f64 = 1e-6;
 const MAX_ERROR_PX: f64 = 3.0;
+
+/// Recompute a retained calibration before using its lens or uncertainty in another acquisition.
+/// Stored success flags, matrices and covariance are never treated as independent evidence.
+/// Capture lens identity, oriented image size and applied rotation must still match at the caller.
+pub fn checked_calibration(saved: &Value) -> Result<CalibrationReport, Refusal> {
+    if saved["schema"] != "ftx-camera-calibration/1"
+        || saved["status"] != "ACCEPTED"
+        || !saved["flags"].as_array().is_some_and(Vec::is_empty)
+    {
+        return Err(invalid(
+            "expected a saved ACCEPTED camera calibration, not a failed report or CLI envelope",
+        ));
+    }
+    let input: CalibrationInput = serde_json::from_value(saved["input"].clone())
+        .map_err(|e| invalid(format!("invalid saved calibration input: {e}")))?;
+    let noise = saved
+        .get("corner_noise_input")
+        .or_else(|| saved.get("conditional_uncertainty"));
+    let checked = if let Some(source) = noise {
+        let noise: uncertainty::CalibrationNoise = serde_json::from_value(source["input"].clone())
+            .map_err(|e| invalid(format!("invalid saved calibration noise: {e}")))?;
+        uncertainty::calibrate_camera_with_uncertainty(&input, &noise)?
+    } else {
+        calibrate_camera(&input)?
+    };
+    let solution = checked
+        .solution
+        .as_ref()
+        .ok_or_else(|| invalid("saved calibration no longer passes its input checks"))?;
+    let k = serde_json::to_value(solution.intrinsics).map_err(|e| invalid(e.to_string()))?;
+    if saved["solution"]["intrinsics"] != k {
+        return Err(invalid(
+            "stored intrinsics differ from calibration inputs; regenerate the calibration report",
+        ));
+    }
+    let uncertainty = checked.uncertainty.as_ref().map(|u| json!(u));
+    if saved.get("uncertainty") != uncertainty.as_ref() {
+        return Err(invalid(
+            "stored intrinsic uncertainty differs from calibration inputs; regenerate the calibration report",
+        ));
+    }
+    let conditional = checked.conditional_uncertainty.as_ref().map(|u| json!(u));
+    if saved.get("conditional_uncertainty") != conditional.as_ref() {
+        return Err(invalid(
+            "stored conditional uncertainty differs from calibration inputs; regenerate the calibration report",
+        ));
+    }
+    Ok(checked)
+}
 
 /// A known physical point on one rigid planar reference, in metres, not inferred body dimensions.
 #[derive(Clone, Debug, Serialize, Deserialize)]

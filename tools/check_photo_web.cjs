@@ -2,6 +2,7 @@
 // FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=... node tools/check_photo_web.cjs NATIVE_DIR
 const {chromium}=require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
 const assert=require("node:assert/strict"), fs=require("node:fs"), path=require("node:path"), http=require("node:http"), os=require("node:os");
+const sha256=bytes=>require("node:crypto").createHash("sha256").update(bytes).digest("hex");
 const root=path.resolve(__dirname,".."), web=path.join(root,"web"), native=process.argv[2];
 if(!native) throw Error("Supply the directory containing native photo scale and measurement captures");
 const work=fs.mkdtempSync(path.join(os.tmpdir(),"ftx-photo-browser-"));
@@ -110,6 +111,45 @@ const server=http.createServer((req,res)=>{
     }
     await page.setInputFiles("#photo",{name:"cut.jpg",mimeType:"image/jpeg",buffer:fs.readFileSync(path.join(native,"photo.jpg")).subarray(0,1000)});
     await action("analyze");assert.notEqual(await page.textContent("#error"),"");await absent();
+    // Actual generated board -> Rust detector -> the same original-pixel clicks and scale path.
+    const sheetPath=path.join(web,"calibration/calib-sheet-letter.json"), boardPath=path.join(web,"calibration/calib-sheet-letter.png");
+    const sheetText=fs.readFileSync(sheetPath,"utf8"), sheet=JSON.parse(sheetText), b=sheet.board;
+    const pixel=(x,y)=>[b.origin_px[0]-.5+x*b.size_px[0]/b.size_mm[0],b.origin_px[1]-.5+y*b.size_px[1]/b.size_mm[1]];
+    const boardPoints=JSON.stringify({across_back:[pixel(44,44),pixel(132,44)]});
+    await page.selectOption("#referenceMode","charuco");
+    await page.setInputFiles("#photo",boardPath);assert.equal(await page.isDisabled("#analyze"),true);
+    await page.setInputFiles("#sheet",sheetPath);await action("analyze");assert.equal(await page.textContent("#error"),"");
+    const boardScale=JSON.parse(await download("photo-scale.json"));
+    assert.equal(boardScale.ok,true);assert.equal(boardScale.coordinate_source,"detected_charuco");assert.equal(boardScale.inliers,35);
+    assert.equal(boardScale.image_input.sha256,sha256(fs.readFileSync(boardPath)));
+    assert.equal(boardScale.image_input.charuco_detection.sheet_sha256,sha256(sheetText));
+    assert.equal(boardScale.image_input.charuco_detection.implementation.backend,"rust_charuco");
+    assert.equal((await download("photo-sheet.json")).toString(),sheetText);
+    await page.fill("#points",boardPoints);await action("measure");
+    const boardMeasured=JSON.parse(await download("photo-measurements.json"));
+    assert.ok(Math.abs(boardMeasured.records[0].value_mm-88)<0.2);assert.equal(boardMeasured.records[0].provenance,"PHOTO_ESTIMATED");
+    const lens={schema:"ftx-photo-lens/1",lens_id:"synthetic-identity",image_size_px:[2550,3300],rotation_cw_deg:0,
+      calibration_evidence:"Synthetic software fixture; not a real lens",intrinsics:{focal_px:[3000,3000],principal_px:[1275,1650]}};
+    const lensText=JSON.stringify(lens), setLens=async value=>page.setInputFiles("#calibration",{name:"lens.json",mimeType:"application/json",buffer:Buffer.from(value)});
+    await setLens(lensText);await absent();assert.equal(await page.isDisabled("#measure"),true);
+    await action("analyze");assert.match(await page.textContent("#error"),/capture_lens_id|rotation_cw_deg|lens identifier/);await absent();
+    await page.fill("#lensId","synthetic-identity");await page.selectOption("#rotation","0");await action("analyze");
+    assert.equal(await page.textContent("#error"),"");const calibratedScale=JSON.parse(await download("photo-scale.json"));
+    assert.equal(calibratedScale.lens_input.sha256,sha256(lensText));assert.equal(calibratedScale.lens_input.recomputed,false);
+    assert.equal(calibratedScale.image_input.charuco_detection.implementation.uses_lens_intrinsics,true);
+    assert.ok(calibratedScale.homography_undistorted_px_to_board_mm);assert.equal(calibratedScale.homography_px_to_board_mm,undefined);
+    assert.equal((await download("photo-calibration.json")).toString(),lensText);
+    assert.deepEqual(JSON.parse(await download("photo-capture.json")),{capture_lens_id:"synthetic-identity",rotation_cw_deg:0});
+    await page.fill("#points",boardPoints);await action("measure");
+    assert.ok(Math.abs(JSON.parse(await download("photo-measurements.json")).records[0].value_mm-88)<0.2);
+    // An actual capture control change withdraws both source calibration and measured outputs.
+    await page.selectOption("#rotation","90");await absent();assert.equal(await page.locator('a[download="photo-scale.json"]').count(),0);
+    assert.equal(await page.isDisabled("#measure"),true);await action("analyze");assert.match(await page.textContent("#error"),/rotation/);
+    await page.selectOption("#rotation","0");await page.fill("#independence","A string cannot supply missing covariance");await action("analyze");
+    assert.match(await page.textContent("#error"),/intrinsic uncertainty/);await page.fill("#independence","");
+    await setLens(JSON.stringify({...lens,image_size_px:[1280,960]}));await action("analyze");assert.match(await page.textContent("#error"),/image_size_px/);await absent();
+    await page.click("#clearCalibration");await action("analyze");assert.equal(JSON.parse(await download("photo-scale.json")).lens_input,undefined);
+    console.log("PASS ChArUco: real Rust detection, exact board/lens receipts, calibrated original-pixel measurement, capture validation and stale-output clearing.");
     assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.url.startsWith(origin+"/")&&r.method==="GET"));
     assert.equal(await page.evaluate(()=>localStorage.length),0);
     console.log("PASS: source/paper/options/points/cancellation withdraw old outputs; wrong paper, blank/transparent/corrupt image, invalid points/options refuse. No uploads, third-party requests, storage or page errors. Artifacts:",work);

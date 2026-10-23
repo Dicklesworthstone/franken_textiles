@@ -1,8 +1,10 @@
 //! File-free photo evidence through the native decoder, detector and uncertainty engine.
 
-use ftx_core::{Refusal, RefusalCode};
+use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_measure::photo::{
-    MAX_PHOTO_PIXELS, PhotoOptions, PhotoScale, analyze_plain_sheet, measure_photo,
+    MAX_PHOTO_PIXELS, PhotoOptions, PhotoScale,
+    acquisition::{PhotoLens, analyze_charuco_image, annotate_charuco},
+    analyze_plain_sheet, measure_photo,
 };
 use ftx_trace::raster::image::{Bgr, encode_png_bgr, load_photo_with_limit};
 use serde::Deserialize;
@@ -35,6 +37,14 @@ struct Options {
     seed: u64,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Capture {
+    capture_lens_id: Option<String>,
+    rotation_cw_deg: Option<u16>,
+    independent_calibration_evidence: Option<String>,
+}
+
 impl Default for Options {
     fn default() -> Self {
         let o = PhotoOptions::default();
@@ -54,6 +64,7 @@ pub struct Photo {
     image: Bgr,
     scale: PhotoScale,
     receipt: Value,
+    lens_input: Option<Value>,
 }
 
 impl Photo {
@@ -72,6 +83,72 @@ impl Photo {
             image,
             scale,
             receipt,
+            lens_input: None,
+        })
+    }
+
+    /// Detect a ChArUco sheet using its original sidecar and an optional retained calibration.
+    /// `calibration` is empty for uncalibrated detection. Otherwise `capture` explicitly declares
+    /// this photo's lens ID and already-applied rotation, plus independence evidence when needed.
+    /// Retained calibration is recomputed; no camera model is newly identified from this photo.
+    ///
+    /// # Errors
+    /// Invalid/budget-exceeding JSON or image, mismatched lens geometry, failed source verification,
+    /// correlated acquisition, unsupported board, or the canonical detector/uncertainty refusals.
+    pub fn with_reference(
+        bytes: &[u8],
+        sheet: &str,
+        calibration: &str,
+        capture: &str,
+    ) -> Result<Self, Refusal> {
+        let sheet_value: Value = parse(sheet)?;
+        let capture: Capture = parse(capture)?;
+        let lens = if calibration.is_empty() {
+            if capture.capture_lens_id.is_some()
+                || capture.rotation_cw_deg.is_some()
+                || capture.independent_calibration_evidence.is_some()
+            {
+                return Err(invalid(
+                    "capture lens identity, rotation and independence evidence require a calibration",
+                ));
+            }
+            None
+        } else {
+            Some(PhotoLens::from_bytes(
+                calibration.as_bytes(),
+                capture
+                    .capture_lens_id
+                    .as_deref()
+                    .ok_or_else(|| invalid("calibration requires explicit capture_lens_id"))?,
+                capture
+                    .rotation_cw_deg
+                    .ok_or_else(|| invalid("calibration requires explicit rotation_cw_deg"))?,
+                capture.independent_calibration_evidence.as_deref(),
+            )?)
+        };
+        let (image, mut receipt) = load_photo_with_limit(bytes, MAX_PHOTO_PIXELS)?;
+        if let Some(lens) = &lens {
+            lens.check_acquisition(&image.data, [image.w, image.h], &mut receipt)?;
+        }
+        let (scale, mut detection) = analyze_charuco_image(
+            &image.data,
+            image.w,
+            image.h,
+            &sheet_value,
+            lens.as_ref().map(PhotoLens::intrinsics),
+        )?;
+        detection["sheet_sha256"] = json!(sha256_hex(sheet.as_bytes()));
+        receipt["charuco_detection"] = detection;
+        let scale = if let Some(lens) = &lens {
+            lens.apply_uncertainty(scale)?
+        } else {
+            scale
+        };
+        Ok(Self {
+            image,
+            scale,
+            receipt,
+            lens_input: lens.map(|l| l.receipt().clone()),
         })
     }
 
@@ -80,6 +157,10 @@ impl Photo {
     pub fn report(&self) -> Value {
         let mut report = self.scale.report().clone();
         report["image_input"] = self.receipt.clone();
+        if let Some(lens) = &self.lens_input {
+            report["lens_input"] = lens.clone();
+        }
+        annotate_charuco(&mut report);
         report
     }
 
@@ -111,6 +192,10 @@ impl Photo {
         let mut result = measure_photo(&self.scale, &points, &options)?;
         result["taken_on"] = Value::Null;
         result["photo"]["image_input"] = self.receipt.clone();
+        if let Some(lens) = &self.lens_input {
+            result["photo"]["lens_input"] = lens.clone();
+        }
+        annotate_charuco(&mut result["photo"]);
         result["photo"]["measurement_options"] = json!({
             "depth_offset_mm":options.depth_offset_mm,"camera_distance_mm":options.camera_distance_mm,
             "click_px":options.click_px,"view":options.view,"points_from_width":options.points_from_width,

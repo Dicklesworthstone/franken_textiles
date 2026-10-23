@@ -3,6 +3,7 @@
 //! Coordinates and pixels must already use the full-resolution, EXIF-oriented image frame.
 //! Image decoding stays with the caller. A homography measures only the sheet's plane.
 
+pub mod acquisition;
 mod camera;
 mod charuco;
 mod charuco_detect;
