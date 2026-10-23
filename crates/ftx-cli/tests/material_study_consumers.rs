@@ -52,6 +52,61 @@ fn run(main: bool, dir: &Path) -> Value {
 }
 
 #[test]
+fn both_native_commands_expand_design_material_pairs_and_preserve_exact_replay() {
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let input = include_str!("../../../examples/design-study.json");
+    let typed: Request = serde_json::from_str(input).unwrap();
+    let expected = serde_json::to_value(
+        typed
+            .evaluate(&Pattern::from_json(pattern).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-design-study-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), pattern).unwrap();
+    fs::write(dir.join("study.json"), input).unwrap();
+    assert_eq!(expected["schema"], "ftx-design-study-report/1");
+    assert_eq!(expected["alternatives"].as_array().unwrap().len(), 8);
+    for main in [false, true] {
+        let report = run(main, &dir);
+        assert_eq!(report, expected);
+        for row in report["alternatives"].as_array().unwrap() {
+            let design = &row["design"];
+            if design["key"] == "unbalanced-seam" {
+                assert_eq!(row["binding"]["status"], "refused");
+                assert_eq!(design["validation"]["passed"], false);
+                assert!(design["altered_pattern_json"].is_string());
+                continue;
+            }
+            let changes: ftx_pattern::material_binding::Changes =
+                serde_json::from_value(row["frozen_changes"].clone()).unwrap();
+            let altered =
+                Pattern::from_json(design["altered_pattern_json"].as_str().unwrap()).unwrap();
+            let rebound = changes.apply(&altered).unwrap();
+            assert_eq!(
+                rebound["pattern_json"],
+                row["binding"]["result"]["pattern_json"]
+            );
+            assert_eq!(row["cutting"]["status"], "available");
+            assert_eq!(row["sewing"]["status"], "available");
+        }
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("pattern.json")).unwrap(),
+        pattern
+    );
+    assert_eq!(fs::read_to_string(dir.join("study.json")).unwrap(), input);
+}
+
+#[test]
 fn both_native_study_commands_preserve_split_purchase_incumbents_and_replay_orders() {
     let pattern = include_str!("../../../examples/mixed-cutting/pattern.json");
     let mut input: Value = serde_json::from_str(include_str!(

@@ -1,4 +1,4 @@
-# Source-qualified material screening and fixed-pattern manufacturing studies
+# Source-qualified material screening and manufacturing/design studies
 
 This is a product path over the existing material authority and production planners, not another
 materials database, guessed fiber mixing law or a process checklist. It turns the existing catalog
@@ -554,6 +554,121 @@ ftx materials study tests/fixtures/materials/synthetic-sewing-pattern.json \
 Scenario studies use the same optional `comparison` at the top of their result, additionally
 supporting signed heat, reported edge strain and simulated-cloth mass. See
 `docs/material-scenario-studies.md` for mandatory settledness, identity checks and scope limits.
+
+## Bounded garment alterations: `ftx-design-study/1`
+
+Design studies cross explicit width, length, vertex, seam-truing or cap-ease changes with the same
+material alternatives and production consumers. Each geometry sequence starts from the original
+pattern. Its complete altered document then receives the ordinary material binding; cutting,
+finite stock, mixed jobs, purchasing, assembly mass, sewing and optional qualified recipe selection
+all rerun on that actual result. A scenario study additionally builds a fresh production drape for
+each admitted pair. This makes an authored geometry change affect stock, seams and simulation
+together without adding another alteration or cloth solver.
+
+The existing study commands and browser workbench accept the explicit new schema. Run this
+**synthetic software example**:
+
+```sh
+ftx materials study tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/design-study.json --json
+```
+
+The example compares two source-bearing artificial sheet selections across the unaltered baseline,
+added width/ease, added length, and one intentionally unbalanced seam: eight retained rows. The two
+unbalanced rows fail the canonical validation gate. The six valid rows produce new real cutting and
+sewing plans, including the longer seam's extra stitches and each material's different stock mass.
+The declared objectives concern mass and continuous-feed time; they do not establish that the
+smallest pattern fits a wearer. The supplied dimensions and material properties are test data.
+
+Keep the usual `variants`, `screened` or `combinations` source, and add `designs`:
+
+```json
+{
+  "schema": "ftx-design-study/1",
+  "designs": [{
+    "key": "wider-front",
+    "operations": [
+      {"op": "slash_spread", "piece": "front", "axis": "x", "at_mm": 10, "add_mm": 8}
+    ]
+  }],
+  "variants": [{"key": "original-materials", "changes": {"schema": "ftx-material-bindings/1"}}],
+  "cutting": {"copies": 1, "gap_mm": 2, "edge_margin_mm": 0, "end_margin_mm": 0}
+}
+```
+
+The reserved `baseline` design is always added for **every** requested material alternative. It
+preserves the original geometry; retaining the original material assignments is the explicit
+empty binding change illustrated above. Geometry candidates use unique nonempty names and ordered
+nonempty operation lists. `ftx-material-study/1` rejects a `designs` array and keeps its existing
+fixed-geometry result shape.
+
+| Operation | Required fields | Canonical effect |
+| --- | --- | --- |
+| `slash_spread` | `piece`, `axis`, `at_mm`, `add_mm` | Shift coordinates strictly beyond the cut; `x` changes width and `y` changes length. Negative spreads remove width/length. |
+| `move` | `piece`, `vertex`, `dx_mm`, `dy_mm` | Move one drafted vertex; relative curves follow its endpoints. |
+| `true_seam` | `seam`, `end` | Explicitly slide the seam's B-side drafted start/end vertex within the existing ±60 mm search to its declared ratio or band midpoint. |
+| `cap_ease` | `piece`, `seams`, `target_ratio` | Scale above the existing underarm within the canonical factor range to the declared total cap/armhole ratio. |
+
+Operations preserve the existing alteration semantics and history. Slash-spread rounds transformed
+vertices and marks to 0.001 mm. Slash-spread and cap-ease transform grain, internal, decor and trace
+mark points; they leave notches, drills and placement anchors unchanged. Move and true-seam change
+drafted vertices without relocating marks. Mirrored/folded geometry follows the canonical pattern
+expansion, and true-seam refuses unsupported mirrored-side edits. Cap-ease adjusts the aggregate
+ratio; each individual seam still has to pass validation. No seam ratio, machine policy or material
+property is rewritten to make a candidate succeed.
+
+### Admission, replay and comparisons
+
+Before any binding or consumer evaluation, each design—including the baseline—passes the existing
+flat validator's structural checks, seam walk, free-edge truing and cut/grain completeness checks.
+The seam tolerance is the shared sewing/recipe-template tolerance when supplied, otherwise 3 mm;
+existing per-seam overrides remain authoritative. Free-edge truing uses the canonical 8-degree
+tolerance. The retained validation spec has no inferred body-measurement points. An additional
+full-boundary simplicity check uses the existing 60-sample-per-curve outline and shared polygon
+predicates; it catches positive-area self-intersections that signed area alone would miss. This is
+the canonical sampled-geometry scope, not an analytic proof for arbitrary curves.
+
+A refused operator or failed validation preserves the row and its reason, prevents manufacturing
+and scenario callbacks for that row, and prevents it from reaching a comparison frontier. Other
+design/material pairs continue. Invalid geometry cannot win a mass-only or price-only objective.
+Successful binding still does not imply successful sewing, a settled drape or measured wearer fit;
+the normal consumer-specific and scenario comparison admission rules remain in force.
+
+Each design row has a `design` receipt containing its original `key` and `material_key`, exact
+`operations`, original `source_pattern_sha256`, and complete `altered_pattern_json` with its hash.
+`validation` retains the unmodified canonical flat report, outline outcome, exact validation spec
+and combined `passed` flag. Altered JSON survives a later validation refusal for inspection; an
+operator refusal leaves it null rather than returning a partially applied sequence as a design.
+`geometry_changed` distinguishes a real piece/mark change from history-only no-ops. Row keys are
+canonical JSON strings encoding `[design_key, material_key]`, so arbitrary quotes and delimiters in
+authored names cannot collide. Combination choices retain their usual separate `choices` map.
+
+Replay a successful row by applying `frozen_changes` to its **exact `design.altered_pattern_json`**.
+The row's `binding.result.pattern_json` already contains both alteration and material binding and
+can go directly to existing cutter, pattern-export, sewing and drape commands. The binding's source
+hash identifies the altered document; the outer study and design receipt retain the original hash.
+JavaScript consumers should pass these retained strings directly instead of reparsing and
+stringifying floating-point source numbers.
+
+Manufacturing reports use `ftx-design-study-report/1`; single-scenario and named-scenario-matrix
+reports use `ftx-design-scenario-study/1` and `ftx-design-scenario-matrix-study/1`. The existing native
+and portable scenario entry points accept the new study request with their ordinary scenario or
+matrix input. Manufacturing runs once per design/material pair, and each named case starts fresh
+on that pair's retained bound pattern. The ordinary explicit objectives, constraints, reported-bound
+rules and cross-case comparisons apply; no geometry-fit score, weighted winner or continuous/global
+optimum is synthesized.
+
+The entire design/material product, including baseline and later failures, is limited to 32 rows.
+At most 31 explicit designs, 16 operators per sequence and 256 expanded operator applications are
+admitted. Source-document plus authored-operation bytes times the reserved document-pass count must
+fit a 256 MiB processing reservation: each row and move/slash-spread charges one pass, while each
+true-seam/cap-ease reserves 64 passes for the canonical root search and final document, including
+trials that later refuse early. Serialized material-binding payload bytes are also reserved once
+per design, including baseline, before expanding large source records across rows. Outline checking shares 40 million work units across
+the study. Existing instance, sewing, mass, finite-stock, recipe and supplier budgets charge every
+expanded row. A named matrix reserves `expanded_rows × cases` before any alteration, manufacturing
+or scenario callback and still obeys its caller-supplied maximum of 64 evaluations. Excess work
+refuses the study instead of silently dropping candidates or returning a partial frontier.
 
 ## Budgets, tests and remaining gates
 

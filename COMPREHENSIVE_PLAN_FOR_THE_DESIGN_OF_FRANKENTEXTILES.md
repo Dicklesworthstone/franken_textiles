@@ -3074,6 +3074,37 @@ These are conditional source endpoints with fixed cut geometry, not guaranteed s
 confidence intervals, empirical garment accuracy or machine qualification. Those acceptance gates
 remain open. See [cutting-plans.md](docs/cutting-plans.md).
 
+
+---
+
+### 25.68 Compare explicit garment alterations and material choices together
+
+**Implementation (`ftx-ds1`), final runtime verification pending.** The opt-in
+`ftx-design-study/1` request crosses independently authored canonical alteration sequences with
+explicit, screened or grouped material alternatives. It always retains the original-geometry
+baseline. Width/ease, length, vertex, seam-truing and cap-ease changes use existing operators; each
+sequence starts from the unchanged original and retains its exact operations and altered document.
+
+Every candidate passes canonical structure, seam walk, free-edge truing, cut/grain completeness and
+sampled outline simplicity before binding or downstream consumers. Invalid designs remain visible
+with their actual validation/refusal and cannot win a manufacturing or scenario comparison. Each
+admitted altered-and-bound pattern reruns the real cutting, finite-stock/mixed-job, purchasing, mass,
+sewing/recipe and requested simulation consumers. Single and named-case studies share the same
+production path; no second browser solver or implicit seam repair is introduced.
+
+The complete design/material product is bounded to 32 rows including baseline. Operation counts,
+root-search document passes, repeated source-bearing selections, outline checks and existing
+manufacturing/scenario reservations are charged before or across their actual work. Reports retain
+collision-free pair identities, geometry-change truth, exact altered JSON, final bound JSON and
+frozen material changes. The workbench displays designs, failed gates and exact replay downloads.
+The existing fixed-pattern study schema retains its previous behavior.
+
+This is a finite authored-design search, not continuous optimization, inferred wearer fit, automatic
+safe ease or empirical garment performance. `ftx-ds2` remains open for bounded synthesis of fit-driven
+alterations from accepted body evidence and explicit design variables, with real sewn feasibility
+constraints and held-out checks. See [material-screening-and-studies.md](docs/material-screening-and-studies.md)
+and the synthetic runnable request [design-study.json](examples/design-study.json).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

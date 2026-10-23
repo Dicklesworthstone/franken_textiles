@@ -146,6 +146,7 @@ impl Request {
                 },
             },
             choices: BTreeMap::new(),
+            design: None,
         }];
         for group in groups {
             let mut choices: Vec<_> = group.choices.iter().collect();
@@ -169,6 +170,7 @@ impl Request {
                     expanded.push(PreparedVariant {
                         variant: Variant { key, changes },
                         choices: chosen,
+                        design: None,
                     });
                 }
             }

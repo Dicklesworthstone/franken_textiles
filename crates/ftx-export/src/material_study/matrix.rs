@@ -92,7 +92,7 @@ pub struct Comparison {
 /// One manufacturing study composed with a bounded set of fresh production scenarios.
 #[derive(Debug, Serialize)]
 pub struct Report<T> {
-    /// `ftx-material-scenario-matrix-study/1`.
+    /// `ftx-material-scenario-matrix-study/1`, or `ftx-design-scenario-matrix-study/1`.
     pub schema: &'static str,
     /// Exact source pattern, authored material study, ordered cases and evaluation allowance.
     pub request_sha256: String,
@@ -228,7 +228,11 @@ impl Request {
             notes.push("At least one case has no explicit effective comparison policy. Requested per-case comparisons remain available; no all-cases policy or frontier is synthesized.");
         }
         Ok(Report {
-            schema: "ftx-material-scenario-matrix-study/1",
+            schema: if self.is_design() {
+                "ftx-design-scenario-matrix-study/1"
+            } else {
+                "ftx-material-scenario-matrix-study/1"
+            },
             request_sha256,
             max_evaluations,
             planned_evaluations,

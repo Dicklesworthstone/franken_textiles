@@ -121,6 +121,7 @@ fn case(combined: bool) -> (Alternative, Value, Value) {
     let alternative = Alternative {
         choices: BTreeMap::new(),
         key: "synthetic".into(),
+        design: None,
         binding: Outcome::NotRequested,
         frozen_changes: Some(changes),
         cutting: Outcome::NotRequested,

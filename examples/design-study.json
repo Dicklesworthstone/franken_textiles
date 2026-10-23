@@ -1,0 +1,89 @@
+{
+  "schema": "ftx-design-study/1",
+  "designs": [
+    {
+      "key": "more-ease",
+      "operations": [
+        {"op": "slash_spread", "piece": "front", "axis": "x", "at_mm": 10.0, "add_mm": 8.0},
+        {"op": "slash_spread", "piece": "back", "axis": "x", "at_mm": 10.0, "add_mm": 8.0}
+      ]
+    },
+    {
+      "key": "longer",
+      "operations": [
+        {"op": "slash_spread", "piece": "front", "axis": "y", "at_mm": 50.0, "add_mm": 20.0},
+        {"op": "slash_spread", "piece": "back", "axis": "y", "at_mm": 50.0, "add_mm": 20.0}
+      ]
+    },
+    {
+      "key": "unbalanced-seam",
+      "operations": [
+        {"op": "slash_spread", "piece": "front", "axis": "y", "at_mm": 50.0, "add_mm": 20.0}
+      ]
+    }
+  ],
+  "variants": [
+    {
+      "key": "light-sheet",
+      "changes": {
+        "schema": "ftx-material-bindings/1",
+        "default": {
+          "id": "synthetic-design-light",
+          "allow_estimates": true,
+          "record": {
+            "id": "synthetic-design-light",
+            "name": "Artificial light sheet for design software examples",
+            "form": "woven",
+            "properties": {
+              "width": {"value": 0.1, "unit": "m", "evidence": "estimate", "source": "test", "method": "Invented software test width"},
+              "thickness": {"value": 0.4, "unit": "mm", "evidence": "estimate", "source": "test", "method": "Invented software test thickness"},
+              "areal_density": {"value": 0.18, "unit": "kg/m2", "evidence": "estimate", "source": "test", "method": "Invented software test areal density"}
+            },
+            "sources": {"test": {"reference": "test:design-study", "accessed_on": "2026-10-23", "note": "Synthetic software fixture, not empirical garment evidence"}}
+          }
+        }
+      }
+    },
+    {
+      "key": "heavy-sheet",
+      "changes": {
+        "schema": "ftx-material-bindings/1",
+        "default": {
+          "id": "synthetic-design-heavy",
+          "allow_estimates": true,
+          "record": {
+            "id": "synthetic-design-heavy",
+            "name": "Artificial heavy sheet for design software examples",
+            "form": "woven",
+            "properties": {
+              "width": {"value": 0.08, "unit": "m", "evidence": "estimate", "source": "test", "method": "Invented software test width"},
+              "thickness": {"value": 0.8, "unit": "mm", "evidence": "estimate", "source": "test", "method": "Invented software test thickness"},
+              "areal_density": {"value": 0.36, "unit": "kg/m2", "evidence": "estimate", "source": "test", "method": "Invented software test areal density"}
+            },
+            "sources": {"test": {"reference": "test:design-study", "accessed_on": "2026-10-23", "note": "Synthetic software fixture, not empirical garment evidence"}}
+          }
+        }
+      }
+    }
+  ],
+  "cutting": {"copies": 1, "gap_mm": 2.0, "edge_margin_mm": 0.0, "end_margin_mm": 0.0},
+  "sewing": {
+    "machine": {
+      "id": "example-configuration-not-a-qualified-machine",
+      "stitch_mm": [0.5, 5.0],
+      "feed_b_over_a": [0.5, 2.0],
+      "max_stack_mm": 3.0,
+      "max_stitches_per_minute": 1000.0
+    },
+    "seam_tolerance_mm": 0.5,
+    "passes": [{
+      "seam": "side", "max_stitch_mm": 2.5, "plies": [1, 1], "minimum_allowance_mm": 6.0,
+      "stitches_per_minute": 600.0, "needle": "operator-selected-needle", "thread": "operator-selected-thread", "after": []
+    }]
+  },
+  "comparison": {
+    "basis": "nominal",
+    "required_consumers": ["cutting", "sewing"],
+    "objectives": [{"metric": "stock_mass_kg", "direction": "minimize"}, {"metric": "feed_seconds", "direction": "minimize"}]
+  }
+}

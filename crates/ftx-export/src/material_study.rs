@@ -1,4 +1,4 @@
-//! Unchanged-pattern material alternatives evaluated by the production manufacturing consumers.
+//! Material alternatives and explicit bounded alterations evaluated by production consumers.
 //!
 //! Every variant starts from the same source, never the preceding variant. Screening is optional
 //! and does not hide per-consumer failures: a missing modulus cannot block cutting, a missing offer
@@ -29,6 +29,7 @@ use crate::{
 
 pub mod combinations;
 pub mod comparison;
+pub mod design;
 pub mod matrix;
 pub mod recipes;
 pub mod vapor;
@@ -46,6 +47,7 @@ pub struct Variant {
 struct PreparedVariant {
     variant: Variant,
     choices: BTreeMap<String, String>,
+    design: Option<design::Prepared>,
 }
 
 impl From<Variant> for PreparedVariant {
@@ -53,6 +55,7 @@ impl From<Variant> for PreparedVariant {
         Self {
             variant,
             choices: BTreeMap::new(),
+            design: None,
         }
     }
 }
@@ -97,8 +100,12 @@ pub struct Purchasing {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// Must be `ftx-material-study/1`.
+    /// `ftx-material-study/1` keeps geometry fixed; `ftx-design-study/1` explicitly varies it.
     pub schema: String,
+    /// Explicit independent alteration sequences, crossed with the material alternatives. Only
+    /// design studies admit this field; the unaltered `baseline` is always retained automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub designs: Option<Vec<design::Variant>>,
     /// Explicit alternatives; exclusive with screening/combinations. At most 32 are evaluated.
     #[serde(default)]
     pub variants: Vec<Variant>,
@@ -241,15 +248,19 @@ pub struct Metrics {
 /// One source-locked alternative, with independent production-planner results.
 #[derive(Clone, Debug, Serialize)]
 pub struct Alternative {
-    /// Original candidate key, stable across screening, binding and manufacturing.
+    /// Original material key, or the canonical `[design_key, material_key]` pair in a design study.
     pub key: String,
     /// Selected choice key for every declared combination group; absent for explicit/screened rows.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub choices: BTreeMap<String, String>,
+    /// Present only in design studies, including refused designs and the unaltered baseline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub design: Option<design::Receipt>,
     /// Source-complete binding report, including lossless `pattern_json` for later draping/exports.
     pub binding: Outcome<Value>,
-    /// Source-locked changes which reproduce this binding on the SAME original pattern. Present
-    /// only after successful binding; unchanged inherited/per-piece assignments are also frozen.
+    /// Source-locked changes which reproduce this binding on the original pattern, or on this
+    /// design's exact `altered_pattern_json`. Present only after successful binding; unchanged
+    /// inherited/per-piece assignments are also frozen.
     pub frozen_changes: Option<Changes>,
     /// Real roll marker output or refusal; no mechanical constants are required just to cut.
     pub cutting: Outcome<CutPlan>,
@@ -283,7 +294,7 @@ pub struct Alternative {
 pub struct Report {
     /// Stable report format.
     pub schema: &'static str,
-    /// Original pattern identity, shared by every binding.
+    /// Original pattern identity, before any optional design alteration or material binding.
     pub source_pattern_sha256: String,
     /// Full authored study request identity, including machine policy and offer history.
     pub request_sha256: String,
@@ -294,7 +305,8 @@ pub struct Report {
     /// Present only when a comparison was requested; failed/unknown cells are never zero scores.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<comparison::Report>,
-    /// False: substitutions use the existing geometry-preserving binding implementation.
+    /// True when any retained design produced changed piece geometry/marks, even if later refused.
+    /// Always false in fixed-pattern material studies.
     pub geometry_changed: bool,
     /// Always false, regardless of whether individual planners returned successfully.
     pub hardware_execution_authorized: bool,
@@ -309,7 +321,7 @@ pub struct Report {
 /// existing consumer, not another binding or manufacturing implementation.
 #[derive(Debug, Serialize)]
 pub struct ScenarioStudy<T> {
-    /// `ftx-material-scenario-study/1`.
+    /// `ftx-material-scenario-study/1`, or `ftx-design-scenario-study/1` for explicit alterations.
     pub schema: &'static str,
     /// Identity of the original pattern, study policy and exact supplied scenario descriptor.
     pub request_sha256: String,
@@ -346,6 +358,10 @@ fn hash<T: Serialize>(value: &T) -> Result<String, Refusal> {
 }
 
 impl Request {
+    fn is_design(&self) -> bool {
+        self.schema == "ftx-design-study/1"
+    }
+
     fn purchasing_currency(&self) -> Option<&str> {
         self.purchasing
             .as_ref()
@@ -370,7 +386,8 @@ impl Request {
         if let Some(mass) = &self.assembly_mass {
             mass.validate()?;
         }
-        if self.schema != "ftx-material-study/1"
+        design::validate_request(self)?;
+        if (!self.is_design() && self.schema != "ftx-material-study/1")
             || usize::from(self.screened.is_some())
                 + usize::from(self.combinations.is_some())
                 + usize::from(!self.variants.is_empty())
@@ -398,11 +415,18 @@ impl Request {
             return Err(budget("material study exceeds 32 alternatives"));
         }
         if let Some(combinations) = &self.combinations {
-            return Ok((combinations.variants(pattern)?, None));
+            return Ok((
+                design::expand(self, pattern, combinations.variants(pattern)?)?,
+                None,
+            ));
         }
         let Some(screened) = &self.screened else {
             return Ok((
-                self.variants.iter().cloned().map(Into::into).collect(),
+                design::expand(
+                    self,
+                    pattern,
+                    self.variants.iter().cloned().map(Into::into).collect(),
+                )?,
                 None,
             ));
         };
@@ -453,10 +477,10 @@ impl Request {
                 .into()
             })
             .collect();
-        Ok((variants, Some(report)))
+        Ok((design::expand(self, pattern, variants)?, Some(report)))
     }
 
-    /// Run each explicit substitution against the same unchanged source and common process policies.
+    /// Run each substitution and optional explicit alteration from the same source and process policy.
     ///
     /// # Errors
     /// Invalid source/request, ambiguous identities or excessive aggregate work. Material/geometry
@@ -518,7 +542,11 @@ impl Request {
             })
             .transpose()?;
         Ok(ScenarioStudy {
-            schema: "ftx-material-scenario-study/1",
+            schema: if self.is_design() {
+                "ftx-design-scenario-study/1"
+            } else {
+                "ftx-material-scenario-study/1"
+            },
             request_sha256,
             scenario,
             manufacturing,
@@ -629,8 +657,14 @@ impl Request {
         let mut alternatives = Vec::new();
         let mut stations = 0usize;
         let mut mass_work = Work::new(40_000_000);
+        let mut design_work = Work::new(40_000_000);
         for variant in variants {
-            let row = self.evaluate_variant(pattern, variant, &mut mass_work)?;
+            let row = self.evaluate_variant(pattern, variant, &mut mass_work, &mut design_work)?;
+            if design_work.exhausted {
+                return Err(budget(
+                    "design study exceeds 40000000 aggregate outline-validation work units",
+                ));
+            }
             if mass_work.exhausted {
                 return Err(budget(
                     "material study exceeds aggregate mass geometry budget",
@@ -667,7 +701,11 @@ impl Request {
                 )
             });
         let mut notes = vec![
-            "All variants start from the same source geometry and process options. Default replacements preserve explicit piece assignments; named-piece replacements do not change unrelated pieces.",
+            if self.is_design() {
+                "Each explicit alteration sequence and its unaltered baseline start from the same original pattern, then cross every requested material alternative. Canonical alteration operators, flat validation and sampled outline checks run before manufacturing or additional consumers; no seam repair or fit objective is inferred. Frozen changes replay on the retained altered_pattern_json."
+            } else {
+                "All variants start from the same source geometry and process options. Default replacements preserve explicit piece assignments; named-piece replacements do not change unrelated pieces."
+            },
             "Scalar-screening dominance is not garment/marker dominance. Frontier-only pruning happens solely when explicitly requested; manufacturing outputs are not assigned a hidden aggregate score.",
             "Missing mass or offer coverage stays unknown. Stock mass includes waste, feed time excludes handling, and purchased quantities come from actual roll markers, not net pattern area.",
             "Binding and available plans are not a successful drape, empirical fit, thermal-comfort prediction, seam qualification or permission to operate machinery. Source-locked pattern_json can be passed to the existing drape/thermal/export consumers.",
@@ -690,14 +728,26 @@ impl Request {
         if self.vapor.is_some() {
             notes.push("Potential vapor transport uses explicit common-area layer occurrences resolved from each final material assignment. It infers no overlap, body coverage, air-gap resistance, sweat supply, evaporation or coupled heat; canonical source qualifications and boundary assumptions remain in every available result.");
         }
+        if self.is_design() {
+            notes.push("Slash-spread and cap-ease preserve the canonical operator's mark behavior: grain/internal/decor/trace marks move, while notches, drills and placement anchors do not. Move/true-seam edit drafted vertices only. Complete flat validation includes seam walk, free-edge truing and cut/grain completeness; it does not establish wearer fit or empirical sewing quality. The finite declared design/material frontier is not a continuous or global optimum.");
+        }
+        let geometry_changed = alternatives.iter().any(|row| {
+            row.design
+                .as_ref()
+                .is_some_and(|design| design.geometry_changed == Some(true))
+        });
         Ok(Report {
-            schema: "ftx-material-study-report/1",
+            schema: if self.is_design() {
+                "ftx-design-study-report/1"
+            } else {
+                "ftx-material-study-report/1"
+            },
             source_pattern_sha256,
             request_sha256,
             screening,
             alternatives,
             comparison,
-            geometry_changed: false,
+            geometry_changed,
             hardware_execution_authorized: false,
             physical_validation_claim: false,
             notes,
@@ -709,9 +759,26 @@ impl Request {
         source: &Pattern,
         prepared: PreparedVariant,
         mass_work: &mut Work,
+        design_work: &mut Work,
     ) -> Result<Alternative, Refusal> {
         let mut variant = prepared.variant;
+        let (design, altered) = if let Some(design) = prepared.design {
+            let seam_tolerance = self
+                .sewing
+                .as_ref()
+                .or_else(|| self.sewing_selection.as_ref().map(|s| &s.options))
+                .map_or(3.0, |s| s.seam_tolerance_mm);
+            let (receipt, pattern) = design.apply(source, seam_tolerance, design_work)?;
+            (Some(receipt), Some(pattern))
+        } else {
+            (None, None)
+        };
         let binding = (|| {
+            let source = match &altered {
+                Some(Ok(pattern)) => pattern,
+                Some(Err(refusal)) => return Err(refusal.clone()),
+                None => source,
+            };
             if let Some(combinations) = &self.combinations
                 && combinations.interfaces.is_some()
             {
@@ -725,6 +792,7 @@ impl Request {
         let mut row = Alternative {
             key: variant.key,
             choices: prepared.choices,
+            design,
             binding: Outcome::NotRequested,
             frozen_changes: None,
             cutting: Outcome::NotRequested,

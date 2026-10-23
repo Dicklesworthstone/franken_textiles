@@ -9,6 +9,94 @@ const PATTERN: &str =
 const STOCK: &str = include_str!("../../../tests/fixtures/materials/synthetic-stock-request.json");
 
 #[test]
+fn portable_design_study_changes_real_manufacturing_and_replays_each_exact_pattern() {
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let input = include_str!("../../../examples/design-study.json");
+    let request: Value = serde_json::from_str(input).unwrap();
+    let raw = materials::study(pattern, input).unwrap();
+    let report: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(report["schema"], "ftx-design-study-report/1");
+    assert_eq!(report["geometry_changed"], true);
+    let rows = report["alternatives"].as_array().unwrap();
+    assert_eq!(rows.len(), 8);
+    let row = |design: &str, material: &str| {
+        rows.iter()
+            .find(|row| row["design"]["key"] == design && row["design"]["material_key"] == material)
+            .unwrap()
+    };
+    let baseline = row("baseline", "light-sheet");
+    let wider = row("more-ease", "light-sheet");
+    let longer = row("longer", "light-sheet");
+    assert_eq!(baseline["design"]["geometry_changed"], false);
+    assert!(
+        wider["metrics"]["stock_mass_kg"].as_f64().unwrap()
+            > baseline["metrics"]["stock_mass_kg"].as_f64().unwrap()
+    );
+    assert_eq!(
+        wider["metrics"]["feed_seconds"],
+        baseline["metrics"]["feed_seconds"]
+    );
+    assert!(
+        longer["metrics"]["feed_seconds"].as_f64().unwrap()
+            > baseline["metrics"]["feed_seconds"].as_f64().unwrap()
+    );
+    for candidate in rows {
+        let design = &candidate["design"];
+        let altered = design["altered_pattern_json"].as_str().unwrap();
+        if design["key"] == "unbalanced-seam" {
+            assert_eq!(design["validation"]["passed"], false);
+            assert_eq!(candidate["binding"]["status"], "refused");
+            assert!(
+                report["comparison"]["frontier"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|key| key != &candidate["key"])
+            );
+            continue;
+        }
+        assert_eq!(design["validation"]["passed"], true);
+        let rebound: Value = serde_json::from_str(
+            &materials::bind(altered, &candidate["frozen_changes"].to_string()).unwrap(),
+        )
+        .unwrap();
+        let bound = candidate["binding"]["result"]["pattern_json"]
+            .as_str()
+            .unwrap();
+        assert_eq!(rebound["pattern_json"], bound);
+        let cut: Value = serde_json::from_str(
+            &ftx_wasm::manufacturing::cut_plan(bound, &request["cutting"].to_string()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cut, candidate["cutting"]["result"]);
+        let geometry: Value = serde_json::from_str(altered).unwrap();
+        let expected = match design["key"].as_str().unwrap() {
+            "more-ease" => json!([28.0, 100.0]),
+            "longer" => json!([20.0, 120.0]),
+            _ => json!([20, 100]),
+        };
+        assert_eq!(geometry["pieces"][0]["vertices"]["c"], expected);
+    }
+    assert_eq!(raw, materials::study(pattern, input).unwrap());
+    let mut wrong_schema = request.clone();
+    wrong_schema["schema"] = json!("ftx-material-study/1");
+    assert!(materials::study(pattern, &wrong_schema.to_string()).is_err());
+    let mut over_budget = request;
+    over_budget["designs"] = json!(
+        (0..16)
+            .map(|i| json!({"key":format!("design-{i}"),
+        "operations":[{"op":"move","piece":"front","vertex":"b","dx_mm":0.0,"dy_mm":0.0}]}))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        materials::study(pattern, &over_budget.to_string())
+            .unwrap_err()
+            .code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
 fn portable_split_supplier_study_replays_complete_purchases_and_retains_budget_proof_status() {
     let pattern = include_str!("../../../examples/mixed-cutting/pattern.json");
     let mut input: Value = serde_json::from_str(include_str!(
