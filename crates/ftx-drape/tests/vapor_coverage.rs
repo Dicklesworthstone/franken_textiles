@@ -90,6 +90,26 @@ fn request() -> Request {
     }
 }
 
+fn with_bounds(mut input: Request) -> Request {
+    for (selection, bounds) in input.source.materials.iter_mut().zip([[1., 3.], [2., 4.]]) {
+        set_bounds(selection, Some(bounds));
+    }
+    input
+}
+
+fn set_bounds(selection: &mut Selection, bounds: Option<[f64; 2]>) {
+    selection.expected_sha256 = None;
+    selection
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("vapor_resistance")
+        .unwrap()
+        .bounds = bounds;
+    *selection = catalog().resolve(selection).unwrap().frozen_selection();
+}
+
 fn close(actual: &Value, expected: f64) {
     let actual = actual.as_f64().unwrap();
     assert!(
@@ -174,6 +194,101 @@ fn moving_history_matches_independent_area_time_integrals_and_exact_frozen_repla
     let replay: history::Request =
         serde_json::from_str(r["replay_request_json"].as_str().unwrap()).unwrap();
     assert_eq!(replay.evaluate().unwrap(), r);
+}
+
+#[test]
+fn complete_ret_ranges_propagate_through_coverage_and_moving_area_time_integrals() {
+    let initial = with_bounds(request());
+    let frame = initial.evaluate().unwrap();
+    let bounds = &frame["coverage"]["reported_bounds"];
+    // Fixed films + interface = 7; summed layer Ret range = [3,7].
+    close(&bounds["covered_potential_heat_flow_w"][0], 500. / 14.);
+    close(&bounds["covered_potential_heat_flow_w"][1], 500. / 10.);
+    close(
+        &bounds["covered_potential_mass_flow_kg_s"][0],
+        500. / 14. / 2_500_000.,
+    );
+    assert_eq!(frame["coverage"]["bounds_unavailable"], json!([]));
+    assert_eq!(
+        frame["coverage"]["regions"][0]["vapor"]["reported_bounds"]["potential_heat_flow_w"],
+        bounds["covered_potential_heat_flow_w"]
+    );
+    let input = history_request(initial);
+    let result = input.evaluate().unwrap();
+    let bounds = &result["totals"]["reported_bounds"];
+    for (endpoint, resistance) in [14., 10.].into_iter().enumerate() {
+        let energy = 1000. / resistance * (0.5 * 0.1 + 1. * 0.15);
+        close(&bounds["potential_energy_j"][endpoint], energy);
+        close(&bounds["potential_mass_kg"][endpoint], energy / 2_500_000.);
+        close(
+            &result["samples"][0]["reported_bounds"]["potential_energy_j"][endpoint],
+            1000. / resistance * 0.5 * 0.1,
+        );
+        close(
+            &result["samples"][1]["reported_bounds"]["potential_energy_j"][endpoint],
+            1000. / resistance * 1. * 0.15,
+        );
+    }
+    assert_eq!(result["totals"]["bounds_unavailable"], json!([]));
+    let replay: history::Request =
+        serde_json::from_str(result["replay_request_json"].as_str().unwrap()).unwrap();
+    assert_eq!(replay.evaluate().unwrap(), result);
+}
+
+#[test]
+fn a_late_unbounded_layer_invalidates_integral_ranges_but_preserves_nominal_history() {
+    let mut initial = with_bounds(request());
+    set_bounds(&mut initial.source.materials[1], None);
+    // The unbounded shell initially lies outside the body domain and is not consumed.
+    for p in &mut initial.source.positions_m[3..] {
+        p.x += 2.;
+    }
+    let mut input = history_request(initial);
+    // It covers the body only in the last interval; both early ranges must remain inspectable.
+    for i in 0..3 {
+        input.samples[1].positions_m[3 + i] =
+            input.samples[1].positions_m[i] + Vec3::new(0., 0., 0.01);
+    }
+    let result = input.evaluate().unwrap();
+    assert!(result["initial"]["result"]["coverage"]["reported_bounds"].is_object());
+    assert!(result["samples"][0]["reported_bounds"].is_object());
+    assert!(result["samples"][1]["reported_bounds"].is_null());
+    assert!(result["totals"]["reported_bounds"].is_null());
+    assert!(
+        !result["totals"]["bounds_unavailable"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    close(
+        &result["totals"]["potential_energy_j"],
+        1000. * (0.5 * 0.1 / 7. + 1. * 0.15 / 12.),
+    );
+}
+
+#[test]
+fn an_unbounded_time_zero_layer_does_not_invalidate_later_complete_integral_ranges() {
+    let mut initial = with_bounds(request());
+    set_bounds(&mut initial.source.materials[1], None);
+    let mut input = history_request(initial);
+    for sample in &mut input.samples {
+        for p in &mut sample.positions_m[3..] {
+            p.x += 4.;
+        }
+    }
+    let result = input.evaluate().unwrap();
+    assert!(result["initial"]["result"]["coverage"]["reported_bounds"].is_null());
+    assert!(result["samples"][0]["reported_bounds"].is_object());
+    assert!(result["samples"][1]["reported_bounds"].is_object());
+    // Only bounded lining contributes over positive duration; films 5 + lining [1,3].
+    close(
+        &result["totals"]["reported_bounds"]["potential_energy_j"][0],
+        1000. * (0.5 * 0.1 + 1. * 0.15) / 8.,
+    );
+    close(
+        &result["totals"]["reported_bounds"]["potential_energy_j"][1],
+        1000. * (0.5 * 0.1 + 1. * 0.15) / 6.,
+    );
 }
 
 #[test]

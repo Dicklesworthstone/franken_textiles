@@ -12,6 +12,13 @@ sheet sums are not covered-body evaporation, water availability, latent heat fee
 comfort/physical-validation claim. See `docs/vapor-resistance.md`; analytical/source-only tests and
 `material_scenario` exercise canonical consumer equality and real sewn geometry.
 
+Complete positive source Ret endpoints also propagate through these same current-area sheets,
+covered-body regions and positive-duration motion samples. Each optional range is conditional on
+the fixed geometry, boundary inputs and retained integration rule. A missing or unrepresentable
+contribution keeps the aggregate range unavailable while preserving nominal results. Source repeats
+do not require an independence assumption; no SD/CV conversion, confidence level, unsampled-motion
+error bound, moisture supply or latent cooling follows from these ranges.
+
 **Purpose.** The cloth solver that replaces Blender's (plan §11): an orthotropic Green-strain membrane
 rotated to the grain, quadratic hinge bending, lumped inertia, and implicit Euler solved by Newton on a
 sparse LDLᵀ with an Armijo line search; a static solve; and contact with a static body (IPC barrier on the

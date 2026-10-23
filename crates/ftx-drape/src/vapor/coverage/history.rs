@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{MAX_BYTES, Request as CoverageRequest, add, bounded, budget, digest, invalid};
+use crate::vapor::{BoundsSum, TransferBounds};
 
 /// Portable complete moving-coverage experiment, independent of a body-model installation.
 pub const SCHEMA: &str = "ftx-vapor-coverage-history/1";
@@ -181,6 +182,7 @@ pub(crate) struct History {
     retained_bytes: usize,
     potential_energy_j: f64,
     potential_mass_kg: f64,
+    bounds: BoundsSum,
 }
 
 impl History {
@@ -232,6 +234,7 @@ impl History {
             retained_bytes,
             potential_energy_j: 0.0,
             potential_mass_kg: 0.0,
+            bounds: BoundsSum::new(),
         })
     }
 
@@ -293,10 +296,26 @@ impl History {
         let mut total_mass = self.potential_mass_kg;
         add(&mut total_energy, energy)?;
         add(&mut total_mass, mass)?;
+        let label = format!("sample {}", self.rows.len());
+        let mut interval_bounds = BoundsSum::new();
+        interval_bounds.add_scaled(
+            TransferBounds::from_json(
+                &result["coverage"]["reported_bounds"],
+                "covered_potential_heat_flow_w",
+                "covered_potential_mass_flow_kg_s",
+            ),
+            dt,
+            [energy, mass],
+            &label,
+        );
+        let mut total_bounds = self.bounds.clone();
+        total_bounds.add_scaled(interval_bounds.value, 1., [energy, mass], &label);
         let row = json!({"sample_index":self.rows.len(),"time_s":sample.time_s,"dt_s":dt,
             "positions_sha256":digest(&json!(sample.positions_m))?,
             "body_positions_sha256":digest(&json!(sample.body_positions_m))?,"result":result,
-            "potential_energy_j":energy,"potential_mass_kg":mass});
+            "potential_energy_j":energy,"potential_mass_kg":mass,
+            "reported_bounds":interval_bounds.json("potential_energy_j","potential_mass_kg"),
+            "bounds_unavailable":interval_bounds.unavailable});
         let retained_bytes = self
             .retained_bytes
             .saturating_add(sample_bytes)
@@ -312,6 +331,7 @@ impl History {
         self.retained_bytes = retained_bytes;
         self.potential_energy_j = total_energy;
         self.potential_mass_kg = total_mass;
+        self.bounds = total_bounds;
         self.time_s = sample.time_s;
         self.request.samples.push(sample);
         self.rows.push(row);
@@ -333,12 +353,15 @@ impl History {
         "initial":self.initial,"samples":self.rows,"duration_s":self.time_s,
         "integration":self.request.policy.integration,"geometry_operations":self.geometry_operations,
         "retained_vertex_samples":self.retained_vertices,
-        "totals":{"potential_energy_j":self.potential_energy_j,"potential_mass_kg":self.potential_mass_kg},
+        "totals":{"potential_energy_j":self.potential_energy_j,"potential_mass_kg":self.potential_mass_kg,
+            "reported_bounds":self.bounds.json("potential_energy_j","potential_mass_kg"),
+            "bounds_unavailable":self.bounds.unavailable},
         "storage_required":false,"dry_thermal_properties_required":false,
         "latent_heat_coupled":false,"physical_validation_claim":false,"comfort_claim":false,
         "notes":[
             "Each right-endpoint potential uses newly projected body and cloth geometry with fixed material observations, triangle identities, vapor reservoirs and explicitly supplied interfaces. No unsampled geometry or strain-dependent Ret is inferred.",
             "Integrals include covered body regions only. Uncovered transfer remains unknown; missing or ambiguous samples refuse the complete history instead of contributing zero.",
+            "Complete source Ret endpoints propagate through each fixed accepted sample and its exact positive duration, then sum without an independence assumption. Time-zero bounds are reported separately and carry no elapsed-time weight. Missing or unrepresentable sampled ranges leave integral ranges unavailable. These conditional ranges do not bound unsampled geometry, temporal quadrature, source SD/CV or physical model error.",
             "Potential joules and kilograms are prescribed-reservoir quadrature, not actual evaporation, sweat supply, stored moisture, latent cooling or an error-bounded transport solution."
         ]});
         bounded(&result)?;

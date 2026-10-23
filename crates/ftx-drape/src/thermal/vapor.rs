@@ -23,7 +23,10 @@ use super::{
         validate_topology,
     },
 };
-use crate::scene::Scene;
+use crate::{
+    scene::Scene,
+    vapor::{BoundsSum, TransferBounds},
+};
 
 /// Prescribed vapor reservoirs and films for one independent sheet column.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -260,10 +263,28 @@ impl Conditions {
         let mut area_m2 = 0.0;
         let mut heat_w = 0.0;
         let mut mass_kg_s = 0.0;
-        for ((patch, area), &owner) in surface.patches.iter().zip(areas).zip(&surface.owners) {
+        let mut bounds = BoundsSum::new();
+        let mut piece_bounds = vec![BoundsSum::new(); pieces.len()];
+        for (index, ((patch, area), &owner)) in surface
+            .patches
+            .iter()
+            .zip(areas)
+            .zip(&surface.owners)
+            .enumerate()
+        {
             let column = &columns[patch.column];
             let heat = scaled(column.potential_heat_flux_w_m2, area)?;
             let mass = scaled(column.potential_mass_flux_kg_m2_s, area)?;
+            let mut patch_bounds = BoundsSum::new();
+            let label = format!("patch {index}");
+            patch_bounds.add_scaled(
+                TransferBounds::from_report(column),
+                area,
+                [heat, mass],
+                &label,
+            );
+            bounds.add_scaled(patch_bounds.value, 1., [heat, mass], &label);
+            piece_bounds[owner].add_scaled(patch_bounds.value, 1., [heat, mass], &label);
             area_m2 += area;
             heat_w += heat;
             mass_kg_s += mass;
@@ -285,8 +306,15 @@ impl Conditions {
                 json!({"column":patch.column,"instance":owner,"area_m2":area,
                 "potential_heat_flux_w_m2":column.potential_heat_flux_w_m2,
                 "potential_mass_flux_kg_m2_s":column.potential_mass_flux_kg_m2_s,
-                "potential_heat_flow_w":heat,"potential_mass_flow_kg_s":mass}),
+                "potential_heat_flow_w":heat,"potential_mass_flow_kg_s":mass,
+                "reported_bounds":patch_bounds.json("potential_heat_flow_w","potential_mass_flow_kg_s"),
+                "bounds_unavailable":patch_bounds.unavailable}),
             );
+        }
+        for (piece, bounds) in pieces.iter_mut().zip(piece_bounds) {
+            piece["reported_bounds"] =
+                bounds.json("potential_heat_flow_w", "potential_mass_flow_kg_s");
+            piece["bounds_unavailable"] = json!(bounds.unavailable);
         }
         if !area_m2.is_finite() || !heat_w.is_finite() || !mass_kg_s.is_finite() {
             return Err(invalid("vapor surface totals overflow"));
@@ -301,6 +329,8 @@ impl Conditions {
             "triangle_instance":surface.owners,"instances":surface.instances,
             "columns":columns,"patches":patches,"pieces":pieces,
             "area_m2":area_m2,"potential_heat_flow_w":heat_w,"potential_mass_flow_kg_s":mass_kg_s,
+            "reported_bounds":bounds.json("potential_heat_flow_w","potential_mass_flow_kg_s"),
+            "bounds_unavailable":bounds.unavailable,
             "mixed_protocols":mixed,"dry_transport_required":false,"storage_required":false,
             "physical_validation_claim":false,"comfort_claim":false,"uncertainty_propagated":false,
             "effective_model":"constant_source_resistance_independent_current_area_sheets/1",
@@ -308,7 +338,8 @@ impl Conditions {
             "notes":["Each canonical column report is evaluated at one square metre; only patch, piece and surface totals use actual current cloth areas.",
                 "Overlapping sheets remain independent; no body coverage, interlayer series resistance, exposure, air-gap or bare-skin path is inferred.",
                 "Source Ret is held constant at its recorded characterization. Area change does not identify stretch-dependent permeability or a new humidity/temperature domain.",
-                "Water availability, sweating, moisture storage, condensation and latent-energy feedback into dry heat are not modeled. Source bounds and variability are retained, not propagated."]});
+                "Complete reported Ret endpoints propagate through the fixed current areas and prescribed boundaries. Missing bounds invalidate the affected range while nominal values remain; SD/CV are never converted. These conditional ranges exclude geometry uncertainty and model/physical error, and require no independence assumption for shared sources.",
+                "Water availability, sweating, moisture storage, condensation and latent-energy feedback into dry heat are not modeled."]});
         bounded(&result)?;
         Ok(result)
     }
@@ -362,6 +393,25 @@ mod tests {
                 "sources":{"test":{"reference":"test:vapor-surface","accessed_on":"2026-10-22",
                     "note":"Synthetic resistance only; no density, mechanics or dry heat"}}}}))
         .unwrap();
+        Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: vec![],
+        }
+        .resolve(&selection)
+        .unwrap()
+    }
+
+    fn bounded_record(id: &str, ret: f64, bounds: [f64; 2]) -> ResolvedMaterial {
+        let mut selection = record(id, ret, "synthetic Ret").frozen_selection();
+        selection.expected_sha256 = None;
+        selection
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("vapor_resistance")
+            .unwrap()
+            .bounds = Some(bounds);
         Catalog {
             schema: CATALOG_SCHEMA.into(),
             materials: vec![],
@@ -498,6 +548,63 @@ mod tests {
         assert_ne!(value["model_sha256"], replacement["model_sha256"]);
         close(replacement["potential_heat_flow_w"].as_f64().unwrap(), 50.);
         assert_eq!(replacement["columns"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn source_bound_ranges_follow_current_areas_and_missing_piece_ranges_stay_unknown() {
+        let source = report(&[
+            bounded_record("thin", 7., [5., 9.]),
+            bounded_record("dense", 17., [13., 21.]),
+        ]);
+        let value = conditions().evaluate(&source).unwrap();
+        let bounds = &value["reported_bounds"];
+        close(bounds["potential_heat_flow_w"][0].as_f64().unwrap(), 62.5);
+        close(bounds["potential_heat_flow_w"][1].as_f64().unwrap(), 93.75);
+        close(
+            bounds["potential_mass_flow_kg_s"][0].as_f64().unwrap(),
+            62.5 / 2_500_000.,
+        );
+        assert_eq!(value["bounds_unavailable"], json!([]));
+        close(
+            value["pieces"][0]["reported_bounds"]["potential_heat_flow_w"][0]
+                .as_f64()
+                .unwrap(),
+            500. / 12.,
+        );
+        assert_eq!(
+            value["patches"][0]["reported_bounds"],
+            value["pieces"][0]["reported_bounds"]
+        );
+        let mut surface = Surface::restore(&source).unwrap();
+        surface.positions[1].x *= 2.;
+        let moved = json!({"material":source["material"],
+            "vapor_surface":surface.frame(&source["material"]).unwrap()});
+        let moved = conditions().evaluate(&moved).unwrap();
+        close(
+            moved["reported_bounds"]["potential_heat_flow_w"][0]
+                .as_f64()
+                .unwrap(),
+            1000. / 12. + 500. / 24.,
+        );
+        close(
+            moved["reported_bounds"]["potential_heat_flow_w"][1]
+                .as_f64()
+                .unwrap(),
+            1000. / 8. + 500. / 16.,
+        );
+        assert_eq!(moved["columns"], value["columns"]);
+
+        let missing = conditions()
+            .evaluate(&report(&[
+                bounded_record("thin", 7., [5., 9.]),
+                record("dense", 17., "synthetic Ret"),
+            ]))
+            .unwrap();
+        assert!(missing["reported_bounds"].is_null());
+        assert!(!missing["bounds_unavailable"].as_array().unwrap().is_empty());
+        assert!(missing["pieces"][0]["reported_bounds"].is_object());
+        assert!(missing["pieces"][1]["reported_bounds"].is_null());
+        close(missing["potential_heat_flow_w"].as_f64().unwrap(), 75.);
     }
 
     #[test]

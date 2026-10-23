@@ -141,8 +141,12 @@ common-area isothermal series assumption adds nominal layer Ret and two explicit
 prescribed inside/outside vapor pressures determine potential latent heat flux and a layer pressure
 profile. Caller-supplied positive latent heat converts that potential to mass flow. Water availability,
 actual sweating, condensation, dry/wet thermal coupling and warmth/comfort are not inferred. Observed
-specimen/method/conditions and variability remain separate from the network assumptions; neither
-source temperature extrapolation nor uncertainty propagation occurs. Complete protocol differences
+specimen/method/conditions and variability remain separate from the network assumptions. Complete
+positive source Ret bounds propagate monotonically through fixed areas, films, interfaces, pressures
+and latent heat into optional resistance/flux/flow endpoints. Missing or unrepresentable endpoints
+leave nominal results available with an explicit range-unavailable reason. No SD/CV conversion,
+independence assumption, confidence interval or geometry/model-error bound is inferred; source
+temperature extrapolation remains unsupported. Complete protocol differences
 require explicit admission; exact filters, estimate consent and digest locks still apply. Frozen
 requests replay offline. Vapor data do not supply missing mechanics or transient heat-storage inputs.
 

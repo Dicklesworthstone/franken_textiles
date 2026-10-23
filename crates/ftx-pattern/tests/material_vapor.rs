@@ -46,6 +46,223 @@ fn request() -> Request {
     .unwrap()
 }
 
+fn bounded_request() -> Request {
+    let mut input = request();
+    for (layer, bounds) in input.layers.iter_mut().zip([[1., 3.], [2., 4.]]) {
+        layer
+            .selection
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("vapor_resistance")
+            .unwrap()
+            .bounds = Some(bounds);
+    }
+    input
+}
+
+#[test]
+fn complete_source_bounds_reverse_resistance_endpoints_and_replay_exactly() {
+    let input = bounded_request();
+    let report = input.evaluate(&empty_catalog()).unwrap();
+    let bounds = report.reported_bounds.unwrap();
+    assert_eq!(bounds.layer_resistance_m2_pa_w, [3., 7.]);
+    assert_eq!(bounds.total_resistance_m2_pa_w, [8., 12.]);
+    for (endpoint, resistance) in [12., 8.].into_iter().enumerate() {
+        close(
+            bounds.potential_heat_flux_w_m2[endpoint],
+            1000. / resistance,
+        );
+        close(bounds.potential_heat_flow_w[endpoint], 500. / resistance);
+        close(
+            bounds.potential_mass_flux_kg_m2_s[endpoint],
+            1000. / resistance / 2_500_000.,
+        );
+        close(
+            bounds.potential_mass_flow_kg_s[endpoint],
+            500. / resistance / 2_500_000.,
+        );
+    }
+    assert!(report.bounds_unavailable.is_empty());
+    assert_eq!(report.layers[0].observation.bounds, Some([1., 3.]));
+    assert_eq!(report.layers[1].observation.bounds, Some([2., 4.]));
+    let replay: Request = serde_json::from_str(&report.replay_request_json).unwrap();
+    let replayed = replay.evaluate(&empty_catalog()).unwrap();
+    assert_eq!(
+        serde_json::to_value(replayed.reported_bounds).unwrap(),
+        serde_json::to_value(report.reported_bounds).unwrap()
+    );
+    // Every corner of the independent endpoint box is enclosed. Shared-source use below is
+    // also enclosed; no statistical independence or Gaussian variability is assumed here.
+    for first in [1., 3.] {
+        for second in [2., 4.] {
+            let mut corner = input.clone();
+            for (layer, value) in corner.layers.iter_mut().zip([first, second]) {
+                layer
+                    .selection
+                    .record
+                    .as_mut()
+                    .unwrap()
+                    .properties
+                    .get_mut("vapor_resistance")
+                    .unwrap()
+                    .value = value;
+            }
+            let flow = corner
+                .evaluate(&empty_catalog())
+                .unwrap()
+                .potential_heat_flow_w;
+            assert!(flow >= bounds.potential_heat_flow_w[0]);
+            assert!(flow <= bounds.potential_heat_flow_w[1]);
+        }
+    }
+}
+
+#[test]
+fn reported_bounds_follow_unequal_areas_interfaces_and_shared_sources() {
+    let mut input = bounded_request();
+    input.layers[0].area_m2 = Some(1.);
+    input.layers[1].area_m2 = Some(0.25);
+    input.interface_resistance_m2_pa_w = vec![2.];
+    let report = input.evaluate(&empty_catalog()).unwrap();
+    let bounds = report.reported_bounds.unwrap();
+    assert_eq!(bounds.layer_resistance_m2_pa_w, [4.5, 9.5]);
+    assert_eq!(bounds.total_resistance_m2_pa_w, [11.5, 16.5]);
+    close(bounds.potential_heat_flow_w[0], 500. / 16.5);
+    close(bounds.potential_heat_flow_w[1], 500. / 11.5);
+    // One source occurs twice with distinct physical areas; both endpoint values move together.
+    input.layers[1].selection = input.layers[0].selection.clone();
+    let repeated = input.evaluate(&empty_catalog()).unwrap();
+    let bounds = repeated.reported_bounds.unwrap();
+    assert_eq!(bounds.layer_resistance_m2_pa_w, [2.5, 7.5]);
+    assert_eq!(bounds.total_resistance_m2_pa_w, [9.5, 14.5]);
+    close(bounds.potential_heat_flow_w[0], 500. / 14.5);
+    close(bounds.potential_heat_flow_w[1], 500. / 9.5);
+    assert_eq!(
+        repeated.layers[0].material_sha256,
+        repeated.layers[1].material_sha256
+    );
+}
+
+#[test]
+fn missing_endpoints_and_source_sd_do_not_become_nominal_bounds() {
+    let mut input = bounded_request();
+    input.layers[1]
+        .selection
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("vapor_resistance")
+        .unwrap()
+        .bounds = None;
+    for layer in &mut input.layers {
+        layer
+            .selection
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("vapor_resistance")
+            .unwrap()
+            .conditions
+            .extend([
+                ("reported_standard_deviation".into(), "0.1".into()),
+                (
+                    "reported_coefficient_of_variation_percent".into(),
+                    "5".into(),
+                ),
+            ]);
+    }
+    let report = input.evaluate(&empty_catalog()).unwrap();
+    assert!(report.reported_bounds.is_none());
+    assert_eq!(
+        report.bounds_unavailable,
+        ["shell: vapor resistance has no reported bounds"]
+    );
+    close(report.potential_heat_flow_w, 50.);
+    // An exact zero pressure difference still does not manufacture missing source bounds.
+    input.inside_vapor_pressure_pa = input.outside_vapor_pressure_pa;
+    let zero = input.evaluate(&empty_catalog()).unwrap();
+    assert!(zero.reported_bounds.is_none());
+    assert_eq!(zero.potential_heat_flow_w, 0.);
+}
+
+#[test]
+fn unrepresentable_bound_endpoints_preserve_valid_nominal_potential() {
+    let mut input = bounded_request();
+    for layer in &mut input.layers {
+        layer
+            .selection
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("vapor_resistance")
+            .unwrap()
+            .bounds = Some([1., 1e308]);
+    }
+    let report = input.evaluate(&empty_catalog()).unwrap();
+    assert!(report.reported_bounds.is_none());
+    assert_eq!(report.bounds_unavailable.len(), 1);
+    assert!(report.bounds_unavailable[0].contains("overflows"));
+    close(report.potential_heat_flow_w, 50.);
+
+    // Even when nominal mass flow is positive, its lower endpoint can underflow to zero.
+    let mut input = bounded_request();
+    input.inside_vapor_pressure_pa = 1e-307;
+    input.outside_vapor_pressure_pa = 0.;
+    input.latent_heat_j_kg = 1e15;
+    input.layers[0]
+        .selection
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("vapor_resistance")
+        .unwrap()
+        .bounds = Some([1., 1e12]);
+    let report = input.evaluate(&empty_catalog()).unwrap();
+    assert!(report.potential_mass_flow_kg_s > 0.);
+    assert!(report.reported_bounds.is_none());
+    assert!(report.bounds_unavailable[0].contains("underflows"));
+}
+
+#[test]
+fn complete_point_bounds_and_zero_pressure_difference_remain_exact() {
+    let mut input = bounded_request();
+    for layer in &mut input.layers {
+        let q = layer
+            .selection
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("vapor_resistance")
+            .unwrap();
+        q.bounds = Some([q.value; 2]);
+    }
+    let nominal = input.evaluate(&empty_catalog()).unwrap();
+    let bounds = nominal.reported_bounds.unwrap();
+    assert_eq!(bounds.total_resistance_m2_pa_w, [10.; 2]);
+    assert_eq!(
+        bounds.potential_heat_flow_w,
+        [nominal.potential_heat_flow_w; 2]
+    );
+    assert_eq!(
+        bounds.potential_mass_flow_kg_s,
+        [nominal.potential_mass_flow_kg_s; 2]
+    );
+    input.inside_vapor_pressure_pa = input.outside_vapor_pressure_pa;
+    let zero = input.evaluate(&empty_catalog()).unwrap();
+    let bounds = zero.reported_bounds.unwrap();
+    assert_eq!(bounds.potential_heat_flux_w_m2, [0.; 2]);
+    assert_eq!(bounds.potential_heat_flow_w, [0.; 2]);
+    assert_eq!(bounds.potential_mass_flux_kg_m2_s, [0.; 2]);
+    assert_eq!(bounds.potential_mass_flow_kg_s, [0.; 2]);
+}
+
 #[test]
 fn unequal_layer_areas_and_explicit_interfaces_preserve_observations_and_pressure_balance() {
     let db = empty_catalog();

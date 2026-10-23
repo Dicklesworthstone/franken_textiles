@@ -24,6 +24,7 @@ use crate::{
         projection::{self, ProjectionSource},
         validate_topology,
     },
+    vapor::{BoundsSum, TransferBounds},
 };
 
 pub mod history;
@@ -546,6 +547,7 @@ impl Request {
         let mut regions = Vec::new();
         let mut heat = 0.0;
         let mut mass = 0.0;
+        let mut bounds = BoundsSum::new();
         let mut first_protocol = None;
         let mut mixed_protocols = false;
         for r in &projection.layout.regions {
@@ -627,6 +629,12 @@ impl Request {
             }
             add(&mut heat, vapor.potential_heat_flow_w)?;
             add(&mut mass, vapor.potential_mass_flow_kg_s)?;
+            bounds.add_scaled(
+                TransferBounds::from_report(&vapor),
+                1.,
+                [vapor.potential_heat_flow_w, vapor.potential_mass_flow_kg_s],
+                &r.id,
+            );
             regions.push(
                 json!({"id":r.id,"body_triangle":r.body_triangle,"body_area_m2":body_area,
                 "layer_area_m2":layer_areas,"vapor":vapor}),
@@ -669,12 +677,15 @@ impl Request {
             "coverage":{"regions":regions,"body":body,"body_area_m2":body_area,
                 "covered_area_m2":covered_area,"uncovered_area_m2":uncovered_area,
                 "unassigned_cloth_reference_area_m2":unassigned,
-                "covered_potential_heat_flow_w":heat,"covered_potential_mass_flow_kg_s":mass},
+                "covered_potential_heat_flow_w":heat,"covered_potential_mass_flow_kg_s":mass,
+                "reported_bounds":bounds.json("covered_potential_heat_flow_w","covered_potential_mass_flow_kg_s"),
+                "bounds_unavailable":bounds.unavailable},
             "storage_required":false,"dry_thermal_properties_required":false,
             "physical_validation_claim":false,"comfort_claim":false,"uncertainty_propagated":false,
             "notes":[
                 "Disjoint covered body regions are counted once. Each layer Ret uses its allocated current cloth area; boundary films and explicitly declared vapor interfaces use covered body area. Strain dependence of Ret is not characterized by this geometric rescaling.",
                 "Covered subtotals exclude uncovered body fractions and unallocated cloth. Their vapor transfer is unknown, not zero; these are not total wearer heat loss or comfort predictions.",
+                "Complete source Ret endpoint ranges are summed over the same frozen covered regions. Shared sources need no independence assumption; geometry, pressure, films, interfaces and latent heat stay fixed. A missing or unrepresentable regional range leaves the aggregate range unavailable without replacing its nominal value. These are not confidence intervals or bounds on geometry/model/physical error.",
                 "The local-normal projection, isothermal reservoirs and fixed source resistances are explicit modeling assumptions. No air-gap vapor coefficient, sweat supply, actual evaporation, condensation, moisture storage or latent coupling into dry heat is inferred."
             ]
         });

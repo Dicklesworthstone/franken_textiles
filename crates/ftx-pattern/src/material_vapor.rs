@@ -116,6 +116,26 @@ pub struct InterfaceReading {
     pub pressure_drop_pa: f64,
 }
 
+/// Conditional endpoint envelopes from complete positive reported layer Ret bounds. Geometry,
+/// pressure difference, films, interfaces and latent heat remain exactly the authored inputs.
+/// Every output is monotone in the layer resistances; shared sources need no independence model.
+/// These are not confidence intervals or uncertainty bounds on an actual garment.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ReportedBounds {
+    /// Sum of area-adjusted material resistance endpoints, excluding films and interfaces.
+    pub layer_resistance_m2_pa_w: [f64; 2],
+    /// Total resistance endpoints, including the fixed films and interfaces.
+    pub total_resistance_m2_pa_w: [f64; 2],
+    /// Potential heat-flux endpoints, W/m². Resistance endpoints reverse under division.
+    pub potential_heat_flux_w_m2: [f64; 2],
+    /// Potential heat-flow endpoints on the fixed boundary area, W.
+    pub potential_heat_flow_w: [f64; 2],
+    /// Potential mass-flux endpoints using the fixed latent heat, kg/(m²·s).
+    pub potential_mass_flux_kg_m2_s: [f64; 2],
+    /// Potential mass-flow endpoints on the fixed boundary area, kg/s.
+    pub potential_mass_flow_kg_s: [f64; 2],
+}
+
 /// Conditional transport potential, never an actual sweating or comfort prediction.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
@@ -152,6 +172,11 @@ pub struct Report {
     pub potential_mass_flux_kg_m2_s: f64,
     /// Potential water-vapor mass flow over the prescribed reference area, in kg/s.
     pub potential_mass_flow_kg_s: f64,
+    /// Present only when every consumed layer has positive reported bounds and all propagated
+    /// endpoints are representable. Missing endpoints never become the nominal observation.
+    pub reported_bounds: Option<ReportedBounds>,
+    /// Missing layer bounds or endpoint arithmetic failures, independent of the nominal result.
+    pub bounds_unavailable: Vec<String>,
     /// At least one reported method or complete conditions map differs from the first layer.
     pub mixed_protocols: bool,
     /// Effective network assumption, kept separate from each observation's evidence.
@@ -416,6 +441,7 @@ impl Request {
             }
         }
         let area_aware = self.layers.iter().any(|l| l.area_m2.is_some()) || !interfaces.is_empty();
+        let (reported_bounds, bounds_unavailable) = self.reported_bounds(&layers);
         let mut report = Report {
             schema: "ftx-vapor-stack-report/1",
             request: self.clone(),
@@ -433,18 +459,91 @@ impl Request {
             potential_heat_flow_w: heat_flow,
             potential_mass_flux_kg_m2_s: mass_flux,
             potential_mass_flow_kg_s: mass_flow,
+            reported_bounds,
+            bounds_unavailable,
             mixed_protocols,
             effective_model: if area_aware { AREA_MODEL } else { MODEL },
             physical_validation_claim: false,
             notes: vec![
                 "This common-area, isothermal series network assumes each selected nominal Ret remains constant and adds only the two explicitly supplied films. A computed assembly is not a measured assembly; layer contact, gaps, compression, swelling, advection changes and temperature/humidity extrapolation are not modeled.".into(),
                 "Heat and mass values are conditional transport potentials. Latent heat is a caller-supplied conversion assumption, not a source-certified or temperature-derived value. Water availability and sweating are unknown; these are not actual latent heat loss, wearer warmth/comfort or safety predictions. There is no dry-heat coupling, moisture storage, liquid flow or condensation calculation.".into(),
-                "Original specimen, method, conditions, evidence and reported variability remain visible. Complete method/condition equality is a conservative filter, not empirical comparability proof; admitting mixed protocols does not make their conditions equivalent. Reported bounds/SD/CV are not propagated uncertainty.".into(),
+                "Original specimen, method, conditions, evidence and reported variability remain visible. Complete method/condition equality is a conservative filter, not empirical comparability proof; admitting mixed protocols does not make their conditions equivalent. Complete positive reported Ret endpoints propagate monotonically at fixed geometry, films, interfaces, pressure and latent heat. Shared sources require no independence assumption. These conditional ranges are not confidence intervals, measured assembly accuracy or general uncertainty; SD/CV are never converted into bounds.".into(),
             ],
         };
         if area_aware {
             report.notes[0] = "This isothermal series network retains each nominal source Ret and explicitly scales its resistance by boundary area / layer conducting area. Films and declared interfaces use boundary area. Changed conducting area does not characterize strain-dependent Ret. No air-gap, compression, swelling, advection or temperature/humidity law is inferred.".into();
         }
         Ok(report)
+    }
+
+    fn reported_bounds(&self, layers: &[LayerReading]) -> (Option<ReportedBounds>, Vec<String>) {
+        let missing: Vec<_> = layers
+            .iter()
+            .filter(|layer| layer.observation.bounds.is_none())
+            .map(|layer| format!("{}: vapor resistance has no reported bounds", layer.key))
+            .collect();
+        if !missing.is_empty() {
+            return (None, missing);
+        }
+        match self.bound_endpoints(layers) {
+            Ok(bounds) => (Some(bounds), Vec::new()),
+            Err(error) => (
+                None,
+                vec![format!("reported vapor bounds: {}", error.message)],
+            ),
+        }
+    }
+
+    fn bound_endpoints(&self, layers: &[LayerReading]) -> Result<ReportedBounds, Refusal> {
+        let mut layer_resistance = [0.; 2];
+        let mut total_resistance = [self.inside_film_resistance_m2_pa_w; 2];
+        for (index, layer) in layers.iter().enumerate() {
+            let observed = layer.observation.bounds.expect("complete source bounds");
+            for endpoint in 0..2 {
+                let effective = match layer.area_m2 {
+                    Some(area) => observed[endpoint] * (self.area_m2 / area),
+                    None => observed[endpoint],
+                };
+                if !positive(effective) {
+                    return Err(invalid(
+                        "area-adjusted resistance endpoint overflows or underflows",
+                    ));
+                }
+                layer_resistance[endpoint] = add_resistance(layer_resistance[endpoint], effective)?;
+                total_resistance[endpoint] = add_resistance(total_resistance[endpoint], effective)?;
+                if let Some(&interface) = self.interface_resistance_m2_pa_w.get(index)
+                    && interface > 0.
+                {
+                    total_resistance[endpoint] =
+                        add_resistance(total_resistance[endpoint], interface)?;
+                }
+            }
+        }
+        for resistance in &mut total_resistance {
+            *resistance = add_resistance(*resistance, self.outside_film_resistance_m2_pa_w)?;
+        }
+        let pressure_difference = self.inside_vapor_pressure_pa - self.outside_vapor_pressure_pa;
+        let heat_flux = [
+            pressure_difference / total_resistance[1],
+            pressure_difference / total_resistance[0],
+        ];
+        let heat_flow = heat_flux.map(|v| v * self.area_m2);
+        let mass_flux = heat_flux.map(|v| v / self.latent_heat_j_kg);
+        let mass_flow = mass_flux.map(|v| v * self.area_m2);
+        if [heat_flux, heat_flow, mass_flux, mass_flow]
+            .iter()
+            .flatten()
+            .any(|v| !v.is_finite() || (pressure_difference > 0. && *v <= 0.))
+        {
+            return Err(invalid("flux endpoint overflows or underflows"));
+        }
+        Ok(ReportedBounds {
+            layer_resistance_m2_pa_w: layer_resistance,
+            total_resistance_m2_pa_w: total_resistance,
+            potential_heat_flux_w_m2: heat_flux,
+            potential_heat_flow_w: heat_flow,
+            potential_mass_flux_kg_m2_s: mass_flux,
+            potential_mass_flow_kg_s: mass_flow,
+        })
     }
 }
