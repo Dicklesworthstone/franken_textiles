@@ -27,6 +27,7 @@ struct Bound {
     element: MembraneElement,
     law_sha256: String,
     memory: Memory,
+    dissipated_j: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +45,8 @@ impl Field {
             || self.triangles != model.panel_bending_triangles()
             || self.triangle_count != model.membranes.len()
             || x.len() != model.rest.len()
+            || !self.dissipated_j.is_finite()
+            || self.dissipated_j < 0.
         {
             return Err(bad(
                 "plastic bending cannot reuse history after topology or ownership changes",
@@ -57,6 +60,8 @@ impl Field {
         {
             if b.patch != model.panel_bending_patches()[i]
                 || b.element != model.membranes[b.triangle]
+                || !b.dissipated_j.is_finite()
+                || b.dissipated_j < 0.
             {
                 return Err(bad(
                     "plastic bending cannot reuse history after material, grain, metric or stencil changes",
@@ -108,8 +113,17 @@ impl Field {
             .filter_map(|(i, b)| b.as_ref().map(|b| (i, b)))
         {
             let update = b.memory.advance(b.patch.bending_strain(x)?)?;
-            dissipated += b.patch.reference_area() * update.dissipated_j_m2;
-            proposed.push((i, update.memory));
+            let increment = b.patch.reference_area() * update.dissipated_j_m2;
+            let local = b.dissipated_j + increment;
+            if !increment.is_finite()
+                || increment < 0.
+                || !local.is_finite()
+                || local < b.dissipated_j
+            {
+                return Err(bad("source-panel plastic dissipation overflows"));
+            }
+            dissipated += increment;
+            proposed.push((i, update.memory, local));
         }
         let steps = self
             .steps
@@ -118,8 +132,10 @@ impl Field {
         if !dissipated.is_finite() || dissipated < self.dissipated_j {
             return Err(bad("plastic dissipation overflows"));
         }
-        for (i, memory) in proposed {
-            self.entries[i].as_mut().expect("bound update").memory = memory;
+        for (i, memory, local) in proposed {
+            let bound = self.entries[i].as_mut().expect("bound update");
+            bound.memory = memory;
+            bound.dissipated_j = local;
         }
         self.dissipated_j = dissipated;
         self.steps = steps;
@@ -176,6 +192,7 @@ impl Solver {
                     element: self.model.membranes[triangle],
                     law_sha256: law.fingerprint(),
                     memory: law.pristine(),
+                    dissipated_j: 0.,
                 }))
             })
             .collect::<Result<Vec<_>, Refusal>>()?;
@@ -215,6 +232,24 @@ impl Solver {
         }
     }
 
+    /// Accepted irreversible bending work in retained source-triangle order, in joules.
+    /// Inactive triangles have explicit zeros. None means no plastic bending law is bound.
+    /// Work uses each source panel's reference area, independent of its stencil vertex overlap.
+    ///
+    /// # Errors
+    /// Changed material/topology, invalid current curvature or non-finite accepted work.
+    pub fn bending_plastic_dissipation_j(&self) -> Result<Option<Vec<f64>>, Refusal> {
+        let Some(field) = &self.plasticity else {
+            return Ok(None);
+        };
+        field.check(&self.model, &self.x)?;
+        let mut work = vec![0.; field.triangle_count];
+        for b in field.entries.iter().flatten() {
+            work[b.triangle] = b.dissipated_j;
+        }
+        Ok(Some(work))
+    }
+
     /// Output accepted source-panel state and rate-independent dissipation. This report is NOT a
     /// restart import, physical wrinkle validation, stress-free garment or thermal source term.
     ///
@@ -238,6 +273,7 @@ impl Solver {
                 "accumulated_curvature_m_inv":b.memory.accumulated_curvature(),
                 "authored_preferred_curvature_m_inv":b.patch.preferred_curvature(),
                 "current_curvature_departure_m_inv":k,"elastic_moment_n":r.moment_n,
+                "plastic_dissipation_j":b.dissipated_j,
                 "stored_elastic_and_hardening_energy_j":energy}));
         }
         if !stored.is_finite() {

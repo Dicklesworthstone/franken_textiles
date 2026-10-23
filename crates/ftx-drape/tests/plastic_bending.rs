@@ -161,6 +161,31 @@ fn solver(fixed: bool, plastic: bool, maxwell: bool) -> Solver {
 fn clamped_folding_records_permanent_curvature_without_double_counting_elastic_energy() {
     let mut s = solver(true, true, false);
     let x = s.x.clone();
+    assert_eq!(
+        s.bending_plastic_dissipation_j().unwrap().unwrap(),
+        vec![0.; s.model.membranes.len()]
+    );
+    let law = Catalog::builtin()
+        .unwrap()
+        .resolve(&selection())
+        .unwrap()
+        .bending_plasticity()
+        .unwrap()
+        .unwrap();
+    let mut expected_work = vec![0.; s.model.membranes.len()];
+    for (&triangle, patch) in s
+        .model
+        .panel_bending_triangles()
+        .iter()
+        .zip(s.model.panel_bending_patches())
+    {
+        expected_work[triangle] = patch.reference_area()
+            * law
+                .pristine()
+                .advance(patch.bending_strain(&x).unwrap())
+                .unwrap()
+                .dissipated_j_m2;
+    }
     let initial = s.panel_bending_energy().unwrap();
     near(
         initial,
@@ -177,6 +202,21 @@ fn clamped_folding_records_permanent_curvature_without_double_counting_elastic_e
     assert_eq!(s.x, x);
     assert_eq!(history["accepted_steps"], 1);
     assert!(history["plastic_dissipation_j"].as_f64().unwrap() > 0.);
+    let accepted_work = s.bending_plastic_dissipation_j().unwrap().unwrap();
+    for (&actual, expected) in accepted_work.iter().zip(expected_work) {
+        near(actual, expected, 1e-14);
+    }
+    near(
+        accepted_work.iter().sum(),
+        history["plastic_dissipation_j"].as_f64().unwrap(),
+        1e-14,
+    );
+    for patch in history["patches"].as_array().unwrap() {
+        assert_eq!(
+            patch["plastic_dissipation_j"].as_f64().unwrap(),
+            accepted_work[patch["triangle"].as_u64().unwrap() as usize]
+        );
+    }
     assert!(
         history["patches"]
             .as_array()
@@ -224,11 +264,12 @@ fn failed_steps_roll_back_both_memories_and_continuation_is_deterministic() {
     let mut s = solver(false, true, true);
     s.step(0.0005).unwrap();
     let mut clean = s.clone();
-    let (x, v, plastic, maxwell) = (
+    let (x, v, plastic, maxwell, work) = (
         s.x.clone(),
         s.v.clone(),
         s.bending_plasticity_report().unwrap(),
         s.relaxation_report().unwrap(),
+        s.bending_plastic_dissipation_j().unwrap(),
     );
     s.max_newton = 0;
     assert_eq!(s.step(0.0005).unwrap_err().code, RefusalCode::NotConverged);
@@ -236,6 +277,7 @@ fn failed_steps_roll_back_both_memories_and_continuation_is_deterministic() {
     assert_eq!(s.v, v);
     assert_eq!(s.bending_plasticity_report().unwrap(), plastic);
     assert_eq!(s.relaxation_report().unwrap(), maxwell);
+    assert_eq!(s.bending_plastic_dissipation_j().unwrap(), work);
     s.max_newton = 100;
     for _ in 0..4 {
         s.step(0.0005).unwrap();
@@ -243,6 +285,10 @@ fn failed_steps_roll_back_both_memories_and_continuation_is_deterministic() {
     }
     assert_eq!(s.x, clean.x);
     assert_eq!(s.v, clean.v);
+    assert_eq!(
+        s.bending_plastic_dissipation_j().unwrap(),
+        clean.bending_plastic_dissipation_j().unwrap()
+    );
     assert_eq!(
         s.bending_plasticity_report().unwrap(),
         clean.bending_plasticity_report().unwrap()
@@ -276,6 +322,7 @@ fn material_only_change_affects_sparse_dynamics_not_mass_metric_or_seam_policy()
     assert_ne!(plastic.x, elastic.x);
     assert!(plastic.x.iter().all(|p| p.is_finite()));
     assert!(elastic.bending_plasticity_report().unwrap().is_none());
+    assert!(elastic.bending_plastic_dissipation_j().unwrap().is_none());
     for i in 0..plastic.model.hinges.len() {
         assert_eq!(
             plastic.model.hinge_rigidity(i),
@@ -298,6 +345,7 @@ fn stale_stencils_rest_metrics_and_invalid_material_bindings_refuse() {
     changed.model.membranes[0].g[0][0] += 1.;
     assert!(changed.step(0.001).is_err());
     assert!(changed.bending_plasticity_report().is_err());
+    assert!(changed.bending_plastic_dissipation_j().is_err());
     assert_eq!(s.bending_plasticity_report().unwrap(), before);
     let rest = vec![Vec2::ZERO, Vec2::new(0.1, 0.), Vec2::new(0., 0.1)];
     let model = ClothModel::new(
@@ -395,13 +443,33 @@ fn ordinary_sewn_drape_selects_per_piece_crease_history_and_body_motion_retains_
     assert!(history["plastic_dissipation_j"].as_f64().unwrap() > 0.);
     assert_eq!(run.report["material"]["plastic_bending_piece_count"], 1);
     assert!(run.scene.mesh.verts2d.len() > run.scene.solver.x.len()); // real sewn/welded pattern
+    let work = run
+        .scene
+        .solver
+        .bending_plastic_dissipation_j()
+        .unwrap()
+        .unwrap();
+    assert_eq!(work.len(), run.scene.triangle_owner.len());
+    let mut patch_work = vec![0.; work.len()];
     for p in history["patches"].as_array().unwrap() {
         let i = p["triangle"].as_u64().unwrap() as usize;
+        patch_work[i] = p["plastic_dissipation_j"].as_f64().unwrap();
         assert_eq!(
             run.scene.mesh.instances[run.scene.triangle_owner[i]],
             "front"
         );
     }
+    assert_eq!(work, patch_work);
+    for (i, &owner) in run.scene.triangle_owner.iter().enumerate() {
+        if run.scene.mesh.instances[owner] == "back" {
+            assert_eq!(work[i], 0.);
+        }
+    }
+    near(
+        work.iter().sum(),
+        history["plastic_dissipation_j"].as_f64().unwrap(),
+        1e-14,
+    );
     let shifted: Vec<_> = vertices
         .iter()
         .map(|p| *p + Vec3::new(0., 0., 1e-6))
