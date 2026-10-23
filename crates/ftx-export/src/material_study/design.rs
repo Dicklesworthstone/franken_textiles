@@ -129,8 +129,10 @@ pub struct Validation {
 pub struct Receipt {
     /// Authored design key, or the automatically retained `baseline`.
     pub key: String,
-    /// Original material variant key, before collision-free pair encoding.
-    pub material_key: String,
+    /// Original material variant key, before collision-free pair encoding. Absent on the
+    /// independent flat-screening receipt, before any material is selected or bound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material_key: Option<String>,
     /// Exact ordered operators, empty only for the unaltered baseline.
     pub operations: Vec<Operation>,
     /// Declared grid coordinates; absent for the baseline and hand-authored designs.
@@ -154,8 +156,9 @@ pub struct Receipt {
 
 pub(super) struct Prepared {
     variant: Variant,
-    material_key: String,
+    material_key: Option<String>,
     variables_mm: Option<BTreeMap<String, f64>>,
+    evaluated: Option<(Receipt, Result<Pattern, Refusal>)>,
 }
 
 pub(super) fn validate_request(request: &Request) -> Result<(), Refusal> {
@@ -177,6 +180,11 @@ pub(super) fn validate_request(request: &Request) -> Result<(), Refusal> {
     }
     if let Some(grid) = &request.design_grid {
         grid.validate()?;
+        if grid.fit_screening.is_some() && request.design_fit.is_none() {
+            return Err(invalid(
+                "design grid fit_screening requires an explicit design_fit contract",
+            ));
+        }
     }
     if let Some(fit) = &request.design_fit {
         fit.validate()?;
@@ -221,10 +229,28 @@ pub(super) fn expand(
     request: &Request,
     pattern: &Pattern,
     materials: Vec<PreparedVariant>,
-) -> Result<Vec<PreparedVariant>, Refusal> {
+    fit_context: Option<&fit::Context<'_>>,
+) -> Result<(Vec<PreparedVariant>, Option<grid::Receipt>), Refusal> {
     if !request.is_design() {
-        return Ok(materials);
+        return Ok((materials, None));
     }
+    let screened = request
+        .design_grid
+        .as_ref()
+        .is_some_and(|grid| grid.fit_screening.is_some());
+    if screened {
+        fit_context
+            .ok_or_else(|| {
+                invalid("design grid fit_screening needs the selected scenario's fitted-body measurement context")
+                    .repair("Evaluate this design request with a model-backed scenario entry point.")
+            })?
+            .validate()?;
+    }
+    let mut search = request
+        .design_grid
+        .as_ref()
+        .map(grid::Request::receipt)
+        .transpose()?;
     let designs: Vec<_> = if let Some(grid) = &request.design_grid {
         grid.generate()?
             .into_iter()
@@ -247,24 +273,69 @@ pub(super) fn expand(
     {
         return Err(invalid("material variant keys must be unique and nonempty"));
     }
-    let rows = (designs.len() + 1).saturating_mul(materials.len());
+    let selected_bound = if screened {
+        designs.len().min(
+            request
+                .design_grid
+                .as_ref()
+                .expect("screened grid")
+                .max_designs,
+        )
+    } else {
+        designs.len()
+    };
+    let rows = (selected_bound + 1).saturating_mul(materials.len());
     if rows > 32 {
         return Err(budget(
             "design study exceeds 32 expanded design/material alternatives, including baseline",
         ));
     }
+    if screened {
+        // Existing operators move coordinates but retain edge/control-point topology. Bound the
+        // entire canonical simplicity pass before any candidate operation or sampling allocates.
+        let outline_work = pattern
+            .instances
+            .iter()
+            .fold(0usize, |total, instance| {
+                let points = instance.edges.iter().fold(0usize, |count, edge| {
+                    count.saturating_add(edge.curve.as_ref().map_or(1, |curve| {
+                        if curve.is_line() {
+                            1
+                        } else {
+                            OUTLINE_DENSE.max(curve.controls().len().saturating_add(1))
+                        }
+                    }))
+                });
+                total.saturating_add(points.saturating_mul(points.saturating_add(1)) / 2)
+            })
+            .saturating_mul(designs.len() + 1);
+        if outline_work > 40_000_000 {
+            return Err(budget(
+                "design fit_screening exceeds 40000000 reserved outline-validation work units",
+            ));
+        }
+    }
     if let Some(fit) = &request.design_fit {
         // Canonical points may resample an outline or walk several selected edges. Reserve a
         // conservative full-instance edge pass per selector, before alterations or consumers.
-        let edges = pattern
+        let dense = ftx_core::curve::MEASURE_DENSE.max(ftx_core::curve::EDGE_DENSE);
+        let samples = pattern
             .instances
             .iter()
-            .fold(0usize, |n, instance| n.saturating_add(instance.edges.len()));
+            .flat_map(|instance| &instance.edges)
+            .fold(0usize, |n, edge| {
+                n.saturating_add(if screened {
+                    edge.curve.as_ref().map_or(dense, |curve| {
+                        dense.max(curve.controls().len().saturating_add(2))
+                    })
+                } else {
+                    dense
+                })
+            });
         let work = fit
             .measurement_work_units()
-            .saturating_mul(edges.max(1))
-            .saturating_mul(ftx_core::curve::MEASURE_DENSE.max(ftx_core::curve::EDGE_DENSE))
-            .saturating_mul(rows);
+            .saturating_mul(samples.max(dense))
+            .saturating_mul(if screened { designs.len() + 1 } else { rows });
         if work > 40_000_000 {
             return Err(budget(
                 "design fit exceeds 40000000 aggregate measurement work units",
@@ -275,18 +346,25 @@ pub(super) fn expand(
         .iter()
         .map(|(design, _)| design.operations.len())
         .sum::<usize>()
-        .saturating_mul(materials.len());
-    if operations > MAX_EXPANDED_OPERATIONS {
-        return Err(budget(
-            "design study exceeds 256 expanded alteration operations",
-        ));
+        .saturating_mul(if screened { 1 } else { materials.len() });
+    let max_operations = if screened {
+        4096
+    } else {
+        MAX_EXPANDED_OPERATIONS
+    };
+    if operations > max_operations {
+        return Err(budget(if screened {
+            "design fit_screening exceeds 4096 reserved alteration operations"
+        } else {
+            "design study exceeds 256 expanded alteration operations"
+        }));
     }
     let document_passes = designs
         .iter()
         .flat_map(|(design, _)| &design.operations)
         .map(Operation::document_passes)
         .sum::<usize>()
-        .saturating_mul(materials.len());
+        .saturating_mul(if screened { 1 } else { materials.len() });
     // Reserve source clones/retained documents and the authored operation payload before running
     // any operation. This bounds large-document work in addition to the existing geometry budgets.
     let source_bytes = serde_json::to_vec(pattern.raw())
@@ -301,13 +379,29 @@ pub(super) fn expand(
             .len();
         Ok::<_, Refusal>(sum.saturating_add(bytes))
     })?;
+    let body_identity_bytes = if screened {
+        serde_json::to_vec(fit_context.expect("validated screening context").identity)
+            .map_err(|e| invalid(e.to_string()))?
+            .len()
+    } else {
+        0
+    };
+    let geometry_evaluations = if screened { designs.len() + 1 } else { rows };
     if source_bytes
         .saturating_add(operation_bytes)
         .saturating_mul(
+            // Each screening receipt retains its altered document and canonical validation;
+            // selected candidates additionally retain cached geometry for material expansion.
             rows.saturating_add(document_passes)
-                .saturating_add(usize::from(request.design_fit.is_some()).saturating_mul(rows)),
+                .saturating_add(if screened { geometry_evaluations } else { 0 })
+                .saturating_add(
+                    usize::from(request.design_fit.is_some()).saturating_mul(geometry_evaluations),
+                ),
         )
-        .saturating_add(material_bytes.saturating_mul(designs.len() + 1))
+        .saturating_add(material_bytes.saturating_mul(selected_bound + 1))
+        .saturating_add(
+            body_identity_bytes.saturating_mul(geometry_evaluations.saturating_add(rows)),
+        )
         > MAX_DOCUMENT_WORK_BYTES
     {
         return Err(budget(
@@ -321,8 +415,82 @@ pub(super) fn expand(
         },
         None,
     );
+    let mut candidates = Vec::with_capacity(selected_bound + 1);
+    if screened {
+        let mut work = Work::new(40_000_000);
+        let seam_tolerance = request
+            .sewing
+            .as_ref()
+            .or_else(|| request.sewing_selection.as_ref().map(|s| &s.options))
+            .map_or(3.0, |s| s.seam_tolerance_mm);
+        let mut evaluate = |design: &Variant, variables_mm: &Option<BTreeMap<String, f64>>| {
+            let result = Prepared {
+                variant: design.clone(),
+                material_key: None,
+                variables_mm: variables_mm.clone(),
+                evaluated: None,
+            }
+            .apply(
+                pattern,
+                seam_tolerance,
+                &mut work,
+                request.design_fit.as_ref(),
+                fit_context,
+            )?;
+            if work.exhausted {
+                return Err(budget(
+                    "design fit_screening exceeds 40000000 aggregate outline-validation work units",
+                ));
+            }
+            Ok(result)
+        };
+        let initial = evaluate(&baseline.0, &baseline.1)?;
+        candidates.push((baseline.0, baseline.1, Some(initial)));
+        let mut rows = Vec::with_capacity(designs.len());
+        let mut qualified = 0;
+        let mut selected = 0;
+        for (design, variables_mm) in designs {
+            let evaluated = evaluate(&design, &variables_mm)?;
+            let passed = evaluated.1.is_ok();
+            qualified += usize::from(passed);
+            let retain = passed && selected < selected_bound;
+            rows.push(grid::ScreenedDesign {
+                design: evaluated.0.clone(),
+                selected: retain,
+                refusal: evaluated.1.as_ref().err().cloned(),
+            });
+            if retain {
+                selected += 1;
+                candidates.push((design, variables_mm, Some(evaluated)));
+            }
+        }
+        let receipt = search.as_mut().expect("screened grid receipt");
+        let unvisited = receipt.total_grid_points - rows.len();
+        let omitted = qualified - selected;
+        receipt.generated_designs = selected;
+        receipt.omitted_designs = receipt.total_grid_points - selected;
+        receipt.complete_grid_enumeration = unvisited == 0 && omitted == 0;
+        receipt.budget_exhausted = !receipt.complete_grid_enumeration;
+        receipt.fit_screening = Some(grid::FitScreeningReport {
+            screened_designs: rows.len(),
+            qualified_designs: qualified,
+            rejected_designs: rows.len() - qualified,
+            selected_designs: selected,
+            qualified_designs_omitted: omitted,
+            unvisited_designs: unvisited,
+            complete_fit_screening: unvisited == 0,
+            all_qualified_designs_selected: omitted == 0,
+            rows,
+        });
+    } else {
+        candidates.extend(
+            std::iter::once(baseline)
+                .chain(designs)
+                .map(|(design, values)| (design, values, None)),
+        );
+    }
     let mut expanded = Vec::with_capacity(rows);
-    for (design, variables_mm) in std::iter::once(&baseline).chain(&designs) {
+    for (design, variables_mm, evaluated) in &candidates {
         for material in &materials {
             let key = serde_json::to_string(&(&design.key, &material.variant.key))
                 .map_err(|e| invalid(e.to_string()))?;
@@ -333,13 +501,14 @@ pub(super) fn expand(
                 choices: material.choices.clone(),
                 design: Some(Prepared {
                     variant: design.clone(),
-                    material_key: material.variant.key.clone(),
+                    material_key: Some(material.variant.key.clone()),
                     variables_mm: variables_mm.clone(),
+                    evaluated: evaluated.clone(),
                 }),
             });
         }
     }
-    Ok(expanded)
+    Ok((expanded, search))
 }
 
 impl Prepared {
@@ -351,6 +520,10 @@ impl Prepared {
         fit_request: Option<&fit::Request>,
         fit_context: Option<&fit::Context<'_>>,
     ) -> Result<(Receipt, Result<Pattern, Refusal>), Refusal> {
+        if let Some((mut receipt, pattern)) = self.evaluated {
+            receipt.material_key = self.material_key;
+            return Ok((receipt, pattern));
+        }
         let mut receipt = Receipt {
             key: self.variant.key,
             material_key: self.material_key,

@@ -12,6 +12,19 @@ their behavior when these fields are absent. Numerical target admission is not e
 safe strain/pressure qualification, a continuous optimum or machine authorization. Tests:
 `design_study`, design fit/grid unit tests, and native/portable accepted-body workflow.
 
+**Fit-directed grid screening** (`design_grid.fit_screening`). An explicit 1–256 candidate
+allowance inspects the authored grid prefix once using the same alteration, flat, outline and
+selected-body fit authorities. It requires a live fit context and explicit target contract, retains
+every inspected geometry/fit/refusal receipt, and passes the first `max_designs` qualified designs
+plus the original baseline to ordinary material, manufacturing and scenario consumers. Cached
+canonical results prevent repeated flat work across materials or named cases. Complete screening,
+qualified-but-unselected designs and unvisited points remain separate; no downstream result is
+inferred for omitted candidates. Source/document/root-search, retained identity, measurement and
+outline work are reserved before screening; ordinary expanded consumer limits remain in force.
+Absent screening preserves the earlier prefix request/output semantics and budgets. Tests in
+`design_study` cover a feasible candidate beyond the old prefix, exact marker replay, single versus
+matrix evaluation, missing context, budget exhaustion and retained failures.
+
 **Finite-water scenario decisions.** The optional `motion_wet_film` comparison consumer reads
 evaporated, remaining, unmet-demand and supplied mass plus prescribed-body latent energy from a
 complete admitted moving-coverage history. It verifies exact authored body-bound liquid/supply,

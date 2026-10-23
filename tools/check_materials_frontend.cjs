@@ -4803,3 +4803,73 @@ test('complete design grids retain scope and unavailable points without turning 
   assert.equal(points.children[2].children[1].textContent,'Unknown');
   assert.equal(points.children[2].children[6].textContent,'Unknown');
 });
+
+test('fit screening separates rejected, selected, omitted and unvisited designs and retains exact patterns', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const report = designReport(), source = ' {"schema":"fabric-pattern/1","coordinate":-0.0,"label":"<retained>"}\n';
+  const screened = (key, value, passed, selected) => ({selected,
+    design:{key,variables_mm:{'<length>':value},altered_pattern_json:source,
+      validation:{passed},fit:outcome({passed,body_identity:{provenance:'MODEL_FIT',shape_sha256:'selected-shape'},
+        validation:{points:[{id:'length',status:passed?'IN_BAND':'LOW',residual_mm:passed?0:20}]}})},
+    refusal:passed?null:{message:'<length>: below the authored target'}});
+  report.design_search = {total_grid_points:8,generated_designs:1,omitted_designs:7,
+    complete_grid_enumeration:false,budget_exhausted:true,global_optimum_claim:false,
+    fit_screening:{screened_designs:3,qualified_designs:2,rejected_designs:1,selected_designs:1,
+      qualified_designs_omitted:1,unvisited_designs:5,complete_fit_screening:false,all_qualified_designs_selected:false,
+      rows:[screened('grid:0000',0,false,false),screened('grid:0001',20,true,true),screened('grid:0002',30,true,false)]}};
+  await p.e.study.onclick(); p.emit(report);
+  const s = section(p,'Fixed-pattern manufacturing alternatives');
+  const table = title => descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===title);
+  assert.deepEqual(plain(table('Fit screening before manufacturing and simulation').children[2].children.map(n=>n.textContent)),
+    ['8','3','2','1','1','1','5']);
+  const rows = table('Screened garment designs').children.slice(2);
+  assert.deepEqual(plain(rows.map(row=>row.children.slice(2,4).map(n=>n.textContent))),
+    [['Refused','Not selected'],['Passed declared flat gates','Selected'],['Passed declared flat gates','Not selected']]);
+  assert.equal(rows[0].children[1].textContent,'<length>: 0');
+  assert.equal(rows[0].children[4].textContent,'<length>: below the authored target');
+  assert.match(visibleText(s),/unvisited grid points; their feasibility remains unknown/);
+  assert.match(visibleText(s),/downstream results remain unknown/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  const replay = descendants(s).find(n=>n.download==='screened-design-3-pattern.json');
+  assert.ok(replay); assert.equal(await p.blobs.get(replay.href).text(),source);
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('complete fit screening reports complete flat admission without certifying physical fit', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const report = designReport();
+  report.design_search = {total_grid_points:3,generated_designs:1,omitted_designs:2,
+    complete_grid_enumeration:true,budget_exhausted:false,global_optimum_claim:false,
+    fit_screening:{screened_designs:3,qualified_designs:1,rejected_designs:2,selected_designs:1,
+      qualified_designs_omitted:0,unvisited_designs:0,complete_fit_screening:true,all_qualified_designs_selected:true,rows:[]}};
+  await p.e.study.onclick(); p.emit(report);
+  const text = visibleText(section(p,'Fixed-pattern manufacturing alternatives'));
+  assert.match(text,/Every declared grid point received flat geometry and fit screening/);
+  assert.match(text,/Every passing screened design was selected/);
+  assert.match(text,/do not establish physical garment fit/);
+  assert.doesNotMatch(text,/their downstream results remain unknown/);
+});
+
+test('compiled WASM fit screening reaches the same late design and named-case frontier as both native commands',
+  {skip:process.env.FTX_REAL_WASM!=='1' || !process.env.FTX_DESIGN_SCREENING_REPLAY}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const dir=process.env.FTX_DESIGN_SCREENING_REPLAY, input=name=>fs.readFileSync(path.join(dir,name),'utf8');
+    const bytes=fs.readFileSync(path.join(dir,'model.ftxbody')), w=await workerModule({bindings:ftx});
+    const previousProgress=globalThis.ftxProgress; globalThis.ftxProgress=()=>{};
+    try {
+      for(const name of ['single','matrix']) {
+        const studyRequest=input('study.json'), scenarioRequest=input(`${name}-scenario.json`);
+        const result=await w.send({type:'scenario',request:170,pattern:input('pattern.json'),studyRequest,scenarioRequest,
+          measurements:input('body-input.json'),bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+        assert.equal(result.type,'result',result.message);
+        assert.deepEqual(result.result,JSON.parse(input(`${name}-report.json`)));
+        const screening=result.result.manufacturing.design_search.fit_screening;
+        assert.equal(screening.screened_designs,9); assert.equal(screening.selected_designs,1);
+        assert.equal(screening.rows.find(row=>row.selected).design.key,'grid:0006');
+        assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+        assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
+      }
+    } finally {globalThis.ftxProgress=previousProgress;}
+  });

@@ -3137,7 +3137,7 @@ fit or process qualification gates. See [material-scenario-studies.md](docs/mate
 
 ### 25.70 Generate fit-constrained garment alterations on the selected body
 
-**Implemented software, runtime validation pending (`ftx-ds2`).** The existing design study now
+**Implemented software (`ftx-ds2`), with focused runtime verification in §25.71.** The existing design study now
 generates bounded linked width/ease and length alterations from explicit finite variable domains,
 crosses them with material choices, and evaluates the actual altered garment through the same
 manufacturing and optional scenario consumers. Original geometry remains a visible baseline.
@@ -3159,12 +3159,37 @@ measurement sampling, source documents and existing manufacturing/scenario budge
 The workbench exposes variable choices, full target residuals, source identity and incomplete search.
 See [material-screening-and-studies.md](docs/material-screening-and-studies.md).
 
-Focused numerical, synthetic selected-body and native/portable regressions are included. Fresh
-strict Clippy/type/borrow analysis passes for both changed core crates and their unit-test bodies.
-Final executable Rust gates remain pending while the shared build filesystem is exhausted; keep
-the bead open until those checks run. Adaptive/continuous inverse design, qualified local strain/pressure
+Focused numerical, synthetic selected-body and native/portable regressions are included; the
+executable checks in §25.71 now cover the finite-grid path. Adaptive/continuous inverse design, qualified local strain/pressure
 constraints and held-out measured garment acceptance remain substantive next gates. A numerical
 ease band is neither a physical garment-fit claim nor a safe-fit or comfort threshold.
+
+---
+
+### 25.71 Screen fit-qualified designs before spending downstream evaluation slots
+
+**Delivered bounded software (`ftx-ds2`).** Optional `design_grid.fit_screening` inspects an
+explicit prefix of up to 256 authored grid points using the existing canonical alteration,
+flat-validation, outline and selected-body fit authorities. It retains the original baseline and
+sends the first `max_designs` qualifying candidates through the ordinary material, manufacturing
+and scenario consumers. A useful candidate beyond the old short prefix can therefore reach real
+consumers without consuming a downstream slot for every failed flat design. Omitting this option
+preserves the original prefix behavior.
+
+Every inspected point retains exact geometry, operations, body/fit evidence and any refusal.
+Reports distinguish rejected, selected, qualified-but-omitted and wholly unvisited points; a
+complete flat screening pass is not a complete downstream comparison when passing points were
+omitted. Canonical flat results are reused across materials and named cases. Source/document,
+root-search, retained identity, measurement and outline work are bounded before screening.
+See [material-screening-and-studies.md](docs/material-screening-and-studies.md).
+
+All 18 export design regressions pass, including actual manufacturing replay and incomplete-search
+behavior. The native selected-body regression reaches the seventh grid point (+30 mm) with one
+downstream design slot after rejecting the first six; both `ftx` and `ftx-materials` exactly match
+portable single-case and named-matrix reports. These checks establish software behavior on
+synthetic evidence. `ftx-ds2` remains in progress for further verification, adaptive/continuous
+design, qualified local strain/pressure constraints and independent measured garment validation.
+No safe-fit threshold, empirical wearer fit or global optimum is inferred.
 
 ---
 

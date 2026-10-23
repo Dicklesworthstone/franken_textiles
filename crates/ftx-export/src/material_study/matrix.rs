@@ -169,10 +169,14 @@ impl Request {
         // overrides, and shared manufacturing must not invent another comparison context.
         let mut manufacturing_request = self.clone();
         manufacturing_request.comparison = None;
-        let (variants, screening) = manufacturing_request.variants(pattern, true)?;
-        let planned_evaluations = variants.len().checked_mul(cases.len()).ok_or_else(|| {
-            budget("scenario matrix alternative/case evaluation reservation overflows")
-        })?;
+        let prepared = manufacturing_request.variants(pattern, true, fit)?;
+        let planned_evaluations = prepared
+            .variants
+            .len()
+            .checked_mul(cases.len())
+            .ok_or_else(|| {
+                budget("scenario matrix alternative/case evaluation reservation overflows")
+            })?;
         if planned_evaluations > max_evaluations {
             return Err(budget(
                 "scenario matrix exceeds its aggregate alternative/case evaluation allowance",
@@ -190,7 +194,7 @@ impl Request {
             hash(&(pattern.raw(), self, cases, max_evaluations))?
         };
         let mut manufacturing =
-            manufacturing_request.evaluate_prepared(pattern, true, variants, screening, fit)?;
+            manufacturing_request.evaluate_prepared(pattern, true, prepared, fit)?;
         // The shared request is still the exact authored study, including its optional fallback.
         manufacturing.request_sha256 = self.manufacturing_identity(fit)?;
         let mut reports = Vec::with_capacity(cases.len());

@@ -36,7 +36,7 @@ pub struct Context<'a> {
 }
 
 impl Context<'_> {
-    fn validate(&self) -> Result<(), Refusal> {
+    pub(super) fn validate(&self) -> Result<(), Refusal> {
         if self
             .identity
             .as_object()

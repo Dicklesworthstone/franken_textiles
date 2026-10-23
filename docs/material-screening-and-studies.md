@@ -818,6 +818,76 @@ of the declared grid, not solver convergence, empirical fit, a continuous optimu
 No hidden scalar fit score or automatic winner is introduced. Ordinary explicit manufacturing,
 drape/motion strain and thermal objectives/constraints still use their existing authorities.
 
+### Find qualified designs beyond the short downstream prefix
+
+An optional `fit_screening` allowance searches a larger authored grid prefix with inexpensive
+canonical flat measurements before spending the material/scenario allowance:
+
+```json
+{
+  "design_grid": {
+    "variables": [{
+      "key": "linked-width",
+      "values_mm": [0, 4, 8, 12],
+      "sites": [
+        {"piece": "front", "axis": "x", "at_mm": 10, "multiplier": 1},
+        {"piece": "back", "axis": "x", "at_mm": 10, "multiplier": 1}
+      ]
+    }],
+    "max_designs": 1,
+    "fit_screening": {"max_candidates": 4}
+  }
+}
+```
+
+This fragment belongs in an ordinary `ftx-design-study/1` request with material choices and an
+explicit `design_fit` contract, evaluated through a model-backed entry point. Screening requires
+that selected-body context; standalone or raw-mesh calls cannot invent it. `max_candidates` is
+1–256 and excludes the always retained original baseline. Each inspected point uses the unchanged
+original pattern, its exact linked operations, canonical seam/truing/completeness checks, sampled
+outline checks and explicit body-fit targets. No candidate is selected solely because it has the
+smallest displayed residual.
+
+In the synthetic 20 mm wide rectangle example, a declared ease band of 7–9 mm accepts the 8 mm
+choice. With `max_designs: 1`, the ordinary prefix would inspect only the 0 mm choice. Screening
+instead reaches and selects `grid:0002`, then crosses that exact geometry with each material and
+runs the ordinary cutting, sewing, mass and requested simulation consumers. Its altered pattern and
+frozen material bindings replay through the same existing APIs. Flat screening is performed once
+per geometry, including the baseline, and reused across materials and named operating cases.
+
+`design_search.fit_screening` distinguishes the actual outcomes:
+
+| Field | Meaning |
+|---|---|
+| `screened_designs` | Grid points inspected, excluding baseline |
+| `qualified_designs` / `rejected_designs` | Points passing or failing the complete canonical flat gates |
+| `selected_designs` | First qualifying points sent to the material cross product, up to `max_designs` |
+| `qualified_designs_omitted` | Passing points withheld by the downstream design allowance; their production outcomes remain unknown |
+| `unvisited_designs` | Points beyond the screening allowance; their fit and production outcomes remain unknown |
+| `complete_fit_screening` | Every declared grid point was inspected |
+| `all_qualified_designs_selected` | Every passing point in the inspected prefix was selected |
+| `rows` | Authored-order exact geometry/fit receipts, selection status and any structured refusal |
+
+Screening rows have no `material_key`, because no material substitution has happened yet. They retain
+the exact original and altered pattern identities, operations, variables, altered JSON, canonical
+validation and selected-body fit receipt. Failed or unmeasurable points remain inspectable. A passing
+point omitted after `max_designs` has no fabricated refusal; its `selected` flag is false.
+
+With screening, top-level `generated_designs` counts selected grid points sent downstream, while
+`omitted_designs` counts every point not sent downstream, including explicitly rejected ones.
+`complete_grid_enumeration` is true only when each point was sent downstream or explicitly rejected
+by flat screening: both `unvisited_designs` and `qualified_designs_omitted` must be zero. Exhausting
+either allowance retains any selected feasible incumbent and marks incomplete decision coverage.
+Even complete screening with no qualifying point establishes only the recorded canonical outcomes,
+not empirical infeasibility or missing evidence. A complete screening pass with unselected passing
+points is not a complete material/scenario comparison.
+
+All inspected operations, root-search document passes, retained source/body/fit data, measurement
+sampling and outline work are reserved before screening starts. Screening admits at most 4,096
+alteration operations, 256 MiB of aggregate document-processing reservation, and 40 million units
+each for measurement and outline validation. Existing material/scenario caps apply to the reserved
+selected cross product. Omitting `fit_screening` preserves the original deterministic-prefix mode.
+
 Grid domain data, fit specification and body identity are each bounded to 256 KiB; selected edge,
 measurement and document-processing work is charged across the expanded rows. Nonzero values whose
 site multiplication underflows to zero refuse instead of silently dropping the alteration.

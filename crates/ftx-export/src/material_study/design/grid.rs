@@ -35,6 +35,15 @@ pub struct Variable {
     pub sites: Vec<Site>,
 }
 
+/// Optional cheap canonical geometry/fit screening before the material and scenario cross product.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FitScreening {
+    /// One to 256 grid points, excluding the baseline, inspected in authored grid order.
+    /// Selection retains the first `max_designs` passing points; every inspected result is retained.
+    pub max_candidates: usize,
+}
+
 /// Finite grid search through the ordinary design/material evaluation and comparison authorities.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,6 +56,47 @@ pub struct Request {
     /// One to 31 grid points, excluding the always retained original baseline.
     /// A smaller allowance evaluates a deterministic prefix and reports incomplete search.
     pub max_designs: usize,
+    /// Inspect a larger bounded grid prefix with the explicit selected-body fit contract, then
+    /// spend the design/material allowance only on its first passing candidates. No score is inferred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_screening: Option<FitScreening>,
+}
+
+/// One exact canonical screening result before any material substitution or consumer evaluation.
+#[derive(Clone, Debug, Serialize)]
+pub struct ScreenedDesign {
+    /// Full original/altered identity, operations, variables, geometry validation and body-fit result.
+    /// There is no material key because flat geometry/fit is evaluated once before the cross product.
+    pub design: super::Receipt,
+    /// Selected for the ordinary material/consumer cross product; not a downstream feasibility claim.
+    pub selected: bool,
+    /// Canonical alteration, geometry or fit failure; absent on a passing flat candidate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
+}
+
+/// What was established by flat screening versus what remains unevaluated by real consumers.
+#[derive(Clone, Debug, Serialize)]
+pub struct FitScreeningReport {
+    /// Grid points inspected once, independently of the number of material choices.
+    pub screened_designs: usize,
+    /// Inspected points passing the complete canonical geometry and explicit body-fit gates.
+    pub qualified_designs: usize,
+    /// Inspected points refused by an alteration, geometry or fit gate.
+    pub rejected_designs: usize,
+    /// Qualified points sent to production consumers, excluding the retained original baseline.
+    pub selected_designs: usize,
+    /// Qualified points not sent downstream because `max_designs` was reached.
+    pub qualified_designs_omitted: usize,
+    /// Grid points whose flat fit and downstream feasibility remain unknown.
+    pub unvisited_designs: usize,
+    /// Every declared grid point was inspected by canonical flat screening.
+    pub complete_fit_screening: bool,
+    /// Every qualified point in the inspected prefix was sent to production consumers.
+    /// This does not certify unvisited points, when `complete_fit_screening` is false.
+    pub all_qualified_designs_selected: bool,
+    /// Authored-order screening results, retaining failures and unselected passing points alike.
+    pub rows: Vec<ScreenedDesign>,
 }
 
 /// The exact finite search domain and the part actually expanded for production evaluation.
@@ -58,16 +108,23 @@ pub struct Receipt {
     pub request: Request,
     /// Cartesian product before any physical/fit feasibility result is known.
     pub total_grid_points: usize,
-    /// Generated choices, including choices later refused by geometry, fit or a consumer.
+    /// Choices sent to the material cross product, including later consumer refusals.
+    /// With fit screening, this counts only its selected passing points.
     pub generated_designs: usize,
-    /// Unevaluated domain points; none is silently certified infeasible or dominated.
+    /// Domain points not sent to the material cross product. With fit screening, consult its
+    /// exact rejected/qualified-omitted/unvisited counts rather than treating every omission alike.
     pub omitted_designs: usize,
-    /// Every declared grid point was generated. This is not physical convergence or global proof.
+    /// Every grid point was sent downstream or explicitly rejected by canonical flat screening.
+    /// False when any point is unvisited or flat-qualified but omitted from production consumers.
+    /// This is not physical convergence, downstream feasibility or a global optimum proof.
     pub complete_grid_enumeration: bool,
-    /// The explicit design allowance stopped enumeration before the domain was exhausted.
+    /// A screening or design allowance left an unvisited or flat-qualified unevaluated point.
     pub budget_exhausted: bool,
     /// Always false: even a complete grid is not a continuous or global design optimum.
     pub global_optimum_claim: bool,
+    /// Present only when the larger explicit flat-screening allowance was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit_screening: Option<FitScreeningReport>,
 }
 
 impl Request {
@@ -90,6 +147,15 @@ impl Request {
         {
             return Err(invalid(
                 "design grid needs 1..3 variables and max_designs in 1..=31",
+            ));
+        }
+        if self
+            .fit_screening
+            .as_ref()
+            .is_some_and(|screening| !(1..=256).contains(&screening.max_candidates))
+        {
+            return Err(invalid(
+                "design fit_screening needs max_candidates in 1..=256",
             ));
         }
         let operations = self
@@ -152,13 +218,20 @@ impl Request {
             complete_grid_enumeration: generated == total,
             budget_exhausted: generated < total,
             global_optimum_claim: false,
+            fit_screening: None,
         })
     }
 
     pub(super) fn generate(&self) -> Result<Vec<GeneratedDesign>, Refusal> {
         let receipt = self.receipt()?;
-        let mut designs = Vec::with_capacity(receipt.generated_designs);
-        for index in 0..receipt.generated_designs {
+        let count = self
+            .fit_screening
+            .as_ref()
+            .map_or(receipt.generated_designs, |screening| {
+                receipt.total_grid_points.min(screening.max_candidates)
+            });
+        let mut designs = Vec::with_capacity(count);
+        for index in 0..count {
             let mut quotient = index;
             let mut indices = vec![0; self.variables.len()];
             for (i, variable) in self.variables.iter().enumerate().rev() {

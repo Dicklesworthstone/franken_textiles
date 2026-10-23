@@ -789,16 +789,51 @@ function designComparison(op, parent, study) {
   parent.append(note);
   const grid = study.design_search;
   if (grid) {
-    const search = table(parent, "Declared alteration search",
-      ["Generated designs", "Declared grid points", "Omitted designs", "Enumeration"]);
-    cells(search, [metric(grid.generated_designs), metric(grid.total_grid_points), metric(grid.omitted_designs),
-      grid.complete_grid_enumeration === true ? "Complete declared grid" :
-        grid.budget_exhausted === true ? "Stopped at design budget" : "Incomplete"]);
-    const scope = document.createElement("p");
-    scope.textContent = grid.complete_grid_enumeration === true ?
-      "Every declared grid point was generated. Candidate validation and consumer results still govern eligibility; this is not a continuous or global optimum." :
-      "The frontier is conditional on visited designs. Omitted grid points remain unknown and may contain better feasible designs.";
-    parent.append(scope);
+    if (grid.fit_screening) {
+      const screening = grid.fit_screening;
+      const search = table(parent, "Fit screening before manufacturing and simulation",
+        ["Declared grid points", "Flat screened", "Passed flat gates", "Rejected", "Selected for consumers",
+          "Passing designs not selected", "Unvisited grid points"]);
+      cells(search, [metric(grid.total_grid_points), metric(screening.screened_designs), metric(screening.qualified_designs),
+        metric(screening.rejected_designs), metric(screening.selected_designs), metric(screening.qualified_designs_omitted),
+        metric(screening.unvisited_designs)]);
+      const scope = document.createElement("p");
+      scope.textContent = (screening.complete_fit_screening === true ?
+        "Every declared grid point received flat geometry and fit screening. " :
+        "The flat-screening allowance left unvisited grid points; their feasibility remains unknown. ") +
+        (screening.all_qualified_designs_selected === true ?
+          "Every passing screened design was selected for the requested consumers. " :
+          "Some passing screened designs were not selected for manufacturing or simulation; their downstream results remain unknown. ") +
+        "The original baseline remains visible. Flat fit targets do not establish physical garment fit or a continuous or global optimum.";
+      parent.append(scope);
+      const screened = table(parent, "Screened garment designs",
+        ["Pattern design", "Variables (mm)", "Flat admission", "Downstream selection", "Reason"]);
+      for (const [i, row] of (screening.rows || []).entries()) {
+        const design = row.design || {}, fit = available(design.fit);
+        const passed = design.validation?.passed === true && fit?.passed === true;
+        cells(screened, [design.key ?? "Unknown",
+          design.variables_mm ? Object.entries(design.variables_mm).map(([key, value]) => `${key}: ${metric(value)}`).join("; ") : "Unknown",
+          passed ? "Passed declared flat gates" : "Refused",
+          row.selected === true ? "Selected" : "Not selected",
+          row.refusal?.message || (passed ? "Passed declared targets" : "Inspect retained validation")]);
+        if (typeof design.altered_pattern_json === "string") {
+          const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
+          link(op, actions, {name: `screened-design-${i + 1}-pattern.json`, text: design.altered_pattern_json, mime: "application/json"});
+        }
+        detail(parent, `${design.key ?? "Unknown design"}: screened operations, body identity and fit evidence (display only)`, row);
+      }
+    } else {
+      const search = table(parent, "Declared alteration search",
+        ["Generated designs", "Declared grid points", "Omitted designs", "Enumeration"]);
+      cells(search, [metric(grid.generated_designs), metric(grid.total_grid_points), metric(grid.omitted_designs),
+        grid.complete_grid_enumeration === true ? "Complete declared grid" :
+          grid.budget_exhausted === true ? "Stopped at design budget" : "Incomplete"]);
+      const scope = document.createElement("p");
+      scope.textContent = grid.complete_grid_enumeration === true ?
+        "Every declared grid point was generated. Candidate validation and consumer results still govern eligibility; this is not a continuous or global optimum." :
+        "The frontier is conditional on visited designs. Omitted grid points remain unknown and may contain better feasible designs.";
+      parent.append(scope);
+    }
     detail(parent, "Exact alteration grid, linked sites and search allowance (display only)", grid);
   }
   const t = table(parent, "Pattern designs and material choices",

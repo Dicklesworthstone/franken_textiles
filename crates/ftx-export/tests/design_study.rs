@@ -217,6 +217,323 @@ fn fit_gates_once_before_named_cases_and_expanded_work_is_reserved_before_callba
     assert_eq!(calls, 0);
 }
 
+fn screened_grid_request(max_designs: usize, max_candidates: usize) -> Request {
+    let mut request = grid_request(max_designs);
+    request.design_grid.as_mut().unwrap().fit_screening =
+        Some(ftx_export::material_study::design::grid::FitScreening { max_candidates });
+    request.design_fit.as_mut().unwrap().fit_spec["points"][0]["target_mm"] = json!([7, 8, 9]);
+    request
+}
+
+#[test]
+fn fit_screening_reaches_a_late_candidate_and_replays_real_consumers_without_changing_prefix_mode()
+{
+    use ftx_export::material_study::design::fit::Context;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let original = pattern.raw().clone();
+    let body = ftx_pattern::validate::Measurements(json!({"declared_width":20}));
+    let identity = json!({"source":"test:late-flat-fit-candidate"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let mut request = screened_grid_request(1, 4);
+    request.comparison = None;
+    let mut prefix = request.clone();
+    prefix.design_grid.as_mut().unwrap().fit_screening = None;
+    let mut prefix_calls = 0;
+    let default = prefix
+        .evaluate_with_fit(&pattern, &json!({}), Some(&fit), |_, _| {
+            prefix_calls += 1;
+            Ok(json!({}))
+        })
+        .unwrap();
+    assert_eq!(prefix_calls, 0);
+    let default = serde_json::to_value(default.manufacturing).unwrap();
+    assert!(default["design_search"].get("fit_screening").is_none());
+    assert_eq!(default["design_search"]["generated_designs"], 1);
+    assert_eq!(default["design_search"]["omitted_designs"], 3);
+    assert_eq!(default["alternatives"].as_array().unwrap().len(), 4);
+
+    let mut calls = Vec::new();
+    let result = request
+        .evaluate_with_fit(&pattern, &json!({}), Some(&fit), |key, altered| {
+            calls.push(key.to_owned());
+            assert_eq!(
+                altered.raw()["pieces"][0]["vertices"]["b"][0].as_f64(),
+                Some(28.0)
+            );
+            assert_eq!(
+                altered.raw()["pieces"][0]["vertices"]["b"][1].as_f64(),
+                Some(0.0)
+            );
+            Ok(json!({"pattern_sha256":sha256_hex(&serde_json::to_vec(altered.raw()).unwrap())}))
+        })
+        .unwrap();
+    assert_eq!(calls.len(), 2);
+    let result = serde_json::to_value(result).unwrap();
+    let report = &result["manufacturing"];
+    let search = &report["design_search"];
+    let screened = &search["fit_screening"];
+    assert_eq!(search["generated_designs"], 1);
+    assert_eq!(search["omitted_designs"], 3);
+    assert_eq!(search["complete_grid_enumeration"], true);
+    assert_eq!(search["budget_exhausted"], false);
+    assert_eq!(screened["screened_designs"], 4);
+    assert_eq!(screened["qualified_designs"], 1);
+    assert_eq!(screened["rejected_designs"], 3);
+    assert_eq!(screened["qualified_designs_omitted"], 0);
+    assert_eq!(screened["unvisited_designs"], 0);
+    for (i, screened) in screened["rows"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(screened["design"]["key"], format!("grid:{i:04}"));
+        assert!(screened["design"].get("material_key").is_none());
+        assert_eq!(
+            screened["design"]["fit"]["result"]["body_identity"],
+            identity
+        );
+        assert_eq!(screened["selected"], i == 2);
+        assert_eq!(screened.get("refusal").is_none(), i == 2);
+    }
+    for material in ["light-sheet", "heavy-sheet"] {
+        let selected = row(report, "grid:0002", material);
+        assert_eq!(selected["design"]["validation"]["passed"], true);
+        assert_eq!(selected["cutting"]["status"], "available");
+        assert_eq!(selected["sewing"]["status"], "available");
+        assert_eq!(selected["assembly_mass"]["status"], "available");
+        let altered =
+            Pattern::from_json(selected["design"]["altered_pattern_json"].as_str().unwrap())
+                .unwrap();
+        let changes: Changes = serde_json::from_value(selected["frozen_changes"].clone()).unwrap();
+        assert_eq!(
+            changes.apply(&altered).unwrap()["pattern"],
+            selected["binding"]["result"]["pattern"]
+        );
+        let replay = CutPlan::build(
+            &Pattern::new(selected["binding"]["result"]["pattern"].clone()),
+            request.cutting.as_ref().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(replay).unwrap(),
+            selected["cutting"]["result"]
+        );
+        let simulation = result["simulations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["key"] == selected["key"])
+            .unwrap();
+        assert_eq!(
+            simulation["evaluation"]["result"]["pattern_sha256"],
+            selected["binding"]["result"]["pattern_sha256"]
+        );
+    }
+    assert_eq!(pattern.raw(), &original);
+}
+
+#[test]
+fn fit_screening_distinguishes_unvisited_qualified_omissions_and_a_complete_failed_domain() {
+    use ftx_export::material_study::design::fit::Context;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = ftx_pattern::validate::Measurements(json!({"declared_width":20}));
+    let identity = json!({"source":"test:screened-domain"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let evaluate = |request: &Request| {
+        serde_json::to_value(
+            request
+                .evaluate_with_fit_body(&pattern, Some(&fit))
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let early = evaluate(&screened_grid_request(1, 2));
+    assert_eq!(early["alternatives"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        early["design_search"]["fit_screening"]["unvisited_designs"],
+        2
+    );
+    assert_eq!(
+        early["design_search"]["fit_screening"]["qualified_designs"],
+        0
+    );
+    assert_eq!(early["design_search"]["complete_grid_enumeration"], false);
+    let incumbent = evaluate(&screened_grid_request(1, 3));
+    assert_eq!(
+        incumbent["design_search"]["fit_screening"]["selected_designs"],
+        1
+    );
+    assert_eq!(
+        incumbent["design_search"]["fit_screening"]["unvisited_designs"],
+        1
+    );
+    assert_eq!(incumbent["design_search"]["budget_exhausted"], true);
+    assert_eq!(
+        incumbent["comparison"]["frontier"],
+        json!([key("grid:0002", "light-sheet")])
+    );
+
+    let mut request = screened_grid_request(1, 4);
+    request.design_fit.as_mut().unwrap().fit_spec["points"][0]["target_mm"] = json!([3, 6, 10]);
+    let omitted = evaluate(&request);
+    let screening = &omitted["design_search"]["fit_screening"];
+    assert_eq!(screening["qualified_designs"], 2);
+    assert_eq!(screening["selected_designs"], 1);
+    assert_eq!(screening["qualified_designs_omitted"], 1);
+    assert_eq!(screening["complete_fit_screening"], true);
+    assert_eq!(screening["all_qualified_designs_selected"], false);
+    assert_eq!(screening["rows"][2]["selected"], false);
+    assert!(screening["rows"][2].get("refusal").is_none());
+    assert_eq!(omitted["design_search"]["complete_grid_enumeration"], false);
+    assert_eq!(omitted["design_search"]["budget_exhausted"], true);
+
+    request.design_fit.as_mut().unwrap().fit_spec["points"][0]["target_mm"] =
+        json!([100, 101, 102]);
+    let none = evaluate(&request);
+    assert_eq!(
+        none["design_search"]["fit_screening"]["rejected_designs"],
+        4
+    );
+    assert_eq!(none["design_search"]["generated_designs"], 0);
+    assert_eq!(none["design_search"]["complete_grid_enumeration"], true);
+    assert_eq!(none["design_search"]["budget_exhausted"], false);
+    assert_eq!(none["alternatives"].as_array().unwrap().len(), 2);
+    assert_eq!(none["comparison"]["frontier"], json!([]));
+}
+
+#[test]
+fn fit_screening_reuses_one_body_evaluation_across_materials_and_named_cases() {
+    use ftx_export::material_study::design::fit::Context;
+    use ftx_pattern::{BodyMeasure, instance::PyError};
+    use std::cell::Cell;
+    struct CountedBody {
+        calls: Cell<usize>,
+    }
+    impl BodyMeasure for CountedBody {
+        fn value(&self, _: &str) -> Result<f64, PyError> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(20.0)
+        }
+        fn sigma(&self, _: &str) -> Option<f64> {
+            None
+        }
+        fn landmark_h(&self, _: &str, _: &str) -> Result<f64, PyError> {
+            Err(PyError::Key(
+                "explicit vertex does not need a body landmark".into(),
+            ))
+        }
+    }
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = CountedBody {
+        calls: Cell::new(0),
+    };
+    let identity = json!({"source":"test:single-screening"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let mut request = screened_grid_request(1, 4);
+    request.comparison = None;
+    request
+        .evaluate_with_fit_body(&pattern, Some(&fit))
+        .unwrap();
+    let two_material_reads = body.calls.replace(0);
+    assert!(two_material_reads > 0);
+    let mut one_material = request.clone();
+    one_material.variants.truncate(1);
+    one_material
+        .evaluate_with_fit_body(&pattern, Some(&fit))
+        .unwrap();
+    assert_eq!(body.calls.replace(0), two_material_reads);
+    let cases = ["one", "two"].map(|key| Case {
+        key: key.into(),
+        scenario: json!({}),
+        comparison: None,
+    });
+    let result = request
+        .evaluate_matrix_with_fit(&pattern, &cases, 8, Some(&fit), |_, _, _| Ok(json!({})))
+        .unwrap();
+    assert_eq!(result.evaluations, 4);
+    assert_eq!(body.calls.get(), two_material_reads);
+    let single = request
+        .evaluate_with_fit_body(&pattern, Some(&fit))
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(result.manufacturing.design_search).unwrap(),
+        serde_json::to_value(single.design_search).unwrap()
+    );
+}
+
+#[test]
+fn fit_screening_requires_explicit_body_fit_and_reserves_unvisited_root_search_work() {
+    use ftx_export::material_study::design::fit::Context;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let request = screened_grid_request(1, 4);
+    assert!(
+        request
+            .evaluate(&pattern)
+            .unwrap_err()
+            .message
+            .contains("fitted-body")
+    );
+    let mut missing_fit = request.clone();
+    missing_fit.design_fit = None;
+    assert!(
+        missing_fit
+            .evaluate(&pattern)
+            .unwrap_err()
+            .message
+            .contains("explicit design_fit")
+    );
+    let body = ftx_pattern::validate::Measurements(json!({"declared_width":20}));
+    let identity = json!({"source":"test:screening-reservations"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    for max_candidates in [0, 257] {
+        let mut invalid = request.clone();
+        invalid
+            .design_grid
+            .as_mut()
+            .unwrap()
+            .fit_screening
+            .as_mut()
+            .unwrap()
+            .max_candidates = max_candidates;
+        assert!(
+            invalid
+                .evaluate_with_fit_body(&pattern, Some(&fit))
+                .is_err()
+        );
+    }
+    let mut costly = request;
+    let grid = costly.design_grid.as_mut().unwrap();
+    grid.variables[0].values_mm = (0..64).map(f64::from).collect();
+    grid.fit_screening.as_mut().unwrap().max_candidates = 64;
+    grid.after = vec![
+        ftx_export::material_study::design::Operation::TrueSeam {
+            seam: "side".into(),
+            end: "start".into()
+        };
+        14
+    ];
+    let mut source = pattern.raw().clone();
+    source["meta"]["annotation"] = json!("x".repeat(20_000));
+    let mut calls = 0;
+    let error = costly
+        .evaluate_with_fit(&Pattern::new(source), &json!({}), Some(&fit), |_, _| {
+            calls += 1;
+            Ok(json!({}))
+        })
+        .unwrap_err();
+    assert_eq!(error.code, RefusalCode::BudgetExceeded);
+    assert!(error.message.contains("document-processing"));
+    assert_eq!(calls, 0);
+}
+
 #[test]
 fn ease_and_length_cross_every_material_and_replay_real_markers_sewing_and_exports() {
     let pattern = Pattern::from_json(PATTERN).unwrap();

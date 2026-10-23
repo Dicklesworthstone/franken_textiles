@@ -50,6 +50,12 @@ struct PreparedVariant {
     design: Option<design::Prepared>,
 }
 
+struct PreparedStudy {
+    variants: Vec<PreparedVariant>,
+    screening: Option<material_screen::Report>,
+    design_search: Option<design::grid::Receipt>,
+}
+
 impl From<Variant> for PreparedVariant {
     fn from(variant: Variant) -> Self {
         Self {
@@ -434,7 +440,8 @@ impl Request {
         &self,
         pattern: &Pattern,
         additional_consumer: bool,
-    ) -> Result<(Vec<PreparedVariant>, Option<material_screen::Report>), Refusal> {
+        fit: Option<&design::fit::Context<'_>>,
+    ) -> Result<PreparedStudy, Refusal> {
         if let Some(policy) = &self.comparison {
             policy.validate(self, additional_consumer)?;
         }
@@ -470,20 +477,26 @@ impl Request {
             return Err(budget("material study exceeds 32 alternatives"));
         }
         if let Some(combinations) = &self.combinations {
-            return Ok((
-                design::expand(self, pattern, combinations.variants(pattern)?)?,
-                None,
-            ));
+            let (variants, design_search) =
+                design::expand(self, pattern, combinations.variants(pattern)?, fit)?;
+            return Ok(PreparedStudy {
+                variants,
+                screening: None,
+                design_search,
+            });
         }
         let Some(screened) = &self.screened else {
-            return Ok((
-                design::expand(
-                    self,
-                    pattern,
-                    self.variants.iter().cloned().map(Into::into).collect(),
-                )?,
-                None,
-            ));
+            let (variants, design_search) = design::expand(
+                self,
+                pattern,
+                self.variants.iter().cloned().map(Into::into).collect(),
+                fit,
+            )?;
+            return Ok(PreparedStudy {
+                variants,
+                screening: None,
+                design_search,
+            });
         };
         if let Target::Pieces { ids } = &screened.target {
             let mut unique = BTreeSet::new();
@@ -532,7 +545,12 @@ impl Request {
                 .into()
             })
             .collect();
-        Ok((design::expand(self, pattern, variants)?, Some(report)))
+        let (variants, design_search) = design::expand(self, pattern, variants, fit)?;
+        Ok(PreparedStudy {
+            variants,
+            screening: Some(report),
+            design_search,
+        })
     }
 
     /// Run each substitution and optional explicit alteration from the same source and process policy.
@@ -649,18 +667,22 @@ impl Request {
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
         }
-        let (variants, screening) = self.variants(pattern, additional_consumer)?;
-        self.evaluate_prepared(pattern, additional_consumer, variants, screening, fit)
+        let prepared = self.variants(pattern, additional_consumer, fit)?;
+        self.evaluate_prepared(pattern, additional_consumer, prepared, fit)
     }
 
     fn evaluate_prepared(
         &self,
         pattern: &Pattern,
         additional_consumer: bool,
-        mut variants: Vec<PreparedVariant>,
-        screening: Option<material_screen::Report>,
+        prepared: PreparedStudy,
         fit: Option<&design::fit::Context<'_>>,
     ) -> Result<Report, Refusal> {
+        let PreparedStudy {
+            mut variants,
+            screening,
+            design_search,
+        } = prepared;
         if variants.len() > 32 {
             return Err(budget(
                 "constrain screening or supply at most 32 material alternatives",
@@ -847,7 +869,11 @@ impl Request {
             notes.push("Slash-spread and cap-ease preserve the canonical operator's mark behavior: grain/internal/decor/trace marks move, while notches, drills and placement anchors do not. Move/true-seam edit drafted vertices only. Complete flat validation includes seam walk, free-edge truing and cut/grain completeness; it does not establish wearer fit or empirical sewing quality. The finite declared design/material frontier is not a continuous or global optimum.");
         }
         if self.design_grid.is_some() {
-            notes.push("Grid variables generate linked canonical alterations in authored order, with the last variable changing fastest. The baseline is additional to the explicit design allowance. Unevaluated grid points remain unknown; a budget-limited frontier is conditional on the evaluated prefix, never a continuous or global optimum.");
+            notes.push(if self.design_grid.as_ref().is_some_and(|grid| grid.fit_screening.is_some()) {
+                "Grid variables generate linked canonical alterations in authored order, with the last variable changing fastest. The baseline is additional to the explicit design allowance. Optional fit screening inspects its declared larger prefix once before material expansion and selects its first passing candidates; failures and qualified-but-unselected points remain in the screening receipt. Unvisited points and downstream outcomes of unselected passing points remain unknown; the frontier is conditional on evaluated candidates, never a continuous or global optimum."
+            } else {
+                "Grid variables generate linked canonical alterations in authored order, with the last variable changing fastest. The baseline is additional to the explicit design allowance. Unevaluated grid points remain unknown; a budget-limited frontier is conditional on the evaluated prefix, never a continuous or global optimum."
+            });
         }
         if self.design_fit.is_some() {
             notes.push("Explicit fit targets use the fixed caller-supplied body authority through canonical flat validation before binding or any production consumer. Model-derived measurements retain MODEL_FIT provenance; missing points or out-of-band raw values refuse the design even when a rounded residual is zero. Passing a declared ease band is not empirical garment fit or a safe-fit certification.");
@@ -866,11 +892,7 @@ impl Request {
             source_pattern_sha256,
             request_sha256,
             screening,
-            design_search: self
-                .design_grid
-                .as_ref()
-                .map(design::grid::Request::receipt)
-                .transpose()?,
+            design_search,
             alternatives,
             comparison,
             geometry_changed,

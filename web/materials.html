@@ -242,6 +242,13 @@ Each named entry in <code>designs</code> contains explicit <code>operations</cod
 the unchanged <code>baseline</code> is included automatically. Every design is crossed with the requested material
 alternatives, up to 32 total candidates. Invalid alterations retain their refusal and cannot win a comparison.
 Download each exact altered pattern, final material-bound pattern, and original study inputs for replay.</p>
+<p class="note">For fit-driven alterations, use <code>design_grid</code> with explicit linked variable values and
+<code>design_fit</code> with your <code>fabric-fit/1</code> targets, then run the body scenario below.
+Optional <code>design_grid.fit_screening: {"max_candidates":64}</code> checks a bounded grid prefix against
+the selected body before sending up to <code>max_designs</code> passing alterations to manufacturing and simulation.
+The report retains rejected designs, passing designs outside that allowance, and unvisited points separately.
+The unchanged baseline is additional to the allowance. The selected model supplies the body measurements;
+computed target compliance does not establish fit on a real wearer.</p>
 <details><summary>Build combinations of shell, lining, cuffs and other material choices</summary>
 <p>Inspect a material in section 1, select the source pieces that share a choice, and add it to a named group.
 Add more choices to that group, then create groups for other pieces. Every combination runs through the requested consumers.</p>
