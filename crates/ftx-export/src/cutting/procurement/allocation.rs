@@ -136,13 +136,149 @@ struct Incumbent {
     offers: Vec<Option<Offer>>,
 }
 
+struct Prepared {
+    sample: Option<PriceSample>,
+    ids: Vec<String>,
+    aliases: Vec<BTreeSet<(String, String)>>,
+    components: Vec<usize>,
+    unlocked: Vec<String>,
+    costs_monotone: bool,
+}
+
+fn scope(
+    plan: &CutPlan,
+    market: &Market,
+    source_indices: &[usize],
+    mask: u16,
+) -> Result<(Scope, f64, Vec<usize>), Refusal> {
+    let mut area = 0.0;
+    let mut length = 0.0;
+    let mut longest = 0.0_f64;
+    let mut indices = Vec::new();
+    for (bit, &index) in source_indices.iter().enumerate() {
+        if mask & (1 << bit) != 0 {
+            let marker = &plan.rolls[index];
+            area = add(area, marker.stock_area_m2)?;
+            length = add(length, marker.length_m)?;
+            longest = longest.max(marker.length_m);
+            indices.push(index);
+        }
+    }
+    Ok((
+        Scope {
+            currency: market.currency.clone(),
+            region: market.region.clone(),
+            quality: market.quality.clone(),
+            terms: market.terms.clone(),
+            as_of: market.as_of.clone(),
+            as_of_at: market.as_of_at.clone(),
+            max_age_days: market.max_age_days,
+            requirement: area,
+            basis: Basis::Area,
+            require_observed_quantity: market.require_observed_quantity,
+            continuous_length_m: Some(longest),
+            require_observed_continuous_length: market.require_observed_continuous_length,
+        },
+        length,
+        indices,
+    ))
+}
+
+fn prepare(
+    plan: &CutPlan,
+    book: &QuoteBook,
+    market: &Market,
+    indices: &[usize],
+    work: &mut Work,
+) -> Result<Prepared, Refusal> {
+    let sample = if work.charge(true) {
+        let (scope, _, _) = scope(plan, market, indices, (1 << indices.len()) - 1)?;
+        Some(book.evaluate(&plan.rolls[indices[0]].material, &scope)?)
+    } else {
+        None
+    };
+    let mut current = BTreeMap::new();
+    let mut unlocked = BTreeSet::new();
+    let mut costs_monotone = true;
+    if let Some(sample) = &sample {
+        let candidates = sample.offers.iter().map(|offer| &offer.quote).chain(
+            sample
+                .excluded_offers
+                .iter()
+                .filter(|excluded| {
+                    matches!(
+                        excluded.reason,
+                        ExclusionReason::InsufficientQuantity
+                            | ExclusionReason::InsufficientContinuousLength
+                    )
+                })
+                .map(|excluded| &excluded.quote),
+        );
+        for quote in candidates {
+            if quote.material_sha256.as_deref().is_some_and(|sha| {
+                sha.eq_ignore_ascii_case(plan.rolls[indices[0]].material.sha256())
+            }) {
+                costs_monotone &= quote.price_breaks.is_empty();
+                current.insert(quote.offer_id.clone(), stock_keys(quote));
+            } else {
+                unlocked.insert(quote.offer_id.clone());
+            }
+        }
+        if current.len() > MAX_OFFERS {
+            return Err(budget(
+                "split orders support at most eight current exact-locked offers per material; narrow the supplied quote book explicitly",
+            ));
+        }
+    }
+    let (ids, aliases) = current.into_iter().unzip();
+    Ok(Prepared {
+        sample,
+        ids,
+        aliases,
+        components: Vec::new(),
+        unlocked: unlocked.into_iter().collect(),
+        costs_monotone,
+    })
+}
+
+// Alias identity is transitive, including through unselected quotes for other material groups.
+// At most 32 groups × 8 candidates enter this union; we retain component IDs, not duplicated
+// transitive alias sets. Every identity comes from the already charged current canonical sample.
+fn connect_stock(prepared: &mut [Prepared]) {
+    fn root(parents: &[usize], mut index: usize) -> usize {
+        while parents[index] != index {
+            index = parents[index];
+        }
+        index
+    }
+    let count = prepared.iter().map(|p| p.ids.len()).sum();
+    let mut parents: Vec<_> = (0..count).collect();
+    let mut owner = BTreeMap::new();
+    for (index, keys) in prepared.iter().flat_map(|p| &p.aliases).enumerate() {
+        for key in keys {
+            if let Some(previous) = owner.insert(key, index) {
+                let left = root(&parents, index);
+                let right = root(&parents, previous);
+                parents[left] = right;
+            }
+        }
+    }
+    let components: Vec<_> = (0..count).map(|index| root(&parents, index)).collect();
+    drop(owner);
+    let mut offset = 0;
+    for group in prepared {
+        group.components = components[offset..offset + group.ids.len()].to_vec();
+        offset += group.ids.len();
+    }
+}
+
 struct Search<'a> {
     plan: &'a CutPlan,
     book: &'a QuoteBook,
     market: &'a Market,
     indices: &'a [usize],
     ids: Vec<String>,
-    stock_keys: Vec<BTreeSet<(String, String)>>,
+    stock_components: Vec<usize>,
     costs_monotone: bool,
     cache: BTreeMap<u16, Vec<Option<Offer>>>,
     masks: Vec<u16>,
@@ -155,37 +291,7 @@ struct Search<'a> {
 
 impl Search<'_> {
     fn scope(&self, mask: u16) -> Result<(Scope, f64, Vec<usize>), Refusal> {
-        let mut area = 0.0;
-        let mut length = 0.0;
-        let mut longest = 0.0_f64;
-        let mut indices = Vec::new();
-        for (bit, &index) in self.indices.iter().enumerate() {
-            if mask & (1 << bit) != 0 {
-                let marker = &self.plan.rolls[index];
-                area = add(area, marker.stock_area_m2)?;
-                length = add(length, marker.length_m)?;
-                longest = longest.max(marker.length_m);
-                indices.push(index);
-            }
-        }
-        Ok((
-            Scope {
-                currency: self.market.currency.clone(),
-                region: self.market.region.clone(),
-                quality: self.market.quality.clone(),
-                terms: self.market.terms.clone(),
-                as_of: self.market.as_of.clone(),
-                as_of_at: self.market.as_of_at.clone(),
-                max_age_days: self.market.max_age_days,
-                requirement: area,
-                basis: Basis::Area,
-                require_observed_quantity: self.market.require_observed_quantity,
-                continuous_length_m: Some(longest),
-                require_observed_continuous_length: self.market.require_observed_continuous_length,
-            },
-            length,
-            indices,
-        ))
+        scope(self.plan, self.market, self.indices, mask)
     }
 
     fn sample(&mut self, mask: u16) -> Result<Option<PriceSample>, Refusal> {
@@ -246,7 +352,7 @@ impl Search<'_> {
             if self.masks.iter().enumerate().any(|(other, &mask)| {
                 other != candidate
                     && mask != 0
-                    && !self.stock_keys[other].is_disjoint(&self.stock_keys[candidate])
+                    && self.stock_components[other] == self.stock_components[candidate]
             }) {
                 continue;
             }
@@ -307,24 +413,35 @@ fn group(
     market: &Market,
     policy: &Policy,
     indices: &[usize],
+    prepared: Prepared,
     work: &mut Work,
-) -> Result<Report, Refusal> {
+) -> Result<(Report, BTreeSet<usize>), Refusal> {
     let before = (work.nodes, work.quotes);
+    let Prepared {
+        sample,
+        ids,
+        components,
+        unlocked,
+        costs_monotone,
+        ..
+    } = prepared;
+    let initial_quotes = usize::from(sample.is_some());
+    let candidate_count = ids.len();
     let mut search = Search {
         plan,
         book,
         market,
         indices,
-        ids: Vec::new(),
-        stock_keys: Vec::new(),
-        costs_monotone: true,
+        ids,
+        stock_components: components,
+        costs_monotone,
         cache: BTreeMap::new(),
-        masks: Vec::new(),
-        active: Vec::new(),
+        masks: vec![0; candidate_count],
+        active: vec![None; candidate_count],
         visit_order: (0..indices.len()).collect(),
         incumbent: None,
         work,
-        exhausted: false,
+        exhausted: sample.is_none(),
     };
     search.visit_order.sort_by(|&a, &b| {
         plan.rolls[indices[b]]
@@ -333,41 +450,7 @@ fn group(
             .then(a.cmp(&b))
     });
     let full = (1 << indices.len()) - 1;
-    let sample = search.sample(full)?;
-    let mut unlocked = BTreeSet::new();
     if let Some(sample) = &sample {
-        let candidates = sample.offers.iter().map(|offer| &offer.quote).chain(
-            sample
-                .excluded_offers
-                .iter()
-                .filter(|excluded| {
-                    matches!(
-                        excluded.reason,
-                        ExclusionReason::InsufficientQuantity
-                            | ExclusionReason::InsufficientContinuousLength
-                    )
-                })
-                .map(|excluded| &excluded.quote),
-        );
-        let mut current = BTreeMap::new();
-        for quote in candidates {
-            if quote.material_sha256.as_deref().is_some_and(|sha| {
-                sha.eq_ignore_ascii_case(plan.rolls[indices[0]].material.sha256())
-            }) {
-                search.costs_monotone &= quote.price_breaks.is_empty();
-                current.insert(quote.offer_id.clone(), stock_keys(quote));
-            } else {
-                unlocked.insert(quote.offer_id.clone());
-            }
-        }
-        if current.len() > MAX_OFFERS {
-            return Err(budget(
-                "split orders support at most eight current exact-locked offers per material; narrow the supplied quote book explicitly",
-            ));
-        }
-        (search.ids, search.stock_keys) = current.into_iter().unzip();
-        search.masks.resize(search.ids.len(), 0);
-        search.active.resize(search.ids.len(), None);
         let offers: Vec<_> = search
             .ids
             .iter()
@@ -407,22 +490,38 @@ fn group(
     }
     let selected_orders = search.orders()?;
     let total = search.incumbent.as_ref().map(|incumbent| incumbent.cost);
-    Ok(Report {
-        schema: "ftx-cut-order-allocation-report/1",
-        policy: policy.clone(),
-        candidate_offer_ids: search.ids.clone(),
-        excluded_unlocked_offer_ids: unlocked.into_iter().collect(),
-        whole_order_sample: sample,
-        selected_orders,
-        selected_observed_order_total: total,
-        search_nodes: search.work.nodes - before.0,
-        quote_evaluations: search.work.quotes - before.1,
-        search_complete: !search.exhausted,
-        budget_exhausted: search.exhausted,
-        optimality_proven: !search.exhausted && total.is_some(),
-        no_feasible_listed_allocation: !search.exhausted && total.is_none(),
-        tie_break: "retain the cheapest whole-order baseline on equal cost; otherwise retain the first complete allocation in descending-marker-length then offer-ID order",
-    })
+    let selected_components = search
+        .incumbent
+        .as_ref()
+        .map(|incumbent| {
+            incumbent
+                .masks
+                .iter()
+                .enumerate()
+                .filter(|(_, mask)| **mask != 0)
+                .map(|(index, _)| search.stock_components[index])
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok((
+        Report {
+            schema: "ftx-cut-order-allocation-report/1",
+            policy: policy.clone(),
+            candidate_offer_ids: search.ids.clone(),
+            excluded_unlocked_offer_ids: unlocked,
+            whole_order_sample: sample,
+            selected_orders,
+            selected_observed_order_total: total,
+            search_nodes: search.work.nodes - before.0,
+            quote_evaluations: initial_quotes + search.work.quotes - before.1,
+            search_complete: !search.exhausted,
+            budget_exhausted: search.exhausted,
+            optimality_proven: !search.exhausted && total.is_some(),
+            no_feasible_listed_allocation: !search.exhausted && total.is_none(),
+            tie_break: "retain the cheapest whole-order baseline on equal cost; otherwise retain the first complete allocation in descending-marker-length then offer-ID order",
+        },
+        selected_components,
+    ))
 }
 
 pub(super) fn evaluate(
@@ -468,6 +567,11 @@ pub(super) fn evaluate(
         limit: policy.max_search_nodes,
         ..Work::default()
     };
+    let mut prepared = groups
+        .values()
+        .map(|indices| prepare(plan, book, market, indices, &mut work))
+        .collect::<Result<Vec<_>, _>>()?;
+    connect_stock(&mut prepared);
     let mut material_orders = Vec::new();
     let mut roll_prices = Vec::new();
     let mut complete = true;
@@ -477,20 +581,20 @@ pub(super) fn evaluate(
     let mut search_complete = true;
     let mut total = 0.0;
     let mut used_stock = BTreeSet::new();
-    for (hash, indices) in groups {
-        let report = group(plan, book, market, policy, &indices, &mut work)?;
+    for ((hash, indices), prepared) in groups.into_iter().zip(prepared) {
+        let (report, components) =
+            group(plan, book, market, policy, &indices, prepared, &mut work)?;
+        // All groups' candidate identities were connected before selection. An unselected bridging
+        // quote therefore cannot make one supplier's physical stock appear independent again.
+        if !used_stock.is_disjoint(&components) {
+            return Err(invalid(
+                "split orders cannot reuse one supplier stock alias component across distinct material snapshots",
+            ));
+        }
+        used_stock.extend(components);
         let mut assignments = BTreeMap::new();
         if let Some(orders) = &report.selected_orders {
             for order in orders {
-                // Exact material locks prevent one offer from serving changed snapshots. A supplier
-                // SKU reused under distinct material IDs still cannot manufacture independent stock.
-                let keys = stock_keys(&order.offer.quote);
-                if !used_stock.is_disjoint(&keys) {
-                    return Err(invalid(
-                        "split orders cannot reuse one supplier SKU or declared tier alias across distinct material snapshots",
-                    ));
-                }
-                used_stock.extend(keys);
                 observed &= order.offer.quantity_sufficiency_observed;
                 continuous &= order.offer.within_observed_continuous_limit == Some(true);
                 total = add(total, order.offer.order_cost)?;
@@ -539,7 +643,7 @@ pub(super) fn evaluate(
         "order_allocation_optimality_proven":complete && proved,"search_complete":search_complete,
         "budget_exhausted":!search_complete,"search_nodes":work.nodes,"quote_evaluations":work.quotes,
         "limits":["Only complete indivisible markers are assigned; marker and pattern geometry are unchanged.",
-            "Only exact material-snapshot-locked offers are candidates. One supplier/SKU, including every declared tier SKU alias, can use at most one offer; distinct tiers do not multiply its observed stock.",
+            "Only exact material-snapshot-locked offers are candidates. Current offers connected by supplier/base/tier SKU aliases share one stock identity, including transitive links through unselected candidates in other material groups; they cannot multiply observed stock.",
             "Canonical quote evaluation applies latest observations, market/date/source locks, minima, increments, aggregate order capacity and longest-marker continuous-cut limits independently to each selected order.",
             "Capacity and continuous-cut limits are dated observations, not reservations, guaranteed cut segmentation or checkout permission. Missing capacity stays explicit under the market's ordinary admission policy.",
             "The selected total is a complete feasible incumbent. The least-observed total is present only after every listed improvement is excluded. No supplier bundle, shipping, population-market or unlisted-offer optimum is inferred.",

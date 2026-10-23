@@ -939,6 +939,90 @@ fn supplier_tier_sku_aliases_cannot_create_additional_independent_stock() {
 }
 
 #[test]
+fn unselected_supplier_quotes_keep_transitive_stock_aliases_connected() {
+    use ftx_export::cutting::procurement::evaluate;
+    let (plan, mut quotes, market) = split_order_fixture();
+    for (quote, (base, alias)) in quotes.iter_mut().zip([("x", "y"), ("z", "w")]) {
+        quote["supplier"] = json!("shared source");
+        quote["sku"] = json!(base);
+        quote["price_breaks"] = json!([{"minimum_quantity":0.25,"price":1.0,"sku":alias}]);
+    }
+    let mut bridge = quotes[0].clone();
+    bridge["offer_id"] = json!("bridge");
+    bridge["sku"] = json!("y");
+    bridge["price_breaks"] = json!([{"minimum_quantity":0.25,"price":1.0,"sku":"z"}]);
+    bridge["available_quantity"] = json!(0.0);
+    quotes.push(bridge);
+    let priced = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+    // The unusable bridge still establishes y=z. Buying x/y and z/w cannot create two stocks.
+    assert_eq!(priced["complete_offer_coverage"], false);
+    assert!(priced["selected_observed_order_total"].is_null());
+    assert_eq!(
+        priced["material_orders"][0]["allocation"]["no_feasible_listed_allocation"],
+        true
+    );
+}
+
+#[test]
+fn stock_alias_components_include_unselected_bridges_in_other_material_groups() {
+    use ftx_export::cutting::procurement::evaluate;
+    let (_, base_quotes, market) = split_order_fixture();
+    let mut lining = piece("lining", 40.0, 100.0);
+    lining["fabric"] = fabric("lining", 0.1);
+    let mut trim = piece("trim", 40.0, 100.0);
+    trim["fabric"] = fabric("trim", 0.1);
+    let plan = CutPlan::build(
+        &pattern(vec![piece("front", 40.0, 100.0), lining, trim]),
+        &options(),
+    )
+    .unwrap();
+    assert_eq!(plan.rolls.len(), 3);
+    let mut quotes = Vec::new();
+    for (id, base, alias) in [
+        ("shell", "x", "y"),
+        ("lining", "y", "z"),
+        ("trim", "z", "w"),
+    ] {
+        let material = &plan
+            .rolls
+            .iter()
+            .find(|r| r.material.material().id == id)
+            .unwrap()
+            .material;
+        let mut quote = base_quotes[0].clone();
+        quote["offer_id"] = json!(id);
+        quote["material_id"] = json!(id);
+        quote["material_sha256"] = json!(material.sha256());
+        quote["supplier"] = json!("shared source");
+        quote["sku"] = json!(base);
+        quote["price_breaks"] = json!([{"minimum_quantity":0.25,"price":1.0,"sku":alias}]);
+        if id == "lining" {
+            let mut independent = quote.clone();
+            independent["offer_id"] = json!("lining-independent");
+            independent["supplier"] = json!("independent source");
+            independent["sku"] = json!("lining-independent");
+            independent["price_breaks"] = json!([]);
+            quotes.push(independent);
+            quote["available_quantity"] = json!(0.0);
+        }
+        quotes.push(quote);
+    }
+    let refusal = evaluate(&plan, &split_quote_book(quotes.clone()), &market).unwrap_err();
+    assert!(
+        refusal.message.contains("stock alias component"),
+        "{refusal:?}"
+    );
+    // A genuinely different current identity disconnects the stock, so independent orders work.
+    quotes
+        .iter_mut()
+        .find(|q| q["offer_id"] == "lining")
+        .unwrap()["price_breaks"] = json!([]);
+    let independent = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+    assert_eq!(independent["complete_offer_coverage"], true);
+    assert_eq!(independent["order_allocation_optimality_proven"], true);
+}
+
+#[test]
 fn supplier_tiers_never_multiply_stock_and_unlocked_or_short_offers_cannot_fill_markers() {
     use ftx_export::cutting::procurement::evaluate;
     let (plan, mut quotes, market) = split_order_fixture();
