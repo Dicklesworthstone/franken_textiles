@@ -10,7 +10,9 @@ use ftx_drape::{
     },
     study_input::PreparedInput,
 };
-use ftx_export::material_study::{Request, comparison::Policy, matrix::Case as MatrixCase};
+use ftx_export::material_study::{
+    Request, comparison::Policy, design::fit::Context, matrix::Case as MatrixCase,
+};
 use serde_json::{Value, json};
 
 use super::{budget, invalid};
@@ -50,10 +52,12 @@ pub fn on_body(
     let prepared = PreparedInput::new(source, &scenario.options)?;
     let mut session = Session::new(&scenario, body)?;
     let mut descriptor = session.descriptor();
+    annotate_raw_fit(&request, &mut descriptor);
     prepared.annotate(&mut descriptor)?;
-    let report = request.evaluate_with(prepared.pattern(), &descriptor, |key, pattern| {
-        session.evaluate(pattern, |line| progress(&format!("{key}: {line}")))
-    })?;
+    let report =
+        request.evaluate_with_fit(prepared.pattern(), &descriptor, None, |key, pattern| {
+            session.evaluate(pattern, |line| progress(&format!("{key}: {line}")))
+        })?;
     serde_json::to_string(&report).map_err(invalid)
 }
 
@@ -100,6 +104,19 @@ pub fn on_model(
         .as_ref()
         .map_err(Clone::clone)
         .and_then(|request| FittedBody::prepare(model, model_sha256, request));
+    let fit_body = request.design_fit.as_ref().map(|_| {
+        fitted
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|fitted| fitted.flat_fit_body(model, model_sha256))
+    });
+    let fit = fit_body
+        .as_ref()
+        .and_then(|body| body.as_ref().ok())
+        .map(|body| Context {
+            body,
+            identity: body.identity(),
+        });
     let body = fitted.as_ref().map(FittedBody::body).map_err(Clone::clone);
     let mut session = body
         .as_ref()
@@ -120,16 +137,34 @@ pub fn on_model(
     descriptor["body_fit"] = fitted
         .as_ref()
         .map_or(Value::Null, |body| body.report.clone());
+    match &fit_body {
+        Some(Ok(body)) => descriptor["design_fit_body"] = body.identity().clone(),
+        Some(Err(refusal)) => descriptor["design_fit_setup_refusal"] = json!(refusal),
+        None => {}
+    }
     prepared.annotate(&mut descriptor)?;
-    let report = request.evaluate_with(prepared.pattern(), &descriptor, |key, pattern| {
-        session
-            .as_mut()
-            .map_err(|e| e.clone())?
-            .evaluate(pattern, |line| {
-                progress(&format!("{key}: {line}"));
-            })
-    })?;
+    let report = request.evaluate_with_fit(
+        prepared.pattern(),
+        &descriptor,
+        fit.as_ref(),
+        |key, pattern| {
+            session
+                .as_mut()
+                .map_err(|e| e.clone())?
+                .evaluate(pattern, |line| {
+                    progress(&format!("{key}: {line}"));
+                })
+        },
+    )?;
     serde_json::to_string(&report).map_err(invalid)
+}
+
+fn annotate_raw_fit(request: &Request, descriptor: &mut Value) {
+    if request.design_fit.is_some() {
+        descriptor["design_fit_setup_refusal"] = json!(invalid(
+            "design fit requires a selected fitted body; a raw drape body has no canonical flat-fit readings",
+        ));
+    }
 }
 
 // Resolve every effective policy before preparing a body or starting a numerical consumer.
@@ -177,6 +212,7 @@ fn on_body_matrix(
             Ok(session) => session.descriptor(),
             Err(refusal) => json!({"scenario":case.scenario,"body_setup_refusal":refusal}),
         };
+        annotate_raw_fit(request, &mut descriptor);
         prepared.annotate(&mut descriptor)?;
         cases.push(MatrixCase {
             key: case.key.clone(),
@@ -189,6 +225,7 @@ fn on_body_matrix(
         &prepared,
         &cases,
         matrix.max_evaluations,
+        None,
         &mut sessions,
         progress,
     )
@@ -213,6 +250,20 @@ fn on_model_matrix(
         .as_ref()
         .map_err(Clone::clone)
         .and_then(|request| FittedBody::prepare(model, model_sha256, request));
+    // Every case uses this one fixed reference-pose body, independently of its motion path.
+    let fit_body = request.design_fit.as_ref().map(|_| {
+        fitted
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|fitted| fitted.flat_fit_body(model, model_sha256))
+    });
+    let fit = fit_body
+        .as_ref()
+        .and_then(|body| body.as_ref().ok())
+        .map(|body| Context {
+            body,
+            identity: body.identity(),
+        });
     let body = fitted.as_ref().map(FittedBody::body).map_err(Clone::clone);
     let mut sessions = Vec::with_capacity(matrix.cases.len());
     let mut cases = Vec::with_capacity(matrix.cases.len());
@@ -236,6 +287,11 @@ fn on_model_matrix(
         descriptor["body_fit"] = fitted
             .as_ref()
             .map_or(Value::Null, |body| body.report.clone());
+        match &fit_body {
+            Some(Ok(body)) => descriptor["design_fit_body"] = body.identity().clone(),
+            Some(Err(refusal)) => descriptor["design_fit_setup_refusal"] = json!(refusal),
+            None => {}
+        }
         prepared.annotate(&mut descriptor)?;
         sessions.push(session);
         cases.push(MatrixCase {
@@ -249,6 +305,7 @@ fn on_model_matrix(
         &prepared,
         &cases,
         matrix.max_evaluations,
+        fit.as_ref(),
         &mut sessions,
         progress,
     )
@@ -259,14 +316,16 @@ fn evaluate_matrix(
     prepared: &PreparedInput,
     cases: &[MatrixCase],
     max_evaluations: usize,
+    fit: Option<&Context<'_>>,
     sessions: &mut [Result<Session<'_, '_>, Refusal>],
     mut progress: impl FnMut(&str),
 ) -> Result<String, Refusal> {
     let mut work = MatrixBudget::default();
-    let report = request.evaluate_matrix_with(
+    let report = request.evaluate_matrix_with_fit(
         prepared.pattern(),
         cases,
         max_evaluations,
+        fit,
         |index, key, pattern| {
             let session = sessions[index].as_mut().map_err(|e| e.clone())?;
             work.evaluate(session, pattern, |line| {

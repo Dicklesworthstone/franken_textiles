@@ -106,6 +106,13 @@ pub struct Request {
     /// design studies admit this field; the unaltered `baseline` is always retained automatically.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub designs: Option<Vec<design::Variant>>,
+    /// Bounded linked alteration variables; exclusive with authored `designs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_grid: Option<design::grid::Request>,
+    /// Explicit flat fit targets evaluated against the caller's selected live body authority.
+    /// Requested targets without that authority refuse every design, including the baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_fit: Option<design::fit::Request>,
     /// Explicit alternatives; exclusive with screening/combinations. At most 32 are evaluated.
     #[serde(default)]
     pub variants: Vec<Variant>,
@@ -300,6 +307,9 @@ pub struct Report {
     pub request_sha256: String,
     /// Retained screening result, including excluded/unknown candidates, when screening was requested.
     pub screening: Option<material_screen::Report>,
+    /// Complete finite grid and any omitted domain; absent for hand-authored alternatives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub design_search: Option<design::grid::Receipt>,
     /// Key-ordered alternatives, never sorted by a fabricated weighted score.
     pub alternatives: Vec<Alternative>,
     /// Present only when a comparison was requested; failed/unknown cells are never zero scores.
@@ -360,6 +370,35 @@ fn hash<T: Serialize>(value: &T) -> Result<String, Refusal> {
 impl Request {
     fn is_design(&self) -> bool {
         self.schema == "ftx-design-study/1"
+    }
+
+    fn manufacturing_identity(
+        &self,
+        fit: Option<&design::fit::Context<'_>>,
+    ) -> Result<String, Refusal> {
+        if self.design_fit.is_some() {
+            hash(&(self, fit.map(|context| context.identity)))
+        } else {
+            hash(self)
+        }
+    }
+
+    fn scenario_identity(
+        &self,
+        pattern: &Pattern,
+        scenario: &Value,
+        fit: Option<&design::fit::Context<'_>>,
+    ) -> Result<String, Refusal> {
+        if self.design_fit.is_some() {
+            hash(&(
+                pattern.raw(),
+                self,
+                scenario,
+                fit.map(|context| context.identity),
+            ))
+        } else {
+            hash(&(pattern.raw(), self, scenario))
+        }
     }
 
     fn purchasing_currency(&self) -> Option<&str> {
@@ -486,7 +525,21 @@ impl Request {
     /// Invalid source/request, ambiguous identities or excessive aggregate work. Material/geometry
     /// feasibility errors belong to the individual consumer outcomes, not an invented aggregate pass.
     pub fn evaluate(&self, pattern: &Pattern) -> Result<Report, Refusal> {
-        self.evaluate_manufacturing(pattern, false)
+        self.evaluate_manufacturing(pattern, false, None)
+    }
+
+    /// Evaluate manufacturing and explicit flat targets against one fixed caller-supplied body.
+    /// Production adapters supply the selected model's reference-pose measurements and identity.
+    ///
+    /// # Errors
+    /// The same request/budget refusals as [`Self::evaluate`]. Unavailable or out-of-band fit
+    /// evidence stays in each design's retained refusal and cannot supply a winning plan.
+    pub fn evaluate_with_fit_body(
+        &self,
+        pattern: &Pattern,
+        fit: Option<&design::fit::Context<'_>>,
+    ) -> Result<Report, Refusal> {
+        self.evaluate_manufacturing(pattern, false, fit)
     }
 
     /// Compose an additional production consumer with the existing immutable material study.
@@ -501,11 +554,26 @@ impl Request {
         &self,
         pattern: &Pattern,
         scenario: &S,
+        evaluate: impl FnMut(&str, &Pattern) -> Result<T, Refusal>,
+    ) -> Result<ScenarioStudy<T>, Refusal> {
+        self.evaluate_with_fit(pattern, scenario, None, evaluate)
+    }
+
+    /// Compose production consumers after the same fixed-body flat-fit gate used by manufacturing.
+    /// Each design/material candidate uses the original source and the same immutable body context.
+    ///
+    /// # Errors
+    /// The same structural, numerical-budget and serialization refusals as [`Self::evaluate_with`].
+    pub fn evaluate_with_fit<T: Serialize, S: Serialize>(
+        &self,
+        pattern: &Pattern,
+        scenario: &S,
+        fit: Option<&design::fit::Context<'_>>,
         mut evaluate: impl FnMut(&str, &Pattern) -> Result<T, Refusal>,
     ) -> Result<ScenarioStudy<T>, Refusal> {
-        let manufacturing = self.evaluate_manufacturing(pattern, true)?;
+        let manufacturing = self.evaluate_manufacturing(pattern, true, fit)?;
         let scenario = serde_json::to_value(scenario).map_err(|e| invalid(e.to_string()))?;
-        let request_sha256 = hash(&(pattern.raw(), self, &scenario))?;
+        let request_sha256 = self.scenario_identity(pattern, &scenario, fit)?;
         let mut simulations = Vec::with_capacity(manufacturing.alternatives.len());
         for row in &manufacturing.alternatives {
             let evaluation = match &row.binding {
@@ -559,13 +627,14 @@ impl Request {
         &self,
         pattern: &Pattern,
         additional_consumer: bool,
+        fit: Option<&design::fit::Context<'_>>,
     ) -> Result<Report, Refusal> {
         let errors = pattern.structure_errors();
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
         }
         let (variants, screening) = self.variants(pattern, additional_consumer)?;
-        self.evaluate_prepared(pattern, additional_consumer, variants, screening)
+        self.evaluate_prepared(pattern, additional_consumer, variants, screening, fit)
     }
 
     fn evaluate_prepared(
@@ -574,6 +643,7 @@ impl Request {
         additional_consumer: bool,
         mut variants: Vec<PreparedVariant>,
         screening: Option<material_screen::Report>,
+        fit: Option<&design::fit::Context<'_>>,
     ) -> Result<Report, Refusal> {
         if variants.len() > 32 {
             return Err(budget(
@@ -659,7 +729,8 @@ impl Request {
         let mut mass_work = Work::new(40_000_000);
         let mut design_work = Work::new(40_000_000);
         for variant in variants {
-            let row = self.evaluate_variant(pattern, variant, &mut mass_work, &mut design_work)?;
+            let row =
+                self.evaluate_variant(pattern, variant, &mut mass_work, &mut design_work, fit)?;
             if design_work.exhausted {
                 return Err(budget(
                     "design study exceeds 40000000 aggregate outline-validation work units",
@@ -686,7 +757,7 @@ impl Request {
             }
             alternatives.push(row);
         }
-        let request_sha256 = hash(self)?;
+        let request_sha256 = self.manufacturing_identity(fit)?;
         let source_pattern_sha256 = hash(pattern.raw())?;
         let comparison = self
             .comparison
@@ -731,6 +802,12 @@ impl Request {
         if self.is_design() {
             notes.push("Slash-spread and cap-ease preserve the canonical operator's mark behavior: grain/internal/decor/trace marks move, while notches, drills and placement anchors do not. Move/true-seam edit drafted vertices only. Complete flat validation includes seam walk, free-edge truing and cut/grain completeness; it does not establish wearer fit or empirical sewing quality. The finite declared design/material frontier is not a continuous or global optimum.");
         }
+        if self.design_grid.is_some() {
+            notes.push("Grid variables generate linked canonical alterations in authored order, with the last variable changing fastest. The baseline is additional to the explicit design allowance. Unevaluated grid points remain unknown; a budget-limited frontier is conditional on the evaluated prefix, never a continuous or global optimum.");
+        }
+        if self.design_fit.is_some() {
+            notes.push("Explicit fit targets use the fixed caller-supplied body authority through canonical flat validation before binding or any production consumer. Model-derived measurements retain MODEL_FIT provenance; missing points or out-of-band raw values refuse the design even when a rounded residual is zero. Passing a declared ease band is not empirical garment fit or a safe-fit certification.");
+        }
         let geometry_changed = alternatives.iter().any(|row| {
             row.design
                 .as_ref()
@@ -745,6 +822,11 @@ impl Request {
             source_pattern_sha256,
             request_sha256,
             screening,
+            design_search: self
+                .design_grid
+                .as_ref()
+                .map(design::grid::Request::receipt)
+                .transpose()?,
             alternatives,
             comparison,
             geometry_changed,
@@ -760,6 +842,7 @@ impl Request {
         prepared: PreparedVariant,
         mass_work: &mut Work,
         design_work: &mut Work,
+        fit: Option<&design::fit::Context<'_>>,
     ) -> Result<Alternative, Refusal> {
         let mut variant = prepared.variant;
         let (design, altered) = if let Some(design) = prepared.design {
@@ -768,7 +851,13 @@ impl Request {
                 .as_ref()
                 .or_else(|| self.sewing_selection.as_ref().map(|s| &s.options))
                 .map_or(3.0, |s| s.seam_tolerance_mm);
-            let (receipt, pattern) = design.apply(source, seam_tolerance, design_work)?;
+            let (receipt, pattern) = design.apply(
+                source,
+                seam_tolerance,
+                design_work,
+                self.design_fit.as_ref(),
+                fit,
+            )?;
             (Some(receipt), Some(pattern))
         } else {
             (None, None)

@@ -9,7 +9,7 @@ use ftx_drape::study::{
     matrix,
 };
 use ftx_drape::study_input::PreparedInput;
-use ftx_export::material_study::Request;
+use ftx_export::material_study::{Request, design::fit::Context};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -88,6 +88,21 @@ pub(super) fn run(
                 .map_err(Clone::clone)
                 .and_then(|model| FittedBody::prepare(model, &model_sha256, request))
         });
+    let fit_body = request.design_fit.as_ref().map(|_| {
+        fitted.as_ref().map_err(Clone::clone).and_then(|fitted| {
+            model
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|model| fitted.flat_fit_body(model, &model_sha256))
+        })
+    });
+    let fit = fit_body
+        .as_ref()
+        .and_then(|body| body.as_ref().ok())
+        .map(|body| Context {
+            body,
+            identity: body.identity(),
+        });
     let body = fitted.as_ref().map(FittedBody::body).map_err(Clone::clone);
     let mut session = body
         .as_ref()
@@ -110,15 +125,25 @@ pub(super) fn run(
     descriptor["body_fit"] = fitted
         .as_ref()
         .map_or(Value::Null, |body| body.report.clone());
+    match &fit_body {
+        Some(Ok(body)) => descriptor["design_fit_body"] = body.identity().clone(),
+        Some(Err(refusal)) => descriptor["design_fit_setup_refusal"] = json!(refusal),
+        None => {}
+    }
     prepared.annotate(&mut descriptor)?;
-    let report = request.evaluate_with(prepared.pattern(), &descriptor, |key, pattern| {
-        session
-            .as_mut()
-            .map_err(|e| e.clone())?
-            .evaluate(pattern, |line| {
-                eprintln!("{key}: {line}");
-            })
-    })?;
+    let report = request.evaluate_with_fit(
+        prepared.pattern(),
+        &descriptor,
+        fit.as_ref(),
+        |key, pattern| {
+            session
+                .as_mut()
+                .map_err(|e| e.clone())?
+                .evaluate(pattern, |line| {
+                    eprintln!("{key}: {line}");
+                })
+        },
+    )?;
     serde_json::to_value(report).map_err(invalid)
 }
 
@@ -141,6 +166,22 @@ fn run_matrix(
                 .as_ref()
                 .map_err(Clone::clone)
                 .and_then(|model| FittedBody::prepare(model, &model_sha256, request))
+        });
+    // The reference-pose readings belong to the common selected shape, not a case's posed mesh.
+    let fit_body = request.design_fit.as_ref().map(|_| {
+        fitted.as_ref().map_err(Clone::clone).and_then(|fitted| {
+            model
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|model| fitted.flat_fit_body(model, &model_sha256))
+        })
+    });
+    let fit = fit_body
+        .as_ref()
+        .and_then(|body| body.as_ref().ok())
+        .map(|body| Context {
+            body,
+            identity: body.identity(),
         });
     let body = fitted.as_ref().map(FittedBody::body).map_err(Clone::clone);
     let mut sessions = matrix
@@ -171,6 +212,11 @@ fn run_matrix(
         descriptor["body_fit"] = fitted
             .as_ref()
             .map_or(Value::Null, |body| body.report.clone());
+        match &fit_body {
+            Some(Ok(body)) => descriptor["design_fit_body"] = body.identity().clone(),
+            Some(Err(refusal)) => descriptor["design_fit_setup_refusal"] = json!(refusal),
+            None => {}
+        }
         prepared.annotate(&mut descriptor)?;
         cases.push(ftx_export::material_study::matrix::Case {
             key: case.key.clone(),
@@ -179,10 +225,11 @@ fn run_matrix(
         });
     }
     let mut work = matrix::Budget::default();
-    let report = request.evaluate_matrix_with(
+    let report = request.evaluate_matrix_with_fit(
         prepared.pattern(),
         &cases,
         matrix.max_evaluations,
+        fit.as_ref(),
         |index, key, pattern| {
             work.evaluate(
                 sessions[index].as_mut().map_err(|e| e.clone())?,

@@ -1,0 +1,123 @@
+{
+  "schema": "ftx-design-study/1",
+  "design_grid": {
+    "variables": [
+      {
+        "key": "length",
+        "values_mm": [
+          20,
+          30,
+          40
+        ],
+        "sites": [
+          {
+            "piece": "front",
+            "axis": "y",
+            "at_mm": 50,
+            "multiplier": 1
+          },
+          {
+            "piece": "back",
+            "axis": "y",
+            "at_mm": 50,
+            "multiplier": 1
+          }
+        ]
+      }
+    ],
+    "after": [],
+    "max_designs": 3
+  },
+  "design_fit": {
+    "fit_spec": {
+      "schema": "fabric-fit/1",
+      "points": [
+        {
+          "id": "synthetic-scaled-stature-length",
+          "label": "Synthetic length target; not a garment recommendation",
+          "kind": "vertical",
+          "instance": "front",
+          "from": "a",
+          "to": "d",
+          "body": "stature",
+          "body_scale": 0.1,
+          "target_mm": [
+            -1,
+            0,
+            1
+          ]
+        }
+      ]
+    }
+  },
+  "variants": [
+    {
+      "key": "synthetic-sheet",
+      "changes": {
+        "schema": "ftx-material-bindings/1",
+        "default": {
+          "id": "synthetic-design-light",
+          "allow_estimates": true,
+          "record": {
+            "id": "synthetic-design-light",
+            "name": "Artificial light sheet for design software examples",
+            "form": "woven",
+            "properties": {
+              "width": {
+                "value": 0.1,
+                "unit": "m",
+                "evidence": "estimate",
+                "source": "test",
+                "method": "Invented software test width"
+              },
+              "thickness": {
+                "value": 0.4,
+                "unit": "mm",
+                "evidence": "estimate",
+                "source": "test",
+                "method": "Invented software test thickness"
+              },
+              "areal_density": {
+                "value": 0.18,
+                "unit": "kg/m2",
+                "evidence": "estimate",
+                "source": "test",
+                "method": "Invented software test areal density"
+              }
+            },
+            "sources": {
+              "test": {
+                "reference": "test:design-study",
+                "accessed_on": "2026-10-23",
+                "note": "Synthetic software fixture, not empirical garment evidence"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "cutting": {
+    "copies": 1,
+    "gap_mm": 2,
+    "edge_margin_mm": 0,
+    "end_margin_mm": 0
+  },
+  "assembly_mass": {
+    "schema": "ftx-assembly-mass/1",
+    "inventory_complete": true,
+    "extras": []
+  },
+  "comparison": {
+    "basis": "nominal",
+    "required_consumers": [
+      "cutting"
+    ],
+    "objectives": [
+      {
+        "metric": "assembly_mass_kg",
+        "direction": "minimize"
+      }
+    ]
+  }
+}

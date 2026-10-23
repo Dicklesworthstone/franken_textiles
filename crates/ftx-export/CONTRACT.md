@@ -1,5 +1,17 @@
 # ftx-export
 
+**Selected-body design synthesis** (`material_study::design`, plan §25.70 / `ftx-ds2`).
+Optional finite variable grids generate linked canonical alterations and retain baseline, exact
+coordinates/operations and incomplete-domain receipts. Explicit flat fit bands use a borrowed live
+`BodyMeasure` context from the production adapter; the export crate never fits a body or guesses
+landmarks. Canonical raw status gates binding and every consumer before comparison. Context identity
+is part of manufacturing/scenario/matrix hashes. A missing body, point or landmark cannot become a
+zero residual or implicit fit. Grid, fit-spec, identity, measurement and expanded consumer work are
+bounded; a prefix frontier is conditional on visited designs. Existing authored/fixed studies keep
+their behavior when these fields are absent. Numerical target admission is not empirical wearer fit,
+safe strain/pressure qualification, a continuous optimum or machine authorization. Tests:
+`design_study`, design fit/grid unit tests, and native/portable accepted-body workflow.
+
 **Finite-water scenario decisions.** The optional `motion_wet_film` comparison consumer reads
 evaporated, remaining, unmet-demand and supplied mass plus prescribed-body latent energy from a
 complete admitted moving-coverage history. It verifies exact authored body-bound liquid/supply,

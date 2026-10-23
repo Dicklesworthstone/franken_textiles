@@ -42,6 +42,181 @@ fn key(design: &str, material: &str) -> Value {
     json!(serde_json::to_string(&(design, material)).unwrap())
 }
 
+fn grid_request(max_designs: usize) -> Request {
+    let mut input = request();
+    input.as_object_mut().unwrap().remove("designs");
+    input["design_grid"] = json!({"variables":[{"key":"ease","values_mm":[0,4,8,12],
+        "sites":[{"piece":"front","axis":"x","at_mm":10,"multiplier":1},
+                 {"piece":"back","axis":"x","at_mm":10,"multiplier":1}]}],
+        "max_designs":max_designs});
+    input["design_fit"] = json!({"fit_spec":{"schema":"fabric-fit/1","points":[
+        {"id":"front-width","kind":"width","instance":"front","at_vertex":"a","dy":50,
+         "body":"declared_width","target_mm":[3,6,10]}]}});
+    input["assembly_mass"] =
+        json!({"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[]});
+    input["comparison"]["objectives"] =
+        json!([{"metric":"assembly_mass_kg","direction":"minimize"}]);
+    serde_json::from_value(input).unwrap()
+}
+
+#[test]
+fn grid_synthesis_meets_explicit_ease_then_compares_real_material_and_manufacturing_outputs() {
+    use ftx_export::material_study::design::fit::Context;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = ftx_pattern::validate::Measurements(json!({"declared_width":20}));
+    let identity = json!({"schema":"synthetic-flat-fit-body/1","source":"test:design-grid"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let request = grid_request(4);
+    let report = serde_json::to_value(
+        request
+            .evaluate_with_fit_body(&pattern, Some(&fit))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["alternatives"].as_array().unwrap().len(), 10);
+    assert_eq!(report["design_search"]["total_grid_points"], 4);
+    assert_eq!(report["design_search"]["complete_grid_enumeration"], true);
+    assert_eq!(report["design_search"]["global_optimum_claim"], false);
+    for material in ["light-sheet", "heavy-sheet"] {
+        for refused in ["baseline", "grid:0000", "grid:0003"] {
+            let candidate = row(&report, refused, material);
+            assert_eq!(candidate["design"]["fit"]["result"]["passed"], false);
+            assert_eq!(candidate["binding"]["status"], "refused");
+            assert_eq!(candidate["cutting"]["status"], "refused");
+            assert_eq!(candidate["sewing"]["status"], "refused");
+        }
+        for (design, ease) in [("grid:0001", 4.0), ("grid:0002", 8.0)] {
+            let candidate = row(&report, design, material);
+            assert_eq!(candidate["design"]["variables_mm"]["ease"], ease);
+            let fit = &candidate["design"]["fit"]["result"];
+            assert_eq!(fit["body_identity"], identity);
+            assert_eq!(fit["validation"]["points"][0]["ease_mm"], ease);
+            assert_eq!(fit["validation"]["points"][0]["status"], "IN_BAND");
+            assert_eq!(candidate["binding"]["status"], "available");
+            assert_eq!(candidate["cutting"]["status"], "available");
+            assert_eq!(candidate["sewing"]["status"], "available");
+            let source = Pattern::from_json(
+                candidate["design"]["altered_pattern_json"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            let changes: Changes =
+                serde_json::from_value(candidate["frozen_changes"].clone()).unwrap();
+            assert_eq!(
+                changes.apply(&source).unwrap()["pattern"],
+                candidate["binding"]["result"]["pattern"]
+            );
+        }
+    }
+    assert_eq!(
+        report["comparison"]["frontier"],
+        json!([key("grid:0001", "light-sheet")])
+    );
+    let partial = serde_json::to_value(
+        grid_request(2)
+            .evaluate_with_fit_body(&pattern, Some(&fit))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(partial["design_search"]["omitted_designs"], 2);
+    assert_eq!(partial["design_search"]["budget_exhausted"], true);
+    assert_eq!(partial["design_search"]["complete_grid_enumeration"], false);
+    assert_eq!(
+        partial["comparison"]["frontier"],
+        json!([key("grid:0001", "light-sheet")])
+    );
+    let other_identity =
+        json!({"schema":"synthetic-flat-fit-body/1","source":"test:different-body"});
+    let changed = request
+        .evaluate_with_fit_body(
+            &pattern,
+            Some(&Context {
+                body: &body,
+                identity: &other_identity,
+            }),
+        )
+        .unwrap();
+    assert_ne!(report["request_sha256"], changed.request_sha256);
+}
+
+#[test]
+fn missing_fit_body_never_falls_back_and_cannot_invoke_a_scenario() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let request = grid_request(4);
+    let mut calls = 0;
+    let report = request
+        .evaluate_with(&pattern, &json!({"scenario":"test"}), |_, _| {
+            calls += 1;
+            Ok(json!({}))
+        })
+        .unwrap();
+    assert_eq!(calls, 0);
+    assert!(report.manufacturing.alternatives.iter().all(|r| matches!(
+        r.binding,
+        ftx_export::material_study::Outcome::Refused { .. }
+    )));
+    assert!(report.comparison.unwrap().frontier.is_empty());
+}
+
+#[test]
+fn fit_gates_once_before_named_cases_and_expanded_work_is_reserved_before_callbacks() {
+    use ftx_export::material_study::design::fit::Context;
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let body = ftx_pattern::validate::Measurements(json!({"declared_width":20}));
+    let identity = json!({"schema":"synthetic-flat-fit-body/1","source":"test:design-grid"});
+    let fit = Context {
+        body: &body,
+        identity: &identity,
+    };
+    let request = grid_request(4);
+    let cases = vec![
+        Case {
+            key: "one".into(),
+            scenario: json!({"case":1}),
+            comparison: None,
+        },
+        Case {
+            key: "two".into(),
+            scenario: json!({"case":2}),
+            comparison: None,
+        },
+    ];
+    let mut calls = Vec::new();
+    let report = request
+        .evaluate_matrix_with_fit(&pattern, &cases, 20, Some(&fit), |case, key, pattern| {
+            calls.push((
+                case,
+                key.to_owned(),
+                pattern.raw()["pieces"][0]["vertices"]["b"][0]
+                    .as_f64()
+                    .unwrap(),
+            ));
+            Ok(json!({"case":case}))
+        })
+        .unwrap();
+    assert_eq!(report.planned_evaluations, 20);
+    assert_eq!(report.evaluations, 8);
+    assert_eq!(calls.len(), 8);
+    assert!(
+        calls
+            .iter()
+            .all(|(_, _, width)| *width == 24.0 || *width == 28.0)
+    );
+    let mut calls = 0;
+    let refused = request
+        .evaluate_matrix_with_fit(&pattern, &cases, 19, Some(&fit), |_, _, _| {
+            calls += 1;
+            Ok(json!({}))
+        })
+        .unwrap_err();
+    assert_eq!(refused.code, RefusalCode::BudgetExceeded);
+    assert_eq!(calls, 0);
+}
+
 #[test]
 fn ease_and_length_cross_every_material_and_replay_real_markers_sewing_and_exports() {
     let pattern = Pattern::from_json(PATTERN).unwrap();

@@ -670,6 +670,115 @@ expanded row. A named matrix reserves `expanded_rows × cases` before any altera
 or scenario callback and still obeys its caller-supplied maximum of 64 evaluations. Excess work
 refuses the study instead of silently dropping candidates or returning a partial frontier.
 
+## Search declared alterations against the selected body
+
+An opt-in `design_grid` replaces `designs` within `ftx-design-study/1`. It generates linked canonical
+slash-and-spread operations from one to three scalar variables. Each variable declares a unique key,
+1–64 strictly increasing finite `values_mm`, and one or more `sites` containing `piece`, `axis`,
+`at_mm` and a nonzero signed `multiplier`. The variable value times each site's multiplier is that
+site's `add_mm`. Sites and variables run in authored order; optional `after` operations run last.
+This expresses a shared ease or length change across front/back pieces without independently
+inventing alterations or silently repairing seams.
+
+```json
+{
+  "design_grid": {
+    "variables": [{
+      "key": "length",
+      "values_mm": [20, 30, 40],
+      "sites": [
+        {"piece": "front", "axis": "y", "at_mm": 50, "multiplier": 1},
+        {"piece": "back", "axis": "y", "at_mm": 50, "multiplier": 1}
+      ]
+    }],
+    "after": [],
+    "max_designs": 3
+  },
+  "design_fit": {
+    "fit_spec": {
+      "schema": "fabric-fit/1",
+      "points": [{
+        "id": "synthetic-scaled-stature-length",
+        "kind": "vertical",
+        "instance": "front",
+        "from": "a",
+        "to": "d",
+        "body": "stature",
+        "body_scale": 0.1,
+        "target_mm": [-1, 0, 1]
+      }]
+    }
+  }
+}
+```
+
+These coordinates and targets are a synthetic software example, not pattern-making advice.
+[The complete request](../examples/design-fit-search.json) uses the existing synthetic sewing
+pattern and an explicitly artificial sheet. For an independently selected 1300 mm model, its
+100 mm original panel and +20/+30/+40 mm length choices yield 120/130/140 mm; only +30 is in the
+declared ±1 mm band around one tenth of that model stature. A different selected body can yield a
+different candidate or no feasible candidate. Run it through the ordinary model-backed boundary:
+
+```sh
+ftx --json materials scenario-study \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/design-fit-search.json scenario.json body-input.json model.ftxbody
+```
+
+Supply an existing compatible scenario and converted model; body inputs may reuse an intact
+accepted fit as described in [material-scenario-studies.md](material-scenario-studies.md).
+A standalone manufacturing request with `design_fit` has no selected body and explicitly refuses
+those rows. Library callers can use `evaluate_with_fit_body`, `evaluate_with_fit` or
+`evaluate_matrix_with_fit` with one immutable live `design::fit::Context`.
+
+### One selected body authority
+
+The native and portable model adapters construct `FittedBody::flat_fit_body` once, only when fit
+targets are requested. It reuses the selected shape without refitting and evaluates existing tape
+sections and actual model-frame landmarks in the standard 35-degree A-pose. Reference measurements
+do not follow the requested drape pose, motion frames or conflicting newly supplied tapes. Available
+stature is retained independently when complete tape sections are unavailable. Unknown body fields
+and landmarks remain unavailable; no analytic dress-form or acquired-tape fallback replaces model
+geometry. Values retain `MODEL_FIT` provenance and no invented propagated sigma.
+
+Each candidate's `design.fit` retains the canonical full flat report, exact target specification and
+model/shape/source/reference-geometry/value identities. Source identities are also bound into the
+manufacturing, single-scenario and matrix request hashes. Explicit fit requires 1–32 unique points
+with finite ordered [minimum, nominal, maximum] ease targets. Existing girth, width, vertical and
+path point semantics apply. Canonical `IN_BAND`/report status controls admission, before display
+rounding; a LOW/HIGH residual that rounds to zero still fails. Seam, truing, completeness and sampled
+outline gates remain in force. A failed or unavailable fit cannot bind materials, invoke a scenario,
+produce manufacturing plans or enter a frontier. The retained altered pattern remains inspectable.
+
+The raw `on_body` API has no selected model measurement authority and refuses requested fit; it
+does not guess body measurements from arbitrary collision geometry. Invalid accepted-body receipts
+remain refusals and cannot fall back to a tape fit. The ordinary no-fit workflows preserve their
+existing independent manufacturing/scenario behavior.
+
+### Explicit finite search and its limits
+
+The last variable changes fastest. Generated keys are `grid:0000`, `grid:0001`, etc.; each row
+retains its `design.variables_mm`, exact applied operations, altered pattern and frozen material
+changes. The unchanged baseline is additional to the required `max_designs` allowance of 1–31.
+The existing 32-row design × material cap and case budgets still apply, even to candidates later
+refused by fit. Work is reserved before invoking consumers.
+
+A small explicit allowance visits a deterministic prefix of the grid. `design_search` retains
+the entire domain and reports `total_grid_points`, `generated_designs`, `omitted_designs`,
+`complete_grid_enumeration` and `budget_exhausted`. An incomplete frontier describes only visited
+designs; omitted points may contain better feasible designs. Full enumeration establishes coverage
+of the declared grid, not solver convergence, empirical fit, a continuous optimum or a global optimum.
+No hidden scalar fit score or automatic winner is introduced. Ordinary explicit manufacturing,
+drape/motion strain and thermal objectives/constraints still use their existing authorities.
+
+Grid domain data, fit specification and body identity are each bounded to 256 KiB; selected edge,
+measurement and document-processing work is charged across the expanded rows. Nonzero values whose
+site multiplication underflows to zero refuse instead of silently dropping the alteration.
+The workbench displays search completeness, parameter choices, target admission, every canonical
+point and the complete body/fit receipt. Existing exact altered/bound downloads remain the replay
+path. Source-qualified strain limits, physical garment validation, continuous/adaptive search and
+contact-pressure constraints require their own evidence and remaining implementation.
+
 ## Budgets, tests and remaining gates
 
 Explicit variant `changes` can also include a complete `interfaces` replacement using the existing

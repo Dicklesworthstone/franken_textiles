@@ -2,7 +2,7 @@
 //! Geometry is authored through the canonical operators; neither seam repair nor wearer fit is
 //! inferred. Every sequence starts from the same source, including the unaltered baseline.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ftx_core::{Refusal, RefusalCode, curve::OUTLINE_DENSE};
 use ftx_pattern::{Pattern, alter, validate};
@@ -11,6 +11,9 @@ use serde_json::{Value, json};
 
 use super::{Outcome, PreparedVariant, Request, budget, hash, invalid};
 use crate::cutting::geometry::{Work, simple};
+
+pub mod fit;
+pub mod grid;
 
 const BASELINE: &str = "baseline";
 const MAX_DESIGNS: usize = 31;
@@ -117,7 +120,7 @@ pub struct Validation {
     pub outlines: Outcome<Vec<String>>,
     /// Existing canonical outline sampling density, not an analytic curved-intersection proof.
     pub outline_samples_per_curve: usize,
-    /// Both the canonical flat report and every sampled outline passed.
+    /// Canonical flat structure, every sampled outline and any requested body-fit gate passed.
     pub passed: bool,
 }
 
@@ -130,6 +133,9 @@ pub struct Receipt {
     pub material_key: String,
     /// Exact ordered operators, empty only for the unaltered baseline.
     pub operations: Vec<Operation>,
+    /// Declared grid coordinates; absent for the baseline and hand-authored designs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variables_mm: Option<BTreeMap<String, f64>>,
     /// Identity of the original unchanged pattern, before alteration or material binding.
     pub source_pattern_sha256: String,
     /// Identity of the complete altered document, before material binding. Null on operator refusal.
@@ -141,27 +147,44 @@ pub struct Receipt {
     pub geometry_changed: Option<bool>,
     /// Complete canonical flat/sampled-outline gate, absent only if an operator refused.
     pub validation: Option<Validation>,
+    /// Explicit fit targets, fixed body identity and the canonical report or unavailable evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit: Option<Outcome<fit::Report>>,
 }
 
 pub(super) struct Prepared {
     variant: Variant,
     material_key: String,
+    variables_mm: Option<BTreeMap<String, f64>>,
 }
 
 pub(super) fn validate_request(request: &Request) -> Result<(), Refusal> {
     if !request.is_design() {
-        if request.designs.is_some() {
+        if request.designs.is_some()
+            || request.design_grid.is_some()
+            || request.design_fit.is_some()
+        {
             return Err(invalid(
-                "designs require explicit ftx-design-study/1; ftx-material-study/1 keeps geometry fixed",
+                "designs, design_grid and design_fit require explicit ftx-design-study/1; ftx-material-study/1 keeps geometry fixed",
             ));
         }
         return Ok(());
     }
-    let designs = request
-        .designs
-        .as_ref()
-        .filter(|designs| !designs.is_empty())
-        .ok_or_else(|| invalid("design study needs at least one explicit design"))?;
+    if request.designs.is_some() == request.design_grid.is_some() {
+        return Err(invalid(
+            "design study needs exactly one of designs or design_grid",
+        ));
+    }
+    if let Some(grid) = &request.design_grid {
+        grid.validate()?;
+    }
+    if let Some(fit) = &request.design_fit {
+        fit.validate()?;
+    }
+    let designs = request.designs.as_deref().unwrap_or(&[]);
+    if request.designs.is_some() && designs.is_empty() {
+        return Err(invalid("design study needs at least one explicit design"));
+    }
     if designs.len() > MAX_DESIGNS {
         return Err(budget("design study exceeds 31 designs plus its baseline"));
     }
@@ -202,7 +225,21 @@ pub(super) fn expand(
     if !request.is_design() {
         return Ok(materials);
     }
-    let designs = request.designs.as_ref().expect("validated design request");
+    let designs: Vec<_> = if let Some(grid) = &request.design_grid {
+        grid.generate()?
+            .into_iter()
+            .map(|(design, values)| (design, Some(values)))
+            .collect()
+    } else {
+        request
+            .designs
+            .as_ref()
+            .expect("validated design request")
+            .iter()
+            .cloned()
+            .map(|design| (design, None))
+            .collect()
+    };
     let mut keys = BTreeSet::new();
     if materials
         .iter()
@@ -216,9 +253,27 @@ pub(super) fn expand(
             "design study exceeds 32 expanded design/material alternatives, including baseline",
         ));
     }
+    if let Some(fit) = &request.design_fit {
+        // Canonical points may resample an outline or walk several selected edges. Reserve a
+        // conservative full-instance edge pass per selector, before alterations or consumers.
+        let edges = pattern
+            .instances
+            .iter()
+            .fold(0usize, |n, instance| n.saturating_add(instance.edges.len()));
+        let work = fit
+            .measurement_work_units()
+            .saturating_mul(edges.max(1))
+            .saturating_mul(ftx_core::curve::MEASURE_DENSE.max(ftx_core::curve::EDGE_DENSE))
+            .saturating_mul(rows);
+        if work > 40_000_000 {
+            return Err(budget(
+                "design fit exceeds 40000000 aggregate measurement work units",
+            ));
+        }
+    }
     let operations = designs
         .iter()
-        .map(|design| design.operations.len())
+        .map(|(design, _)| design.operations.len())
         .sum::<usize>()
         .saturating_mul(materials.len());
     if operations > MAX_EXPANDED_OPERATIONS {
@@ -228,7 +283,7 @@ pub(super) fn expand(
     }
     let document_passes = designs
         .iter()
-        .flat_map(|design| &design.operations)
+        .flat_map(|(design, _)| &design.operations)
         .map(Operation::document_passes)
         .sum::<usize>()
         .saturating_mul(materials.len());
@@ -237,7 +292,7 @@ pub(super) fn expand(
     let source_bytes = serde_json::to_vec(pattern.raw())
         .map_err(|e| invalid(e.to_string()))?
         .len();
-    let operation_bytes = serde_json::to_vec(designs)
+    let operation_bytes = serde_json::to_vec(&(&designs, &request.design_fit))
         .map_err(|e| invalid(e.to_string()))?
         .len();
     let material_bytes = materials.iter().try_fold(0usize, |sum, material| {
@@ -248,7 +303,10 @@ pub(super) fn expand(
     })?;
     if source_bytes
         .saturating_add(operation_bytes)
-        .saturating_mul(rows.saturating_add(document_passes))
+        .saturating_mul(
+            rows.saturating_add(document_passes)
+                .saturating_add(usize::from(request.design_fit.is_some()).saturating_mul(rows)),
+        )
         .saturating_add(material_bytes.saturating_mul(designs.len() + 1))
         > MAX_DOCUMENT_WORK_BYTES
     {
@@ -256,12 +314,15 @@ pub(super) fn expand(
             "design study exceeds 256 MiB aggregate document-processing reservation",
         ));
     }
-    let baseline = Variant {
-        key: BASELINE.into(),
-        operations: Vec::new(),
-    };
+    let baseline = (
+        Variant {
+            key: BASELINE.into(),
+            operations: Vec::new(),
+        },
+        None,
+    );
     let mut expanded = Vec::with_capacity(rows);
-    for design in std::iter::once(&baseline).chain(designs) {
+    for (design, variables_mm) in std::iter::once(&baseline).chain(&designs) {
         for material in &materials {
             let key = serde_json::to_string(&(&design.key, &material.variant.key))
                 .map_err(|e| invalid(e.to_string()))?;
@@ -273,6 +334,7 @@ pub(super) fn expand(
                 design: Some(Prepared {
                     variant: design.clone(),
                     material_key: material.variant.key.clone(),
+                    variables_mm: variables_mm.clone(),
                 }),
             });
         }
@@ -286,16 +348,20 @@ impl Prepared {
         source: &Pattern,
         seam_tolerance_mm: f64,
         work: &mut Work,
+        fit_request: Option<&fit::Request>,
+        fit_context: Option<&fit::Context<'_>>,
     ) -> Result<(Receipt, Result<Pattern, Refusal>), Refusal> {
         let mut receipt = Receipt {
             key: self.variant.key,
             material_key: self.material_key,
             operations: self.variant.operations,
+            variables_mm: self.variables_mm,
             source_pattern_sha256: hash(source.raw())?,
             altered_pattern_sha256: None,
             altered_pattern_json: None,
             geometry_changed: None,
             validation: None,
+            fit: None,
         };
         let altered = receipt
             .operations
@@ -326,13 +392,29 @@ impl Prepared {
         } else {
             check_outlines(&pattern, work)
         };
-        let refused = match &outlines {
+        let mut refused = match &outlines {
             Err(refusal) => Some(refusal.clone()),
             Ok(_) if flat["status"] != "CONVERGED" => Some(invalid(
                 "design failed canonical flat validation; inspect design.validation.flat for seam, truing or completeness failures",
             )),
             Ok(_) => None,
         };
+        if let Some(request) = fit_request {
+            let outcome = request.evaluate(&pattern, fit_context);
+            if refused.is_none() {
+                refused = match &outcome {
+                    Outcome::Available { result } if result.passed => None,
+                    Outcome::Available { .. } => Some(invalid(
+                        "design failed explicit flat fit targets on the selected body; inspect design.fit.result.validation",
+                    )),
+                    Outcome::Refused { refusal } => Some(refusal.clone()),
+                    Outcome::NotRequested => {
+                        Some(invalid("requested design fit was not evaluated"))
+                    }
+                };
+            }
+            receipt.fit = Some(outcome);
+        }
         receipt.validation = Some(Validation {
             spec,
             flat,

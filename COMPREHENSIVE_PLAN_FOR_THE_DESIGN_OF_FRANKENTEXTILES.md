@@ -3133,6 +3133,41 @@ are conditional source-endpoint consequences, not confidence intervals or genera
 film uncertainty. They do not close measured moisture coupling, empirical wearer cooling, garment
 fit or process qualification gates. See [material-scenario-studies.md](docs/material-scenario-studies.md).
 
+---
+
+### 25.70 Generate fit-constrained garment alterations on the selected body
+
+**Implemented software, runtime validation pending (`ftx-ds2`).** The existing design study now
+generates bounded linked width/ease and length alterations from explicit finite variable domains,
+crosses them with material choices, and evaluates the actual altered garment through the same
+manufacturing and optional scenario consumers. Original geometry remains a visible baseline.
+Each generated row retains its scalar coordinates, canonical operations, validation, exact altered
+document and final material binding.
+
+Explicit points-of-measure/ease targets are evaluated against one immutable selected model shape.
+The body adapter uses canonical tape sections and actual reference-pose frame landmarks, retains
+MODEL_FIT provenance and exact model/shape/source/geometry/value identities, and never substitutes
+conflicting supplied tapes or analytic dress-form landmarks. Missing sections remain unavailable.
+Canonical flat validation and sampled outline checks gate binding and all downstream callbacks;
+out-of-band raw values cannot pass merely because display rounding produces a zero residual.
+Single and named-case native/portable studies share the same body and manufacturing admission.
+
+A declared allowance can visit only a deterministic prefix of the finite grid. Reports retain
+total/generated/omitted counts and explicit search completeness; no unvisited point is certified
+infeasible and no conditional frontier is called a continuous or global optimum. Expanded rows,
+measurement sampling, source documents and existing manufacturing/scenario budgets are reserved.
+The workbench exposes variable choices, full target residuals, source identity and incomplete search.
+See [material-screening-and-studies.md](docs/material-screening-and-studies.md).
+
+Focused numerical, synthetic selected-body and native/portable regressions are included. Fresh
+strict Clippy/type/borrow analysis passes for both changed core crates and their unit-test bodies.
+Final executable Rust gates remain pending while the shared build filesystem is exhausted; keep
+the bead open until those checks run. Adaptive/continuous inverse design, qualified local strain/pressure
+constraints and held-out measured garment acceptance remain substantive next gates. A numerical
+ease band is neither a physical garment-fit claim nor a safe-fit or comfort threshold.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

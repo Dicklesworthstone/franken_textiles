@@ -18,6 +18,179 @@ fn model_bytes() -> Vec<u8> {
 }
 
 #[test]
+fn fit_driven_design_grid_uses_one_selected_reference_body_in_native_and_portable_scenarios() {
+    use ftx_drape::study::fitted::{BodyRequest, FittedBody};
+    use ftx_wasm::materials::scenario::{on_body, on_model};
+
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model =
+        ftx_body::AnnyModel::from_data(ftx_body::AnnyData::from_bytes(&bytes, true).unwrap())
+            .unwrap();
+    // The accepted synthetic shape is 1300 mm tall. Conflicting new tape stature is retained
+    // as a residual; it must never replace the already selected model's flat-fit target.
+    let body_input = json!({"schema":"ftx-scenario-body/1",
+        "accepted_body_fit":receipt(&digest),"arm_abduction_deg":50.0,
+        "measurements":{"wearer":{"stature_mm":1111.0}}});
+    let fitted =
+        FittedBody::prepare(&model, &digest, &BodyRequest::read(&body_input).unwrap()).unwrap();
+    let reference = fitted.flat_fit_body(&model, &digest).unwrap();
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let mut request: Value =
+        serde_json::from_str(include_str!("../../../examples/design-study.json")).unwrap();
+    request.as_object_mut().unwrap().remove("designs");
+    request.as_object_mut().unwrap().remove("sewing");
+    request["variants"].as_array_mut().unwrap().truncate(1);
+    request["design_grid"] = json!({"variables":[{"key":"length","values_mm":[0.0,30.0,40.0],
+        "sites":[{"piece":"front","axis":"y","at_mm":50.0,"multiplier":1.0},
+            {"piece":"back","axis":"y","at_mm":50.0,"multiplier":1.0}]}],"max_designs":3});
+    request["design_fit"] = json!({"fit_spec":{"schema":"fabric-fit/1",
+        "seam_tol_mm":3.0,"truing_tol_deg":8.0,"points":[{
+            "id":"synthetic_scaled_stature","kind":"vertical","instance":"front",
+            "from":"a","to":"d","body":"stature","body_scale":0.1,
+            "target_mm":[-0.1,0.0,0.1]}]}});
+    request["comparison"] = json!({"basis":"nominal",
+        "objectives":[{"metric":"stock_mass_kg","direction":"minimize"}]});
+    let scenario = json!({"schema":"ftx-drape-scenario/1",
+        "options":{"spacing":100.0,"sew_steps":3,"drape_steps":3,"step":0.001},
+        "fit_spec":{},"max_mesh_points":4096,"max_vertex_frames":1000000});
+    let portable = |scenario: &Value, body_input: &Value| -> Value {
+        serde_json::from_str(
+            &on_model(
+                &model,
+                &digest,
+                pattern,
+                &request.to_string(),
+                &scenario.to_string(),
+                &body_input.to_string(),
+                |_| {},
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let single = portable(&scenario, &body_input);
+    let winner = json!(serde_json::to_string(&("grid:0001", "light-sheet")).unwrap());
+    assert_eq!(
+        single["comparison"]["frontier"],
+        json!([winner]),
+        "{single}"
+    );
+    assert_eq!(single["scenario"]["design_fit_body"], *reference.identity());
+    assert_eq!(
+        single["scenario"]["design_fit_body"]["measurement_pose"],
+        "a_pose_35"
+    );
+    assert_eq!(
+        single["scenario"]["body_fit"]["pose"]["arm_abduction_deg"],
+        50.0
+    );
+    for row in single["manufacturing"]["alternatives"].as_array().unwrap() {
+        let fit = &row["design"]["fit"]["result"];
+        let passed = row["design"]["key"] == "grid:0001";
+        assert_eq!(fit["body_identity"], *reference.identity());
+        assert_eq!(fit["validation"]["points"][0]["body_mm"], 130.0);
+        assert_eq!(fit["passed"], passed);
+        assert_eq!(
+            row["binding"]["status"],
+            if passed { "available" } else { "refused" }
+        );
+        assert_eq!(
+            row["cutting"]["status"],
+            if passed { "available" } else { "refused" }
+        );
+    }
+    let matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":8,
+        "cases":[{"key":"first","scenario":scenario},{"key":"second","scenario":scenario}]});
+    let combined = portable(&matrix, &body_input);
+    assert_eq!(combined["planned_evaluations"], 8);
+    assert_eq!(combined["evaluations"], 2);
+    assert_eq!(combined["comparison"]["frontier"], json!([winner]));
+    assert_eq!(
+        combined["manufacturing"]["alternatives"],
+        single["manufacturing"]["alternatives"]
+    );
+    for case in combined["cases"].as_array().unwrap() {
+        assert_eq!(case["scenario"]["design_fit_body"], *reference.identity());
+        assert_eq!(case["comparison"]["frontier"], json!([winner]));
+    }
+
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    std::fs::write(dir.join("pattern.json"), pattern).unwrap();
+    save(&dir.join("study.json"), &request);
+    save(&dir.join("body-input.json"), &body_input);
+    for (scenario, expected) in [(&scenario, &single), (&matrix, &combined)] {
+        save(&dir.join("scenario.json"), scenario);
+        for (binary, prefix) in [
+            (
+                env!("CARGO_BIN_EXE_ftx"),
+                &["--json", "materials", "scenario-study"][..],
+            ),
+            (env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"][..]),
+        ] {
+            let output = Command::new(binary)
+                .current_dir(&dir)
+                .args(prefix)
+                .args([
+                    "pattern.json",
+                    "study.json",
+                    "scenario.json",
+                    "body-input.json",
+                    "model.ftxbody",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{} / {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result.get("result").unwrap_or(&result), expected);
+        }
+    }
+
+    // A raw collision/placement body does not carry a selected shape measurement authority.
+    let raw: Value = serde_json::from_str(
+        &on_body(
+            &fitted.body(),
+            pattern,
+            &request.to_string(),
+            &matrix.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(raw["evaluations"], 0);
+    assert_eq!(raw["comparison"]["frontier"], json!([]));
+    assert!(raw["cases"][0]["scenario"]["design_fit_setup_refusal"]["message"].is_string());
+    assert!(
+        raw["manufacturing"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["design"]["fit"]["status"] == "refused"
+                && row["binding"]["status"] == "refused")
+    );
+    let mut invalid_body = body_input;
+    invalid_body["accepted_body_fit"]["status"] = json!("REJECTED");
+    let refused = portable(&scenario, &invalid_body);
+    assert!(refused["scenario"]["design_fit_setup_refusal"]["message"].is_string());
+    assert!(refused["scenario"]["design_fit_body"].is_null());
+    assert_eq!(refused["comparison"]["frontier"], json!([]));
+    assert!(
+        refused["simulations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["evaluation"]["status"] == "refused")
+    );
+}
+
+#[test]
 fn finite_body_water_objectives_use_actual_motion_in_native_and_portable_scenarios() {
     use ftx_drape::study::fitted::{BodyRequest, FittedBody};
     use ftx_wasm::materials::scenario::on_model;

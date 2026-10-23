@@ -1,10 +1,13 @@
 //! Fit one Anny body once for an entire material study, using the existing production pose pipeline.
+use std::collections::BTreeMap;
+
 use ftx_body::{
     AnnyModel, BodyFrames, BodyParams, Pose, SkinMesh, TAPE_FIELDS, Wearer,
     accepted_shape::AcceptedShape, fit_tape, pose_deltas, skin_mesh, tape_readings, tape_targets,
     trimmed_skin,
 };
 use ftx_core::Refusal;
+use ftx_pattern::{instance::PyError, validate::BodyMeasure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -155,8 +158,49 @@ pub struct FittedBody {
     arm_deg: f64,
     params: BodyParams,
     model_sha256: String,
+    // Freeze source identity separately from the public display report. Lazy flat measurements
+    // must not inherit later edits to report text or a different set of supplied tape targets.
+    flat_source: Value,
     /// Actual body-fitting residuals and source identity; the fit is model-derived, not measured.
     pub report: Value,
+}
+
+/// Flat-pattern measurement authority from one selected model shape in its reference A-pose.
+/// Values are model predictions in millimetres, not acquired wearer measurements. Missing tape
+/// sections stay unavailable; no dress-form formula or supplied tape replaces the selected shape.
+pub struct FlatFitBody {
+    frames: BodyFrames,
+    values: BTreeMap<String, f64>,
+    identity: Value,
+}
+
+impl FlatFitBody {
+    /// Exact model, selected shape, source evidence, reference geometry and measurement identities.
+    #[must_use]
+    pub fn identity(&self) -> &Value {
+        &self.identity
+    }
+}
+
+impl BodyMeasure for FlatFitBody {
+    fn value(&self, name: &str) -> Result<f64, PyError> {
+        self.values
+            .get(name)
+            .copied()
+            .ok_or_else(|| PyError::Key(name.into()))
+    }
+
+    fn sigma(&self, _: &str) -> Option<f64> {
+        // Input-tape uncertainty is not propagated through body fitting or geometric sections.
+        None
+    }
+
+    fn landmark_h(&self, part_key: &str, name: &str) -> Result<f64, PyError> {
+        self.frames
+            .landmark_h(part_key, name)
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| PyError::Key(format!("{part_key}/{name}")))
+    }
 }
 
 impl FittedBody {
@@ -209,6 +253,8 @@ impl FittedBody {
             json!({"kind":"standing_straight_arm", "arm_abduction_deg":request.arm_abduction_deg});
         report["body_provenance"] = json!("MODEL_FIT");
         report["physical_validation_claim"] = json!(false);
+        let flat_source = json!({"shape_source":report["shape_source"],
+            "input_measurements_sha256":report["measurements_sha256"]});
         Ok(Self {
             frames,
             collision,
@@ -216,7 +262,69 @@ impl FittedBody {
             arm_deg: request.arm_abduction_deg,
             params,
             model_sha256: model_sha256.into(),
+            flat_source,
             report,
+        })
+    }
+
+    /// Lazily measure this unchanged selected shape in the standard A-pose at 35 degrees.
+    /// The ordinary scenario pose and any image-frame poses do not change flat-fit targets.
+    /// Stature remains available from model anthropometry when the complete tape-section
+    /// evaluator cannot measure this shape; all other missing sections remain unavailable.
+    ///
+    /// # Errors
+    /// The supplied model digest does not match the selected shape, or reference geometry,
+    /// landmarks or model stature cannot be computed.
+    pub fn flat_fit_body(
+        &self,
+        model: &AnnyModel,
+        model_sha256: &str,
+    ) -> Result<FlatFitBody, Refusal> {
+        if self.model_sha256.is_empty() || self.model_sha256 != model_sha256 {
+            return Err(invalid(
+                "flat-fit measurements must use the source-identified selected body model",
+            ));
+        }
+        let rest = model.rest(&self.params)?;
+        let stature_m = model.anthropometry(&rest).height;
+        let stature_mm = stature_m * 1000.0;
+        if !stature_mm.is_finite() || stature_mm <= 0.0 {
+            return Err(invalid("flat-fit model stature is unavailable"));
+        }
+        let posed = model.pose(&rest, &pose_deltas(model, &rest, &Pose::a_pose(35.0), 1.0)?)?;
+        let frames = BodyFrames::new(model, &posed)?;
+        let faces: Vec<_> = model
+            .data()
+            .faces
+            .iter()
+            .map(|face| face.map(|index| index as usize))
+            .collect();
+        let readings = tape_readings(&faces, stature_m, &posed, &frames)
+            .filter(|values| values.iter().all(|value| value.is_finite() && *value > 0.0));
+        let mut values = BTreeMap::from([("stature".into(), stature_mm)]);
+        if let Some(readings) = readings {
+            values.extend(
+                TAPE_FIELDS
+                    .into_iter()
+                    .zip(readings)
+                    .map(|(name, value)| (name.into(), value)),
+            );
+        }
+        let identity = json!({"schema":"ftx-flat-fit-body/1","provenance":"MODEL_FIT",
+            "model_sha256":model_sha256,
+            "shape_sha256":hash(&(model_sha256, parameters(&self.params)))?,
+            "shape_source":self.flat_source["shape_source"],
+            "input_measurements_sha256":self.flat_source["input_measurements_sha256"],
+            "measurement_pose":"a_pose_35",
+            "measurement_geometry_sha256":hash(&(&posed.vertices, &faces))?,
+            "measurement_values_sha256":hash(&values)?,
+            "available_measurements":values.keys().collect::<Vec<_>>(),
+            "complete_tape_sections":readings.is_some(),
+            "uncertainty_propagated":false,"fit_claim":false});
+        Ok(FlatFitBody {
+            frames,
+            values,
+            identity,
         })
     }
 
@@ -534,6 +642,117 @@ mod tests {
         let again = FittedBody::prepare(&model, &hash, &req).unwrap();
         assert_eq!(b.collision.vertices, again.collision.vertices);
         assert_eq!(b.report, again.report);
+    }
+
+    #[test]
+    fn flat_fit_body_uses_selected_model_values_and_keeps_missing_sections_unavailable() {
+        let model = model();
+        let digest = "a".repeat(64);
+        let mut request = request();
+        request.measurements = json!({"wearer":{"stature_mm":1000.0},
+            "fused":{"waist":{"value_mm":500.0,"sigma_mm":5.0}}});
+        let fitted = FittedBody::prepare(&model, &digest, &request).unwrap();
+        let report = fitted.report.clone();
+        let flat = fitted.flat_fit_body(&model, &digest).unwrap();
+        // The fixture's 1.7 m rest height has one height blend: 1.7 * (1 + 0.5 * 0.6).
+        // The disagreeing supplied tape is retained as evidence, never substituted or fitted.
+        assert!((flat.value("stature").unwrap() - 2210.0).abs() < 1e-9);
+        assert_eq!(flat.sigma("stature"), None);
+        assert_eq!(flat.identity()["complete_tape_sections"], false);
+        assert_eq!(
+            flat.identity()["available_measurements"],
+            json!(["stature"])
+        );
+        assert!(flat.value("waist").is_err());
+        assert!(flat.value("hand_pass").is_err());
+        assert!(flat.landmark_h("torso", "unknown").is_err());
+        assert!(flat.landmark_h("unknown", "waist").is_err());
+        assert_eq!(flat.identity()["provenance"], "MODEL_FIT");
+        assert_eq!(flat.identity()["measurement_pose"], "a_pose_35");
+        assert_eq!(flat.identity()["shape_sha256"], report["shape_sha256"]);
+        assert_eq!(
+            flat.identity()["input_measurements_sha256"],
+            json!(hash(&request.measurements).unwrap())
+        );
+        assert_eq!(flat.identity()["shape_source"], report["shape_source"]);
+        assert_eq!(flat.identity()["uncertainty_propagated"], false);
+        assert_eq!(flat.identity()["fit_claim"], false);
+        assert_eq!(fitted.report, report);
+        assert!(fitted.flat_fit_body(&model, &"b".repeat(64)).is_err());
+        assert!(fitted.flat_fit_body(&model, "").is_err());
+
+        let pattern = ftx_pattern::Pattern::from_json(include_str!(
+            "../../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+        ))
+        .unwrap();
+        let point = json!({"id":"scaled_stature","kind":"vertical","instance":"band",
+            "from":"a","to":"d","body":"stature","body_scale":0.01,
+            "target_mm":[-3.0,-2.0,-1.0]});
+        let row = ftx_pattern::validate::measure_point(&pattern, &point, &flat);
+        assert_eq!(row.finished_mm, Some(20.0));
+        assert_eq!(row.body_mm, Some(22.1));
+        assert_eq!(row.ease_mm, Some(-2.1));
+        assert_eq!(row.status, "IN_BAND");
+        assert_eq!(row.body_sigma_mm, Some(None));
+        let mut missing = point;
+        missing["body"] = json!("waist");
+        assert_eq!(
+            ftx_pattern::validate::measure_point(&pattern, &missing, &flat).status,
+            "UNMEASURABLE"
+        );
+    }
+
+    #[test]
+    fn flat_fit_body_reference_identity_and_landmarks_do_not_follow_drape_or_report_edits() {
+        let model = model();
+        let digest = "a".repeat(64);
+        let mut request = request();
+        let mut fitted = FittedBody::prepare(&model, &digest, &request).unwrap();
+        let flat = fitted.flat_fit_body(&model, &digest).unwrap();
+        request.arm_abduction_deg = 50.0;
+        let reposed = FittedBody::prepare(&model, &digest, &request).unwrap();
+        assert_ne!(fitted.collision.vertices, reposed.collision.vertices);
+        let again = reposed.flat_fit_body(&model, &digest).unwrap();
+        assert_eq!(flat.identity(), again.identity());
+
+        let rest = model.rest(&fitted.params).unwrap();
+        let posed = model
+            .pose(
+                &rest,
+                &pose_deltas(&model, &rest, &Pose::a_pose(35.0), 1.0).unwrap(),
+            )
+            .unwrap();
+        let reference = BodyFrames::new(&model, &posed).unwrap();
+        for (part, landmark) in [("torso", "waist"), ("arm_R", "wrist"), ("leg_R", "knee")] {
+            let expected = reference.landmark_h(part, landmark).unwrap();
+            assert_eq!(flat.landmark_h(part, landmark).unwrap(), expected);
+            assert_eq!(again.landmark_h(part, landmark).unwrap(), expected);
+        }
+
+        fitted.report["shape_source"] = json!({"kind":"edited-display-report"});
+        fitted.report["measurements_sha256"] = json!("c".repeat(64));
+        fitted.report["shape_sha256"] = json!("d".repeat(64));
+        assert_eq!(
+            fitted.flat_fit_body(&model, &digest).unwrap().identity(),
+            flat.identity()
+        );
+        request.measurements = json!({"wearer":{"stature_mm":1000.0}});
+        let extra_tape = FittedBody::prepare(&model, &digest, &request)
+            .unwrap()
+            .flat_fit_body(&model, &digest)
+            .unwrap();
+        assert_eq!(
+            extra_tape.value("stature").unwrap(),
+            flat.value("stature").unwrap()
+        );
+        assert_eq!(
+            extra_tape.identity()["measurement_geometry_sha256"],
+            flat.identity()["measurement_geometry_sha256"]
+        );
+        assert_ne!(
+            extra_tape.identity()["input_measurements_sha256"],
+            flat.identity()["input_measurements_sha256"]
+        );
     }
 
     #[test]

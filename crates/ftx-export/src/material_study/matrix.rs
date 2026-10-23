@@ -127,6 +127,22 @@ impl Request {
         pattern: &Pattern,
         cases: &[Case],
         max_evaluations: usize,
+        evaluate: impl FnMut(usize, &str, &Pattern) -> Result<T, Refusal>,
+    ) -> Result<Report<T>, Refusal> {
+        self.evaluate_matrix_with_fit(pattern, cases, max_evaluations, None, evaluate)
+    }
+
+    /// Evaluate named cases after one shared design-fit gate on the caller's fixed body.
+    /// Body selection and measurement are performed once by the production adapter.
+    ///
+    /// # Errors
+    /// The same case, work and structural refusals as [`Self::evaluate_matrix_with`].
+    pub fn evaluate_matrix_with_fit<T: Serialize>(
+        &self,
+        pattern: &Pattern,
+        cases: &[Case],
+        max_evaluations: usize,
+        fit: Option<&super::design::fit::Context<'_>>,
         mut evaluate: impl FnMut(usize, &str, &Pattern) -> Result<T, Refusal>,
     ) -> Result<Report<T>, Refusal> {
         if cases.is_empty() || cases.len() > 8 || !(1..=64).contains(&max_evaluations) {
@@ -162,17 +178,27 @@ impl Request {
                 "scenario matrix exceeds its aggregate alternative/case evaluation allowance",
             ));
         }
-        let request_sha256 = hash(&(pattern.raw(), self, cases, max_evaluations))?;
+        let request_sha256 = if self.design_fit.is_some() {
+            hash(&(
+                pattern.raw(),
+                self,
+                cases,
+                max_evaluations,
+                fit.map(|context| context.identity),
+            ))?
+        } else {
+            hash(&(pattern.raw(), self, cases, max_evaluations))?
+        };
         let mut manufacturing =
-            manufacturing_request.evaluate_prepared(pattern, true, variants, screening)?;
+            manufacturing_request.evaluate_prepared(pattern, true, variants, screening, fit)?;
         // The shared request is still the exact authored study, including its optional fallback.
-        manufacturing.request_sha256 = hash(self)?;
+        manufacturing.request_sha256 = self.manufacturing_identity(fit)?;
         let mut reports = Vec::with_capacity(cases.len());
         let mut evaluations = 0;
         for (case_index, case) in cases.iter().enumerate() {
             let mut effective_request = self.clone();
             effective_request.comparison = case.comparison.clone().or(self.comparison.clone());
-            let context = hash(&(pattern.raw(), &effective_request, &case.scenario))?;
+            let context = effective_request.scenario_identity(pattern, &case.scenario, fit)?;
             let mut simulations = Vec::with_capacity(manufacturing.alternatives.len());
             for row in &manufacturing.alternatives {
                 let evaluation = match &row.binding {
