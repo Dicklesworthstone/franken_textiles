@@ -102,6 +102,61 @@ fn both_binaries_replay_geometry_derived_vapor_without_a_body_model_or_dry_heat_
 }
 
 #[test]
+fn both_binaries_replay_moving_layered_potential_with_the_exact_shared_integral() {
+    let initial: Value = serde_json::from_str(include_str!(
+        "../../../examples/vapor-coverage/layered.json"
+    ))
+    .unwrap();
+    let mut stretched_cloth = initial["source"]["positions_m"].clone();
+    let mut stretched_body = initial["map"]["body_positions_m"].clone();
+    for positions in [&mut stretched_cloth, &mut stretched_body] {
+        for vertex in positions.as_array_mut().unwrap() {
+            vertex[0] = json!(vertex[0].as_f64().unwrap() * 2.0);
+        }
+    }
+    let input = json!({"schema":"ftx-vapor-coverage-history/1",
+        "policy":{"schema":"ftx-motion-vapor-coverage/1","integration":"right_endpoint","max_geometry_operations":10000},
+        "samples":[
+            {"time_s":1,"positions_m":initial["source"]["positions_m"],"body_positions_m":initial["map"]["body_positions_m"]},
+            {"time_s":3,"positions_m":stretched_cloth,"body_positions_m":stretched_body}],
+        "initial":initial}).to_string();
+    let request: ftx_drape::vapor::coverage::history::Request =
+        serde_json::from_str(&input).unwrap();
+    let expected = request.evaluate().unwrap();
+    let energy = 1000.0 * 0.002 / (2.0 * 11.27 + 5.0) * 5.0;
+    assert!((expected["totals"]["potential_energy_j"].as_f64().unwrap() - energy).abs() < 1e-12);
+    assert!(
+        (expected["totals"]["potential_mass_kg"].as_f64().unwrap() - energy / 2_500_000.0).abs()
+            < 1e-18
+    );
+    let replay = expected["replay_request_json"].as_str().unwrap();
+    let mut exceeded: Value = serde_json::from_str(replay).unwrap();
+    exceeded["policy"]["max_geometry_operations"] = json!(1);
+    for main in [false, true] {
+        for document in [&input, replay] {
+            assert_eq!(
+                success(&invoke_action(
+                    main,
+                    "thermal-vapor-coverage-history",
+                    document,
+                    &[]
+                )),
+                expected
+            );
+        }
+        refusal(
+            main,
+            &invoke_action(
+                main,
+                "thermal-vapor-coverage-history",
+                &exceeded.to_string(),
+                &[],
+            ),
+        );
+    }
+}
+
+#[test]
 fn both_binaries_match_core_preserve_source_conditions_and_replay_offline() {
     let request: Request = serde_json::from_str(INPUT).unwrap();
     let expected = serde_json::to_value(

@@ -83,6 +83,12 @@ geometry-derived layered coverage consumer as the native command. Retained mater
 body/cloth geometry, explicit vapor boundaries and frozen replay stay with the report. Missing dry
 thermal properties do not prevent this independent consumer; uncovered body transfer remains unknown.
 
+`thermal::vapor_coverage_history` / wasm32 `thermal_vapor_coverage_history(input)` replay the same
+bounded moving-coverage potential as the native history command. Scenario motion can opt in with
+`vapor_coverage_history` while reusing its existing `vapor_coverage` geometry and boundary policy.
+The browser displays complete sample coverage and potential integrals, preserves exact replay bytes,
+and withdraws stale histories on dependent edits. This evolves no moisture state or latent cooling.
+
 **Complete mixed-stock jobs.** `manufacturing::cut_job` / wasm32
 `material_cut_job(pattern, request)` invoke the canonical explicit roll/finite-stock routing planner.
 The combined JSON input limit is 64 MiB. Every original instance/copy is accounted for once; pricing

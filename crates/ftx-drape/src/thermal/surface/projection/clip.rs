@@ -5,16 +5,31 @@ use super::invalid;
 
 pub(in crate::thermal::surface) const AREA_EPS: f64 = 1e-12;
 
-#[derive(Default)]
-pub(in crate::thermal::surface) struct Work(pub usize);
+pub(in crate::thermal::surface) struct Work(pub usize, usize);
+impl Default for Work {
+    fn default() -> Self {
+        Self(0, 5_000_000)
+    }
+}
 impl Work {
+    pub(in crate::thermal::surface) fn limited(limit: usize) -> Self {
+        Self(0, limit.min(5_000_000))
+    }
+
     pub(in crate::thermal::surface) fn add(&mut self, n: usize) -> Result<(), Refusal> {
         self.0 = self
             .0
             .checked_add(n)
-            .filter(|n| *n <= 5_000_000)
+            .filter(|n| *n <= self.1)
             .ok_or_else(|| {
-                invalid("thermal projection exceeds five million geometry operations")
+                if self.1 == 5_000_000 {
+                    invalid("thermal projection exceeds five million geometry operations")
+                } else {
+                    Refusal::new(
+                        ftx_core::RefusalCode::BudgetExceeded,
+                        "projection exceeds the remaining geometry operation budget",
+                    )
+                }
             })?;
         Ok(())
     }

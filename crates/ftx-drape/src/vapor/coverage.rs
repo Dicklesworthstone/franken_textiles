@@ -26,6 +26,8 @@ use crate::{
     },
 };
 
+pub mod history;
+
 /// Portable geometry and source request; no live catalog or body model is needed for replay.
 pub const SCHEMA: &str = "ftx-vapor-coverage/1";
 const MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -313,6 +315,53 @@ pub struct Request {
 }
 
 impl Request {
+    /// Follow the same body vertices/triangles and cloth material coordinates into a new pose.
+    /// Nonuniform pressure fields remain attached to their original body triangle identities.
+    /// The original body binding is verified before the new exact geometry identity is installed.
+    ///
+    /// # Errors
+    /// Stale original boundary identity, changed vertex counts or nonfinite new geometry.
+    pub fn with_positions(&self, cloth: &[Vec3], body: &[Vec3]) -> Result<Self, Refusal> {
+        self.validate_body_binding()?;
+        if cloth.len() != self.source.positions_m.len()
+            || body.len() != self.map.body_positions_m.len()
+            || cloth.iter().chain(body).any(|p| !p.is_finite())
+        {
+            return Err(invalid(
+                "moving vapor coverage must preserve finite body/cloth vertex identities",
+            ));
+        }
+        let mut current = self.clone();
+        current.source.positions_m = cloth.to_vec();
+        current.map.body_positions_m = body.to_vec();
+        current.conditions.body_mesh_sha256 = Some(current.body_sha256()?);
+        Ok(current)
+    }
+
+    fn body_sha256(&self) -> Result<String, Refusal> {
+        digest(
+            &json!({"positions_m":self.map.body_positions_m,"triangles":self.map.body_triangles}),
+        )
+    }
+
+    fn validate_body_binding(&self) -> Result<String, Refusal> {
+        let body_sha = self.body_sha256()?;
+        if self
+            .conditions
+            .body_mesh_sha256
+            .as_ref()
+            .is_some_and(|s| *s != body_sha)
+            || (self.conditions.boundaries.len() != 1 && self.conditions.body_mesh_sha256.is_none())
+            || (self.conditions.boundaries.len() != 1
+                && self.conditions.boundaries.len() != self.map.body_triangles.len())
+        {
+            return Err(invalid(
+                "nonuniform vapor boundaries require the exact body_mesh_sha256 and one boundary per body triangle",
+            ));
+        }
+        Ok(body_sha)
+    }
+
     /// Recompute actual disjoint overlap and evaluate each ordered path through the canonical Ret
     /// consumer. Uncovered body fractions remain unknown and excluded from covered subtotals.
     ///
@@ -320,6 +369,15 @@ impl Request {
     /// Invalid/frozen-source mismatch, stale nonuniform boundaries, ambiguous coverage, missing
     /// vapor observations/interfaces, unadmitted evidence/protocols or exhausted replay budgets.
     pub fn evaluate(&self) -> Result<Value, Refusal> {
+        self.evaluate_with_geometry_budget(5_000_000)
+    }
+
+    pub(crate) fn evaluate_with_geometry_budget(&self, remaining: usize) -> Result<Value, Refusal> {
+        if remaining == 0 {
+            return Err(budget(
+                "vapor coverage has no remaining geometry operation budget",
+            ));
+        }
         if self.schema != SCHEMA
             || self.conditions.boundaries.is_empty()
             || self.conditions.boundaries.len() > 65_536
@@ -379,22 +437,7 @@ impl Request {
                 return Err(invalid("invalid, duplicate or unsupported vapor interface"));
             }
         }
-        let body_sha = digest(
-            &json!({"positions_m":self.map.body_positions_m,"triangles":self.map.body_triangles}),
-        )?;
-        if self
-            .conditions
-            .body_mesh_sha256
-            .as_ref()
-            .is_some_and(|s| *s != body_sha)
-            || (self.conditions.boundaries.len() != 1 && self.conditions.body_mesh_sha256.is_none())
-            || (self.conditions.boundaries.len() != 1
-                && self.conditions.boundaries.len() != self.map.body_triangles.len())
-        {
-            return Err(invalid(
-                "nonuniform vapor boundaries require the exact body_mesh_sha256 and one boundary per body triangle",
-            ));
-        }
+        let body_sha = self.validate_body_binding()?;
         // Validate every boundary even if its body triangle ends up uncovered. This checks no
         // material capability and does not assign a fictitious bare-skin resistance.
         for b in &self.conditions.boundaries {
@@ -419,28 +462,40 @@ impl Request {
             layers: records.iter().map(std::slice::from_ref).collect(),
             snapshot: source_snapshot.clone(),
         };
-        let projection = projection::project_geometry(
-            &geometry,
-            &self.source.positions_m,
-            &self.map.body_positions_m,
-            &self.map.body_triangles,
-            &projection::Request {
-                schema: "ftx-thermal-projection/1".into(),
-                cloth_layers: self
-                    .source
-                    .triangle_instance
-                    .iter()
-                    .map(|&owner| self.map.instance_layers[&self.source.instances[owner]].clone())
-                    .collect(),
-                settings: projection::Settings {
-                    max_distance_m: self.map.settings.max_distance_m,
-                    min_normal_cosine: self.map.settings.min_normal_cosine,
-                    separation_tolerance_m: self.map.settings.separation_tolerance_m,
-                    cells_per_layer: 1,
-                    interfaces: vec![],
-                },
+        let projection_request = projection::Request {
+            schema: "ftx-thermal-projection/1".into(),
+            cloth_layers: self
+                .source
+                .triangle_instance
+                .iter()
+                .map(|&owner| self.map.instance_layers[&self.source.instances[owner]].clone())
+                .collect(),
+            settings: projection::Settings {
+                max_distance_m: self.map.settings.max_distance_m,
+                min_normal_cosine: self.map.settings.min_normal_cosine,
+                separation_tolerance_m: self.map.settings.separation_tolerance_m,
+                cells_per_layer: 1,
+                interfaces: vec![],
             },
-        )?;
+        };
+        let projection = if remaining >= 5_000_000 {
+            projection::project_geometry(
+                &geometry,
+                &self.source.positions_m,
+                &self.map.body_positions_m,
+                &self.map.body_triangles,
+                &projection_request,
+            )
+        } else {
+            projection::project_geometry_limited(
+                &geometry,
+                &self.source.positions_m,
+                &self.map.body_positions_m,
+                &self.map.body_triangles,
+                &projection_request,
+                remaining,
+            )
+        }?;
         let (covered, allocated) = projection.layout.allocations(self.source.patches.len())?;
         let occurrences: usize = projection
             .layout

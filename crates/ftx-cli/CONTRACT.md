@@ -86,6 +86,11 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   replay the shared geometry-derived layered vapor network. Frozen sources, declared body/cloth
   geometry and vapor boundaries determine covered-region potential flows; uncovered fractions
   remain explicit and no sweat supply or coupled evaporative cooling is inferred.
+- `ftx materials thermal-vapor-coverage-history HISTORY.json [--json]` and the companion command
+  replay the complete bounded moving-coverage potential through the shared history evaluator.
+  Fixed source/body identities and explicit vapor boundaries follow every accepted geometry sample;
+  right-endpoint potential integrals retain exact replay and refuse any failed sample. This does
+  not evolve moisture storage or inject latent cooling. See `docs/vapor-coverage.md`.
 - `ftx materials cut-job PATTERN.json REQUEST.json [--json]` and the companion command
   route every physical cut instance/copy exactly once to roll or finite stock through the existing
   planners. Complete geometry and independent purchasing outcomes retain frozen pattern/request

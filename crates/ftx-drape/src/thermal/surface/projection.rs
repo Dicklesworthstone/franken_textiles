@@ -317,7 +317,7 @@ pub(crate) fn project_source(
     faces: &[[usize; 3]],
     request: &Request,
 ) -> Result<Projection, Refusal> {
-    project_source_mode(source, cloth, body, faces, request, true)
+    project_source_mode(source, cloth, body, faces, request, true, Work::default())
 }
 
 /// Geometry-only reuse for non-thermal transport. The private intermediate Layout uses zero
@@ -330,12 +330,32 @@ pub(crate) fn project_geometry(
     faces: &[[usize; 3]],
     request: &Request,
 ) -> Result<Projection, Refusal> {
+    project_geometry_limited(source, cloth, body, faces, request, 5_000_000)
+}
+
+/// The existing geometry kernel with a smaller remaining-work allowance for complete histories.
+pub(crate) fn project_geometry_limited(
+    source: &ProjectionSource<'_>,
+    cloth: &[Vec3],
+    body: &[Vec3],
+    faces: &[[usize; 3]],
+    request: &Request,
+    limit: usize,
+) -> Result<Projection, Refusal> {
     if !request.settings.interfaces.is_empty() {
         return Err(invalid(
             "geometry-only projection cannot consume thermal interfaces",
         ));
     }
-    project_source_mode(source, cloth, body, faces, request, false)
+    project_source_mode(
+        source,
+        cloth,
+        body,
+        faces,
+        request,
+        false,
+        Work::limited(limit),
+    )
 }
 
 fn project_source_mode(
@@ -345,6 +365,7 @@ fn project_source_mode(
     faces: &[[usize; 3]],
     request: &Request,
     thermal_interfaces: bool,
+    mut work: Work,
 ) -> Result<Projection, Refusal> {
     if source.layers.iter().any(|layers| layers.len() != 1) {
         return Err(invalid("projection requires single-layer source triangles"));
@@ -412,7 +433,6 @@ fn project_source_mode(
     }
     let bvh = QueryBvh::build(&boxes);
     let mut candidates = Vec::new();
-    let mut work = Work::default();
     let mut tested = 0;
     let mut partition_roundoff = 0.0;
     let mut unresolved_footprint_area = 0.0;

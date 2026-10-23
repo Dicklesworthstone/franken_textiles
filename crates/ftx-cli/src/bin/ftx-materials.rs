@@ -83,6 +83,7 @@ ftx-materials thermal-transient STACK.json
 ftx-materials thermal-compression HISTORY.json
 ftx-materials thermal-vapor STACK.json
 ftx-materials thermal-vapor-coverage REQUEST.json
+ftx-materials thermal-vapor-coverage-history HISTORY.json
 ftx-materials thermal-vapor-surface SIM_REPORT.json CONDITIONS.json
 ftx-materials thermal-steady STACK.json
 ftx-materials thermal-steady-surface SIM_REPORT.json CONDITIONS.json
@@ -109,6 +110,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `thermal-compression` retains material heat state across qualified gap changes and thermal holds; mechanical work is not converted to heat.
 `thermal-vapor` computes potential evaporative exchange from source-qualified vapor resistances and explicit boundary pressures; it does not infer sweat availability, condensation or wearer comfort.
 `thermal-vapor-coverage` recomputes layered vapor paths from declared body/cloth geometry and source-locked materials; uncovered body fractions remain unknown.
+`thermal-vapor-coverage-history` replays bounded moving layered vapor potentials with an explicit integration rule; no moisture supply or latent cooling is inferred.
 `thermal-vapor-surface` evaluates independent sheet potentials on retained current drape geometry, without requiring dry heat or storage data; it does not establish actual wearer evaporation.
 `thermal-at` evaluates a complete source-qualified effective sheet at one temperature, never extrapolating.
 `pressure-condition` prepares a frozen material at a declared normal pressure from qualified observations; it does not infer contact pressure.
@@ -362,6 +364,7 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-compression", path] => steady_workbench::compression_history(path),
         ["thermal-vapor", path] => steady_workbench::vapor(path),
         ["thermal-vapor-coverage", path] => steady_workbench::vapor_coverage(path),
+        ["thermal-vapor-coverage-history", path] => steady_workbench::vapor_coverage_history(path),
         ["thermal-vapor-surface", report, conditions] => {
             steady_workbench::vapor_surface(report, conditions)
         }

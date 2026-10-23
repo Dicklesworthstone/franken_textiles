@@ -176,6 +176,25 @@ fn vapor_substitution_uses_current_sewn_geometry_without_dry_heat_or_storage() {
     assert_eq!(no_vapor["surface"]["status"], "available");
 
     s.motion = motion_scenario().motion;
+    s.vapor_coverage = Some(
+        serde_json::from_value(json!({
+            "body_triangle_ids":[0],"instance_layers":{"band":"shell"},
+            "settings":{"max_distance_m":0.08,"min_normal_cosine":0.1,
+                "separation_tolerance_m":0.00001,"interfaces":[]},
+            "conditions":{"boundaries":[{
+                "inside_vapor_pressure_pa":2000.,"outside_vapor_pressure_pa":1000.,
+                "inside_film_resistance_m2_pa_w":1.,"outside_film_resistance_m2_pa_w":2.,
+                "latent_heat_j_kg":2_500_000.}]}
+        }))
+        .unwrap(),
+    );
+    s.motion.as_mut().unwrap().vapor_coverage_history = Some(
+        serde_json::from_value(json!({
+            "schema":"ftx-motion-vapor-coverage/1","integration":"right_endpoint",
+            "max_geometry_operations":1_000_000,
+        }))
+        .unwrap(),
+    );
     s.max_vertex_frames = 2_000_000;
     let mut moving = Session::new(&s, &body).unwrap();
     moving.set_motion_path(Ok(path(&s, &body))).unwrap();
@@ -199,7 +218,109 @@ fn vapor_substitution_uses_current_sewn_geometry_without_dry_heat_or_storage() {
         let area = vapor["result"]["area_m2"].as_f64().unwrap();
         let heat = vapor["result"]["potential_heat_flow_w"].as_f64().unwrap();
         assert!((heat - area * 100.).abs() < 1e-12);
+        let coverage = &endpoint["vapor_coverage"];
+        assert_eq!(coverage["status"], "available", "{coverage}");
+        assert_eq!(
+            coverage["result"]["request"]["source"]["positions_m"],
+            motion["samples"][sample]["positions_m"]
+        );
+        assert_eq!(
+            coverage["result"]["request"]["map"]["body_positions_m"],
+            motion["samples"][sample]["body_positions_m"]
+        );
     }
+    let history = &motion["vapor_coverage_history"];
+    assert_eq!(history["status"], "available", "{history}");
+    let history = &history["result"];
+    assert_eq!(history["path_sha256"], motion["path_sha256"]);
+    assert_eq!(
+        history["initial_positions_sha256"],
+        moved["positions_sha256"]
+    );
+    assert_eq!(
+        history["samples"].as_array().unwrap().len(),
+        motion["samples"].as_array().unwrap().len()
+    );
+    let mut integral = 0.0;
+    let mut previous = 0.0;
+    for (sample, row) in motion["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(history["samples"].as_array().unwrap())
+    {
+        assert_eq!(row["time_s"], sample["time_s"]);
+        assert_eq!(
+            row["result"]["request"]["source"]["positions_m"],
+            sample["positions_m"]
+        );
+        assert_eq!(
+            row["result"]["request"]["map"]["body_positions_m"],
+            sample["body_positions_m"]
+        );
+        let time = sample["time_s"].as_f64().unwrap();
+        integral += (time - previous)
+            * row["result"]["coverage"]["covered_potential_heat_flow_w"]
+                .as_f64()
+                .unwrap();
+        previous = time;
+    }
+    assert_eq!(history["totals"]["potential_energy_j"], integral);
+    let replay: ftx_drape::vapor::coverage::history::Request =
+        serde_json::from_str(history["replay_request_json"].as_str().unwrap()).unwrap();
+    assert_eq!(replay.evaluate().unwrap(), *history);
+
+    // A transport-budget refusal must preserve every accepted mechanical sample and the
+    // independent instantaneous endpoint consumers; no partial integral may survive.
+    s.motion
+        .as_mut()
+        .unwrap()
+        .vapor_coverage_history
+        .as_mut()
+        .unwrap()
+        .max_geometry_operations = 1;
+    let mut limited = Session::new(&s, &body).unwrap();
+    limited.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let refused = limited.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(refused["motion"]["status"], "available");
+    assert_eq!(refused["motion"]["result"]["samples"], motion["samples"]);
+    assert_eq!(
+        refused["motion"]["result"]["vapor_coverage_history"]["status"],
+        "refused"
+    );
+    assert!(refused["motion"]["result"]["vapor_coverage_history"]["result"].is_null());
+    assert_eq!(
+        refused["motion"]["result"]["keyframes"][0]["vapor_coverage"]["status"],
+        "available"
+    );
+    s.motion
+        .as_mut()
+        .unwrap()
+        .vapor_coverage_history
+        .as_mut()
+        .unwrap()
+        .max_geometry_operations = 20_000_000;
+    let mut aggregate = Session::new(&s, &body).unwrap();
+    aggregate.set_motion_path(Ok(path(&s, &body))).unwrap();
+    for _ in 0..2 {
+        let missing = aggregate.evaluate(&pattern(), |_| {}).unwrap();
+        assert_eq!(missing["motion"]["status"], "available");
+        assert_eq!(
+            missing["motion"]["result"]["vapor_coverage_history"]["status"],
+            "refused"
+        );
+    }
+    // Both failed source qualifications still consume their admitted whole-history reservation.
+    let exhausted = aggregate.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(exhausted["motion"]["status"], "available");
+    let refusal = &exhausted["motion"]["result"]["vapor_coverage_history"]["refusal"];
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap()
+            .contains("reserved session"),
+        "{refusal}"
+    );
 }
 
 #[test]

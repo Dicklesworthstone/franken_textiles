@@ -85,6 +85,36 @@ pub fn thermal_vapor_coverage(input: &str) -> Result<String, wasm_bindgen::JsErr
     vapor_coverage(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+/// Replay source-qualified layered vapor potential on every retained moving body/cloth sample.
+/// The explicit temporal rule integrates potential transfer; no water supply or latent cooling is
+/// inferred. This is the same local calculation as `ftx materials thermal-vapor-coverage-history`.
+///
+/// # Errors
+/// Input over 64 MiB, invalid source or motion geometry, unsupported boundaries, exceeded work
+/// limits or any failed sample. A refusal returns no partial history.
+pub fn vapor_coverage_history(input: &str) -> Result<String, Refusal> {
+    if input.len() > 64 * 1024 * 1024 {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "vapor coverage history input exceeds 64 MiB",
+        ));
+    }
+    let invalid = |e: serde_json::Error| Refusal::new(RefusalCode::InvalidDocument, e.to_string());
+    let request: ftx_drape::vapor::coverage::history::Request =
+        serde_json::from_str(input).map_err(invalid)?;
+    serde_json::to_string(&request.evaluate()?).map_err(invalid)
+}
+
+/// Browser binding for the shared moving layered vapor potential and frozen replay inputs.
+///
+/// # Errors
+/// The same source, motion, budget and arithmetic refusals as [`vapor_coverage_history`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn thermal_vapor_coverage_history(input: &str) -> Result<String, wasm_bindgen::JsError> {
+    vapor_coverage_history(input).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Potential vapor transfer on source-locked current drape geometry, independent of dry heat.
 /// No body coverage, moisture supply or latent feedback is inferred.
 ///

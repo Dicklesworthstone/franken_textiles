@@ -32,6 +32,47 @@ fn portable_coverage_matches_the_canonical_geometry_network_and_exact_frozen_rep
 }
 
 #[test]
+fn portable_moving_coverage_preserves_the_shared_report_and_rejects_stale_sources() {
+    let initial: Value = serde_json::from_str(include_str!(
+        "../../../examples/vapor-coverage/layered.json"
+    ))
+    .unwrap();
+    let input = json!({"schema":"ftx-vapor-coverage-history/1",
+        "policy":{"schema":"ftx-motion-vapor-coverage/1","integration":"right_endpoint","max_geometry_operations":10000},
+        "samples":[{"time_s":2,"positions_m":initial["source"]["positions_m"],
+            "body_positions_m":initial["map"]["body_positions_m"]}],"initial":initial}).to_string();
+    let request: ftx_drape::vapor::coverage::history::Request =
+        serde_json::from_str(&input).unwrap();
+    let output = thermal::vapor_coverage_history(&input).unwrap();
+    assert_eq!(
+        output,
+        serde_json::to_string(&request.evaluate().unwrap()).unwrap()
+    );
+    let report: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(
+        thermal::vapor_coverage_history(report["replay_request_json"].as_str().unwrap()).unwrap(),
+        output
+    );
+    assert_eq!(report["latent_heat_coupled"], false);
+    let energy = 1000.0 * 0.002 / (2.0 * 11.27 + 5.0) * 2.0;
+    assert!((report["totals"]["potential_energy_j"].as_f64().unwrap() - energy).abs() < 1e-12);
+    let mut changed: Value =
+        serde_json::from_str(report["replay_request_json"].as_str().unwrap()).unwrap();
+    changed["initial"]["source"]["materials"][0]["record"]["name"] = json!("Changed specimen");
+    assert!(thermal::vapor_coverage_history(&changed.to_string()).is_err());
+    assert_eq!(
+        thermal::vapor_coverage_history("{oops").unwrap_err().code,
+        RefusalCode::InvalidDocument
+    );
+    assert_eq!(
+        thermal::vapor_coverage_history(&" ".repeat(64 * 1024 * 1024 + 1))
+            .unwrap_err()
+            .code,
+        RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
 fn portable_entry_returns_the_exact_shared_report_and_frozen_offline_replay() {
     let request: Request = serde_json::from_str(INPUT).unwrap();
     let report = request

@@ -46,6 +46,12 @@ pub(crate) fn vapor_coverage(path: &str) -> Result<Value, Refusal> {
     serde_json::to_value(request.evaluate()?).map_err(invalid)
 }
 
+pub(crate) fn vapor_coverage_history(path: &str) -> Result<Value, Refusal> {
+    let request: ftx_drape::vapor::coverage::history::Request =
+        serde_json::from_str(&read(path, MAX_INPUT)?).map_err(invalid)?;
+    serde_json::to_value(request.evaluate()?).map_err(invalid)
+}
+
 pub(crate) fn vapor_surface(report: &str, conditions: &str) -> Result<Value, Refusal> {
     let report = read(report, MAX_INPUT)?;
     let conditions: ftx_drape::thermal::vapor::Conditions =

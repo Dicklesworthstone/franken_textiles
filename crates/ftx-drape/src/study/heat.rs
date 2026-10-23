@@ -71,9 +71,22 @@ pub struct SurfaceRequest {
 pub(super) struct Budget {
     reserved_cell_steps: usize,
     reserved_geometry_operations: usize,
+    reserved_vapor_geometry_operations: usize,
 }
 
 impl Budget {
+    pub(in crate::study) fn reserve_vapor_geometry(&mut self, count: usize) -> Result<(), Refusal> {
+        self.reserved_vapor_geometry_operations = self
+            .reserved_vapor_geometry_operations
+            .saturating_add(count);
+        if self.reserved_vapor_geometry_operations > 40_000_000 {
+            return Err(budget(
+                "motion vapor exceeds 40000000 reserved session geometry operations",
+            ));
+        }
+        Ok(())
+    }
+
     fn reserve(&mut self, count: usize) -> Result<(), Refusal> {
         self.reserved_cell_steps = self.reserved_cell_steps.saturating_add(count);
         if self.reserved_cell_steps > 20_000_000 {

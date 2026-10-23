@@ -5,7 +5,9 @@ use ftx_core::{Refusal, Vec3, intersection::validate_mesh};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Scenario, budget, coverage_at, hash, heat, invalid, omitted, outcome};
+use super::{
+    Scenario, budget, coverage_at, hash, heat, invalid, omitted, outcome, vapor_coverage_request,
+};
 use crate::{
     motion::{DissipationCapture, MotionOptions, advance_body_with_work},
     run::{DrapeBody, DrapeRun},
@@ -56,6 +58,10 @@ pub struct Request {
     /// accepted geometric sample. Independent of sheet heat and steady endpoint snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transient_coverage: Option<heat::coverage::Request>,
+    /// Optional potential integral over every accepted mechanical sample, using the scenario's
+    /// fixed `vapor_coverage` source/body/boundary policy. No moisture or latent heat is evolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vapor_coverage_history: Option<crate::vapor::coverage::history::Policy>,
 }
 
 impl Request {
@@ -227,6 +233,22 @@ fn evaluate_path(
     let initial_membrane_history = run.scene.solver.relaxation_report()?;
     let initial_bending_history = run.scene.solver.bending_plasticity_report()?;
     let initial_permanent_history = run.scene.solver.membrane_plasticity_report()?;
+    // Freeze source/topology at the same sewn state as the mechanical path. Moving pressure fields
+    // follow these verified body triangle identities; an old body hash is never silently cleared.
+    let vapor_initial = scenario
+        .vapor_coverage
+        .as_ref()
+        .map(|policy| vapor_coverage_request(policy, run, body.collision));
+    let mut vapor_history = request.vapor_coverage_history.as_ref().map(|policy| {
+        policy.validate()?;
+        // This reservation survives an initial or later source/projection failure.
+        heat_budget.reserve_vapor_geometry(policy.max_geometry_operations)?;
+        let initial = vapor_initial
+            .as_ref()
+            .ok_or_else(|| invalid("moving vapor history requires scenario.vapor_coverage"))?
+            .clone()?;
+        crate::vapor::coverage::history::History::new(initial, policy.clone())
+    });
     // The thermal state is private to this material run. Its failure never aborts mechanics;
     // conversely a mechanical failure publishes neither a partial path nor its partial heat.
     let mut surface_heat = request
@@ -342,6 +364,15 @@ fn evaluate_path(
                 ));
             }
             accepted_time = time;
+            if let Some(Ok(history)) = &mut vapor_history
+                && let Err(refusal) = history.advance(crate::vapor::coverage::history::Sample {
+                    time_s: time,
+                    positions_m: sample.cloth.clone(),
+                    body_positions_m: sample.body.clone(),
+                })
+            {
+                vapor_history = Some(Err(refusal));
+            }
             if let Some(Ok(history)) = &mut surface_heat
                 && let Err(refusal) = history.advance(
                     &sample.cloth,
@@ -406,6 +437,15 @@ fn evaluate_path(
         if let Some(conditions) = &scenario.vapor_surface {
             endpoint["vapor_surface"] = outcome(conditions.evaluate(&snapshot));
         }
+        if let Some(initial) = &vapor_initial {
+            endpoint["vapor_coverage"] = outcome(
+                initial
+                    .as_ref()
+                    .map_err(Clone::clone)
+                    .and_then(|r| r.with_positions(&run.scene.solver.x, &path.vertices[i]))
+                    .and_then(|r| r.evaluate()),
+            );
+        }
         endpoints.push(endpoint);
         previous_time = frame.time_s;
     }
@@ -458,6 +498,13 @@ fn evaluate_path(
         );
         result["thermal_basis"] = json!(
             "Steady endpoint snapshots and separately requested transient sheet/coverage histories. Their domains and energy totals are not interchangeable."
+        );
+    }
+    if let Some(history) = vapor_history {
+        result["vapor_coverage_history"] =
+            outcome(history.and_then(|h| h.finish(Some(path.sha256.clone()))));
+        result["vapor_basis"] = json!(
+            "Independent steady endpoints and a separately requested right-endpoint integral of covered prescribed-reservoir potential on every accepted sample. No stored moisture or latent cooling is modeled."
         );
     }
     Ok(result)

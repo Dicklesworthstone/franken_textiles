@@ -98,6 +98,240 @@ fn close(actual: &Value, expected: f64) {
     );
 }
 
+fn history_request(initial: Request) -> history::Request {
+    let mut translated_cloth = initial.source.positions_m.clone();
+    let mut translated_body = initial.map.body_positions_m.clone();
+    for p in translated_cloth.iter_mut().chain(&mut translated_body) {
+        p.x += 0.2;
+    }
+    let mut stretched_cloth = translated_cloth.clone();
+    let mut stretched_body = translated_body.clone();
+    for p in stretched_cloth.iter_mut().chain(&mut stretched_body) {
+        p.x *= 2.0;
+    }
+    history::Request {
+        schema: history::SCHEMA.into(),
+        policy: history::Policy {
+            schema: "ftx-motion-vapor-coverage/1".into(),
+            integration: history::Integration::RightEndpoint,
+            max_geometry_operations: 1_000_000,
+        },
+        initial,
+        samples: vec![
+            history::Sample {
+                time_s: 0.1,
+                positions_m: translated_cloth,
+                body_positions_m: translated_body,
+            },
+            history::Sample {
+                time_s: 0.25,
+                positions_m: stretched_cloth,
+                body_positions_m: stretched_body,
+            },
+        ],
+        path_sha256: Some(sha256_hex(b"declared synthetic prescribed path")),
+    }
+}
+
+#[test]
+fn moving_history_matches_independent_area_time_integrals_and_exact_frozen_replay() {
+    let input = history_request(request());
+    let r = input.evaluate().unwrap();
+    assert_eq!(r["integration"], "right_endpoint");
+    assert_eq!(r["duration_s"], 0.25);
+    // First interval translates 0.5 m² rigidly; the second has 1 m² current boundary/layer area.
+    let energy = 1000.0 / 12.0 * (0.5 * 0.1 + 1.0 * 0.15);
+    close(&r["totals"]["potential_energy_j"], energy);
+    close(&r["totals"]["potential_mass_kg"], energy / 2_500_000.0);
+    close(
+        &r["samples"][0]["potential_energy_j"],
+        1000.0 / 12.0 * 0.5 * 0.1,
+    );
+    close(
+        &r["samples"][1]["result"]["coverage"]["covered_area_m2"],
+        1.0,
+    );
+    for (sample, row) in input.samples.iter().zip(r["samples"].as_array().unwrap()) {
+        assert_eq!(
+            row["result"]["request"]["source"]["positions_m"],
+            json!(sample.positions_m)
+        );
+        assert_eq!(
+            row["result"]["request"]["source"]["patches"],
+            json!(input.initial.source.patches)
+        );
+        assert_eq!(
+            row["result"]["request"]["source"]["materials"],
+            json!(input.initial.source.materials)
+        );
+        assert_ne!(
+            row["result"]["body_mesh_sha256"],
+            r["initial"]["result"]["body_mesh_sha256"]
+        );
+    }
+    assert_eq!(r["latent_heat_coupled"], false);
+    assert_eq!(r["dry_thermal_properties_required"], false);
+    let replay: history::Request =
+        serde_json::from_str(r["replay_request_json"].as_str().unwrap()).unwrap();
+    assert_eq!(replay.evaluate().unwrap(), r);
+}
+
+#[test]
+fn moving_nonuniform_pressures_follow_verified_original_body_triangles() {
+    let mut initial = request();
+    initial.map.body_positions_m.push(Vec3::new(0.5, 0.5, 0.0));
+    initial.map.body_triangles = vec![[0, 1, 3], [0, 3, 2]];
+    let mut other = initial.conditions.boundaries[0];
+    other.inside_vapor_pressure_pa = 3000.0;
+    initial.conditions.boundaries.push(other);
+    initial.conditions.body_mesh_sha256 = Some(sha256_hex(
+        &serde_json::to_vec(&json!({
+            "positions_m":initial.map.body_positions_m,"triangles":initial.map.body_triangles,
+        }))
+        .unwrap(),
+    ));
+    let mut input = history_request(initial);
+    input.samples.truncate(1);
+    let report = input.evaluate().unwrap();
+    // Two 0.25 m² domains keep their respective 1000 Pa and 2000 Pa driving pressures.
+    close(
+        &report["totals"]["potential_energy_j"],
+        0.1 * (1000.0 + 2000.0) * 0.25 / 12.0,
+    );
+    assert_eq!(
+        report["samples"][0]["result"]["request"]["conditions"]["boundaries"],
+        json!(input.initial.conditions.boundaries)
+    );
+    input.initial.conditions.body_mesh_sha256 = Some("a".repeat(64));
+    assert!(
+        input
+            .evaluate()
+            .unwrap_err()
+            .message
+            .contains("body_mesh_sha256")
+    );
+    assert!(
+        input
+            .initial
+            .with_positions(
+                &input.samples[0].positions_m,
+                &input.samples[0].body_positions_m
+            )
+            .is_err()
+    );
+    input.initial.conditions.body_mesh_sha256 = None;
+    assert!(input.evaluate().is_err());
+}
+
+#[test]
+fn moving_history_refuses_last_sample_without_publishing_partial_integrals() {
+    let mut input = history_request(request());
+    input.samples[1].positions_m[3].z = 0.01;
+    input.samples[1].positions_m[4].z = 0.01;
+    input.samples[1].positions_m[5].z = 0.01;
+    assert!(
+        input.evaluate().is_err(),
+        "coincident different layers must refuse the whole history"
+    );
+    let mut input = history_request(request());
+    input.samples[1].time_s = input.samples[0].time_s;
+    assert!(input.evaluate().is_err());
+    input.samples[1].time_s = 0.25;
+    input.samples[1].positions_m.pop();
+    assert!(input.evaluate().is_err());
+}
+
+#[test]
+fn moving_history_charges_initial_and_every_projection_and_refuses_within_remaining_work() {
+    let mut input = history_request(request());
+    let report = input.evaluate().unwrap();
+    let work = report["geometry_operations"].as_u64().unwrap() as usize;
+    let counted: usize = std::iter::once(&report["initial"])
+        .chain(report["samples"].as_array().unwrap())
+        .map(|row| {
+            row["result"]["projection"]["geometry_operations"]
+                .as_u64()
+                .unwrap() as usize
+        })
+        .sum();
+    assert_eq!(work, counted);
+    assert!(work > 1);
+    input.policy.max_geometry_operations = work;
+    assert!(input.evaluate().is_ok());
+    input.policy.max_geometry_operations = work - 1;
+    assert_eq!(
+        input.evaluate().unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+    input.policy.max_geometry_operations = 1;
+    assert_eq!(
+        input.evaluate().unwrap_err().code,
+        ftx_core::RefusalCode::BudgetExceeded
+    );
+}
+
+#[test]
+fn moving_history_keeps_partial_coverage_unknown_and_source_substitution_effects_separate() {
+    let mut initial = request();
+    initial.map.body_positions_m.push(Vec3::new(1.0, 1.0, 0.0));
+    initial.map.body_triangles.push([1, 3, 2]);
+    let mut input = history_request(initial);
+    let baseline = input.evaluate().unwrap();
+    close(
+        &baseline["samples"][0]["result"]["coverage"]["uncovered_area_m2"],
+        0.5,
+    );
+    close(
+        &baseline["samples"][1]["result"]["coverage"]["uncovered_area_m2"],
+        1.0,
+    );
+    input.initial.source.materials[1] = material("higher-ret-shell", 15.0);
+    let changed = input.evaluate().unwrap();
+    close(
+        &changed["totals"]["potential_energy_j"],
+        baseline["totals"]["potential_energy_j"].as_f64().unwrap() / 2.0,
+    );
+    assert_ne!(changed["request_sha256"], baseline["request_sha256"]);
+    assert_eq!(
+        changed["request"]["samples"],
+        baseline["request"]["samples"]
+    );
+}
+
+#[test]
+fn right_endpoint_potential_converges_to_independent_linear_area_time_integral() {
+    // A(t)=0.5*(1+t) m² for t in [0,1], with the complete two-layer resistance fixed at 12.
+    let exact = 1000.0 / 12.0 * 0.75;
+    let mut errors = Vec::new();
+    for n in [2, 4, 8] {
+        let mut input = history_request(request());
+        input.samples = (1..=n)
+            .map(|i| {
+                let time = i as f64 / n as f64;
+                let scale = |p: &Vec3| Vec3::new(p.x * (1.0 + time), p.y, p.z);
+                history::Sample {
+                    time_s: time,
+                    positions_m: input.initial.source.positions_m.iter().map(scale).collect(),
+                    body_positions_m: input
+                        .initial
+                        .map
+                        .body_positions_m
+                        .iter()
+                        .map(scale)
+                        .collect(),
+                }
+            })
+            .collect();
+        let report = input.evaluate().unwrap();
+        let error = report["totals"]["potential_energy_j"].as_f64().unwrap() - exact;
+        assert!(error > 0.0);
+        assert!((error - 1000.0 / 12.0 * 0.25 / n as f64).abs() < 1e-10);
+        errors.push(error);
+    }
+    assert!((errors[0] / errors[1] - 2.0).abs() < 1e-10);
+    assert!((errors[1] / errors[2] - 2.0).abs() < 1e-10);
+}
+
 #[test]
 fn overlapping_layers_count_body_once_and_match_independent_series_answer_without_dry_properties() {
     let input = request();

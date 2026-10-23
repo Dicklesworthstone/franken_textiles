@@ -327,8 +327,13 @@ impl<'a, 'body> Session<'a, 'body> {
             if self.scenario.vapor_surface.is_some() {
                 endpoint_copies += 4 * request.keyframes.len();
             }
+            if self.scenario.vapor_coverage.is_some() {
+                endpoint_copies += 4 * request.keyframes.len();
+            }
             // Endpoint heat receipts duplicate geometry; final velocities retain one more array.
-            let retained = samples.saturating_add(count.saturating_mul(endpoint_copies + 1));
+            let history_copies = if request.vapor_coverage_history.is_some() { 4 } else { 0 };
+            let retained = samples.saturating_mul(1 + history_copies)
+                .saturating_add(count.saturating_mul(endpoint_copies + 1));
             let work = samples.saturating_mul(8).max(retained);
             let total_work = self.charged_motion_frames.saturating_add(work);
             let total_trials = self.charged_motion_trials.saturating_add(request.max_trials);
@@ -433,6 +438,14 @@ fn vapor_coverage_at(
     run: &crate::run::DrapeRun,
     body: (&[ftx_core::Vec3], &[[usize; 3]]),
 ) -> Result<Value, Refusal> {
+    vapor_coverage_request(policy, run, body)?.evaluate()
+}
+
+fn vapor_coverage_request(
+    policy: &VaporCoverage,
+    run: &crate::run::DrapeRun,
+    body: (&[ftx_core::Vec3], &[[usize; 3]]),
+) -> Result<crate::vapor::coverage::Request, Refusal> {
     use crate::vapor::coverage::{Map, Request, Source};
     let mut seen = BTreeSet::new();
     if policy.body_triangle_ids.is_empty()
@@ -446,7 +459,7 @@ fn vapor_coverage_at(
             "vapor coverage needs 1..4096 unique current collision-body triangle IDs",
         ));
     }
-    Request {
+    Ok(Request {
         schema: "ftx-vapor-coverage/1".into(),
         source: Source::from_scene(&run.scene, &run.report["material"])?,
         map: Map {
@@ -460,8 +473,7 @@ fn vapor_coverage_at(
             settings: policy.settings.clone(),
         },
         conditions: policy.conditions.clone(),
-    }
-    .evaluate()
+    })
 }
 
 fn coverage_at(
