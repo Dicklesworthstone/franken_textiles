@@ -3,7 +3,7 @@ use ftx_core::{RefusalCode, Vec2};
 use ftx_export::{
     Ctx, ExportOptions, Source,
     cutter::cutter_ring,
-    cutting::{CutOptions, CutPlan},
+    cutting::{CutOptions, CutPlan, WidthBasis},
 };
 use ftx_pattern::{Pattern, textile_import::resolve_fabric};
 use serde_json::{Value, json};
@@ -33,6 +33,7 @@ fn options() -> CutOptions {
         copies: 1,
         gap_mm: 5.,
         edge_margin_mm: 5.,
+        width_basis: Default::default(),
         end_margin_mm: 10.,
         seam_allowance_mm: None,
         maximum_marker_length_m: None,
@@ -47,7 +48,11 @@ fn check_marker(plan: &CutPlan) {
                 x0 >= plan.options.edge_margin_mm - 1e-10
                     && y0 >= plan.options.end_margin_mm - 1e-10
             );
-            assert!(x1 <= roll.width_m * 1000. - plan.options.edge_margin_mm + 1e-10);
+            let layout_width = roll
+                .layout_width
+                .as_ref()
+                .map_or(roll.width_m, |w| w.width_m);
+            assert!(x1 <= layout_width * 1000. - plan.options.edge_margin_mm + 1e-10);
             assert!(y1 <= roll.length_m * 1000. - plan.options.end_margin_mm + 1e-10);
             let d = a.grain_mm[1] - a.grain_mm[0];
             assert!(d.x.abs() < 1e-9 && d.y > 0.);
@@ -63,6 +68,325 @@ fn check_marker(plan: &CutPlan) {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn source_lower_width_replans_complete_geometry_and_preserves_nominal_purchase_basis() {
+    let p = pattern(vec![
+        piece("front", 40.0, 100.0),
+        piece("back", 40.0, 100.0),
+    ]);
+    let mut raw = p.raw().clone();
+    let width = &mut raw["fabric"]["material"]["record"]["properties"]["width"];
+    width["value"] = json!(100.0);
+    width["unit"] = json!("mm");
+    width["bounds"] = json!([80.0, 110.0]);
+    let p = Pattern::new(raw.clone());
+    let mut opts = options();
+    let nominal = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(nominal.rolls[0].length_m, 0.12);
+    assert!(
+        serde_json::to_value(&opts)
+            .unwrap()
+            .get("width_basis")
+            .is_none()
+    );
+    assert!(
+        serde_json::to_value(&nominal.rolls[0])
+            .unwrap()
+            .get("layout_width")
+            .is_none()
+    );
+    let mut explicit = serde_json::to_value(&opts).unwrap();
+    explicit["width_basis"] = json!("nominal");
+    let explicit = CutPlan::build(&p, &serde_json::from_value(explicit).unwrap()).unwrap();
+    assert_eq!(
+        serde_json::to_string(&nominal).unwrap(),
+        serde_json::to_string(&explicit).unwrap()
+    );
+
+    opts.width_basis = WidthBasis::ReportedLowerBound;
+    let bounded = CutPlan::build(&p, &opts).unwrap();
+    let roll = &bounded.rolls[0];
+    assert_eq!(bounded.schema, nominal.schema);
+    assert_eq!(roll.width_m, 0.1);
+    assert_eq!(roll.layout_width.as_ref().unwrap().width_m, 0.08);
+    assert_eq!(
+        roll.layout_width.as_ref().unwrap().reported_bounds_m,
+        [0.08, 0.11]
+    );
+    assert_eq!(roll.length_m, 0.225);
+    assert!((roll.stock_area_m2 - 0.0225).abs() < 1e-14);
+    assert!((roll.stock_mass_kg.unwrap() - 0.0045).abs() < 1e-14);
+    assert_eq!(
+        roll.external_cut_area_m2,
+        nominal.rolls[0].external_cut_area_m2
+    );
+    assert_eq!(roll.material.sha256(), nominal.rolls[0].material.sha256());
+    assert_eq!(p.raw(), &raw);
+    check_marker(&bounded);
+    let svg = ftx_export::cutting::preview::svg(&bounded, 0).unwrap();
+    assert!(svg.contains("id=\"stock\" width=\"100\""));
+    assert!(svg.contains("id=\"layout-width\" width=\"80\""));
+    assert!(svg.contains("Reported source width range: 80 to 110 mm"));
+    assert!(
+        !ftx_export::cutting::preview::svg(&nominal, 0)
+            .unwrap()
+            .contains("layout-width")
+    );
+
+    for work_limit in [1, 100_000] {
+        opts.nesting = Some(ftx_export::cutting::nesting::NestingOptions {
+            work_limit,
+            ..Default::default()
+        });
+        let nested = CutPlan::build(&p, &opts).unwrap();
+        check_marker(&nested);
+        assert_eq!(nested.rolls[0].length_m, bounded.rolls[0].length_m);
+        assert_eq!(nested.rolls[0].placements.len(), 2);
+        assert_eq!(
+            nested.rolls[0].nesting.as_ref().unwrap().budget_exhausted,
+            work_limit == 1
+        );
+    }
+    opts.nesting = None;
+    opts.maximum_marker_length_m = Some(0.12);
+    let partitioned = CutPlan::build(&p, &opts).unwrap();
+    assert_eq!(partitioned.rolls.len(), 2);
+    assert!(
+        partitioned
+            .rolls
+            .iter()
+            .all(|r| r.length_m == 0.12 && r.placements.len() == 1)
+    );
+    assert_eq!(
+        partitioned
+            .rolls
+            .iter()
+            .map(|r| r.external_cut_area_m2)
+            .sum::<f64>(),
+        roll.external_cut_area_m2
+    );
+    check_marker(&partitioned);
+}
+
+#[test]
+fn lower_width_requires_admitted_positive_source_bounds_and_refuses_oversized_cutters() {
+    let p = pattern(vec![piece("front", 75.0, 100.0)]);
+    let mut opts = options();
+    assert!(CutPlan::build(&p, &opts).is_ok());
+    opts.width_basis = WidthBasis::ReportedLowerBound;
+    assert!(
+        CutPlan::build(&p, &opts)
+            .unwrap_err()
+            .message
+            .contains("source-reported width bounds")
+    );
+    for bounds in [
+        json!([0.0, 0.11]),
+        json!([-0.01, 0.11]),
+        json!([0.11, 0.12]),
+        json!([0.08, 0.09]),
+    ] {
+        let mut raw = p.raw().clone();
+        raw["fabric"]["material"]["record"]["properties"]["width"]["bounds"] = bounds;
+        assert!(CutPlan::build(&Pattern::new(raw), &opts).is_err());
+    }
+    let mut raw = p.raw().clone();
+    raw["fabric"]["material"]["record"]["properties"]["width"]["bounds"] = json!([0.08, 0.11]);
+    let error = CutPlan::build(&Pattern::new(raw.clone()), &opts).unwrap_err();
+    assert!(error.message.contains("usable width 70"));
+    raw["fabric"]["material"]["allow_estimates"] = json!(false);
+    assert!(
+        CutPlan::build(&Pattern::new(raw.clone()), &opts)
+            .unwrap_err()
+            .message
+            .contains("estimate")
+    );
+    raw["fabric"]["material"]["allow_estimates"] = json!(true);
+    raw["fabric"]["material"]["record"]["properties"]["width"]["bounds"] = json!([0.1, 0.1]);
+    let exact_pattern = Pattern::new(raw);
+    let exact = CutPlan::build(&exact_pattern, &opts).unwrap();
+    assert_eq!(
+        exact.rolls[0].layout_width.as_ref().unwrap().width_m,
+        exact.rolls[0].width_m
+    );
+    opts.edge_margin_mm = 50.0;
+    assert!(
+        CutPlan::build(&exact_pattern, &opts)
+            .unwrap_err()
+            .message
+            .contains("usable width")
+    );
+}
+
+#[test]
+fn lower_width_marker_requirements_reach_whole_and_split_supplier_orders() {
+    use ftx_export::cutting::procurement::evaluate;
+    let mut raw = pattern(vec![
+        piece("front", 40.0, 100.0),
+        piece("back", 40.0, 100.0),
+    ])
+    .raw()
+    .clone();
+    raw["fabric"]["material"]["record"]["properties"]["width"]["bounds"] = json!([0.08, 0.11]);
+    let p = Pattern::new(raw);
+    let mut opts = options();
+    opts.maximum_marker_length_m = Some(0.12);
+    let nominal = CutPlan::build(&p, &opts).unwrap();
+    opts.width_basis = WidthBasis::ReportedLowerBound;
+    let bounded = CutPlan::build(&p, &opts).unwrap();
+    let (_, mut quotes, mut market) = split_order_fixture();
+    for quote in &mut quotes {
+        quote["material_sha256"] = json!(bounded.rolls[0].material.sha256());
+    }
+    let book = split_quote_book(quotes.clone());
+    let nominal_price = evaluate(&nominal, &book, &market).unwrap();
+    let bounded_price = evaluate(&bounded, &book, &market).unwrap();
+    assert!(
+        (nominal_price["selected_observed_order_total"]
+            .as_f64()
+            .unwrap()
+            - 0.15)
+            .abs()
+            < 1e-12
+    );
+    assert!(
+        (bounded_price["selected_observed_order_total"]
+            .as_f64()
+            .unwrap()
+            - 0.45)
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(bounded_price["complete_offer_coverage"], true);
+    assert_eq!(bounded_price["order_allocation_optimality_proven"], true);
+    assert_eq!(
+        bounded_price["material_orders"][0]["required_length_m"],
+        0.24
+    );
+    assert_eq!(
+        bounded_price["material_orders"][0]["required_stock_area_m2"],
+        0.024
+    );
+    assert_eq!(
+        bounded_price["material_orders"][0]["allocation"]["selected_orders"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    market.split_orders = None;
+    assert_eq!(
+        evaluate(&bounded, &book, &market).unwrap()["complete_offer_coverage"],
+        false
+    );
+    quotes.truncate(1);
+    quotes[0]["available_quantity"] = json!(0.25);
+    quotes[0]["price"] = json!(10.0);
+    let book = split_quote_book(quotes);
+    let whole = evaluate(&bounded, &book, &market).unwrap();
+    assert_eq!(
+        whole["material_orders"][0]["least_observed_order"]["order_quantity"],
+        0.25
+    );
+    assert_eq!(whole["least_observed_independent_order_total"], 2.5);
+    // Replacing nominal purchase width by the narrower layout width would under-order this job.
+    assert_eq!(
+        whole["material_orders"][0]["sample"]["scope"]["requirement"],
+        0.024
+    );
+    assert_eq!(whole["cut_plan"], serde_json::to_value(&bounded).unwrap());
+}
+
+#[test]
+fn reported_lower_width_changes_the_actual_material_frontier_and_retains_independent_mass() {
+    use ftx_export::material_study::Request;
+    let p = pattern(vec![
+        piece("front", 40.0, 100.0),
+        piece("back", 40.0, 100.0),
+    ]);
+    let mut variants = Vec::new();
+    let mut quotes = Vec::new();
+    for (key, lower, price) in [
+        ("variable-width", Some(0.08), 1.0),
+        ("stable-width", Some(0.095), 1.5),
+        ("missing-range", None, 5.0),
+    ] {
+        let mut selection = fabric(key, 0.1)["material"].clone();
+        if let Some(lower) = lower {
+            selection["record"]["properties"]["width"]["bounds"] = json!([lower, 0.11]);
+        }
+        variants.push(
+            json!({"key":key,"changes":{"schema":"ftx-material-bindings/1","default":selection}}),
+        );
+        quotes.push(json!({"offer_id":key,"material_id":key,"supplier":"Synthetic supplier","sku":key,
+            "price":price,"quantity":1.0,"unit":"linear_meter","minimum_quantity":0.01,"order_increment":0.01,
+            "currency":"USD","region":"US","quality":"test","terms":"ex-tax-shipping",
+            "observed_on":"2026-10-18","available":true,"source":"test:reported-width-study","source_sha256":"0".repeat(64)}));
+    }
+    let mut opts = options();
+    opts.maximum_marker_length_m = Some(0.12);
+    let mut request = json!({"schema":"ftx-material-study/1","variants":variants,"cutting":opts,
+        "assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[]},
+        "purchasing":{"quotes":{"schema":"ftx-textile-quotes/1","quotes":quotes},
+            "market":{"currency":"USD","region":"US","quality":"test","terms":"ex-tax-shipping","as_of":"2026-10-18","max_age_days":0}},
+        "comparison":{"basis":"nominal","required_consumers":["purchasing"],
+            "objectives":[{"metric":"observed_order_cost","direction":"minimize"}],"constraints":[]}});
+    let nominal: Request = serde_json::from_value(request.clone()).unwrap();
+    let nominal = serde_json::to_value(nominal.evaluate(&p).unwrap()).unwrap();
+    assert_eq!(nominal["comparison"]["frontier"], json!(["variable-width"]));
+    request["cutting"]["width_basis"] = json!("reported_lower_bound");
+    let request: Request = serde_json::from_value(request).unwrap();
+    let bounded = serde_json::to_value(request.evaluate(&p).unwrap()).unwrap();
+    assert_eq!(bounded["comparison"]["frontier"], json!(["stable-width"]));
+    for row in bounded["alternatives"].as_array().unwrap() {
+        let key = row["key"].as_str().unwrap();
+        assert_eq!(row["binding"]["status"], "available");
+        assert_eq!(row["assembly_mass"]["status"], "available");
+        assert!((row["metrics"]["assembly_mass_kg"].as_f64().unwrap() - 0.0016).abs() < 1e-14);
+        let decision = bounded["comparison"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["key"] == key)
+            .unwrap();
+        if key == "missing-range" {
+            assert_eq!(row["cutting"]["status"], "refused");
+            assert_eq!(row["purchasing"]["status"], "refused");
+            assert!(row["metrics"]["least_observed_independent_order_total"].is_null());
+            assert_eq!(decision["eligible"], false);
+            continue;
+        }
+        let actual_pattern = Pattern::new(row["binding"]["result"]["pattern"].clone());
+        let direct = CutPlan::build(&actual_pattern, request.cutting.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            row["cutting"]["result"],
+            serde_json::to_value(&direct).unwrap()
+        );
+        let purchasing = request.purchasing.as_ref().unwrap();
+        let priced = ftx_export::cutting::procurement::evaluate(
+            &direct,
+            &purchasing.quotes,
+            &purchasing.market,
+        )
+        .unwrap();
+        assert_eq!(row["purchasing"]["result"], priced);
+        assert_eq!(
+            decision["readings"]["observed_order_cost"]["value"],
+            priced["least_observed_independent_order_total"]
+        );
+        let expected = if key == "variable-width" { 0.24 } else { 0.18 };
+        assert!(
+            (priced["least_observed_independent_order_total"]
+                .as_f64()
+                .unwrap()
+                - expected)
+                .abs()
+                < 1e-12
+        );
     }
 }
 

@@ -61,6 +61,25 @@ pub fn svg(plan: &CutPlan, roll_index: usize) -> Result<String, Refusal> {
         xml_escape(&plan.pattern_sha256),
         xml_escape(roll.material.sha256())
     );
+    if let Some(layout) = &roll.layout_width {
+        let [lo, hi] = layout.reported_bounds_m;
+        let layout_mm = layout.width_m * 1000.0;
+        if !layout_mm.is_finite()
+            || layout_mm <= 0.0
+            || layout_mm > w
+            || !lo.is_finite()
+            || !hi.is_finite()
+            || !(hi * 1000.0).is_finite()
+            || lo != layout.width_m
+            || hi < roll.width_m
+        {
+            return Err(bad());
+        }
+        out.push_str(&format!(
+            "<g id=\"source-width-envelope\"><title>Layout at source-reported lower width; nominal stock rectangle remains the purchase basis</title><desc>Reported source width range: {} to {} mm. Fixed cutter geometry and margins; no confidence or physical guarantee. Gross area, mass and invoice conversions retain nominal width.</desc><rect id=\"layout-width\" width=\"{}\" height=\"{hs}\" stroke=\"#975000\" stroke-dasharray=\"2 1\"/></g>\n",
+            fnum(lo * 1000.0, 6), fnum(hi * 1000.0, 6), fnum(layout_mm, 6)
+        ));
+    }
     for (index, p) in roll.placements.iter().enumerate() {
         if p.cut_mm.len() < 3
             || p.cut_mm.iter().chain(&p.grain_mm).any(|v| !v.is_finite())

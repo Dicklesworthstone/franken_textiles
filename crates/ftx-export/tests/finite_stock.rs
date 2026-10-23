@@ -196,6 +196,7 @@ fn hides_without_roll_width_use_real_boundary_defects_and_source_evidence() {
         copies: 1,
         gap_mm: 2.,
         edge_margin_mm: 2.,
+        width_basis: Default::default(),
         end_margin_mm: 2.,
         seam_allowance_mm: None,
         nesting: None,

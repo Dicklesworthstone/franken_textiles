@@ -63,6 +63,66 @@ fn priced(pattern: &Pattern, request: &job::Request) -> job::Request {
 }
 
 #[test]
+fn lower_width_roll_planning_preserves_finite_inventory_and_exact_mixed_job_replay() {
+    let (pattern, mut request) = inputs();
+    let mut raw = pattern.raw().clone();
+    raw["pieces"][1]["fabric"]["material"]["record"]["properties"]["width"]["bounds"] =
+        json!([0.03, 0.11]);
+    let pattern = Pattern::new(raw.clone());
+    request.roll.as_mut().unwrap().maximum_marker_length_m = Some(0.029);
+    let mut request = priced(&pattern, &request);
+    let nominal = request.build(&pattern).unwrap();
+    request.roll.as_mut().unwrap().width_basis =
+        ftx_export::cutting::WidthBasis::ReportedLowerBound;
+    let bounded = request.build(&pattern).unwrap();
+    assert_eq!(pattern.raw(), &raw);
+    assert_eq!(bounded.inventory, nominal.inventory);
+    assert!(bounded.complete_inventory);
+    assert_eq!(value(&bounded.finite_stock), value(&nominal.finite_stock));
+    assert_eq!(nominal.roll.as_ref().unwrap().rolls.len(), 1);
+    let rolls = &bounded.roll.as_ref().unwrap().rolls;
+    assert_eq!(rolls.len(), 2);
+    for marker in rolls {
+        near(marker.width_m, 0.1);
+        near(marker.layout_width.as_ref().unwrap().width_m, 0.03);
+        near(marker.length_m, 0.029);
+        assert_eq!(marker.placements.len(), 1);
+        assert!(marker.placements[0].bounds_mm[2] <= 28.0);
+    }
+    near(bounded.external_cut_area_m2, nominal.external_cut_area_m2);
+    near(bounded.stock_area_m2 - nominal.stock_area_m2, 0.0029);
+    let pricing = bounded.purchasing.as_ref().unwrap();
+    assert!(pricing.complete_offer_coverage);
+    assert_eq!(
+        value(&pricing.finite_stock),
+        value(&nominal.purchasing.as_ref().unwrap().finite_stock)
+    );
+    let supplied = request.purchasing.as_ref().unwrap();
+    assert_eq!(
+        value(&pricing.roll)["result"],
+        procurement::evaluate(
+            bounded.roll.as_ref().unwrap(),
+            &supplied.quotes,
+            &supplied.market
+        )
+        .unwrap()
+    );
+    let replay: job::Request = serde_json::from_str(&bounded.replay_request_json).unwrap();
+    assert_eq!(
+        replay.roll.as_ref().unwrap().width_basis,
+        ftx_export::cutting::WidthBasis::ReportedLowerBound
+    );
+    assert_eq!(
+        value(&bounded),
+        value(
+            &replay
+                .build(&Pattern::from_json(&bounded.pattern_json).unwrap())
+                .unwrap()
+        )
+    );
+}
+
+#[test]
 fn mixed_job_allocates_original_mirrors_fold_lining_and_copies_exactly_once() {
     let (pattern, request) = inputs();
     let original = pattern.raw().clone();

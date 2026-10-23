@@ -18,6 +18,23 @@ pub mod preview;
 pub mod procurement;
 pub mod stock;
 
+/// Source-width admission for placement, separate from nominal purchase-unit conversion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WidthBasis {
+    /// Preserve ordinary planning at the source's central width.
+    #[default]
+    Nominal,
+    /// Plan inside the source-reported lower width; missing bounds refuse rather than fall back.
+    ReportedLowerBound,
+}
+
+impl WidthBasis {
+    fn is_nominal(&self) -> bool {
+        *self == Self::Nominal
+    }
+}
+
 /// Declared roll-planning policy. Values are allowances, not calibrated machine parameters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +45,9 @@ pub struct CutOptions {
     pub gap_mm: f64,
     /// Unused strip on each selvage, in mm, subtracted from the material's sourced width.
     pub edge_margin_mm: f64,
+    /// Width used for layout before edge margins; nominal purchased width remains unchanged.
+    #[serde(default, skip_serializing_if = "WidthBasis::is_nominal")]
+    pub width_basis: WidthBasis,
     /// Unused length at both ends of each marker, in mm.
     pub end_margin_mm: f64,
     /// Optional export seam allowance override; otherwise the existing export hierarchy is used.
@@ -69,6 +89,17 @@ pub struct CutPlacement {
     pub transform: [[f64; 3]; 2],
 }
 
+/// Conditional source-width envelope actually used by the complete placement authority.
+#[derive(Clone, Debug, Serialize)]
+pub struct LayoutWidth {
+    /// Full planning width before edge margins, equal to the admitted lower source bound.
+    pub width_m: f64,
+    /// Original normalized source range, not a confidence interval or a measured guarantee.
+    pub reported_bounds_m: [f64; 2],
+    /// Fixed-input interpretation and the unchanged scope of purchasing and gross material metrics.
+    pub notes: [&'static str; 2],
+}
+
 /// One continuous marker of an exact material snapshot, never pooled merely by display name.
 #[derive(Clone, Debug, Serialize)]
 pub struct RollMarker {
@@ -76,6 +107,9 @@ pub struct RollMarker {
     pub material: ResolvedMaterial,
     /// Nominal sourced stock width, in metres, before the two declared edge margins.
     pub width_m: f64,
+    /// Explicit source-lower-bound layout; absent for nominal planning, including legacy requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout_width: Option<LayoutWidth>,
     /// Required roll length, including outline gaps and both end margins, in metres.
     pub length_m: f64,
     /// Gross purchased stock area width × length, NOT the sum of pattern-piece areas.
@@ -447,6 +481,9 @@ impl CutPlan {
                     "Nominal source width/density and caller margins; source uncertainty is retained, not propagated into a fit or safety guarantee.",
                     "Planning geometry only: no device execution, sewing order, tool compensation or process-safety authorization.",
                 ];
+                if options.width_basis == WidthBasis::ReportedLowerBound {
+                    limits[4] = "Placement uses the admitted source-reported lower width with fixed geometry and margins. Gross area, mass and invoice conversions retain nominal source width; no area/mass/cost uncertainty is propagated.";
+                }
                 if options.maximum_marker_length_m.is_some() {
                     limits.push("Whole cut instances are assigned by bounded first-fit shelves; marker count and total length are heuristic, not globally optimal. Compaction stays within each assigned marker.");
                     limits.push("The requested marker-length limit is a planning constraint, not observed continuous stock or a supplier fulfillment guarantee.");
@@ -497,7 +534,38 @@ fn pack(
             .material()
             .require("width", "m", material.allows_estimates())?,
     )?;
-    let width_mm = positive("stock width in mm", width_m * 1000.0)?;
+    let layout_width = if options.width_basis == WidthBasis::ReportedLowerBound {
+        let bounds = material.material().properties["width"]
+            .bounds
+            .ok_or_else(|| {
+                bad(format!(
+                    "material {} needs explicit source-reported width bounds for reported_lower_bound planning",
+                    material.material().id
+                ))
+            })?;
+        if bounds.iter().any(|x| !x.is_finite() || *x <= 0.0)
+            || bounds[0] > width_m
+            || bounds[1] < width_m
+        {
+            return Err(bad(
+                "reported width bounds must be finite, positive and contain nominal width",
+            ));
+        }
+        Some(LayoutWidth {
+            width_m: bounds[0],
+            reported_bounds_m: bounds,
+            notes: [
+                "Placement uses the source-reported lower width with fixed cutter geometry and declared margins. The source range is not a confidence interval, stock guarantee or physical validation.",
+                "Gross stock area, stock mass and invoice-unit conversion retain nominal source width and the newly planned length. No area, mass or cost uncertainty interval is inferred.",
+            ],
+        })
+    } else {
+        None
+    };
+    let width_mm = positive(
+        "layout width in mm",
+        layout_width.as_ref().map_or(width_m, |w| w.width_m) * 1000.0,
+    )?;
     let usable = positive(
         "usable width after both edge margins",
         width_mm - 2.0 * options.edge_margin_mm,
@@ -587,7 +655,16 @@ fn pack(
     }
     markers
         .into_iter()
-        .map(|parts| finish_marker(material.clone(), parts, options, width_m, width_mm))
+        .map(|parts| {
+            finish_marker(
+                material.clone(),
+                parts,
+                options,
+                width_m,
+                width_mm,
+                layout_width.clone(),
+            )
+        })
         .collect()
 }
 
@@ -597,6 +674,7 @@ fn finish_marker(
     options: &CutOptions,
     width_m: f64,
     width_mm: f64,
+    layout_width: Option<LayoutWidth>,
 ) -> Result<RollMarker, Refusal> {
     let MarkerParts {
         shelves,
@@ -648,6 +726,7 @@ fn finish_marker(
     Ok(RollMarker {
         material,
         width_m,
+        layout_width,
         length_m,
         stock_area_m2,
         external_cut_area_m2: total_area,

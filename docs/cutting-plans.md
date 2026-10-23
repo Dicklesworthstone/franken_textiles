@@ -94,6 +94,46 @@ of the lowest
 observed whole-order costs per snapshot, not the sum of percentiles or a representative market estimate.
 Different snapshots, even sharing a product ID, are conservatively ordered separately.
 
+## Planning at the source-reported lower width
+
+Set `width_basis` to `reported_lower_bound` to fit the complete marker inside the lower end of each
+material's reported width range. For example:
+
+```json
+{
+  "copies": 3,
+  "gap_mm": 5,
+  "edge_margin_mm": 5,
+  "end_margin_mm": 10,
+  "maximum_marker_length_m": 0.12,
+  "width_basis": "reported_lower_bound"
+}
+```
+
+Each consumed material must have explicit `properties.width.bounds` in the width observation's unit.
+The resolver normalizes the value and both bounds together; the range must be finite, positive and
+contain nominal width. Width provenance and estimate consent still apply. Missing bounds refuse this
+planning mode instead of substituting nominal width. Omitting `width_basis`, or setting it to
+`nominal`, preserves the existing layout and output format.
+
+Both edge margins are subtracted from the admitted lower width. Shelf placement, optional polygon
+compaction and bounded-marker partitioning all use that narrower space; complete pieces can move to
+additional shelves or markers, and a cutter too wide for it refuses. This is a conditional fit with
+fixed cutter geometry and margins, not a confidence interval or a guarantee about delivered stock.
+
+Each marker retains nominal `width_m` and adds `layout_width.width_m`,
+`layout_width.reported_bounds_m` and explanatory `layout_width.notes`. Gross `stock_area_m2`,
+`stock_mass_kg`, utilization and purchase-unit conversions use **nominal width and the newly planned
+length**. Source width bounds do not become area, mass or cost intervals. For example, three 0.12 m
+markers of nominally 0.1 m stock require 0.036 m² and 0.36 linear metres before order rounding, even
+when their layout width is 0.075 m. Finite hide/remnant outlines and inventory are unchanged; in a
+mixed cutting job this option belongs to the roll route.
+
+In the browser, load these cutting options and use **Plan roll cuts**. Its marker summary retains
+both widths, and the SVG shows the lower-width layout envelope inside the nominal stock rectangle.
+Select **Preview marker number** for any additional marker and rerun the planner. **Compare
+whole-order costs** uses all resulting marker lengths with the same nominal purchase-width basis.
+
 ## Bounded marker lengths and multiple cuts
 
 Add `maximum_marker_length_m` when each marker must fit a declared cutting-table or continuous-cut
