@@ -29,6 +29,7 @@ use crate::{
 
 pub mod combinations;
 pub mod comparison;
+pub mod matrix;
 pub mod recipes;
 pub mod vapor;
 
@@ -535,7 +536,17 @@ impl Request {
         if !errors.is_empty() {
             return Err(invalid(errors.join("; ")));
         }
-        let (mut variants, screening) = self.variants(pattern, additional_consumer)?;
+        let (variants, screening) = self.variants(pattern, additional_consumer)?;
+        self.evaluate_prepared(pattern, additional_consumer, variants, screening)
+    }
+
+    fn evaluate_prepared(
+        &self,
+        pattern: &Pattern,
+        additional_consumer: bool,
+        mut variants: Vec<PreparedVariant>,
+        screening: Option<material_screen::Report>,
+    ) -> Result<Report, Refusal> {
         if variants.len() > 32 {
             return Err(budget(
                 "constrain screening or supply at most 32 material alternatives",

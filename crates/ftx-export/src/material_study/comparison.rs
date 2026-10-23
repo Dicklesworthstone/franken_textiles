@@ -14,6 +14,7 @@ use super::{Alternative, Request, ScenarioAlternative, hash, invalid};
 
 #[cfg(test)]
 mod heating_tests;
+mod matrix;
 
 /// Uncertainty admission. Source intervals cannot be propagated through planners by relabeling them.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -966,6 +967,12 @@ impl Policy {
     }
 
     fn dominates(&self, a: &Candidate, b: &Candidate) -> bool {
+        self.relation(a, b) == Some(true)
+    }
+
+    // Some(false) is no worse with no strict improvement; None is not no-worse. Keeping that
+    // distinction lets named-case matrices combine ties and improvements using this same rule.
+    fn relation(&self, a: &Candidate, b: &Candidate) -> Option<bool> {
         let mut strictly = false;
         for objective in &self.objectives {
             let interval = |candidate: &Candidate| {
@@ -982,19 +989,19 @@ impl Policy {
             match objective.direction {
                 Direction::Minimize => {
                     if ah > bl {
-                        return false;
+                        return None;
                     }
                     strictly |= ah < bl;
                 }
                 Direction::Maximize => {
                     if al < bh {
-                        return false;
+                        return None;
                     }
                     strictly |= al > bh;
                 }
             }
         }
-        strictly
+        Some(strictly)
     }
 
     fn protocol(
