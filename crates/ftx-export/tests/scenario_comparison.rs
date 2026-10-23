@@ -1472,6 +1472,359 @@ fn covered_vapor_protocols_follow_consumed_layers_and_require_separate_compariso
     assert!(r.comparison.as_ref().unwrap().validate(&r, true).is_err());
 }
 
+fn moving_vapor_inputs() -> (Request, Value) {
+    let (mut request, coverage) = vapor_coverage_inputs();
+    let mut descriptor = motion_descriptor();
+    descriptor["scenario"]["vapor_coverage"] = coverage["scenario"]["vapor_coverage"].clone();
+    descriptor["vapor_coverage_body_mesh_sha256"] =
+        coverage["vapor_coverage_body_mesh_sha256"].clone();
+    descriptor["scenario"]["motion"]["vapor_coverage_history"] = json!({
+        "schema":"ftx-motion-vapor-coverage/1","integration":"right_endpoint",
+        "max_geometry_operations":10000});
+    request.variants[1]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("vapor_resistance")
+        .unwrap()
+        .value = 20.;
+    request.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal", "objectives":[
+        {"metric":"motion_covered_vapor_potential_energy_j","direction":"maximize"},
+        {"metric":"motion_covered_vapor_potential_mass_kg","direction":"maximize"}],
+        "required_consumers":["motion_vapor_coverage"]}))
+        .unwrap(),
+    );
+    (request, descriptor)
+}
+
+// Synthetic geometry with independently specified area changes; each regional network is evaluated
+// by the production material authority. These callbacks test comparison admission, not projection.
+fn moving_vapor_frame(pattern: &Pattern, d: &Value, width: f64) -> Value {
+    let mut frame = synthetic_vapor_coverage(pattern, d, 0.);
+    frame["positions_m"][1][0] = json!(width);
+    let positions = frame["positions_m"].clone();
+    let result = &mut frame["vapor_coverage"]["result"];
+    result["request"]["source"]["positions_m"] = positions;
+    result["request"]["map"]["body_positions_m"][1][0] = json!(width);
+    let body_hash = digest(
+        &json!({"positions_m":result["request"]["map"]["body_positions_m"],
+        "triangles":result["request"]["map"]["body_triangles"]}),
+    );
+    result["request"]["conditions"]["body_mesh_sha256"] = json!(body_hash);
+    result["body_mesh_sha256"] = json!(body_hash);
+    let boundary = &result["request"]["conditions"]["boundaries"][0];
+    let network: ftx_pattern::material_vapor::Request = serde_json::from_value(json!({
+        "schema":"ftx-vapor-stack/1","layers":[{"key":"shell",
+            "selection":result["request"]["source"]["materials"][0],"area_m2":width * 0.5}],
+        "area_m2":width * 0.5,
+        "inside_vapor_pressure_pa":boundary["inside_vapor_pressure_pa"],
+        "outside_vapor_pressure_pa":boundary["outside_vapor_pressure_pa"],
+        "inside_film_resistance_m2_pa_w":boundary["inside_film_resistance_m2_pa_w"],
+        "outside_film_resistance_m2_pa_w":boundary["outside_film_resistance_m2_pa_w"],
+        "latent_heat_j_kg":boundary["latent_heat_j_kg"],"required_conditions":{},
+        "required_method":null,"allow_mixed_protocols":false}))
+    .unwrap();
+    let vapor = network
+        .evaluate(&Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: vec![],
+        })
+        .unwrap();
+    result["coverage"]["body_area_m2"] = json!(width * 0.5);
+    result["coverage"]["body"] = json!([{"area_m2":width * 0.5,
+        "covered_area_m2":width * 0.5,"uncovered_area_m2":0.}]);
+    result["mixed_protocols"] = json!(false);
+    result["coverage"]["covered_area_m2"] = json!(width * 0.5);
+    result["coverage"]["regions"][0]["body_area_m2"] = json!(width * 0.5);
+    result["coverage"]["regions"][0]["layer_area_m2"] = json!([width * 0.5]);
+    result["coverage"]["covered_potential_heat_flow_w"] = json!(vapor.potential_heat_flow_w);
+    result["coverage"]["covered_potential_mass_flow_kg_s"] = json!(vapor.potential_mass_flow_kg_s);
+    result["coverage"]["regions"][0]["vapor"] = json!(vapor);
+    result["projection"]["geometry_operations"] = json!(11);
+    result["source_sha256"] = json!(digest(&result["request"]["source"]));
+    result["request_sha256"] = json!(digest(&result["request"]));
+    result["replay_request_json"] = json!(serde_json::to_string(&result["request"]).unwrap());
+    frame
+}
+
+fn synthetic_moving_vapor(pattern: &Pattern, d: &Value) -> Value {
+    let mut simulation = moving_vapor_frame(pattern, d, 1.);
+    simulation["positions_sha256"] = json!(digest(&simulation["positions_m"]));
+    let mut motion = synthetic_motion(pattern, 3.)["motion"]["result"].clone();
+    motion["initial_positions_sha256"] = simulation["positions_sha256"].clone();
+    motion["triangles"] = simulation["triangles"].clone();
+    let initial_result = simulation["vapor_coverage"]["result"].clone();
+    let initial_request = &initial_result["request"];
+    motion["initial_sample"] = json!({"time_s":0.,"positions_m":simulation["positions_m"],
+        "body_positions_m":initial_request["map"]["body_positions_m"]});
+    let initial = json!({"time_s":0.,"positions_sha256":simulation["positions_sha256"],
+        "body_positions_sha256":digest(&initial_request["map"]["body_positions_m"]),
+        "result":initial_result});
+    let mut rows = Vec::new();
+    let mut retained = Vec::new();
+    let mut energy = 0.;
+    let mut mass = 0.;
+    for (i, width) in [1.5, 2.].into_iter().enumerate() {
+        let frame = moving_vapor_frame(pattern, d, width);
+        let result = &frame["vapor_coverage"]["result"];
+        let sample = json!({"time_s":0.5 * (i + 1) as f64,"positions_m":frame["positions_m"],
+            "body_positions_m":result["request"]["map"]["body_positions_m"]});
+        motion["samples"][i] = sample.clone();
+        motion["samples"][i]["solve"] = json!({"converged":true});
+        motion["keyframes"][i]["positions_sha256"] = json!(digest(&sample["positions_m"]));
+        motion["keyframes"][i]["body_collision_sha256"] = json!(digest(&json!([
+            sample["body_positions_m"],
+            motion["body_triangles"]
+        ])));
+        let e = result["coverage"]["covered_potential_heat_flow_w"]
+            .as_f64()
+            .unwrap()
+            * 0.5;
+        let m = result["coverage"]["covered_potential_mass_flow_kg_s"]
+            .as_f64()
+            .unwrap()
+            * 0.5;
+        energy += e;
+        mass += m;
+        rows.push(
+            json!({"sample_index":i,"time_s":sample["time_s"],"dt_s":0.5,
+            "positions_sha256":digest(&sample["positions_m"]),
+            "body_positions_sha256":digest(&sample["body_positions_m"]),
+            "result":result,"potential_energy_j":e,"potential_mass_kg":m}),
+        );
+        retained.push(sample);
+    }
+    let request = json!({"schema":"ftx-vapor-coverage-history/1",
+        "policy":d["scenario"]["motion"]["vapor_coverage_history"],
+        "initial":initial_request,"samples":retained,"path_sha256":motion["path_sha256"]});
+    motion["vapor_coverage_history"] = json!({"status":"available","result":{
+        "schema":"ftx-vapor-coverage-history-report/1","request":request,
+        "request_sha256":digest(&request),"replay_request_json":serde_json::to_string(&request).unwrap(),
+        "path_sha256":motion["path_sha256"],"initial_positions_sha256":simulation["positions_sha256"],
+        "duration_s":1.,"integration":"right_endpoint","geometry_operations":33,
+        "initial":initial,"samples":rows,"totals":{"potential_energy_j":energy,"potential_mass_kg":mass}}});
+    simulation["motion"] = json!({"status":"available","result":motion});
+    simulation["surface"] = json!({"status":"refused"});
+    simulation["coverage"] = json!({"status":"refused"});
+    simulation
+}
+
+#[test]
+fn moving_vapor_objectives_integrate_every_current_area_and_remain_independent_of_dry_heat() {
+    let (r, d) = moving_vapor_inputs();
+    let report = serde_json::to_value(
+        r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |_, p| {
+            Ok(synthetic_moving_vapor(p, &d))
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        report["comparison"]["frontier"],
+        json!(["a"]),
+        "{}",
+        report["comparison"]
+    );
+    assert_eq!(report["comparison"]["motion_required"], true);
+    let readings = &report["comparison"]["alternatives"][0]["readings"];
+    // Ret=10, films=5, pressure difference=1000 Pa. Accepted body areas are 0.75 and 1 m².
+    let expected = (0.75 + 1.) * 0.5 * 1000. / 15.;
+    assert!(
+        (readings["motion_covered_vapor_potential_energy_j"]["value"]
+            .as_f64()
+            .unwrap()
+            - expected)
+            .abs()
+            < 1e-12
+    );
+    assert!(
+        (readings["motion_covered_vapor_potential_mass_kg"]["value"]
+            .as_f64()
+            .unwrap()
+            - expected / 2500000.)
+            .abs()
+            < 1e-18
+    );
+    assert_eq!(
+        readings["motion_covered_vapor_potential_energy_j"]["unit"],
+        "J"
+    );
+    assert_eq!(
+        readings["motion_covered_vapor_potential_mass_kg"]["unit"],
+        "kg"
+    );
+    assert_eq!(
+        readings["motion_covered_vapor_potential_energy_j"]["consumer"],
+        "motion_vapor_coverage"
+    );
+    assert_eq!(
+        report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+        "available"
+    );
+}
+
+#[test]
+fn moving_vapor_refuses_partial_stale_and_modified_histories_even_with_protocol_consent() {
+    let (mut r, d) = moving_vapor_inputs();
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    for fault in [
+        "missing",
+        "partial",
+        "initial_partial",
+        "path",
+        "body",
+        "geometry",
+        "time",
+        "integral",
+        "total",
+        "rule",
+        "canonical_transport",
+        "source",
+        "bound_material",
+        "area_accounting",
+        "frame_replay",
+        "boundary",
+        "replay",
+        "work",
+    ] {
+        let report = serde_json::to_value(r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d,
+            |key, p| {
+                let mut simulation = synthetic_moving_vapor(p, &d);
+                    if key == "a" && fault == "bound_material" {
+                        let mut other = p.raw().clone();
+                        other["fabric"]["material"]["expected_sha256"] = Value::Null;
+                        other["fabric"]["material"]["record"]["properties"]["vapor_resistance"]["value"] = json!(1.);
+                        simulation = synthetic_moving_vapor(&Pattern::new(other), &d);
+                        simulation["pattern_sha256"] = json!(digest(p.raw()));
+                    }
+                if key == "a" {
+                    let history = &mut simulation["motion"]["result"]["vapor_coverage_history"]["result"];
+                    match fault {
+                        "missing" => *history = Value::Null,
+                        "partial" => { history["samples"].as_array_mut().unwrap().pop(); },
+                        "initial_partial" => history["initial"]["result"]["coverage"]["uncovered_area_m2"] = json!(0.1),
+                        "path" => history["path_sha256"] = json!("4".repeat(64)),
+                        "body" => history["samples"][1]["result"]["request"]["map"]["body_positions_m"][0][2] = json!(0.02),
+                        "geometry" => history["samples"][1]["result"]["request"]["source"]["positions_m"][0][2] = json!(0.04),
+                        "time" => history["samples"][1]["dt_s"] = json!(0.25),
+                        "integral" => history["samples"][1]["potential_energy_j"] = json!(500.),
+                        "total" => history["totals"]["potential_mass_kg"] = json!(100.),
+                        "rule" => history["integration"] = json!("left_endpoint"),
+                        "canonical_transport" => history["samples"][1]["result"]["coverage"]["regions"][0]["vapor"]["potential_heat_flow_w"] = json!(1000.),
+                        "source" => history["samples"][1]["result"]["request"]["source"]["materials"][0]["expected_sha256"] = json!("5".repeat(64)),
+                        "boundary" => history["samples"][1]["result"]["request"]["conditions"]["boundaries"][0]["inside_vapor_pressure_pa"] = json!(10000.),
+                        "replay" => history["replay_request_json"] = json!("{}"),
+                        "frame_replay" => history["samples"][1]["result"]["replay_request_json"] = json!("{}"),
+                        "work" => history["geometry_operations"] = json!(10001),
+                        "bound_material" => {},
+                        "area_accounting" => {
+                            let frame = &mut history["samples"][1]["result"];
+                            frame["projection"]["regions"][0]["body_fraction"] = json!(0.5);
+                            frame["projection"]["regions"][0]["layers"][0]["fraction"] = json!(0.5);
+                            let region = &mut frame["coverage"]["regions"][0];
+                            region["body_area_m2"] = json!(0.5);
+                            region["layer_area_m2"] = json!([0.5]);
+                            let mut request: ftx_pattern::material_vapor::Request =
+                                serde_json::from_value(region["vapor"]["request"].clone()).unwrap();
+                            request.area_m2 = 0.5;
+                            request.layers[0].area_m2 = Some(0.5);
+                            let canonical = request.evaluate(&Catalog {
+                                schema: CATALOG_SCHEMA.into(), materials:vec![] }).unwrap();
+                            let power = canonical.potential_heat_flow_w;
+                            let flow = canonical.potential_mass_flow_kg_s;
+                            region["vapor"] = json!(canonical);
+                            frame["coverage"]["covered_potential_heat_flow_w"] = json!(power);
+                            frame["coverage"]["covered_potential_mass_flow_kg_s"] = json!(flow);
+                            history["samples"][1]["potential_energy_j"] = json!(power * 0.5);
+                            history["samples"][1]["potential_mass_kg"] = json!(flow * 0.5);
+                            history["totals"]["potential_energy_j"] = json!(
+                                history["samples"][0]["potential_energy_j"].as_f64().unwrap() + power * 0.5);
+                            history["totals"]["potential_mass_kg"] = json!(
+                                history["samples"][0]["potential_mass_kg"].as_f64().unwrap() + flow * 0.5);
+                        },
+                        _ => unreachable!(),
+                    }
+                }
+                Ok(simulation)
+            }).unwrap()).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            json!(["b"]),
+            "{fault}: {}",
+            report["comparison"]
+        );
+        assert_eq!(
+            report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
+        );
+        assert_eq!(
+            report["simulations"][0]["evaluation"]["result"]["motion"]["status"],
+            "available"
+        );
+    }
+}
+
+#[test]
+fn moving_vapor_requires_history_only_when_consumed_and_preserves_source_protocol_comparison() {
+    let (mut r, d) = moving_vapor_inputs();
+    r.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("vapor_resistance")
+        .unwrap()
+        .method = "different acquired protocol".into();
+    let evaluate = |request: &Request, missing: bool| {
+        serde_json::to_value(
+            request
+                .evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |_, p| {
+                    let mut simulation = synthetic_moving_vapor(p, &d);
+                    if missing {
+                        simulation["motion"]["result"]["vapor_coverage_history"] =
+                            json!({"status":"refused"});
+                    }
+                    Ok(simulation)
+                })
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let report = evaluate(&r, false);
+    assert_eq!(report["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(
+        report["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    r.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    assert_eq!(evaluate(&r, false)["comparison"]["frontier"], json!(["a"]));
+    r.comparison = Some(serde_json::from_value(json!({"basis":"nominal","objectives":[
+        {"metric":"stock_mass_kg","direction":"minimize"}],"required_consumers":["motion_vapor_coverage"]})).unwrap());
+    assert!(
+        evaluate(&r, true)["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    r.comparison.as_mut().unwrap().required_consumers.clear();
+    let static_only = evaluate(&r, true);
+    assert_eq!(static_only["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(static_only["comparison"]["motion_required"], false);
+}
+
 fn vapor_piece_inputs() -> (Pattern, Request, Value) {
     let (mut request, mut descriptor) = vapor_coverage_inputs();
     let mut raw: Value = serde_json::from_str(PATTERN).unwrap();

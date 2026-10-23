@@ -2395,6 +2395,35 @@ test('compiled WASM draped vapor coverage preserves source geometry, replay and 
     p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
   });
 
+test('compiled WASM moving vapor integrates changing area and replays the complete frozen history',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const initial=JSON.parse(fs.readFileSync(path.join(__dirname,'../examples/vapor-coverage/layered.json'),'utf8'));
+    const stretch=positions=>positions.map(([x,y,z])=>[2*x,y,z]);
+    const input={schema:'ftx-vapor-coverage-history/1',
+      policy:{schema:'ftx-motion-vapor-coverage/1',integration:'right_endpoint',max_geometry_operations:10000},
+      initial,samples:[
+        {time_s:1,positions_m:initial.source.positions_m,body_positions_m:initial.map.body_positions_m},
+        {time_s:3,positions_m:stretch(initial.source.positions_m),body_positions_m:stretch(initial.map.body_positions_m)}]};
+    const raw=ftx.thermal_vapor_coverage_history(JSON.stringify(input)), report=JSON.parse(raw);
+    const energy=1000*0.002/(2*11.27+5)*5;
+    assert.ok(Math.abs(report.totals.potential_energy_j-energy)<1e-12);
+    assert.ok(Math.abs(report.totals.potential_mass_kg-energy/2500000)<1e-18);
+    assert.equal(report.samples.length,2); assert.equal(report.duration_s,3);
+    assert.equal(report.latent_heat_coupled,false);
+    assert.equal(ftx.thermal_vapor_coverage_history(report.replay_request_json),raw);
+    if(process.env.FTX_VAPOR_HISTORY_REPLAY) {
+      assert.deepEqual(report,JSON.parse(fs.readFileSync(process.env.FTX_VAPOR_HISTORY_REPLAY,'utf8')));
+    }
+    const changed=JSON.parse(report.replay_request_json);
+    changed.initial.source.materials[0].record.name+=' changed';
+    assert.throws(()=>ftx.thermal_vapor_coverage_history(JSON.stringify(changed)));
+    changed.initial=input.initial; changed.policy.max_geometry_operations=1;
+    assert.throws(()=>ftx.thermal_vapor_coverage_history(JSON.stringify(changed)));
+  });
+
 test('compiled WASM mixed cutting jobs cover every part and replay the frozen complete allocation',
   { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
@@ -3385,4 +3414,42 @@ test('scenario displays independent vapor refusals and freshly evaluated motion 
   assert.deepEqual(plain(table('A: endpoint vapor potentials — independent sheets').children[2].children.map(n=>n.textContent)),
     ['1','Available','0.6','30','0.00001']);
   assert.match(visibleText(table('Initial drape vapor potentials — independent sheets')),/missing mechanics/);
+});
+
+test('moving layered vapor displays accepted coverage, exact replay and independent late refusal', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
+  const report=scenarioReport(); report.scenario.scenario={motion:{vapor_coverage_history:{}}};
+  const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  const transfer={coverage:{covered_area_m2:0.5,uncovered_area_m2:0.1,unassigned_cloth_reference_area_m2:0.2,
+    covered_potential_heat_flow_w:10,covered_potential_mass_flow_kg_s:0.000004}};
+  const replay='{"schema":"ftx-vapor-coverage-history/1","coordinate":-0.0,"duration":1.0}';
+  const history={duration_s:1,integration:'right_endpoint',totals:{potential_energy_j:10,potential_mass_kg:0.000004},
+    initial:{time_s:0,result:transfer},samples:[{time_s:1,dt_s:1,result:transfer,potential_energy_j:10,potential_mass_kg:0.000004}],
+    replay_request_json:replay,path_sha256:'current-motion-path'};
+  initial.motion=outcome({duration_s:1,trials:1,samples:[{}],vapor_coverage_history:outcome(history),keyframes:[
+    {time_s:1,arm_abduction_deg:40,surface:refused('no dry heat'),coverage:refused('no heat capacity'),vapor_coverage:outcome(transfer)}]});
+  p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=label=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===label);
+  assert.deepEqual(plain(table('A: moving layered vapor potential').children[2].children.map(n=>n.textContent)),
+    ['Available','1','1','10','0.000004','right_endpoint']);
+  assert.deepEqual(plain(table('A: vapor coverage at accepted motion samples').children[2].children.map(n=>n.textContent)),
+    ['0','Initial only','0.5','0.1','0.2','10','0.000004','Initial only','Initial only']);
+  assert.deepEqual(plain(table('A: vapor coverage at accepted motion samples').children[3].children.map(n=>n.textContent)),
+    ['1','1','0.5','0.1','0.2','10','0.000004','10','0.000004']);
+  assert.deepEqual(plain(table('A: endpoint vapor potentials — covered layers').children[2].children.map(n=>n.textContent)),
+    ['1','Available','0.5','0.1','10','0.000004']);
+  assert.match(visibleText(s),/complete-domain comparisons require coverage at every sample/);
+  assert.match(visibleText(s),/refining motion samples can change the integral/);
+  assert.match(visibleText(table('B: moving layered vapor potential')),/missing mechanics/);
+  const download=descendants(s).find(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json');
+  assert.equal(await p.blobs.get(download.href).text(),replay);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+  await p.e.scenario.onclick(); initial.motion.result.vapor_coverage_history=refused('late geometry budget exhausted'); p.emit(report);
+  assert.equal(table('A: vapor coverage at accepted motion samples'),undefined);
+  assert.match(visibleText(table('A: moving layered vapor potential')),/late geometry budget exhausted/);
+  assert.equal(table('A: moving layered vapor potential').children[2].children.slice(1).every(n=>n.textContent==='Unknown'),true);
+  assert.ok(table('A: endpoint vapor potentials — covered layers'));
+  assert.equal(descendants(s).some(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json'),false);
 });

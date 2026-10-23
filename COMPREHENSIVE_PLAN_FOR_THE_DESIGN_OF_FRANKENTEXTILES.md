@@ -2820,6 +2820,37 @@ the durations, and physical sewing qualification remains open under `ftx-sp2`/`f
 
 ---
 
+### 25.57 Layered vapor potential follows the complete accepted motion
+
+The existing `scenario.vapor_coverage` consumer now rebuilds its layer paths on every motion
+keyframe. An explicit `motion.vapor_coverage_history` policy additionally evaluates every accepted
+mechanical sample, preserving the same frozen material selections, physical layer names, source
+filters, body-triangle identities and fixed vapor boundaries. Nonuniform pressure fields verify
+their initial body identity before following those triangles through the new poses. No dry
+conductivity or heat capacity is required.
+
+The declared right-endpoint rule integrates each new sample's covered potential power and mass
+flow over its preceding interval. Initial geometry, every accepted sample, projected coverage,
+per-interval values and exact frozen replay remain in the report. Bounded projection work and
+retention are charged before further work; failed samples refuse the complete vapor history while
+retaining independent mechanics and other available consumers. A new native command and portable
+WASM entry point replay the same history without a body-model installation.
+
+Material studies can compare `motion_covered_vapor_potential_energy_j` and
+`motion_covered_vapor_potential_mass_kg`, or require `motion_vapor_coverage`. Admission requires a
+complete mechanical path, the current material and geometry identities, and full coverage of the
+explicit body domain at every retained state. Partial covered subtotals stay inspectable without
+ranking as whole-domain transfer. The browser displays initial and sampled coverage, potential
+integrals, independent refusals and the exact replay download.
+
+Analytic area/time cases, time refinement, source substitution, nonuniform boundary rebinding,
+late failures and actual production-motion replay provide numerical verification. These potential
+integrals depend on the declared reservoirs and motion sampling. Moisture availability/storage,
+actual evaporation, conservative latent feedback and matched wet/dry measurements remain open
+under `ftx-vc2`/`ftx-tmc`. See [vapor-coverage.md](docs/vapor-coverage.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

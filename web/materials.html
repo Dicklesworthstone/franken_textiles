@@ -280,6 +280,16 @@ body-triangle IDs, instance-to-layer names, geometric projection settings and va
 The result reports covered-region potential transfer separately from uncovered body area and unassigned cloth.
 It does not infer sweat supply or add evaporative cooling to dry heat. Download its frozen request for
 <code>thermal-vapor-coverage</code> replay.</p>
+<p class="note">With motion, layered vapor coverage also follows every declared endpoint. To integrate its potential
+over all accepted mechanical samples, add <code>motion.vapor_coverage_history</code> with
+<code>schema: "ftx-motion-vapor-coverage/1"</code>, <code>integration: "right_endpoint"</code> and
+an explicit <code>max_geometry_operations</code> (1–20,000,000). It reuses the same <code>vapor_coverage</code>
+source, layer and boundary policy. Results retain coverage and potential transfer at each sample plus an exact
+<code>thermal-vapor-coverage-history</code> replay download. Use <code>motion_covered_vapor_potential_energy_j</code>
+or <code>motion_covered_vapor_potential_mass_kg</code> as objectives, or require <code>motion_vapor_coverage</code>;
+comparison requires the entire declared body domain to be covered at every retained state.
+The integral uses each new sample's flow over its preceding interval and depends on motion resolution.
+It supplies no moisture state, actual sweating or latent cooling.</p>
 <p class="note">Optional <code>motion</code> in the scenario (<code>ftx-drape-motion/1</code>) continues that same sewn cloth through
 declared time/arm-angle keyframes, preserving velocities and material history. It uses the selected shape without refitting.
 Each interval follows checked linear body-vertex chords, not a certified anatomical joint path. The report retains every accepted

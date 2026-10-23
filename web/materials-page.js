@@ -390,7 +390,41 @@ function motionSamples(parent, key, motion) {
     }
   });
 }
-function motionComparison(parent, rows, simulations, requested) {
+function motionVaporComparison(op, parent, key, index, motion, dependency, requested) {
+  const output = motion?.vapor_coverage_history;
+  if (!requested?.vapor_coverage_history && !output) return;
+  const history = available(output);
+  const summary = table(parent, `${key}: moving layered vapor potential`, ["History", "Duration (s)",
+    "Accepted samples", "Potential energy (J)", "Potential water mass (kg)", "Integration rule"]);
+  cells(summary, [output ? state(output) : `Unavailable: ${state(dependency)}`, metric(history?.duration_s),
+    metric(history?.samples?.length), metric(history?.totals?.potential_energy_j),
+    metric(history?.totals?.potential_mass_kg), history?.integration || "Unknown"]);
+  const note = document.createElement("p");
+  note.textContent = "Each accepted body/cloth sample recomputes the covered layer paths under the fixed declared vapor boundaries. " +
+    "The right-endpoint rule holds each accepted sample's potential flow over its preceding interval; refining motion samples can change the integral. " +
+    "Uncovered body transfer remains unknown, and complete-domain comparisons require coverage at every sample. " +
+    "These potentials do not model water supply, actual evaporation, moisture storage or cooling supplied to dry heat.";
+  parent.append(note);
+  detail(parent, `${key}: moving vapor sources, sample coverage and exact replay (display only)`,
+    history || { refusal: output?.refusal || dependency?.refusal });
+  if (!history) return;
+  const samples = table(parent, `${key}: vapor coverage at accepted motion samples`, ["Time (s)", "Interval (s)",
+    "Covered body (m²)", "Uncovered body (m²)", "Unassigned reference cloth (m²)",
+    "Potential power (W)", "Potential water flow (kg/s)", "Interval energy (J)", "Interval water mass (kg)"]);
+  for (const sample of [history.initial, ...(history.samples || [])].filter(Boolean)) {
+    const coverage = sample.result?.coverage, initial = sample.time_s === 0;
+    cells(samples, [metric(sample.time_s), initial ? "Initial only" : metric(sample.dt_s),
+      metric(coverage?.covered_area_m2), metric(coverage?.uncovered_area_m2), metric(coverage?.unassigned_cloth_reference_area_m2),
+      metric(coverage?.covered_potential_heat_flow_w), metric(coverage?.covered_potential_mass_flow_kg_s),
+      initial ? "Initial only" : metric(sample.potential_energy_j), initial ? "Initial only" : metric(sample.potential_mass_kg)]);
+  }
+  if (typeof history.replay_request_json === "string") {
+    const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
+    link(op, actions, { name: `alternative-${index + 1}-motion-vapor-coverage-replay.json`,
+      text: history.replay_request_json, mime: "application/json" });
+  }
+}
+function motionComparison(op, parent, rows, simulations, requested) {
   if (!requested && ![...simulations.values()].some(o => available(o)?.motion)) return;
   const note = document.createElement("p");
   note.textContent = "Motion continues the initial sewn cloth; it does not re-drape each pose. Motion enters the computed frontier through explicitly declared motion objectives or required consumers. " +
@@ -398,12 +432,13 @@ function motionComparison(parent, rows, simulations, requested) {
   parent.append(note);
   const t = table(parent, "Prescribed motion — complete trajectory or refusal", ["Alternative", "Motion", "Initial drape settled",
     "Duration (s)", "Accepted substeps", "Attempted substeps", "Peak absolute panel-edge strain (%)"]);
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const evaluation = simulations.get(row.key), initial = available(evaluation), result = available(initial?.motion);
     cells(t, [row.key, initial ? state(initial.motion) : state(evaluation),
       initial?.drape?.settled === true ? "Yes — also review initial flags" : initial?.drape?.settled === false ? "NO — review initial state" : "Unknown",
       metric(result?.duration_s), metric(result?.samples?.length), metric(result?.trials), metric(result?.metrics?.max_absolute_edge_strain_pct)]);
     transientHeatComparison(parent, row.key, result, initial?.motion || evaluation, requested);
+    motionVaporComparison(op, parent, row.key, index, result, initial?.motion || evaluation, requested);
     if (!result) continue;
     const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)", "Arm angle (degrees)",
       "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
@@ -420,6 +455,17 @@ function motionComparison(parent, rows, simulations, requested) {
           metric(transfer?.potential_heat_flow_w), metric(transfer?.potential_mass_flow_kg_s)]);
       }
     }
+    if (result.keyframes.some(e => e.vapor_coverage && e.vapor_coverage.status !== "not_requested")) {
+      const vapor = table(parent, `${row.key}: endpoint vapor potentials — covered layers`,
+        ["Time (s)", "Vapor coverage", "Covered body (m²)", "Uncovered body (m²)",
+          "Potential power (W)", "Potential water flow (kg/s)"]);
+      for (const endpoint of result.keyframes) {
+        const coverage = available(endpoint.vapor_coverage)?.coverage;
+        cells(vapor, [metric(endpoint.time_s), state(endpoint.vapor_coverage), metric(coverage?.covered_area_m2),
+          metric(coverage?.uncovered_area_m2), metric(coverage?.covered_potential_heat_flow_w),
+          metric(coverage?.covered_potential_mass_flow_kg_s)]);
+      }
+    }
     detail(parent, `${row.key}: motion identities, material history and endpoint refusals (display only)`, {
       path_sha256: result.path_sha256, initial_positions_sha256: result.initial_positions_sha256,
       initial_body_collision_sha256: result.initial_body_collision_sha256, initial_drape_gating: result.initial_drape_gating,
@@ -427,7 +473,8 @@ function motionComparison(parent, rows, simulations, requested) {
       membrane_history: result.membrane_history, bending_history: result.bending_history,
       membrane_plasticity_history: result.membrane_plasticity_history,
       endpoints: result.keyframes.map(e => ({ time_s: e.time_s, positions_sha256: e.positions_sha256,
-        body_collision_sha256: e.body_collision_sha256, surface_refusal: e.surface?.refusal, coverage_refusal: e.coverage?.refusal, vapor_refusal: e.vapor_surface?.refusal })),
+        body_collision_sha256: e.body_collision_sha256, surface_refusal: e.surface?.refusal, coverage_refusal: e.coverage?.refusal,
+        vapor_refusal: e.vapor_surface?.refusal, vapor_coverage_refusal: e.vapor_coverage?.refusal })),
       scope: result.scope, thermal_basis: result.thermal_basis });
     motionSamples(parent, row.key, result);
   }
@@ -546,7 +593,7 @@ function comparison(op, r) {
       }
     }
     attachedMassComparison(parent, study.alternatives, simulations);
-    motionComparison(parent, study.alternatives, simulations, r.scenario?.scenario?.motion);
+    motionComparison(op, parent, study.alternatives, simulations, r.scenario?.scenario?.motion);
     detail(parent, "Retained body fit, scenario options and environment (display only)", r.scenario);
   }
   return { schema: r.schema, source_pattern_sha256: study.source_pattern_sha256, request_sha256: r.request_sha256,

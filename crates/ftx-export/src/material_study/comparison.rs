@@ -58,6 +58,8 @@ pub enum Consumer {
     VaporCoverage,
     /// Complete prescribed motion starting at this admitted drape, not independent static poses.
     Motion,
+    /// Complete potential vapor transfer on the declared covered body domain at every motion sample.
+    MotionVaporCoverage,
     /// Complete independent-sheet temperature history on every admitted mechanical sample.
     TransientSurface,
     /// Complete moving body-domain/exposed-cloth history, with its explicit layer/film policy.
@@ -124,6 +126,10 @@ pub enum Metric {
     CoveredVaporPotentialMassFlowKgS,
     /// Peak absolute original-panel edge strain (%) over the initial state and accepted motion samples.
     MotionMaxAbsoluteEdgeStrainPct,
+    /// Right-endpoint integral of covered vapor potential over the requested motion, in joules.
+    MotionCoveredVaporPotentialEnergyJ,
+    /// Right-endpoint integral of covered vapor potential mass flow, in kilograms; no water supply.
+    MotionCoveredVaporPotentialMassKg,
     /// Signed incoming-side energy (J) for all independent sheets over the whole requested motion.
     TransientSurfaceInsideEnergyJ,
     /// Signed incoming-side energy (J) of declared body paths AND exposed-cloth films, not wearer loss.
@@ -178,6 +184,9 @@ impl Metric {
                 Consumer::VaporCoverage
             }
             Self::MotionMaxAbsoluteEdgeStrainPct => Consumer::Motion,
+            Self::MotionCoveredVaporPotentialEnergyJ | Self::MotionCoveredVaporPotentialMassKg => {
+                Consumer::MotionVaporCoverage
+            }
             Self::TransientSurfaceInsideEnergyJ
             | Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
@@ -203,7 +212,8 @@ impl Metric {
             Self::StockMassKg
             | Self::AssemblyMassKg
             | Self::UsedStockMassKg
-            | Self::CuttingJobStockMassKg => "kg",
+            | Self::CuttingJobStockMassKg
+            | Self::MotionCoveredVaporPotentialMassKg => "kg",
             Self::ObservedOrderCost | Self::CuttingJobObservedOrderCost => {
                 currency.unwrap_or("unavailable currency")
             }
@@ -221,7 +231,8 @@ impl Metric {
             Self::TransientSurfaceInsideEnergyJ
             | Self::TransientCoverageInsideEnergyJ
             | Self::TransientSurfaceNetBoundaryEnergyJ
-            | Self::TransientCoverageNetBoundaryEnergyJ => "J",
+            | Self::TransientCoverageNetBoundaryEnergyJ
+            | Self::MotionCoveredVaporPotentialEnergyJ => "J",
             Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
             | Self::TransientCoverageMinSampleTemperatureC
@@ -283,6 +294,12 @@ impl Metric {
             }
             Self::MotionMaxAbsoluteEdgeStrainPct => {
                 admitted.motion["metrics"]["max_absolute_edge_strain_pct"].as_f64()
+            }
+            Self::MotionCoveredVaporPotentialEnergyJ => {
+                admitted.motion_vapor_coverage?["totals"]["potential_energy_j"].as_f64()
+            }
+            Self::MotionCoveredVaporPotentialMassKg => {
+                admitted.motion_vapor_coverage?["totals"]["potential_mass_kg"].as_f64()
             }
             Self::TransientSurfaceInsideEnergyJ => {
                 admitted.transient_surface.as_ref()?.result["inside_energy_j"].as_f64()
@@ -518,6 +535,7 @@ impl Policy {
                 | Consumer::Coverage
                 | Consumer::VaporCoverage
                 | Consumer::Motion
+                | Consumer::MotionVaporCoverage
                 | Consumer::TransientSurface
                 | Consumer::TransientCoverage => additional_consumer,
             };
@@ -554,6 +572,7 @@ impl Policy {
                     | Consumer::Coverage
                     | Consumer::VaporCoverage
                     | Consumer::Motion
+                    | Consumer::MotionVaporCoverage
                     | Consumer::TransientSurface
                     | Consumer::TransientCoverage
             )
@@ -564,7 +583,10 @@ impl Policy {
         self.consumers().iter().any(|c| {
             matches!(
                 c,
-                Consumer::Motion | Consumer::TransientSurface | Consumer::TransientCoverage
+                Consumer::Motion
+                    | Consumer::MotionVaporCoverage
+                    | Consumer::TransientSurface
+                    | Consumer::TransientCoverage
             )
         })
     }
@@ -687,6 +709,9 @@ impl Policy {
         if self.consumers().contains(&Consumer::VaporCoverage) {
             report.notes.push("Covered vapor objectives require the whole declared body domain to be covered on the admitted drape. Partial covered subtotals stay visible but cannot be ranked as complete-domain transfer. Actual layer areas, explicit interlayer resistance, pressure boundaries and films define the potential network; no sweat supply, condensation, thermal feedback or comfort is inferred.");
         }
+        if self.consumers().contains(&Consumer::MotionVaporCoverage) {
+            report.notes.push("Moving covered vapor objectives require complete declared body coverage at the initial state and every accepted mechanical sample, with the current material, path and prescribed conditions. Potential energy and mass integrate right-endpoint power and flow over the actual sample intervals; they do not establish water availability, actual evaporation, latent cooling, continuous-time accuracy or comfort.");
+        }
         if self.metrics().iter().any(|metric| {
             matches!(
                 metric,
@@ -739,6 +764,7 @@ impl Policy {
             vapor_surface: &Value::Null,
             vapor_coverage: None,
             motion: &Value::Null,
+            motion_vapor_coverage: None,
             transient_surface: None,
             transient_coverage: None,
         };
@@ -761,6 +787,12 @@ impl Policy {
             }
         }
         if !admitted.motion.is_null() {
+            if self.consumers().contains(&Consumer::MotionVaporCoverage) {
+                match admit_motion_vapor_coverage(row, descriptor, simulation, admitted.motion) {
+                    Ok(history) => admitted.motion_vapor_coverage = Some(history),
+                    Err(e) => result.exclusions.push(e),
+                }
+            }
             for (consumer, target) in [
                 (Consumer::TransientSurface, &mut admitted.transient_surface),
                 (
@@ -1047,6 +1079,16 @@ impl Policy {
                 .ok_or_else(|| invalid("covered vapor observation protocols unavailable"))?;
             base = hash(&(base, covered_vapor_protocols(vapor)?))?;
         }
+        if consumers.contains(&Consumer::MotionVaporCoverage) {
+            let history = admitted
+                .motion_vapor_coverage
+                .ok_or_else(|| invalid("moving covered vapor observation protocols unavailable"))?;
+            let mut protocols = covered_vapor_protocols(&history["initial"]["result"])?;
+            for sample in vapor_array(history, "samples")? {
+                protocols.extend(covered_vapor_protocols(&sample["result"])?);
+            }
+            base = hash(&(base, protocols))?;
+        }
         // Only the explicitly consumed layer occurrences participate. A cuff or trim with
         // unrelated vapor observations must not change a shell/lining comparison's protocol.
         if consumers.contains(&Consumer::Vapor) {
@@ -1097,6 +1139,7 @@ struct Numerical<'a> {
     vapor_surface: &'a Value,
     vapor_coverage: Option<&'a Value>,
     motion: &'a Value,
+    motion_vapor_coverage: Option<&'a Value>,
     transient_surface: Option<Heat<'a>>,
     transient_coverage: Option<Heat<'a>>,
 }
@@ -1136,6 +1179,7 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
         Consumer::Coverage => admitted.drape["coverage"]["status"] == "available",
         Consumer::VaporCoverage => admitted.vapor_coverage.is_some(),
         Consumer::Motion => !admitted.motion.is_null(),
+        Consumer::MotionVaporCoverage => admitted.motion_vapor_coverage.is_some(),
         Consumer::TransientSurface => admitted.transient_surface.is_some(),
         Consumer::TransientCoverage => admitted.transient_coverage.is_some(),
     }
@@ -1579,8 +1623,6 @@ fn admit_vapor_coverage<'a>(
 ) -> Result<&'a Value, Refusal> {
     let policy = &descriptor["scenario"]["vapor_coverage"];
     let result = &simulation["vapor_coverage"]["result"];
-    let request = &result["request"];
-    let source = &request["source"];
     let mut expected_conditions = policy["conditions"].clone();
     if let Some(conditions) = expected_conditions.as_object_mut() {
         conditions.insert(
@@ -1588,17 +1630,44 @@ fn admit_vapor_coverage<'a>(
             descriptor["vapor_coverage_body_mesh_sha256"].clone(),
         );
     }
+    if simulation["vapor_coverage"]["status"] != "available" {
+        return Err(invalid("covered vapor result unavailable"));
+    }
+    admit_vapor_frame(
+        policy,
+        result,
+        &descriptor["vapor_coverage_body_mesh_sha256"],
+        &expected_conditions,
+        VaporFrame {
+            positions: &simulation["positions_m"],
+            triangles: &simulation["triangles"],
+            material: &simulation["drape"]["material"],
+        },
+    )
+}
+
+struct VaporFrame<'a> {
+    positions: &'a Value,
+    triangles: &'a Value,
+    material: &'a Value,
+}
+
+fn admit_vapor_frame<'a>(
+    policy: &Value,
+    result: &'a Value,
+    body_mesh_sha256: &Value,
+    expected_conditions: &Value,
+    frame: VaporFrame<'_>,
+) -> Result<&'a Value, Refusal> {
+    let request = &result["request"];
+    let source = &request["source"];
     if !policy.is_object()
-        || simulation["vapor_coverage"]["status"] != "available"
         || result["schema"] != "ftx-vapor-coverage-report/1"
         || request["schema"] != "ftx-vapor-coverage/1"
-        || !same_identity(
-            &result["body_mesh_sha256"],
-            &descriptor["vapor_coverage_body_mesh_sha256"],
-        )
+        || !same_identity(&result["body_mesh_sha256"], body_mesh_sha256)
         || request["map"]["instance_layers"] != policy["instance_layers"]
         || request["map"]["settings"] != policy["settings"]
-        || request["conditions"] != expected_conditions
+        || request["conditions"] != *expected_conditions
         || result["request_sha256"].as_str() != Some(hash(request)?.as_str())
         || result["body_mesh_sha256"].as_str()
             != Some(
@@ -1606,10 +1675,9 @@ fn admit_vapor_coverage<'a>(
                 "triangles":request["map"]["body_triangles"]}))?
                 .as_str(),
             )
-        || source["positions_m"] != simulation["positions_m"]
+        || source["positions_m"] != *frame.positions
         || result["source_sha256"].as_str() != Some(hash(source)?.as_str())
-        || source["material_report_sha256"].as_str()
-            != Some(hash(&simulation["drape"]["material"])?.as_str())
+        || source["material_report_sha256"].as_str() != Some(hash(frame.material)?.as_str())
     {
         return Err(invalid(
             "covered vapor comparison needs the current material/geometry and exact requested body domain, projection and pressure conditions",
@@ -1618,7 +1686,8 @@ fn admit_vapor_coverage<'a>(
     let patches = source["patches"]
         .as_array()
         .ok_or_else(|| invalid("covered vapor source patches unavailable"))?;
-    let triangles = simulation["triangles"]
+    let triangles = frame
+        .triangles
         .as_array()
         .ok_or_else(|| invalid("current drape triangles unavailable"))?;
     if patches.len() != triangles.len()
@@ -1631,7 +1700,7 @@ fn admit_vapor_coverage<'a>(
             "covered vapor topology differs from the current drape",
         ));
     }
-    admit_vapor_material(source, &simulation["drape"]["material"])?;
+    admit_vapor_material(source, frame.material)?;
     let coverage = &result["coverage"];
     let body_area = coverage["body_area_m2"]
         .as_f64()
@@ -1645,6 +1714,426 @@ fn admit_vapor_coverage<'a>(
         ));
     }
     Ok(result)
+}
+
+fn admit_motion_vapor_coverage<'a>(
+    alternative: &Alternative,
+    descriptor: &Value,
+    simulation: &Value,
+    motion: &'a Value,
+) -> Result<&'a Value, Refusal> {
+    let fail = || {
+        invalid(
+            "moving covered vapor comparison needs the complete current material/path/geometry history, fully covered body domain and exact potential integrals",
+        )
+    };
+    let policy = &descriptor["scenario"]["motion"]["vapor_coverage_history"];
+    let coverage_policy = &descriptor["scenario"]["vapor_coverage"];
+    let history = &motion["vapor_coverage_history"]["result"];
+    let request = &history["request"];
+    let initial = &history["initial"];
+    let initial_result = &initial["result"];
+    let initial_request = &request["initial"];
+    let samples = vapor_array(motion, "samples")?;
+    let rows = vapor_array(history, "samples")?;
+    let retained = vapor_array(request, "samples")?;
+    if motion["vapor_coverage_history"]["status"] != "available"
+        || policy["schema"] != "ftx-motion-vapor-coverage/1"
+        || policy["integration"] != "right_endpoint"
+        || history["schema"] != "ftx-vapor-coverage-history-report/1"
+        || request["schema"] != "ftx-vapor-coverage-history/1"
+        || request["policy"] != *policy
+        || history["integration"] != "right_endpoint"
+        || rows.len() != samples.len()
+        || retained.len() != samples.len()
+        || initial["time_s"].as_f64() != Some(0.)
+        || history["duration_s"] != motion["duration_s"]
+        || !same_identity(&history["path_sha256"], &motion["path_sha256"])
+        || request["path_sha256"] != motion["path_sha256"]
+        || !same_identity(
+            &history["initial_positions_sha256"],
+            &simulation["positions_sha256"],
+        )
+        || history["initial_positions_sha256"] != initial["positions_sha256"]
+        || motion["initial_sample"]["time_s"].as_f64() != Some(0.)
+        || (!coverage_policy["conditions"]["body_mesh_sha256"].is_null()
+            && coverage_policy["conditions"]["body_mesh_sha256"]
+                != descriptor["vapor_coverage_body_mesh_sha256"])
+        || initial_request != &initial_result["request"]
+        || history["request_sha256"].as_str() != Some(hash(request)?.as_str())
+        || serde_json::from_str::<Value>(history["replay_request_json"].as_str().ok_or_else(fail)?)
+            .map_err(|_| fail())?
+            != *request
+    {
+        return Err(fail());
+    }
+    let body_triangles = vapor_array(motion, "body_triangles")?;
+    let body_ids = vapor_array(coverage_policy, "body_triangle_ids")?;
+    if body_ids.is_empty() || body_ids.len() > 4096 {
+        return Err(fail());
+    }
+    let selected: Vec<_> = body_ids
+        .iter()
+        .map(|id| {
+            body_triangles
+                .get(vapor_index(id)?)
+                .cloned()
+                .ok_or_else(fail)
+        })
+        .collect::<Result<_, _>>()?;
+    if body_ids
+        .iter()
+        .map(vapor_index)
+        .collect::<Result<BTreeSet<_>, _>>()?
+        .len()
+        != body_ids.len()
+        || initial_request["map"]["body_triangles"] != json!(selected)
+        || motion["triangles"] != simulation["triangles"]
+        || motion["initial_sample"]["positions_m"] != simulation["positions_m"]
+        || initial_request["map"]["body_positions_m"]
+            != motion["initial_sample"]["body_positions_m"]
+    {
+        return Err(fail());
+    }
+    let bound = alternative.binding.value().ok_or_else(fail)?;
+    let pattern = ftx_pattern::Pattern::new(bound["pattern"].clone());
+    let changes = alternative.frozen_changes.as_ref().ok_or_else(fail)?;
+    let source = &initial_request["source"];
+    let instances = vapor_array(source, "instances")?;
+    let catalog = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    };
+    let selections = instances
+        .iter()
+        .map(|instance| {
+            let piece = &pattern
+                .instance(instance.as_str().ok_or_else(fail)?)
+                .ok_or_else(fail)?
+                .piece;
+            let selection = changes
+                .pieces
+                .get(piece)
+                .or(changes.default.as_ref())
+                .ok_or_else(fail)?;
+            serde_json::to_value(catalog.resolve(selection)?.frozen_selection()).map_err(|_| fail())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for (patch, owner) in vapor_array(source, "patches")?
+        .iter()
+        .zip(vapor_array(source, "triangle_instance")?)
+    {
+        if selections.get(vapor_index(owner)?)
+            != source["materials"].get(vapor_index(&patch["column"])?)
+        {
+            return Err(invalid(
+                "moving covered vapor source differs from this alternative's final material assignments",
+            ));
+        }
+    }
+    let mut time = 0.;
+    let mut energy = 0.;
+    let mut mass = 0.;
+    let mut work = 0_u64;
+    for (index, (row, sample)) in std::iter::once((initial, &motion["initial_sample"]))
+        .chain(rows.iter().zip(samples))
+        .enumerate()
+    {
+        let result = &row["result"];
+        let current = &result["request"];
+        let body_hash = json!(hash(&json!({"positions_m":sample["body_positions_m"],
+            "triangles":selected}))?);
+        let mut conditions = coverage_policy["conditions"].clone();
+        conditions
+            .as_object_mut()
+            .ok_or_else(fail)?
+            .insert("body_mesh_sha256".into(), body_hash.clone());
+        if row["positions_sha256"].as_str() != Some(hash(&sample["positions_m"])?.as_str())
+            || serde_json::from_str::<Value>(
+                result["replay_request_json"].as_str().ok_or_else(fail)?,
+            )
+            .map_err(|_| fail())?
+                != *current
+            || row["body_positions_sha256"].as_str()
+                != Some(hash(&sample["body_positions_m"])?.as_str())
+            || current["map"]["body_positions_m"] != sample["body_positions_m"]
+            || current["map"]["body_triangles"] != initial_request["map"]["body_triangles"]
+            || [
+                "patches",
+                "materials",
+                "instances",
+                "triangle_instance",
+                "material_report_sha256",
+            ]
+            .iter()
+            .any(|key| current["source"][key] != initial_request["source"][key])
+            || (index == 0
+                && !same_identity(&body_hash, &descriptor["vapor_coverage_body_mesh_sha256"]))
+        {
+            return Err(fail());
+        }
+        admit_vapor_frame(
+            coverage_policy,
+            result,
+            &body_hash,
+            &conditions,
+            VaporFrame {
+                positions: &sample["positions_m"],
+                triangles: &simulation["triangles"],
+                material: &simulation["drape"]["material"],
+            },
+        )?;
+        let (power, flow) = covered_vapor_potential(result)?;
+        work = work
+            .checked_add(
+                result["projection"]["geometry_operations"]
+                    .as_u64()
+                    .ok_or_else(fail)?,
+            )
+            .ok_or_else(fail)?;
+        if index != 0 {
+            let t = finite(&sample["time_s"]).ok_or_else(fail)?;
+            let dt = t - time;
+            let delta_energy = power * dt;
+            let delta_mass = flow * dt;
+            if dt < 1e-9
+                || (power > 0. && delta_energy <= 0.)
+                || (flow > 0. && delta_mass <= 0.)
+                || (delta_energy > 0. && energy + delta_energy <= energy)
+                || (delta_mass > 0. && mass + delta_mass <= mass)
+                || row["sample_index"].as_u64() != Some((index - 1) as u64)
+                || row["time_s"] != sample["time_s"]
+                || row["dt_s"].as_f64() != Some(dt)
+                || retained[index - 1]
+                    != json!({"time_s":sample["time_s"],
+                    "positions_m":sample["positions_m"],"body_positions_m":sample["body_positions_m"]})
+                || row["potential_energy_j"].as_f64() != Some(delta_energy)
+                || row["potential_mass_kg"].as_f64() != Some(delta_mass)
+            {
+                return Err(fail());
+            }
+            energy += delta_energy;
+            mass += delta_mass;
+            time = t;
+        }
+    }
+    let limit = policy["max_geometry_operations"]
+        .as_u64()
+        .ok_or_else(fail)?;
+    if !(1..=20_000_000).contains(&limit)
+        || work > limit
+        || history["geometry_operations"].as_u64() != Some(work)
+        || !energy.is_finite()
+        || !mass.is_finite()
+        || history["totals"]["potential_energy_j"].as_f64() != Some(energy)
+        || history["totals"]["potential_mass_kg"].as_f64() != Some(mass)
+    {
+        return Err(fail());
+    }
+    Ok(history)
+}
+
+fn covered_vapor_potential(result: &Value) -> Result<(f64, f64), Refusal> {
+    let fail = || {
+        invalid(
+            "moving covered vapor needs canonical source-qualified regional transport and complete potential totals",
+        )
+    };
+    let regions = vapor_array(&result["coverage"], "regions")?;
+    let projected = vapor_array(&result["projection"], "regions")?;
+    let source = &result["request"]["source"];
+    let map = &result["request"]["map"];
+    let conditions = &result["request"]["conditions"];
+    let boundaries = vapor_array(conditions, "boundaries")?;
+    let body_triangles = vapor_array(map, "body_triangles")?;
+    let body_rows = vapor_array(&result["coverage"], "body")?;
+    let patches = vapor_array(source, "patches")?;
+    if body_triangles.len() != body_rows.len() {
+        return Err(fail());
+    }
+    let mut body_allocations = vec![0_f64; body_triangles.len()];
+    let mut cloth_allocations = vec![0_f64; patches.len()];
+    let mut ids = BTreeSet::new();
+    let mut protocols = BTreeSet::new();
+    let mut allocated_body_area = 0.;
+    let mut power = 0.;
+    let mut mass = 0.;
+    if regions.is_empty() || regions.len() != projected.len() {
+        return Err(fail());
+    }
+    for (region, geometry) in regions.iter().zip(projected) {
+        let vapor = &region["vapor"];
+        let request: ftx_pattern::material_vapor::Request =
+            serde_json::from_value(vapor["request"].clone()).map_err(|_| fail())?;
+        let portions = vapor_array(geometry, "layers")?;
+        if request.layers.len() != portions.len() {
+            return Err(fail());
+        }
+        let body = vapor_index(&geometry["body_triangle"])?;
+        *body_allocations.get_mut(body).ok_or_else(fail)? +=
+            finite(&geometry["body_fraction"]).ok_or_else(fail)?;
+        let id = geometry["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(fail)?;
+        if !ids.insert(id)
+            || region["id"] != geometry["id"]
+            || region["body_triangle"] != geometry["body_triangle"]
+        {
+            return Err(fail());
+        }
+        let boundary = boundaries
+            .get(if boundaries.len() == 1 { 0 } else { body })
+            .ok_or_else(fail)?;
+        let body_area =
+            vapor_triangle_area(&map["body_positions_m"], &map["body_triangles"][body])?
+                * finite(&geometry["body_fraction"])
+                    .filter(|f| *f > 0. && *f <= 1.)
+                    .ok_or_else(fail)?;
+        if request.area_m2 != body_area
+            || region["body_area_m2"].as_f64() != Some(body_area)
+            || [
+                "inside_vapor_pressure_pa",
+                "outside_vapor_pressure_pa",
+                "inside_film_resistance_m2_pa_w",
+                "outside_film_resistance_m2_pa_w",
+                "latent_heat_j_kg",
+            ]
+            .iter()
+            .any(|key| vapor["request"][*key] != boundary[*key])
+            || [
+                "required_conditions",
+                "required_method",
+                "allow_mixed_protocols",
+            ]
+            .iter()
+            .any(|key| vapor["request"][*key] != conditions[*key])
+        {
+            return Err(fail());
+        }
+        allocated_body_area += body_area;
+        for (index, (layer, portion)) in request.layers.iter().zip(portions).enumerate() {
+            let patch = vapor_index(&portion["cloth_triangle"])?;
+            let column = vapor_index(&source["patches"][patch]["column"])?;
+            *cloth_allocations.get_mut(patch).ok_or_else(fail)? +=
+                finite(&portion["fraction"]).ok_or_else(fail)?;
+            let area = vapor_triangle_area(
+                &source["positions_m"],
+                &source["patches"][patch]["vertices"],
+            )? * finite(&portion["fraction"])
+                .filter(|f| *f > 0. && *f <= 1.)
+                .ok_or_else(fail)?;
+            if json!(layer.selection) != source["materials"][column]
+                || layer.key != portion["layer"].as_str().ok_or_else(fail)?
+                || layer.area_m2 != Some(area)
+                || region["layer_area_m2"][index].as_f64() != Some(area)
+            {
+                return Err(fail());
+            }
+        }
+        let interfaces = vapor_array(&map["settings"], "interfaces")?;
+        let expected_interfaces = request
+            .layers
+            .windows(2)
+            .map(|pair| {
+                let matching: Vec<_> = interfaces
+                    .iter()
+                    .filter(|interface| {
+                        interface["inner"] == pair[0].key && interface["outer"] == pair[1].key
+                    })
+                    .collect();
+                if matching.len() != 1 {
+                    return Err(fail());
+                }
+                finite(&matching[0]["resistance_m2_pa_w"])
+                    .filter(|r| *r >= 0.)
+                    .ok_or_else(fail)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if request.interface_resistance_m2_pa_w != expected_interfaces {
+            return Err(fail());
+        }
+        let canonical = request.evaluate(&Catalog {
+            schema: CATALOG_SCHEMA.into(),
+            materials: vec![],
+        })?;
+        if serde_json::to_value(&canonical).map_err(|_| fail())? != *vapor {
+            return Err(fail());
+        }
+        for layer in &canonical.layers {
+            protocols.insert(hash(&(
+                &layer.observation.method,
+                &layer.observation.conditions,
+            ))?);
+        }
+        if (canonical.potential_heat_flow_w > 0.
+            && power + canonical.potential_heat_flow_w <= power)
+            || (canonical.potential_mass_flow_kg_s > 0.
+                && mass + canonical.potential_mass_flow_kg_s <= mass)
+        {
+            return Err(fail());
+        }
+        power += canonical.potential_heat_flow_w;
+        mass += canonical.potential_mass_flow_kg_s;
+    }
+    let mut body_area = 0.;
+    for (triangle, row) in body_triangles.iter().zip(body_rows) {
+        let area = vapor_triangle_area(&map["body_positions_m"], triangle)?;
+        if row["area_m2"].as_f64() != Some(area)
+            || row["covered_area_m2"].as_f64() != Some(area)
+            || row["uncovered_area_m2"].as_f64() != Some(0.)
+        {
+            return Err(fail());
+        }
+        body_area += area;
+    }
+    let mixed = protocols.len() > 1;
+    if (mixed && conditions["allow_mixed_protocols"] != true)
+        || result["mixed_protocols"] != json!(mixed)
+        || body_allocations
+            .iter()
+            .any(|f| !f.is_finite() || (f - 1.).abs() > 1e-9)
+        || cloth_allocations
+            .iter()
+            .any(|f| !f.is_finite() || *f > 1. + 1e-9)
+        || !body_area.is_finite()
+        || !allocated_body_area.is_finite()
+        || (allocated_body_area - body_area).abs() > 1e-9 * body_area
+        || result["coverage"]["body_area_m2"].as_f64() != Some(body_area)
+        || !power.is_finite()
+        || !mass.is_finite()
+        || result["coverage"]["covered_potential_heat_flow_w"].as_f64() != Some(power)
+        || result["coverage"]["covered_potential_mass_flow_kg_s"].as_f64() != Some(mass)
+    {
+        return Err(fail());
+    }
+    Ok((power, mass))
+}
+
+fn vapor_triangle_area(positions: &Value, vertices: &Value) -> Result<f64, Refusal> {
+    let fail = || invalid("moving covered vapor needs finite retained triangle geometry");
+    let vertices = vertices
+        .as_array()
+        .filter(|v| v.len() == 3)
+        .ok_or_else(fail)?;
+    let point = |index: &Value| -> Result<ftx_core::Vec3, Refusal> {
+        let point = &positions[vapor_index(index)?];
+        let values = point.as_array().filter(|p| p.len() == 3).ok_or_else(fail)?;
+        Ok(ftx_core::Vec3::new(
+            finite(&values[0]).ok_or_else(fail)?,
+            finite(&values[1]).ok_or_else(fail)?,
+            finite(&values[2]).ok_or_else(fail)?,
+        ))
+    };
+    let a = point(&vertices[0])?;
+    let area = 0.5
+        * (point(&vertices[1])? - a)
+            .cross(point(&vertices[2])? - a)
+            .norm();
+    if !area.is_finite() || area <= 0. {
+        return Err(fail());
+    }
+    Ok(area)
 }
 
 fn admit_motion<'a>(descriptor: &Value, simulation: &'a Value) -> Result<&'a Value, Refusal> {

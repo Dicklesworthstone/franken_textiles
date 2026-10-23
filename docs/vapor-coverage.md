@@ -90,6 +90,75 @@ Input/output are bounded to 64 MiB. The vapor report permits at most 4,096 cover
 layer occurrences, with a conservative source-expansion check before generating repeated reports.
 The shared geometry kernel retains its existing bounded work and finite allocation rules.
 
+## Moving coverage and complete potential histories
+
+When a scenario requests `vapor_coverage` and prescribed motion, every motion keyframe receives a
+fresh layered `vapor_coverage` result on its accepted body and sewn-cloth coordinates. Initial
+overlap and old material-area values are never reused. Missing inputs or ambiguous coverage refuse
+that independent transport result while complete mechanics and other consumers remain available.
+
+To integrate covered potential across **every accepted mechanical sample**, explicitly add this
+policy to the scenario's existing `motion` object:
+
+```json
+"vapor_coverage_history": {
+  "schema": "ftx-motion-vapor-coverage/1",
+  "integration": "right_endpoint",
+  "max_geometry_operations": 1000000
+}
+```
+
+This requires the scenario's existing `vapor_coverage` policy. Its source filters, physical layer
+names, interlayer resistances and pressure/film boundaries stay fixed throughout the path.
+Nonuniform pressure fields follow their original body triangle IDs in the declared order. Their
+initial `body_mesh_sha256` must match before a new pose can rebind that identity; a stale or missing
+nonuniform binding refuses instead of resetting the field.
+
+For each accepted interval, `right_endpoint` evaluates the newly accepted geometry and multiplies
+covered potential W and kg/s by elapsed seconds. The initial state is retained but contributes no
+interval. This declared first-order quadrature neither interpolates unseen motion nor establishes
+an adaptive transport error bound. Ret observations and original reference areas stay unchanged;
+current conducting layer and boundary areas come from each new projection.
+
+The independent `motion.result.vapor_coverage_history` outcome contains a complete result or a
+refusal. Its `ftx-vapor-coverage-history-report/1` result retains the initial coverage report and one
+full report per accepted sample, with times, sample indices, body/cloth identities, covered/uncovered
+areas and original observations. Each row carries `potential_energy_j` and `potential_mass_kg`;
+`totals` retains their complete integrals. Duration, integration rule, geometry work, motion-path
+identity, complete frozen `request` and exact `replay_request_json` are also retained.
+
+Replay a downloaded request with either native command:
+
+```sh
+ftx-materials thermal-vapor-coverage-history history.json
+ftx materials thermal-vapor-coverage-history history.json --json
+```
+
+The shared Rust API is `ftx_drape::vapor::coverage::history::Request::evaluate`. The portable
+`ftx-vapor-coverage-history/1` request contains `policy`, `initial` (an ordinary coverage request),
+`samples` (`time_s`, `positions_m`, `body_positions_m`) and optional `path_sha256`. The initial state
+has time zero; accepted times increase through at most 60 seconds. Frozen replay reproduces the
+complete report with no body-model installation, live catalog or hidden previous projection.
+
+Histories allow at most 512 accepted samples, two million retained body/cloth vertex samples and
+64 MiB of input/output. Full nested reports and escaped replay retention are charged before append.
+`max_geometry_operations` is in 1–20,000,000 and includes the initial projection; each kernel receives
+only the remaining allowance. Each material-study attempt reserves its complete history allowance
+against 40,000,000 session operations, including histories that later refuse. Mechanical retention
+budgets also account for geometry duplicated in the complete replay reports.
+
+A failed later sample publishes no partial integral and does not contribute zero transfer. Complete
+mechanics and independent instantaneous endpoints remain available. Uncovered body transfer is
+unknown at each sample: partial coverage can be inspected but cannot rank as a complete covered-domain
+comparison. These potential joules and kilograms are neither actual evaporation nor moisture storage
+and do not enter the dry-heat solver. Moisture availability, conservative latent feedback and qualified
+wet/dry garment experiments remain separate open work.
+
+Independent series/area/time tests check accounting, source substitutions, nonuniform pressure
+identity, stale-input refusal, transactional failures and exact replay. An analytic linearly increasing
+area demonstrates first-order time refinement. Production tests verify accepted geometry throughout
+the history and that failed transport reservations preserve complete mechanics.
+
 ## Runnable example and software verification
 
 Run the [layered example](../examples/vapor-coverage/layered.json) with:
