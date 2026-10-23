@@ -983,6 +983,80 @@ fn scenario_binaries_replay_accepted_shape_and_pose_with_real_drape_and_heat() {
     }
     save(&dir.join("motion-report.json"), &compared);
 
+    // Opt-in export for the existing compiled-WASM parity check, using this exact accepted
+    // synthetic model and positive production result. These are replay inputs, not an oracle.
+    if let Some(destination) = std::env::var_os("FTX_MOTION_REPLAY") {
+        let destination = PathBuf::from(destination);
+        std::fs::create_dir_all(&destination).unwrap();
+        for name in [
+            "model.ftxbody",
+            "pattern.json",
+            "study.json",
+            "scenario.json",
+            "body-input.json",
+            "motion-report.json",
+        ] {
+            std::fs::copy(dir.join(name), destination.join(name)).unwrap();
+        }
+    }
+
+    // A named decision keeps each physical case intact and shares only manufacturing. The
+    // first case is the already-qualified motion above; the other is an independent static
+    // opposite-temperature boundary. Both binaries must reproduce each standalone case.
+    let mut opposite = scenario.clone();
+    opposite.as_object_mut().unwrap().remove("motion");
+    opposite["surface"]["boundaries"][0]["inside_c"] = json!(10.0);
+    opposite["surface"]["boundaries"][0]["outside_c"] = json!(30.0);
+    let opposite_policy = json!({"basis":"nominal","objectives":[
+        {"metric":"independent_surface_power_w","direction":"minimize"}]});
+    let mut opposite_study = serde_json::to_value(&compared_request).unwrap();
+    opposite_study["comparison"] = opposite_policy.clone();
+    save(&dir.join("scenario.json"), &opposite);
+    save(&dir.join("study.json"), &opposite_study);
+    let independent_opposite = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    let matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":4,"cases":[
+        {"key":"declared-motion","scenario":scenario},
+        {"key":"opposite-static-boundary","scenario":opposite,"comparison":opposite_policy}]});
+    save(
+        &dir.join("study.json"),
+        &serde_json::to_value(&compared_request).unwrap(),
+    );
+    save(&dir.join("scenario.json"), &matrix);
+    let combined = run(env!("CARGO_BIN_EXE_ftx-materials"), &["scenario-study"]);
+    assert_eq!(
+        combined,
+        run(
+            env!("CARGO_BIN_EXE_ftx"),
+            &["--json", "materials", "scenario-study"]
+        )
+    );
+    assert_eq!(combined["schema"], "ftx-material-scenario-matrix-study/1");
+    assert_eq!(combined["manufacturing"], compared["manufacturing"]);
+    assert_eq!(combined["planned_evaluations"], 4);
+    assert_eq!(combined["evaluations"], 4);
+    for (index, independent) in [&compared, &independent_opposite].into_iter().enumerate() {
+        for field in ["scenario", "request_sha256", "simulations", "comparison"] {
+            assert_eq!(
+                combined["cases"][index][field], independent[field],
+                "case {index}: {field}"
+            );
+        }
+    }
+    assert!(
+        combined["comparison"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["eligible"] == true)
+    );
+    assert!(
+        !combined["comparison"]["frontier"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    save(&dir.join("scenario.json"), &scenario);
+
     // Retain a separate model-backed replay: changing only conversion of accepted plastic work
     // changes independent-sheet and covered/exposed heat, while every accepted trajectory stays identical.
     // The generated native output is an adapter parity input, not an empirical physics oracle.

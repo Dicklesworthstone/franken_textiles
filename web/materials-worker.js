@@ -125,7 +125,13 @@ self.onmessage = async ({ data: msg }) => {
     if (msg.outfit) {
       if (typeof msg.outfit.request_json !== "string" || typeof msg.outfit.composition_json !== "string") throw Error("The original outfit request and composition receipt are required.");
       if (msg.type === "fold" && !(msg.selfContactMm > 0)) throw Error("Joint outfits require cloth-cloth self-contact.");
-      if (msg.type === "scenario" && !json(msg.scenarioRequest).options?.self_contact) throw Error("Joint outfit scenarios require explicit options.self_contact; no cross-garment contact is inferred.");
+      if (msg.type === "scenario") {
+        const request = json(msg.scenarioRequest);
+        const scenarios = request.schema === "ftx-drape-scenario-matrix/1" ? request.cases?.map(c => c.scenario) : [request];
+        if (!scenarios?.length || scenarios.some(s => !s?.options?.self_contact)) {
+          throw Error("Joint outfit scenarios require explicit options.self_contact in every case; no cross-garment contact is inferred.");
+        }
+      }
     }
     let result, files = [], viewer = null, picture = null, raw, reportText = null;
     switch (msg.type) {
@@ -271,7 +277,8 @@ self.onmessage = async ({ data: msg }) => {
         } finally { model.free(); }
         // Save original JSON text, not the display objects: number spellings participate in locks.
         // The large local model stays with its owner; the report identifies its exact source hash.
-        files = [file("material-scenario-study.json", raw), file("original-pattern.json", msg.pattern),
+        const matrix = result.schema === "ftx-material-scenario-matrix-study/1";
+        files = [file(matrix ? "material-scenario-matrix-study.json" : "material-scenario-study.json", raw), file("original-pattern.json", msg.pattern),
           file("study-request.json", msg.studyRequest), file("scenario-request.json", msg.scenarioRequest),
           file("body-input.json", msg.measurements)];
         break;

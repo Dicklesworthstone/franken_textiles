@@ -284,10 +284,17 @@ or <code>sewing_feed_and_setup_seconds</code> as objectives or constraints. The 
 remains feed-only duration. Missing setup evidence leaves the new durations unknown; they do not include
 undeclared handling or establish total production time.</p>
 </div><div>
-<h3>Fresh body, drape and heat study</h3>
-<label>Scenario request JSON (<code>ftx-drape-scenario/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
+<h3>Fresh body, drape and heat studies</h3>
+<label>Scenario or named matrix JSON (<code>ftx-drape-scenario/1</code> or <code>ftx-drape-scenario-matrix/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>
 <label>Optional body-source request JSON (<code>ftx-scenario-body/1</code>) <input id="scenarioBody" type="file" accept=".json,application/json"></label>
-<button id="scenario" data-command="scenario" disabled>Recompute drape &amp; heat for every alternative</button>
+<button id="scenario" data-command="scenario" disabled>Recompute every alternative in the requested scenarios</button>
+<p class="note">A named matrix evaluates the same material alternatives and body under 1–8 declared scenarios.
+Use <code>{"schema":"ftx-drape-scenario-matrix/1","max_evaluations":16,"cases":[{"key":"case name","scenario":{…}}]}</code>,
+with each <code>scenario</code> containing an ordinary scenario request. Set <code>max_evaluations</code> from 1 to 64
+to cover the complete alternative × case count. Each case can override <code>comparison</code>; otherwise it uses the study policy.
+Manufacturing is shared once. Per-case outcomes and refusals remain separate, and the cross-case frontier requires
+comparison policies for every case. Motion, conditions and consumer requests belong to each case. For joint outfits,
+every case must explicitly enable <code>options.self_contact</code>. Download the original matrix and full report to replay it.</p>
 <p class="note">Uses the same study request and the <strong>local body model</strong> selected in section 3.
 Without a body-source request it fits the section-3 measurements at 35°. A body-source request instead owns the
 measurements, optional <code>accepted_body_fit</code> report and <code>arm_abduction_deg</code> (0–180°, default 35°).

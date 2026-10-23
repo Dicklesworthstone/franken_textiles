@@ -305,6 +305,18 @@ Complete feasible selected costs remain available after exhaustion, while minimu
 require completed proof. Mixed jobs add exact finite-item prices only when all routes are complete.
 Neither an incomplete subtotal nor duplicated physical stock may supply a comparison value.
 
+**Named scenario matrices.** `material_study::Request::evaluate_matrix_with` expands and binds one
+unchanged-pattern material study, runs manufacturing once and retains every named case's independent
+production outcomes. One to eight unique cases reserve at most 64 alternative/case slots before
+manufacturing or callbacks. Each effective policy uses the ordinary source/geometry/consumer
+admission; a case override may replace the fallback policy. An all-cases frontier exists only when
+every case has an explicit policy. Eligibility requires all case constraints; dominance reuses the
+ordinary nominal/source-range relation on every case/objective coordinate, with strict improvement
+somewhere. Protocol admission stays local to each case. Missing results and contradictory preferences
+stay visible; there is no averaging or inferred probability. `tests/material_scenario_matrix.rs`
+checks standalone equality, complete admission, cross-case ties/tradeoffs, interval uncertainty,
+protocol isolation, binding failures and bounded work. Numerical cases do not establish garment fit.
+
 **Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve, a seam allowance
 outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` for a projector page over
 200 in; `io` for an unreadable output directory.

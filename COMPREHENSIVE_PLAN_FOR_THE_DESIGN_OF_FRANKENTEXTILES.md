@@ -2990,6 +2990,28 @@ remain open under `ftx-vc2`/`ftx-tmc`. See [vapor-coverage.md](docs/vapor-covera
 
 ---
 
+### 25.64 One material decision across named operating cases
+
+**Delivered software (`ftx-ms2`).** The existing scenario-study commands and browser API accept a
+bounded `ftx-drape-scenario-matrix/1` request. The common body shape is selected once and the same
+frozen material alternatives share one binding/manufacturing evaluation. Every named case starts
+fresh production drapes and its own existing heat, vapor and optional motion consumers. Case-specific
+comparison policies may override the ordinary study policy without changing physical input meaning.
+
+The combined frontier requires every case's constraints and required consumers. Dominance uses the
+existing nominal/source-range relation on all case/objective coordinates: no worse everywhere,
+strictly better somewhere. Opposing improvements, missing data and incompatible source protocols
+remain explicit. Source comparability is checked within each case; different environments are not
+silently averaged, assigned probabilities or treated as one experimental protocol. Case outputs and
+exact replay identities remain available independently of the combined decision.
+
+One to eight cases reserve at most 64 case/alternative evaluations before planning or callbacks.
+Mechanical allocations, retained motion geometry and heat/vapor work retain aggregate limits across
+the matrix. Native and browser consumers share the implementation; browser input changes cancel and
+invalidate the whole matrix. See `docs/material-scenario-studies.md` and the complete numerical
+example `examples/scenario-matrix.json`. This advances the material decision workflow without closing
+the measured textile, moisture coupling, sewn-garment or machine qualification gates.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -530,7 +530,7 @@ function vaporHistoryResult(parent, key, history, statusLabel, refusal) {
   }
   wetFilmResult(parent, key, history);
 }
-function motionVaporComparison(op, parent, key, index, motion, dependency, requested) {
+function motionVaporComparison(op, parent, key, index, motion, dependency, requested, filePrefix = "") {
   const output = motion?.vapor_coverage_history;
   if (!requested?.vapor_coverage_history && !output) return;
   const history = available(output);
@@ -538,11 +538,11 @@ function motionVaporComparison(op, parent, key, index, motion, dependency, reque
     output?.refusal || dependency?.refusal);
   if (typeof history?.replay_request_json === "string") {
     const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
-    link(op, actions, { name: `alternative-${index + 1}-motion-vapor-coverage-replay.json`,
+    link(op, actions, { name: `${filePrefix}alternative-${index + 1}-motion-vapor-coverage-replay.json`,
       text: history.replay_request_json, mime: "application/json" });
   }
 }
-function motionComparison(op, parent, rows, simulations, requested) {
+function motionComparison(op, parent, rows, simulations, requested, filePrefix = "") {
   if (!requested && ![...simulations.values()].some(o => available(o)?.motion)) return;
   const note = document.createElement("p");
   note.textContent = "Motion continues the initial sewn cloth; it does not re-drape each pose. Motion enters the computed frontier through explicitly declared motion objectives or required consumers. " +
@@ -556,7 +556,7 @@ function motionComparison(op, parent, rows, simulations, requested) {
       initial?.drape?.settled === true ? "Yes — also review initial flags" : initial?.drape?.settled === false ? "NO — review initial state" : "Unknown",
       metric(result?.duration_s), metric(result?.samples?.length), metric(result?.trials), metric(result?.metrics?.max_absolute_edge_strain_pct)]);
     transientHeatComparison(parent, row.key, result, initial?.motion || evaluation, requested);
-    motionVaporComparison(op, parent, row.key, index, result, initial?.motion || evaluation, requested);
+    motionVaporComparison(op, parent, row.key, index, result, initial?.motion || evaluation, requested, filePrefix);
     if (!result) continue;
     const endpoints = table(parent, `${row.key}: endpoint steady snapshots — not transient heat`, ["Time (s)", "Arm angle (degrees)",
       "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
@@ -590,7 +590,7 @@ function motionComparison(op, parent, rows, simulations, requested) {
           transfer || { refusal: endpoint.vapor_coverage?.refusal });
         if (typeof transfer?.replay_request_json === "string") {
           const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
-          link(op, actions, { name: `alternative-${index + 1}-motion-endpoint-${j + 1}-vapor-coverage-replay.json`,
+          link(op, actions, { name: `${filePrefix}alternative-${index + 1}-motion-endpoint-${j + 1}-vapor-coverage-replay.json`,
             text: transfer.replay_request_json, mime: "application/json" });
         }
       }
@@ -608,15 +608,123 @@ function motionComparison(op, parent, rows, simulations, requested) {
     motionSamples(parent, row.key, result);
   }
 }
-function comparison(op, r) {
-  const parent = sections.get(op).comparison;
+function comparison(op, r, parent = sections.get(op).comparison, { skipManufacturing = false, filePrefix = "" } = {}) {
   if (op === "screen") {
     screening(parent, r);
     return { schema: r.schema, basis: r.basis, allow_mixed_protocols: r.allow_mixed_protocols,
       scalar_frontier: r.frontier, request_sha256: r.request_sha256, notes: r.notes };
   }
+  if (r.schema === "ftx-material-scenario-matrix-study/1") return scenarioMatrixComparison(op, parent, r);
   if (r.comparison) objectiveComparison(parent, r.comparison);
-  const study = op === "scenario" ? r.manufacturing : r;
+  const study = r.manufacturing || r;
+  if (!skipManufacturing) manufacturingComparison(op, parent, study, r.comparison);
+  if (r.manufacturing) {
+    const simulations = new Map(r.simulations.map(row => [row.key, row.evaluation]));
+    const sim = table(parent, "Initial static-drape results — review drape flags before interpreting heat", ["Alternative", "Drape",
+      "Gating clear", "Cloth mass (kg)", "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
+    for (const row of study.alternatives) {
+      const outcome = simulations.get(row.key), result = available(outcome), m = result?.metrics || {};
+      cells(sim, [row.key, state(outcome), m.simulation_gating_clear === true ? "Yes" :
+        m.simulation_gating_clear === false ? "NO — review flags" : "Unknown", metric(m.cloth_mass_kg),
+        state(result?.surface), metric(m.independent_surface_power_w), state(result?.coverage), metric(m.body_coverage_power_w)]);
+      detail(parent, `${row.key}: simulation flags, identities and thermal refusals`, {
+        refusal: outcome?.refusal, settled: result?.drape?.settled, flags: result?.drape?.flags,
+        scenario_sha256: result?.scenario_sha256, body_geometry_sha256: result?.body_geometry_sha256,
+        placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
+        surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
+    }
+    vaporCoverageComparison(op, parent, study.alternatives, simulations, r.scenario?.scenario?.vapor_coverage, filePrefix);
+    if ([...simulations.values()].some(o => {
+      const vapor = available(o)?.vapor_surface;
+      return vapor && vapor.status !== "not_requested";
+    })) {
+      const vapor = table(parent, "Initial drape vapor potentials — independent sheets",
+        ["Alternative", "Vapor transfer", "Current sheet area (m²)", "Potential heat transfer (W)", "Potential mass transfer (kg/s)"]);
+      for (const row of study.alternatives) {
+        const outcome = simulations.get(row.key), initial = available(outcome), transfer = available(initial?.vapor_surface);
+        cells(vapor, [row.key, initial ? state(initial.vapor_surface) : state(outcome), metric(transfer?.area_m2),
+          vaporMetric(transfer, "potential_heat_flow_w"), vaporMetric(transfer, "potential_mass_flow_kg_s")]);
+        vaporBoundsNote(parent, transfer, `${row.key}: independent-sheet vapor bounds`);
+        detail(parent, `${row.key}: vapor conditions, source columns and refusal (display only)`,
+          transfer || { refusal: initial?.vapor_surface?.refusal || outcome?.refusal });
+      }
+    }
+    attachedMassComparison(parent, study.alternatives, simulations);
+    motionComparison(op, parent, study.alternatives, simulations, r.scenario?.scenario?.motion, filePrefix);
+    detail(parent, "Retained body fit, scenario options and environment (display only)", r.scenario);
+  }
+  return { schema: r.schema, source_pattern_sha256: study.source_pattern_sha256, request_sha256: r.request_sha256,
+    geometry_changed: study.geometry_changed, physical_validation_claim: study.physical_validation_claim,
+    hardware_execution_authorized: study.hardware_execution_authorized, notes: study.notes,
+    computed_frontier: r.comparison?.frontier ?? null,
+    comparison_basis: r.comparison ? (r.comparison.policy.basis === "reported_bounds" ?
+      "Complete source-reported ranges evaluated by Rust at fixed declared inputs; unresolved overlap and unknown ranges remain explicit." :
+      "Declared nominal objectives evaluated by Rust; conditional Pareto set, not an empirical fit/warmth claim or global optimum.") :
+      "Actual consumer results; no computed objectives requested. Unknowns are not zero, and no ranking is inferred by this page." };
+}
+function scenarioMatrixComparison(op, parent, r) {
+  const note = document.createElement("p");
+  note.textContent = "Named scenarios share the same original pattern, material alternatives and body source. " +
+    "Manufacturing is evaluated once; each case starts a fresh drape with its own conditions and optional motion. " +
+    "Case decisions and physical units remain separate. No browser score or average replaces the native comparison.";
+  parent.append(note);
+  if (r.comparison) {
+    const result = r.comparison, frontier = document.createElement("p");
+    frontier.textContent = `Computed cross-case frontier: ${result.frontier.length ? result.frontier.join(", ") : "No eligible non-dominated alternatives"}. ` +
+      "Admission requires every case's declared gates and limits. Review each case's retained readings and exclusions below.";
+    parent.append(frontier);
+    const t = table(parent, "Named scenario decisions — authoritative Rust comparison",
+      ["Alternative", "Across cases", "Dominated by", "Case", "Case admission", "Retained readings"]);
+    for (const row of result.alternatives) {
+      for (const key of result.case_order) {
+        const candidate = row.cases[key], policy = result.policies[key];
+        const quantities = [...(policy?.objectives || []), ...(policy?.constraints || [])]
+          .filter((q, i, all) => all.findIndex(other => other.metric === q.metric) === i);
+        const readings = quantities.map(({ metric: name }) => {
+          const q = candidate?.readings?.[name];
+          if (!q) return `${name}: Unknown`;
+          const bounds = q.reported_bounds ? `; reported range [${q.reported_bounds.map(metric).join(", ")}] ${q.unit}` :
+            policy.basis === "reported_bounds" ? "; reported range unknown" : "";
+          return `${name}: ${metric(q.value)} ${q.unit}${bounds}`;
+        });
+        cells(t, [row.key, row.eligible ? "Eligible" : "Excluded", row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
+          key, candidate ? (candidate.eligible ? "Eligible" : `Excluded: ${candidate.exclusions.map(e => e.message).join("; ")}`) : "Unknown",
+          readings.length ? readings.join(" | ") : "No declared quantities"]);
+      }
+    }
+    for (const pair of result.incomparable) {
+      const p = document.createElement("p");
+      p.textContent = `${pair.alternatives.join(" / ")}: ${pair.reason} (cases: ${pair.cases.join(", ")}).`;
+      parent.append(p);
+    }
+    detail(parent, "Cross-case policies, identities and decisions (display only)", result);
+  } else {
+    const unavailable = document.createElement("p");
+    unavailable.textContent = "No cross-case comparison is available. Comparison policies are required for every case; " +
+      "available per-case comparisons and independent outcomes remain below.";
+    parent.append(unavailable);
+  }
+  for (const message of r.notes || []) {
+    const note = document.createElement("p"); note.textContent = message; parent.append(note);
+  }
+  const shared = document.createElement("section"), heading = document.createElement("h4");
+  heading.textContent = "Shared manufacturing — evaluated once"; shared.append(heading); parent.append(shared);
+  comparison(op, r.manufacturing, shared);
+  for (const [index, item] of r.cases.entries()) {
+    const group = document.createElement("section"), heading = document.createElement("h4");
+    heading.textContent = `Case ${index + 1}: ${item.key}`; group.append(heading); parent.append(group);
+    comparison(op, { ...item, schema: "ftx-material-scenario-study/1", manufacturing: r.manufacturing }, group,
+      { skipManufacturing: true, filePrefix: `case-${index + 1}-` });
+    detail(group, "Case request identity (display only)", { key: item.key, request_sha256: item.request_sha256 });
+  }
+  return { schema: r.schema, request_sha256: r.request_sha256, source_pattern_sha256: r.manufacturing.source_pattern_sha256,
+    cases: r.cases.map(item => item.key), max_evaluations: r.max_evaluations,
+    planned_evaluations: r.planned_evaluations, evaluations: r.evaluations,
+    computed_cross_case_frontier: r.comparison?.frontier ?? null,
+    physical_validation_claim: r.manufacturing.physical_validation_claim,
+    scope: "Fixed-input named cases, with their native outcomes, refusals and policies retained independently." };
+}
+function manufacturingComparison(op, parent, study, computed) {
   if (study.alternatives.some(row => row.choices)) {
     const choices = table(parent, "Material combinations evaluated by the study", ["Alternative", "Group choices"]);
     for (const row of study.alternatives) cells(choices, [row.key,
@@ -673,7 +781,7 @@ function comparison(op, r) {
   }
   if (study.alternatives.some(row => row.metrics?.sewing_setup_seconds != null ||
       row.metrics?.sewing_feed_and_setup_seconds != null) ||
-      [...(r.comparison?.policy?.objectives || []), ...(r.comparison?.policy?.constraints || [])]
+      [...(computed?.policy?.objectives || []), ...(computed?.policy?.constraints || [])]
         .some(item => ["sewing_setup_seconds", "sewing_feed_and_setup_seconds"].includes(item.metric))) {
     const timing = table(parent, "Source-qualified sewing durations", ["Alternative", "Sewing",
       "Feed-only seconds", "Setup seconds", "Feed + setup seconds"]);
@@ -694,49 +802,6 @@ function comparison(op, r) {
   assemblyMassComparison(parent, study.alternatives);
   vaporComparison(op, parent, study.alternatives);
   if (study.screening) screening(parent, study.screening);
-  if (op === "scenario") {
-    const simulations = new Map(r.simulations.map(row => [row.key, row.evaluation]));
-    const sim = table(parent, "Initial static-drape results — review drape flags before interpreting heat", ["Alternative", "Drape",
-      "Gating clear", "Cloth mass (kg)", "Surface heat", "Signed surface power (W)", "Body coverage", "Signed coverage power (W)"]);
-    for (const row of study.alternatives) {
-      const outcome = simulations.get(row.key), result = available(outcome), m = result?.metrics || {};
-      cells(sim, [row.key, state(outcome), m.simulation_gating_clear === true ? "Yes" :
-        m.simulation_gating_clear === false ? "NO — review flags" : "Unknown", metric(m.cloth_mass_kg),
-        state(result?.surface), metric(m.independent_surface_power_w), state(result?.coverage), metric(m.body_coverage_power_w)]);
-      detail(parent, `${row.key}: simulation flags, identities and thermal refusals`, {
-        refusal: outcome?.refusal, settled: result?.drape?.settled, flags: result?.drape?.flags,
-        scenario_sha256: result?.scenario_sha256, body_geometry_sha256: result?.body_geometry_sha256,
-        placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
-        surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
-    }
-    vaporCoverageComparison(op, parent, study.alternatives, simulations, r.scenario?.scenario?.vapor_coverage);
-    if ([...simulations.values()].some(o => {
-      const vapor = available(o)?.vapor_surface;
-      return vapor && vapor.status !== "not_requested";
-    })) {
-      const vapor = table(parent, "Initial drape vapor potentials — independent sheets",
-        ["Alternative", "Vapor transfer", "Current sheet area (m²)", "Potential heat transfer (W)", "Potential mass transfer (kg/s)"]);
-      for (const row of study.alternatives) {
-        const outcome = simulations.get(row.key), initial = available(outcome), transfer = available(initial?.vapor_surface);
-        cells(vapor, [row.key, initial ? state(initial.vapor_surface) : state(outcome), metric(transfer?.area_m2),
-          vaporMetric(transfer, "potential_heat_flow_w"), vaporMetric(transfer, "potential_mass_flow_kg_s")]);
-        vaporBoundsNote(parent, transfer, `${row.key}: independent-sheet vapor bounds`);
-        detail(parent, `${row.key}: vapor conditions, source columns and refusal (display only)`,
-          transfer || { refusal: initial?.vapor_surface?.refusal || outcome?.refusal });
-      }
-    }
-    attachedMassComparison(parent, study.alternatives, simulations);
-    motionComparison(op, parent, study.alternatives, simulations, r.scenario?.scenario?.motion);
-    detail(parent, "Retained body fit, scenario options and environment (display only)", r.scenario);
-  }
-  return { schema: r.schema, source_pattern_sha256: study.source_pattern_sha256, request_sha256: r.request_sha256,
-    geometry_changed: study.geometry_changed, physical_validation_claim: study.physical_validation_claim,
-    hardware_execution_authorized: study.hardware_execution_authorized, notes: study.notes,
-    computed_frontier: r.comparison?.frontier ?? null,
-    comparison_basis: r.comparison ? (r.comparison.policy.basis === "reported_bounds" ?
-      "Complete source-reported ranges evaluated by Rust at fixed declared inputs; unresolved overlap and unknown ranges remain explicit." :
-      "Declared nominal objectives evaluated by Rust; conditional Pareto set, not an empirical fit/warmth claim or global optimum.") :
-      "Actual consumer results; no computed objectives requested. Unknowns are not zero, and no ranking is inferred by this page." };
 }
 function cuttingJobComparison(op, parent, alternatives) {
   if (!alternatives.some(row => row.cutting_job && row.cutting_job.status !== "not_requested")) return;
@@ -784,7 +849,7 @@ function cuttingJobComparison(op, parent, alternatives) {
       { name: `alternative-${i + 1}-cut-job-request.json`, text: r.replay_request_json, mime: "application/json" });
   }
 }
-function vaporCoverageComparison(op, parent, alternatives, simulations, requested) {
+function vaporCoverageComparison(op, parent, alternatives, simulations, requested, filePrefix = "") {
   if (!requested && ![...simulations.values()].some(value => available(value)?.vapor_coverage)) return;
   const note = document.createElement("p");
   note.textContent = "Vapor paths use this alternative's draped geometry, declared physical layers and source-qualified vapor resistance. " +
@@ -804,7 +869,7 @@ function vaporCoverageComparison(op, parent, alternatives, simulations, requeste
       r || { refusal: initial?.vapor_coverage?.refusal || evaluation?.refusal });
     if (typeof r?.replay_request_json === "string") {
       const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
-      link(op, actions, { name: `alternative-${i + 1}-vapor-coverage-replay.json`, text: r.replay_request_json, mime: "application/json" });
+      link(op, actions, { name: `${filePrefix}alternative-${i + 1}-vapor-coverage-replay.json`, text: r.replay_request_json, mime: "application/json" });
     }
   }
 }

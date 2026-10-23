@@ -571,6 +571,32 @@ test('aggregate study JSON budget refuses before calling any consumer or allocat
   assert.equal(r.type, 'error'); assert.match(r.message, /64 MiB/); assert.deepEqual(w.called, []);
 });
 
+test('scenario matrices use one native dispatch and retain exact matrix sources, partial refusals and model cleanup', async () => {
+  const report=scenarioMatrixReport(), raw=` ${JSON.stringify(report)}\n`;
+  const scenarioRequest=' {"schema":"ftx-drape-scenario-matrix/1","max_evaluations":4,"cases":[{"key":"cold","scenario":{"x":-0.0}},{"key":"warm","scenario":{"temperature":303.0}}]}\n';
+  for (const failure of [null,Error('matrix evaluation budget exceeded'),new WebAssembly.RuntimeError('matrix trap')]) {
+    const calls=[], freed=[];
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),
+      WebBody:class {constructor(){calls.push(['body']);}free(){freed.push('body');}},
+      material_scenario_study:(...args)=>{calls.push(['matrix',...args]);if(failure)throw failure;return raw;}}});
+    const msg={type:'scenario',request:17,bytes:new ArrayBuffer(8),pattern:'{"x":-0.0}',
+      studyRequest:' {"coefficient":1.0}\n',scenarioRequest,measurements:'{"length":10.0}'};
+    const result=await w.send(msg);
+    assert.deepEqual(calls.map(c=>c[0]),['body','matrix']); assert.deepEqual(freed,['body']);
+    assert.deepEqual(calls[1].slice(2),[msg.pattern,msg.studyRequest,scenarioRequest,msg.measurements]);
+    if (failure) {
+      assert.equal(result.type,'error'); assert.equal(result.fatal,failure instanceof WebAssembly.RuntimeError);
+      assert.equal(w.sent.some(m=>m.type==='result'),false);
+    } else {
+      assert.equal(result.type,'result',result.message);
+      assert.equal(result.result.cases[1].simulations.find(row=>row.key==='B').evaluation.status,'refused');
+      assert.deepEqual(plain(result.files.map(f=>[f.name,f.text])),[
+        ['material-scenario-matrix-study.json',raw],['original-pattern.json',msg.pattern],
+        ['study-request.json',msg.studyRequest],['scenario-request.json',scenarioRequest],['body-input.json',msg.measurements]]);
+    }
+  }
+});
+
 class Element {
   constructor() { this.value = ''; this.files = []; this.children = []; this.handlers = {}; this.checked = false; this.disabled = false; }
   addEventListener(name, fn) { this.handlers[name] = fn; }
@@ -685,6 +711,15 @@ test('outfit worker retains exact sources across imports and substitutions and r
   const supported = await w.send({...base,type:'scenario',request:6,scenarioRequest:'{"options":{"self_contact":{}}}'});
   assert.equal(supported.type,'result',supported.message);
   assert.deepEqual(called.find(c=>c[0]==='scenario'),['scenario',edited]);
+  const matrix={schema:'ftx-drape-scenario-matrix/1',max_evaluations:2,cases:[
+    {key:'contact',scenario:{options:{self_contact:{}}}},{key:'missing contact',scenario:{options:{}}}]};
+  const incomplete=await w.send({...base,type:'scenario',request:7,scenarioRequest:JSON.stringify(matrix)});
+  assert.equal(incomplete.type,'error'); assert.match(incomplete.message,/self_contact in every case/);
+  assert.equal(called.filter(c=>c[0]==='scenario').length,1);
+  matrix.cases[1].scenario.options.self_contact={};
+  const complete=await w.send({...base,type:'scenario',request:8,scenarioRequest:JSON.stringify(matrix)});
+  assert.equal(complete.type,'result',complete.message);
+  assert.equal(called.filter(c=>c[0]==='scenario').length,2);
 });
 test('outfit page imports namespaced pieces and binds exact composed JSON with its source receipt', async () => {
   const p = await pageModule(), imported = outfitImport();
@@ -1720,11 +1755,125 @@ const scenarioReport = () => ({ schema: 'ftx-material-scenario-study/1', scenari
     metrics: { simulation_gating_clear: false, cloth_mass_kg: 0, independent_surface_power_w: -4.5, body_coverage_power_w: null },
     surface: outcome(), coverage: refused('missing conductivity'), drape: { settled: false, flags: ['unsettled'] },
     body_geometry_sha256: 'body-lock', positions_sha256: 'positions-lock' }) }] });
+function scenarioMatrixReport() {
+  const cold=scenarioReport(), warm=scenarioReport();
+  const candidate=(key,value,unit,eligible=true)=>({key,eligible,dominated_by:[],
+    exclusions:eligible?[]:[{message:'missing mechanics in this case'}],readings:value==null?{}:{[unit==='W'?
+      'independent_surface_power_w':'motion_covered_vapor_potential_energy_j']:{value,unit,
+      ...(unit==='J'?{reported_bounds:[14,28]}:{})}}});
+  cold.comparison={policy:{basis:'nominal',allow_mixed_protocols:false,objectives:[
+    {metric:'independent_surface_power_w',direction:'minimize'}],constraints:[]},
+    motion_required:false,frontier:['A'],incomparable:[],alternatives:[candidate('A',-4.5,'W'),candidate('B',-3,'W')]};
+  cold.comparison.alternatives[1].dominated_by=['A'];
+  warm.comparison={policy:{basis:'reported_bounds',allow_mixed_protocols:false,objectives:[
+    {metric:'motion_covered_vapor_potential_energy_j',direction:'maximize'}],constraints:[]},
+    motion_required:true,frontier:['A'],incomparable:[],alternatives:[candidate('A',17.5,'J'),candidate('B',null,'J',false)]};
+  for (const [index,report] of [cold,warm].entries()) {
+    const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+    initial.drape={settled:true,flags:[]}; initial.metrics.simulation_gating_clear=true;
+    const coverage=vaporCoverageReport(), history=vaporHistoryReport();
+    coverage.replay_request_json=` {"schema":"ftx-vapor-coverage/1","source":"case ${index+1}","value":1.0,"x":-0.0}\n`;
+    history.replay_request_json=` {"schema":"ftx-vapor-coverage-history/1","source":"case ${index+1}","value":1.0,"x":-0.0}\n`;
+    history.totals.reported_bounds={potential_energy_j:[14,28],potential_mass_kg:[0.0000056,0.0000112]};
+    initial.vapor_coverage=outcome(coverage);
+    initial.motion=outcome({duration_s:1,trials:1,samples:[],keyframes:[{time_s:1,arm_abduction_deg:40,
+      surface:omitted(),coverage:omitted(),vapor_coverage:outcome(coverage)}],vapor_coverage_history:outcome(history)});
+  }
+  const successfulB=plain(cold.simulations.find(row=>row.key==='A'));
+  successfulB.key='B'; successfulB.evaluation.result.metrics.independent_surface_power_w=-3;
+  successfulB.evaluation.result.motion=omitted(); successfulB.evaluation.result.vapor_coverage=omitted();
+  cold.simulations[0]=successfulB;
+  warm.simulations[0].evaluation=refused('missing mechanics in this case');
+  const cases=[{key:'<cold>',request_sha256:'cold-lock',scenario:cold.scenario,simulations:cold.simulations,comparison:cold.comparison},
+    {key:'warm',request_sha256:'warm-lock',scenario:warm.scenario,simulations:warm.simulations,comparison:warm.comparison}];
+  return {schema:'ftx-material-scenario-matrix-study/1',request_sha256:'matrix-lock',max_evaluations:4,
+    planned_evaluations:4,evaluations:4,manufacturing:cold.manufacturing,cases,notes:['Synthetic frontend matrix; no empirical claim.'],
+    comparison:{schema:'ftx-material-scenario-matrix-comparison/1',case_order:cases.map(row=>row.key),
+      policies:Object.fromEntries(cases.map(row=>[row.key,row.comparison.policy])),frontier:['A'],incomparable:[],
+      alternatives:['A','B'].map(key=>({key,eligible:key==='A',dominated_by:[],
+        cases:Object.fromEntries(cases.map(row=>[row.key,row.comparison.alternatives.find(a=>a.key===key)]))}))}};
+}
 function scenarioInputs(p) {
   p.select('studyRequest', '{"value":1.0}'); p.select('scenarioRequest', '{"temperature":293.0}');
   p.select('measurements', '{"length":10.0}'); p.select('body');
   p.e.body.files[0].arrayBuffer = async () => new ArrayBuffer(8); p.e.body.handlers.change();
 }
+
+test('named scenario matrices share manufacturing, retain native case decisions and publish distinct exact replays', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  await p.e.study.onclick(); p.emit(studyReport()); const priorUrls=new Set(p.live);
+  const input=' {"schema":"ftx-drape-scenario-matrix/1","max_evaluations":4,"cases":[{"key":"<cold>","scenario":{"x":-0.0}},{"key":"warm","scenario":{"temperature":303.0}}]}\n';
+  p.select('scenarioRequest',input); p.e.scenarioRequest.handlers.change(); await p.e.scenario.onclick();
+  const request=p.current().messages.at(-1), report=scenarioMatrixReport(), raw=` ${JSON.stringify(report)}\n`;
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),WebBody:class {free(){}},
+    material_scenario_study:(_body,pattern,study,matrix,body)=>{
+      assert.equal(matrix,input); assert.equal(pattern,request.pattern); assert.equal(study,request.studyRequest);
+      assert.equal(body,request.measurements); return raw;}}});
+  p.current().emit(await w.send(request));
+  const s=section(p,'Fresh drape and heat alternatives'), tables=descendants(s).filter(n=>n.tag==='table');
+  assert.equal(s.hidden,false);
+  assert.equal(tables.filter(t=>t.children[0].textContent==='Independent manufacturing outcomes').length,1);
+  const shared=descendants(s).find(n=>n.tag==='section'&&n.children[0]?.textContent==='Shared manufacturing — evaluated once');
+  assert.ok(shared); assert.equal(descendants(shared).filter(n=>n.download?.endsWith('-pattern.json')).length,2);
+  const groups=['Case 1: <cold>','Case 2: warm'].map(title=>
+    descendants(s).find(n=>n.tag==='section'&&n.children[0]?.textContent===title));
+  assert.ok(groups.every(Boolean)); assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  assert.equal(groups.some(g=>visibleText(g).includes('Independent manufacturing outcomes')),false);
+  assert.match(visibleText(groups[0]),/Computed nominal frontier: A/);
+  assert.match(visibleText(groups[1]),/Computed reported_bounds frontier: A/);
+  assert.match(visibleText(groups[1]),/missing mechanics in this case/);
+  const initial=g=>descendants(g).find(n=>n.tag==='table'&&n.children[0].textContent.startsWith('Initial static-drape results'));
+  assert.equal(initial(groups[0]).children[3].children[5].textContent,'-3');
+  assert.equal(initial(groups[1]).children[3].children[5].textContent,'Unknown');
+  assert.match(visibleText(s),/Computed cross-case frontier: A/);
+  const aggregate=tables.find(t=>t.children[0].textContent==='Named scenario decisions — authoritative Rust comparison');
+  assert.deepEqual(plain(aggregate.children[2].children.map(n=>n.textContent)),
+    ['A','Eligible','None reported','<cold>','Eligible','independent_surface_power_w: -4.5 W']);
+  assert.deepEqual(plain(aggregate.children[3].children.map(n=>n.textContent)),
+    ['A','Eligible','None reported','warm','Eligible','motion_covered_vapor_potential_energy_j: 17.5 J; reported range [14, 28] J']);
+  assert.deepEqual(plain(aggregate.children[5].children.map(n=>n.textContent)),['B','Excluded','None reported','warm',
+    'Excluded: missing mechanics in this case','motion_covered_vapor_potential_energy_j: Unknown']);
+  const expected=[['material-scenario-matrix-study.json',raw],['scenario-request.json',input]];
+  for (const [index,item] of report.cases.entries()) {
+    const a=item.simulations.find(row=>row.key==='A').evaluation.result, prefix=`case-${index+1}-alternative-1-`;
+    expected.push([`${prefix}vapor-coverage-replay.json`,a.vapor_coverage.result.replay_request_json],
+      [`${prefix}motion-vapor-coverage-replay.json`,a.motion.result.vapor_coverage_history.result.replay_request_json],
+      [`${prefix}motion-endpoint-1-vapor-coverage-replay.json`,a.motion.result.keyframes[0].vapor_coverage.result.replay_request_json]);
+  }
+  for (const [name,text] of expected) {
+    const links=descendants(s).filter(n=>n.download===name); assert.equal(links.length,1,name);
+    assert.equal(await p.blobs.get(links[0].href).text(),text);
+  }
+  const downloads=descendants(s).filter(n=>n.download).map(n=>n.download);
+  assert.equal(new Set(downloads).size,downloads.length);
+  const summary=JSON.parse(s.children[1].textContent);
+  assert.equal(summary.planned_evaluations,4); assert.equal(summary.evaluations,4); assert.equal(summary.max_evaluations,4);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.deepEqual(p.live,priorUrls);
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,false);
+});
+
+test('matrix policies remain optional per case and replacement cancels every stale case result and replay', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const report=scenarioMatrixReport(); delete report.comparison; delete report.cases[0].comparison;
+  report.notes=['Case <cold> has no effective comparison policy.'];
+  await p.e.scenario.onclick(); p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  assert.match(visibleText(s),/No cross-case comparison is available/);
+  assert.match(visibleText(s),/Case <cold> has no effective comparison policy/);
+  assert.equal(descendants(s).filter(n=>n.tag==='table'&&n.children[0].textContent.startsWith('Declared computed objectives')).length,1);
+  assert.equal(descendants(s).filter(n=>n.tag==='table'&&n.children[0].textContent.startsWith('Initial static-drape results')).length,2);
+  const delay=deferred(); p.e.scenarioRequest.files[0].text=()=>delay.promise;
+  const old=p.current(), messages=old.messages.length, running=p.e.scenario.onclick();
+  p.select('scenarioRequest','{"schema":"ftx-drape-scenario-matrix/1","cases":[]}');
+  p.e.scenarioRequest.handlers.change(); p.ready(); delay.resolve('{"schema":"ftx-drape-scenario-matrix/1"}'); await running;
+  assert.equal(old.dead,true); assert.equal(old.messages.length,messages); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+  await p.e.scenario.onclick(); const stale=p.current(), id=stale.messages.at(-1).request;
+  p.e.body.handlers.change(); p.ready();
+  stale.emit({type:'result',request:id,result:report,files:[]});
+  assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+  await p.e.scenario.onclick(); p.emit(report); assert.equal(s.hidden,false);
+  p.e.scenarioBody.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
 
 function addChoice(p, group, choice, pieces = ['front']) {
   p.e.combinationGroup.value = group; p.e.combinationChoice.value = choice;
@@ -3129,6 +3278,63 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
           assert.deepEqual(actual[key], original[key], `Motion allowance changed independent ${key}`);
         }
       });
+      // Reuse the same unlocked synthetic source and body: reverse only the existing steady
+      // temperatures, with independent static drapes and no new measurement/physics fixture.
+      const matrixStudy=JSON.parse(msg.studyRequest), forward=JSON.parse(msg.scenarioRequest);
+      delete forward.motion;
+      matrixStudy.comparison={basis:'nominal',objectives:[{metric:'independent_surface_power_w',direction:'minimize'}]};
+      const reverse=plain(forward);
+      for (const boundary of reverse.surface.boundaries) {
+        [boundary.inside_c,boundary.outside_c]=[boundary.outside_c,boundary.inside_c];
+      }
+      const cases=[{key:'forward',scenario:forward},{key:'reverse',scenario:reverse,comparison:{
+        ...matrixStudy.comparison,constraints:[{metric:'independent_surface_power_w',maximum:0}]}}];
+      const matrixRequest=` ${JSON.stringify({schema:'ftx-drape-scenario-matrix/1',max_evaluations:4,cases})}\n`;
+      const matrixStudyText=JSON.stringify(matrixStudy);
+      const matrixMessage={...msg,request:96,studyRequest:matrixStudyText,scenarioRequest:matrixRequest};
+      const matrix=await w.send(matrixMessage);
+      assert.equal(matrix.type,'result',matrix.message);
+      assert.equal(matrix.result.schema,'ftx-material-scenario-matrix-study/1');
+      assert.deepEqual(matrix.result.cases.map(c=>c.key),['forward','reverse']);
+      assert.equal(matrix.result.planned_evaluations,4); assert.equal(matrix.result.evaluations,4);
+      assert.equal(matrix.files.find(f=>f.name==='scenario-request.json').text,matrixRequest);
+      assert.equal(matrix.files.find(f=>f.name==='study-request.json').text,matrixStudyText);
+      assert.equal(matrix.files.find(f=>f.name==='body-input.json').text,msg.measurements);
+      const model=new ftx.WebBody(new Uint8Array(msg.bytes)), priorProgress=globalThis.ftxProgress;
+      globalThis.ftxProgress=()=>{};
+      try {
+        const raw=ftx.material_scenario_study(model,msg.pattern,matrixStudyText,matrixRequest,msg.measurements);
+        assert.equal(matrix.files.find(f=>f.name==='material-scenario-matrix-study.json').text,raw);
+        assert.deepEqual(matrix.result,JSON.parse(raw));
+        for (const [i,item] of cases.entries()) {
+          const independent=JSON.parse(ftx.material_scenario_study(model,msg.pattern,
+            JSON.stringify({...matrixStudy,comparison:item.comparison||matrixStudy.comparison}),
+            JSON.stringify(item.scenario),msg.measurements));
+          const actual=matrix.result.cases[i];
+          assert.equal(actual.request_sha256,independent.request_sha256);
+          assert.deepEqual(actual.scenario,independent.scenario);
+          assert.deepEqual(actual.simulations,independent.simulations);
+          assert.deepEqual(actual.comparison,independent.comparison);
+          assert.deepEqual(matrix.result.manufacturing.alternatives,independent.manufacturing.alternatives);
+          for (const candidate of actual.comparison.alternatives) {
+            const evaluated=actual.simulations.find(row=>row.key===candidate.key).evaluation;
+            assert.equal(evaluated.status,'available'); assert.equal(candidate.eligible,true);
+            assert.equal(candidate.readings.independent_surface_power_w.value,evaluated.result.metrics.independent_surface_power_w);
+            assert.deepEqual(matrix.result.comparison.alternatives.find(row=>row.key===candidate.key).cases[item.key],candidate);
+          }
+        }
+      } finally {
+        model.free();
+        if (priorProgress===undefined) delete globalThis.ftxProgress; else globalThis.ftxProgress=priorProgress;
+      }
+      const forwardResult=matrix.result.cases[0].simulations[0].evaluation.result;
+      const reverseResult=matrix.result.cases[1].simulations[0].evaluation.result;
+      assert.equal(forwardResult.positions_sha256,reverseResult.positions_sha256);
+      assert.ok(forwardResult.metrics.independent_surface_power_w>0);
+      assert.ok(reverseResult.metrics.independent_surface_power_w<0);
+      assert.notDeepEqual(matrix.result.cases[0].comparison.frontier,matrix.result.cases[1].comparison.frontier);
+      assert.equal(matrix.result.comparison.frontier.length,2);
+      assert.equal((await w.send(matrixMessage)).files[0].text,matrix.files[0].text);
     }
     // Separate native fixture keeps the original uncoupled motion replay intact. All material
     // observations and body geometry here are synthetic software inputs, not measured textiles.

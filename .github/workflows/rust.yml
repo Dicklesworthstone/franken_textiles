@@ -29,6 +29,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
         if: ${{ !cancelled() }}
+        env:
+          FTX_MOTION_REPLAY: ${{ runner.temp }}/ftx-motion-replay
         run: cargo test --workspace --locked
       - name: Test supplier source adapters
         if: ${{ !cancelled() }}
@@ -41,6 +43,8 @@ jobs:
         run: node --experimental-vm-modules --test tools/check_trace_frontend.cjs
       - name: Build requested browser bundle
         if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[browser-bundle]')) }}
+        env:
+          FTX_MOTION_REPLAY: ${{ runner.temp }}/ftx-motion-replay
         run: |
           cargo install wasm-bindgen-cli --version 0.2.128 --locked
           sh tools/build_web.sh

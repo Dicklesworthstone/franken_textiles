@@ -565,3 +565,14 @@ publishes no partial success. Frozen inputs replay offline. Synthetic analytical
 reactions/work, continuous Maxwell ramp/hold refinement, mass-dependent dynamics and refusal tests
 are in `tests/strip_history.rs`. This is constrained planar dynamics, not buckling, parameter fitting,
 measured coupon qualification, inferred heat or actual garment fit.
+
+**Named operating cases.** `study::matrix` admits `ftx-drape-scenario-matrix/1` through the existing
+scenario adapters. The common body is selected once; each case owns a fresh ordinary session and
+each material evaluation starts with independent cloth, constitutive and thermal state. Every case
+must prepare the same exact original pattern/outfit under its own options. Declared vertex-frame
+allocations sum to 64000000 and active motion-trial allocations to 32768; the export layer separately
+reserves at most 64 case/alternative callbacks. Thermal/vapor work and retained motion geometry
+share the existing session limits across cases, including refusals. Only work counters cross session
+boundaries. Case environments and motion paths are explicit sensitivity inputs, not a probability
+distribution or a claim about untested operating conditions. The native/file-free adapters retain
+identical descriptors and independent consumer refusals; existing single-case behavior is preserved.

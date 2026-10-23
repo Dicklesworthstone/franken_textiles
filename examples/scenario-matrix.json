@@ -1,0 +1,42 @@
+{
+  "schema": "ftx-drape-scenario-matrix/1",
+  "max_evaluations": 64,
+  "cases": [
+    {
+      "key": "outward-temperature-gradient",
+      "scenario": {
+        "schema": "ftx-drape-scenario/1",
+        "options": {"spacing": 12.0, "sew_steps": 12, "drape_steps": 36},
+        "fit_spec": {},
+        "max_mesh_points": 32768,
+        "max_vertex_frames": 32000000,
+        "surface": {
+          "schema": "ftx-steady-surface-conditions/1",
+          "boundaries": [{"inside_c": 30.0, "outside_c": 10.0,
+            "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.2}]
+        }
+      },
+      "comparison": {"basis": "nominal", "objectives": [
+        {"metric": "independent_surface_power_w", "direction": "minimize"}
+      ]}
+    },
+    {
+      "key": "inward-temperature-gradient",
+      "scenario": {
+        "schema": "ftx-drape-scenario/1",
+        "options": {"spacing": 12.0, "sew_steps": 12, "drape_steps": 36},
+        "fit_spec": {},
+        "max_mesh_points": 32768,
+        "max_vertex_frames": 32000000,
+        "surface": {
+          "schema": "ftx-steady-surface-conditions/1",
+          "boundaries": [{"inside_c": 10.0, "outside_c": 30.0,
+            "inside_resistance_m2_k_w": 0.1, "outside_resistance_m2_k_w": 0.2}]
+        }
+      },
+      "comparison": {"basis": "nominal", "objectives": [
+        {"metric": "independent_surface_power_w", "direction": "minimize"}
+      ]}
+    }
+  ]
+}

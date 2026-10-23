@@ -63,6 +63,282 @@ fn request() -> Request {
         "cutting":{"copies":1,"gap_mm":1.,"edge_margin_mm":0.,"end_margin_mm":0.,"seam_allowance_mm":0.}
     })).unwrap()
 }
+fn matrix_scenario() -> Value {
+    let mut cold: Value = serde_json::from_str(SCENARIO).unwrap();
+    // Sewing-only geometry is explicit and gating-clear; this is not a gravity-settled fit claim.
+    cold["options"]["sew_steps"] = json!(120);
+    cold["options"]["drape_steps"] = json!(0);
+    let mut warm = cold.clone();
+    warm["surface"]["boundaries"][0]["outside_c"] = json!(25.);
+    warm["coverage"]["conditions"]["boundaries"][0]["outside_c"] = json!(25.);
+    json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":6,
+        "cases":[{"key":"cold","scenario":cold},{"key":"warm","scenario":warm}]})
+}
+
+fn matrix_heat_policy(direction: &str) -> Value {
+    json!({"basis":"nominal", "objectives":[
+        {"metric":"independent_surface_power_w","direction":direction}]})
+}
+
+#[test]
+fn named_matrix_cases_match_standalone_consumers_and_replay_frozen_sources() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let mut request = request();
+    request.comparison = Some(serde_json::from_value(matrix_heat_policy("minimize")).unwrap());
+    let mut matrix = matrix_scenario();
+    matrix["cases"][1]["comparison"] = matrix_heat_policy("maximize");
+    let mut progress = Vec::new();
+    let result: Value = serde_json::from_str(
+        &on_body(
+            &body,
+            PATTERN,
+            &serde_json::to_string(&request).unwrap(),
+            &matrix.to_string(),
+            |line| progress.push(line.to_owned()),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["schema"], "ftx-material-scenario-matrix-study/1");
+    assert_eq!(result["planned_evaluations"], 6);
+    assert_eq!(result["evaluations"], 6);
+    assert!(progress.iter().any(|line| line.starts_with("cold / a:")));
+    assert!(progress.iter().any(|line| line.starts_with("warm / a:")));
+    assert_eq!(result["cases"][0]["comparison"]["frontier"], json!(["a"]));
+    assert_eq!(result["cases"][1]["comparison"]["frontier"], json!(["b"]));
+    assert_eq!(result["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(result["comparison"]["physical_validation_claim"], false);
+    assert_eq!(
+        result["cases"][0]["scenario"]["body_geometry_sha256"],
+        result["cases"][1]["scenario"]["body_geometry_sha256"]
+    );
+    for (index, case) in matrix["cases"].as_array().unwrap().iter().enumerate() {
+        let mut effective = request.clone();
+        if let Some(policy) = case.get("comparison") {
+            effective.comparison = Some(serde_json::from_value(policy.clone()).unwrap());
+        }
+        let standalone: Value = serde_json::from_str(
+            &on_body(
+                &body,
+                PATTERN,
+                &serde_json::to_string(&effective).unwrap(),
+                &case["scenario"].to_string(),
+                |_| {},
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for field in ["request_sha256", "scenario", "simulations", "comparison"] {
+            assert_eq!(
+                result["cases"][index][field], standalone[field],
+                "case {index}: {field}"
+            );
+        }
+        assert_eq!(
+            result["manufacturing"]["alternatives"],
+            standalone["manufacturing"]["alternatives"]
+        );
+        assert_eq!(
+            result["cases"][index]["simulations"][2]["evaluation"]["status"],
+            "refused"
+        );
+    }
+    assert_eq!(
+        result["manufacturing"]["alternatives"][2]["cutting"]["status"],
+        "available"
+    );
+    for (variant, row) in request
+        .variants
+        .iter_mut()
+        .zip(result["manufacturing"]["alternatives"].as_array().unwrap())
+    {
+        variant.changes = serde_json::from_value(row["frozen_changes"].clone()).unwrap();
+    }
+    let replay: Value = serde_json::from_str(
+        &on_body(
+            &body,
+            PATTERN,
+            &serde_json::to_string(&request).unwrap(),
+            &matrix.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for index in 0..2 {
+        assert_eq!(
+            result["cases"][index]["simulations"],
+            replay["cases"][index]["simulations"]
+        );
+    }
+    assert_eq!(
+        result["comparison"]["frontier"],
+        replay["comparison"]["frontier"]
+    );
+}
+
+#[test]
+fn named_matrix_refuses_excessive_work_and_invalid_later_policies_before_any_solve() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let request = serde_json::to_string(&request()).unwrap();
+    for fault in [
+        "empty",
+        "many",
+        "duplicate",
+        "evaluation_cap",
+        "product_cap",
+        "frames",
+        "policy",
+    ] {
+        let mut matrix = matrix_scenario();
+        match fault {
+            "empty" => matrix["cases"] = json!([]),
+            "many" => {
+                let case = matrix["cases"][0].clone();
+                matrix["cases"] = json!(
+                    (0..9)
+                        .map(|index| {
+                            let mut case = case.clone();
+                            case["key"] = json!(format!("case-{index}"));
+                            case
+                        })
+                        .collect::<Vec<_>>()
+                );
+            }
+            "duplicate" => matrix["cases"][1]["key"] = json!("cold"),
+            "evaluation_cap" => matrix["max_evaluations"] = json!(1),
+            "product_cap" => matrix["max_evaluations"] = json!(5),
+            "frames" => {
+                for case in matrix["cases"].as_array_mut().unwrap() {
+                    case["scenario"]["max_vertex_frames"] = json!(64_000_000);
+                }
+            }
+            "policy" => {
+                matrix["cases"][1]["comparison"] = json!({"basis":"nominal",
+                "objectives":[{"metric":"assembly_mass_kg","direction":"minimize"}]})
+            }
+            _ => unreachable!(),
+        }
+        let mut started = false;
+        assert!(
+            on_body(&body, PATTERN, &request, &matrix.to_string(), |_| started =
+                true)
+            .is_err(),
+            "{fault}"
+        );
+        assert!(
+            !started,
+            "{fault}: no earlier case may run before aggregate admission"
+        );
+    }
+    // Every case must admit the same original outfit under its own contact policy.
+    let outfit = include_str!("../../../tests/fixtures/materials/synthetic-joint-outfit.json");
+    let mut matrix = matrix_scenario();
+    matrix["cases"][0]["scenario"]["options"]["self_contact"] =
+        json!(ftx_drape::run::DrapeOptions::default().contact);
+    let mut started = false;
+    assert!(
+        on_body(&body, outfit, &request, &matrix.to_string(), |_| started =
+            true)
+        .is_err()
+    );
+    assert!(!started);
+}
+
+#[test]
+fn named_matrix_missing_required_consumer_excludes_joint_frontier_without_erasing_cases() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: 35.,
+    };
+    let mut request = request();
+    request.comparison = Some(serde_json::from_value(matrix_heat_policy("minimize")).unwrap());
+    let mut matrix = matrix_scenario();
+    matrix["cases"][1]["scenario"]["surface"] = Value::Null;
+    let result: Value = serde_json::from_str(
+        &on_body(
+            &body,
+            PATTERN,
+            &serde_json::to_string(&request).unwrap(),
+            &matrix.to_string(),
+            |_| {},
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["cases"][0]["comparison"]["frontier"], json!(["a"]));
+    assert_eq!(result["cases"][1]["comparison"]["frontier"], json!([]));
+    assert_eq!(result["comparison"]["frontier"], json!([]));
+    let missing = &result["cases"][1]["simulations"][0]["evaluation"];
+    assert_eq!(missing["status"], "available");
+    assert_eq!(missing["result"]["surface"]["status"], "not_requested");
+    assert_eq!(missing["result"]["coverage"]["status"], "available");
+    for row in result["manufacturing"]["alternatives"].as_array().unwrap() {
+        assert_eq!(row["cutting"]["status"], "available");
+    }
+}
+
+#[test]
+fn named_matrix_retains_body_setup_refusals_and_valid_overrides_of_an_unused_fallback() {
+    let form = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&form.vertices, &form.triangles),
+        display: (&form.vertices, &form.triangles),
+        arm_deg: f64::NAN,
+    };
+    let mut request = request();
+    let mut unsupported = matrix_heat_policy("minimize");
+    unsupported["basis"] = json!("reported_bounds");
+    request.comparison = Some(serde_json::from_value(unsupported).unwrap());
+    let mut matrix = matrix_scenario();
+    for case in matrix["cases"].as_array_mut().unwrap() {
+        case["comparison"] = matrix_heat_policy("minimize");
+    }
+    let mut started = false;
+    let result: Value = serde_json::from_str(
+        &on_body(
+            &body,
+            PATTERN,
+            &serde_json::to_string(&request).unwrap(),
+            &matrix.to_string(),
+            |_| started = true,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(!started);
+    for case in result["cases"].as_array().unwrap() {
+        assert!(case["scenario"]["body_setup_refusal"].is_object());
+        for row in case["simulations"].as_array().unwrap() {
+            assert_eq!(row["evaluation"]["status"], "refused");
+            assert_eq!(
+                row["evaluation"]["refusal"],
+                case["scenario"]["body_setup_refusal"]
+            );
+        }
+    }
+    for row in result["manufacturing"]["alternatives"].as_array().unwrap() {
+        assert_eq!(row["cutting"]["status"], "available");
+    }
+    assert_eq!(result["comparison"]["frontier"], json!([]));
+}
+
 #[test]
 fn file_free_study_matches_real_consumers_and_keeps_manufacturing_after_drape_refusal() {
     let form = form();

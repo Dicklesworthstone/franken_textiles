@@ -25,6 +25,7 @@ use crate::{
 
 pub mod fitted;
 pub mod heat;
+pub mod matrix;
 pub mod motion;
 mod options;
 

@@ -9,24 +9,32 @@ use ftx_pattern::{
 use serde_json::{Value, json};
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 const FIXTURE: &str = include_str!("../../../tests/fixtures/materials/synthetic-compression.json");
 
 fn workspace() -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "ftx-compression-cli-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir(&path).unwrap();
-    path
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    loop {
+        let path = std::env::temp_dir().join(format!(
+            "ftx-compression-cli-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::create_dir(&path) {
+            Ok(()) => return path,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("cannot create {}: {error}", path.display()),
+        }
+    }
 }
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) {

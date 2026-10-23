@@ -94,6 +94,62 @@ meshing; it can exceed the eventual retained vertices. The aggregate vertex-fram
 in key order, including failed attempted drapes. Total sew/drape steps are capped at 256, lag rounds
 at four and PCG iterations at 128. These are allocation/work limits, not a runtime guarantee.
 
+## One material decision across named operating cases
+
+The same native commands and `material_scenario_study` WASM function also accept
+`ftx-drape-scenario-matrix/1` in the scenario input. The browser's existing scenario upload accepts
+this file directly. See [the complete two-environment example](../examples/scenario-matrix.json).
+Its temperatures and films are illustrative prescribed reservoirs, not measured service conditions;
+provide your actual fit contract, qualified material observations and numerical settling policy.
+
+A matrix has `schema`, `max_evaluations` and `cases`. Each case has a unique `key`, a complete existing
+`scenario`, and an optional `comparison` override using the ordinary comparison policy. Omitted
+overrides use `study.comparison`. Distinct cases may choose different objectives or directions, so
+minimizing signed heat in one environment need not imply the same design preference in another.
+If any case has no effective policy, its physical results and the other case comparisons remain
+available, but no combined frontier is invented.
+
+```sh
+ftx materials scenario-study pattern.json study.json examples/scenario-matrix.json body-input.json model.ftxbody --json
+ftx-materials scenario-study pattern.json study.json examples/scenario-matrix.json body-input.json model.ftxbody
+```
+
+The body shape and initial pose are selected once. Binding, scalar screening, cutting, sewing,
+inventory and purchasing run once on the shared frozen alternatives. Every case/alternative starts
+a fresh drape and independently evaluates its requested heat, vapor and motion consumers. Existing
+motion programs may differ across cases; no previous case's final cloth state, material memory or
+temperature field becomes another case's initial condition. Joint outfits are admitted separately
+under every case's options and must produce the same exact prepared pattern.
+
+The `ftx-material-scenario-matrix-study/1` result contains shared `manufacturing` and ordered `cases`.
+Each case retains its descriptor, request identity, complete `simulations` and ordinary `comparison`.
+The optional top-level matrix comparison retains case-keyed policies, readings, source protocols,
+exclusions and a conditional all-cases `frontier`:
+
+- A material is eligible only when **every case** admits its objectives, constraints and required
+  consumers. A failed required case cannot disappear into an average or become a zero result.
+- Dominance requires no worse performance in every declared case/objective coordinate and a strict
+  improvement in at least one. A tie in one case can coexist with an improvement elsewhere; opposite
+  improvements keep both choices. The existing nominal/source-range relation supplies each decision.
+- Protocol compatibility is checked between materials **within each case**. Permission to mix source
+  protocols in one case does not change another case. Different authored environments are retained
+  as separate coordinates rather than asserted to be the same experiment.
+- Reported-range constraints require the whole admitted range. Missing bounds, overlapping ranges
+  and unsupported propagated uncertainties retain the existing comparator's behavior.
+
+Matrices admit 1–8 cases and at most 64 case × alternative evaluations. The exact product is reserved
+before manufacturing or physical callbacks; failed bindings remain in every case without starting
+a solver. Case vertex-frame allocations must sum to at most 64,000,000, and active motion-trial
+allocations to at most 32,768. Heat/vapor operation budgets and retained motion geometry are shared
+across cases, including refused attempts; cases cannot multiply the ordinary session allowances.
+Declared order determines execution and reservation order, while alternatives retain stable key order.
+
+The browser shows manufacturing once, then the combined frontier and each case's actual outcomes.
+Original input/report downloads retain their exact text; case-prefixed frozen replay downloads avoid
+collisions. Changing the source, body, study or matrix cancels and invalidates all dependent output.
+This is sensitivity to a finite set of explicitly authored cases, without inferred probabilities,
+unseen operating conditions, measured garment validation or a whole-wearer comfort prediction.
+
 ## Prescribed motion of the sewn cloth
 
 Add optional `motion` to the scenario request. Both native binaries and the model-backed WASM
