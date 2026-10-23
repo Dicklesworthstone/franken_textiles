@@ -16,6 +16,8 @@ use crate::{
     materials::{Catalog, Form, Quantity, Source},
 };
 
+pub mod wet_film;
+
 /// Portable steady vapor-stack request.
 pub const SCHEMA: &str = "ftx-vapor-stack/1";
 /// Scope of the assumed network, independent of the evidence of its input observations.

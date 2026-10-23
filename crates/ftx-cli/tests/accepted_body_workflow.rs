@@ -17,6 +17,301 @@ fn model_bytes() -> Vec<u8> {
     model_bytes_with_rig(false)
 }
 
+#[test]
+fn finite_body_water_objectives_use_actual_motion_in_native_and_portable_scenarios() {
+    use ftx_drape::study::fitted::{BodyRequest, FittedBody};
+    use ftx_wasm::materials::scenario::on_model;
+
+    let bytes = model_bytes_with_rig(true);
+    let digest = sha256_hex(&bytes);
+    let model =
+        ftx_body::AnnyModel::from_data(ftx_body::AnnyData::from_bytes(&bytes, true).unwrap())
+            .unwrap();
+    let body_request = json!({"schema":"ftx-scenario-body/1",
+        "accepted_body_fit":receipt(&digest),"arm_abduction_deg":35.0});
+    let fitted =
+        FittedBody::prepare(&model, &digest, &BodyRequest::read(&body_request).unwrap()).unwrap();
+    let body = fitted.body();
+    // Select a genuine vertical face of this synthetic prism and cover its entire height.
+    // The small original band covers only part of a tall body triangle, which cannot qualify
+    // complete-coverage objectives. The domain has no anatomical interpretation.
+    let (body_triangle, triangle) = body
+        .collision
+        .1
+        .iter()
+        .enumerate()
+        .find(|(_, t)| {
+            let [a, b, c] = t.map(|i| body.collision.0[i]);
+            let normal = (b - a).cross(c - a);
+            normal.z.abs() < 0.1 * normal.norm()
+        })
+        .unwrap();
+    let frame = body.frames.frame("torso").unwrap();
+    let heights = triangle.map(|i| (body.collision.0[i] * 1000.0 - frame.origin).dot(frame.up));
+    let low = heights.into_iter().fold(f64::INFINITY, f64::min) - 50.0;
+    let high = heights.into_iter().fold(f64::NEG_INFINITY, f64::max) + 50.0;
+    let mut pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let width = 180.0 * std::f64::consts::TAU;
+    let piece = &mut pattern["pieces"][0];
+    piece["vertices"]["b"][0] = json!(width);
+    piece["vertices"]["c"] = json!([width, high - low]);
+    piece["vertices"]["d"][1] = json!(high - low);
+    piece["placement"]["radius_mm"] = json!(180.0);
+    piece["placement"]["x0"] = json!(width / 2.0);
+    piece["placement"]["y0"] = json!(body.frames.landmark_h("torso", "waist").unwrap() - low);
+    let mut fast = pattern["fabric"]["material"].clone();
+    fast["record"]["properties"]["vapor_resistance"] = json!({
+        "value":7.0,"unit":"m2*Pa/W","source":"test","evidence":"estimate",
+        "method":"Synthetic constant Ret for finite-body-water comparison",
+        "conditions":{"conditioning":"synthetic dry coupon"}});
+    let mut slow = fast.clone();
+    slow["record"]["properties"]["vapor_resistance"]["value"] = json!(17.0);
+    let mut study = json!({"schema":"ftx-material-study/1","variants":[
+        {"key":"a-fast","changes":{"schema":"ftx-material-bindings/1","default":fast}},
+        {"key":"b-slow","changes":{"schema":"ftx-material-bindings/1","default":slow}}],
+        "cutting":{"copies":1,"gap_mm":1.0,"edge_margin_mm":0.0,
+            "end_margin_mm":0.0,"seam_allowance_mm":0.0}});
+    let mut scenario: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario.json"
+    ))
+    .unwrap();
+    scenario.as_object_mut().unwrap().remove("coverage");
+    scenario["options"] = json!({"spacing":100.0,"sew_steps":120,"drape_steps":0,"step":0.001});
+    scenario["vapor_coverage"] = json!({"body_triangle_ids":[body_triangle],
+        "instance_layers":{"band":"shell"},
+        "settings":{"max_distance_m":0.2,"min_normal_cosine":0.1,
+            "separation_tolerance_m":0.00001,"interfaces":[]},
+        "conditions":{"boundaries":[{"inside_vapor_pressure_pa":2000.0,
+            "outside_vapor_pressure_pa":1000.0,"inside_film_resistance_m2_pa_w":1.0,
+            "outside_film_resistance_m2_pa_w":2.0,"latent_heat_j_kg":2_500_000.0}]}});
+    scenario["motion"] = json!({"schema":"ftx-drape-motion/1",
+        "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.1},
+            {"time_s":0.004,"arm_abduction_deg":35.2}],"max_step_s":0.001,
+        "max_trials":16,"max_pairs":100000,"max_sample_vertices":10000,
+        "vapor_coverage_history":{"schema":"ftx-motion-vapor-coverage/1",
+            "integration":"right_endpoint","max_geometry_operations":1_000_000}});
+    let portable = |request: &Value, scenarios: &Value| -> Value {
+        serde_json::from_str(
+            &on_model(
+                &model,
+                &digest,
+                &pattern.to_string(),
+                &request.to_string(),
+                &scenarios.to_string(),
+                &body_request.to_string(),
+                |_| {},
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let initial = portable(&study, &scenario);
+    let initial_simulation = &initial["simulations"][0]["evaluation"]["result"];
+    assert_eq!(
+        initial_simulation["metrics"]["simulation_gating_clear"], true,
+        "{initial_simulation}"
+    );
+    assert_eq!(initial_simulation["motion"]["status"], "available");
+    let initial_coverage = &initial_simulation["vapor_coverage"]["result"];
+    assert_eq!(
+        initial_coverage["coverage"]["uncovered_area_m2"], 0.0,
+        "{initial_coverage}"
+    );
+    let film = json!({"schema":"ftx-body-wet-film/1",
+        "body_mesh_sha256":initial_coverage["body_mesh_sha256"],
+        "source":"test:explicit-body-water",
+        "basis":"Synthetic initial film and constant body supply; no inferred wearer physiology",
+        "initial_liquid_mass_kg":[0.0],"supply_rate_kg_s":[0.0]});
+    scenario["motion"]["vapor_coverage_history"]["wet_film"] = film;
+    let policy = |maximum| {
+        json!({"basis":"nominal",
+        "required_consumers":["motion_wet_film"],
+        "objectives":[{"metric":"motion_wet_film_evaporated_mass_kg","direction":"maximize"}],
+        "constraints":[{"metric":"motion_wet_film_evaporated_mass_kg","minimum":0.0,"maximum":maximum},
+            {"metric":"motion_wet_film_remaining_liquid_mass_kg","minimum":0.0,"maximum":0.0},
+            {"metric":"motion_wet_film_unmet_demand_mass_kg","minimum":0.0},
+            {"metric":"motion_wet_film_supplied_mass_kg","minimum":0.0,"maximum":5e-13},
+            {"metric":"motion_wet_film_body_reservoir_latent_energy_j","minimum":0.0,"maximum":5e-6}]})
+    };
+    study["comparison"] = policy(2e-12);
+    let mut supplied = scenario.clone();
+    supplied["motion"]["vapor_coverage_history"]["wet_film"]["initial_liquid_mass_kg"] =
+        json!([1e-12]);
+    supplied["motion"]["vapor_coverage_history"]["wet_film"]["supply_rate_kg_s"] = json!([1e-10]);
+    let matrix = json!({"schema":"ftx-drape-scenario-matrix/1","max_evaluations":4,
+        "cases":[{"key":"dry-body","scenario":scenario,"comparison":policy(0.0)},
+            {"key":"supply-limited","scenario":supplied}]});
+    let result = portable(&study, &matrix);
+    assert_eq!(
+        result["comparison"]["frontier"],
+        json!(["a-fast", "b-slow"]),
+        "{}",
+        result["cases"]
+    );
+    for (index, case) in result["cases"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(case["comparison"]["frontier"], json!(["a-fast", "b-slow"]));
+        let mut potentials = Vec::new();
+        let mut evaporation = Vec::new();
+        for (candidate, simulation) in case["comparison"]["alternatives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(case["simulations"].as_array().unwrap())
+        {
+            assert_eq!(candidate["eligible"], true, "{candidate}");
+            let current = &simulation["evaluation"]["result"];
+            let motion = &current["motion"]["result"];
+            assert_eq!(current["metrics"]["simulation_gating_clear"], true);
+            assert_eq!(
+                motion["samples"],
+                initial_simulation["motion"]["result"]["samples"]
+            );
+            let history = &motion["vapor_coverage_history"]["result"];
+            let water = &history["wet_film"]["totals"];
+            for (metric, field, unit) in [
+                (
+                    "motion_wet_film_evaporated_mass_kg",
+                    "evaporated_mass_kg",
+                    "kg",
+                ),
+                (
+                    "motion_wet_film_remaining_liquid_mass_kg",
+                    "remaining_liquid_mass_kg",
+                    "kg",
+                ),
+                (
+                    "motion_wet_film_unmet_demand_mass_kg",
+                    "unmet_demand_mass_kg",
+                    "kg",
+                ),
+                ("motion_wet_film_supplied_mass_kg", "supplied_mass_kg", "kg"),
+                (
+                    "motion_wet_film_body_reservoir_latent_energy_j",
+                    "body_reservoir_latent_energy_j",
+                    "J",
+                ),
+            ] {
+                let reading = &candidate["readings"][metric];
+                assert_eq!(reading["value"], water[field]);
+                assert_eq!(reading["unit"], unit);
+                assert_eq!(reading["consumer"], "motion_wet_film");
+            }
+            let actual = water["evaporated_mass_kg"].as_f64().unwrap();
+            let expected = if index == 0 {
+                0.0
+            } else {
+                1e-12 + 1e-10 * 0.004
+            };
+            assert!((actual - expected).abs() < 1e-25);
+            assert_eq!(water["remaining_liquid_mass_kg"], 0.0);
+            assert!(
+                (water["body_reservoir_latent_energy_j"].as_f64().unwrap() - actual * 2_500_000.0)
+                    .abs()
+                    < 1e-18
+            );
+            assert!(water["mass_balance_error_kg"].as_f64().unwrap().abs() < 1e-25);
+            potentials.push(history["totals"]["potential_mass_kg"].as_f64().unwrap());
+            evaporation.push(actual);
+            let replay: ftx_drape::vapor::coverage::history::Request =
+                serde_json::from_str(history["replay_request_json"].as_str().unwrap()).unwrap();
+            assert_eq!(replay.evaluate().unwrap(), *history);
+        }
+        assert!(potentials[0] > potentials[1] && potentials[1] > 2e-12);
+        assert_eq!(evaporation[0], evaporation[1]);
+    }
+
+    // Both executable boundaries and the file-free browser boundary consume the same real
+    // model, source materials, sewn geometry and continuing motion; no callback report is forged.
+    let dir = setup();
+    std::fs::write(dir.join("model.ftxbody"), &bytes).unwrap();
+    for (name, value) in [
+        ("pattern.json", &pattern),
+        ("study.json", &study),
+        ("scenario.json", &matrix),
+        ("body-input.json", &body_request),
+    ] {
+        save(&dir.join(name), value);
+    }
+    for (binary, prefix) in [
+        (env!("CARGO_BIN_EXE_ftx-materials"), vec!["scenario-study"]),
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            vec!["--json", "materials", "scenario-study"],
+        ),
+    ] {
+        let output = Command::new(binary)
+            .current_dir(&dir)
+            .args(prefix)
+            .args([
+                "pattern.json",
+                "study.json",
+                "scenario.json",
+                "body-input.json",
+                "model.ftxbody",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} / {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(document.get("result").unwrap_or(&document), &result);
+    }
+    let mut frozen = study.clone();
+    for (variant, row) in frozen["variants"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(result["manufacturing"]["alternatives"].as_array().unwrap())
+    {
+        variant["changes"] = row["frozen_changes"].clone();
+    }
+    let replay = portable(&frozen, &matrix);
+    for index in 0..2 {
+        assert_eq!(
+            replay["cases"][index]["simulations"],
+            result["cases"][index]["simulations"]
+        );
+        assert_eq!(
+            replay["cases"][index]["comparison"]["frontier"],
+            result["cases"][index]["comparison"]["frontier"]
+        );
+    }
+    for invalid in [Value::Null, json!("stale")] {
+        let mut bad = matrix.clone();
+        let wet = &mut bad["cases"][1]["scenario"]["motion"]["vapor_coverage_history"]["wet_film"];
+        if invalid.is_null() {
+            *wet = Value::Null;
+        } else {
+            wet["body_mesh_sha256"] = json!("0".repeat(64));
+        }
+        let refused = portable(&study, &bad);
+        assert_eq!(refused["comparison"]["frontier"], json!([]));
+        assert_eq!(
+            refused["cases"][0]["comparison"]["frontier"],
+            json!(["a-fast", "b-slow"])
+        );
+        assert_eq!(refused["cases"][1]["comparison"]["frontier"], json!([]));
+        for simulation in refused["cases"][1]["simulations"].as_array().unwrap() {
+            let motion = &simulation["evaluation"]["result"]["motion"];
+            assert_eq!(motion["status"], "available");
+            for endpoint in motion["result"]["keyframes"].as_array().unwrap() {
+                assert_eq!(endpoint["vapor_coverage"]["status"], "available");
+                assert_eq!(endpoint["surface"]["status"], "available");
+            }
+        }
+        for row in refused["manufacturing"]["alternatives"].as_array().unwrap() {
+            assert_eq!(row["cutting"]["status"], "available");
+        }
+    }
+}
+
 fn model_bytes_with_rig(articulated: bool) -> Vec<u8> {
     // The placement case is an articulated closed prism; the original image-fit case is a box.
     // Both are synthetic analytic geometry, never a stand-in for anatomical acceptance.

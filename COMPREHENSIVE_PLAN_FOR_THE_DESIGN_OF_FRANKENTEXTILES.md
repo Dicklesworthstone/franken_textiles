@@ -3024,6 +3024,12 @@ body-triangle step and cumulative receipt must conserve liquid and agree with ca
 demand, the declared quadrature and latent conversion. Altered, incomplete or refused histories
 cannot enter the frontier; independent manufacturing, mechanics and dry-heat results remain visible.
 
+The production motion adapter and decision admission use one geometry-independent canonical water
+reducer. Every retained step and cumulative receipt is reconstructed from current qualified demand
+and the prescribed liquid policy, including residuals and retention charges. Finite supply can make
+different transport potentials tie in modeled evaporation; missing film evidence never becomes an
+assumed dry film. Native and portable model-backed studies retain the same exact replay and decisions.
+
 The two quadratures retain their own declared sampled-time meaning. Water-state uncertainty is not
 propagated, so these objectives refuse `reported_bounds`; source Ret protocols still govern
 comparability. This advances decisions about the conditional body-film model without claiming

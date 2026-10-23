@@ -24,5 +24,8 @@ ftx-trace = { path = "../ftx-trace" }
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+ftx-wasm = { path = "../ftx-wasm" }
+
 [lints]
 workspace = true

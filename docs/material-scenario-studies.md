@@ -513,12 +513,22 @@ The threshold above is an illustrative decision input, not a physiological recom
 textile measurement. A material that transfers more water can also exhaust its supply earlier;
 multiple objectives preserve that tradeoff instead of introducing an undisclosed score.
 
+All alternatives in a case use that case's identical prescribed water inputs. Distinct named cases
+retain their own water policy, climate, readings and exclusions. A greater vapor potential alone
+cannot rank an alternative above another after both have exhausted the same available water:
+their finite evaporation may tie. Higher unmet demand is not automatically better or worse; the
+request must declare its direction. Existing potential metrics retain their separate meaning.
+
 Admission requires complete declared body coverage initially and at every retained mechanical
-sample. It checks the exact authored film, per-triangle supply and finite-inventory limits, step
-and cumulative mass/demand balances, latent conversion, and retained-state budget. Altering a
+sample. It replays every triangle's water state through the **same canonical reducer used by
+production motion**, checking the exact authored film, per-triangle supply and finite-inventory
+limits, every step and cumulative receipt, mass/demand residuals, latent conversion and retained-state
+budget. Altering a
 request and recomputing a receipt hash cannot substitute a different initial inventory, supply or
 body owner. Source protocol mismatches remain explicit. Failed water admission preserves other
 independent outputs and excludes the candidate only from policies requiring that consumer.
+Missing film evidence never becomes an assumed dry film or zero evaporation. The film consumer can
+be required independently of a water objective, and sets `comparison.motion_required: true`.
 
 These metrics require `basis: "nominal"`. Source Ret ranges do not establish uncertainty bounds
 for evolving water inventories. The model does not cool textile heat storage, add wet textile mass,

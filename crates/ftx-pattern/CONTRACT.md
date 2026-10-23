@@ -48,6 +48,16 @@ Specimen EI in `N*m2` never becomes sheet rigidity in `N*m`. Existing catalog/fr
 mass accounting and condition filters consume these facts; mechanics and heat still refuse missing
 inputs. Source hashes, discrepancies and retention boundary: `docs/mit-fabric-measurements.md`.
 
+**Finite prescribed body liquid** (`material_vapor::wet_film`). One canonical geometry-independent
+reducer advances explicitly sourced per-body-triangle liquid and constant supply under admitted
+covered vapor demand. Motion and decision admission share the same step/cumulative mass, unmet-demand,
+latent-energy and conservation receipts. The caller binds exact body identity and canonical Ret-based
+regional rates; the reducer does not infer geometry, physiology or textile moisture properties.
+Right-endpoint or trapezoid interval-average demand consumes at most available water, without pooling
+triangles. This is nominal reservoir accounting, not textile-temperature feedback or uncertainty
+propagation. `ftx-drape` retains its public history types and geometry adapter. See
+`docs/vapor-coverage.md` and `docs/material-scenario-studies.md`.
+
 **Retained extra mass** (`material_mass`). One shared source-qualified total-group `Extra` observation
 feeds assembly accounting and optional `attached_mass` dynamics. Explicit physical instance/boundary
 vertex targets allocate fractions summing to one; mirrors are never inferred and mass is not multiplied

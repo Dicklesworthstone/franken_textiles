@@ -64,6 +64,7 @@ dependencies = [
  "ftx-measure",
  "ftx-pattern",
  "ftx-trace",
+ "ftx-wasm",
  "serde",
  "serde_json",
 ]

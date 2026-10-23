@@ -2338,6 +2338,28 @@ fn moving_vapor_requires_history_only_when_consumed_and_preserves_source_protoco
     assert_eq!(static_only["comparison"]["motion_required"], false);
 }
 
+fn body_water_inputs(initial: f64, supply: f64) -> (Request, Value) {
+    let (mut request, mut descriptor) = moving_vapor_inputs();
+    descriptor["scenario"]["motion"]["vapor_coverage_history"]["wet_film"] = json!({
+        "schema":"ftx-body-wet-film/1",
+        "body_mesh_sha256":descriptor["vapor_coverage_body_mesh_sha256"],
+        "source":"local:finite-body-water-comparison",
+        "basis":"Synthetic known liquid and constant supply; not an inferred sweating rate",
+        "initial_liquid_mass_kg":[initial],"supply_rate_kg_s":[supply]});
+    request.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal",
+        "objectives":[
+            {"metric":"motion_wet_film_evaporated_mass_kg","direction":"maximize"},
+            {"metric":"motion_wet_film_body_reservoir_latent_energy_j","direction":"maximize"}],
+        "constraints":[
+            {"metric":"motion_wet_film_remaining_liquid_mass_kg","minimum":0.},
+            {"metric":"motion_wet_film_unmet_demand_mass_kg","minimum":0.}],
+        "required_consumers":["motion_wet_film"]}))
+        .unwrap(),
+    );
+    (request, descriptor)
+}
+
 fn wet_film_inputs() -> (Request, Value) {
     let (mut request, mut descriptor) = moving_vapor_inputs();
     descriptor["scenario"]["motion"]["vapor_coverage_history"]["wet_film"] = json!({
@@ -2357,6 +2379,185 @@ fn wet_film_inputs() -> (Request, Value) {
         .unwrap(),
     );
     (request, descriptor)
+}
+
+// Geometry and transport remain the existing explicitly synthetic comparison fixture. Its new
+// water receipts use the production shared reducer; assertions below use independent mass/energy
+// answers, and separate native/portable tests use actual sewn motion rather than this callback.
+fn synthetic_body_water(pattern: &Pattern, descriptor: &Value) -> Value {
+    use ftx_pattern::material_vapor::wet_film::{State, WetFilm};
+    let mut simulation = synthetic_moving_vapor(pattern, descriptor);
+    let history = &mut simulation["motion"]["result"]["vapor_coverage_history"]["result"];
+    let policy: WetFilm =
+        serde_json::from_value(history["request"]["policy"]["wet_film"].clone()).unwrap();
+    let initial = &history["request"]["initial"];
+    let latent = initial["conditions"]["boundaries"][0]["latent_heat_j_kg"]
+        .as_f64()
+        .unwrap();
+    let mut state = State::new(&policy, &policy.body_mesh_sha256, &[latent]).unwrap();
+    let mut vertices = initial["source"]["positions_m"].as_array().unwrap().len()
+        + initial["map"]["body_positions_m"].as_array().unwrap().len();
+    for sample in history["request"]["samples"].as_array().unwrap() {
+        vertices += sample["positions_m"].as_array().unwrap().len()
+            + sample["body_positions_m"].as_array().unwrap().len();
+    }
+    let trapezoid = history["integration"] == "composite_trapezoid";
+    let mut previous = [
+        history["initial"]["result"]["coverage"]["covered_potential_mass_flow_kg_s"]
+            .as_f64()
+            .unwrap(),
+    ];
+    for row in history["samples"].as_array_mut().unwrap() {
+        let current = [
+            row["result"]["coverage"]["covered_potential_mass_flow_kg_s"]
+                .as_f64()
+                .unwrap(),
+        ];
+        let (next, receipt) = state
+            .advance(
+                &current,
+                trapezoid.then_some(&previous[..]),
+                row["dt_s"].as_f64().unwrap(),
+            )
+            .unwrap();
+        row["wet_film"] = receipt;
+        state = next;
+        previous = current;
+    }
+    history["wet_film"] = state.report().unwrap();
+    history["retained_vertex_samples"] = json!(vertices);
+    history["retained_wet_film_scalar_equivalents"] = json!(48);
+    for key in [
+        "storage_required",
+        "dry_thermal_properties_required",
+        "latent_heat_coupled",
+        "physical_validation_claim",
+        "comfort_claim",
+    ] {
+        history[key] = json!(false);
+    }
+    simulation
+}
+
+fn body_water_comparison(request: &Request, descriptor: &Value) -> Value {
+    serde_json::to_value(
+        request
+            .evaluate_with(
+                &Pattern::from_json(PATTERN).unwrap(),
+                descriptor,
+                |_, pattern| Ok(synthetic_body_water(pattern, descriptor)),
+            )
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn finite_body_water_ranking_caps_evaporation_and_preserves_potential_independently() {
+    let (request, descriptor) = body_water_inputs(1e-6, 2e-6);
+    let report = body_water_comparison(&request, &descriptor);
+    assert_eq!(
+        report["comparison"]["frontier"],
+        json!(["a", "b"]),
+        "{}",
+        report["comparison"]
+    );
+    for candidate in report["comparison"]["alternatives"].as_array().unwrap() {
+        let readings = &candidate["readings"];
+        let evaporation = &readings["motion_wet_film_evaporated_mass_kg"];
+        assert!((evaporation["value"].as_f64().unwrap() - 3e-6).abs() < 1e-20);
+        assert_eq!(evaporation["unit"], "kg");
+        assert_eq!(evaporation["consumer"], "motion_wet_film");
+        assert!(evaporation["reported_bounds"].is_null());
+        assert!(
+            (readings["motion_wet_film_body_reservoir_latent_energy_j"]["value"]
+                .as_f64()
+                .unwrap()
+                - 7.5)
+                .abs()
+                < 1e-12
+        );
+        assert_eq!(
+            readings["motion_wet_film_body_reservoir_latent_energy_j"]["unit"],
+            "J"
+        );
+        assert_eq!(
+            readings["motion_wet_film_remaining_liquid_mass_kg"]["value"],
+            0.
+        );
+        assert!(
+            readings["motion_wet_film_unmet_demand_mass_kg"]["value"]
+                .as_f64()
+                .unwrap()
+                > 0.
+        );
+    }
+    let (potential, _) = moving_vapor_inputs();
+    let potential_report = body_water_comparison(&potential, &descriptor);
+    assert_eq!(potential_report["comparison"]["frontier"], json!(["a"]));
+    assert_eq!(
+        report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+        "available"
+    );
+    assert_eq!(report["comparison"]["motion_required"], true);
+    let (dry, descriptor) = body_water_inputs(0., 0.);
+    let dry = body_water_comparison(&dry, &descriptor);
+    assert_eq!(dry["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(
+        dry["comparison"]["alternatives"][0]["readings"]["motion_wet_film_evaporated_mass_kg"]["value"],
+        0.
+    );
+}
+
+#[test]
+fn finite_body_water_constraints_and_quadrature_use_actual_conserved_liquid() {
+    for integration in ["right_endpoint", "composite_trapezoid"] {
+        let (mut request, mut descriptor) = body_water_inputs(1e-3, 0.);
+        descriptor["scenario"]["motion"]["vapor_coverage_history"]["integration"] =
+            json!(integration);
+        let report = body_water_comparison(&request, &descriptor);
+        assert_eq!(
+            report["comparison"]["frontier"],
+            json!(["a"]),
+            "{}",
+            report["comparison"]
+        );
+        let area_time = if integration == "right_endpoint" {
+            0.875
+        } else {
+            0.75
+        };
+        let demand = [15., 25.].map(|resistance| area_time * 1000. / resistance / 2_500_000.);
+        for (i, expected) in demand.iter().enumerate() {
+            let readings = &report["comparison"]["alternatives"][i]["readings"];
+            assert!(
+                (readings["motion_wet_film_evaporated_mass_kg"]["value"]
+                    .as_f64()
+                    .unwrap()
+                    - expected)
+                    .abs()
+                    < 1e-18
+            );
+            assert!(
+                (readings["motion_wet_film_remaining_liquid_mass_kg"]["value"]
+                    .as_f64()
+                    .unwrap()
+                    - (1e-3 - expected))
+                    .abs()
+                    < 1e-18
+            );
+            assert_eq!(
+                readings["motion_wet_film_unmet_demand_mass_kg"]["value"],
+                0.
+            );
+        }
+        request.comparison.as_mut().unwrap().constraints[0].minimum =
+            Some(1e-3 - (demand[0] + demand[1]) / 2.);
+        assert_eq!(
+            body_water_comparison(&request, &descriptor)["comparison"]["frontier"],
+            json!(["b"])
+        );
+    }
 }
 
 fn wet_test_balance(
@@ -2442,7 +2643,15 @@ fn synthetic_moving_wet_film(pattern: &Pattern, descriptor: &Value) -> Value {
         "textile_temperature_coupled":false,"uncertainty_propagated":false});
     history["retained_vertex_samples"] = json!(18);
     history["retained_wet_film_scalar_equivalents"] = json!(48);
-    history["latent_heat_coupled"] = json!(false);
+    for key in [
+        "storage_required",
+        "dry_thermal_properties_required",
+        "latent_heat_coupled",
+        "physical_validation_claim",
+        "comfort_claim",
+    ] {
+        history[key] = json!(false);
+    }
     simulation
 }
 
@@ -2681,6 +2890,185 @@ fn finite_water_comparison_is_opt_in_nominal_and_keeps_ret_protocol_admission() 
     let manufacturing = evaluate(&request, true);
     assert_eq!(manufacturing["comparison"]["frontier"], json!(["a", "b"]));
     assert_eq!(manufacturing["comparison"]["motion_required"], false);
+}
+
+#[test]
+fn finite_body_water_preserves_protocol_gates_and_rejects_invented_uncertainty() {
+    let (mut request, descriptor) = body_water_inputs(1e-3, 0.);
+    request.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("vapor_resistance")
+        .unwrap()
+        .method = "different acquired protocol".into();
+    let report = body_water_comparison(&request, &descriptor);
+    assert_eq!(report["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(
+        report["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    assert_eq!(
+        body_water_comparison(&request, &descriptor)["comparison"]["frontier"],
+        json!(["a"])
+    );
+    request.comparison.as_mut().unwrap().basis =
+        ftx_export::material_study::comparison::Basis::ReportedBounds;
+    let mut called = false;
+    assert!(
+        request
+            .evaluate_with(
+                &Pattern::from_json(PATTERN).unwrap(),
+                &descriptor,
+                |_, pattern| {
+                    called = true;
+                    Ok(synthetic_body_water(pattern, &descriptor))
+                }
+            )
+            .is_err()
+    );
+    assert!(!called);
+}
+
+#[test]
+fn finite_body_water_named_cases_retain_supply_limited_ties_and_independent_constraints() {
+    use ftx_export::material_study::matrix::Case;
+    let (request, wet) = body_water_inputs(1e-3, 0.);
+    let (_, dry) = body_water_inputs(0., 0.);
+    let mut cases = vec![
+        Case {
+            key: "water_available".into(),
+            scenario: wet,
+            comparison: None,
+        },
+        Case {
+            key: "dry_body".into(),
+            scenario: dry,
+            comparison: None,
+        },
+    ];
+    let run = |cases: &[Case]| {
+        serde_json::to_value(
+            request
+                .evaluate_matrix_with(
+                    &Pattern::from_json(PATTERN).unwrap(),
+                    cases,
+                    4,
+                    |i, _, pattern| Ok(synthetic_body_water(pattern, &cases[i].scenario)),
+                )
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let report = run(&cases);
+    assert_eq!(
+        report["comparison"]["frontier"],
+        json!(["a"]),
+        "{}",
+        report["comparison"]
+    );
+    assert_eq!(
+        report["cases"][1]["comparison"]["frontier"],
+        json!(["a", "b"])
+    );
+    assert_eq!(
+        report["comparison"]["alternatives"][0]["cases"]["dry_body"]["readings"]["motion_wet_film_evaporated_mass_kg"]
+            ["value"],
+        0.
+    );
+    cases[1].comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal","objectives":[
+        {"metric":"motion_wet_film_evaporated_mass_kg","direction":"maximize"}],
+        "constraints":[{"metric":"motion_wet_film_evaporated_mass_kg","minimum":1e-12}]}))
+        .unwrap(),
+    );
+    assert_eq!(run(&cases)["comparison"]["frontier"], json!([]));
+    let replay: Vec<Case> = serde_json::from_value(json!(cases)).unwrap();
+    assert_eq!(run(&replay), run(&cases));
+}
+
+#[test]
+fn finite_body_water_refuses_forged_history_state_and_requires_no_unrelated_dry_heat() {
+    let (request, descriptor) = body_water_inputs(1e-3, 0.);
+    for fault in [
+        "missing",
+        "step",
+        "carryover",
+        "total",
+        "body",
+        "policy",
+        "latent",
+        "retention",
+        "coupled",
+        "potential",
+        "partial",
+    ] {
+        let report = serde_json::to_value(request.evaluate_with(&Pattern::from_json(PATTERN).unwrap(),
+            &descriptor, |_, pattern| {
+                let mut simulation = synthetic_body_water(pattern, &descriptor);
+                let history = &mut simulation["motion"]["result"]["vapor_coverage_history"]["result"];
+                match fault {
+                    "missing" => { history.as_object_mut().unwrap().remove("wet_film"); }
+                    "step" => history["samples"][0]["wet_film"]["body"][0]["evaporated_mass_kg"] = json!(0.),
+                    "carryover" => history["samples"][1]["wet_film"]["body"][0]["starting_liquid_mass_kg"] = json!(1e-3),
+                    "total" => history["wet_film"]["totals"]["remaining_liquid_mass_kg"] = json!(0.),
+                    "body" => history["wet_film"]["body_mesh_sha256"] = json!("0".repeat(64)),
+                    "policy" => history["request"]["policy"]["wet_film"]["source"] = json!("local:different-water-source"),
+                    "latent" => history["samples"][0]["wet_film"]["totals"]["body_reservoir_latent_energy_j"] = json!(0.),
+                    "retention" => history["retained_wet_film_scalar_equivalents"] = json!(0),
+                    "coupled" => history["latent_heat_coupled"] = json!(true),
+                    "potential" => history["samples"][0]["result"]["coverage"]["regions"][0]["vapor"]["potential_mass_flow_kg_s"] = json!(0.),
+                    "partial" => history["samples"].as_array_mut().unwrap().truncate(1),
+                    _ => unreachable!(),
+                }
+                Ok(simulation)
+            }).unwrap()).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            json!([]),
+            "{fault}: {}",
+            report["comparison"]
+        );
+        assert_eq!(
+            report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
+        );
+    }
+    let mut independent = request;
+    independent.comparison = Some(serde_json::from_value(json!({"basis":"nominal","objectives":[
+        {"metric":"stock_mass_kg","direction":"minimize"}],"required_consumers":["motion_wet_film"]})).unwrap());
+    let missing = |request: &Request| {
+        serde_json::to_value(
+            request
+                .evaluate_with(
+                    &Pattern::from_json(PATTERN).unwrap(),
+                    &descriptor,
+                    |_, pattern| Ok(synthetic_moving_vapor(pattern, &descriptor)),
+                )
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    assert_eq!(missing(&independent)["comparison"]["frontier"], json!([]));
+    independent
+        .comparison
+        .as_mut()
+        .unwrap()
+        .required_consumers
+        .clear();
+    assert_eq!(
+        missing(&independent)["comparison"]["frontier"],
+        json!(["a", "b"])
+    );
 }
 
 fn vapor_piece_inputs() -> (Pattern, Request, Value) {
