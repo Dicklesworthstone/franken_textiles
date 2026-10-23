@@ -322,7 +322,7 @@ remain necessary; a small energy residual alone proves neither physical accuracy
 The comparator's existing metric names still describe the initial static result. The separate
 motion metrics below compare signed cumulative energy and final cloth-cell temperatures.
 
-### Qualified irreversible membrane heating
+### Qualified irreversible material heating
 
 Add `"plastic_dissipation_heat": "uniform_reference_thickness"` inside the existing
 `motion.transient_surface` or `motion.transient_coverage` object to convert accepted plastic membrane
@@ -342,6 +342,14 @@ to convert physical Maxwell dashpot work. Each active relaxing material needs it
 the actual equilibrium tensor and every relaxation branch against that specimen. Explicit zero
 is supported; absent or mismatched evidence refuses only the requested thermal history.
 
+Either domain can independently request
+`"bending_plastic_dissipation_heat": "uniform_reference_thickness"` for accepted irreversible
+source-panel curvature work. Each active permanent-curvature material needs its own
+`bending_plastic_heat_fraction` observation, with the matching specimen/conditioning, work basis
+`irreversible_bending_plastic_dissipation`, fraction and bounds in [0,1], and explicit temperature
+domain. The source triangle's reference area supplies the work; overlapping six-node stencils do
+not multiply it or deposit it in neighboring material. See [qualified bending heat](bending-heat.md).
+
 The consumer subtracts the accepted cumulative work at motion time zero, after initial drape.
 Only subsequent accepted increments become heat; rejected trials, initial forming work,
 elastic/hardening storage and backward-Euler numerical spring loss are excluded. Maxwell work uses
@@ -355,6 +363,7 @@ domain subtracts its separately supplied source energies (an unrequested source 
 balance_error_j = stored_change_j - net_boundary_energy_j
                   - plastic_dissipation_heat.supplied_heat_j
                   - relaxation_dissipation_heat.supplied_heat_j
+                  - bending_plastic_dissipation_heat.supplied_heat_j
 ```
 
 Both trace entries and the final thermal result expose `plastic_dissipation_heat` with motion-only
@@ -371,6 +380,12 @@ arrays are named `membrane_relaxation_dissipation_j`. Plastic and Maxwell work r
 source observations and ledgers. When both channels are requested, their heat is summed once before
 material-depth deposition and the physical storage balance. This permits different material triangles
 to use their respective laws; it does not enable an uncharacterized joint same-triangle viscoplastic law.
+
+Bending receipts use `bending_plastic_dissipation_heat.plastic_dissipation_j` and
+`initial_plastic_dissipation_j` with their separate supplied/unconverted heat. Captured arrays are
+`bending_plastic_dissipation_j`, including exact zeros for inactive triangles. All selected channels
+sum once into each consumer's balance; the two thermal consumers share each captured channel without
+combining their separate temperature histories or energy totals.
 
 With heating enabled, all cloth cells cost 129 work units per thermal substep, even for zero
 conversion or an elastic triangle. Coverage additionally charges one unit per selected body face.

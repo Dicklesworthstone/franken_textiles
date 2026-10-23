@@ -54,6 +54,9 @@ pub struct MotionSample {
     /// Only explicitly requested captures allocate this array. Initial drape work is included;
     /// consumers must subtract their own baseline. Numerical integration loss is excluded.
     pub membrane_relaxation_dissipation_j: Option<Vec<f64>>,
+    /// Cumulative accepted irreversible source-panel bending work in retained triangle order.
+    /// Inactive triangles are zero; initial drape work is included for explicit baseline removal.
+    pub bending_plastic_dissipation_j: Option<Vec<f64>>,
 }
 
 /// Independently requested physical-work samples. Each retained scalar counts against the existing
@@ -64,6 +67,8 @@ pub struct DissipationCapture {
     pub plastic: bool,
     /// Capture accepted physical Maxwell viscous work, excluding numerical dissipation.
     pub relaxation: bool,
+    /// Capture accepted irreversible bending work, excluding recoverable panel storage.
+    pub bending: bool,
 }
 
 /// Returned only after the ENTIRE target motion succeeds.
@@ -156,12 +161,13 @@ pub fn advance_body_with_dissipation(
         DissipationCapture {
             plastic: true,
             relaxation: false,
+            bending: false,
         },
     )
 }
 
 /// Advance the ordinary checked motion while capturing only the requested material-work channels.
-/// Both histories are read after accepted substeps; no work from failed trials is retained. The
+/// Selected histories are read after accepted substeps; no work from failed trials is retained. The
 /// geometry-only and existing plastic-only APIs preserve their original output allocation policy.
 ///
 /// # Errors
@@ -255,11 +261,19 @@ fn advance_body_impl(
     } else {
         0
     };
+    let bending_count = if capture.bending {
+        solver
+            .bending_plastic_dissipation_j()?
+            .map_or(0, |v| v.len())
+    } else {
+        0
+    };
     let count = target
         .len()
         .checked_add(solver.x.len())
         .and_then(|n| n.checked_add(plastic_count))
         .and_then(|n| n.checked_add(relaxation_count))
+        .and_then(|n| n.checked_add(bending_count))
         .ok_or_else(|| invalid("sample size overflow"))?;
     let mut work = solver.clone();
     let mut report = MotionReport {
@@ -390,6 +404,11 @@ fn advance_body_impl(
             },
             membrane_relaxation_dissipation_j: if capture.relaxation {
                 trial.membrane_relaxation_dissipation_j()?
+            } else {
+                None
+            },
+            bending_plastic_dissipation_j: if capture.bending {
+                trial.bending_plastic_dissipation_j()?
             } else {
                 None
             },

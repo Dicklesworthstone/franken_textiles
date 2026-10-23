@@ -608,6 +608,7 @@ fn relaxation_work_capture_preserves_motion_and_charges_every_retained_scalar() 
     let capture = DissipationCapture {
         plastic: false,
         relaxation: true,
+        bending: false,
     };
     let mut captured = original.clone();
     let result = advance_body_with_work(&mut captured, &target, 0.03, opts, capture).unwrap();

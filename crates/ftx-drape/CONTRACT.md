@@ -57,10 +57,14 @@ explicit. Heat storage follows reference mass; changing coverage preserves cover
 enthalpy, with remap residual separated from physical heat. Thermal failures never erase complete
 mechanics or another consumer. Complete histories retain time/geometry/source identities and final
 fields; coverage includes a restorable checkpoint. Per-history/session work is bounded. Prescribed
-films, qualified exterior exchange and independently opted-in plastic-yield/Maxwell-dashpot heating retain
+films, qualified exterior exchange and independently opted-in membrane-yield/Maxwell-dashpot/bending-yield heating retain
 separate source ledgers. Both thermal domains qualify their own conversion observations and sum selected
 source heat once; mechanical work arrays are captured once per channel across the domains. Exact sample
-admission uses retained sewn triangles, while conservative session reservations include both channels.
+admission uses retained sewn triangles, while conservative session reservations include all selected channels.
+Bending work is integrated once over each source triangle's reference area, not its six-node stencil
+extent; accepted per-triangle arrays retain explicit zeros for inactive triangles. Initial drape work
+is excluded from every motion heat source. `docs/bending-heat.md` and `tests/relaxation_heating.rs`
+cover source qualification, shared capture, covered/exposed conservation and independent refusal.
 There is no inferred ambient state, moisture, thermal feedback, human
 thermoregulation or empirical warmth claim. Schemas, accounting and
 limits are in `docs/material-scenario-studies.md`; production regressions in `material_scenario.rs`

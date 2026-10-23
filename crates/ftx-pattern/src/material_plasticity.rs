@@ -26,6 +26,15 @@ pub const PROPERTY_FAMILIES: [(&str, &str); 4] = [
     ("bending_accumulation_limit", "1/m"),
 ];
 
+/// Source-qualified conversion of irreversible curvature work into sensible sheet heat.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct BendingHeatFraction {
+    /// Explicit dimensionless fraction in [0,1]; no conversion is inferred from mechanical data.
+    pub fraction: f64,
+    /// Inclusive characterized material-temperature interval in degrees Celsius.
+    pub temperature_range_c: [f64; 2],
+}
+
 fn bad(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }
@@ -235,6 +244,74 @@ impl Memory {
 }
 
 impl ResolvedMaterial {
+    /// Resolve the optional bending-work conversion only for an explicitly requested heat
+    /// consumer. Inactive bending returns None. Every active law needs its own observation,
+    /// including explicit zero, with the same specimen and conditioning as its tensor/history.
+    /// Mechanical readiness does not consume this optional heat qualification.
+    ///
+    /// # Errors
+    /// Invalid bending law, missing/unapproved evidence, mismatched specimen or conditioning,
+    /// incorrect work basis, fraction/bounds outside [0,1], or invalid temperature domain.
+    pub fn bending_plastic_heat_fraction(&self) -> Result<Option<BendingHeatFraction>, Refusal> {
+        if self.bending_plasticity()?.is_none() {
+            return Ok(None);
+        }
+        let material = self.material();
+        let key = "bending_plastic_heat_fraction";
+        let fraction = material.require(key, "1", self.allows_estimates())?;
+        let observation = &material.properties[key];
+        if !(0.0..=1.0).contains(&fraction)
+            || observation
+                .bounds
+                .is_some_and(|[lo, hi]| lo < 0. || hi > 1.)
+        {
+            return Err(bad(
+                "bending plastic heat fraction and bounds must lie in [0,1]",
+            ));
+        }
+        // The active compiler checks this identity across all tensor and history observations.
+        let conditions = &material.properties["bending_warp"].conditions;
+        for identity in ["specimen_id", "conditioning"] {
+            if observation.conditions.get(identity) != conditions.get(identity) {
+                return Err(bad(format!(
+                    "bending plastic heat fraction must match the law's {identity}"
+                )));
+            }
+        }
+        if observation.conditions.get("work_basis").map(String::as_str)
+            != Some("irreversible_bending_plastic_dissipation")
+        {
+            return Err(bad(
+                "bending plastic heat fraction requires irreversible_bending_plastic_dissipation work basis",
+            ));
+        }
+        let mut temperature_range_c = [0.; 2];
+        for (i, name) in ["temperature_min_c", "temperature_max_c"]
+            .iter()
+            .enumerate()
+        {
+            temperature_range_c[i] = observation
+                .conditions
+                .get(*name)
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value >= -273.15)
+                .ok_or_else(|| {
+                    bad(format!(
+                        "bending plastic heat fraction needs finite {name} >= -273.15"
+                    ))
+                })?;
+        }
+        if temperature_range_c[0] > temperature_range_c[1] {
+            return Err(bad(
+                "bending plastic heat temperature range must be ordered",
+            ));
+        }
+        Ok(Some(BendingHeatFraction {
+            fraction,
+            temperature_range_c,
+        }))
+    }
+
     /// Resolve permanent-curvature behavior from the SAME source-locked record as all other
     /// consumers. All tensor, yield, hardening, range and preferred-curvature observations must
     /// identify the same nonempty `specimen_id` and `conditioning`; different test methods may coexist.

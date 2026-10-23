@@ -1182,6 +1182,18 @@ impl Policy {
         }) {
             keys.insert("membrane_relaxation_heat_fraction");
         }
+        if [
+            (Consumer::TransientSurface, "transient_surface"),
+            (Consumer::TransientCoverage, "transient_coverage"),
+        ]
+        .into_iter()
+        .any(|(consumer, name)| {
+            consumers.contains(&consumer)
+                && descriptor["scenario"]["motion"][name]["bending_plastic_dissipation_heat"]
+                    == "uniform_reference_thickness"
+        }) {
+            keys.insert("bending_plastic_heat_fraction");
+        }
         let pieces = bound["pattern"]["pieces"]
             .as_array()
             .ok_or_else(|| invalid("bound source pieces unavailable"))?;
@@ -1215,7 +1227,10 @@ impl Policy {
                     material
                         .properties
                         .keys()
-                        .filter(|k| k.starts_with("bending_"))
+                        .filter(|k| {
+                            k.starts_with("bending_")
+                                && k.as_str() != "bending_plastic_heat_fraction"
+                        })
                         .map(String::as_str),
                 );
             }
@@ -2817,7 +2832,7 @@ fn admit_heat<'a>(
     // source may borrow the other's evidence or make its own full-temperature energy claim.
     let mut supplied = vec![0.; trace.len() + 1];
     let mut heated = false;
-    for channel in [HeatWork::Plastic, HeatWork::Relaxation] {
+    for channel in [HeatWork::Plastic, HeatWork::Relaxation, HeatWork::Bending] {
         let field = channel.policy();
         match request.get(field).filter(|v| !v.is_null()) {
             Some(policy) if policy.as_str() == Some("uniform_reference_thickness") => {
@@ -2876,6 +2891,7 @@ fn admit_heat<'a>(
 enum HeatWork {
     Plastic,
     Relaxation,
+    Bending,
 }
 
 impl HeatWork {
@@ -2883,6 +2899,7 @@ impl HeatWork {
         match self {
             Self::Plastic => "plastic_dissipation_heat",
             Self::Relaxation => "relaxation_dissipation_heat",
+            Self::Bending => "bending_plastic_dissipation_heat",
         }
     }
 }
@@ -2919,6 +2936,15 @@ fn admit_dissipation_heat(
                 "viscous_step_work_j",
                 "viscous_dissipation_j",
                 "initial_viscous_dissipation_j",
+            ),
+            HeatWork::Bending => (
+                "bending_plastic_heat_fraction",
+                "bending_plastic_dissipation_j",
+                "initial_bending_history",
+                "bending_history",
+                "plastic_dissipation_j",
+                "plastic_dissipation_j",
+                "initial_plastic_dissipation_j",
             ),
         };
     let fail = || {
@@ -2973,6 +2999,17 @@ fn admit_dissipation_heat(
                         .to_owned(),
                 )
             }
+            HeatWork::Bending => {
+                let f = material.bending_plastic_heat_fraction()?.ok_or_else(fail)?;
+                (
+                    f.fraction,
+                    f.temperature_range_c,
+                    material
+                        .bending_plasticity()?
+                        .ok_or_else(fail)?
+                        .fingerprint(),
+                )
+            }
         };
         let expected = json!({"material_sha256":material.sha256(),"law_sha256":law,
             "fraction":fraction,"temperature_range_c":temperature_range_c,
@@ -3003,8 +3040,14 @@ fn admit_dissipation_heat(
         return Err(fail());
     }
     let mut fractions = vec![None; triangles.len()];
+    let mut bending_patches = vec![None; triangles.len()];
     let mut used = BTreeSet::new();
-    for element in motion[initial_history]["elements"]
+    let entries = if channel == HeatWork::Bending {
+        "patches"
+    } else {
+        "elements"
+    };
+    for element in motion[initial_history][entries]
         .as_array()
         .ok_or_else(fail)?
     {
@@ -3022,6 +3065,20 @@ fn admit_dissipation_heat(
                         .is_some_and(|v| near(v, previous[index]))))
         {
             return Err(fail());
+        }
+        if channel == HeatWork::Bending {
+            let vertices = element["vertices"]
+                .as_array()
+                .filter(|v| v.len() == 6)
+                .ok_or_else(fail)?;
+            if triangles[index].as_array().map(Vec::as_slice) != Some(&vertices[..3])
+                || !finite(&element["plastic_dissipation_j"])
+                    .is_some_and(|v| near(v, previous[index]))
+                || !finite(&element["reference_area_m2"]).is_some_and(|v| v > 0.)
+            {
+                return Err(fail());
+            }
+            bending_patches[index] = Some(element);
         }
         used.insert(law);
     }
@@ -3080,6 +3137,32 @@ fn admit_dissipation_heat(
     if !finite(&motion[final_history][history_total]).is_some_and(|v| near(v, initial + dissipated))
     {
         return Err(fail());
+    }
+    if channel == HeatWork::Bending {
+        let mut seen = BTreeSet::new();
+        for patch in motion[final_history]["patches"]
+            .as_array()
+            .ok_or_else(fail)?
+        {
+            let index = patch["triangle"]
+                .as_u64()
+                .and_then(|i| usize::try_from(i).ok())
+                .filter(|&i| i < triangles.len())
+                .ok_or_else(fail)?;
+            let initial_patch = bending_patches[index].ok_or_else(fail)?;
+            if !seen.insert(index)
+                || patch["law_sha256"] != initial_patch["law_sha256"]
+                || patch["vertices"] != initial_patch["vertices"]
+                || patch["reference_area_m2"] != initial_patch["reference_area_m2"]
+                || !finite(&patch["plastic_dissipation_j"])
+                    .is_some_and(|v| near(v, previous[index]))
+            {
+                return Err(fail());
+            }
+        }
+        if seen.len() != bending_patches.iter().flatten().count() {
+            return Err(fail());
+        }
     }
     check(heat, dissipated, supplied)?;
     supplied_history.push(supplied);

@@ -108,6 +108,7 @@ pub fn property_unit(key: &str) -> Option<&'static str> {
         | "membrane_accumulation_limit_shear"
         | "membrane_plastic_heat_fraction"
         | "membrane_relaxation_heat_fraction"
+        | "bending_plastic_heat_fraction"
         | "yarn_elongation_break"
         | "yarn_mass_cv"
         | "limiting_oxygen_index" => "1",

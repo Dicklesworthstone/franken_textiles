@@ -202,6 +202,7 @@ fn unchanged_mechanics(a: &Value, b: &Value) {
         "final_velocities_m_s",
         "membrane_history",
         "membrane_plasticity_history",
+        "bending_history",
     ] {
         assert_eq!(
             a["motion"]["result"][key], b["motion"]["result"][key],
@@ -217,6 +218,292 @@ fn unchanged_mechanics(a: &Value, b: &Value) {
         for key in ["positions_m", "body_positions_m", "solve", "time_s"] {
             assert_eq!(a[key], b[key], "{key}");
         }
+    }
+}
+
+fn bending(fraction: f64) -> Value {
+    let mut selected: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-plastic-bending.json"
+    ))
+    .unwrap();
+    selected["record"]["properties"]["bending_plastic_heat_fraction"] = json!({
+        "value":fraction,"unit":"1","source":"test","evidence":"estimate",
+        "method":"Synthetic irreversible-curvature conversion, not measured textile data",
+        "conditions":{"specimen_id":"artificial-coupon-A","conditioning":"synthetic constant state",
+            "work_basis":"irreversible_bending_plastic_dissipation",
+            "temperature_min_c":"-20","temperature_max_c":"80"}});
+    selected
+}
+
+fn bending_scenario() -> Scenario {
+    use ftx_drape::study::heat::DissipationHeatDistribution::UniformReferenceThickness;
+    let mut s = coverage_scenario();
+    s.options.spacing = 10.;
+    let motion = s.motion.as_mut().unwrap();
+    let surface = motion.transient_surface.as_mut().unwrap();
+    surface.relaxation_dissipation_heat = None;
+    surface.bending_plastic_dissipation_heat = Some(UniformReferenceThickness);
+    surface.boundaries[0].inside_resistance_m2_k_w = 1e12;
+    surface.boundaries[0].outside_resistance_m2_k_w = 1e12;
+    let coverage = motion.transient_coverage.as_mut().unwrap();
+    coverage.relaxation_dissipation_heat = None;
+    coverage.bending_plastic_dissipation_heat = Some(UniformReferenceThickness);
+    coverage.boundaries = surface.boundaries.clone();
+    s
+}
+
+#[test]
+fn bending_heat_follows_source_reference_area_and_shares_one_accepted_motion_capture() {
+    let mut elastic = bending(0.75);
+    elastic["record"]["structure"]
+        .as_object_mut()
+        .unwrap()
+        .remove("bending_plasticity_model");
+    let mut raw = garment(elastic).raw().clone();
+    raw["fabric"]["material"] = bending(0.75);
+    let p = Pattern::new(raw);
+    let s = bending_scenario();
+    let result = evaluate(&s, &p);
+    let h = heat(&result);
+    let covered = coverage_heat(&result);
+    let source = &h["bending_plastic_dissipation_heat"];
+    assert_eq!(source, &covered["bending_plastic_dissipation_heat"]);
+    let m = &result["motion"]["result"];
+    let initial = m["initial_sample"]["bending_plastic_dissipation_j"]
+        .as_array()
+        .unwrap();
+    let final_work =
+        m["samples"].as_array().unwrap().last().unwrap()["bending_plastic_dissipation_j"]
+            .as_array()
+            .unwrap();
+    let patches = h["model"]["patches"].as_array().unwrap();
+    let mut expected_work = 0.;
+    for (i, (old, current)) in initial.iter().zip(final_work).enumerate() {
+        let delta = current.as_f64().unwrap() - old.as_f64().unwrap();
+        assert!(delta >= 0.);
+        expected_work += delta;
+        let owner = result["drape"]["material"]["triangle_instance"][i]
+            .as_u64()
+            .unwrap() as usize;
+        let piece = result["drape"]["material"]["instances"][owner]["piece_index"]
+            .as_u64()
+            .unwrap();
+        if piece == 1 {
+            assert_eq!(old, &json!(0.));
+            assert_eq!(current, &json!(0.));
+        }
+        // Almost adiabatic films make this an independent Q = reference mass * cp * dT oracle.
+        // No six-node stencil area or current stretched exchange area enters storage.
+        let capacity = patches[i]["reference_area_m2"].as_f64().unwrap() * 0.2 * 1200.;
+        for t in h["final"]["temperature_c"][i].as_array().unwrap() {
+            assert!((t.as_f64().unwrap() - 20. - 0.75 * delta / capacity).abs() < 1e-8);
+        }
+    }
+    assert!(expected_work > 0.);
+    assert!(source["initial_plastic_dissipation_j"].as_f64().unwrap() > 0.);
+    assert!((source["plastic_dissipation_j"].as_f64().unwrap() - expected_work).abs() < 1e-12);
+    let expected_heat = 0.75 * expected_work;
+    assert!((source["supplied_heat_j"].as_f64().unwrap() - expected_heat).abs() < 1e-12);
+    assert!(
+        (h["stored_change_j"].as_f64().unwrap()
+            - h["net_boundary_energy_j"].as_f64().unwrap()
+            - expected_heat)
+            .abs()
+            < 1e-10
+    );
+    assert!(
+        (covered["physical_stored_change_j"].as_f64().unwrap()
+            - covered["net_boundary_energy_j"].as_f64().unwrap()
+            - expected_heat)
+            .abs()
+            < 1e-10
+    );
+    assert!(
+        (checkpoint_enthalpy_change(&covered["checkpoint"])
+            - covered["physical_stored_change_j"].as_f64().unwrap()
+            - covered["signed_remap_residual_j"].as_f64().unwrap())
+        .abs()
+            < 1e-10
+    );
+    assert!(
+        !covered["checkpoint"]["frame"]["projection"]["layout"]["regions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        covered["checkpoint"]["exposed_temperature_c"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| !v.as_array().unwrap().is_empty())
+    );
+    assert_eq!(
+        m["retained_dissipation_scalars"],
+        json!((m["samples"].as_array().unwrap().len() + 1) * initial.len())
+    );
+    assert_eq!(evaluate(&s, &p), result);
+
+    let mut off = s;
+    off.motion
+        .as_mut()
+        .unwrap()
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .bending_plastic_dissipation_heat = None;
+    off.motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap()
+        .bending_plastic_dissipation_heat = None;
+    let cold = evaluate(&off, &p);
+    unchanged_mechanics(&result, &cold);
+    assert!(
+        cold["motion"]["result"]
+            .get("retained_dissipation_scalars")
+            .is_none()
+    );
+    assert!(
+        cold["motion"]["result"]["initial_sample"]
+            .get("bending_plastic_dissipation_j")
+            .is_none()
+    );
+}
+
+#[test]
+fn bending_and_maxwell_heat_sum_once_and_thermal_failure_keeps_the_other_consumer() {
+    use ftx_drape::study::heat::DissipationHeatDistribution::UniformReferenceThickness;
+    let p = garment(bending(0.8)); // Maxwell front, irreversible curvature on back.
+    let mut s = bending_scenario();
+    s.motion
+        .as_mut()
+        .unwrap()
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .relaxation_dissipation_heat = Some(UniformReferenceThickness);
+    s.motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap()
+        .relaxation_dissipation_heat = Some(UniformReferenceThickness);
+    let result = evaluate(&s, &p);
+    let h = heat(&result);
+    let covered = coverage_heat(&result);
+    let mut supplied = 0.;
+    for channel in [
+        "bending_plastic_dissipation_heat",
+        "relaxation_dissipation_heat",
+    ] {
+        assert_eq!(h[channel], covered[channel]);
+        let q = h[channel]["supplied_heat_j"].as_f64().unwrap();
+        assert!(q > 0., "{channel}");
+        supplied += q;
+    }
+    for (heat, stored) in [
+        (h, "stored_change_j"),
+        (covered, "physical_stored_change_j"),
+    ] {
+        assert!(
+            (heat[stored].as_f64().unwrap()
+                - heat["net_boundary_energy_j"].as_f64().unwrap()
+                - supplied)
+                .abs()
+                < 1e-10
+        );
+    }
+    let first = covered["trace"][0]["thermal_substeps"].as_u64().unwrap();
+    let all = covered["thermal_steps"].as_u64().unwrap();
+    assert!(first < all);
+    let mut limited = s.clone();
+    limited
+        .motion
+        .as_mut()
+        .unwrap()
+        .transient_coverage
+        .as_mut()
+        .unwrap()
+        .max_cell_steps = (first * covered["cell_steps"].as_u64().unwrap() / all) as usize;
+    let failed = evaluate(&limited, &p);
+    unchanged_mechanics(&result, &failed);
+    let unaffected = heat(&failed);
+    // The path identity deliberately retains the entire motion request, including the
+    // other consumer's changed budget. Every physical field and this consumer's own
+    // request must remain identical; print only the first differing field on failure.
+    assert_ne!(unaffected["path_sha256"], h["path_sha256"]);
+    assert_eq!(
+        unaffected["path_sha256"],
+        failed["motion"]["result"]["path_sha256"]
+    );
+    assert!(
+        unaffected
+            .as_object()
+            .unwrap()
+            .keys()
+            .eq(h.as_object().unwrap().keys()),
+        "unaffected surface report fields changed"
+    );
+    for (field, expected) in h.as_object().unwrap() {
+        if field != "path_sha256" {
+            assert!(
+                &unaffected[field] == expected,
+                "unaffected surface {field} changed"
+            );
+        }
+    }
+    assert_eq!(
+        failed["motion"]["result"]["transient_coverage"]["status"],
+        "refused"
+    );
+    assert!(
+        failed["motion"]["result"]["transient_coverage"]
+            .get("result")
+            .is_none()
+    );
+
+    // The covered domain independently qualifies conversion even when the sheet consumer does not.
+    s.motion
+        .as_mut()
+        .unwrap()
+        .transient_surface
+        .as_mut()
+        .unwrap()
+        .bending_plastic_dissipation_heat = None;
+    for missing in [false, true] {
+        let mut raw = p.raw().clone();
+        let properties = &mut raw["pieces"][1]["fabric"]["material"]["record"]["properties"];
+        if missing {
+            properties
+                .as_object_mut()
+                .unwrap()
+                .remove("bending_plastic_heat_fraction");
+        } else {
+            properties["bending_plastic_heat_fraction"]["conditions"]["temperature_max_c"] =
+                json!("20");
+        }
+        let failed = evaluate(&s, &Pattern::new(raw));
+        assert_eq!(
+            failed["motion"]["result"]["final_positions_sha256"],
+            result["motion"]["result"]["final_positions_sha256"]
+        );
+        assert_eq!(
+            failed["motion"]["result"]["transient_surface"]["status"],
+            "available"
+        );
+        assert_eq!(
+            failed["motion"]["result"]["transient_coverage"]["status"],
+            "refused"
+        );
+        assert!(
+            failed["motion"]["result"]["transient_coverage"]
+                .get("result")
+                .is_none()
+        );
     }
 }
 

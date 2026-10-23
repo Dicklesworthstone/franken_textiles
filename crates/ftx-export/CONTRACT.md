@@ -114,6 +114,11 @@ work, excluded initial dissipation and complete source-energy accounting at ever
 uses physical storage, never remap residual, in the balance. Conversion protocols participate only
 when that thermal domain is consumed. A refusal preserves independent domain and manufacturing
 outputs; neither a boundary total nor the other thermal model can substitute for supplied heat.
+The separately requested bending-yield source uses the same conservation admission, with its own
+qualified observation and accepted per-triangle work. Initial and final patch records must retain
+the same law, source-triangle prefix, six-node stencil and reference area, and reconcile with captured
+work. Unconsumed conversion observations do not split mechanical or uncoupled thermal protocols.
+Regressions: `tests/scenario_comparison/bending_heat.rs`; contract: `docs/bending-heat.md`.
 
 **Material-following vapor studies** (`material_study::vapor`, plan §25.49). Explicit ordered layer
 occurrences resolve the final source-piece/default selections after every atomic material substitution.

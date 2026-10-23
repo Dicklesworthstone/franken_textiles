@@ -1,5 +1,5 @@
-//! Shared conversion of accepted membrane dissipation in the exact retained material triangles.
-//! Source kinds retain separate budgets of physical work; neither can supply the other's heat.
+//! Shared conversion of accepted material dissipation in the exact retained source triangles.
+//! Source kinds retain separate budgets of physical work; no channel supplies another's heat.
 
 use ftx_core::Refusal;
 use serde_json::{Value, json};
@@ -17,6 +17,7 @@ struct Conversion {
 pub(super) enum Kind {
     Plastic,
     Relaxation,
+    Bending,
 }
 
 impl Kind {
@@ -24,6 +25,7 @@ impl Kind {
         match self {
             Self::Plastic => "plastic",
             Self::Relaxation => "Maxwell viscous",
+            Self::Bending => "irreversible bending",
         }
     }
 }
@@ -59,15 +61,19 @@ impl Heating {
                 run.scene.solver.membrane_relaxation_dissipation_j()?,
                 run.scene.solver.relaxation_report()?,
             ),
+            Kind::Bending => (
+                run.scene.solver.bending_plastic_dissipation_j()?,
+                run.scene.solver.bending_plasticity_report()?,
+            ),
         };
         let previous_j = previous_j.ok_or_else(|| {
             invalid(format!(
-                "{} heat requires an active membrane law",
+                "{} heat requires an active material law",
                 kind.name()
             ))
         })?;
         let history = history
-            .ok_or_else(|| invalid(format!("missing accepted {} membrane history", kind.name())))?;
+            .ok_or_else(|| invalid(format!("missing accepted {} material history", kind.name())))?;
         let (records, assignment) = retained_materials(
             &run.report["material"],
             &run.scene.mesh.instances,
@@ -105,6 +111,14 @@ impl Heating {
                         .map(|law| law.fingerprint().to_owned()),
                     "membrane_relaxation_heat_fraction",
                 ),
+                Kind::Bending => (
+                    record.bending_plastic_heat_fraction()?.map(|f| Conversion {
+                        fraction: f.fraction,
+                        temperature_range_c: f.temperature_range_c,
+                    }),
+                    record.bending_plasticity()?.map(|law| law.fingerprint()),
+                    "bending_plastic_heat_fraction",
+                ),
             };
             if let Some(fraction) = &fraction {
                 materials.push(json!({"material_sha256":record.sha256(),
@@ -116,7 +130,12 @@ impl Heating {
             laws.push(law);
         }
         let mut actual_laws = vec![None; previous_j.len()];
-        for element in history["elements"]
+        let entries = if matches!(kind, Kind::Bending) {
+            "patches"
+        } else {
+            "elements"
+        };
+        for element in history[entries]
             .as_array()
             .ok_or_else(|| invalid("dissipation heat needs retained law identities"))?
         {
@@ -193,9 +212,9 @@ impl Heating {
         cells: usize,
     ) -> Result<Vec<Vec<f64>>, Refusal> {
         let values = cumulative_j
-            .ok_or_else(|| invalid("accepted motion is missing membrane dissipation samples"))?;
+            .ok_or_else(|| invalid("accepted motion is missing material dissipation samples"))?;
         if values.len() != self.previous_j.len() || cells == 0 {
-            return Err(invalid("membrane dissipation sample topology changed"));
+            return Err(invalid("material dissipation sample topology changed"));
         }
         let mut heat = Vec::with_capacity(values.len());
         let mut dissipated = 0.;
@@ -205,7 +224,7 @@ impl Heating {
         {
             if !current.is_finite() || current < previous {
                 return Err(invalid(
-                    "accepted membrane dissipation must be finite and nondecreasing",
+                    "accepted material dissipation must be finite and nondecreasing",
                 ));
             }
             let delta = current - previous;
@@ -251,6 +270,11 @@ impl Heating {
             result["initial_viscous_dissipation_j"] = json!(self.initial_j);
             result["scope"] = json!(
                 "Only accepted Maxwell dashpot endpoint-quadrature dissipation after motion time zero is converted. Initial drape work, reversible spring storage, backward-Euler numerical loss, plastic yield, bending and contact friction are excluded. Unconverted dissipation is not assigned another destination; temperature does not feed back into mechanics."
+            );
+        }
+        if let Kind::Bending = self.kind {
+            result["scope"] = json!(
+                "Only accepted irreversible source-panel curvature yield dissipation after motion time zero is converted. Work uses each source triangle's reference area, without multiplying overlapping stencil vertices. Initial drape work, elastic/hardening storage, membrane/Maxwell work, seam plasticity and contact friction are excluded. Unconverted dissipation is not assigned another destination; temperature does not feed back into mechanics."
             );
         }
         if include_materials {

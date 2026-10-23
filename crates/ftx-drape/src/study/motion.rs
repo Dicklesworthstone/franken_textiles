@@ -269,7 +269,10 @@ fn evaluate_path(
         .map_or(DissipationCapture::default(), |h| h.dissipation_capture());
     capture.plastic |= coverage_capture.plastic;
     capture.relaxation |= coverage_capture.relaxation;
-    let channels = usize::from(capture.plastic) + usize::from(capture.relaxation);
+    capture.bending |= coverage_capture.bending;
+    let channels = usize::from(capture.plastic)
+        + usize::from(capture.relaxation)
+        + usize::from(capture.bending);
     let history_scalars = run
         .scene
         .solver
@@ -295,6 +298,10 @@ fn evaluate_path(
     if capture.relaxation {
         initial_sample["membrane_relaxation_dissipation_j"] =
             json!(run.scene.solver.membrane_relaxation_dissipation_j()?);
+    }
+    if capture.bending {
+        initial_sample["bending_plastic_dissipation_j"] =
+            json!(run.scene.solver.bending_plastic_dissipation_j()?);
     }
     let faces: Vec<_> = run
         .scene
@@ -381,6 +388,7 @@ fn evaluate_path(
                     samples.len(),
                     sample.membrane_plastic_dissipation_j.as_deref(),
                     sample.membrane_relaxation_dissipation_j.as_deref(),
+                    sample.bending_plastic_dissipation_j.as_deref(),
                 )
             {
                 surface_heat = Some(Err(refusal));
@@ -394,6 +402,7 @@ fn evaluate_path(
                     samples.len(),
                     sample.membrane_plastic_dissipation_j.as_deref(),
                     sample.membrane_relaxation_dissipation_j.as_deref(),
+                    sample.bending_plastic_dissipation_j.as_deref(),
                 )
             {
                 coverage_heat = Some(Err(refusal));
@@ -409,6 +418,9 @@ fn evaluate_path(
             }
             if let Some(dissipation) = sample.membrane_relaxation_dissipation_j {
                 retained["membrane_relaxation_dissipation_j"] = json!(dissipation);
+            }
+            if let Some(dissipation) = sample.bending_plastic_dissipation_j {
+                retained["bending_plastic_dissipation_j"] = json!(dissipation);
             }
             samples.push(retained);
         }

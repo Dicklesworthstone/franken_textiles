@@ -317,3 +317,172 @@ fn missing_or_mixed_characterizations_cannot_activate_a_crease_model() {
             .is_none()
     );
 }
+
+fn heat_selection() -> Selection {
+    let mut s = selection();
+    s.record.as_mut().unwrap().properties.insert("bending_plastic_heat_fraction".into(),
+        serde_json::from_value(json!({"value":0.75,"unit":"1","evidence":"estimate","source":"test",
+            "method":"Synthetic irreversible-curvature conversion, not measured textile data",
+            "conditions":{"specimen_id":"artificial-coupon-A","conditioning":"synthetic constant state",
+                "work_basis":"irreversible_bending_plastic_dissipation",
+                "temperature_min_c":"0","temperature_max_c":"80"}})).unwrap());
+    s
+}
+
+#[test]
+fn bending_heat_conversion_retains_source_units_and_frozen_law_identity() {
+    let catalog = Catalog::builtin().unwrap();
+    let mut s = heat_selection();
+    let q = s
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("bending_plastic_heat_fraction")
+        .unwrap();
+    q.value = 75.;
+    q.unit = "%".into();
+    q.bounds = Some([50., 100.]);
+    let material = catalog.resolve(&s).unwrap();
+    let heat = material.bending_plastic_heat_fraction().unwrap().unwrap();
+    assert_eq!(heat.fraction, 0.75);
+    assert_eq!(heat.temperature_range_c, [0., 80.]);
+    assert_eq!(
+        material.material().properties["bending_plastic_heat_fraction"].bounds,
+        Some([0.5, 1.])
+    );
+    assert_eq!(
+        material.authored().properties["bending_plastic_heat_fraction"].unit,
+        "%"
+    );
+    assert_eq!(
+        material.authored().properties["bending_plastic_heat_fraction"].value,
+        75.
+    );
+    assert_eq!(
+        catalog
+            .resolve(&material.frozen_selection())
+            .unwrap()
+            .bending_plastic_heat_fraction()
+            .unwrap(),
+        Some(heat)
+    );
+    for fraction in [0., 1.] {
+        let mut s = heat_selection();
+        s.record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("bending_plastic_heat_fraction")
+            .unwrap()
+            .value = fraction;
+        let changed = catalog.resolve(&s).unwrap();
+        assert_eq!(
+            changed
+                .bending_plastic_heat_fraction()
+                .unwrap()
+                .unwrap()
+                .fraction,
+            fraction
+        );
+        assert_ne!(
+            material
+                .bending_plasticity()
+                .unwrap()
+                .unwrap()
+                .fingerprint(),
+            changed.bending_plasticity().unwrap().unwrap().fingerprint()
+        );
+        assert_eq!(
+            material.bending_response().unwrap(),
+            changed.bending_response().unwrap()
+        );
+    }
+}
+
+#[test]
+fn bending_heat_requires_separate_qualified_evidence_without_changing_mechanics() {
+    use ftx_pattern::materials::Evidence;
+    let catalog = Catalog::builtin().unwrap();
+    let missing = catalog.resolve(&selection()).unwrap();
+    assert!(missing.bending_plasticity().is_ok());
+    assert!(missing.bending_plastic_heat_fraction().is_err());
+    for (key, value) in [
+        ("specimen_id", "another coupon"),
+        ("conditioning", "another state"),
+        ("work_basis", "total_mechanical_energy"),
+        ("temperature_min_c", "NaN"),
+        ("temperature_max_c", "inf"),
+        ("temperature_min_c", "-274"),
+        ("temperature_min_c", "81"),
+        ("temperature_max_c", ""),
+    ] {
+        let mut s = heat_selection();
+        s.record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("bending_plastic_heat_fraction")
+            .unwrap()
+            .conditions
+            .insert(key.into(), value.into());
+        let material = catalog.resolve(&s).unwrap();
+        assert!(material.bending_plasticity().is_ok());
+        assert!(
+            material.bending_plastic_heat_fraction().is_err(),
+            "{key}={value}"
+        );
+    }
+    for (value, bounds) in [
+        (-0.1, None),
+        (1.1, None),
+        (0.75, Some([-0.1, 1.])),
+        (0.75, Some([0., 1.1])),
+    ] {
+        let mut s = heat_selection();
+        let q = s
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("bending_plastic_heat_fraction")
+            .unwrap();
+        q.value = value;
+        q.bounds = bounds;
+        let material = catalog.resolve(&s).unwrap();
+        assert!(material.bending_plasticity().is_ok());
+        assert!(material.bending_plastic_heat_fraction().is_err());
+    }
+    let mut s = heat_selection();
+    // Isolate the conversion consent gate; the fixture remains explicitly artificial.
+    for (key, q) in &mut s.record.as_mut().unwrap().properties {
+        if key != "bending_plastic_heat_fraction" {
+            q.evidence = Evidence::Published;
+        }
+    }
+    s.allow_estimates = false;
+    let denied = catalog.resolve(&s).unwrap();
+    assert!(denied.bending_plasticity().is_ok());
+    assert!(denied.bending_plastic_heat_fraction().is_err());
+    s.allow_estimates = true;
+    assert!(
+        catalog
+            .resolve(&s)
+            .unwrap()
+            .bending_plastic_heat_fraction()
+            .is_ok()
+    );
+    s.record
+        .as_mut()
+        .unwrap()
+        .structure
+        .remove("bending_plasticity_model");
+    assert!(
+        catalog
+            .resolve(&s)
+            .unwrap()
+            .bending_plastic_heat_fraction()
+            .unwrap()
+            .is_none()
+    );
+}

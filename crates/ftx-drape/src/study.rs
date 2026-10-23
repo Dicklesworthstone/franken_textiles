@@ -310,7 +310,12 @@ impl<'a, 'body> Session<'a, 'body> {
                 .is_some_and(|h| h.relaxation_dissipation_heat.is_some())
                 || request.transient_coverage.as_ref()
                     .is_some_and(|h| h.relaxation_dissipation_heat.is_some());
-            let channels = usize::from(plastic_capture) + usize::from(relaxation_capture);
+            let bending_capture = request.transient_surface.as_ref()
+                .is_some_and(|h| h.bending_plastic_dissipation_heat.is_some())
+                || request.transient_coverage.as_ref()
+                    .is_some_and(|h| h.bending_plastic_dissipation_heat.is_some());
+            let channels = usize::from(plastic_capture) + usize::from(relaxation_capture)
+                + usize::from(bending_capture);
             let history_points = points.saturating_mul(2).saturating_mul(channels);
             let geometry_count = self.body.collision.0.len().saturating_add(points);
             // History points bound a mesh not yet triangulated. Reserve their upper bound here,

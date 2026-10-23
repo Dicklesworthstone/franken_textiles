@@ -15,6 +15,9 @@ mod wet_film;
 #[path = "scenario_comparison/wet_film_bounds.rs"]
 mod wet_film_bounds;
 
+#[path = "scenario_comparison/bending_heat.rs"]
+mod bending_heat;
+
 const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-scenario-pattern.json");
 fn descriptor() -> Value {

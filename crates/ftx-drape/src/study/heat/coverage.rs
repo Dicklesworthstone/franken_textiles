@@ -66,6 +66,10 @@ pub struct Request {
     /// Initial drape work, reversible storage and backward-Euler numerical loss are excluded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation_dissipation_heat: Option<DissipationHeatDistribution>,
+    /// Convert independently qualified source-panel bending work over covered and exposed
+    /// reference material. Initial drape work, elastic/hardening storage and seam work are excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bending_plastic_dissipation_heat: Option<DissipationHeatDistribution>,
     /// Maximum physical thermal substep, seconds, independent of mechanical adaptive steps.
     pub max_step_s: f64,
     /// Maximum cell plus body-face advances, including all substeps, in 1..=10000000. Heating
@@ -209,6 +213,12 @@ impl Request {
                 )
             })
             .transpose()?;
+        let bending = self
+            .bending_plastic_dissipation_heat
+            .map(|_| {
+                plastic::Heating::new_kind(run, self.initial_temperature_c, plastic::Kind::Bending)
+            })
+            .transpose()?;
         Ok(History {
             request: self.clone(),
             source,
@@ -237,6 +247,7 @@ impl Request {
             final_field: Value::Null,
             plastic,
             relaxation,
+            bending,
         })
     }
 }
@@ -278,6 +289,7 @@ pub(in crate::study) struct History {
     final_field: Value,
     plastic: Option<plastic::Heating>,
     relaxation: Option<plastic::Heating>,
+    bending: Option<plastic::Heating>,
 }
 
 impl History {
@@ -285,6 +297,7 @@ impl History {
         DissipationCapture {
             plastic: self.plastic.is_some(),
             relaxation: self.relaxation.is_some(),
+            bending: self.bending.is_some(),
         }
     }
 
@@ -294,6 +307,10 @@ impl History {
             .map_or(0., plastic::Heating::supplied_j)
             + self
                 .relaxation
+                .as_ref()
+                .map_or(0., plastic::Heating::supplied_j)
+            + self
+                .bending
                 .as_ref()
                 .map_or(0., plastic::Heating::supplied_j)
     }
@@ -318,6 +335,7 @@ impl History {
         sample_index: usize,
         plastic_dissipation_j: Option<&[f64]>,
         relaxation_dissipation_j: Option<&[f64]>,
+        bending_dissipation_j: Option<&[f64]>,
     ) -> Result<(), Refusal> {
         let seconds = time_s - self.time_s;
         if !time_s.is_finite() || seconds <= 0. || self.trace.len() >= 512 {
@@ -358,7 +376,7 @@ impl History {
             self.projection.clone(),
         )?;
         self.geometry(next.projection().geometry_operations)?;
-        let heated = self.plastic.is_some() || self.relaxation.is_some();
+        let heated = self.plastic.is_some() || self.relaxation.is_some() || self.bending.is_some();
         let cell_cost = if heated { 129 } else { 1 };
         let unit = next
             .cells()
@@ -394,10 +412,11 @@ impl History {
             for (heating, work) in [
                 (&mut self.plastic, plastic_dissipation_j),
                 (&mut self.relaxation, relaxation_dissipation_j),
+                (&mut self.bending, bending_dissipation_j),
             ] {
                 if let Some(heating) = heating {
                     heating.check_temperatures(&temperatures)?;
-                    // Both channels retain separate source/work receipts. Sum whole-triangle joules
+                    // Channels retain separate source/work receipts. Sum whole-triangle joules
                     // once; the core owns covered/exposed allocation and material depth distribution.
                     let values = heating.increment(work, 1)?;
                     if values.len() != total.len() {
@@ -475,7 +494,10 @@ impl History {
             };
             if heated {
                 let temperatures = self.frame.source_temperatures(&step.clone().into_state())?;
-                for heating in [&self.plastic, &self.relaxation].into_iter().flatten() {
+                for heating in [&self.plastic, &self.relaxation, &self.bending]
+                    .into_iter()
+                    .flatten()
+                {
                     heating.check_temperatures(&temperatures)?;
                 }
             }
@@ -563,6 +585,9 @@ impl History {
         if let Some(heating) = &self.relaxation {
             sample["relaxation_dissipation_heat"] = heating.snapshot(false);
         }
+        if let Some(heating) = &self.bending {
+            sample["bending_plastic_dissipation_heat"] = heating.snapshot(false);
+        }
         for (field, convective, radiative) in [
             (
                 "exterior_exchange",
@@ -618,6 +643,12 @@ impl History {
             result["relaxation_dissipation_heat"] = heating.snapshot(true);
             result["scope"] = json!(
                 "One-way transient heat on the explicit collision-body domain with independently qualified accepted Maxwell dashpot dissipation and, only when separately requested, irreversible membrane yield dissipation. Source heat follows covered and exposed reference material and is summed once in the physical balance; remap residuals remain separate and bare body receives no internal energy. Initial drape work, reversible storage, backward-Euler numerical loss, bending and friction heating are excluded. No temperature feedback, moisture, thermoregulation or empirical garment claim."
+            );
+        }
+        if let Some(heating) = &self.bending {
+            result["bending_plastic_dissipation_heat"] = heating.snapshot(true);
+            result["scope"] = json!(
+                "One-way transient heat on the explicit body domain with source-qualified irreversible source-panel bending work, plus independently requested membrane yield and Maxwell dissipation. Source heat follows covered and exposed reference material and is summed once; remap residuals stay separate and bare body receives no internal energy. Initial drape work, recoverable elastic/hardening storage, numerical loss, seam plasticity and contact friction are excluded. No temperature feedback, moisture, thermoregulation or empirical garment claim."
             );
         }
         for (field, schedule, convective, radiative) in [

@@ -79,6 +79,15 @@ continuous-path, measured-textile, damage, fatigue or empirical garment claim. T
 cycle fixture and `tests/membrane_plasticity_calibration.rs` exercise signed history, coupled elasticity,
 unobserved peaks, held-out isolation and constrained identification.
 
+**Qualified irreversible bending heat** (`material_plasticity`). Optional
+`bending_plastic_heat_fraction` converts only accepted curvature-yield dissipation. The canonical
+compiler requires admitted evidence, a normalized fraction and bounds in [0,1], the active law's
+exact specimen/conditioning, the irreversible bending work basis and an inclusive physical
+temperature domain. Mechanical-only consumers do not require this observation, and inactive laws
+return no conversion. Full frozen source identity is retained. No conversion default, temperature
+feedback or empirical material claim is inferred. Contract and synthetic regression scope:
+`docs/bending-heat.md`, `tests/material_plasticity.rs`.
+
 **Validation** (`validate`, spec 01 §9): seam walk, truing, points of measure, report status, text table
 and the role-based default fit spec. The body comes through the `BodyMeasure` trait (values, σ, landmark
 heights); `Measurements` implements it for a measurement file (flat or fused) with the reference's
