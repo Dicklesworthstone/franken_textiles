@@ -2338,6 +2338,351 @@ fn moving_vapor_requires_history_only_when_consumed_and_preserves_source_protoco
     assert_eq!(static_only["comparison"]["motion_required"], false);
 }
 
+fn wet_film_inputs() -> (Request, Value) {
+    let (mut request, mut descriptor) = moving_vapor_inputs();
+    descriptor["scenario"]["motion"]["vapor_coverage_history"]["wet_film"] = json!({
+        "schema":"ftx-body-wet-film/1",
+        "body_mesh_sha256":descriptor["vapor_coverage_body_mesh_sha256"],
+        "source":"test:finite-water-comparison",
+        "basis":"Synthetic body liquid and constant supply; no acquired wearer observation",
+        "initial_liquid_mass_kg":[0.000010],"supply_rate_kg_s":[0.000008]});
+    request.comparison = Some(
+        serde_json::from_value(json!({"basis":"nominal","objectives":[
+        {"metric":"motion_wet_film_evaporated_mass_kg","direction":"maximize"},
+        {"metric":"motion_wet_film_remaining_liquid_mass_kg","direction":"minimize"},
+        {"metric":"motion_wet_film_unmet_demand_mass_kg","direction":"minimize"},
+        {"metric":"motion_wet_film_supplied_mass_kg","direction":"minimize"},
+        {"metric":"motion_wet_film_body_reservoir_latent_energy_j","direction":"maximize"}],
+        "required_consumers":["motion_wet_film"]}))
+        .unwrap(),
+    );
+    (request, descriptor)
+}
+
+fn wet_test_balance(
+    starting: f64,
+    supplied: f64,
+    demand: f64,
+    evaporated: f64,
+    remaining: f64,
+    latent: f64,
+) -> Value {
+    let unmet = demand - evaporated;
+    json!({"starting_liquid_mass_kg":starting,"supplied_mass_kg":supplied,
+        "potential_evaporation_mass_kg":demand,"evaporated_mass_kg":evaporated,
+        "unmet_demand_mass_kg":unmet,"remaining_liquid_mass_kg":remaining,
+        "body_reservoir_latent_energy_j":latent,
+        "mass_balance_error_kg":remaining - starting + evaporated - supplied,
+        "demand_balance_error_kg":evaporated + unmet - demand})
+}
+
+// Synthetic one-triangle ledger over independently prescribed areas. The actual production
+// wet-film integration is checked separately by the native/portable scenario consumers.
+fn synthetic_moving_wet_film(pattern: &Pattern, descriptor: &Value) -> Value {
+    let mut simulation = synthetic_moving_vapor(pattern, descriptor);
+    let history = &mut simulation["motion"]["result"]["vapor_coverage_history"]["result"];
+    let policy = history["request"]["policy"]["wet_film"].clone();
+    let start = policy["initial_liquid_mass_kg"][0].as_f64().unwrap();
+    let supply = policy["supply_rate_kg_s"][0].as_f64().unwrap();
+    let latent = history["request"]["initial"]["conditions"]["boundaries"][0]["latent_heat_j_kg"]
+        .as_f64()
+        .unwrap();
+    let trapezoid = history["integration"] == "composite_trapezoid";
+    let mut previous = history["initial"]["result"]["coverage"]["covered_potential_mass_flow_kg_s"]
+        .as_f64()
+        .unwrap();
+    let mut remaining = start;
+    let mut totals = [0.; 5]; // supply, demand, evaporation, unmet demand, latent energy
+    for row in history["samples"].as_array_mut().unwrap() {
+        let flow = row["result"]["coverage"]["covered_potential_mass_flow_kg_s"]
+            .as_f64()
+            .unwrap();
+        let dt = row["dt_s"].as_f64().unwrap();
+        let demand = if trapezoid {
+            previous * (0.5 * dt) + flow * (0.5 * dt)
+        } else {
+            flow * dt
+        };
+        let supplied = supply * dt;
+        let evaporated = demand.min(remaining + supplied);
+        let next = remaining + supplied - evaporated;
+        let balance = wet_test_balance(
+            remaining,
+            supplied,
+            demand,
+            evaporated,
+            next,
+            evaporated * latent,
+        );
+        let mut body = balance.clone();
+        body["body_triangle"] = json!(0);
+        row["wet_film"] =
+            json!({"schema":"ftx-body-wet-film-step/1","body":[body],"totals":balance});
+        for (total, amount) in totals.iter_mut().zip([
+            supplied,
+            demand,
+            evaporated,
+            demand - evaporated,
+            evaporated * latent,
+        ]) {
+            *total += amount;
+        }
+        remaining = next;
+        previous = flow;
+    }
+    let mut balance =
+        wet_test_balance(start, totals[0], totals[1], totals[2], remaining, totals[4]);
+    // Cumulative unmet demand is the sum of the step observations, not one final subtraction.
+    balance["unmet_demand_mass_kg"] = json!(totals[3]);
+    balance["demand_balance_error_kg"] = json!(totals[2] + totals[3] - totals[1]);
+    let mut body = balance.clone();
+    body["body_triangle"] = json!(0);
+    history["wet_film"] = json!({"schema":"ftx-body-wet-film-report/1","body":[body],"totals":balance,
+        "source":policy["source"],"basis":policy["basis"],"body_mesh_sha256":policy["body_mesh_sha256"],
+        "textile_temperature_coupled":false,"uncertainty_propagated":false});
+    history["retained_vertex_samples"] = json!(18);
+    history["retained_wet_film_scalar_equivalents"] = json!(48);
+    history["latent_heat_coupled"] = json!(false);
+    simulation
+}
+
+#[test]
+fn finite_water_objectives_compare_modeled_evaporation_and_constraints_for_both_quadratures() {
+    for (rule, area_time) in [("right_endpoint", 0.875), ("composite_trapezoid", 0.75)] {
+        let (mut request, mut descriptor) = wet_film_inputs();
+        descriptor["scenario"]["motion"]["vapor_coverage_history"]["integration"] = json!(rule);
+        let evaluate = |request: &Request| {
+            serde_json::to_value(
+                request
+                    .evaluate_with(
+                        &Pattern::from_json(PATTERN).unwrap(),
+                        &descriptor,
+                        |_, pattern| Ok(synthetic_moving_wet_film(pattern, &descriptor)),
+                    )
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let report = evaluate(&request);
+        // Ten milligrams initially and eight supplied: the lower-Ret cloth exhausts all eighteen;
+        // the higher-Ret cloth meets its lower demand and retains liquid. Neither tradeoff dominates.
+        assert_eq!(
+            report["comparison"]["frontier"],
+            json!(["a", "b"]),
+            "{rule}: {}",
+            report["comparison"]
+        );
+        for (index, ret) in [(0_usize, 10_f64), (1, 20.)] {
+            let demand = 1000. * area_time / ((ret + 5.) * 2_500_000.);
+            let evaporated = demand.min(0.000018);
+            let expected = [
+                ("motion_wet_film_evaporated_mass_kg", evaporated, "kg"),
+                (
+                    "motion_wet_film_remaining_liquid_mass_kg",
+                    0.000018 - evaporated,
+                    "kg",
+                ),
+                (
+                    "motion_wet_film_unmet_demand_mass_kg",
+                    demand - evaporated,
+                    "kg",
+                ),
+                ("motion_wet_film_supplied_mass_kg", 0.000008, "kg"),
+                (
+                    "motion_wet_film_body_reservoir_latent_energy_j",
+                    evaporated * 2_500_000.,
+                    "J",
+                ),
+            ];
+            for (metric, expected, unit) in expected {
+                let reading = &report["comparison"]["alternatives"][index]["readings"][metric];
+                let actual = reading["value"].as_f64().unwrap();
+                assert!(
+                    (actual - expected).abs() < 1e-12 * expected.abs().max(1e-8),
+                    "{rule} {metric}: {actual} versus {expected}"
+                );
+                assert_eq!(reading["consumer"], "motion_wet_film");
+                assert_eq!(reading["unit"], unit);
+                assert!(reading["reported_bounds"].is_null());
+            }
+        }
+        assert_eq!(report["comparison"]["motion_required"], true);
+        assert_eq!(report["comparison"]["physical_validation_claim"], false);
+        assert_eq!(
+            report["simulations"][0]["evaluation"]["result"]["surface"]["status"],
+            "refused"
+        );
+        request.comparison.as_mut().unwrap().constraints = serde_json::from_value(json!([
+            {"metric":"motion_wet_film_unmet_demand_mass_kg","maximum":0.000001}]))
+        .unwrap();
+        assert_eq!(
+            evaluate(&request)["comparison"]["frontier"],
+            json!(["b"]),
+            "{rule}"
+        );
+    }
+}
+
+#[test]
+fn finite_water_refuses_forged_ledgers_and_recomputed_replacement_inputs() {
+    let (mut request, descriptor) = wet_film_inputs();
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    request.comparison.as_mut().unwrap().objectives.push(
+        serde_json::from_value(json!({
+        "metric":"motion_covered_vapor_potential_mass_kg","direction":"maximize"}))
+        .unwrap(),
+    );
+    for fault in [
+        "missing",
+        "step_missing",
+        "step_owner",
+        "step_evaporation",
+        "cumulative",
+        "step_conservation",
+        "total_conservation",
+        "source",
+        "body",
+        "coupled",
+        "uncertainty",
+        "retention",
+        "geometry_retention",
+        "recomputed_initial",
+        "recomputed_supply",
+        "recomputed_basis",
+    ] {
+        let report = serde_json::to_value(request.evaluate_with(&Pattern::from_json(PATTERN).unwrap(),
+            &descriptor, |key, pattern| {
+                let mut produced = descriptor.clone();
+                if key == "a" {
+                    let film = &mut produced["scenario"]["motion"]["vapor_coverage_history"]["wet_film"];
+                    match fault {
+                        "recomputed_initial" => film["initial_liquid_mass_kg"][0] = json!(0.001),
+                        "recomputed_supply" => film["supply_rate_kg_s"][0] = json!(0.001),
+                        "recomputed_basis" => film["basis"] = json!("Different invented reservoir provenance"),
+                        _ => {}
+                    }
+                }
+                let mut simulation = synthetic_moving_wet_film(pattern, &produced);
+                if key == "a" {
+                    let history = &mut simulation["motion"]["result"]["vapor_coverage_history"]["result"];
+                    match fault {
+                        "missing" => history["wet_film"] = Value::Null,
+                        "step_missing" => history["samples"][1]["wet_film"] = Value::Null,
+                        "step_owner" => history["samples"][0]["wet_film"]["body"][0]["body_triangle"] = json!(1),
+                        "step_evaporation" => history["samples"][1]["wet_film"]["body"][0]["evaporated_mass_kg"] = json!(0.),
+                        "cumulative" => history["wet_film"]["totals"]["evaporated_mass_kg"] = history["totals"]["potential_mass_kg"].clone(),
+                        "step_conservation" => history["samples"][0]["wet_film"]["totals"]["mass_balance_error_kg"] = json!(1.),
+                        "total_conservation" => history["wet_film"]["totals"]["demand_balance_error_kg"] = json!(1.),
+                        "source" => history["wet_film"]["source"] = json!("test:different-source"),
+                        "body" => history["wet_film"]["body_mesh_sha256"] = json!("0".repeat(64)),
+                        "coupled" => history["wet_film"]["textile_temperature_coupled"] = json!(true),
+                        "uncertainty" => history["wet_film"]["uncertainty_propagated"] = json!(true),
+                        "retention" => history["retained_wet_film_scalar_equivalents"] = json!(16),
+                        "geometry_retention" => history["retained_vertex_samples"] = json!(6),
+                        _ => {}
+                    }
+                }
+                Ok(simulation)
+            }).unwrap()).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            json!(["b"]),
+            "{fault}: {}",
+            report["comparison"]
+        );
+        let readings = &report["comparison"]["alternatives"][0]["readings"];
+        assert!(
+            readings["motion_wet_film_evaporated_mass_kg"].is_null(),
+            "{fault}"
+        );
+        if !fault.starts_with("recomputed_") {
+            assert!(
+                readings["motion_covered_vapor_potential_mass_kg"].is_object(),
+                "{fault}"
+            );
+        }
+        assert_eq!(
+            report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
+        );
+        assert_eq!(
+            report["simulations"][0]["evaluation"]["result"]["motion"]["status"],
+            "available"
+        );
+    }
+}
+
+#[test]
+fn finite_water_comparison_is_opt_in_nominal_and_keeps_ret_protocol_admission() {
+    let (mut request, descriptor) = wet_film_inputs();
+    request.comparison.as_mut().unwrap().objectives.truncate(1);
+    request.variants[0]
+        .changes
+        .default
+        .as_mut()
+        .unwrap()
+        .record
+        .as_mut()
+        .unwrap()
+        .properties
+        .get_mut("vapor_resistance")
+        .unwrap()
+        .method = "different acquired Ret protocol".into();
+    let evaluate = |request: &Request, missing: bool| {
+        serde_json::to_value(request.evaluate_with(
+        &Pattern::from_json(PATTERN).unwrap(), &descriptor, |_, pattern| {
+            let mut simulation = synthetic_moving_wet_film(pattern, &descriptor);
+            if missing { simulation["motion"]["result"]["vapor_coverage_history"]["result"]["wet_film"] = Value::Null; }
+            Ok(simulation)
+        }).unwrap()).unwrap()
+    };
+    let separate = evaluate(&request, false);
+    assert_eq!(separate["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(
+        separate["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    assert_eq!(
+        evaluate(&request, false)["comparison"]["frontier"],
+        json!(["a"])
+    );
+    assert_eq!(
+        evaluate(&request, true)["comparison"]["frontier"],
+        json!([])
+    );
+    request.comparison.as_mut().unwrap().basis =
+        ftx_export::material_study::comparison::Basis::ReportedBounds;
+    assert!(
+        request
+            .comparison
+            .as_ref()
+            .unwrap()
+            .validate(&request, true)
+            .unwrap_err()
+            .message
+            .contains("finite-water")
+    );
+    request.comparison = Some(serde_json::from_value(json!({"basis":"nominal","objectives":[
+        {"metric":"stock_mass_kg","direction":"minimize"}],"required_consumers":["motion_wet_film"]})).unwrap());
+    assert_eq!(
+        evaluate(&request, true)["comparison"]["frontier"],
+        json!([])
+    );
+    request
+        .comparison
+        .as_mut()
+        .unwrap()
+        .required_consumers
+        .clear();
+    let manufacturing = evaluate(&request, true);
+    assert_eq!(manufacturing["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(manufacturing["comparison"]["motion_required"], false);
+}
+
 fn vapor_piece_inputs() -> (Pattern, Request, Value) {
     let (mut request, mut descriptor) = vapor_coverage_inputs();
     let mut raw: Value = serde_json::from_str(PATTERN).unwrap();

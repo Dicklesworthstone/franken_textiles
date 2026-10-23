@@ -15,6 +15,7 @@ use super::{Alternative, Request, ScenarioAlternative, hash, invalid};
 #[cfg(test)]
 mod heating_tests;
 mod matrix;
+mod wet_film;
 
 /// Uncertainty admission. Source intervals cannot be propagated through planners by relabeling them.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -61,6 +62,8 @@ pub enum Consumer {
     Motion,
     /// Complete potential vapor transfer on the declared covered body domain at every motion sample.
     MotionVaporCoverage,
+    /// Conserved explicitly supplied body liquid over a complete covered-domain motion history.
+    MotionWetFilm,
     /// Complete independent-sheet temperature history on every admitted mechanical sample.
     TransientSurface,
     /// Complete moving body-domain/exposed-cloth history, with its explicit layer/film policy.
@@ -135,6 +138,16 @@ pub enum Metric {
     MotionCoveredVaporPotentialEnergyJ,
     /// Declared quadrature of covered vapor potential mass flow, in kilograms; no water supply.
     MotionCoveredVaporPotentialMassKg,
+    /// Modeled covered evaporation limited by explicit body liquid and supply, in kilograms.
+    MotionWetFilmEvaporatedMassKg,
+    /// Liquid remaining on the declared body triangles at the end of the motion, in kilograms.
+    MotionWetFilmRemainingLiquidMassKg,
+    /// Covered potential demand that the declared finite liquid could not supply, in kilograms.
+    MotionWetFilmUnmetDemandMassKg,
+    /// Prescribed liquid supplied to the declared body triangles over the motion, in kilograms.
+    MotionWetFilmSuppliedMassKg,
+    /// Latent energy drawn from the prescribed body reservoir, not textile sensible heat, in joules.
+    MotionWetFilmBodyReservoirLatentEnergyJ,
     /// Signed incoming-side energy (J) for all independent sheets over the whole requested motion.
     TransientSurfaceInsideEnergyJ,
     /// Signed incoming-side energy (J) of declared body paths AND exposed-cloth films, not wearer loss.
@@ -194,6 +207,11 @@ impl Metric {
             Self::MotionCoveredVaporPotentialEnergyJ | Self::MotionCoveredVaporPotentialMassKg => {
                 Consumer::MotionVaporCoverage
             }
+            Self::MotionWetFilmEvaporatedMassKg
+            | Self::MotionWetFilmRemainingLiquidMassKg
+            | Self::MotionWetFilmUnmetDemandMassKg
+            | Self::MotionWetFilmSuppliedMassKg
+            | Self::MotionWetFilmBodyReservoirLatentEnergyJ => Consumer::MotionWetFilm,
             Self::TransientSurfaceInsideEnergyJ
             | Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
@@ -220,7 +238,11 @@ impl Metric {
             | Self::AssemblyMassKg
             | Self::UsedStockMassKg
             | Self::CuttingJobStockMassKg
-            | Self::MotionCoveredVaporPotentialMassKg => "kg",
+            | Self::MotionCoveredVaporPotentialMassKg
+            | Self::MotionWetFilmEvaporatedMassKg
+            | Self::MotionWetFilmRemainingLiquidMassKg
+            | Self::MotionWetFilmUnmetDemandMassKg
+            | Self::MotionWetFilmSuppliedMassKg => "kg",
             Self::ObservedOrderCost
             | Self::SelectedObservedOrderCost
             | Self::CuttingJobObservedOrderCost
@@ -240,7 +262,8 @@ impl Metric {
             | Self::TransientCoverageInsideEnergyJ
             | Self::TransientSurfaceNetBoundaryEnergyJ
             | Self::TransientCoverageNetBoundaryEnergyJ
-            | Self::MotionCoveredVaporPotentialEnergyJ => "J",
+            | Self::MotionCoveredVaporPotentialEnergyJ
+            | Self::MotionWetFilmBodyReservoirLatentEnergyJ => "J",
             Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
             | Self::TransientCoverageMinSampleTemperatureC
@@ -310,6 +333,21 @@ impl Metric {
             }
             Self::MotionCoveredVaporPotentialMassKg => {
                 admitted.motion_vapor_coverage?["totals"]["potential_mass_kg"].as_f64()
+            }
+            Self::MotionWetFilmEvaporatedMassKg => {
+                admitted.motion_wet_film?["totals"]["evaporated_mass_kg"].as_f64()
+            }
+            Self::MotionWetFilmRemainingLiquidMassKg => {
+                admitted.motion_wet_film?["totals"]["remaining_liquid_mass_kg"].as_f64()
+            }
+            Self::MotionWetFilmUnmetDemandMassKg => {
+                admitted.motion_wet_film?["totals"]["unmet_demand_mass_kg"].as_f64()
+            }
+            Self::MotionWetFilmSuppliedMassKg => {
+                admitted.motion_wet_film?["totals"]["supplied_mass_kg"].as_f64()
+            }
+            Self::MotionWetFilmBodyReservoirLatentEnergyJ => {
+                admitted.motion_wet_film?["totals"]["body_reservoir_latent_energy_j"].as_f64()
             }
             Self::TransientSurfaceInsideEnergyJ => {
                 admitted.transient_surface.as_ref()?.result["inside_energy_j"].as_f64()
@@ -554,6 +592,13 @@ impl Policy {
             }
         }
         if matches!(self.basis, Basis::ReportedBounds)
+            && self.consumers().contains(&Consumer::MotionWetFilm)
+        {
+            return Err(invalid(
+                "finite-water comparison requires nominal basis; source Ret bounds do not propagate through evolving body liquid and supply",
+            ));
+        }
+        if matches!(self.basis, Basis::ReportedBounds)
             && self.metrics().iter().any(|m| !m.supports_bounds())
         {
             return Err(invalid(
@@ -584,6 +629,7 @@ impl Policy {
                 | Consumer::VaporCoverage
                 | Consumer::Motion
                 | Consumer::MotionVaporCoverage
+                | Consumer::MotionWetFilm
                 | Consumer::TransientSurface
                 | Consumer::TransientCoverage => additional_consumer,
             };
@@ -621,6 +667,7 @@ impl Policy {
                     | Consumer::VaporCoverage
                     | Consumer::Motion
                     | Consumer::MotionVaporCoverage
+                    | Consumer::MotionWetFilm
                     | Consumer::TransientSurface
                     | Consumer::TransientCoverage
             )
@@ -633,6 +680,7 @@ impl Policy {
                 c,
                 Consumer::Motion
                     | Consumer::MotionVaporCoverage
+                    | Consumer::MotionWetFilm
                     | Consumer::TransientSurface
                     | Consumer::TransientCoverage
             )
@@ -760,6 +808,9 @@ impl Policy {
         if self.consumers().contains(&Consumer::MotionVaporCoverage) {
             report.notes.push("Moving covered vapor objectives require complete declared body coverage at the initial state and every accepted mechanical sample, with the current material, path and prescribed conditions. Potential energy and mass integrate sampled power and flow over the actual intervals using the declared right-endpoint or composite-trapezoid rule; they do not establish water availability, actual evaporation, latent cooling, continuous-time accuracy or comfort.");
         }
+        if self.consumers().contains(&Consumer::MotionWetFilm) {
+            report.notes.push("Finite-water objectives require complete declared body coverage throughout the admitted motion and the exact sourced initial liquid and supply on its stable body triangles. Each retained step and cumulative ledger is checked against canonical regional demand, the declared quadrature and finite liquid. Evaporation is modeled covered transfer; latent energy comes from the prescribed body reservoir and does not cool textile storage. No wearer physiology, physical garment performance, unsampled-motion accuracy or propagated water-state uncertainty is inferred.");
+        }
         if self.metrics().iter().any(|metric| {
             matches!(
                 metric,
@@ -818,6 +869,7 @@ impl Policy {
             vapor_coverage: None,
             motion: &Value::Null,
             motion_vapor_coverage: None,
+            motion_wet_film: None,
             transient_surface: None,
             transient_coverage: None,
         };
@@ -840,9 +892,22 @@ impl Policy {
             }
         }
         if !admitted.motion.is_null() {
-            if self.consumers().contains(&Consumer::MotionVaporCoverage) {
+            if self.consumers().contains(&Consumer::MotionVaporCoverage)
+                || self.consumers().contains(&Consumer::MotionWetFilm)
+            {
                 match admit_motion_vapor_coverage(row, descriptor, simulation, admitted.motion) {
                     Ok(history) => admitted.motion_vapor_coverage = Some(history),
+                    Err(e) => result.exclusions.push(e),
+                }
+            }
+            if self.consumers().contains(&Consumer::MotionWetFilm)
+                && let Some(history) = admitted.motion_vapor_coverage
+            {
+                match wet_film::admit(
+                    history,
+                    &descriptor["scenario"]["motion"]["vapor_coverage_history"]["wet_film"],
+                ) {
+                    Ok(water) => admitted.motion_wet_film = Some(water),
                     Err(e) => result.exclusions.push(e),
                 }
             }
@@ -1172,7 +1237,9 @@ impl Policy {
                 .ok_or_else(|| invalid("covered vapor observation protocols unavailable"))?;
             base = hash(&(base, covered_vapor_protocols(vapor)?))?;
         }
-        if consumers.contains(&Consumer::MotionVaporCoverage) {
+        if consumers.contains(&Consumer::MotionVaporCoverage)
+            || consumers.contains(&Consumer::MotionWetFilm)
+        {
             let history = admitted
                 .motion_vapor_coverage
                 .ok_or_else(|| invalid("moving covered vapor observation protocols unavailable"))?;
@@ -1181,6 +1248,17 @@ impl Policy {
                 protocols.extend(covered_vapor_protocols(&sample["result"])?);
             }
             base = hash(&(base, protocols))?;
+        }
+        if consumers.contains(&Consumer::MotionWetFilm) {
+            // Explicit liquid/supply/source identity is part of this experiment, never inferred
+            // from the material or admitted by the mixed-textile-protocol option.
+            admitted
+                .motion_wet_film
+                .ok_or_else(|| invalid("conserved body wet-film history unavailable"))?;
+            base = hash(&(
+                base,
+                &descriptor["scenario"]["motion"]["vapor_coverage_history"]["wet_film"],
+            ))?;
         }
         // Only the explicitly consumed layer occurrences participate. A cuff or trim with
         // unrelated vapor observations must not change a shell/lining comparison's protocol.
@@ -1233,6 +1311,7 @@ struct Numerical<'a> {
     vapor_coverage: Option<&'a Value>,
     motion: &'a Value,
     motion_vapor_coverage: Option<&'a Value>,
+    motion_wet_film: Option<&'a Value>,
     transient_surface: Option<Heat<'a>>,
     transient_coverage: Option<Heat<'a>>,
 }
@@ -1273,6 +1352,7 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
         Consumer::VaporCoverage => admitted.vapor_coverage.is_some(),
         Consumer::Motion => !admitted.motion.is_null(),
         Consumer::MotionVaporCoverage => admitted.motion_vapor_coverage.is_some(),
+        Consumer::MotionWetFilm => admitted.motion_wet_film.is_some(),
         Consumer::TransientSurface => admitted.transient_surface.is_some(),
         Consumer::TransientCoverage => admitted.transient_coverage.is_some(),
     }

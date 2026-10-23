@@ -477,6 +477,55 @@ the latter explicitly reports that gravity was not simulated. The short cylinder
 demonstrates that clear-gating but drifting cloth is excluded. Neither establishes a gravity-settled
 anatomical garment or measured fit.
 
+### Finite body water through complete motion
+
+When `scenario.motion.vapor_coverage_history.wet_film` declares an exact body-bound initial liquid
+inventory and supply, the `motion_wet_film` consumer makes its conservative water results available
+to nominal objectives and constraints. It reuses the actual moving layered coverage, source Ret,
+body identities, pressure boundaries and requested quadrature. The same metrics can participate in
+individual cases of a scenario matrix.
+
+| Metric | Unit | Meaning |
+|---|---|---|
+| `motion_wet_film_evaporated_mass_kg` | kg | Modeled covered-domain transfer, limited by each body triangle's initial and supplied liquid. |
+| `motion_wet_film_remaining_liquid_mass_kg` | kg | Liquid still stored on the declared body domain at the end of the complete motion. |
+| `motion_wet_film_unmet_demand_mass_kg` | kg | Integrated canonical vapor demand that the finite liquid could not supply. |
+| `motion_wet_film_supplied_mass_kg` | kg | Integrated prescribed supply, retained separately from the initial inventory. |
+| `motion_wet_film_body_reservoir_latent_energy_j` | J | Modeled evaporation times the declared latent heat for its body triangle. The prescribed body reservoir supplies this energy. |
+
+For example, a deliberately authored decision can maximize modeled evaporation while requiring
+some liquid to remain:
+
+```json
+{
+  "basis": "nominal",
+  "required_consumers": ["motion_wet_film"],
+  "objectives": [
+    {"metric": "motion_wet_film_evaporated_mass_kg", "direction": "maximize"}
+  ],
+  "constraints": [
+    {"metric": "motion_wet_film_remaining_liquid_mass_kg", "minimum": 0.00001}
+  ]
+}
+```
+
+The threshold above is an illustrative decision input, not a physiological recommendation or
+textile measurement. A material that transfers more water can also exhaust its supply earlier;
+multiple objectives preserve that tradeoff instead of introducing an undisclosed score.
+
+Admission requires complete declared body coverage initially and at every retained mechanical
+sample. It checks the exact authored film, per-triangle supply and finite-inventory limits, step
+and cumulative mass/demand balances, latent conversion, and retained-state budget. Altering a
+request and recomputing a receipt hash cannot substitute a different initial inventory, supply or
+body owner. Source protocol mismatches remain explicit. Failed water admission preserves other
+independent outputs and excludes the candidate only from policies requiring that consumer.
+
+These metrics require `basis: "nominal"`. Source Ret ranges do not establish uncertainty bounds
+for evolving water inventories. The model does not cool textile heat storage, add wet textile mass,
+infer sweating, bare-body transfer, sorption, condensation or whole-wearer loss. Its ledger remains
+available for inspection, and exact retained histories replay through the ordinary coverage API.
+See [vapor-coverage.md](vapor-coverage.md) for the source and physical-domain contract.
+
 ### Vapor potential on the current sewn geometry
 
 With `scenario.vapor_surface` declared, comparisons can use the actual initial drape's independent

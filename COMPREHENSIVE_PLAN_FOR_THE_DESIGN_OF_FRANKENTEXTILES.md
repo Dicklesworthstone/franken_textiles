@@ -3012,6 +3012,24 @@ invalidate the whole matrix. See `docs/material-scenario-studies.md` and the com
 example `examples/scenario-matrix.json`. This advances the material decision workflow without closing
 the measured textile, moisture coupling, sewn-garment or machine qualification gates.
 
+---
+
+### 25.65 Compare material choices under finite body-water supply
+
+**Delivered software (`ftx-wf2`).** Single-case and named-case studies can require the existing
+`motion_wet_film` consumer and use modeled evaporation, remaining liquid, unmet demand, prescribed
+supply and body-reservoir latent energy as nominal objectives or inclusive constraints. Admission
+requires complete covered motion and the exact authored source, initial liquid and supply. Every
+body-triangle step and cumulative receipt must conserve liquid and agree with canonical regional
+demand, the declared quadrature and latent conversion. Altered, incomplete or refused histories
+cannot enter the frontier; independent manufacturing, mechanics and dry-heat results remain visible.
+
+The two quadratures retain their own declared sampled-time meaning. Water-state uncertainty is not
+propagated, so these objectives refuse `reported_bounds`; source Ret protocols still govern
+comparability. This advances decisions about the conditional body-film model without claiming
+physiological sweating, textile-temperature feedback or empirical wearer cooling. See
+[material-scenario-studies.md](docs/material-scenario-studies.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

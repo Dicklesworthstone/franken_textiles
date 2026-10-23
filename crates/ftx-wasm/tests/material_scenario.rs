@@ -565,6 +565,257 @@ fn draped_vapor_objectives_use_real_sewn_geometry_and_independent_material_evide
 }
 
 #[test]
+fn finite_water_optimization_admits_real_motion_and_replays_both_quadratures() {
+    // The authored comparison domain is entirely inside the 20–40 mm cloth band. The original
+    // tall cylinder intentionally leaves bare regions, whose unknown transfer cannot be ranked.
+    let cylinder = form();
+    let vertices = cylinder
+        .vertices
+        .iter()
+        .map(|p| Vec3::new(p.x, p.y, if p.z < 0. { 0.025 } else { 0.035 }))
+        .collect();
+    let cylinder = Body::new(vertices, cylinder.triangles, 0.01).unwrap();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&cylinder.vertices, &cylinder.triangles),
+        display: (&cylinder.vertices, &cylinder.triangles),
+        arm_deg: 35.,
+    };
+    let original: Value = serde_json::from_str(PATTERN).unwrap();
+    let missing = original["fabric"]["material"].clone();
+    let mut fast = missing.clone();
+    fast["record"]["properties"]["vapor_resistance"] = json!({
+        "value":7.,"unit":"m2*Pa/W","source":"test","evidence":"estimate",
+        "method":"Synthetic finite-water optimization regression, not measured textile data",
+        "conditions":{"conditioning":"synthetic dry coupon"}});
+    let mut slow = fast.clone();
+    slow["record"]["properties"]["vapor_resistance"]["value"] = json!(17.);
+    let request: Request = serde_json::from_value(json!({"schema":"ftx-material-study/1",
+        "variants":[
+            {"key":"a-fast","changes":{"schema":"ftx-material-bindings/1","default":fast}},
+            {"key":"b-slow","changes":{"schema":"ftx-material-bindings/1","default":slow}},
+            {"key":"c-missing","changes":{"schema":"ftx-material-bindings/1","default":missing}}],
+        "cutting":{"copies":1,"gap_mm":1.,"edge_margin_mm":0.,"end_margin_mm":0.,"seam_allowance_mm":0.},
+        "comparison":{"basis":"nominal","required_consumers":["motion_wet_film"],
+            "objectives":[
+                {"metric":"motion_wet_film_evaporated_mass_kg","direction":"maximize"},
+                {"metric":"motion_wet_film_remaining_liquid_mass_kg","direction":"maximize"}],
+            "constraints":[
+                {"metric":"motion_wet_film_unmet_demand_mass_kg","minimum":0.},
+                {"metric":"motion_wet_film_supplied_mass_kg","minimum":0.},
+                {"metric":"motion_wet_film_body_reservoir_latent_energy_j","minimum":0.}]}}))
+        .unwrap();
+    let mut scenario: Value = serde_json::from_str(SCENARIO).unwrap();
+    scenario["options"]["sew_steps"] = json!(120);
+    scenario["options"]["drape_steps"] = json!(0);
+    scenario["max_vertex_frames"] = json!(2_000_000);
+    scenario["vapor_coverage"] = json!({
+        "body_triangle_ids":[0],"instance_layers":{"band":"shell"},
+        "settings":{"max_distance_m":0.08,"min_normal_cosine":0.1,
+            "separation_tolerance_m":0.00001,"interfaces":[]},
+        "conditions":{"boundaries":[{
+            "inside_vapor_pressure_pa":2000.,"outside_vapor_pressure_pa":1000.,
+            "inside_film_resistance_m2_pa_w":1.,"outside_film_resistance_m2_pa_w":2.,
+            "latent_heat_j_kg":2_500_000.}]}});
+    scenario["motion"] = json!({"schema":"ftx-drape-motion/1",
+        "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.},
+            {"time_s":0.004,"arm_abduction_deg":36.}],
+        "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000,
+        "vapor_coverage_history":{"schema":"ftx-motion-vapor-coverage/1",
+            "integration":"right_endpoint","max_geometry_operations":1_000_000}});
+    let path = |s: &Scenario| {
+        // Explicit caller-owned cylinder translations, not an anatomical arm-angle claim.
+        let endpoints = [0.0001, 0.0002]
+            .into_iter()
+            .map(|z| {
+                cylinder
+                    .vertices
+                    .iter()
+                    .map(|p| *p + Vec3::new(0., 0., z))
+                    .collect()
+            })
+            .collect();
+        ftx_drape::study::motion::Path::new(s.motion.as_ref().unwrap(), body.collision, endpoints)
+            .unwrap()
+    };
+    let base: Scenario = serde_json::from_value(scenario.clone()).unwrap();
+    let mut baseline = Session::new(&base, &body).unwrap();
+    baseline.set_motion_path(Ok(path(&base))).unwrap();
+    let mut fast_pattern = original.clone();
+    fast_pattern["fabric"]["material"] = fast;
+    let reference = baseline
+        .evaluate(&Pattern::new(fast_pattern), |_| {})
+        .unwrap();
+    assert_eq!(
+        reference["drape"]["settled"], true,
+        "{}",
+        reference["drape"]
+    );
+    assert_eq!(
+        reference["motion"]["status"], "available",
+        "{}",
+        reference["motion"]
+    );
+    let potential = &reference["motion"]["result"]["vapor_coverage_history"];
+    assert_eq!(potential["status"], "available", "{potential}");
+    let potential = &potential["result"];
+    let duration = potential["duration_s"].as_f64().unwrap();
+    let flow = |frame: &Value, ret: f64| -> f64 {
+        let coverage = &frame["coverage"];
+        assert_eq!(coverage["uncovered_area_m2"], 0., "{coverage}");
+        assert_eq!(coverage["covered_area_m2"], coverage["body_area_m2"]);
+        coverage["regions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|region| {
+                let body_area = region["body_area_m2"].as_f64().unwrap();
+                let cloth_area = region["layer_area_m2"][0].as_f64().unwrap();
+                1000. * body_area / (1. + ret * body_area / cloth_area + 2.) / 2_500_000.
+            })
+            .sum()
+    };
+    let demand = |ret: f64, trapezoid: bool| {
+        let mut previous = flow(&potential["initial"]["result"], ret);
+        let mut total = 0.;
+        for row in potential["samples"].as_array().unwrap() {
+            let current = flow(&row["result"], ret);
+            let dt = row["dt_s"].as_f64().unwrap();
+            total += if trapezoid {
+                previous * (0.5 * dt) + current * (0.5 * dt)
+            } else {
+                current * dt
+            };
+            previous = current;
+        }
+        total
+    };
+    for integration in ["right_endpoint", "composite_trapezoid"] {
+        let faster_demand = demand(7., integration == "composite_trapezoid");
+        let slower_demand = demand(17., integration == "composite_trapezoid");
+        assert!(slower_demand > 0. && slower_demand < faster_demand);
+        let available_water = 0.5 * (slower_demand + faster_demand);
+        let supplied_water = 0.1 * slower_demand;
+        let initial_water = available_water - supplied_water;
+        scenario["motion"]["vapor_coverage_history"]["integration"] = json!(integration);
+        scenario["motion"]["vapor_coverage_history"]["wet_film"] = json!({
+            "schema":"ftx-body-wet-film/1",
+            "body_mesh_sha256":reference["vapor_coverage"]["result"]["body_mesh_sha256"],
+            "source":"test:finite-water-optimization",
+            "basis":"Synthetic finite film and supply on one declared moving body triangle; no wearer data",
+            "initial_liquid_mass_kg":[initial_water],"supply_rate_kg_s":[supplied_water/duration]});
+        let configured: Scenario = serde_json::from_value(scenario.clone()).unwrap();
+        let mut session = Session::new(&configured, &body).unwrap();
+        session.set_motion_path(Ok(path(&configured))).unwrap();
+        let result = request
+            .evaluate_with(
+                &Pattern::new(original.clone()),
+                &session.descriptor(),
+                |_, p| session.evaluate(p, |_| {}),
+            )
+            .unwrap();
+        let result = serde_json::to_value(result).unwrap();
+        assert_eq!(
+            result["comparison"]["frontier"],
+            json!(["a-fast", "b-slow"]),
+            "{integration}: {}",
+            result["comparison"]
+        );
+        assert!(
+            result["comparison"]["incomparable"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let comparisons = result["comparison"]["alternatives"].as_array().unwrap();
+        let simulations = result["simulations"].as_array().unwrap();
+        for ((candidate, simulation), manufacturing) in comparisons
+            .iter()
+            .zip(simulations)
+            .zip(result["manufacturing"]["alternatives"].as_array().unwrap())
+        {
+            assert_eq!(manufacturing["cutting"]["status"], "available");
+            assert_eq!(simulation["evaluation"]["status"], "available");
+            let actual = &simulation["evaluation"]["result"];
+            assert_eq!(actual["surface"]["status"], "available");
+            assert_eq!(actual["coverage"]["status"], "available");
+            assert_eq!(actual["motion"]["status"], "available");
+            assert_eq!(
+                actual["motion"]["result"]["samples"],
+                reference["motion"]["result"]["samples"]
+            );
+            let history = &actual["motion"]["result"]["vapor_coverage_history"];
+            if candidate["key"] == "c-missing" {
+                assert_eq!(candidate["eligible"], false);
+                assert_eq!(history["status"], "refused");
+                assert!(
+                    candidate["readings"]
+                        .get("motion_wet_film_evaporated_mass_kg")
+                        .is_none()
+                );
+                continue;
+            }
+            assert_eq!(candidate["eligible"], true, "{candidate}");
+            assert_eq!(history["status"], "available");
+            let history = &history["result"];
+            assert_eq!(history["integration"], integration);
+            assert_eq!(history["wet_film"]["textile_temperature_coupled"], false);
+            let totals = &history["wet_film"]["totals"];
+            for (metric, field, unit) in [
+                (
+                    "motion_wet_film_evaporated_mass_kg",
+                    "evaporated_mass_kg",
+                    "kg",
+                ),
+                (
+                    "motion_wet_film_remaining_liquid_mass_kg",
+                    "remaining_liquid_mass_kg",
+                    "kg",
+                ),
+                (
+                    "motion_wet_film_unmet_demand_mass_kg",
+                    "unmet_demand_mass_kg",
+                    "kg",
+                ),
+                ("motion_wet_film_supplied_mass_kg", "supplied_mass_kg", "kg"),
+                (
+                    "motion_wet_film_body_reservoir_latent_energy_j",
+                    "body_reservoir_latent_energy_j",
+                    "J",
+                ),
+            ] {
+                assert_eq!(candidate["readings"][metric]["value"], totals[field]);
+                assert_eq!(candidate["readings"][metric]["unit"], unit);
+            }
+            let evaporated = totals["evaporated_mass_kg"].as_f64().unwrap();
+            let remaining = totals["remaining_liquid_mass_kg"].as_f64().unwrap();
+            assert!(
+                (totals["supplied_mass_kg"].as_f64().unwrap() - supplied_water).abs()
+                    < 1e-12 * initial_water
+            );
+            assert!((evaporated + remaining - available_water).abs() < 1e-12 * initial_water);
+            assert!(
+                (totals["body_reservoir_latent_energy_j"].as_f64().unwrap()
+                    - evaporated * 2_500_000.)
+                    .abs()
+                    < 1e-12
+            );
+            if candidate["key"] == "a-fast" {
+                assert_eq!(remaining, 0.);
+                assert!(totals["unmet_demand_mass_kg"].as_f64().unwrap() > 0.);
+            } else {
+                assert!(remaining > 0.);
+                assert_eq!(totals["unmet_demand_mass_kg"], 0.);
+                assert!((evaporated - slower_demand).abs() < 1e-12 * initial_water);
+            }
+            let replay: ftx_drape::vapor::coverage::history::Request =
+                serde_json::from_str(history["replay_request_json"].as_str().unwrap()).unwrap();
+            assert_eq!(replay.evaluate().unwrap(), *history);
+        }
+    }
+}
+
+#[test]
 fn material_substitution_recomputes_draped_vapor_without_dry_thermal_readiness() {
     let form = form();
     let body = DrapeBody {

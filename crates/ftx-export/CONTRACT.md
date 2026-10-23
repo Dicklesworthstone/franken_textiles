@@ -1,5 +1,13 @@
 # ftx-export
 
+**Finite-water scenario decisions.** The optional `motion_wet_film` comparison consumer reads
+evaporated, remaining, unmet-demand and supplied mass plus prescribed-body latent energy from a
+complete admitted moving-coverage history. It verifies exact authored body-bound liquid/supply,
+canonical regional demand, per-step and cumulative conservation, source protocols and retention
+limits. These are nominal quantities; conditional Ret ranges do not become evolving water-state
+intervals. The consumer shares the ordinary single-case and matrix decision rules and preserves
+independent outputs on refusal. It introduces no wet-textile law or textile-temperature feedback.
+
 **Purpose.** Every deliverable of a pattern as a projection of one model (spec 03). So far: the text and
 number helpers (§2), the seam-allowance cut outline (§3–4), piece geometry (§5), shelf layouts (§6), the
 master SVG (§7.1), the PDFs (§7.2–7.6), the DXFs (§7.7–7.8), HPGL (§7.9), the cutter files (§7.10),
