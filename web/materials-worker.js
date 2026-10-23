@@ -141,8 +141,13 @@ self.onmessage = async ({ data: msg }) => {
       case "catalog": result = json(ftx.material_catalog(msg.query)); break;
       case "inspect": result = json(ftx.material_inspect(msg.selection)); break;
       case "vapor": {
-        if (typeof ftx.thermal_vapor !== "function") throw Error("Rebuild web/pkg: missing vapor-resistance engine.");
-        raw = ftx.thermal_vapor(msg.vaporRequest); result = json(raw);
+        const schema = json(msg.vaporRequest).schema;
+        const engine = schema === "ftx-vapor-coverage-history/1" ? "thermal_vapor_coverage_history" :
+          schema === "ftx-vapor-coverage/1" ? "thermal_vapor_coverage" :
+            schema === "ftx-vapor-stack/1" ? "thermal_vapor" : null;
+        if (!engine) throw Error("Choose a vapor stack, layered coverage request or moving-coverage history replay.");
+        if (typeof ftx[engine] !== "function") throw Error("Rebuild web/pkg: missing requested vapor engine.");
+        raw = ftx[engine](msg.vaporRequest); result = json(raw);
         if (typeof result.replay_request_json !== "string") throw Error("Rebuild web/pkg: missing frozen vapor replay request.");
         files = [file("vapor-report.json", raw), file("vapor-request.json", msg.vaporRequest),
           file("vapor-replay-request.json", result.replay_request_json)];

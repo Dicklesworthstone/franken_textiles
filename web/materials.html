@@ -52,9 +52,13 @@ links for loading/unloading branch changes. Review chronological heat and extern
 and keep the full report with its original input; a final selection alone is not saved heat state.
 These local column calculations do not solve 3D garment contact or qualify presser-foot clearance.</p>
 <h3>Potential evaporative transfer</h3>
-<label>Vapor-resistance stack JSON (<code>ftx-vapor-stack/1</code>) <input id="vaporRequest" type="file" accept=".json,application/json"></label>
+<label>Vapor stack, layered coverage or motion-history replay JSON <input id="vaporRequest" type="file" accept=".json,application/json"></label>
 <button id="vapor" data-command="vapor" disabled>Calculate potential vapor transfer</button>
-<p class="note">Supply the ordered material layers, area, inside/outside vapor pressures in pascals,
+<p class="note">Accepts <code>ftx-vapor-stack/1</code>, <code>ftx-vapor-coverage/1</code> and
+<code>ftx-vapor-coverage-history/1</code>. Frozen coverage and motion-history replays include their
+retained geometry, material sources and boundaries, so they run without loading a body model.
+Download a replay from a scenario result and open it here to repeat its covered-region calculation.</p>
+<p class="note">For a stack, supply the ordered material layers, area, inside/outside vapor pressures in pascals,
 boundary-film resistances and latent heat in J/kg. The shared material engine uses each layer's
 source-qualified <code>vapor_resistance</code> and reports potential latent heat and water transfer,
 with every pressure drop, measurement protocol and frozen material source retained.

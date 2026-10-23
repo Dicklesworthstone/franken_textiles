@@ -24,6 +24,35 @@ function vaporReport() {
     effective_model:'Declared synthetic constant-resistance series network',physical_validation_claim:false,
     notes:['Synthetic UI test only; latent heat is a caller-supplied conversion.'] };
 }
+function vaporCoverageReport() {
+  const replay=' {"schema":"ftx-vapor-coverage/1","source":"<synthetic retained geometry>","value":1.0,"x":-0.0}\n';
+  return {schema:'ftx-vapor-coverage-report/1',request_sha256:'coverage-lock',replay_request_json:replay,
+    coverage:{body_area_m2:2,covered_area_m2:1.5,uncovered_area_m2:0.5,unassigned_cloth_reference_area_m2:0.25,
+      covered_potential_heat_flow_w:30,covered_potential_mass_flow_kg_s:0.000012,
+      regions:[{id:'body-2-region-0',body_triangle:2,vapor:vaporReport()}]},
+    projection:{geometry_operations:12},request:{source:'<synthetic retained geometry>'},physical_validation_claim:false};
+}
+function vaporHistoryReport(integration='right_endpoint') {
+  const replay=` {"schema":"ftx-vapor-coverage-history/1","policy":{"integration":"${integration}"},"value":1.0,"x":-0.0}\n`;
+  const sample=(covered,uncovered,power,mass)=>{
+    const result=vaporCoverageReport();
+    Object.assign(result.coverage,{covered_area_m2:covered,uncovered_area_m2:uncovered,
+      covered_potential_heat_flow_w:power,covered_potential_mass_flow_kg_s:mass});
+    return result;
+  };
+  // Retained synthetic Rust results: the frontend must display these integrals unchanged.
+  const trapezoid=integration==='composite_trapezoid';
+  return {schema:'ftx-vapor-coverage-history-report/1',request_sha256:'history-lock',path_sha256:'motion-lock',
+    replay_request_json:replay,duration_s:1,integration,
+    totals:trapezoid?{potential_energy_j:26.25,potential_mass_kg:0.0000105}:{potential_energy_j:17.5,potential_mass_kg:0.000007},
+    initial:{time_s:0,result:sample(1,1,20,0.000008)},
+    samples:[
+      {time_s:0.25,dt_s:0.25,result:sample(2,0,40,0.000016),
+        potential_energy_j:trapezoid?7.5:10,potential_mass_kg:trapezoid?0.000003:0.000004},
+      {time_s:1,dt_s:0.75,result:sample(0.5,1.5,10,0.000004),
+        potential_energy_j:trapezoid?18.75:7.5,potential_mass_kg:trapezoid?0.0000075:0.000003}
+    ],latent_heat_coupled:false,physical_validation_claim:false};
+}
 function calibrationReport(mode = 'nonlinear', admission = false, check = true) {
   if (mode === 'membrane_plasticity') return permanentCalibration('ACCEPTED', admission, check);
   if (mode === 'clamped_strip') return stripCalibration('ACCEPTED', admission, check);
@@ -208,7 +237,7 @@ test('material worker calls the shared consumers with exact current inputs and c
   assert.deepEqual(w.freed, ['round']);
 });
 test('vapor worker retains the original request, exact Rust report and frozen replay bytes', async () => {
-  const w=await workerModule(), vaporRequest=' {"area_m2":1.0,"value":-0.0}\n';
+  const w=await workerModule(), vaporRequest=' {"schema":"ftx-vapor-stack/1","area_m2":1.0,"value":-0.0}\n';
   const result=await w.send({type:'vapor',request:41,vaporRequest});
   assert.equal(result.type,'result',result.message);
   assert.deepEqual(w.called,[['vapor',vaporRequest]]);
@@ -216,6 +245,52 @@ test('vapor worker retains the original request, exact Rust report and frozen re
     ['vapor-report.json',JSON.stringify(vaporReport())],['vapor-request.json',vaporRequest],
     ['vapor-replay-request.json',vaporReport().replay_request_json]]);
   assert.equal(result.files.length,3); assert.deepEqual(w.freed,[]);
+});
+test('vapor worker dispatches stack, layered coverage and history schemas without rewriting bytes', async () => {
+  const cases=[['ftx-vapor-stack/1','thermal_vapor',vaporReport()],
+    ['ftx-vapor-coverage/1','thermal_vapor_coverage',vaporCoverageReport()],
+    ['ftx-vapor-coverage-history/1','thermal_vapor_coverage_history',vaporHistoryReport()]];
+  const calls=[], bindings={default:()=>Promise.resolve()};
+  for (const [,engine,report] of cases) bindings[engine]=input=>{
+    calls.push([engine,input]); return ` ${JSON.stringify(report)}\n`;
+  };
+  const w=await workerModule({bindings});
+  for (const [schema,engine,report] of cases) {
+    const vaporRequest=` {"schema":"${schema}","value":1.0,"x":-0.0}\n`;
+    const result=await w.send({type:'vapor',request:42,vaporRequest});
+    assert.equal(result.type,'result',result.message); assert.equal(result.request,42);
+    assert.deepEqual(calls.at(-1),[engine,vaporRequest]);
+    assert.deepEqual(plain(result.files.map(f=>[f.name,f.text])),[
+      ['vapor-report.json',` ${JSON.stringify(report)}\n`],['vapor-request.json',vaporRequest],
+      ['vapor-replay-request.json',report.replay_request_json]]);
+    assert.equal(result.result.schema,report.schema);
+  }
+  assert.equal(calls.length,cases.length);
+});
+test('vapor dispatch refuses unknown schemas, unavailable engines and incomplete histories without partial files', async () => {
+  let fallbackCalls=0;
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),
+    thermal_vapor:()=>{fallbackCalls++;return JSON.stringify(vaporReport());}}});
+  for (const [schema,reason] of [
+    ['ftx-vapor-coverage-history-report/1',/Choose a vapor stack/],
+    ['ftx-vapor-coverage/1',/missing requested vapor engine/],
+    ['ftx-vapor-coverage-history/1',/missing requested vapor engine/]
+  ]) {
+    const result=await w.send({type:'vapor',request:43,vaporRequest:JSON.stringify({schema})});
+    assert.equal(result.type,'error'); assert.match(result.message,reason);
+    assert.equal(result.request,43); assert.equal(result.files,undefined);
+  }
+  assert.equal(fallbackCalls,0); assert.equal(w.sent.some(m=>m.type==='result'),false);
+  for (const fail of [false,true]) {
+    const failed=await workerModule({bindings:{default:()=>Promise.resolve(),thermal_vapor_coverage_history:()=>{
+      if(fail) throw Error('SOURCE_MISMATCH: retained material changed');
+      return '{"schema":"ftx-vapor-coverage-history-report/1"}';
+    }}});
+    const result=await failed.send({type:'vapor',request:44,vaporRequest:'{"schema":"ftx-vapor-coverage-history/1"}'});
+    assert.equal(result.type,'error');
+    assert.match(result.message,fail?/SOURCE_MISMATCH/:/frozen vapor replay request/);
+    assert.equal(result.files,undefined); assert.equal(failed.sent.some(m=>m.type==='result'),false);
+  }
 });
 test('bounded-marker worker previews the selected intact marker and refuses invalid indices', async () => {
   const w = await workerModule(), pattern = '{"origin":-0.0}',
@@ -729,7 +804,7 @@ test('partial sewing spans display both source sides without an ordering policy 
 test('vapor calculation works without a pattern and preserves unrelated inspected material', async () => {
   const p=await pageModule(); await p.inspect('existing-selection');
   assert.equal(p.e.vapor.disabled,true);
-  const selected=p.e.selection.value, request=' {"area_m2":1.0,"value":-0.0}\n';
+  const selected=p.e.selection.value, request=' {"schema":"ftx-vapor-stack/1","area_m2":1.0,"value":-0.0}\n';
   p.select('vaporRequest',request); p.e.vaporRequest.handlers.change();
   assert.equal(p.e.vapor.disabled,false); await p.e.vapor.onclick();
   assert.equal(p.current().messages.at(-1).vaporRequest,request);
@@ -753,16 +828,80 @@ test('vapor calculation works without a pattern and preserves unrelated inspecte
   assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('standalone coverage and history replays retain source bytes, units, integration rules and initial samples', async () => {
+  const cases=[['thermal_vapor_coverage',vaporCoverageReport()],
+    ['thermal_vapor_coverage_history',vaporHistoryReport()],
+    ['thermal_vapor_coverage_history',vaporHistoryReport('composite_trapezoid')]];
+  for (const [engine,report] of cases) {
+    const p=await pageModule(), raw=` ${JSON.stringify(report)}\n`;
+    const w=await workerModule({bindings:{default:()=>Promise.resolve(),[engine]:()=>raw}});
+    p.select('vaporRequest',report.replay_request_json); p.e.vaporRequest.handlers.change();
+    assert.equal(p.e.vapor.disabled,false); await p.e.vapor.onclick();
+    const request=p.current().messages.at(-1);
+    assert.equal(request.vaporRequest,report.replay_request_json);
+    const result=await w.send(request); assert.equal(result.type,'result',result.message);
+    p.current().emit(result);
+    const s=section(p,'Potential evaporative transfer');
+    const table=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    assert.equal(s.hidden,false); assert.match(visibleText(s),/"physical_validation_claim": false/);
+    if (engine==='thermal_vapor_coverage') {
+      const t=table('Layered vapor coverage');
+      assert.deepEqual(plain(t.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+        ['Covered body area','1.5','m²'],['Uncovered body area — transfer unknown','0.5','m²'],
+        ['Covered potential heat flow','30','W'],['Covered potential water flow','0.000012','kg/s']]);
+      const d=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='Ordered layers, pressure profiles and source conditions');
+      d.open=true; d.handlers.toggle(); assert.match(visibleText(d),/Original <measurement>/);
+      assert.match(visibleText(s),/uncovered transfer and moisture availability remain unknown/);
+    } else {
+      const totals=table('Replay: moving layered vapor potential'), samples=table('Replay: vapor coverage at accepted motion samples');
+      assert.deepEqual(plain(totals.children[1].children.map(n=>n.textContent)),
+        ['History','Duration (s)','Accepted samples','Potential energy (J)','Potential water mass (kg)','Integration rule']);
+      assert.deepEqual(plain(totals.children[2].children.map(n=>n.textContent)),
+        ['Available','1','2',String(report.totals.potential_energy_j),String(report.totals.potential_mass_kg),report.integration]);
+      assert.deepEqual(plain(samples.children[1].children.map(n=>n.textContent)),
+        ['Time (s)','Interval (s)','Covered body (m²)','Uncovered body (m²)','Unassigned reference cloth (m²)',
+          'Potential power (W)','Potential water flow (kg/s)','Interval energy (J)','Interval water mass (kg)']);
+      assert.deepEqual(plain(samples.children[2].children.map(n=>n.textContent)),
+        ['0','Initial only','1','1','0.25','20','0.000008','Initial only','Initial only']);
+      assert.deepEqual(plain(samples.children[3].children.map(n=>n.textContent)),
+        ['0.25','0.25','2','0','0.25','40','0.000016',String(report.samples[0].potential_energy_j),String(report.samples[0].potential_mass_kg)]);
+      assert.deepEqual(plain(samples.children[4].children.map(n=>n.textContent)),
+        ['1','0.75','0.5','1.5','0.25','10','0.000004',String(report.samples[1].potential_energy_j),String(report.samples[1].potential_mass_kg)]);
+      const trapezoid=report.integration==='composite_trapezoid';
+      assert.match(visibleText(s),trapezoid?/composite trapezoidal rule/:/right-endpoint rule/);
+      assert.doesNotMatch(visibleText(s),trapezoid?/right-endpoint rule/:/composite trapezoidal rule/);
+      assert.match(visibleText(s),/Uncovered body transfer remains unknown/);
+      assert.match(visibleText(s),/refining motion samples can change the integral/);
+      const d=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('Replay: moving vapor sources'));
+      d.open=true; d.handlers.toggle(); assert.match(visibleText(d),/history-lock/);
+      assert.match(visibleText(d),/motion-lock/); assert.match(visibleText(d),/Original <measurement>/);
+    }
+    for (const [name,text] of [['vapor-report.json',raw],['vapor-request.json',report.replay_request_json],
+      ['vapor-replay-request.json',report.replay_request_json]]) {
+      const download=descendants(s).find(n=>n.download===name);
+      assert.equal(await p.blobs.get(download.href).text(),text);
+    }
+    assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+    assert.equal(p.live.size,3);
+    p.e.vaporRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+    await p.e.vapor.onclick();
+    p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'late geometry budget exhausted'});
+    assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+  }
+});
+
 test('replacing a vapor request cancels delayed file reads and stale worker results', async () => {
-  const p=await pageModule(), delay=deferred(); p.select('vaporRequest');
+  const p=await pageModule(), delay=deferred(), oldRequest=vaporHistoryReport().replay_request_json,
+    newRequest=vaporCoverageReport().replay_request_json;
+  p.select('vaporRequest',oldRequest);
   p.e.vaporRequest.files[0].text=()=>delay.promise;
   const old=p.current(), running=p.e.vapor.onclick();
-  p.select('vaporRequest','{"new":true}'); p.e.vaporRequest.handlers.change(); p.ready();
-  delay.resolve('{"old":true}'); await running;
+  p.select('vaporRequest',newRequest); p.e.vaporRequest.handlers.change(); p.ready();
+  delay.resolve(oldRequest); await running;
   assert.equal(old.dead,true); assert.equal(old.messages.length,0);
-  old.emit({type:'result',request:1,result:vaporReport(),files:[]});
+  old.emit({type:'result',request:1,result:vaporHistoryReport(),files:[]});
   assert.equal(section(p,'Potential evaporative transfer').hidden,true);
-  await p.e.vapor.onclick(); assert.equal(p.current().messages.at(-1).vaporRequest,'{"new":true}');
+  await p.e.vapor.onclick(); assert.equal(p.current().messages.at(-1).vaporRequest,newRequest);
 });
 
 test('pressure-conditioned selections enter ordinary piece bindings without a numeric JSON round trip', async () => {

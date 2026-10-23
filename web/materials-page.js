@@ -390,23 +390,25 @@ function motionSamples(parent, key, motion) {
     }
   });
 }
-function motionVaporComparison(op, parent, key, index, motion, dependency, requested) {
-  const output = motion?.vapor_coverage_history;
-  if (!requested?.vapor_coverage_history && !output) return;
-  const history = available(output);
+function vaporHistoryResult(parent, key, history, statusLabel, refusal) {
   const summary = table(parent, `${key}: moving layered vapor potential`, ["History", "Duration (s)",
     "Accepted samples", "Potential energy (J)", "Potential water mass (kg)", "Integration rule"]);
-  cells(summary, [output ? state(output) : `Unavailable: ${state(dependency)}`, metric(history?.duration_s),
+  cells(summary, [statusLabel, metric(history?.duration_s),
     metric(history?.samples?.length), metric(history?.totals?.potential_energy_j),
     metric(history?.totals?.potential_mass_kg), history?.integration || "Unknown"]);
   const note = document.createElement("p");
+  const integration = history?.integration === "right_endpoint" ?
+    "The right-endpoint rule holds each accepted sample's potential flow over its preceding interval; " :
+    history?.integration === "composite_trapezoid" ?
+      "The composite trapezoidal rule averages each interval's retained start and end flows; " :
+      "The integration rule is retained in the report; ";
   note.textContent = "Each accepted body/cloth sample recomputes the covered layer paths under the fixed declared vapor boundaries. " +
-    "The right-endpoint rule holds each accepted sample's potential flow over its preceding interval; refining motion samples can change the integral. " +
+    integration + "refining motion samples can change the integral. " +
     "Uncovered body transfer remains unknown, and complete-domain comparisons require coverage at every sample. " +
     "These potentials do not model water supply, actual evaporation, moisture storage or cooling supplied to dry heat.";
   parent.append(note);
   detail(parent, `${key}: moving vapor sources, sample coverage and exact replay (display only)`,
-    history || { refusal: output?.refusal || dependency?.refusal });
+    history || { refusal });
   if (!history) return;
   const samples = table(parent, `${key}: vapor coverage at accepted motion samples`, ["Time (s)", "Interval (s)",
     "Covered body (m²)", "Uncovered body (m²)", "Unassigned reference cloth (m²)",
@@ -418,7 +420,14 @@ function motionVaporComparison(op, parent, key, index, motion, dependency, reque
       metric(coverage?.covered_potential_heat_flow_w), metric(coverage?.covered_potential_mass_flow_kg_s),
       initial ? "Initial only" : metric(sample.potential_energy_j), initial ? "Initial only" : metric(sample.potential_mass_kg)]);
   }
-  if (typeof history.replay_request_json === "string") {
+}
+function motionVaporComparison(op, parent, key, index, motion, dependency, requested) {
+  const output = motion?.vapor_coverage_history;
+  if (!requested?.vapor_coverage_history && !output) return;
+  const history = available(output);
+  vaporHistoryResult(parent, key, history, output ? state(output) : `Unavailable: ${state(dependency)}`,
+    output?.refusal || dependency?.refusal);
+  if (typeof history?.replay_request_json === "string") {
     const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
     link(op, actions, { name: `alternative-${index + 1}-motion-vapor-coverage-replay.json`,
       text: history.replay_request_json, mime: "application/json" });
@@ -726,6 +735,26 @@ function compressionHistoryResult(parent, r) {
     next: "Review the final selected layer's capabilities, then assign it above. Download all final layers and the complete history below." };
 }
 function vaporResult(parent, r) {
+  if (r.schema === "ftx-vapor-coverage-history-report/1") {
+    vaporHistoryResult(parent, "Replay", r, "Available");
+    return { schema: r.schema, request_sha256: r.request_sha256, path_sha256: r.path_sha256,
+      integration: r.integration, latent_heat_coupled: r.latent_heat_coupled,
+      physical_validation_claim: r.physical_validation_claim,
+      next: "Download the exact report, original input and frozen replay request. Replay it in this panel without a body model." };
+  }
+  if (r.schema === "ftx-vapor-coverage-report/1") {
+    const totals = table(parent, "Layered vapor coverage", ["Quantity", "Value", "Unit"]);
+    for (const [label, value, unit] of [
+      ["Covered body area", r.coverage.covered_area_m2, "m²"],
+      ["Uncovered body area — transfer unknown", r.coverage.uncovered_area_m2, "m²"],
+      ["Covered potential heat flow", r.coverage.covered_potential_heat_flow_w, "W"],
+      ["Covered potential water flow", r.coverage.covered_potential_mass_flow_kg_s, "kg/s"]
+    ]) cells(totals, [label, metric(value), unit]);
+    detail(parent, "Ordered layers, pressure profiles and source conditions", r.coverage.regions);
+    detail(parent, "Projection and boundary assumptions", { projection: r.projection, request: r.request });
+    return { schema: r.schema, request_sha256: r.request_sha256, physical_validation_claim: r.physical_validation_claim,
+      scope: "Potential transfer through covered regions only; uncovered transfer and moisture availability remain unknown." };
+  }
   const note = document.createElement("p");
   note.textContent = "Potential steady transfer through the declared series of vapor resistances. " +
     "Boundary vapor pressures, film resistances, area and latent heat are supplied assumptions. " +
