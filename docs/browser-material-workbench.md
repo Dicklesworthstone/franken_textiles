@@ -126,16 +126,66 @@ and a runnable measured-leather example with explicitly illustrative boundary as
 
 ## Identify material behavior from local observations
 
-Section 1 accepts `ftx-nonlinear-swatch-calibration/1` observations for nonlinear stretch and shear,
-`ftx-relaxation-calibration/1` complete loading histories for relaxation, creep and recovery, or
-`ftx-membrane-plasticity-calibration/1` cycles for permanent stretch and directional hardening.
 Choose the matching response, load the source-bearing JSON and run **Identify material behavior**.
+Section 1 supports these existing acquisition contracts:
+
+| Response | Request | Prepared output |
+|---|---|---|
+| Linear orthotropic stretch and shear | `ftx-swatch-calibration/1` | Source-locked material selection |
+| Directional bending and preferred curvature | `ftx-bending-calibration/1` | Source-locked material selection |
+| Kinetic friction between two materials | `ftx-friction-calibration/1`, `target.kind: "pair"` | Exact material-pair interface; both material snapshots remain unchanged |
+| Same-material kinetic friction | `ftx-friction-calibration/1`, `target.kind: "self_contact"` | Material selection with the identified `friction_self` |
+| Kinetic friction against a declared body counterface | `ftx-friction-calibration/1`, `target.kind: "body"` | Material selection with the identified `friction_skin` |
+| Nonlinear stretch, shear and optional area response | `ftx-nonlinear-swatch-calibration/1` | Source-locked material selection |
+| Relaxation, creep and recovery | `ftx-relaxation-calibration/1` | Source-locked material selection when identification is accepted |
+| Permanent stretch and hardening | `ftx-membrane-plasticity-calibration/1` | Source-locked material selection when identification is accepted |
+| Clamped strip forces and transverse widths | `ftx-strip-calibration/1` | Source-locked material selection when identification is accepted |
+
+The shared Rust calibrators own the models, fitting, evidence admission, identifiability and residual
+gates. The page displays their results and retains the supplied measurements unchanged.
+
+Linear swatches supply observed deformation gradients and nominal forces per reference width. The
+result shows the orthotropic membrane stiffness matrix in N/m, its FIT-only Green-strain domain,
+excitation diagnostic and separate FIT/CHECK residuals. CHECK observations cannot enlarge that
+domain. Directional bending supplies measured curvatures and moment resultants in the material
+frame. Its result shows the bending tensor in N·m and preferred curvature in inverse metres;
+`fit_preferred_curvature: true` identifies unloaded curvature when the observations support it.
+Panel bending leaves independent seam bending and unrelated material properties unchanged.
+
+Friction requests supply corrected steady sliding forces, positive normal contact loads, nonzero
+slip velocities, acquisition sources and independent FIT/CHECK acquisitions. The selected browser
+mode must match `target.kind`. Body and self-contact fits enter ordinary material assignment;
+replacing an existing contact property requires `replace_existing: true` in the request. The body
+counterface remains explicit: a surrogate measurement does not establish human-skin behavior.
+Results show the effective isotropic kinetic coefficient and observed FIT load/speed ranges. Those
+ranges do not enforce a runtime operating domain or establish static-friction behavior.
+
+A **pair** fit preserves the independently inspected material selection, including during pending
+or refused fitting. It prepares a separate source-bound interface with its own estimate admission.
+The result reports interface readiness separately from each sheet's mechanical readiness; even an
+admitted interface does not establish complete material mechanics or whole-garment readiness.
+To apply the pair:
+
+1. Assign the exact source material snapshots to the garment's default or relevant source pieces.
+2. In section 2, choose **Stage this calibrated contact pair**. Staging uses the current pending
+   interface table when supplied, including an explicitly empty table; otherwise it uses the
+   original pattern's table. It preserves the other pairs and validates every pair against the
+   final assigned material hashes.
+3. If that exact pair already has evidence, explicitly select **Replace existing evidence for this
+   exact material pair** before staging. Replacement consent resets after successful staging.
+4. Use **Freeze selections & bind** to apply the staged pair with the current material assignments.
+
+Successful staging withdraws obsolete bound outputs. A refusal or stale response cannot replace the
+previous pending interface table. Staging retains valid evidence independently of consumer admission:
+an unadmitted fitted estimate remains unavailable to the mechanical contact consumer. Pair downloads
+include `material-calibration.json`, `calibration-input.json`, `calibrated-interface.json` and
+`friction-binding.json`, with the exact Rust strings retained for reuse. Body and self-contact fits
+also provide `friction-binding.json` alongside their ordinary material-selection download.
+
 Timed requests preserve their independent long-time equilibrium. Directional recovery accepts either
 fixed `orthotropic.times_seconds` or one to three nonoverlapping `orthotropic.time_bounds_seconds`
 windows for identifying the times. Omit or leave empty the other field; supplying both is refused.
-Proportional ratio/time search uses its separate top-level time bounds. The shared Rust
-calibrators own the models, fitting, evidence admission, identifiability and residual gates; the page
-neither fits coefficients itself nor rewrites the supplied measurements.
+Proportional ratio/time search uses its separate top-level time bounds.
 
 For permanent stretch, supply complete pristine-start loading/unloading/reversal histories in raw
 Green strain and second-Piola sheet resultants. Missing force channels remain null, while every
@@ -154,8 +204,10 @@ accumulated strain, stored energy, dissipation and force residuals remain inspec
 [material-membrane-plasticity.md](material-membrane-plasticity.md) and its deliberately synthetic
 calibration fixture; no source identity or observed force is inferred from a fiber or brand label.
 
-The **Admit the fitted estimates** checkbox is off initially. It only sets the returned selection's
-estimate policy. Estimated input observations, estimated equilibrium and replacement of an existing
+The **Admit the fitted material or interface estimates** checkbox is off initially. It sets the
+returned material selection's estimate policy or the fitted pair interface's own policy. Pair
+admission never changes either sheet's existing estimate consent. Estimated input observations,
+estimated equilibrium and replacement of an existing
 response require their separate explicit declarations in the uploaded request. A successful fit can
 therefore remain unavailable to simulation; unrelated missing mass, bending and contact evidence
 also remain visible through the ordinary material capability report.
@@ -191,12 +243,13 @@ spectrum or extend its source-qualified strain applicability.
 identification with independent directional responses. It is an artificial software fixture, not a
 measured textile characterization.
 
-The generated selection is ready for the same default or source-piece assignment and binding steps.
+For material-producing fits, the generated selection is ready for the same default or source-piece assignment and binding steps.
 Its exact Rust `selection_json` is retained through assignment and download, preserving numeric source
 identities. Download `material-calibration.json`, `calibration-input.json` and `calibrated-selection.json`
 for replay. Changing the response, uploaded observations or fitted-estimate consent withdraws the
-current characterization and its assignable selection; an explicitly assigned frozen material remains
-an independent pending choice. Loading a pattern preserves completed characterization downloads.
+current characterization and its prepared material selection or interface. A pair fit leaves the
+independently inspected material intact. An explicitly assigned frozen material or successfully staged
+interface remains an independent pending choice. Loading a pattern preserves completed characterization downloads.
 Cancellation, newer selection edits and failed replacement fits cannot republish a previous result.
 
 ## State, privacy and failure behavior
@@ -258,7 +311,9 @@ not freshly fitted body drapes. The existing `tools/check_web.cjs --model PATH.f
 necessary for successful model-backed browser draping; no model asset or private wearer record is
 bundled by this feature.
 
-This delivers the local operator integration slice of plan §25.9. It does not close the full empirical
-linen/leather/knit garment gate, acquire new measured records, qualify live supplier coverage, or provide
-interactive body/layer-map editing, a simultaneous scenario comparison, transient UI controls or
-robot execution. Those remain distinct follow-on capabilities, not inferred from a working page.
+This delivers the local operator integration slice of plan §25.9, including source-bearing mechanical
+calibration, named scenario comparisons, transient heat and motion histories, and potential vapor and
+finite body water histories through the shared native engines. Each result retains its own evidence,
+physical scope and refusals. It does not close the full empirical linen/leather/knit garment gate,
+acquire new measured records, qualify live supplier coverage, or provide interactive body/layer-map
+editing or robot execution. Those remain distinct follow-on capabilities.

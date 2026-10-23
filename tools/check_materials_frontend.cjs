@@ -74,6 +74,7 @@ function wetFilmHistoryReport() {
 function calibrationReport(mode = 'nonlinear', admission = false, check = true) {
   if (mode === 'membrane_plasticity') return permanentCalibration('ACCEPTED', admission, check);
   if (mode === 'clamped_strip') return stripCalibration('ACCEPTED', admission, check);
+  if (['linear','bending','friction_pair','friction_self','friction_body'].includes(mode)) return measuredCalibration(mode,admission,check);
   const selection = calibrationSelection(admission), quality = { components: 12, rms_scaled: 0.02, peak_scaled: 0.04 };
   return { selection: JSON.parse(selection), selection_json: selection, fit_claim: false,
     material: { selection: JSON.parse(selection), selection_json: selection, snapshot: { id: 'identified' },
@@ -89,6 +90,37 @@ function calibrationReport(mode = 'nonlinear', admission = false, check = true) 
         {time_seconds:8,stiffness_n_m:[0,120,0,0],active:true},
         {time_seconds:32,stiffness_n_m:[0,0,0,0],active:false}]} : undefined,
       fit: quality, check: check ? quality : null, input_sha256:'source-lock', missing_mechanics:[] } };
+}
+function measuredCalibration(mode, admission = false, check = true) {
+  const result=calibrationReport('nonlinear',admission,check), c=result.calibration;
+  if (mode==='linear') {
+    c.schema='ftx-swatch-calibration-report/1'; c.stiffness_n_m=[[300,60,0],[60,180,0],[0,0,70]];
+    c.excitation_pivot=0.02; return result;
+  }
+  if (mode==='bending') {
+    c.schema='ftx-bending-calibration-report/1'; c.bending_nm=[[0.02,0.003,0],[0.003,0.01,0],[0,0,0.004]];
+    c.preferred_curvature_m_inv=[0.5,-0.25,0.1]; c.excitation_pivot=0.03;
+    c.input.fit_preferred_curvature=true; return result;
+  }
+  const kind={friction_pair:'pair',friction_self:'self_contact',friction_body:'body'}[mode];
+  const coefficient={value:0.3,unit:'1',evidence:'estimate',source:'sliding-fit'};
+  c.schema='ftx-friction-calibration-report/1'; c.coefficient=coefficient;
+  c.fit_normal_n_range=[1,4];c.fit_speed_m_s_range=[0.01,0.04];
+  c.input.target={kind,counterface:kind==='body'?{reference:'local:declared-surrogate',note:'Synthetic <counterface>'}:undefined};
+  result.readiness={scope:'material_mechanics',ready:admission,whole_garment_checked:false};
+  result.interface_json=null;result.binding={kind:'material',selection:result.selection};
+  if (kind==='pair') {
+    const interface_json=`{"materials":["left-lock","right-lock"],"friction":{"value":0.3,"bounds":[-0.0,1.0],"unit":"1","evidence":"estimate","source":"sliding-fit"},"sources":{"sliding-fit":{"reference":"local:synthetic-fit","note":"Synthetic <sliding evidence>"}},"allow_estimates":${admission}}`;
+    result.interface_json=interface_json;
+    result.binding={kind:'interface',materials:[{id:'left',expected_sha256:'left-lock'},{id:'right',expected_sha256:'right-lock'}],
+      interface:JSON.parse(interface_json)};
+    result.readiness={scope:'interface_only',ready:admission,
+      refusal:admission?null:{message:'Interface estimates need their own admission'},whole_garment_checked:false,
+      sheets:[{material_sha256:'left-lock',ready:false,refusal:{message:'Missing areal mass'}},{material_sha256:'right-lock',ready:true}]};
+    result.selection=null;result.selection_json=null;result.material=null;result.simulation_ready=false;
+  }
+  result.binding_json=JSON.stringify(result.binding);
+  return result;
 }
 function areaCalibrationReport() {
   const result=calibrationReport('nonlinear',true), c=result.calibration;
@@ -181,6 +213,11 @@ async function workerModule({ failFold = false, failExport = false, trap = false
       return `{"selection":${selection},"selection_json":${JSON.stringify(selection)},"input":{"pressure_pa":250.0},"interpolated":true}`;
     },
     material_calibrate_nonlinear: (r, a) => { called.push(['calibrate-nonlinear',r,a]); return JSON.stringify(calibrationReport('nonlinear',a)); },
+    material_calibrate_linear: (r, a) => { called.push(['calibrate-linear',r,a]); return JSON.stringify(calibrationReport('linear',a)); },
+    material_calibrate_bending: (r, a) => { called.push(['calibrate-bending',r,a]); return JSON.stringify(calibrationReport('bending',a)); },
+    material_calibrate_friction: (r, a) => { called.push(['calibrate-friction',r,a]);
+      const mode={pair:'friction_pair',self_contact:'friction_self',body:'friction_body'}[JSON.parse(r).target.kind];
+      return JSON.stringify(calibrationReport(mode,a)); },
     material_calibrate_relaxation: (r, a) => { called.push(['calibrate-relaxation',r,a]); return JSON.stringify(calibrationReport('relaxation',a)); },
     material_calibrate_membrane_plasticity: (r, a) => { called.push(['calibrate-membrane_plasticity',r,a]); return JSON.stringify(calibrationReport('membrane_plasticity',a)); },
     material_calibrate_strip: (r, a) => { called.push(['calibrate-clamped_strip',r,a]); return JSON.stringify(calibrationReport('clamped_strip',a)); },
@@ -426,7 +463,7 @@ test('compression histories use the shared heat API and preserve every final lay
 
 test('calibration worker routes all shared engines with explicit consent and lossless reusable selections', async () => {
   const w = await workerModule(), input = '{"coefficient":1.0,"origin":-0.0}';
-  for (const mode of ['nonlinear','relaxation','membrane_plasticity','clamped_strip']) for (const allowEstimates of [false,true]) {
+  for (const mode of ['linear','bending','nonlinear','relaxation','membrane_plasticity','clamped_strip']) for (const allowEstimates of [false,true]) {
     const result = await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest:input,allowEstimates,request:19});
     assert.equal(result.type,'result'); assert.equal(result.request,19);
     assert.deepEqual(w.called.at(-1),['calibrate-'+mode,input,allowEstimates]);
@@ -442,6 +479,53 @@ test('calibration worker routes all shared engines with explicit consent and los
   }
   const incomplete=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_nonlinear:()=>'{"selection":{"id":"old"}}'}});
   assert.match((await incomplete.send({type:'calibrate',calibrationMode:'nonlinear',allowEstimates:false,calibrationRequest:input})).message,/selection and capability bridge/);
+});
+
+test('friction worker distinguishes exact pairs, self contact and body counterfaces without rewriting evidence', async () => {
+  const w=await workerModule();
+  for (const [mode,kind] of [['friction_pair','pair'],['friction_self','self_contact'],['friction_body','body']]) {
+    for (const allowEstimates of [false,true]) {
+      const input=` {"target":{"kind":"${kind}"},"source":-0.0,"scale":1.0}\n`;
+      const result=await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest:input,allowEstimates,request:71});
+      const report=calibrationReport(mode,allowEstimates);
+      assert.equal(result.type,'result',result.message);assert.equal(result.request,71);
+      assert.deepEqual(w.called.at(-1),['calibrate-friction',input,allowEstimates]);
+      assert.equal(result.files[0].text,JSON.stringify(report));
+      assert.equal(result.files.find(f=>f.name==='friction-binding.json').text,report.binding_json);
+      assert.equal(result.files.at(-1).text,input);
+      if (kind==='pair') {
+        assert.equal(result.result.selection,null);
+        assert.equal(result.files.some(f=>f.name==='calibrated-selection.json'),false);
+        assert.equal(result.files.find(f=>f.name==='calibrated-interface.json').text,report.interface_json);
+      } else assert.equal(result.files.find(f=>f.name==='calibrated-selection.json').text,calibrationSelection(allowEstimates));
+    }
+    const count=w.called.length;
+    const mismatch=await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest:'{"target":{"kind":"unknown"}}',allowEstimates:true});
+    assert.equal(mismatch.type,'error');assert.match(mismatch.message,/target.kind/);assert.equal(w.called.length,count);
+  }
+  const malformed={...calibrationReport('friction_pair',true),selection_json:calibrationSelection(true)};
+  const bad=await workerModule({bindings:{default:()=>Promise.resolve(),material_calibrate_friction:()=>JSON.stringify(malformed)}});
+  const result=await bad.send({type:'calibrate',calibrationMode:'friction_pair',calibrationRequest:'{"target":{"kind":"pair"}}',allowEstimates:true});
+  assert.equal(result.type,'error');assert.match(result.message,/cannot replace a material selection/);
+});
+
+test('interface staging worker preserves original pattern, pending edits and exact pair through the canonical merger', async () => {
+  const calls=[], pair=calibrationReport('friction_pair',true).interface_json;
+  const interfaces=`[{"materials":["retained","pair"],"value":-0.0},${pair}]`;
+  const report={interfaces_json:interfaces,changes_json:`{"interfaces":${interfaces},"value":1.0}`,geometry_changed:false};
+  const w=await workerModule({bindings:{default:()=>Promise.resolve(),material_stage_interface:(...args)=>{
+    calls.push(args);return JSON.stringify(report);
+  }}});
+  const base={type:'stageInterface',pattern:'{"coordinate":-0.0}',changes:'{"default":null,"value":1.0}',interfaceJson:pair,request:72};
+  for (const replaceExisting of [false,true]) {
+    const result=await w.send({...base,replaceExisting});
+    assert.equal(result.type,'result',result.message);assert.equal(result.request,72);
+    assert.deepEqual(calls.at(-1),[base.pattern,base.changes,pair,replaceExisting]);
+    assert.equal(result.result.interfaces_json,interfaces);assert.equal(result.result.changes_json,report.changes_json);
+  }
+  assert.equal((await w.send({...base,replaceExisting:'true'})).type,'error');assert.equal(calls.length,2);
+  const bad=await workerModule({bindings:{default:()=>Promise.resolve(),material_stage_interface:()=>'{}'}});
+  assert.match((await bad.send({...base,replaceExisting:false})).message,/incomplete staged interface/);
 });
 
 test('unresolved recovery comparisons preserve reports and source without publishing a selection artifact', async () => {
@@ -1060,6 +1144,112 @@ test('identified swatches show independent errors, retain their source across pa
   p.e.target.value='front'; p.e.assign.onclick(); await p.e.bind.onclick();
   assert.ok(p.current().messages.at(-1).changes.includes(selection));
   assert.equal(JSON.parse(p.current().messages.at(-1).changes).pieces.front.allow_estimates,false);
+});
+
+test('linear, bending and single-material friction fits expose measured responses and bind exact selections', async () => {
+  for (const mode of ['linear','bending','friction_self','friction_body']) {
+    const p=await pageModule();await p.load();await p.inspect('prior-material');
+    p.e.calibrationMode.value=mode;p.select('calibrationRequest');p.e.calibrationRequest.handlers.change();
+    await p.e.calibrate.onclick();assert.equal(p.e.assign.disabled,true);
+    const report=calibrationReport(mode,false,false), raw=JSON.stringify(report);
+    p.emit(report,[{name:'material-calibration.json',text:raw,mime:'application/json'},
+      {name:'calibrated-selection.json',text:report.selection_json,mime:'application/json'}]);
+    const s=section(p,'Identified material behavior'), tables=descendants(s).filter(n=>n.tag==='table');
+    assert.match(visibleText(s),/Held out: not supplied/);
+    assert.match(visibleText(s),/Fitted estimates need admission/);
+    assert.equal(p.e.selection.value,calibrationSelection(false));assert.equal(p.e.assign.disabled,false);
+    assert.equal(p.e.stageInterface.disabled,true);
+    if (mode==='linear') {
+      const stiffness=tables.find(t=>visibleText(t).includes('Linear membrane stiffness tensor'));
+      assert.deepEqual(plain(stiffness.children[2].children.map(n=>n.textContent)),['Warp / wale (E11)','300','60','0']);
+      assert.match(visibleText(s),/CHECK observations do not widen/);
+    } else if (mode==='bending') {
+      const tensor=tables.find(t=>visibleText(t).includes('Directional bending tensor'));
+      assert.deepEqual(plain(tensor.children[3].children.map(n=>n.textContent)),['Weft / course (κvv)','0.003','0.01','0']);
+      const curvature=tables.find(t=>visibleText(t).includes('Identified preferred curvature'));
+      assert.deepEqual(plain(curvature.children[4].children.map(n=>n.textContent)),['Twist (2 κuv)','0.1']);
+      assert.match(visibleText(s),/retains independent seam bending/);
+    } else {
+      assert.match(visibleText(s),/Effective isotropic kinetic coefficient/);
+      assert.match(visibleText(s),/do not enforce a runtime load or speed domain/);
+      if (mode==='friction_body') {
+        assert.match(visibleText(s),/surrogate does not establish human-skin behavior/);
+        const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('Complete source observations'));
+        source.open=true;source.handlers.toggle();assert.match(visibleText(source),/Synthetic <counterface>/);
+      }
+    }
+    p.e.target.value='front';p.e.assign.onclick();await p.e.bind.onclick();
+    assert.ok(p.current().messages.at(-1).changes.includes(report.selection_json));
+    p.emit({pattern:{},pattern_json:'{}',pieces:[],pattern_sha256:'bound'});
+    await p.e.calibrate.onclick();
+    p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'Independent check refused'});
+    assert.equal(p.e.assign.disabled,true);assert.equal(s.hidden,true);
+  }
+});
+
+test('pair friction preserves inspected materials and stages lossless evidence without erasing retained pairs', async () => {
+  const p=await pageModule();await p.load();
+  const selection='{"id":"existing-material","expected_sha256":"existing-lock","value":-0.0,"scale":1.0}';
+  p.e.selection.value=selection;p.e.selection.handlers.input();await p.e.inspect.onclick();
+  p.emit({selection:JSON.parse(selection),selection_json:selection,capabilities:{},snapshot:{id:'existing-material'}});
+  p.e.target.value='front';p.e.assign.onclick();
+  const retained=' [{"materials":["prior-left","prior-right"],"friction":{"value":1.0,"bounds":[-0.0,1.0]}}]\n';
+  p.select('interfacesFile',retained);await p.e.interfacesFile.onchange();await p.bind();
+  p.e.calibrationMode.value='friction_pair';p.e.calibrationEstimates.checked=true;
+  const input=' {"target":{"kind":"pair"},"source_value":1.0}\n';p.select('calibrationRequest',input);
+  p.e.calibrationRequest.handlers.change();await p.e.calibrate.onclick();
+  assert.equal(p.e.selection.value,selection);
+  const report=calibrationReport('friction_pair',true), files=[
+    {name:'calibrated-interface.json',text:report.interface_json,mime:'application/json'},
+    {name:'friction-binding.json',text:report.binding_json,mime:'application/json'}];
+  p.emit(report,files);
+  assert.equal(p.e.selection.value,selection);assert.equal(p.e.assign.disabled,false);assert.equal(p.e.stageInterface.disabled,false);
+  const s=section(p,'Identified material behavior');
+  assert.match(visibleText(s),/Exact contact pair and separate material readiness/);
+  assert.match(visibleText(s),/Missing areal mass/);assert.match(visibleText(s),/inspected material selection is unchanged/);
+  const download=descendants(s).find(n=>n.download==='calibrated-interface.json');
+  assert.equal(await p.blobs.get(download.href).text(),report.interface_json);
+  const links=p.live.size, priorSummary=p.e.interfacesSummary.textContent;
+  await p.e.stageInterface.onclick();let sent=p.current().messages.at(-1);
+  assert.equal(sent.type,'stageInterface');assert.equal(sent.interfaceJson,report.interface_json);assert.equal(sent.replaceExisting,false);
+  assert.ok(sent.changes.includes(retained));assert.ok(sent.changes.includes(selection));
+  p.current().emit({type:'error',request:sent.request,message:'Existing pair requires explicit replacement'});
+  assert.equal(p.e.interfacesSummary.textContent,priorSummary);assert.equal(p.live.size,links);
+  assert.equal(p.e.selection.value,selection);assert.equal(p.e.stageInterface.disabled,false);
+  p.e.replaceCalibratedInterface.checked=true;await p.e.stageInterface.onclick();sent=p.current().messages.at(-1);
+  assert.equal(sent.replaceExisting,true);
+  const combined=`[${retained.trim().slice(1,-1)},${report.interface_json}]`;
+  p.emit({interfaces_json:combined,changes_json:`{"interfaces":${combined}}`,geometry_changed:false});
+  assert.equal(p.e.replaceCalibratedInterface.checked,false);assert.equal(p.e.cut.disabled,true);
+  assert.equal(p.live.size,files.length);assert.match(p.e.interfacesSummary.textContent,/2 retained contact pair/);
+  assert.equal(p.e.selection.value,selection);assert.equal(p.e.assign.disabled,false);
+  await p.e.bind.onclick();sent=p.current().messages.at(-1);
+  assert.ok(sent.changes.includes(combined));assert.ok(sent.changes.includes(selection));
+  p.emit({pattern:{},pattern_json:'{}',pieces:[],pattern_sha256:'rebound'});
+  p.e.calibrationRequest.handlers.change();assert.equal(p.e.stageInterface.disabled,true);
+  assert.equal(p.e.selection.value,selection);assert.equal(p.e.assign.disabled,false);
+  await p.e.bind.onclick();assert.ok(p.current().messages.at(-1).changes.includes(combined));
+});
+
+test('pair refusals and stale staging cannot replace the selected material or publish withdrawn interface edits', async () => {
+  const p=await pageModule();await p.load();await p.inspect('unrelated-material');
+  const selection=p.e.selection.value, report=calibrationReport('friction_pair',false);
+  p.e.calibrationMode.value='friction_pair';p.select('calibrationRequest','{"target":{"kind":"pair"}}');
+  await p.e.calibrate.onclick();p.emit(report);
+  assert.match(visibleText(section(p,'Identified material behavior')),/Interface estimates need their own admission/);
+  await p.e.stageInterface.onclick();const old=p.current(), request=old.messages.at(-1).request;
+  p.select('interfacesFile','[]');await p.e.interfacesFile.onchange();p.ready();
+  old.emit({type:'result',request,result:{interfaces_json:`[${report.interface_json}]`,changes_json:'{}'},files:[]});
+  assert.equal(old.dead,true);assert.equal(p.e.selection.value,selection);
+  await p.e.bind.onclick();assert.deepEqual(JSON.parse(p.current().messages.at(-1).changes).interfaces,[]);
+  p.emit({pattern:{},pattern_json:'{}',pieces:[],pattern_sha256:'bound'});
+  await p.e.stageInterface.onclick();const previous=p.current(), staged=previous.messages.at(-1).request;
+  p.e.calibrationEstimates.handlers.change();p.ready();
+  previous.emit({type:'result',request:staged,result:{interfaces_json:`[${report.interface_json}]`,changes_json:'{}'},files:[]});
+  assert.equal(p.e.stageInterface.disabled,true);assert.equal(p.e.assign.disabled,false);assert.equal(p.e.selection.value,selection);
+  await p.e.calibrate.onclick();p.current().emit({type:'error',request:p.current().messages.at(-1).request,message:'Source hash changed'});
+  assert.equal(p.e.stageInterface.disabled,true);assert.equal(p.e.assign.disabled,false);assert.equal(p.e.selection.value,selection);
+  assert.equal(section(p,'Identified material behavior').hidden,true);
 });
 
 test('joint swatches expose area coefficients, exact applicability and source evidence without changing reusable selections', async () => {
@@ -2579,6 +2769,22 @@ test('computed objectives display Rust admission, signed units and incomparabili
   assert.deepEqual(plain(motionTable.children[3].children.map(n => n.textContent)),
     ['B', 'Excluded: complete motion coverage history required', 'None reported', 'Unknown', 'Unknown']);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden, true);
+
+  const filmMetrics=['evaporated_mass_kg','remaining_liquid_mass_kg','unmet_demand_mass_kg','supplied_mass_kg','body_reservoir_latent_energy_j'];
+  comparison.policy={basis:'nominal',allow_mixed_protocols:false,constraints:[],required_consumers:['motion_wet_film'],
+    objectives:filmMetrics.map(metric=>({metric:`motion_wet_film_${metric}`,direction:'minimize'}))};
+  comparison.alternatives[0].readings=Object.fromEntries(filmMetrics.map((metric,i)=>[
+    `motion_wet_film_${metric}`,{value:i+0.25,unit:metric.endsWith('_j')?'J':'kg',consumer:'motion_wet_film'}]));
+  comparison.alternatives[1].exclusions=[{message:'Finite body water history unavailable'}];
+  await p.e.scenario.onclick();p.emit(report);
+  assert.match(visibleText(s),/Finite body water comparison requires complete covered motion/);
+  assert.match(visibleText(s),/does not include textile-temperature feedback/);
+  const filmTable=descendants(s).find(n=>n.tag==='table');
+  assert.match(visibleText(filmTable),/Modeled covered evaporation/);
+  assert.match(visibleText(filmTable),/Prescribed-body latent energy/);
+  assert.deepEqual(plain(filmTable.children[2].children.map(n=>n.textContent)),
+    ['A','Eligible','None reported','0.25 kg','1.25 kg','2.25 kg','3.25 kg','4.25 J']);
+  assert.deepEqual(plain(filmTable.children[3].children.slice(3).map(n=>n.textContent)),Array(5).fill('Unknown'));
 });
 
 test('reported mass comparisons display admitted ranges and unresolved alternatives without nominal reranking', async () => {
@@ -2949,7 +3155,8 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
       assert.equal(calibration.material.capabilities.mechanical_coefficients.ready, admission);
       assert.deepEqual(calibration.material, JSON.parse(ftx.material_inspect(calibration.material.selection_json)));
     }
-    for (const [mode, filename] of [['nonlinear','synthetic-nonlinear-swatch.json'],
+    for (const [mode, filename] of [['linear','synthetic-swatch.json'], ['bending','synthetic-bending-coupons.json'],
+      ['nonlinear','synthetic-nonlinear-swatch.json'],
       ['relaxation','synthetic-relaxation-history.json'], ['relaxation','synthetic-orthotropic-relaxation-history.json'],
       ['relaxation','synthetic-orthotropic-relaxation-search.json'],
       ['membrane_plasticity','synthetic-membrane-plasticity-calibration.json']]) {
@@ -2976,6 +3183,47 @@ test('compiled WASM studies preserve source replay and optional model-backed mot
         assert.equal(binding.result.pattern.fabric.material.expected_sha256,identified.result.selection.expected_sha256);
         assert.equal(binding.result.drape_materials_with_self_contact.ready,allowEstimates);
       }
+    }
+    const sliding=fixture('synthetic-friction-sliding.json'), slidingInput=JSON.parse(sliding);
+    const sourceSelections=slidingInput.target.materials.map(material=>JSON.parse(ftx.material_inspect(JSON.stringify(material))).selection_json);
+    const pairEdits=`{"schema":"ftx-material-bindings/1","default":${sourceSelections[0]},"pieces":{"back":${sourceSelections[1]}}}`;
+    for (const allowEstimates of [false,true]) {
+      const fitted=await w.send({type:'calibrate',calibrationMode:'friction_pair',calibrationRequest:sliding,allowEstimates});
+      assert.equal(fitted.type,'result',fitted.message);
+      assert.equal(fitted.files[0].text,ftx.material_calibrate_friction(sliding,allowEstimates));
+      assert.equal(fitted.result.selection_json,null);assert.equal(fitted.result.material,null);
+      assert.equal(fitted.result.readiness.ready,allowEstimates);
+      assert.equal(fitted.result.readiness.whole_garment_checked,false);
+      assert.ok(fitted.result.readiness.sheets.every(sheet=>sheet.ready));
+      assert.equal(fitted.files.find(f=>f.name==='calibrated-interface.json').text,fitted.result.interface_json);
+      assert.equal(fitted.files.find(f=>f.name==='friction-binding.json').text,fitted.result.binding_json);
+      assert.equal(fitted.files.at(-1).text,sliding);
+      const stage={type:'stageInterface',pattern:fixture('synthetic-sewing-pattern.json'),changes:pairEdits,
+        interfaceJson:fitted.result.interface_json,replaceExisting:false};
+      const staged=await w.send(stage);assert.equal(staged.type,'result',staged.message);
+      assert.deepEqual(staged.result,JSON.parse(ftx.material_stage_interface(stage.pattern,pairEdits,stage.interfaceJson,false)));
+      const binding=await w.send({type:'bind',pattern:stage.pattern,changes:staged.result.changes_json});
+      assert.equal(binding.type,'result',binding.message);assert.equal(binding.result.geometry_changed,false);
+      assert.equal(binding.result.drape_materials_with_self_contact.ready,allowEstimates);
+      assert.deepEqual(binding.result.pattern.fabric.interfaces,[fitted.result.binding.interface]);
+      assert.equal(binding.result.pieces[0].material_sha256,JSON.parse(sourceSelections[0]).expected_sha256);
+      const duplicate=await w.send({...stage,changes:staged.result.changes_json});
+      assert.equal(duplicate.type,'error');assert.match(duplicate.message,/replace_existing/);
+      const replaced=await w.send({...stage,changes:staged.result.changes_json,replaceExisting:true});
+      assert.equal(replaced.type,'result',replaced.message);assert.equal(JSON.parse(replaced.result.interfaces_json).length,1);
+      const stale=stage.interfaceJson.replace(JSON.parse(sourceSelections[0]).expected_sha256,'0'.repeat(64));
+      assert.equal((await w.send({...stage,interfaceJson:stale})).type,'error');
+    }
+    for (const [mode,kind,key] of [['friction_self','self_contact','friction_self'],['friction_body','body','friction_skin']]) {
+      const input={...slidingInput,target:{kind,material:slidingInput.target.materials[0]},replace_existing:true};
+      if (kind==='body') input.target.counterface={reference:'test:synthetic-surrogate',accessed_on:'2026-10-18',note:'Synthetic software counterface; no human-skin qualification'};
+      const request=JSON.stringify(input), fitted=await w.send({type:'calibrate',calibrationMode:mode,calibrationRequest:request,allowEstimates:true});
+      assert.equal(fitted.type,'result',fitted.message);assert.equal(fitted.result.binding.kind,'material');
+      assert.equal(fitted.result.interface_json,null);assert.equal(fitted.result.readiness.scope,'material_mechanics');
+      assert.ok(Math.abs(fitted.result.selection.record.properties[key].value-0.4)<1e-12);
+      assert.equal(fitted.files.find(f=>f.name==='calibrated-selection.json').text,fitted.result.selection_json);
+      assert.equal(fitted.files.find(f=>f.name==='friction-binding.json').text,fitted.result.binding_json);
+      assert.deepEqual(JSON.parse(ftx.material_inspect(fitted.result.selection_json)),fitted.result.material);
     }
     const stripRequest=fixture('synthetic-clamped-strip.json');
     const strip=await w.send({type:'calibrate',calibrationMode:'clamped_strip',

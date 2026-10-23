@@ -12,6 +12,7 @@ let sourceText = null, outfit = null;
 let defaultChange = null;
 let selectionRead = 0, patternRead = 0;
 let interfaceChange = null, interfaceRead = 0, interfaceReady = true;
+let calibratedPair = null;
 const pieceChanges = new Map(), urls = new Map();
 const combinationGroups = new Map();
 const outfitTargets = new Map();
@@ -44,6 +45,8 @@ function controls() {
   $("pressure").disabled ||= !has("compressionRequest");
   $("vapor").disabled ||= !has("vaporRequest");
   $("calibrate").disabled ||= !has("calibrationRequest");
+  $("stageInterface").disabled ||= !source || !interfaceReady || !calibratedPair;
+  $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
   for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
   $("study").disabled ||= !source || !has("studyRequest");
   $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || (!has("scenarioBody") && !has("measurements"));
@@ -71,6 +74,11 @@ function clear(keys) {
     if (key === "cut") { $("marker").hidden = true; $("marker").removeAttribute("src"); }
     if (key === "stock") { $("stockMarker").hidden = true; $("stockMarker").removeAttribute("src"); }
     if (key === "bind") { bound = null; $("boundSummary").textContent = "No current bound pattern."; $("bindFiles").replaceChildren(); }
+    if (key === "calibrate") {
+      calibratedPair = null;
+      $("calibratedInterfaceSummary").textContent = "No current calibrated contact pair.";
+      $("replaceCalibratedInterface").checked = false;
+    }
   }
 }
 function error(message) { $("error").textContent = message; $("error").hidden = false; }
@@ -281,8 +289,21 @@ function objectiveComparison(parent, r) {
   const objectives = r.policy.objectives;
   const constraints = r.policy.constraints.filter(c => !objectives.some(o => o.metric === c.metric));
   const metrics = [...objectives, ...constraints];
+  const wetFilmLabels = {
+    motion_wet_film_evaporated_mass_kg: "Modeled covered evaporation",
+    motion_wet_film_remaining_liquid_mass_kg: "Remaining body liquid",
+    motion_wet_film_unmet_demand_mass_kg: "Unmet covered vapor demand",
+    motion_wet_film_supplied_mass_kg: "Declared supplied body water",
+    motion_wet_film_body_reservoir_latent_energy_j: "Prescribed-body latent energy"
+  };
+  if (metrics.some(o => Object.hasOwn(wetFilmLabels, o.metric)) || r.policy.required_consumers?.includes("motion_wet_film")) {
+    const film = document.createElement("p");
+    film.textContent = "Finite body water comparison requires complete covered motion and the exact declared film policy. " +
+      "Values are nominal modeled liquid and demand balances. Prescribed-body latent energy does not include textile-temperature feedback or establish wearer cooling.";
+    parent.append(film);
+  }
   const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",
-    ...metrics.map(o => `${o.metric} (${o.direction || "constraint"})`)]);
+    ...metrics.map(o => `${wetFilmLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
   for (const row of r.alternatives) {
     cells(t, [row.key, row.eligible ? "Eligible" : `Excluded: ${row.exclusions.map(e => e.message).join("; ")}`,
       row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
@@ -1299,9 +1320,80 @@ function stripCalibrationResult(parent, r) {
     next: r.selection ? "Review capabilities and model assumptions, then assign the identified selection and bind the pattern." :
       "Review the retained acquisition and fit diagnostics. No identified selection is available to assign." };
 }
+function measuredMechanicsResult(parent, r) {
+  const c = r.calibration, friction = c.schema === "ftx-friction-calibration-report/1";
+  const bending = c.schema === "ftx-bending-calibration-report/1";
+  const pair = r.binding?.kind === "interface";
+  const response = friction ? ({ pair: "Kinetic friction between two materials", self_contact: "Same-material kinetic friction",
+    body: "Kinetic friction against a declared body counterface" })[c.input.target.kind] :
+    bending ? "Directional bending and preferred curvature" : "Linear orthotropic stretch and shear";
+  const errors = table(parent, friction ? "Observed sliding-force errors — independent acquisitions" :
+    bending ? "Observed moment errors — independent partitions" : "Observed force errors — independent partitions",
+  ["Partition", "Measured components", "Scaled RMS", "Scaled peak"]);
+  for (const [name, quality] of [["Fit", c.fit], ["Held out", c.check]]) {
+    cells(errors, [quality ? name : `${name}: not supplied`, metric(quality?.components), metric(quality?.rms_scaled), metric(quality?.peak_scaled)]);
+  }
+  if (friction) {
+    const fitted = table(parent, "Effective isotropic kinetic coefficient", ["Target", "Coefficient", "Evidence", "Source"]);
+    cells(fitted, [response, metric(c.coefficient.value), c.coefficient.evidence, c.coefficient.source]);
+    const range = table(parent, "Observed FIT load and speed ranges", ["Observation", "Minimum", "Maximum"]);
+    cells(range, ["Normal force (N)", ...c.fit_normal_n_range.map(metric)]);
+    cells(range, ["Sliding speed (m/s)", ...c.fit_speed_m_s_range.map(metric)]);
+    if (pair) {
+      const admission = table(parent, "Exact contact pair and separate material readiness",
+        ["Scope", "Source identity", "Coefficients admitted", "Reason"]);
+      cells(admission, ["Contact interface", r.binding.interface.materials.join(" / "), r.readiness.ready ? "Yes" : "No",
+        r.readiness.refusal?.message || "See the retained interface evidence"]);
+      for (const sheet of r.readiness.sheets || []) cells(admission,
+        ["Material mechanics", sheet.material_sha256, sheet.ready ? "Yes" : "No", sheet.refusal?.message || "Available"]);
+    }
+    const scope = document.createElement("p");
+    scope.textContent = "These ranges describe the fitting observations; they do not enforce a runtime load or speed domain. " +
+      "The fitted law describes constant isotropic kinetic friction, with no static-friction or condition-dependent response inferred. " +
+      (pair ? "The pair has its own estimate admission. Its readiness does not establish either sheet's mechanical completeness or a successful garment simulation. " :
+        c.input.target.kind === "body" ? "The declared counterface remains in the receipt; a tested surrogate does not establish human-skin behavior. " : "") +
+      "Review the original acquisition sources and corrected forces before using the result.";
+    parent.append(scope);
+    detail(parent, "Exact contact binding, counterfaces and independent readiness", { binding: r.binding, readiness: r.readiness });
+  } else {
+    const directions = bending ? ["Warp / wale (κuu)", "Weft / course (κvv)", "Twist (2 κuv)"] :
+      ["Warp / wale (E11)", "Weft / course (E22)", "Engineering shear (2 E12)"];
+    const matrix = table(parent, bending ? "Directional bending tensor (N·m)" : "Linear membrane stiffness tensor (N/m)",
+      ["Response direction", ...directions]);
+    for (const [i, row] of (bending ? c.bending_nm : c.stiffness_n_m).entries()) cells(matrix, [directions[i], ...row.map(metric)]);
+    if (bending) {
+      const preferred = table(parent, c.input.fit_preferred_curvature ? "Identified preferred curvature" : "Preferred curvature used by the fit",
+        ["Material direction", "Preferred curvature (1/m)"]);
+      for (const [i, direction] of directions.entries()) cells(preferred, [direction, metric(c.preferred_curvature_m_inv[i])]);
+    } else {
+      const domain = table(parent, "Strain domain from fitting observations", ["Material direction", "Minimum Green strain", "Maximum Green strain"]);
+      for (const [i, direction] of directions.entries()) cells(domain, [direction, ...c.fitted_strain_range[i].map(metric)]);
+    }
+    const excitation = document.createElement("p");
+    excitation.textContent = `FIT excitation pivot: ${metric(c.excitation_pivot)}. ` + (bending ?
+      "The fitted panel response retains independent seam bending and all unrelated material properties; missing properties remain unavailable." :
+      "The fitted strain domain comes from FIT observations. CHECK observations do not widen it.");
+    parent.append(excitation);
+  }
+  const note = document.createElement("p");
+  note.textContent = "Scaled residuals use the source request's declared measurement scales, not confidence intervals. " +
+    "An absent held-out partition is not a passed check. Fitted coefficients remain estimates; source identity does not authenticate the observations or establish measured garment fit.";
+  parent.append(note);
+  detail(parent, "Complete source observations, fitted response and independent residuals", c);
+  return { response, material_id: r.selection?.id, allow_estimates: pair ? r.binding.interface.allow_estimates : r.selection?.allow_estimates,
+    readiness: r.readiness, mechanical_coefficients_available: pair ? undefined : r.material?.capabilities.mechanical_coefficients?.ready === true,
+    mechanics_refusal: pair ? undefined : r.material?.capabilities.mechanical_coefficients?.refusal,
+    missing_mechanics: c.missing_mechanics, input_sha256: c.input_sha256,
+    error_budgets: { max_rms_scaled: c.input.max_rms_scaled, max_peak_scaled: c.input.max_peak_scaled },
+    next: pair ? "Assign the exact source materials to the garment, then stage this calibrated contact pair and bind. The inspected material selection is unchanged." :
+      "Review capabilities, then assign the identified material selection and bind the pattern." };
+}
 function calibrationResult(parent, r) {
   if (r.calibration?.schema === "ftx-strip-calibration-report/1") return stripCalibrationResult(parent, r);
   if (r.calibration?.schema === "ftx-membrane-plasticity-calibration-report/1") return permanentStretchResult(parent, r);
+  if (["ftx-swatch-calibration-report/1", "ftx-bending-calibration-report/1", "ftx-friction-calibration-report/1"].includes(r.calibration?.schema)) {
+    return measuredMechanicsResult(parent, r);
+  }
   if (r.comparison) {
     const comparison = r.comparison, decision = comparison.fit_decision;
     const models = table(parent, "Recovery model comparison — FIT choice before held-out checks",
@@ -1476,8 +1568,19 @@ function show(op, msg) {
       pieces: r.pieces, material_resolution: { without_self_contact: r.drape_materials_without_self_contact, with_self_contact: r.drape_materials_with_self_contact } });
     $("boundSummary").replaceChildren(pre);
     for (const f of msg.files) link(op, $("bindFiles"), f);
+  } else if (op === "stageInterface") {
+    ++interfaceRead; interfaceChange = r.interfaces_json; interfaceReady = true;
+    $("interfacesFile").value = "";
+    $("replaceCalibratedInterface").checked = false;
+    edits(); clear(["bind", ...boundOperations]);
+    $("interfacesSummary").textContent = `Staged calibrated pair in ${JSON.parse(r.interfaces_json).length} retained contact pair(s). Freeze selections & bind to apply.`;
   } else {
-    if (op === "pressure" || op === "calibrate" || op === "stripFit") {
+    const pairCalibration = op === "calibrate" && r.binding?.kind === "interface";
+    if (pairCalibration) {
+      calibratedPair = r.interface_json;
+      $("calibratedInterfaceSummary").textContent = `Calibrated pair: ${r.binding.interface.materials.join(" / ")}. Stage this pair after assigning those exact materials.`;
+    }
+    if (op === "pressure" || (op === "calibrate" && !pairCalibration) || op === "stripFit") {
       ++selectionRead; preparedBy = op;
       if (typeof r.selection_json === "string" && (op !== "stripFit" || r.calibration?.accepted === true)) {
         $("selection").value = r.selection_json;
@@ -1603,7 +1706,9 @@ async function execute(op) {
   if (op === "bind") clear(["bind", ...boundOperations]);
   else if (op === "fold") clear(["fold", "heat", "vaporSurface", "coverage"]);
   else if (sections.has(op)) clear([op]);
-  if (selectionOperations.includes(op)) { ++selectionRead; preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren(); }
+  if (selectionOperations.includes(op) && !(op === "calibrate" && $("calibrationMode").value === "friction_pair")) {
+    ++selectionRead; preparedBy = null; inspected = null; $("detail").textContent = ""; $("capabilities").replaceChildren();
+  }
   const id = ++sequence; pending = { id, op }; $("error").hidden = true;
   $("status").textContent = `Running ${op}…`; controls();
   try {
@@ -1613,6 +1718,11 @@ async function execute(op) {
     else if (op === "bind") {
       if (!interfaceReady) throw Error("Load a valid replacement interface list or choose Keep original interfaces.");
       msg.pattern = sourceText; msg.changes = changes();
+    }
+    else if (op === "stageInterface") {
+      if (!sourceText || !interfaceReady || !calibratedPair) throw Error("Load the garment, retain valid interface edits and identify a current contact pair first.");
+      msg.pattern = sourceText; msg.changes = changes();
+      msg.interfaceJson = calibratedPair; msg.replaceExisting = $("replaceCalibratedInterface").checked;
     }
     else if (op === "pressure") {
       msg.compressionLayer = $("compressionLayer").value;

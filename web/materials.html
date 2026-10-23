@@ -68,10 +68,18 @@ require their own selection consent. This fixed-resistance, isothermal calculati
 sweat availability, actual wearer cooling, condensation or garment comfort; it does not add an
 evaporation term to the separate dry-heat simulation.</p>
 <h3>Identify behavior from swatch measurements</h3>
-<label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch, shear and optional area response</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option><option value="clamped_strip">Clamped strip forces and transverse widths</option></select></label>
+<label>Response to identify <select id="calibrationMode"><option value="nonlinear">Nonlinear stretch, shear and optional area response</option><option value="linear">Linear orthotropic stretch and shear</option><option value="bending">Directional bending and preferred curvature</option><option value="friction_pair">Kinetic friction between two materials</option><option value="friction_self">Same-material kinetic friction</option><option value="friction_body">Kinetic friction against a declared body counterface</option><option value="relaxation">Relaxation, creep and recovery</option><option value="membrane_plasticity">Permanent stretch and hardening</option><option value="clamped_strip">Clamped strip forces and transverse widths</option></select></label>
 <label>Source-bearing swatch or complete history JSON <input id="calibrationRequest" type="file" accept=".json,application/json"></label>
-<label><input id="calibrationEstimates" type="checkbox"> Admit the fitted estimates to this material selection</label>
+<label><input id="calibrationEstimates" type="checkbox"> Admit the fitted material or interface estimates</label>
 <button id="calibrate" data-command="calibrate" disabled>Identify material behavior</button>
+<p class="note">Linear swatches use <code>ftx-swatch-calibration/1</code> with observed deformation gradients and nominal force per reference width.
+Directional bending uses <code>ftx-bending-calibration/1</code> with measured curvature and moment resultants; optional
+<code>fit_preferred_curvature</code> identifies the unloaded curvature when the observations support it.
+Both retain independent FIT and CHECK errors and publish the same source-locked material used by the garment solver.</p>
+<p class="note">Friction uses <code>ftx-friction-calibration/1</code> with corrected steady sliding forces, positive normal loads and nonzero slip velocities.
+Choose the matching <code>target.kind</code>: <code>pair</code>, <code>self_contact</code> or <code>body</code>.
+Body and self-contact fits prepare a material selection. A pair fit retains both original material snapshots and prepares separate interface evidence
+for the contact-pair controls in section 2. A declared body surrogate does not become measured human-skin behavior.</p>
 <p class="note">Clamped strips use <code>ftx-strip-calibration/1</code> to solve the finite specimen and compare total grip forces and optional mid-gauge chord widths.
 Declare the warp axis explicitly and qualify the width measurement in the acquisition method. The fitter checks independent held-out acquisitions,
 mesh refinement and replay inside the fitted strain domain. An optional <code>response_family</code> supplies
@@ -147,6 +155,11 @@ Each pair must identify the exact selected material snapshots and retain its sou
 An empty list <code>[]</code> explicitly removes all pairs; omitting a replacement preserves the original evidence.</p>
 <button id="clearInterfaces" type="button" disabled>Keep original interfaces</button>
 <p id="interfacesSummary">Keep the original pattern's interface evidence.</p>
+<p id="calibratedInterfaceSummary">No current calibrated contact pair.</p>
+<label><input id="replaceCalibratedInterface" type="checkbox"> Replace existing evidence for this exact material pair</label>
+<button id="stageInterface" data-command="stageInterface" disabled>Stage this calibrated contact pair</button>
+<p class="note">Staging preserves the other contact pairs and checks the final assigned material snapshots.
+It does not replace the inspected material selection. Freeze selections &amp; bind to use the staged pair with the current garment.</p>
 <button id="bind" data-command="bind" disabled>Freeze selections &amp; bind</button>
 <div id="boundSummary"></div><div id="bindFiles" class="links"></div>
 </section></div>
@@ -325,6 +338,11 @@ per selected body triangle. The same policy works in standalone history replay. 
 through pose and coverage changes; modeled evaporation consumes only available liquid. Results show liquid supply,
 depletion, unmet demand and latent energy supplied by the prescribed body reservoir. These inputs do not infer
 sweating, bare-body transfer, wet textile properties or latent feedback into textile temperatures.</p>
+<p class="note">For a nominal comparison of finite body water, require <code>motion_wet_film</code> or select objectives
+<code>motion_wet_film_evaporated_mass_kg</code>, <code>motion_wet_film_remaining_liquid_mass_kg</code>,
+<code>motion_wet_film_unmet_demand_mass_kg</code>, <code>motion_wet_film_supplied_mass_kg</code> or
+<code>motion_wet_film_body_reservoir_latent_energy_j</code>. These require a complete covered history with the exact film policy;
+reported-bound comparison is unavailable for these liquid balances. Potential vapor demand remains a separate result.</p>
 <p class="note">Optional <code>motion</code> in the scenario (<code>ftx-drape-motion/1</code>) continues that same sewn cloth through
 declared time/arm-angle keyframes, preserving velocities and material history. It uses the selected shape without refitting.
 Each interval follows checked linear body-vertex chords, not a certified anatomical joint path. The report retains every accepted

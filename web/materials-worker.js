@@ -192,13 +192,34 @@ self.onmessage = async ({ data: msg }) => {
       }
       case "calibrate": {
         const identify = ({ nonlinear: ftx.material_calibrate_nonlinear,
+          linear: ftx.material_calibrate_linear,
+          bending: ftx.material_calibrate_bending,
+          friction_pair: ftx.material_calibrate_friction,
+          friction_self: ftx.material_calibrate_friction,
+          friction_body: ftx.material_calibrate_friction,
           relaxation: ftx.material_calibrate_relaxation,
           membrane_plasticity: ftx.material_calibrate_membrane_plasticity,
           clamped_strip: ftx.material_calibrate_strip })[msg.calibrationMode];
-        if (!["nonlinear", "relaxation", "membrane_plasticity", "clamped_strip"].includes(msg.calibrationMode)) throw Error("Choose the response to identify.");
+        if (!["linear", "bending", "friction_pair", "friction_self", "friction_body", "nonlinear", "relaxation", "membrane_plasticity", "clamped_strip"].includes(msg.calibrationMode)) throw Error("Choose the response to identify.");
         if (typeof identify !== "function") throw Error("Rebuild web/pkg: missing material calibration engine.");
         if (typeof msg.allowEstimates !== "boolean") throw Error("Declare admission of fitted estimates explicitly.");
+        const frictionTarget = { friction_pair: "pair", friction_self: "self_contact", friction_body: "body" }[msg.calibrationMode];
+        if (frictionTarget && json(msg.calibrationRequest).target?.kind !== frictionTarget) {
+          throw Error(`The selected friction response requires target.kind ${frictionTarget}.`);
+        }
         raw = identify(msg.calibrationRequest, msg.allowEstimates); result = json(raw);
+        if (frictionTarget === "pair") {
+          if (result.binding?.kind !== "interface" || typeof result.binding_json !== "string" ||
+              typeof result.interface_json !== "string" || result.selection !== null ||
+              result.selection_json !== null || result.material !== null ||
+              result.calibration?.schema !== "ftx-friction-calibration-report/1" ||
+              result.readiness?.scope !== "interface_only" || !Array.isArray(result.readiness.sheets)) {
+            throw Error("Rebuild web/pkg: pair friction needs exact interface evidence and cannot replace a material selection.");
+          }
+          files = [file("material-calibration.json", raw), file("calibrated-interface.json", result.interface_json),
+            file("friction-binding.json", result.binding_json), file("calibration-input.json", msg.calibrationRequest)];
+          break;
+        }
         if ((result.calibration?.schema === "ftx-membrane-plasticity-calibration-report/1" && result.calibration.status !== "ACCEPTED") ||
             (result.calibration?.schema === "ftx-strip-calibration-report/1" && !result.calibration.accepted)) {
           if (result.selection !== null || result.selection_json !== null || result.material !== null) {
@@ -215,8 +236,20 @@ self.onmessage = async ({ data: msg }) => {
         if (typeof result.selection_json !== "string" || !result.material?.capabilities) {
           throw Error("Rebuild web/pkg: missing calibrated selection and capability bridge.");
         }
+        if (frictionTarget && (result.binding?.kind !== "material" || typeof result.binding_json !== "string" || result.interface_json !== null)) {
+          throw Error("Rebuild web/pkg: same-material and body friction need the material binding bridge.");
+        }
         files = [file("material-calibration.json", raw), file("calibrated-selection.json", result.selection_json),
+          ...(frictionTarget ? [file("friction-binding.json", result.binding_json)] : []),
           file("calibration-input.json", msg.calibrationRequest)];
+        break;
+      }
+      case "stageInterface": {
+        if (typeof ftx.material_stage_interface !== "function") throw Error("Rebuild web/pkg: missing source-bound interface staging.");
+        if (typeof msg.replaceExisting !== "boolean") throw Error("Declare replacement of an existing contact pair explicitly.");
+        raw = ftx.material_stage_interface(msg.pattern, msg.changes, msg.interfaceJson, msg.replaceExisting); result = json(raw);
+        if (typeof result.interfaces_json !== "string" || typeof result.changes_json !== "string" ||
+            !Array.isArray(json(result.interfaces_json))) throw Error("Rebuild web/pkg: incomplete staged interface result.");
         break;
       }
       case "stripAcquisition":

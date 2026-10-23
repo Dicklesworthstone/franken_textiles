@@ -3030,6 +3030,24 @@ comparability. This advances decisions about the conditional body-film model wit
 physiological sweating, textile-temperature feedback or empirical wearer cooling. See
 [material-scenario-studies.md](docs/material-scenario-studies.md).
 
+---
+
+### 25.66 Use measured membrane, bending and contact evidence in every client
+
+**Delivered software (`ftx-mw1`, part of `ftx-tm2`).** The primary native CLI and portable/browser
+workbench expose the existing canonical linear-swatch, directional-bending and kinetic-friction
+calibrators. Body and same-material friction produce ordinary frozen selections. Two-material
+friction preserves both sheet identities and produces separate exact interface evidence, with
+interface readiness distinct from sheet or whole-garment readiness. Input evidence admission and
+permission to consume fitted estimates remain independent.
+
+The workbench displays coefficients, source-qualified domains, FIT/CHECK residuals and missing
+capabilities. Pair fitting preserves the inspected selection; staging checks the final assigned
+snapshots, preserves unrelated pairs and requires explicit replacement of existing pair evidence.
+Original requests and exact selections, bindings and interfaces remain downloadable for replay.
+These connected workflows do not supply missing observations or establish empirical garment fit.
+See [browser-material-workbench.md](docs/browser-material-workbench.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.
