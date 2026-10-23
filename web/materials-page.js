@@ -768,23 +768,56 @@ function designComparison(op, parent, study) {
     "The baseline retains the source geometry. Cutting, sewing and requested simulations use each candidate's actual pattern. " +
     "Review alteration validation and consumer refusals before interpreting the computed comparison.";
   parent.append(note);
+  const grid = study.design_search;
+  if (grid) {
+    const search = table(parent, "Declared alteration search",
+      ["Generated designs", "Declared grid points", "Omitted designs", "Enumeration"]);
+    cells(search, [metric(grid.generated_designs), metric(grid.total_grid_points), metric(grid.omitted_designs),
+      grid.complete_grid_enumeration === true ? "Complete declared grid" :
+        grid.budget_exhausted === true ? "Stopped at design budget" : "Incomplete"]);
+    const scope = document.createElement("p");
+    scope.textContent = grid.complete_grid_enumeration === true ?
+      "Every declared grid point was generated. Candidate validation and consumer results still govern eligibility; this is not a continuous or global optimum." :
+      "The frontier is conditional on visited designs. Omitted grid points remain unknown and may contain better feasible designs.";
+    parent.append(scope);
+    detail(parent, "Exact alteration grid, linked sites and search allowance (display only)", grid);
+  }
   const t = table(parent, "Pattern designs and material choices",
     ["Alternative", "Pattern design", "Material choice", "Alteration operations", "Geometry"]);
+  const fitTable = study.alternatives.some(row => row.design?.fit || row.design?.variables_mm) ?
+    table(parent, "Design variables and declared fit targets",
+      ["Alternative", "Variables (mm)", "Body measurement basis", "Fit admission"]) : null;
   for (const [i, row] of study.alternatives.entries()) {
-    const design = row.design;
+    const design = row.design, fit = available(design?.fit);
     cells(t, [row.key, design?.key ?? "Unknown", design?.material_key ?? "Unknown",
       Array.isArray(design?.operations) ? String(design.operations.length) : "Unknown",
       design?.geometry_changed === true ? "Changed" : design?.geometry_changed === false ? "Unchanged" : "Unavailable"]);
     if (!design) continue;
+    if (fitTable) cells(fitTable, [row.key,
+      design.variables_mm ? Object.entries(design.variables_mm).map(([key, value]) => key + ": " + metric(value)).join("; ") :
+        design.key === "baseline" ? "Original baseline" : "Not parameterized",
+      fit?.body_identity?.provenance || (design.fit ? "Unavailable" : "Not requested"),
+      !design.fit ? "Not requested" : !fit ? state(design.fit) :
+        fit.passed === true ? "Passed declared targets" : "Targets not met"]);
+    if (fit) {
+      const points = table(parent, row.key + ": canonical flat fit measurements",
+        ["Point", "Body (mm)", "Finished (mm)", "Ease (mm)", "Target min / nominal / max (mm)", "Status", "Residual (mm)"]);
+      for (const point of Array.isArray(fit.validation?.points) ? fit.validation.points : []) {
+        cells(points, [point.label ?? point.id ?? "Unknown", metric(point.body_mm), metric(point.finished_mm),
+          metric(point.ease_mm), Array.isArray(point.target_mm) ? point.target_mm.map(value => metric(value)).join(" / ") : "Unknown",
+          point.status ?? "Unknown", metric(point.residual_mm)]);
+      }
+      detail(parent, row.key + ": selected body identity and complete flat fit validation (display only)", fit);
+    }
     if (typeof design.altered_pattern_json === "string") {
       const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
       link(op, actions, { name: `alternative-${i + 1}-design-pattern.json`,
         text: design.altered_pattern_json, mime: "application/json" });
     }
     detail(parent, `${row.key}: exact alteration inputs, geometry identities and validation (display only)`, {
-      key: design.key, material_key: design.material_key, operations: design.operations,
+      key: design.key, material_key: design.material_key, operations: design.operations, variables_mm: design.variables_mm,
       source_pattern_sha256: design.source_pattern_sha256, altered_pattern_sha256: design.altered_pattern_sha256,
-      geometry_changed: design.geometry_changed, validation: design.validation,
+      geometry_changed: design.geometry_changed, validation: design.validation, fit: design.fit,
       refusal: row.binding?.refusal });
   }
 }

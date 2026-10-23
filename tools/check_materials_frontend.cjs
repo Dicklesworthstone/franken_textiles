@@ -4568,3 +4568,55 @@ test('vapor range comparisons and motion samples display Rust intervals without 
   assert.match(visibleText(s),/A \/ B: Reported intervals overlap/);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true);
 });
+
+test('design search retains incomplete domains and failed fit status even when residual rounds to zero', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const report = designReport();
+  report.design_search = {schema:'ftx-design-grid-search/1',generated_designs:2,total_grid_points:8,
+    omitted_designs:6,complete_grid_enumeration:false,budget_exhausted:true,global_optimum_claim:false};
+  const [baseline, wider, unavailable] = report.alternatives;
+  baseline.design.fit = outcome({passed:false,body_identity:{provenance:'MODEL_FIT',shape_sha256:'fixed-shape'},
+    fit_spec:{source:'<retained targets>'},validation:{status:'NOT_CONVERGED',points:[
+      {id:'chest',label:'<chest & ease>',body_mm:100,finished_mm:102.96,ease_mm:3,
+        target_mm:[3,5,8],status:'LOW',residual_mm:0}]}});
+  wider.design.variables_mm = {'<ease>':4};
+  wider.design.fit = outcome({passed:true,body_identity:{provenance:'MODEL_FIT',shape_sha256:'fixed-shape'},
+    validation:{status:'CONVERGED',points:[{id:'chest',body_mm:100,finished_mm:104,ease_mm:4,
+      target_mm:[3,5,8],status:'IN_BAND',residual_mm:0}]}});
+  unavailable.design.fit = refused('Selected body measurement is unavailable');
+  await p.e.study.onclick(); p.emit(report);
+  const s = section(p,'Fixed-pattern manufacturing alternatives');
+  assert.match(visibleText(s),/Stopped at design budget/);
+  assert.match(visibleText(s),/frontier is conditional on visited designs/);
+  const summary = descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Declared alteration search');
+  assert.deepEqual(plain(summary.children[2].children.map(n=>n.textContent)),['2','8','6','Stopped at design budget']);
+  const fit = descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Design variables and declared fit targets');
+  assert.equal(fit.children[2].children[3].textContent,'Targets not met');
+  assert.equal(fit.children[3].children[1].textContent,'<ease>: 4');
+  assert.equal(fit.children[3].children[3].textContent,'Passed declared targets');
+  assert.match(fit.children[4].children[3].textContent,/Selected body measurement is unavailable/);
+  const points = descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===baseline.key+': canonical flat fit measurements');
+  assert.equal(points.children[2].children[5].textContent,'LOW');
+  assert.equal(points.children[2].children[6].textContent,'0');
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('complete design grids retain scope and unavailable points without turning enumeration into fit', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  const report = designReport();
+  report.design_search = {generated_designs:2,total_grid_points:2,omitted_designs:0,
+    complete_grid_enumeration:true,budget_exhausted:false,global_optimum_claim:false};
+  report.alternatives[0].design.fit = outcome({passed:false,body_identity:{provenance:'MODEL_FIT'},
+    validation:{status:'BLOCKED',points:[{id:'missing-hand',finished_mm:null,body_mm:null,ease_mm:null,
+      target_mm:[0,5,10],residual_mm:null,status:'UNMEASURABLE'}]}});
+  await p.e.study.onclick(); p.emit(report);
+  const s = section(p,'Fixed-pattern manufacturing alternatives');
+  assert.match(visibleText(s),/Complete declared grid/);
+  assert.match(visibleText(s),/not a continuous or global optimum/);
+  assert.match(visibleText(s),/UNMEASURABLE/);
+  assert.match(visibleText(s),/Targets not met/);
+  const points = descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===report.alternatives[0].key+': canonical flat fit measurements');
+  assert.equal(points.children[2].children[1].textContent,'Unknown');
+  assert.equal(points.children[2].children[6].textContent,'Unknown');
+});
