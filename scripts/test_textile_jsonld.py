@@ -173,6 +173,91 @@ class JsonLdTests(unittest.TestCase):
             p = product(); p["offers"]["availability"] = stock
             with self.subTest(stock=stock), self.assertRaises(ValueError): self.extract(p)
 
+    def test_unit_qualified_offer_inventory_reaches_the_existing_quote_capacity(self):
+        for code, unit, label in (("YRD", "linear_yard", "yards"),
+                                  ("MTR", "linear_meter", "metres"),
+                                  ("MTK", "square_meter", "m²"),
+                                  ("KGM", "kilogram", "kg")):
+            e, p = manifest_entry(), product()
+            e.update(unit=unit, material_sha256="ab" * 32,
+                     required_description_text=[f"Sold per half {label}."],
+                     basis_note="Synthetic reviewed sale-unit example; not a real offer")
+            p["description"] = e["required_description_text"][0]
+            p["offers"]["inventoryLevel"] = {
+                "@type": "QuantitativeValue", "value": "1.25", "unitCode": code, "unitText": label}
+            with self.subTest(unit=unit):
+                quote, receipt = self.extract(p, e)
+                self.assertEqual(quote["available_quantity"], 1.25)
+                self.assertEqual((quote["quantity"], quote["minimum_quantity"], quote["order_increment"]),
+                                 (0.5, 1.0, 0.5))
+                self.assertEqual(quote["material_sha256"], e["material_sha256"])
+                self.assertEqual(quote["source_sha256"], hashlib.sha256(html(p)).hexdigest())
+                self.assertEqual(receipt["offer_ref"], "#retail")
+
+    def test_inventory_zero_unknown_and_unavailable_are_separate_observations(self):
+        p = product()
+        self.assertNotIn("available_quantity", self.extract(p)[0])
+        p["offers"]["inventoryLevel"] = {"@type": "QuantitativeValue", "value": 0, "unitCode": "YRD"}
+        quote = self.extract(p)[0]
+        self.assertEqual(quote["available_quantity"], 0.0)
+        self.assertTrue(quote["available"])  # Preserve the source flag; zero capacity cannot fill an order.
+        p["offers"]["availability"] = "https://schema.org/OutOfStock"
+        p["offers"]["inventoryLevel"]["value"] = 10
+        quote = self.extract(p)[0]
+        self.assertEqual(quote["available_quantity"], 10.0)
+        self.assertFalse(quote["available"])  # A positive count never revives an unavailable offer.
+        del p["offers"]["inventoryLevel"]
+        quote = self.extract(p)[0]
+        self.assertNotIn("available_quantity", quote)
+        self.assertFalse(quote["available"])
+
+    def test_inventory_uses_only_the_selected_offer_and_local_value_reference(self):
+        p, e = product(), manifest_entry()
+        e["offer_ref"] = "#retail"
+        level = {"@id": "#stock", "@type": "QuantitativeValue", "value": 1.25, "unitCode": "YRD"}
+        selected = p["offers"]
+        selected["inventoryLevel"] = {"@id": "#stock"}
+        p["offers"] = [dict(selected, **{"@id": "#other", "inventoryLevel": {
+            "@type": "QuantitativeValue", "value": 999, "unitCode": "C62"}}), selected]
+        p["inventoryLevel"] = {"@type": "QuantitativeValue", "value": 500, "unitCode": "YRD"}
+        document = {"@context": "https://schema.org", "@graph": [p, level]}
+        quote = self.extract(document, e)[0]
+        self.assertEqual(quote["available_quantity"], 1.25)
+        del selected["inventoryLevel"]
+        self.assertNotIn("available_quantity", self.extract(document, e)[0])
+        selected["inventoryLevel"] = {"@id": "https://other.invalid/stock"}
+        with self.assertRaisesRegex(ValueError, "missing embedded"):
+            self.extract(document, e)
+
+    def test_inventory_ranges_counts_missing_units_and_qualifiers_refuse(self):
+        point = {"@type": "QuantitativeValue", "value": 1.25, "unitCode": "YRD"}
+        bad = [None, 1.25, "1.25 yards", [point], {},
+               {"@type": "QuantitativeValue", "value": 1.25},
+               {"@type": "QuantitativeValue", "value": 1.25, "unitText": "yards"}]
+        for change in ({"minValue": 1}, {"maxValue": 2}, {"valueReference": "per roll"},
+                       {"additionalProperty": {"name": "packs"}}, {"@type": "PropertyValue"},
+                       {"@type": ["QuantitativeValue", "PropertyValue"]}, {"unitCode": "C62"},
+                       {"unitCode": "MTR"}, {"unitCode": "MTK"}, {"unitCode": None},
+                       {"unitCode": ["YRD"]}, {"unitText": "half yards"}, {"unitText": "rolls"},
+                       {"unitText": "metres"}, {"unitText": None}, {"value": True}, {"value": -1},
+                       {"value": None}, {"value": [1.25]}, {"value": {"@value": 1.25}},
+                       {"value": "1,250"}, {"value": "about 1.25"}, {"value": "NaN"},
+                       {"value": "1e309"}, {"value": float("inf")}):
+            bad.append(dict(point, **change))
+        for level in bad:
+            p = product(); p["offers"]["inventoryLevel"] = level
+            with self.subTest(level=level), self.assertRaises(ValueError):
+                self.extract(p)
+
+    def test_inventory_cannot_override_expiry_or_wrong_product_identity(self):
+        for change in ({"priceValidUntil": "2026-10-12"}, {"validFrom": "2026-10-14"},
+                       {"sku": "ANOTHER-LOT"}, {"availability": "https://schema.org/BackOrder"}):
+            p = product()
+            p["offers"].update(inventoryLevel={"@type": "QuantitativeValue", "value": 500,
+                                              "unitCode": "YRD"}, **change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.extract(p)
+
     def test_sale_basis_and_conditional_markets_are_not_silently_dropped(self):
         for key in ("eligibleCustomerType", "eligibleQuantity", "validForMemberTier", "addOn", "includesObject"):
             p = product(); p["offers"][key] = {}

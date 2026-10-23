@@ -193,6 +193,45 @@ class SpecificationTests(unittest.TestCase):
         quantity = changed["observations"][0]["facts"]["selected"]["product"]["additionalProperty"]
         self.assertEqual((quantity["value"], quantity["unitText"]), (54, "in"))
 
+    def test_jsonld_inventory_refresh_preserves_original_facts_and_material_revision(self):
+        e, source = jsonld_fixture()
+        source["@graph"][1]["inventoryLevel"] = {"@id": "stock"}
+        source["@graph"].append({"@id": "stock", "@type": "QuantitativeValue",
+                                  "value": 12.5, "unitCode": "YRD"})
+        old, evidence = snapshot(e, raw(source))
+        retained = s.encoded(old)
+        # The snapshot representation stays compatible with pre-capacity captures: original stock
+        # facts remain present and replay-checked, even though they are not textile specifications.
+        self.assertEqual(old["observations"][0]["facts"]["selected"]["offer"]["inventoryLevel"]["value"], 12.5)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, data in evidence.items():
+                (root / name).write_bytes(data)
+            self.assertEqual(s.replay(old, root), old)
+            edited = copy.deepcopy(old)
+            edited["observations"][0]["facts"]["selected"]["offer"]["inventoryLevel"]["value"] = 100
+            with self.assertRaisesRegex(ValueError, "differs"):
+                s.replay(edited, root)
+        source["@graph"][3]["value"] = 0
+        source["@graph"][1].update(price="16.00", availability="https://schema.org/OutOfStock")
+        depleted, _ = snapshot(e, raw(source), now=NOW + dt.timedelta(hours=1))
+        review = s.compare(old, depleted)
+        self.assertTrue(review["quote_publication_allowed"])
+        self.assertTrue(review["offers"][0]["same_material_revision"])
+        self.assertEqual(review["offers"][0]["status"], "unchanged")
+        self.assertEqual(review["offers"][0]["changes"], [])
+        self.assertNotEqual(review["offers"][0]["previous"]["source_sha256"],
+                            review["offers"][0]["current"]["source_sha256"])
+        self.assertEqual(s.encoded(old), retained)
+        del source["@graph"][1]["inventoryLevel"]
+        unknown, _ = snapshot(e, raw(source), now=NOW + dt.timedelta(hours=2))
+        self.assertTrue(s.compare(depleted, unknown)["quote_publication_allowed"])
+        source["@graph"][2]["value"] = 135
+        changed, _ = snapshot(e, raw(source), now=NOW + dt.timedelta(hours=3))
+        self.assertFalse(s.compare(unknown, changed)["quote_publication_allowed"])
+        self.assertIn("/selected/product/additionalProperty/value",
+                      [x["path"] for x in s.compare(unknown, changed)["offers"][0]["changes"]])
+
     def test_missing_null_type_and_json_pointer_paths_are_distinct(self):
         p = product()
         p["finish/a~b"] = None
@@ -346,6 +385,36 @@ class SpecificationCliTests(unittest.TestCase):
             self.assertEqual(review["offers"][0]["status"], "unchanged")
             s.replay(r.load((root / "new-spec.json").read_bytes()), root / "evidence")
             self.assertEqual((root / "old-quotes.json").read_bytes(), previous)
+
+    def test_jsonld_depletion_publishes_zero_capacity_and_retains_the_existing_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            e, source = jsonld_fixture()
+            source["@graph"][1]["inventoryLevel"] = {
+                "@type": "QuantitativeValue", "value": 1.25, "unitCode": "YRD"}
+            (root / "manifest.json").write_bytes(raw({"schema": "ftx-textile-refresh/1", "offers": [e]}))
+            self.assertEqual(self.run_cli(root, raw(source), "old", intraday=True), 0)
+            previous = (root / "old-quotes.json").read_bytes()
+            source["@graph"][1]["inventoryLevel"]["value"] = 0
+            source["@graph"][1].update(price="16.00", availability="https://schema.org/OutOfStock")
+            self.assertEqual(self.run_cli(root, raw(source), "new", comparison=True, intraday=True), 0)
+            book = r.load((root / "new-quotes.json").read_bytes())
+            self.assertEqual(len(book["quotes"]), 1)
+            quote = book["quotes"][0]
+            self.assertEqual(quote["available_quantity"], 0.0)
+            self.assertFalse(quote["available"])
+            self.assertEqual((quote["quantity"], quote["unit"]), (0.5, "linear_yard"))
+            self.assertEqual(quote["material_sha256"], e["material_sha256"])
+            self.assertNotEqual(quote["source_sha256"], r.load(previous)["quotes"][0]["source_sha256"])
+            self.assertEqual((root / "old-quotes.json").read_bytes(), previous)
+            self.assertTrue(r.load((root / "new-review.json").read_bytes())["quote_publication_allowed"])
+            s.replay(r.load((root / "old-spec.json").read_bytes()), root / "evidence")
+            s.replay(r.load((root / "new-spec.json").read_bytes()), root / "evidence")
+            source["@graph"][0]["description"] += " Newly coated textile."
+            with self.assertRaises(SystemExit) as result:
+                self.run_cli(root, raw(source), "changed", comparison=True, intraday=True)
+            self.assertEqual(result.exception.code, 2)
+            self.assertFalse((root / "changed-quotes.json").exists())
 
 
 if __name__ == "__main__":

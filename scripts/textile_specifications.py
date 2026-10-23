@@ -250,6 +250,18 @@ def _changes(before, after, path="", depth=0):
              "before": before, "after": after}]
 
 
+def specification_facts(record):
+    facts = record["facts"]
+    if facts["adapter"] != "jsonld_v1":
+        return facts
+    # Keep original inventory declarations in captured facts: existing immutable baselines must
+    # still replay exactly. The adapter has validated this selected Offer's capacity and unit;
+    # changing or losing its stock observation does not establish a different textile revision.
+    offer = dict(facts["selected"]["offer"])
+    offer.pop("inventoryLevel", None)
+    return dict(facts, selected=dict(facts["selected"], offer=offer))
+
+
 def compare(previous, current):
     old = {r["offer_id"]: r for r in previous["observations"]}
     new = {r["offer_id"]: r for r in current["observations"]}
@@ -258,7 +270,7 @@ def compare(previous, current):
         a, b = old.get(offer), new.get(offer)
         if a and b and dt.datetime.fromisoformat(b["observed_at"]) < dt.datetime.fromisoformat(a["observed_at"]):
             raise ValueError("new supplier observation predates the retained revision")
-        changes = _changes(a["facts"] if a else {}, b["facts"] if b else {})
+        changes = _changes(specification_facts(a) if a else {}, specification_facts(b) if b else {})
         status = "added" if a is None else "removed" if b is None else "changed" if changes else "unchanged"
         bound = bool(a and b and a["facts"]["binding"].get("material_sha256")
                      and a["facts"]["binding"].get("material_sha256") == b["facts"]["binding"].get("material_sha256"))

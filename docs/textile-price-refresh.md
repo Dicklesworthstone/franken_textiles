@@ -364,6 +364,58 @@ whitespace, markup and entities are not normalized. This optional check suppleme
 for `source_format: "json"`. Matching raw page text does not establish visibility or interpret the
 statement: the reviewed manifest still declares the sale unit and quantity, and no scripts run.
 
+### Explicit finite inventory in the reviewed sale unit
+
+The selected Offer can supply `inventoryLevel` as one plain schema.org `QuantitativeValue`.
+For example, this **synthetic** declaration supplies 1.25 yards of observed capacity:
+
+```json
+"inventoryLevel": {
+  "@type": "QuantitativeValue",
+  "value": 1.25,
+  "unitCode": "YRD",
+  "unitText": "yards"
+}
+```
+
+The adapter writes that value into the existing quote's `available_quantity` only when an explicit
+UN/CEFACT unit code matches the manifest's reviewed sale unit:
+
+| Source `unitCode` | Reviewed quote `unit` |
+| --- | --- |
+| `YRD` | `linear_yard` |
+| `MTR` | `linear_meter` |
+| `MTK` | `square_meter` |
+| `KGM` | `kilogram` |
+
+`unitText` is optional, but when present it must agree with the code without qualifying the unit as
+a package or partial unit. The quote's price denominator stays unchanged: a price per half yard
+(`quantity: 0.5`) and an inventory observation of 1.25 `YRD` mean 1.25 yards available, not 1.25
+half-yard pieces. There are no length, area, mass, package or roll-count conversions.
+
+One locally embedded `@id` reference is supported through the existing bounded graph reader. The
+inventory must belong to the exact selected Offer; stock on the Product or a different Offer is not
+borrowed. Missing inventory leaves `available_quantity` absent (unknown). Present inventory requires
+a finite, nonnegative scalar `value` and the matching code. Ranges, counts, missing units, conflicting
+unit text and additional qualifications refuse the refresh, so they cannot become exact capacity.
+
+Zero is retained as an explicit depletion observation. The independent source `availability` flag
+is retained too: zero cannot fill a positive rounded order, and positive capacity never revives an
+unavailable offer. Existing order minimums, increments, strict `require_observed_quantity`, observation
+age and expiry checks still apply in the canonical purchasing evaluator. No previous snapshot is
+silently substituted after a refusal or depletion.
+
+Original source bytes, selection receipts and captured inventory facts remain retained and replayed.
+Only specification comparison ignores this validated selected-Offer inventory observation: changing,
+adding or removing it, like changing price or availability, does not by itself establish a new textile
+revision. Composition, width, finish, selling basis and material bindings retain their review gates.
+The regressions use synthetic sources; this feature does not assert new live supplier inventory.
+
+[schema.org defines inventoryLevel](https://schema.org/inventoryLevel) as approximate current stock.
+Its [QuantitativeValue contract](https://schema.org/QuantitativeValue) permits both points and ranges;
+this adapter accepts only points with supported [unit codes](https://schema.org/unitCode).
+These are dated source observations, not inventory reservations or guarantees of fulfillment.
+
 ### Source expiry is a purchasing constraint, not just a receipt note
 
 The quote model accepts optional `valid_through: "YYYY-MM-DD"` (last eligible UTC date, inclusive).

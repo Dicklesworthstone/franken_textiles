@@ -755,6 +755,40 @@ def valid_period(node: dict, observed: dt.datetime, *, intraday=False) -> tuple[
     return min(expiries, default=None), utc_instant(expiry_at) if expiry_at is not None else None
 
 
+def jsonld_inventory(entry: dict, offer: dict, resolve) -> float | None:
+    """Read one dated stock observation in the reviewed sale unit, never package/roll counts.
+
+    schema.org/inventoryLevel is an approximate supplier declaration, not reserved inventory.
+    Its QuantitativeValue may describe an interval; only an explicitly unit-bearing point is usable.
+    """
+    if "inventoryLevel" not in offer:
+        return None
+    level = resolve(offer["inventoryLevel"])
+    types = level.get("@type")
+    types = types if isinstance(types, list) else [types]
+    if (len(types) != 1 or not schema_type(level, "QuantitativeValue")
+            or set(level) - {"@context", "@id", "@type", "value", "unitCode", "unitText"}):
+        raise ValueError("JSON-LD inventoryLevel needs one plain QuantitativeValue point, not a range or qualified value")
+    # UN/CEFACT Recommendation 20 codes, restricted to the existing quote sale-unit vocabulary.
+    units = {
+        "YRD": ("linear_yard", {"yd", "yard", "yards", "linear yard", "linear yards"}),
+        "MTR": ("linear_meter", {"m", "metre", "metres", "meter", "meters",
+                                  "linear metre", "linear metres", "linear meter", "linear meters"}),
+        "MTK": ("square_meter", {"m2", "m²", "square metre", "square metres", "square meter", "square meters"}),
+        "KGM": ("kilogram", {"kg", "kilogram", "kilograms"}),
+    }
+    code = level.get("unitCode")
+    if not isinstance(code, str) or code not in units or units[code][0] != entry["unit"]:
+        raise ValueError("JSON-LD inventory unitCode must explicitly match the reviewed sale unit; counts and conversion guesses refuse")
+    if "unitText" in level and (not isinstance(level["unitText"], str)
+            or level["unitText"].strip().casefold() not in units[code][1]):
+        raise ValueError("JSON-LD inventory unitText conflicts with or qualifies its unitCode")
+    value = level.get("value")
+    if type(value) not in (str, int, float):
+        raise ValueError("JSON-LD inventoryLevel needs one finite nonnegative scalar value")
+    return float(decimal_number(str(value), allow_zero=True))
+
+
 def extract_jsonld(entry: dict, source_raw: bytes, observed: dt.datetime, *, intraday=False) -> tuple[dict, dict]:
     validate_jsonld(entry)
     observed = observation_time(entry, observed)
@@ -830,10 +864,13 @@ def extract_jsonld(entry: dict, source_raw: bytes, observed: dt.datetime, *, int
                                              ("OutOfStock", False), ("SoldOut", False), ("Discontinued", False))}
     if not isinstance(stock, str) or stock not in stock_values:
         raise ValueError("JSON-LD stock missing, unknown, preorder or backorder")
+    capacity = jsonld_inventory(entry, offer, resolve)
     digest = hashlib.sha256(source_raw).hexdigest()
     quote = quote_basis(entry)
     quote.update(price=float(amounts[0]), observed_on=observed.date().isoformat(), available=stock_values[stock],
                  source=entry["source_url"], source_sha256=digest)
+    if capacity is not None:
+        quote["available_quantity"] = capacity
     if expiry is not None:
         quote["valid_through"] = expiry
     if expiry_at is not None:
