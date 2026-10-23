@@ -98,6 +98,10 @@ pub enum Metric {
     StitchIntervals,
     /// Feed-only time in seconds; not a robot cycle-time estimate.
     FeedSeconds,
+    /// Source-qualified directed setup time of the selected complete sewing schedule, in seconds.
+    SewingSetupSeconds,
+    /// Generated feed plus source-qualified setup time, excluding undeclared handling, in seconds.
+    SewingFeedAndSetupSeconds,
     /// Potential latent power (W) through the declared stack; water supply is not modeled.
     VaporPotentialHeatFlowW,
     /// Potential vapor mass flow (kg/s), using the same explicit boundaries and latent heat.
@@ -160,7 +164,10 @@ impl Metric {
             | Self::CuttingJobStockMassKg => Consumer::CuttingJob,
             Self::CuttingJobObservedOrderCost => Consumer::CuttingJobPurchasing,
             Self::ObservedOrderCost => Consumer::Purchasing,
-            Self::StitchIntervals | Self::FeedSeconds => Consumer::Sewing,
+            Self::StitchIntervals
+            | Self::FeedSeconds
+            | Self::SewingSetupSeconds
+            | Self::SewingFeedAndSetupSeconds => Consumer::Sewing,
             Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
             Self::IndependentSurfacePowerW => Consumer::Surface,
@@ -201,7 +208,7 @@ impl Metric {
                 currency.unwrap_or("unavailable currency")
             }
             Self::StitchIntervals | Self::UsedStockCount => "count",
-            Self::FeedSeconds => "s",
+            Self::FeedSeconds | Self::SewingSetupSeconds | Self::SewingFeedAndSetupSeconds => "s",
             Self::VaporPotentialHeatFlowW
             | Self::CoveredVaporPotentialHeatFlowW
             | Self::IndependentVaporPotentialHeatFlowW => "W",
@@ -243,6 +250,8 @@ impl Metric {
             Self::ObservedOrderCost => row.metrics.least_observed_independent_order_total,
             Self::StitchIntervals => row.metrics.stitch_intervals.map(|n| n as f64),
             Self::FeedSeconds => row.metrics.feed_seconds,
+            Self::SewingSetupSeconds => row.metrics.sewing_setup_seconds,
+            Self::SewingFeedAndSetupSeconds => row.metrics.sewing_feed_and_setup_seconds,
             Self::VaporPotentialHeatFlowW => row.vapor.value().map(|r| r.potential_heat_flow_w),
             Self::VaporPotentialMassFlowKgS => {
                 row.vapor.value().map(|r| r.potential_mass_flow_kg_s)
@@ -678,6 +687,14 @@ impl Policy {
         if self.consumers().contains(&Consumer::VaporCoverage) {
             report.notes.push("Covered vapor objectives require the whole declared body domain to be covered on the admitted drape. Partial covered subtotals stay visible but cannot be ranked as complete-domain transfer. Actual layer areas, explicit interlayer resistance, pressure boundaries and films define the potential network; no sweat supply, condensation, thermal feedback or comfort is inferred.");
         }
+        if self.metrics().iter().any(|metric| {
+            matches!(
+                metric,
+                Metric::SewingSetupSeconds | Metric::SewingFeedAndSetupSeconds
+            )
+        }) {
+            report.notes.push("Sewing time objectives use the selected complete schedule and its explicitly qualified directed setup durations, including the declared initial setup. Feed plus setup excludes undeclared handling and is not a complete machine cycle time. A budget-limited feasible incumbent remains comparable, without an optimality claim; absent timing evidence stays unavailable.");
+        }
         if self.consumers().contains(&Consumer::CuttingJob)
             || self.consumers().contains(&Consumer::CuttingJobPurchasing)
         {
@@ -1006,6 +1023,24 @@ impl Policy {
                 Value::Null
             },
         ))?;
+        if self.metrics().iter().any(|metric| {
+            matches!(
+                metric,
+                Metric::SewingSetupSeconds | Metric::SewingFeedAndSetupSeconds
+            )
+        }) {
+            let times = row
+                .sewing
+                .value()
+                .and_then(|plan| plan.options.ordering.as_ref())
+                .and_then(|ordering| ordering.setup_times.as_ref())
+                .ok_or_else(|| invalid("source-qualified sewing setup times unavailable"))?;
+            base = hash(&(
+                base,
+                json!({"machine":times.machine,"method":times.method,
+                "conditions":times.conditions,"evidence":times.evidence}),
+            ))?;
+        }
         if consumers.contains(&Consumer::VaporCoverage) {
             let vapor = admitted
                 .vapor_coverage

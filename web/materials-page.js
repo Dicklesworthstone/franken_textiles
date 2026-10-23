@@ -492,6 +492,25 @@ function comparison(op, r) {
         plan || { refusal: row.sewing_selection?.refusal });
     }
   }
+  if (study.alternatives.some(row => row.metrics?.sewing_setup_seconds != null ||
+      row.metrics?.sewing_feed_and_setup_seconds != null) ||
+      [...(r.comparison?.policy?.objectives || []), ...(r.comparison?.policy?.constraints || [])]
+        .some(item => ["sewing_setup_seconds", "sewing_feed_and_setup_seconds"].includes(item.metric))) {
+    const timing = table(parent, "Source-qualified sewing durations", ["Alternative", "Sewing",
+      "Feed-only seconds", "Setup seconds", "Feed + setup seconds"]);
+    for (const row of study.alternatives) {
+      const m = row.metrics || {};
+      cells(timing, [row.key, state(row.sewing), metric(m.feed_seconds),
+        metric(m.sewing_setup_seconds), metric(m.sewing_feed_and_setup_seconds)]);
+      const source = available(row.sewing)?.ordering?.timing;
+      if (source) detail(parent, `${row.key}: setup timing evidence and selected schedule (display only)`, source);
+    }
+    const note = document.createElement("p");
+    note.textContent = "Setup and feed + setup durations come from the selected qualified sewing plan and its declared timing evidence. " +
+      "Missing timing stays unknown. These durations exclude undeclared handling, workholding and other machine-cycle work. " +
+      "A feasible bounded-search result does not prove an optimal schedule.";
+    parent.append(note);
+  }
   cuttingJobComparison(op, parent, study.alternatives);
   assemblyMassComparison(parent, study.alternatives);
   vaporComparison(op, parent, study.alternatives);

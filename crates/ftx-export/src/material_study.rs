@@ -221,6 +221,14 @@ pub struct Metrics {
     pub stitch_intervals: Option<usize>,
     /// Declared stitch-rate feed time; excludes handling, robot movement and machine setup.
     pub feed_seconds: Option<f64>,
+    /// Selected production schedule's source-qualified setup time in seconds. Unknown without
+    /// admitted directed timing evidence; setup-change counts never supply a time estimate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sewing_setup_seconds: Option<f64>,
+    /// Selected production plan's feed plus source-qualified setup duration in seconds.
+    /// Excludes handling, acceleration, final reset and other unmodeled production work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sewing_feed_and_setup_seconds: Option<f64>,
 }
 
 /// One source-locked alternative, with independent production-planner results.
@@ -842,6 +850,15 @@ impl Request {
         if let Some(plan) = row.sewing.value() {
             row.metrics.stitch_intervals = Some(plan.stitch_intervals);
             row.metrics.feed_seconds = Some(plan.feed_seconds);
+            if let Some(timing) = plan
+                .ordering
+                .as_ref()
+                .and_then(|order| order.timing.as_ref())
+            {
+                row.metrics.sewing_setup_seconds =
+                    Some(timing.selected_setup_milliseconds as f64 / 1000.0);
+                row.metrics.sewing_feed_and_setup_seconds = Some(timing.feed_and_setup_seconds);
+            }
         }
         if let Some(plan) = row.finite_stock.value() {
             let used = || plan.markers().iter().filter(|m| !m.placements.is_empty());

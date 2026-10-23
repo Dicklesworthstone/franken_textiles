@@ -2799,6 +2799,27 @@ substitution are exercised at the existing core and portable seams. See
 
 ---
 
+### 25.56 Source-qualified sewing duration in material tradeoffs
+
+The existing fixed-pattern study now exposes `sewing_setup_seconds` and
+`sewing_feed_and_setup_seconds` as explicit nominal objectives and inclusive constraints.
+Both come from the selected production sewing plan's qualified directed timing table,
+including its declared initial setup. The existing `feed_seconds` retains its feed-only
+meaning. Recipe selection and material comparison therefore evaluate the same declared
+feed-plus-setup work; a faster feed rate no longer has to stand in for the complete
+available timing model.
+
+Missing timing remains unknown, including plans that count setup changes without timed
+observations. A refused material-specific recipe cannot supply a cheap zero. Bounded
+search retains a complete feasible incumbent and its unproved optimality status. The
+browser displays feed, setup and joint duration separately with their retained evidence.
+Production-planner tests verify a material-frontier change when setup time is included,
+inclusive limits, absent timing and independent consumer refusals. These are software
+checks; handling, acceleration, final resets and other undeclared work remain outside
+the durations, and physical sewing qualification remains open under `ftx-sp2`/`ftx-tm7`.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

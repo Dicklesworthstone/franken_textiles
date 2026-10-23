@@ -109,7 +109,32 @@ heterogeneous combinations and model-backed scenario studies. The search needs a
 maximum stitch pitch and stitch-rate alternatives. It never invents a recipe from a fiber name.
 Machine limits, assemblies, pressure settings, geometry and source-admission policy remain fixed.
 
-The timed `ftx-sewing-selection/2` request is also supported: `selected_objective_seconds` preserves feed plus qualified setup time, while the study's `feed_seconds` remains the selected plan's feed time.
+The timed `ftx-sewing-selection/2` request is also supported: `selected_objective_seconds` preserves
+feed plus qualified setup time, while the study's `feed_seconds` remains the selected plan's feed
+time. An admitted timed plan additionally supplies `sewing_setup_seconds` and
+`sewing_feed_and_setup_seconds`, whether it came from fixed `sewing` options or recipe selection.
+These are the selected schedule's actual setup duration and feed-plus-setup duration from its
+source-qualified directed timing table. Both can be Pareto objectives or inclusive constraints:
+
+```json
+{
+  "basis": "nominal",
+  "objectives": [
+    {"metric": "sewing_feed_and_setup_seconds", "direction": "minimize"}
+  ],
+  "constraints": [{"metric": "sewing_setup_seconds", "maximum": 60}],
+  "required_consumers": ["sewing"]
+}
+```
+
+The study must supply `ordering.objective: "minimize_setup_time"`, an explicit initial setup and
+an admitted complete `setup_times` table through the shared sewing request. A plan with no timing
+table, even one with zero counted setup changes, leaves these duration metrics unknown. A material
+alternative can therefore remain sewing-ready while being excluded from a timed comparison. Zero
+setup seconds is valid only when the admitted production timing calculation actually reports zero.
+The existing search status still distinguishes a complete feasible incumbent from a proved optimum.
+These durations exclude handling, acceleration, final reset and other unmodeled work; they are not
+total production cycle times or measured material quality.
 
 For an executable **synthetic software example**, embed the existing selector fixture in a study:
 
@@ -133,8 +158,9 @@ be selected automatically. Without one, sewing stays unavailable while valid cut
 mass and simulation outcomes remain visible.
 
 Each row's `sewing.result` is the unmodified selected production plan and supplies the existing
-`feed_seconds`, `stitch_intervals` and required-`sewing` comparison checks. The separate
-`sewing_selection.result` retains every trial/refusal, selected operation-to-recipe choice,
+`feed_seconds`, `stitch_intervals`, optional source-qualified timing metrics and required-`sewing`
+comparison checks. The separate `sewing_selection.result` retains every trial/refusal, selected
+operation-to-recipe choice,
 source pattern hash and search status. Geometry is stored only once. An available search with no
 incumbent is not an available sewing plan; its missing metrics cannot win as zeroes. A bounded
 search may produce a usable complete incumbent without proving it is the best listed recipe.
@@ -237,8 +263,9 @@ and its dependent pricing but does not prevent sewing. Every result is the exist
 output, including its provenance and physical/hardware limitations.
 
 Summary metrics distinguish gross stock area, outer cut area, complete stock mass, least observed
-independent order total, stitch intervals and feed-only time. Unknown mass for ANY roll makes total
-stock mass unknown, not a deceptively smaller partial mass. Feed time excludes handling, acceleration,
+independent order total, stitch intervals, feed-only time and separately admitted setup/joint time.
+Unknown mass for ANY roll makes total stock mass unknown, not a deceptively smaller partial mass.
+Feed time excludes handling, acceleration,
 setup and robot motion. There is no aggregate feasibility/quality score or hidden currency conversion.
 
 The binding result contains lossless `pattern_json` suitable for the existing drape, thermal and
@@ -395,8 +422,10 @@ planner outputs**, independently of scalar catalog screening:
 ```
 
 These objectives require cutting and purchasing in the same study request; the constraint requires
-sewing. Other metrics are `stock_area_m2`, `external_cut_area_m2`, `stitch_intervals` and
-`feed_seconds`. Dimensions are fixed by their names; order cost uses the exact request currency.
+sewing. Other metrics are `stock_area_m2`, `external_cut_area_m2`, `stitch_intervals`,
+`feed_seconds`, `sewing_setup_seconds` and `sewing_feed_and_setup_seconds`. Timing objectives use
+the selected production plan and cannot turn missing source-qualified setup durations into zeroes.
+Dimensions are fixed by their names; order cost uses the exact request currency.
 One to sixteen unique objectives, up to 64 constraints and unique required consumers are accepted.
 Every requested value must be available and finite, every inclusive constraint must pass, and
 required purchasing must have complete offer coverage. An unrequested consumer is an invalid

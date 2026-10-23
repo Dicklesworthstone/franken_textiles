@@ -257,6 +257,10 @@ Missing bounds exclude an alternative while its nominal mass remains visible. Ot
 <p class="note">Optional <code>sewing_selection</code> accepts an existing <code>ftx-sewing-selection/1</code> request instead of
 <code>sewing</code>. Each material alternative searches its own source-qualified recipe choices; the report retains trials, work limits
 and the selected plan. If no listed recipe qualifies, sewing remains unavailable for that alternative.</p>
+<p class="note">When the sewing plan includes source-qualified setup timing, use <code>sewing_setup_seconds</code>
+or <code>sewing_feed_and_setup_seconds</code> as objectives or constraints. The existing <code>feed_seconds</code>
+remains feed-only duration. Missing setup evidence leaves the new durations unknown; they do not include
+undeclared handling or establish total production time.</p>
 </div><div>
 <h3>Fresh body, drape and heat study</h3>
 <label>Scenario request JSON (<code>ftx-drape-scenario/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>

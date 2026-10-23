@@ -1924,6 +1924,34 @@ test('material study sewing choices retain bounded search status separately from
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
 });
 
+test('study timing separates sourced setup duration from feed time and preserves missing evidence', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p);
+  for (const op of ['study', 'scenario']) {
+    const timed = studyRow('timed'), unknown = studyRow('unknown'), failed = studyRow('failed');
+    timed.metrics = {...timed.metrics, feed_seconds:2, sewing_setup_seconds:10, sewing_feed_and_setup_seconds:12};
+    timed.sewing = outcome({ordering:{timing:{selected_setup_milliseconds:10000, feed_and_setup_seconds:12,
+      evidence:{source_id:'<measured setup>',conditions:'qualified machine and operator'}}}});
+    unknown.metrics = {...unknown.metrics, feed_seconds:5, sewing_setup_seconds:null, sewing_feed_and_setup_seconds:null};
+    failed.sewing = refused('changed material has no qualified recipe');
+    failed.metrics = {...failed.metrics, feed_seconds:null, sewing_setup_seconds:null, sewing_feed_and_setup_seconds:null};
+    const report = studyReport([timed, unknown, failed]);
+    await p.e[op].onclick(); p.emit(op === 'study' ? report : {...scenarioReport(), manufacturing:report});
+    const s = section(p, op === 'study' ? 'Fixed-pattern manufacturing alternatives' : 'Fresh drape and heat alternatives');
+    const timing = descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'Source-qualified sewing durations');
+    assert.deepEqual(plain(timing.children[2].children.map(n => n.textContent)), ['timed','Available','2','10','12']);
+    assert.deepEqual(plain(timing.children[3].children.map(n => n.textContent)), ['unknown','Available','5','Unknown','Unknown']);
+    assert.deepEqual(plain(timing.children[4].children.slice(2).map(n => n.textContent)), ['Unknown','Unknown','Unknown']);
+    assert.match(visibleText(timing), /changed material has no qualified recipe/);
+    assert.match(visibleText(s), /exclude undeclared handling/);
+    const evidence = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('timed: setup timing evidence'));
+    evidence.open = true; evidence.handlers.toggle(); assert.match(visibleText(evidence), /<measured setup>/);
+    assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+  }
+  p.e.studyRequest.handlers.change(); assert.equal(p.live.size, 0);
+  assert.equal(section(p, 'Fixed-pattern manufacturing alternatives').hidden, true);
+  assert.equal(section(p, 'Fresh drape and heat alternatives').hidden, true);
+});
+
 test('scenario comparisons join keys, preserve signed values, and distinguish gating and independent refusals', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   assert.equal(p.e.scenario.disabled, false); assert.equal(p.e.fold.disabled, true); // no bind or single-preview fit

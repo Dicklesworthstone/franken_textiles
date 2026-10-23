@@ -1707,6 +1707,8 @@ fn material_substitution_selects_the_matching_qualified_recipe_through_real_plan
         assert_eq!(r["sewing"]["status"], "available");
         assert_eq!(r["sewing"]["result"], direct["selected_plan"]);
         assert_eq!(r["metrics"]["feed_seconds"], seconds);
+        assert!(r["metrics"].get("sewing_setup_seconds").is_none());
+        assert!(r["metrics"].get("sewing_feed_and_setup_seconds").is_none());
         assert_eq!(r["sewing"]["result"]["seams"][0]["pass"]["needle"], needle);
         let search = &r["sewing_selection"]["result"];
         for field in [
@@ -1771,7 +1773,11 @@ fn timed_recipe_studies_preserve_joint_scores_search_status_and_selected_plan_me
             "variants":[variant("timed", source.raw()["fabric"]["material"].clone())],
             "sewing_selection":search,
             "comparison":{"basis":"nominal","required_consumers":["sewing"],
-                "objectives":[{"metric":"feed_seconds","direction":"minimize"}]}
+                "objectives":[
+                    {"metric":"feed_seconds","direction":"minimize"},
+                    {"metric":"sewing_setup_seconds","direction":"minimize"},
+                    {"metric":"sewing_feed_and_setup_seconds","direction":"minimize"}
+                ]}
         }))
         .unwrap();
         let result = evaluate(&request, &source);
@@ -1814,10 +1820,39 @@ fn timed_recipe_studies_preserve_joint_scores_search_status_and_selected_plan_me
         assert_eq!(receipt["unresolved_trials"], 0);
         assert!(receipt.get("selected_plan").is_none());
         assert_eq!(alternative["metrics"]["feed_seconds"], feed_seconds);
+        assert_eq!(
+            alternative["metrics"]["sewing_setup_seconds"],
+            objective_seconds - feed_seconds
+        );
+        assert_eq!(
+            alternative["metrics"]["sewing_feed_and_setup_seconds"],
+            objective_seconds
+        );
         let compared = row(&result["comparison"], "timed");
         assert_eq!(compared["eligible"], true);
         assert_eq!(compared["readings"]["feed_seconds"]["value"], feed_seconds);
+        assert_eq!(
+            compared["readings"]["sewing_setup_seconds"]["value"],
+            objective_seconds - feed_seconds
+        );
+        assert_eq!(
+            compared["readings"]["sewing_feed_and_setup_seconds"]["value"],
+            objective_seconds
+        );
         assert_eq!(result["comparison"]["frontier"], json!(["timed"]));
+        let mut fixed = request.clone();
+        fixed.sewing_selection = None;
+        fixed.sewing =
+            Some(serde_json::from_value(direct["selected_plan"]["options"].clone()).unwrap());
+        let fixed_report = evaluate(&fixed, &source);
+        assert_eq!(
+            row(&fixed_report, "timed")["metrics"],
+            alternative["metrics"]
+        );
+        assert_eq!(
+            row(&fixed_report["comparison"], "timed")["readings"],
+            compared["readings"]
+        );
         assert_eq!(result["comparison"]["physical_validation_claim"], false);
         assert_eq!(result["hardware_execution_authorized"], false);
         assert!(
@@ -1831,6 +1866,118 @@ fn timed_recipe_studies_preserve_joint_scores_search_status_and_selected_plan_me
                     })
                 })
         );
+    }
+}
+
+#[test]
+fn joint_sewing_time_changes_the_material_frontier_and_preserves_unknown_outcomes() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    let mut raw = serde_json::to_value(recipe_study()).unwrap();
+    let timed: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-sewing-timed-selection.json"
+    ))
+    .unwrap();
+    let mut ordering = timed["options"]["ordering"].clone();
+    let light = json!({"needle":"light-needle","thread":"light-thread"});
+    let heavy = json!({"needle":"heavy-needle","thread":"heavy-thread"});
+    ordering["initial_setup"] = heavy.clone();
+    ordering["setup_times"]["transitions"] = json!([
+        {"from":heavy,"to":light,"milliseconds":10000},
+        {"from":light,"to":heavy,"milliseconds":7000}
+    ]);
+    raw["sewing_selection"]["schema"] = json!("ftx-sewing-selection/2");
+    raw["sewing_selection"]["objective"] = json!("minimize_feed_and_setup_seconds");
+    raw["sewing_selection"]["options"]["ordering"] = ordering;
+    let mut request: Request = serde_json::from_value(raw).unwrap();
+    let feed_report = evaluate(&request, &source);
+    assert_eq!(feed_report["comparison"]["frontier"], json!(["light"]));
+    for (key, feed, setup, total) in [("light", 2.0, 10.0, 12.0), ("heavy", 5.0, 0.0, 5.0)] {
+        let alternative = row(&feed_report, key);
+        assert_eq!(alternative["metrics"]["feed_seconds"], feed);
+        assert_eq!(alternative["metrics"]["sewing_setup_seconds"], setup);
+        assert_eq!(
+            alternative["metrics"]["sewing_feed_and_setup_seconds"],
+            total
+        );
+        assert_eq!(
+            alternative["sewing_selection"]["result"]["selected_objective_seconds"],
+            total
+        );
+        assert_eq!(
+            alternative["sewing"]["result"]["ordering"]["timing"]["feed_and_setup_seconds"],
+            total
+        );
+    }
+    request.comparison = Some(
+        serde_json::from_value(json!({
+            "basis":"nominal", "required_consumers":["sewing"],
+            "objectives":[{"metric":"sewing_feed_and_setup_seconds","direction":"minimize"}],
+            "constraints":[{"metric":"sewing_setup_seconds","maximum":10.0}]
+        }))
+        .unwrap(),
+    );
+    let report = evaluate(&request, &source);
+    assert_eq!(report["alternatives"], feed_report["alternatives"]);
+    assert_eq!(report["comparison"]["frontier"], json!(["heavy"]));
+    assert_eq!(
+        row(&report["comparison"], "light")["dominated_by"],
+        json!(["heavy"])
+    );
+    for key in ["unqualified", "unknown"] {
+        let alternative = row(&report, key);
+        assert_eq!(alternative["sewing"]["status"], "refused");
+        assert!(alternative["metrics"].get("sewing_setup_seconds").is_none());
+        assert!(
+            alternative["metrics"]
+                .get("sewing_feed_and_setup_seconds")
+                .is_none()
+        );
+        assert_eq!(row(&report["comparison"], key)["eligible"], false);
+    }
+    assert_eq!(
+        row(&report, "unqualified")["cutting"]["status"],
+        "available"
+    );
+    request.comparison.as_mut().unwrap().constraints[0].maximum = Some(0.0);
+    let constrained = evaluate(&request, &source);
+    assert_eq!(row(&constrained["comparison"], "light")["eligible"], false);
+    assert_eq!(row(&constrained["comparison"], "heavy")["eligible"], true);
+    assert_eq!(constrained["comparison"]["frontier"], json!(["heavy"]));
+}
+
+#[test]
+fn untimed_sewing_cannot_supply_setup_durations_or_win_a_timed_objective() {
+    let source = Pattern::from_json(PATTERN).unwrap();
+    for ordering in [
+        None,
+        Some(json!({"objective":"minimize_setup_changes","max_search_nodes":100})),
+    ] {
+        let mut request = recipe_study();
+        request.sewing_selection.as_mut().unwrap().options.ordering =
+            ordering.map(|o| serde_json::from_value(o).unwrap());
+        request.comparison = Some(
+            serde_json::from_value(json!({
+                "basis":"nominal", "required_consumers":["sewing"],
+                "objectives":[{"metric":"sewing_feed_and_setup_seconds","direction":"minimize"}]
+            }))
+            .unwrap(),
+        );
+        let report = evaluate(&request, &source);
+        for key in ["light", "heavy"] {
+            let alternative = row(&report, key);
+            assert_eq!(alternative["sewing"]["status"], "available");
+            assert!(alternative["metrics"]["feed_seconds"].as_f64().unwrap() > 0.0);
+            assert!(alternative["metrics"].get("sewing_setup_seconds").is_none());
+            assert!(
+                alternative["metrics"]
+                    .get("sewing_feed_and_setup_seconds")
+                    .is_none()
+            );
+            let compared = row(&report["comparison"], key);
+            assert_eq!(compared["eligible"], false);
+            assert!(compared["readings"]["sewing_feed_and_setup_seconds"]["value"].is_null());
+        }
+        assert_eq!(report["comparison"]["frontier"], json!([]));
     }
 }
 
