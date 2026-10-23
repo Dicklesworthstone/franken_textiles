@@ -789,7 +789,35 @@ function designComparison(op, parent, study) {
   parent.append(note);
   const grid = study.design_search;
   if (grid) {
-    if (grid.fit_screening) {
+    if (grid.schema === "ftx-design-adaptive-search/1") {
+      const search = table(parent, "Fit-directed adaptive alteration search", ["Fit evaluations", "Passed flat gates",
+        "Selected for consumers", "Stop reason", "Best maximum violation (mm)", "Best total violation (mm)"]);
+      cells(search, [metric(grid.evaluations), metric(grid.qualified_designs), metric(grid.selected_designs),
+        grid.stop_reason?.replaceAll("_", " ") ?? "Unknown", metric(grid.best_max_fit_band_violation_mm),
+        metric(grid.best_total_fit_band_violation_mm)]);
+      const scope = document.createElement("p");
+      scope.textContent = "The adaptive search uses unrounded distances outside your declared fit bands to choose the next alteration values. " +
+        "Its bounds and step sizes define where it can search; the stopping reason does not prove that unvisited values are infeasible " +
+        "or that a global optimum was found. Selected designs use the ordinary manufacturing and scenario consumers, and the original baseline remains visible. " +
+        "Computed target compliance does not establish physical garment fit.";
+      parent.append(scope);
+      const trials = table(parent, "Adaptive alteration trials", ["Pattern design", "Variables (mm)",
+        "Maximum violation (mm)", "Total violation (mm)", "Flat admission", "Downstream selection", "Reason"]);
+      for (const [i, row] of (grid.rows || []).entries()) {
+        const design = row.design || {}, fit = available(design.fit);
+        const passed = design.validation?.passed === true && fit?.passed === true;
+        cells(trials, [design.key ?? "Unknown",
+          design.variables_mm ? Object.entries(design.variables_mm).map(([key, value]) => `${key}: ${metric(value)}`).join("; ") : "Unknown",
+          metric(row.max_fit_band_violation_mm), metric(row.total_fit_band_violation_mm),
+          passed ? "Passed declared flat gates" : "Refused", row.selected === true ? "Selected" : "Not selected",
+          row.refusal?.message || (passed ? "Passed declared targets" : "Inspect retained validation")]);
+        if (typeof design.altered_pattern_json === "string") {
+          const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
+          link(op, actions, {name: `adaptive-design-${i + 1}-pattern.json`, text: design.altered_pattern_json, mime: "application/json"});
+        }
+        detail(parent, `${design.key ?? "Unknown design"}: adaptive trial, unrounded fit and body identity (display only)`, row);
+      }
+    } else if (grid.fit_screening) {
       const screening = grid.fit_screening;
       const search = table(parent, "Fit screening before manufacturing and simulation",
         ["Declared grid points", "Flat screened", "Passed flat gates", "Rejected", "Selected for consumers",
@@ -834,7 +862,9 @@ function designComparison(op, parent, study) {
         "The frontier is conditional on visited designs. Omitted grid points remain unknown and may contain better feasible designs.";
       parent.append(scope);
     }
-    detail(parent, "Exact alteration grid, linked sites and search allowance (display only)", grid);
+    detail(parent, grid.schema === "ftx-design-adaptive-search/1" ?
+      "Exact adaptive bounds, linked sites, steps and search allowance (display only)" :
+      "Exact alteration grid, linked sites and search allowance (display only)", grid);
   }
   const t = table(parent, "Pattern designs and material choices",
     ["Alternative", "Pattern design", "Material choice", "Alteration operations", "Geometry"]);

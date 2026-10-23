@@ -11,6 +11,9 @@ use ftx_export::{
 use ftx_pattern::{Pattern, alter, material_binding::Changes};
 use serde_json::{Value, json};
 
+#[path = "design_study/adaptive.rs"]
+mod adaptive;
+
 const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
 const REQUEST: &str = include_str!("../../../examples/design-study.json");

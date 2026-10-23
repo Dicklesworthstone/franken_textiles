@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use super::{Outcome, PreparedVariant, Request, budget, hash, invalid};
 use crate::cutting::geometry::{Work, simple};
 
+pub mod adaptive;
 pub mod fit;
 pub mod grid;
 
@@ -20,6 +21,16 @@ const MAX_DESIGNS: usize = 31;
 const MAX_OPERATIONS: usize = 16;
 const MAX_EXPANDED_OPERATIONS: usize = 256;
 const MAX_DOCUMENT_WORK_BYTES: usize = 256 * 1024 * 1024;
+
+/// Search-specific receipts preserve the existing grid JSON and identify adaptive discovery.
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum SearchReceipt {
+    /// Declared finite grid, including optional flat fit screening.
+    Grid(grid::Receipt),
+    /// Bounded continuous-domain polling; never a proof about the whole domain.
+    Adaptive(adaptive::Receipt),
+}
 
 /// One existing canonical alteration, applied in the stated order and millimetre frame.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -165,18 +176,36 @@ pub(super) fn validate_request(request: &Request) -> Result<(), Refusal> {
     if !request.is_design() {
         if request.designs.is_some()
             || request.design_grid.is_some()
+            || request.design_adaptive.is_some()
             || request.design_fit.is_some()
         {
             return Err(invalid(
-                "designs, design_grid and design_fit require explicit ftx-design-study/1; ftx-material-study/1 keeps geometry fixed",
+                "designs, design_grid, design_adaptive and design_fit require explicit ftx-design-study/1; ftx-material-study/1 keeps geometry fixed",
             ));
         }
         return Ok(());
     }
-    if request.designs.is_some() == request.design_grid.is_some() {
+    if [
+        request.designs.is_some(),
+        request.design_grid.is_some(),
+        request.design_adaptive.is_some(),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count()
+        != 1
+    {
         return Err(invalid(
-            "design study needs exactly one of designs or design_grid",
+            "design study needs exactly one of designs, design_grid or design_adaptive",
         ));
+    }
+    if let Some(adaptive) = &request.design_adaptive {
+        adaptive.validate()?;
+        if request.design_fit.is_none() {
+            return Err(invalid(
+                "design_adaptive requires an explicit design_fit contract",
+            ));
+        }
     }
     if let Some(grid) = &request.design_grid {
         grid.validate()?;
@@ -230,9 +259,13 @@ pub(super) fn expand(
     pattern: &Pattern,
     materials: Vec<PreparedVariant>,
     fit_context: Option<&fit::Context<'_>>,
-) -> Result<(Vec<PreparedVariant>, Option<grid::Receipt>), Refusal> {
+) -> Result<(Vec<PreparedVariant>, Option<SearchReceipt>), Refusal> {
     if !request.is_design() {
         return Ok((materials, None));
+    }
+    if let Some(adaptive) = &request.design_adaptive {
+        let (variants, receipt) = adaptive.expand(request, pattern, materials, fit_context)?;
+        return Ok((variants, Some(SearchReceipt::Adaptive(receipt))));
     }
     let screened = request
         .design_grid
@@ -508,7 +541,7 @@ pub(super) fn expand(
             });
         }
     }
-    Ok((expanded, search))
+    Ok((expanded, search.map(SearchReceipt::Grid)))
 }
 
 impl Prepared {

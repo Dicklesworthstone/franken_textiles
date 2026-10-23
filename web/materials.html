@@ -249,6 +249,14 @@ the selected body before sending up to <code>max_designs</code> passing alterati
 The report retains rejected designs, passing designs outside that allowance, and unvisited points separately.
 The unchanged baseline is additional to the allowance. The selected model supplies the body measurements;
 computed target compliance does not establish fit on a real wearer.</p>
+<p class="note">To find alteration amounts between listed grid values, replace <code>design_grid</code> with
+<code>design_adaptive</code> and retain the same <code>design_fit</code> targets. Set
+<code>objective: "fit_band_violation_mm"</code>, explicit <code>bounds_mm</code>, <code>initial_mm</code>,
+<code>initial_step_mm</code> and <code>minimum_step_mm</code> for each linked variable, plus
+<code>max_evaluations</code> and <code>max_designs</code>. The search uses unrounded fit measurements,
+refines the steps when progress stops, and sends passing patterns to the existing consumers.
+Every trial retains its exact alterations, body identity and fit result. A work limit or minimum-step stop
+leaves unvisited alteration values unknown; the downstream comparison remains conditional on the designs found.</p>
 <details><summary>Build combinations of shell, lining, cuffs and other material choices</summary>
 <p>Inspect a material in section 1, select the source pieces that share a choice, and add it to a named group.
 Add more choices to that group, then create groups for other pieces. Every combination runs through the requested consumers.</p>

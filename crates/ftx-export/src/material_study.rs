@@ -53,7 +53,7 @@ struct PreparedVariant {
 struct PreparedStudy {
     variants: Vec<PreparedVariant>,
     screening: Option<material_screen::Report>,
-    design_search: Option<design::grid::Receipt>,
+    design_search: Option<design::SearchReceipt>,
 }
 
 impl From<Variant> for PreparedVariant {
@@ -115,6 +115,10 @@ pub struct Request {
     /// Bounded linked alteration variables; exclusive with authored `designs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_grid: Option<design::grid::Request>,
+    /// Adaptive linked alterations under explicit finite bounds, steps and fit-evaluation budget.
+    /// Exclusive with authored designs and grids; requires explicit selected-body fit targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_adaptive: Option<design::adaptive::Request>,
     /// Explicit flat fit targets evaluated against the caller's selected live body authority.
     /// Requested targets without that authority refuse every design, including the baseline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,9 +325,9 @@ pub struct Report {
     pub request_sha256: String,
     /// Retained screening result, including excluded/unknown candidates, when screening was requested.
     pub screening: Option<material_screen::Report>,
-    /// Complete finite grid and any omitted domain; absent for hand-authored alternatives.
+    /// Finite-grid coverage or bounded adaptive discovery; absent for hand-authored alternatives.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub design_search: Option<design::grid::Receipt>,
+    pub design_search: Option<design::SearchReceipt>,
     /// Key-ordered alternatives, never sorted by a fabricated weighted score.
     pub alternatives: Vec<Alternative>,
     /// Present only when a comparison was requested; failed/unknown cells are never zero scores.
@@ -873,6 +877,9 @@ impl Request {
         }
         if self.design_fit.is_some() {
             notes.push("Explicit fit targets use the fixed caller-supplied body authority through canonical flat validation before binding or any production consumer. Model-derived measurements retain MODEL_FIT provenance; missing points or out-of-band raw values refuse the design even when a rounded residual is zero. Passing a declared ease band is not empirical garment fit or a safe-fit certification.");
+        }
+        if self.design_adaptive.is_some() {
+            notes.push("Adaptive linked alterations use explicitly bounded coordinate polling and step refinement. Their declared fit-band objective compares unrounded canonical maximum violation, then total violation, solely to discover candidates. Every selected design still requires complete flat admission and independently reruns the requested material and production consumers. Stopping at the candidate allowance, evaluation budget or minimum steps leaves the continuous domain unresolved; no global optimum, infeasibility or empirical fit is inferred.");
         }
         let geometry_changed = alternatives.iter().any(|row| {
             row.design

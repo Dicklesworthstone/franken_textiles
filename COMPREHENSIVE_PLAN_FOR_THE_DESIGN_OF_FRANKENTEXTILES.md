@@ -3210,6 +3210,24 @@ time, undeclared supplier bundles and empirical seam quality. See [sewing-select
 
 ---
 
+### 25.73 Discover fit-qualified alterations between authored grid values
+
+Optional `design_adaptive` extends the selected-body design study (`ftx-ds2`) with deterministic
+coordinate polling inside explicit variable bounds. Initial/minimum steps and a finite evaluation
+allowance govern discovery; linked slash sites and subsequent operations still use the canonical
+alteration authority. The search shares unrounded flat-fit readings with ordinary validation and
+minimizes maximum band violation, then total violation. Actual altered geometry governs admission,
+including the existing operator's 0.001 mm coordinate rounding.
+
+Every trial retains exact commands, geometry, selected-body identity, fit readings and refusals.
+Qualified designs plus the unchanged baseline flow through the existing material/manufacturing
+and scenario consumers, with one search reused across materials and named cases. Budget and
+minimum-step stops preserve discovered candidates but never prove the unvisited continuous domain
+infeasible or optimal. Local pressure/strain qualification and empirical wearer fit remain separate
+open gates. See [material-screening-and-studies.md](docs/material-screening-and-studies.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

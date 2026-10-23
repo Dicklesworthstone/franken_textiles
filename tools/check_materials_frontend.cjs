@@ -4796,6 +4796,40 @@ test('vapor range comparisons and motion samples display Rust intervals without 
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true);
 });
 
+test('adaptive design search displays raw violations and exact trials without declaring unvisited values infeasible', async () => {
+  const p = await pageModule(); await p.load(); p.select('studyRequest', '{}');
+  const report = designReport(), source = ' {"schema":"fabric-pattern/1","value":-0.0,"label":"<retained>"}\n';
+  const trial = (key,value,passed,selected,violation) => ({selected,max_fit_band_violation_mm:violation,
+    total_fit_band_violation_mm:violation,design:{key,variables_mm:{'<length>':value},altered_pattern_json:source,
+      validation:{passed},fit:outcome({passed,body_identity:{provenance:'MODEL_FIT'},
+        validation:{points:[{status:passed?'ok':'tight',residual_mm:0}]}})},
+    raw_fit:outcome([{id:'length',residual_mm:violation}]),
+    refusal:passed?undefined:{message:'Declared fit band was missed'}});
+  report.design_search = {schema:'ftx-design-adaptive-search/1',evaluations:3,qualified_designs:1,
+    selected_designs:1,stop_reason:'qualified_design_limit',budget_exhausted:false,complete_search:false,
+    global_optimum_claim:false,best_trial_key:'adaptive:0002',best_max_fit_band_violation_mm:0,
+    best_total_fit_band_violation_mm:0,final_steps_mm:{'<length>':0.01},rows:[
+      trial('adaptive:0000',30,false,false,3.69),trial('adaptive:0001',33.69,false,false,0.0001),
+      trial('adaptive:0002',33.7,true,true,0)]};
+  await p.e.study.onclick(); p.emit(report);
+  const s = section(p,'Fixed-pattern manufacturing alternatives');
+  const table = name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.deepEqual(plain(table('Fit-directed adaptive alteration search').children[2].children.map(n=>n.textContent)),
+    ['3','1','1','qualified design limit','0','0']);
+  const rows=table('Adaptive alteration trials').children.slice(2);
+  assert.deepEqual(plain(rows[1].children.map(n=>n.textContent)),
+    ['adaptive:0001','<length>: 33.69','0.0001','0.0001','Refused','Not selected','Declared fit band was missed']);
+  assert.equal(rows[2].children[5].textContent,'Selected');
+  assert.match(visibleText(s),/does not prove that unvisited values are infeasible/);
+  assert.equal(table('Declared alteration search'),undefined);
+  const replay=descendants(s).find(n=>n.download==='adaptive-design-3-pattern.json');
+  assert.equal(await p.blobs.get(replay.href).text(),source);
+  report.design_search.stop_reason='evaluation_budget'; report.design_search.budget_exhausted=true;
+  await p.e.study.onclick(); p.emit(report);
+  assert.match(visibleText(s),/evaluation budget/);
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
 test('design search retains incomplete domains and failed fit status even when residual rounds to zero', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const report = designReport();
@@ -4912,6 +4946,33 @@ test('compiled WASM fit screening reaches the same late design and named-case fr
         const screening=result.result.manufacturing.design_search.fit_screening;
         assert.equal(screening.screened_designs,9); assert.equal(screening.selected_designs,1);
         assert.equal(screening.rows.find(row=>row.selected).design.key,'grid:0006');
+        assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+        assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
+      }
+    } finally {globalThis.ftxProgress=previousProgress;}
+  });
+
+test('compiled WASM adaptive synthesis replays both native selected-body scenarios and exact intermediate patterns',
+  {skip:process.env.FTX_REAL_WASM!=='1' || !process.env.FTX_DESIGN_ADAPTIVE_REPLAY}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const dir=process.env.FTX_DESIGN_ADAPTIVE_REPLAY, input=name=>fs.readFileSync(path.join(dir,name),'utf8');
+    const bytes=fs.readFileSync(path.join(dir,'model.ftxbody')), w=await workerModule({bindings:ftx});
+    const previousProgress=globalThis.ftxProgress; globalThis.ftxProgress=()=>{};
+    try {
+      for (const name of ['single','matrix']) {
+        const studyRequest=input('study.json'), scenarioRequest=input(`${name}-scenario.json`);
+        const result=await w.send({type:'scenario',request:180,pattern:input('pattern.json'),studyRequest,scenarioRequest,
+          measurements:input('body-input.json'),bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+        assert.equal(result.type,'result',result.message);
+        assert.deepEqual(result.result,JSON.parse(input(`${name}-report.json`)));
+        const search=result.result.manufacturing.design_search;
+        assert.equal(search.schema,'ftx-design-adaptive-search/1'); assert.equal(search.selected_designs,1);
+        assert.equal(search.complete_search,false); assert.equal(search.global_optimum_claim,false);
+        const selected=search.rows.find(row=>row.selected);
+        assert.ok(Math.abs(selected.design.variables_mm.length-33.7)<=0.001);
+        assert.equal(selected.max_fit_band_violation_mm,0);
         assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
         assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
       }

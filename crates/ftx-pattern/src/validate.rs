@@ -235,6 +235,27 @@ pub struct PointRow {
     pub message: Option<String>,
 }
 
+/// Canonical point geometry and inclusive band decision before display rounding.
+/// Numerical consumers share this reading with the existing point-of-measure report; it adds
+/// neither a body estimate nor an uncertainty model.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PointMeasurement {
+    /// Finished flat-pattern dimension in millimetres.
+    pub finished_mm: f64,
+    /// Selected-body value after the point's explicit scale and offset, in millimetres.
+    pub body_mm: f64,
+    /// Existing body authority's reported sigma, when available; not newly propagated.
+    pub body_sigma_mm: Option<f64>,
+    /// Finished dimension minus the declared body reference, in millimetres.
+    pub ease_mm: f64,
+    /// Exact declared minimum, nominal and maximum ease, in millimetres.
+    pub target_mm: [f64; 3],
+    /// Signed distance outside the inclusive target band; zero only inside the band.
+    pub residual_mm: f64,
+    /// IN_BAND, LOW or HIGH, decided before any display rounding.
+    pub status: &'static str,
+}
+
 /// Failure counts.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Summary {
@@ -648,6 +669,59 @@ fn finished_value(pat: &Pattern, p: &Value, body: &dyn BodyMeasure) -> Result<f6
     }
 }
 
+/// Unrounded reading used by the canonical point report and bounded design search.
+///
+/// # Errors
+/// Returns the same missing body/pattern reference and malformed-target errors that the public
+/// point report renders as UNMEASURABLE. Callers admitting numerical objectives must also require
+/// finite readings; the reference-compatible report retains its existing numeric semantics.
+pub fn measure_point_unrounded(
+    pat: &Pattern,
+    p: &Value,
+    body: &dyn BodyMeasure,
+) -> Result<PointMeasurement, PyError> {
+    let val = finished_value(pat, p, body)?;
+    let body_name = str_of(p, "body")?;
+    let bval = body.value(body_name)? * get_f64(p, "body_scale").unwrap_or(1.0)
+        + get_f64(p, "body_offset_mm").unwrap_or(0.0);
+    let ease = val - bval;
+    let target = &p["target_mm"];
+    let t: Vec<f64> = target
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_f64).collect())
+        .unwrap_or_default();
+    let arity = target.as_array().map_or(0, Vec::len);
+    let [lo, nominal, hi] = match (arity, t.as_slice()) {
+        (3, [lo, nominal, hi]) => [*lo, *nominal, *hi],
+        _ => {
+            return Err(PyError::Value(format!(
+                "expected 3 target values, got {arity}"
+            )));
+        }
+    };
+    let status = if lo <= ease && ease <= hi {
+        "IN_BAND"
+    } else if ease < lo {
+        "LOW"
+    } else {
+        "HIGH"
+    };
+    let residual_mm = match status {
+        "IN_BAND" => 0.0,
+        "LOW" => ease - lo,
+        _ => ease - hi,
+    };
+    Ok(PointMeasurement {
+        finished_mm: val,
+        body_mm: bval,
+        body_sigma_mm: body.sigma(body_name),
+        ease_mm: ease,
+        target_mm: [lo, nominal, hi],
+        residual_mm,
+        status,
+    })
+}
+
 /// One point of measure (spec 01 §9.3). Never fails: anything that cannot be measured is an
 /// `UNMEASURABLE` row with the reason.
 #[must_use]
@@ -656,37 +730,10 @@ pub fn measure_point(pat: &Pattern, p: &Value, body: &dyn BodyMeasure) -> PointR
     let label = p.get("label").cloned().unwrap_or_else(|| id.clone());
     let target = p.get("target_mm").cloned().unwrap_or(Value::Null);
     let measured = (|| -> Result<PointRow, PyError> {
-        let val = finished_value(pat, p, body)?;
+        let raw = measure_point_unrounded(pat, p, body)?;
         let body_name = str_of(p, "body")?;
-        let bval = body.value(body_name)? * get_f64(p, "body_scale").unwrap_or(1.0)
-            + get_f64(p, "body_offset_mm").unwrap_or(0.0);
-        let ease = val - bval;
-        let t: Vec<f64> = target
-            .as_array()
-            .map(|a| a.iter().filter_map(Value::as_f64).collect())
-            .unwrap_or_default();
-        let arity = target.as_array().map_or(0, Vec::len);
-        let (lo, hi) = match (arity, t.as_slice()) {
-            (3, [lo, _, hi]) => (*lo, *hi),
-            _ => {
-                return Err(PyError::Value(format!(
-                    "expected 3 target values, got {arity}"
-                )));
-            }
-        };
-        let status = if lo <= ease && ease <= hi {
-            "IN_BAND"
-        } else if ease < lo {
-            "LOW"
-        } else {
-            "HIGH"
-        };
-        let resid = match status {
-            "IN_BAND" => 0.0,
-            "LOW" => ease - lo,
-            _ => ease - hi,
-        };
-        let sigma = body.sigma(body_name);
+        let [lo, _, hi] = raw.target_mm;
+        let sigma = raw.body_sigma_mm;
         let note = sigma.filter(|&s| s != 0.0 && s > (hi - lo) / 2.0).map(|s| {
             format!(
                 "body {body_name} is only known to ±{} mm, wider than half the target band; a tape measurement would decide this point",
@@ -697,13 +744,13 @@ pub fn measure_point(pat: &Pattern, p: &Value, body: &dyn BodyMeasure) -> PointR
             id: id.clone(),
             label: label.clone(),
             authority: "ANALYTIC".into(),
-            finished_mm: Some(py::round(val, 1)),
-            body_mm: Some(py::round(bval, 1)),
+            finished_mm: Some(py::round(raw.finished_mm, 1)),
+            body_mm: Some(py::round(raw.body_mm, 1)),
             body_sigma_mm: Some(sigma),
-            ease_mm: Some(py::round(ease, 1)),
+            ease_mm: Some(py::round(raw.ease_mm, 1)),
             target_mm: target.clone(),
-            residual_mm: Some(py::round(resid, 1)),
-            status: status.into(),
+            residual_mm: Some(py::round(raw.residual_mm, 1)),
+            status: raw.status.into(),
             note,
             message: None,
         })
@@ -1053,4 +1100,60 @@ pub fn default_fit_spec(pat: &Pattern, garment: &str) -> Value {
     out.insert("truing_tol_deg".into(), json!(8.0));
     out.insert("points".into(), Value::Array(pts));
     Value::Object(out)
+}
+
+#[cfg(test)]
+mod raw_point_tests {
+    use super::*;
+
+    fn fixture() -> (Pattern, Value) {
+        let pattern = Pattern::from_json(include_str!(
+            "../../../tests/fixtures/materials/synthetic-sewing-pattern.json"
+        ))
+        .unwrap();
+        let point = json!({"id":"length", "kind":"vertical", "instance":"front",
+            "from":"a", "to":"d", "body":"length", "target_mm":[0,0,0]});
+        (pattern, point)
+    }
+
+    #[test]
+    fn canonical_raw_point_keeps_sub_display_band_violations() {
+        let (pattern, point) = fixture();
+        let body = Measurements(json!({"length":100.04}));
+        let raw = measure_point_unrounded(&pattern, &point, &body).unwrap();
+        assert_eq!(raw.finished_mm, 100.0);
+        assert_eq!(raw.body_mm, 100.04);
+        assert_eq!(raw.status, "LOW");
+        assert!((raw.residual_mm + 0.04).abs() < 1e-12);
+        let display = measure_point(&pattern, &point, &body);
+        assert_eq!(display.status, "LOW");
+        assert_eq!(display.residual_mm, Some(0.0));
+        assert_eq!(display.body_mm, Some(100.0));
+    }
+
+    #[test]
+    fn raw_point_preserves_scale_offset_sigma_and_missing_measurement_refusal() {
+        let (pattern, mut point) = fixture();
+        point["body_scale"] = json!(0.5);
+        point["body_offset_mm"] = json!(10);
+        point["target_mm"] = json!([0, 1, 2]);
+        let body = Measurements(json!({"fused":{"length":{"value_mm":178,"sigma_mm":2.34}}}));
+        let raw = measure_point_unrounded(&pattern, &point, &body).unwrap();
+        assert_eq!(raw.body_mm, 99.0);
+        assert_eq!(raw.body_sigma_mm, Some(2.3));
+        assert_eq!(raw.ease_mm, 1.0);
+        assert_eq!(raw.residual_mm, 0.0);
+        assert_eq!(raw.status, "IN_BAND");
+        let missing = Measurements(json!({}));
+        assert!(measure_point_unrounded(&pattern, &point, &missing).is_err());
+        let display = measure_point(&pattern, &point, &missing);
+        assert_eq!(display.status, "UNMEASURABLE");
+        assert_eq!(display.residual_mm, None);
+        point["target_mm"] = json!([0, "unknown", 2]);
+        assert!(measure_point_unrounded(&pattern, &point, &body).is_err());
+        assert_eq!(
+            measure_point(&pattern, &point, &body).status,
+            "UNMEASURABLE"
+        );
+    }
 }

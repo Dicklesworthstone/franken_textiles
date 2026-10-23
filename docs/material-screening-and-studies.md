@@ -893,8 +893,80 @@ measurement and document-processing work is charged across the expanded rows. No
 site multiplication underflows to zero refuse instead of silently dropping the alteration.
 The workbench displays search completeness, parameter choices, target admission, every canonical
 point and the complete body/fit receipt. Existing exact altered/bound downloads remain the replay
-path. Source-qualified strain limits, physical garment validation, continuous/adaptive search and
-contact-pressure constraints require their own evidence and remaining implementation.
+path. Source-qualified strain limits, physical garment validation and contact-pressure constraints
+require their own evidence and remaining implementation.
+
+### Find selected-body fits between authored grid values
+
+`design_adaptive` replaces `designs` or `design_grid` when a useful alteration may lie between the
+listed grid points. It requires the same explicit `design_fit` and selected model/body authority:
+
+```json
+{
+  "design_adaptive": {
+    "objective": "fit_band_violation_mm",
+    "variables": [{
+      "key": "length",
+      "bounds_mm": [0, 60],
+      "initial_mm": 0,
+      "initial_step_mm": 20,
+      "minimum_step_mm": 0.0001,
+      "sites": [
+        {"piece": "front", "axis": "y", "at_mm": 50, "multiplier": 1},
+        {"piece": "back", "axis": "y", "at_mm": 50, "multiplier": 1}
+      ]
+    }],
+    "after": [],
+    "max_evaluations": 96,
+    "max_designs": 1
+  }
+}
+```
+
+[The complete synthetic request](../examples/design-adaptive-search.json) asks the original 100 mm
+panel to finish 3.699–3.701 mm above one tenth of the selected model's stature. For an independently
+selected 1300 mm model, this needs approximately 33.7 mm of linked length spread. The old
+20/30/40 mm grid misses that narrow band; adaptive polling can find it and submit the exact altered
+panel to the existing material binding, cutting and assembly-mass consumers. Use this request in
+the ordinary `ftx materials scenario-study` command shown above, or load it in the model-backed
+workbench study. These dimensions and bands exercise software; they do not prescribe wearer ease.
+
+All bounds, initial coordinates and steps are explicit. One to three variables are supported,
+using the existing linked slash sites and optional canonical `after` operations. The search polls
+variables in authored order, first negative then positive, within their declared bounds. Its
+explicit discovery objective minimizes the largest absolute distance outside a fit band, then the
+sum of those distances to resolve ties between multiple points. Both use canonical **unrounded**
+millimetre readings; an out-of-band residual displayed as `0.0` still cannot qualify. If a poll has
+no strict improvement, steps halve down to the declared minimum. Geometry, seam, truing,
+completeness, outline and missing-body failures cannot supply a numerical search score.
+The canonical slash-spread operator rounds edited points to 0.001 mm. Retained variable values
+are the exact requested spreads; `raw_fit` measures the resulting geometry. A smaller polling
+step helps find that operator's accepted coordinates without increasing its geometric precision.
+
+The first `max_designs` completely qualified trials are retained alongside the original baseline.
+Each retained geometry is evaluated once and reused across material alternatives and named cases;
+downstream manufacturing and scenario objectives still decide their own feasible frontier. The
+search objective alone never selects a production winner. Trials use the unchanged original
+pattern, preserving the exact operations, altered JSON, body identity and frozen material changes
+needed for replay.
+
+The `ftx-design-adaptive-search/1` receipt in `design_search` retains every unique trial, its exact
+coordinates, `raw_fit` readings, two explicit residual values, selection status and any refusal.
+It also reports `evaluations`, `selected_designs`, final steps and the best admitted trial, which
+may still be out of band. `stop_reason` is `qualified_design_limit`, `evaluation_budget` or
+`minimum_steps`; only the second sets `budget_exhausted`. A budget-limited result preserves any
+already qualified candidate and its actual downstream outcomes. `complete_search` and
+`global_optimum_claim` are always false: a local step limit or empty result cannot establish that
+the remaining continuous domain has no feasible solution. A zero residual only establishes the
+declared numerical band checks, without empirical fit or propagated uncertainty claims.
+
+`max_evaluations` admits 1–256 distinct parameter trials, excluding the separately checked original
+baseline; repeated exact coordinates reuse their receipt. `max_designs` is 1–31, and the reserved
+baseline-plus-designs × material cross product still cannot exceed 32. The whole requested domain
+and maximum work are admitted before search: at most 16 operations per trial, 4,096 total
+operations, 256 MiB of document-processing reservation, and 40 million measurement and outline
+work units each. Missing selected-body context refuses the request. Failed trials remain
+inspectable without invoking their production or simulation callbacks.
 
 ## Budgets, tests and remaining gates
 

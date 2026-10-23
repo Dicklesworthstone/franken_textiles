@@ -25,6 +25,18 @@ Absent screening preserves the earlier prefix request/output semantics and budge
 `design_study` cover a feasible candidate beyond the old prefix, exact marker replay, single versus
 matrix evaluation, missing context, budget exhaustion and retained failures.
 
+**Adaptive selected-body design discovery** (`design_adaptive`). Explicit finite bounds, initial
+coordinates, polling/minimum steps and a 1–256 unique-trial allowance refine linked slash-spread
+variables between authored grid values. Canonical unrounded point measurements minimize the
+declared maximum out-of-band distance, then its sum; this discovery objective is separate from
+production ranking. Full geometry, seam, truing, completeness, outline and selected-body gates
+admit only zero-violation trials. Every trial retains exact operations, altered source, body
+identity, raw readings and refusals; selected geometries are cached across materials/cases and
+replay through ordinary consumers. Whole-request work is reserved before search. Evaluation and
+minimum-step limits retain feasible incumbents without claiming continuous-domain completeness,
+global optimality, empirical fit, or unavailable uncertainty. Tests: `design_study/adaptive`,
+canonical `validate::raw_point_tests`, and native/portable accepted-body adaptive workflow.
+
 **Finite-water scenario decisions.** The optional `motion_wet_film` comparison consumer reads
 evaporated, remaining, unmet-demand and supplied mass plus prescribed-body latent energy from a
 complete admitted moving-coverage history. It verifies exact authored body-bound liquid/supply,

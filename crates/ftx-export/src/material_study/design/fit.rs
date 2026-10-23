@@ -71,6 +71,16 @@ pub struct Report {
     pub passed: bool,
 }
 
+/// One canonical unrounded point reading retained by adaptive candidate discovery.
+#[derive(Clone, Debug, Serialize)]
+pub struct RawReading {
+    /// Exact declared point identity, in fit-specification order.
+    pub id: String,
+    /// Shared geometric/body reading and inclusive band decision, with no display rounding.
+    #[serde(flatten)]
+    pub measurement: validate::PointMeasurement,
+}
+
 fn nonempty<'a>(value: &'a Value, key: &str) -> Result<&'a str, Refusal> {
     value
         .get(key)
@@ -174,6 +184,42 @@ fn validate_point(point: &Value, ids: &mut BTreeSet<String>) -> Result<(), Refus
 }
 
 impl Request {
+    pub(super) fn unrounded(
+        &self,
+        pattern: &Pattern,
+        context: &Context<'_>,
+    ) -> Result<Vec<RawReading>, Refusal> {
+        self.fit_spec["points"]
+            .as_array()
+            .expect("validated explicit fit points")
+            .iter()
+            .map(|point| {
+                let measurement = validate::measure_point_unrounded(pattern, point, context.body)
+                    .map_err(|error| {
+                    invalid(format!("adaptive design fit is unavailable: {error}"))
+                })?;
+                if [
+                    measurement.finished_mm,
+                    measurement.body_mm,
+                    measurement.ease_mm,
+                    measurement.residual_mm,
+                ]
+                .into_iter()
+                .chain(measurement.target_mm)
+                .any(|value| !value.is_finite())
+                {
+                    return Err(invalid(
+                        "adaptive design fit needs finite canonical readings",
+                    ));
+                }
+                Ok(RawReading {
+                    id: point["id"].as_str().expect("validated fit point ID").into(),
+                    measurement,
+                })
+            })
+            .collect()
+    }
+
     /// Validate the bounded specification before any alterations or body-dependent evaluations.
     /// Pattern/body names are resolved by the canonical validator, retaining unavailable readings.
     ///
