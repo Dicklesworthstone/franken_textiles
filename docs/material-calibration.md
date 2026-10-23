@@ -1,6 +1,6 @@
 # From a measured swatch to the same pattern's cloth simulation
 
-The `ftx-materials calibrate` command identifies the existing effective orthotropic membrane from
+The `ftx materials calibrate` and `ftx-materials calibrate` commands identify the existing effective orthotropic membrane from
 planar force/deformation observations. It emits the ordinary source-bearing material selection used
 by `bind`, `resolve`, `ftx drape`, rounds and motion; there is no separate calibration-only solver.
 This closes the measurement-to-consumer software path, not the empirical-characterization gate.
@@ -29,6 +29,13 @@ positions change. This is a causal software test, not real garment fit evidence.
 Without `--allow-estimates`, calibration still reports the fit, but its portable selection does not
 admit estimated stiffness to simulation. `simulation_ready` is false and `mechanics_refusal` explains
 why. Allowing estimated *input observations* is a separate explicit choice in the input JSON.
+
+The primary command accepts `ftx materials calibrate SWATCHES.json --allow-estimates --json`.
+Both commands share the same bounded reader, fitter and mechanical-readiness checks. The output's
+`selection_json` preserves the exact frozen selection for replay without a JavaScript number conversion.
+The portable `materials::calibrate_linear` API and `material_calibrate_linear` WASM export use the same
+fitter and return the ordinary inspected material and assignable selection. A successful fit remains
+inspectable when mass, thickness, bending or contact measurements are absent; readiness stays false.
 
 ## Supply observations, not fiber-name defaults
 

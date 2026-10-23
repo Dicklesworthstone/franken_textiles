@@ -1,9 +1,15 @@
 # Directional bending calibration from coupons
 
-`ftx-materials calibrate-bending COUPONS.json [--allow-estimates]` fits the four directional
+`ftx materials calibrate-bending COUPONS.json [--allow-estimates] [--json]` and the equivalent
+`ftx-materials calibrate-bending` command fit the four directional
 panel-bending coefficients used by `orthotropic_normal_patch/1` and returns the ordinary frozen
 material selection consumed by binding, per-piece sewn garments, Newton stepping and body-motion
 continuation. It does not introduce a calibration-only bending model.
+
+The portable `materials::calibrate_bending` API and `material_calibrate_bending` WASM export call this
+same fitter. Their exact `selection_json` enters ordinary pattern assignment, with full source,
+FIT/CHECK and preferred-curvature evidence. Fitted-output consent does not authorize estimated
+input observations or fill missing membrane, mass or contact properties.
 
 The bundled fixture is entirely synthetic. It exists to exercise the acquisition-to-solver path:
 

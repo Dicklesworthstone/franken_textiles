@@ -1,20 +1,19 @@
 //! Material workbench companion to `ftx`: the same catalog, selection and drape resolution APIs.
 //! This executable does no network access and never overwrites a pattern when binding a material.
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
 use ftx_core::{Refusal, RefusalCode};
 use ftx_drape::{material, run::DrapeOptions};
 use ftx_pattern::Pattern;
-use ftx_pattern::material_calibration::{Input as CalibrationInput, calibrate};
-use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
+use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::material_cost::{QuoteBook, Scope};
 use ftx_pattern::materials::ThermalStack;
 use ftx_pattern::textile_import::{catalog, resolve_fabric};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[path = "../materials/stock.rs"]
@@ -42,6 +41,8 @@ mod thermal_transient;
 
 #[path = "material_workbench/bending.rs"]
 mod bending_calibration;
+#[path = "material_workbench/calibration.rs"]
+mod calibration;
 #[path = "material_workbench/cutting.rs"]
 mod cutting;
 #[path = "material_workbench/friction.rs"]
@@ -50,6 +51,8 @@ mod friction_calibration;
 mod membrane_plasticity_calibration;
 #[path = "material_workbench/relaxation.rs"]
 mod relaxation_calibration;
+
+use calibration::{read, simulation_readiness};
 
 const USAGE: &str = "ftx-materials catalog [SEARCH]
 ftx-materials screen REQUEST.json
@@ -151,23 +154,6 @@ fn io(path: &str, error: std::io::Error) -> Refusal {
     Refusal::new(RefusalCode::Io, format!("{path}: {error}"))
 }
 
-fn read<T: DeserializeOwned>(path: &str) -> Result<T, Refusal> {
-    const MAX: u64 = 64 * 1024 * 1024;
-    let mut bytes = Vec::new();
-    File::open(path)
-        .map_err(|e| io(path, e))?
-        .take(MAX + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| io(path, e))?;
-    if bytes.len() as u64 > MAX {
-        return Err(Refusal::new(
-            RefusalCode::BudgetExceeded,
-            "material input exceeds 64 MiB",
-        ));
-    }
-    serde_json::from_slice(&bytes).map_err(|e| invalid(format!("{path}: {e}")))
-}
-
 fn selected(raw: &Value) -> Result<ftx_pattern::material_catalog::ResolvedMaterial, Refusal> {
     if !raw.is_object() || !raw["fabric"].is_object() {
         return Err(invalid(
@@ -190,15 +176,6 @@ fn selected(raw: &Value) -> Result<ftx_pattern::material_catalog::ResolvedMateri
     }
     resolve_fabric(&raw["fabric"])?
         .ok_or_else(|| invalid("pattern has no explicit material selection"))
-}
-
-fn simulation_readiness(material: &ResolvedMaterial) -> Result<(), Refusal> {
-    material.mechanics()?;
-    material.membrane_relaxation()?;
-    material.membrane_plasticity()?;
-    material.bending_response()?;
-    material.bending_plasticity()?;
-    Ok(())
 }
 
 fn bind(raw: Value, selection: &Selection, out: &str) -> Result<Value, Refusal> {
@@ -252,23 +229,6 @@ struct StackInput {
     inside_c: f64,
     outside_c: f64,
     boundary_resistance_m2_k_w: f64,
-}
-
-fn calibration(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
-    let input: CalibrationInput = read(path)?;
-    let report = calibrate(&input)?;
-    let snapshot = catalog()?.resolve(&Selection {
-        id: report.material.id.clone(),
-        record: Some(report.material.clone()),
-        allow_estimates,
-        ..Selection::default()
-    })?;
-    let mechanics = simulation_readiness(&snapshot);
-    Ok(
-        json!({"calibration":report,"selection":snapshot.frozen_selection(),
-        "simulation_ready":mechanics.is_ok(),"mechanics_refusal":mechanics.err(),
-        "fit_claim":false,"calibration_observations_are_not_independent_garment_validation":true}),
-    )
 }
 
 fn run(args: &[String]) -> Result<Value, Refusal> {
@@ -376,8 +336,8 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["thermal-steady-coverage", report, map, conditions] => {
             steady_workbench::coverage(report, map, conditions)
         }
-        ["calibrate", path] => calibration(path, false),
-        ["calibrate", path, "--allow-estimates"] => calibration(path, true),
+        ["calibrate", path] => calibration::run(path, false),
+        ["calibrate", path, "--allow-estimates"] => calibration::run(path, true),
         ["catalog"] | ["catalog", _] => {
             let needle = words.get(1).copied().unwrap_or("").to_lowercase();
             let mut db = catalog()?;

@@ -1,9 +1,23 @@
 # From sliding acquisitions to material-selected cloth contact
 
-`ftx-materials calibrate-friction SLIDING.json [--allow-estimates]` identifies the existing scalar
+`ftx materials calibrate-friction SLIDING.json [--allow-estimates] [--json]` and the equivalent
+`ftx-materials calibrate-friction` command identify the existing scalar
 kinetic Coulomb coefficient from corrected normal load, pulling force and slip velocity. It emits
 ordinary source-locked sheet/interface inputs consumed by the production contact solver. No new
 contact law, fiber mixing rule, body model or numerical smoothing parameter is introduced.
+
+The portable `materials::calibrate_friction` API and `material_calibrate_friction` WASM export retain
+the same calibration and binding. `binding_json` preserves the complete frozen binding; pair results
+also supply `interface_json`, while body/self results supply `selection_json`. Pair readiness admits
+only that interface, with each sheet's readiness reported independently. It never publishes either
+sheet as a newly calibrated material or implies whole-garment readiness.
+
+`Changes::with_interface` and the portable/browser `stage_interface` / `material_stage_interface`
+operation merge one exact pair into the effective pending interface table. They preserve unrelated
+observations and their numeric representation, require explicit consent to replace an existing pair,
+and run the ordinary binding checks against all final material assignments. A pending empty table
+explicitly clears the original table before staging; stale retained pairs refuse rather than vanish.
+Interface estimate consent remains independent of both sheet selections.
 
 ```sh
 cargo run -p ftx-cli --bin ftx-materials -- calibrate-friction \

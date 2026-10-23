@@ -5,8 +5,14 @@ use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import;
 use serde_json::{Value, json};
 
+#[path = "bin/material_workbench/bending.rs"]
+mod bending_calibration;
+#[path = "bin/material_workbench/calibration.rs"]
+mod calibration;
 #[path = "bin/material_workbench/cutting.rs"]
 mod cutting;
+#[path = "bin/material_workbench/friction.rs"]
+mod friction_calibration;
 #[path = "bin/material_workbench/membrane_plasticity.rs"]
 mod membrane_plasticity;
 mod nonlinear;
@@ -18,6 +24,8 @@ mod sewing_selection;
 mod stock;
 mod strip;
 mod thermal;
+
+use calibration::{read, simulation_readiness};
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     let action = args.positional.get(1).map(String::as_str).unwrap_or("list");
@@ -78,7 +86,10 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     if matches!(
         action,
-        "calibrate-nonlinear"
+        "calibrate"
+            | "calibrate-bending"
+            | "calibrate-friction"
+            | "calibrate-nonlinear"
             | "calibrate-relaxation"
             | "calibrate-membrane-plasticity"
             | "calibrate-strip"
@@ -86,11 +97,14 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         known_options(args, "materials", &["allow-estimates"])?;
         let [path] = &args.positional[2..] else {
             return Err(bad_input(
-                "usage: ftx materials calibrate-nonlinear SWATCHES.json | calibrate-relaxation HISTORIES.json | calibrate-membrane-plasticity HISTORIES.json | calibrate-strip ACQUISITION.json [--allow-estimates]",
+                "usage: ftx materials calibrate|calibrate-nonlinear SWATCHES.json | calibrate-bending COUPONS.json | calibrate-friction SLIDING.json | calibrate-relaxation HISTORIES.json | calibrate-membrane-plasticity HISTORIES.json | calibrate-strip ACQUISITION.json [--allow-estimates]",
             ));
         };
         let allow = args.options.contains_key("allow-estimates");
         let result = match action {
+            "calibrate" => calibration::run(path, allow)?,
+            "calibrate-bending" => bending_calibration::run(path, allow)?,
+            "calibrate-friction" => friction_calibration::run(path, allow)?,
             "calibrate-relaxation" => relaxation::run(path, allow)?,
             "calibrate-membrane-plasticity" => membrane_plasticity::run(path, allow)?,
             "calibrate-strip" => strip::run(path, allow)?,

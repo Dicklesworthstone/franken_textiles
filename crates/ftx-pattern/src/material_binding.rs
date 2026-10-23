@@ -86,6 +86,71 @@ fn validate_interfaces(pairs: &[Value], assigned: &BTreeSet<String>) -> Result<(
 }
 
 impl Changes {
+    /// Stage one exact material pair while retaining every other effective interface observation.
+    /// A supplied pending table takes precedence over the original pattern table, including an
+    /// explicitly empty table. Existing pairs require separate replacement consent. Raw JSON
+    /// values retain their number representation; no material selection or coefficient is inferred.
+    ///
+    /// # Errors
+    /// Invalid or duplicate interfaces, unapproved replacement, an exceeded pair budget, or any
+    /// refusal from applying the final material selections and interface table to the pattern.
+    pub fn with_interface(
+        &self,
+        pattern: &Pattern,
+        raw: &Value,
+        replace_existing: bool,
+    ) -> Result<Self, Refusal> {
+        let incoming = Interface::parse(raw)?;
+        incoming.validate_observation()?;
+        let mut key = incoming.materials;
+        key.sort();
+        let mut pairs = match &self.interfaces {
+            Some(pairs) => pairs.clone(),
+            None => match pattern.raw()["fabric"].get("interfaces") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(pairs)) => pairs.clone(),
+                Some(_) => return Err(invalid("existing fabric.interfaces must be a list")),
+            },
+        };
+        if pairs.len() > 2016 {
+            return Err(invalid("material interface budget exceeded"));
+        }
+        let mut found = None;
+        let mut seen = BTreeSet::new();
+        for (index, existing) in pairs.iter().enumerate() {
+            let pair = Interface::parse(existing)?;
+            pair.validate_observation()?;
+            let mut existing_key = pair.materials;
+            existing_key.sort();
+            if existing_key[0] == existing_key[1] || !seen.insert(existing_key.clone()) {
+                return Err(invalid(
+                    "duplicate or same-sheet interface in the effective table",
+                ));
+            }
+            if existing_key == key {
+                found = Some(index);
+            }
+        }
+        if let Some(index) = found {
+            if !replace_existing {
+                return Err(invalid(
+                    "this material pair already has an observation; explicit replace_existing is required",
+                ));
+            }
+            pairs[index] = raw.clone();
+        } else {
+            if pairs.len() == 2016 {
+                return Err(invalid("material interface budget exceeded"));
+            }
+            pairs.push(raw.clone());
+        }
+        let mut staged = self.clone();
+        staged.interfaces = Some(pairs);
+        // The ordinary authority checks every final assigned hash, including retained pairs.
+        staged.apply(pattern)?;
+        Ok(staged)
+    }
+
     /// Apply named changes and freeze EVERY effective source selection, including untouched pieces.
     /// Missing mechanical data does not prevent choosing a material for a supported other consumer.
     /// A uniform change never erases a pre-existing lining/cuff selection. Pair evidence is preserved

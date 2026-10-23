@@ -1,5 +1,5 @@
 //! Coupon-to-selection adapter for directional panel bending.
-use ftx_core::Refusal;
+use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_bending_calibration::{Input, calibrate};
 use ftx_pattern::material_catalog::Selection;
 use ftx_pattern::textile_import::catalog;
@@ -17,9 +17,13 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
         ..Selection::default()
     })?;
     let readiness = simulation_readiness(&material);
+    let selection = material.frozen_selection();
+    let selection_json = serde_json::to_string_pretty(&selection)
+        .map_err(|e| Refusal::new(RefusalCode::InvalidDocument, e.to_string()))?;
     Ok(json!({
         "calibration": report,
-        "selection": material.frozen_selection(),
+        "selection": selection,
+        "selection_json": selection_json,
         "simulation_ready": readiness.is_ok(),
         "mechanics_refusal": readiness.err(),
         "fit_claim": false,

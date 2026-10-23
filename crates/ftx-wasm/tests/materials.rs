@@ -38,6 +38,260 @@ fn changes(default: Value) -> Value {
 }
 
 #[test]
+fn linear_and_bending_identification_reach_the_actual_material_binding() {
+    let linear = include_str!("../../../tests/fixtures/materials/synthetic-swatch.json");
+    let bending = include_str!("../../../tests/fixtures/materials/synthetic-bending-coupons.json");
+    let expected_linear = serde_json::to_value(
+        ftx_pattern::material_calibration::calibrate(&serde_json::from_str(linear).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let expected_bending = serde_json::to_value(
+        ftx_pattern::material_bending_calibration::calibrate(
+            &serde_json::from_str(bending).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for (input, calibrate, expected) in [
+        (
+            linear,
+            materials::calibrate_linear as fn(&str, bool) -> _,
+            expected_linear,
+        ),
+        (bending, materials::calibrate_bending, expected_bending),
+    ] {
+        for allow in [false, true] {
+            let output: Value = serde_json::from_str(&calibrate(input, allow).unwrap()).unwrap();
+            assert_eq!(output["calibration"], expected);
+            assert_eq!(output["simulation_ready"], allow);
+            assert_eq!(output["selection"]["allow_estimates"], allow);
+            assert_eq!(output["empirical_validation_claim"], false);
+            assert!(output["calibration"]["check"].is_object());
+            let selection = output["selection_json"].as_str().unwrap();
+            let inspected: Value =
+                serde_json::from_str(&materials::inspect(selection).unwrap()).unwrap();
+            assert_eq!(inspected, output["material"]);
+            let edits = format!(r#"{{"schema":"ftx-material-bindings/1","default":{selection}}}"#);
+            let bound: Value =
+                serde_json::from_str(&materials::bind(PATTERN, &edits).unwrap()).unwrap();
+            assert_eq!(bound["geometry_changed"], false);
+            assert_eq!(bound["drape_materials_with_self_contact"]["ready"], allow);
+            assert_eq!(
+                bound["pieces"][0]["material_sha256"],
+                output["selection"]["expected_sha256"]
+            );
+        }
+        let mut denied: Value = serde_json::from_str(input).unwrap();
+        denied["allow_estimated_observations"] = json!(false);
+        assert!(calibrate(&denied.to_string(), true).is_err());
+        let mut incomplete: Value = serde_json::from_str(input).unwrap();
+        incomplete["material"]["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("areal_density");
+        let partial: Value =
+            serde_json::from_str(&calibrate(&incomplete.to_string(), true).unwrap()).unwrap();
+        assert_eq!(partial["simulation_ready"], false);
+        assert!(partial["selection"]["record"]["properties"]["areal_density"].is_null());
+        assert!(partial["mechanics_refusal"].is_object());
+        assert!(calibrate("{}", true).is_err());
+    }
+}
+
+#[test]
+fn friction_identification_preserves_pair_identity_and_separate_estimate_admission() {
+    let input = include_str!("../../../tests/fixtures/materials/synthetic-friction-sliding.json");
+    let catalog = ftx_pattern::textile_import::catalog().unwrap();
+    let native =
+        ftx_pattern::material_friction::calibrate(&serde_json::from_str(input).unwrap(), &catalog)
+            .unwrap();
+    for allow in [false, true] {
+        let output: Value =
+            serde_json::from_str(&materials::calibrate_friction(input, allow).unwrap()).unwrap();
+        assert_eq!(
+            output["calibration"],
+            serde_json::to_value(&native).unwrap()
+        );
+        assert_eq!(
+            output["binding"],
+            serde_json::to_value(native.binding(&catalog, allow).unwrap()).unwrap()
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(output["binding_json"].as_str().unwrap()).unwrap(),
+            output["binding"]
+        );
+        assert!(output["selection"].is_null());
+        assert!(output["selection_json"].is_null());
+        assert!(output["material"].is_null());
+        assert_eq!(output["readiness"]["scope"], "interface_only");
+        assert_eq!(output["readiness"]["ready"], allow);
+        assert_eq!(output["readiness"]["whole_garment_checked"], false);
+        for sheet in output["readiness"]["sheets"].as_array().unwrap() {
+            assert_eq!(sheet["ready"], true); // Pair consent never changes either sheet's policy.
+        }
+        let mut raw: Value = serde_json::from_str(PATTERN).unwrap();
+        raw["fabric"]["material"] = output["binding"]["materials"][0].clone();
+        raw["pieces"][1]["fabric"] = json!({"material":output["binding"]["materials"][1]});
+        let staged: Value = serde_json::from_str(
+            &materials::stage_interface(
+                &raw.to_string(),
+                r#"{"schema":"ftx-material-bindings/1"}"#,
+                output["interface_json"].as_str().unwrap(),
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let bound: Value = serde_json::from_str(
+            &materials::bind(&raw.to_string(), staged["changes_json"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bound["drape_materials_with_self_contact"]["ready"], allow);
+        assert_eq!(
+            bound["pattern"]["fabric"]["interfaces"][0]["allow_estimates"],
+            allow
+        );
+        assert_eq!(
+            bound["pieces"][0]["material_sha256"],
+            output["binding"]["materials"][0]["expected_sha256"]
+        );
+    }
+    let mut denied: Value = serde_json::from_str(input).unwrap();
+    denied["allow_estimated_observations"] = json!(false);
+    assert!(materials::calibrate_friction(&denied.to_string(), true).is_err());
+}
+
+#[test]
+fn friction_body_and_self_outputs_change_only_the_named_contact_property() {
+    let input: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-friction-sliding.json"
+    ))
+    .unwrap();
+    let material = input["target"]["materials"][0].clone();
+    let original: Value =
+        serde_json::from_str(&materials::inspect(&material.to_string()).unwrap()).unwrap();
+    for (kind, key) in [("self_contact", "friction_self"), ("body", "friction_skin")] {
+        let mut request = input.clone();
+        request["target"] = json!({"kind":kind,"material":material});
+        if kind == "body" {
+            request["target"]["counterface"] = json!({"reference":"test:synthetic-body-surrogate",
+                "accessed_on":"2026-10-23","note":"Synthetic counterface for software regression only"});
+        }
+        assert!(materials::calibrate_friction(&request.to_string(), true).is_err());
+        request["replace_existing"] = json!(true);
+        for allow in [false, true] {
+            let output: Value = serde_json::from_str(
+                &materials::calibrate_friction(&request.to_string(), allow).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(output["readiness"]["scope"], "material_mechanics");
+            assert_eq!(output["simulation_ready"], allow);
+            assert!(output["interface_json"].is_null());
+            assert_eq!(output["selection"], output["binding"]["selection"]);
+            for (property, quantity) in original["selection"]["record"]["properties"]
+                .as_object()
+                .unwrap()
+            {
+                if property != key {
+                    assert_eq!(
+                        &output["selection"]["record"]["properties"][property],
+                        quantity
+                    );
+                }
+            }
+            assert_eq!(
+                output["selection"]["record"]["properties"][key],
+                output["calibration"]["coefficient"]
+            );
+            let selected = output["selection_json"].as_str().unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&materials::inspect(selected).unwrap()).unwrap(),
+                output["material"]
+            );
+        }
+    }
+}
+
+#[test]
+fn contact_pair_staging_preserves_other_evidence_and_requires_explicit_replacement() {
+    let fit: Value = serde_json::from_str(
+        &materials::calibrate_friction(
+            include_str!("../../../tests/fixtures/materials/synthetic-friction-sliding.json"),
+            true,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut raw: Value = serde_json::from_str(PATTERN).unwrap();
+    raw["fabric"]["material"] = fit["binding"]["materials"][0].clone();
+    raw["pieces"][1]["fabric"] = json!({"material":fit["binding"]["materials"][1]});
+    let third: Value =
+        serde_json::from_str(&materials::inspect(&selection(1.4, 0.8).to_string()).unwrap())
+            .unwrap();
+    let mut piece = raw["pieces"][1].clone();
+    piece["id"] = json!("lining");
+    piece["fabric"] = json!({"material":third["selection"]});
+    raw["pieces"].as_array_mut().unwrap().push(piece);
+    let original_pair = json!({"materials":[fit["binding"]["materials"][0]["expected_sha256"],third["selection"]["expected_sha256"]],
+        "friction":{"value":1,"unit":"1","bounds":[-0.0,1],"source":"pair","evidence":"estimate",
+            "method":"Synthetic corrected sliding acquisition; not textile evidence"},
+        "sources":{"pair":{"reference":"test:retained-pair","accessed_on":"2026-10-23",
+            "note":"Synthetic retained observation"}},"allow_estimates":false});
+    raw["fabric"]["interfaces"] = json!([original_pair]);
+    let original = raw.to_string();
+    let empty = r#"{"schema":"ftx-material-bindings/1"}"#;
+    let interface = fit["interface_json"].as_str().unwrap();
+    let staged: Value = serde_json::from_str(
+        &materials::stage_interface(&original, empty, interface, false).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(staged["interfaces"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        staged["interfaces"][0].to_string(),
+        original_pair.to_string()
+    );
+    assert!(staged["interfaces_json"].as_str().unwrap().contains("-0.0"));
+    assert_eq!(raw.to_string(), original);
+    let pending = staged["changes_json"].as_str().unwrap();
+    assert!(materials::stage_interface(&original, pending, interface, false).is_err());
+    let mut reversed: Value = serde_json::from_str(interface).unwrap();
+    reversed["materials"].as_array_mut().unwrap().reverse();
+    reversed["allow_estimates"] = json!(false);
+    let replaced: Value = serde_json::from_str(
+        &materials::stage_interface(&original, pending, &reversed.to_string(), true).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(replaced["interfaces"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        replaced["interfaces"][0].to_string(),
+        original_pair.to_string()
+    );
+    assert_eq!(replaced["interfaces"][1], reversed);
+    let cleared: Value = serde_json::from_str(
+        &materials::stage_interface(
+            &original,
+            r#"{"schema":"ftx-material-bindings/1","interfaces":[]}"#,
+            interface,
+            false,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(cleared["interfaces"].as_array().unwrap().len(), 1);
+    let duplicate =
+        json!({"schema":"ftx-material-bindings/1","interfaces":[original_pair,original_pair]});
+    assert!(
+        materials::stage_interface(&original, &duplicate.to_string(), interface, true).is_err()
+    );
+    reversed["materials"][0] = json!("f".repeat(64));
+    assert!(materials::stage_interface(&original, empty, &reversed.to_string(), true).is_err());
+    let mut stale = raw;
+    stale["fabric"]["interfaces"][0]["materials"][1] = json!("e".repeat(64));
+    assert!(materials::stage_interface(&stale.to_string(), empty, interface, true).is_err());
+}
+
+#[test]
 fn permanent_stretch_api_identifies_the_native_law_and_preserves_consumption_policy() {
     let input = include_str!(
         "../../../tests/fixtures/materials/synthetic-membrane-plasticity-calibration.json"

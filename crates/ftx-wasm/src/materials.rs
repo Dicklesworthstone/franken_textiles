@@ -180,6 +180,154 @@ pub fn material_strip_acquisition(request: &str) -> Result<String, wasm_bindgen:
     strip_acquisition(request).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
+fn calibration_material(calibration: Value, snapshot: &ResolvedMaterial) -> Result<Value, Refusal> {
+    let material = detail(snapshot)?;
+    let mechanics = &material["capabilities"]["mechanical_coefficients"];
+    Ok(
+        json!({"calibration":calibration,"selection":material["selection"],
+        "selection_json":material["selection_json"],
+        "simulation_ready":mechanics["ready"],"mechanics_refusal":mechanics["refusal"],
+        "material":material,"fit_claim":false,"empirical_validation_claim":false}),
+    )
+}
+
+/// Identify linear orthotropic membrane response from source-bearing nominal swatch forces.
+/// Input-observation consent and admission of the fitted output remain independent.
+///
+/// # Errors
+/// Oversized/invalid input or the canonical fit's source, excitation, stability or residual refusal.
+pub fn calibrate_linear(input: &str, allow_estimates: bool) -> Result<String, Refusal> {
+    budget(&[input])?;
+    let input = serde_json::from_str(input).map_err(invalid)?;
+    let report = ftx_pattern::material_calibration::calibrate(&input)?;
+    let snapshot = textile_import::catalog()?.resolve(&Selection {
+        id: report.material.id.clone(),
+        record: Some(report.material.clone()),
+        allow_estimates,
+        ..Selection::default()
+    })?;
+    serde_json::to_string(&calibration_material(
+        serde_json::to_value(report).map_err(invalid)?,
+        &snapshot,
+    )?)
+    .map_err(invalid)
+}
+
+/// Browser linear swatch calibration through the existing source-qualified membrane authority.
+///
+/// # Errors
+/// Same refusals as [`calibrate_linear`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_calibrate_linear(
+    input: &str,
+    allow_estimates: bool,
+) -> Result<String, wasm_bindgen::JsError> {
+    calibrate_linear(input, allow_estimates).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
+/// Identify directional panel bending and optional preferred curvature from actual coupon inputs.
+/// No thickness-to-bending or missing-contact inference is made.
+///
+/// # Errors
+/// Oversized/invalid input or the canonical coupon fit's evidence, stability or residual refusal.
+pub fn calibrate_bending(input: &str, allow_estimates: bool) -> Result<String, Refusal> {
+    budget(&[input])?;
+    let input = serde_json::from_str(input).map_err(invalid)?;
+    let report = ftx_pattern::material_bending_calibration::calibrate(&input)?;
+    let snapshot = textile_import::catalog()?.resolve(&Selection {
+        id: report.material.id.clone(),
+        record: Some(report.material.clone()),
+        allow_estimates,
+        ..Selection::default()
+    })?;
+    serde_json::to_string(&calibration_material(
+        serde_json::to_value(report).map_err(invalid)?,
+        &snapshot,
+    )?)
+    .map_err(invalid)
+}
+
+/// Browser directional bending identification using the production panel-bending tensor.
+///
+/// # Errors
+/// Same refusals as [`calibrate_bending`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_calibrate_bending(
+    input: &str,
+    allow_estimates: bool,
+) -> Result<String, wasm_bindgen::JsError> {
+    calibrate_bending(input, allow_estimates)
+        .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
+/// Identify exact pair, self or body-counterface kinetic friction from corrected sliding forces.
+/// A pair produces a separate interface, never a replacement for either material selection.
+///
+/// # Errors
+/// Oversized/invalid input, source-lock or observation refusal, unsupported force response, or
+/// unapproved replacement of a sheet property. Missing unrelated mechanics remain unavailable.
+pub fn calibrate_friction(input: &str, allow_estimates: bool) -> Result<String, Refusal> {
+    use ftx_pattern::material_friction::{self, Binding};
+    budget(&[input])?;
+    let input = serde_json::from_str(input).map_err(invalid)?;
+    let catalog = textile_import::catalog()?;
+    let report = material_friction::calibrate(&input, &catalog)?;
+    let binding = report.binding(&catalog, allow_estimates)?;
+    let calibration = serde_json::to_value(&report).map_err(invalid)?;
+    let mut output = match &binding {
+        Binding::Material { selection } => {
+            let snapshot = catalog.resolve(selection)?;
+            let mut value = calibration_material(calibration, &snapshot)?;
+            value["interface_json"] = Value::Null;
+            value["readiness"] = json!({"scope":"material_mechanics",
+                "ready":value["simulation_ready"],"refusal":value["mechanics_refusal"],
+                "whole_garment_checked":false});
+            value
+        }
+        Binding::Interface {
+            materials,
+            interface,
+        } => {
+            let admitted = interface.validate();
+            let mut sheets = Vec::new();
+            for selection in materials {
+                let snapshot = catalog.resolve(selection)?;
+                let material = detail(&snapshot)?;
+                sheets.push(json!({"material_sha256":snapshot.sha256(),
+                    "ready":material["capabilities"]["mechanical_coefficients"]["ready"],
+                    "refusal":material["capabilities"]["mechanical_coefficients"]["refusal"]}));
+            }
+            json!({"calibration":calibration,"selection":null,"selection_json":null,"material":null,
+                "interface_json":serde_json::to_string(interface).map_err(invalid)?,
+                "readiness":{"scope":"interface_only","ready":admitted.is_ok(),
+                    "refusal":admitted.err(),"sheets":sheets,"whole_garment_checked":false},
+                "simulation_ready":false,"fit_claim":false,"empirical_validation_claim":false})
+        }
+    };
+    output["binding"] = serde_json::to_value(&binding).map_err(invalid)?;
+    output["binding_json"] = json!(serde_json::to_string(&binding).map_err(invalid)?);
+    output["scope"] = json!(
+        "Effective constant isotropic kinetic coefficient. No static-friction, condition-dependent law, runtime load/speed qualification or garment validation is inferred."
+    );
+    serde_json::to_string(&output).map_err(invalid)
+}
+
+/// Browser contact identification through the canonical acquisition and exact material-pair types.
+///
+/// # Errors
+/// Same refusals as [`calibrate_friction`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_calibrate_friction(
+    input: &str,
+    allow_estimates: bool,
+) -> Result<String, wasm_bindgen::JsError> {
+    calibrate_friction(input, allow_estimates)
+        .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
+}
+
 /// Identify the production nonlinear material law from source-bearing nominal swatch forces.
 /// Observation consent in the input and admission of the fitted estimates are independent.
 ///
@@ -480,6 +628,47 @@ pub fn bind(pattern: &str, changes: &str) -> Result<String, Refusal> {
     result["drape_materials_with_self_contact"] =
         readiness(material::resolve(&bound, &opts).map(|m| m.report));
     serde_json::to_string(&result).map_err(invalid)
+}
+
+/// Stage one measured contact pair without reconstructing source-bound numbers in JavaScript.
+/// The canonical binding authority preserves other effective pairs and checks final assignments.
+///
+/// # Errors
+/// Oversized/invalid inputs, stale or unassigned materials, invalid existing pairs, or an existing
+/// pair without explicit replacement consent. This does not grant consent to consume estimates.
+pub fn stage_interface(
+    pattern: &str,
+    changes: &str,
+    interface: &str,
+    replace_existing: bool,
+) -> Result<String, Refusal> {
+    budget(&[pattern, changes, interface])?;
+    let pattern = Pattern::from_json(pattern).map_err(invalid)?;
+    let changes: Changes = serde_json::from_str(changes).map_err(invalid)?;
+    let interface: Value = serde_json::from_str(interface).map_err(invalid)?;
+    let staged = changes.with_interface(&pattern, &interface, replace_existing)?;
+    serde_json::to_string(&json!({"schema":"ftx-staged-material-interface/1",
+        "interfaces":staged.interfaces,
+        "interfaces_json":serde_json::to_string(&staged.interfaces).map_err(invalid)?,
+        "changes_json":serde_json::to_string(&staged).map_err(invalid)?,
+        "geometry_changed":false,"physical_validation_claim":false}))
+    .map_err(invalid)
+}
+
+/// Browser staging of one source-bound contact pair over the current pending material edits.
+///
+/// # Errors
+/// Same refusals as [`stage_interface`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn material_stage_interface(
+    pattern: &str,
+    changes: &str,
+    interface: &str,
+    replace_existing: bool,
+) -> Result<String, wasm_bindgen::JsError> {
+    stage_interface(pattern, changes, interface, replace_existing)
+        .map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
 /// Browser catalog discovery; all observations stay local.

@@ -1,5 +1,5 @@
 //! Steady-sliding acquisition to the same source-locked material/interface used by cloth contact.
-use ftx_core::Refusal;
+use ftx_core::{Refusal, RefusalCode};
 use ftx_pattern::material_friction::{Binding, Input, calibrate};
 use ftx_pattern::textile_import::catalog;
 use serde_json::{Value, json};
@@ -33,9 +33,20 @@ pub(super) fn run(path: &str, allow_estimates: bool) -> Result<Value, Refusal> {
                 "whole_garment_checked":false})
         }
     };
-    Ok(
-        json!({"calibration":calibration,"binding":binding,"readiness":readiness,
+    let invalid = |e: serde_json::Error| Refusal::new(RefusalCode::InvalidDocument, e.to_string());
+    let binding_json = serde_json::to_string_pretty(&binding).map_err(invalid)?;
+    let mut result = json!({"calibration":calibration,"binding":binding,"binding_json":binding_json,"readiness":readiness,
         "fit_claim":false,"empirical_validation_claim":false,
-        "scope":"Effective constant isotropic kinetic coefficient. Not a static-friction calibration, condition-dependent law or runtime load/speed admission check."}),
-    )
+        "scope":"Effective constant isotropic kinetic coefficient. Not a static-friction calibration, condition-dependent law or runtime load/speed admission check."});
+    match &binding {
+        Binding::Interface { interface, .. } => {
+            result["interface_json"] =
+                json!(serde_json::to_string_pretty(interface).map_err(invalid)?);
+        }
+        Binding::Material { selection } => {
+            result["selection_json"] =
+                json!(serde_json::to_string_pretty(selection).map_err(invalid)?);
+        }
+    }
+    Ok(result)
 }

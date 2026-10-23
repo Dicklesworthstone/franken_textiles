@@ -119,6 +119,17 @@ replay the accepted ordinary material on a refined held-out strip and optionally
 native report and exact selection under `FTX_INTERVAL_STRIP_REPLAY`. These synthetic checks do not
 qualify a measured textile or supply absent bending, mass, contact or thermal evidence.
 
+**Measured membrane, bending and contact.** `materials::calibrate_linear`, `calibrate_bending` and
+`calibrate_friction` expose the existing source-qualified calibration engines with a 64 MiB input
+budget. Their wasm32 exports use the `material_` prefix and preserve exact Rust-generated selections
+and bindings. Fitted-output permission never admits estimated input observations or missing material
+properties. Pair friction produces a separately scoped interface and per-sheet readiness, with no
+replacement selection. `material_stage_interface` delegates to `Changes::with_interface`: it retains
+the effective table, requires explicit same-pair replacement consent, validates all final assigned
+hashes, and returns exact `interfaces_json` / `changes_json` without changing source geometry.
+`tests/materials.rs` replays actual material/contact consumers and preserves incomplete readiness,
+independent consent, retained numeric evidence, and refusal of stale or duplicate interfaces.
+
 **Joint-outfit material workbench.** `materials::outfit::prepare` and its wasm32 export
 `material_outfit_prepare(input)` use the production outfit composer to freeze an `ftx-outfit-drape/1`
 request into one ordinary pattern. The import retains exact request bytes, their SHA-256, exact
