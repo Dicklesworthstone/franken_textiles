@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 
 use super::CutPlan;
 
+/// Bounded assignment of whole markers to separately observed supplier orders.
+pub mod allocation;
 /// Source-locked purchasing of individually identified hides and remnants, not fungible roll area.
 pub mod finite;
 
@@ -39,6 +41,10 @@ pub struct Market {
     /// This is independent of total stock and does not establish guaranteed continuous inventory.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_observed_continuous_length: bool,
+    /// Optional whole-marker allocation across exact-source-locked supplier offers. Omission keeps
+    /// the original one-offer-per-material calculation and its wire format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_orders: Option<allocation::Policy>,
 }
 
 /// Price each exact material's gross stock area in one whole order, including all of its markers.
@@ -48,6 +54,9 @@ pub struct Market {
 /// # Errors
 /// Invalid quote book/market, empty marker, incompatible width evidence or numerical overflow.
 pub fn evaluate(plan: &CutPlan, book: &QuoteBook, market: &Market) -> Result<Value, Refusal> {
+    if let Some(policy) = &market.split_orders {
+        return allocation::evaluate(plan, book, market, policy);
+    }
     if plan.rolls.is_empty() {
         return Err(Refusal::new(
             RefusalCode::InvalidDocument,

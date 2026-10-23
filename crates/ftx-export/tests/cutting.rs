@@ -711,6 +711,293 @@ fn complete_marker_order_earns_one_source_price_break_after_combined_rounding() 
     assert_eq!(prices(&source)["complete_offer_coverage"], false);
 }
 
+fn split_order_fixture() -> (
+    CutPlan,
+    Vec<Value>,
+    ftx_export::cutting::procurement::Market,
+) {
+    let p = pattern(vec![piece("front", 40.0, 100.0)]);
+    let mut o = options();
+    o.copies = 3;
+    o.maximum_marker_length_m = Some(0.12);
+    let plan = CutPlan::build(&p, &o).unwrap();
+    assert_eq!(plan.rolls.len(), 2);
+    let quotes = ["a", "b"].map(|id| json!({
+        "offer_id":id,"material_id":"shell","material_sha256":plan.rolls[0].material.sha256(),
+        "supplier":format!("synthetic-{id}"),"sku":"shell","price":if id == "a" {1.0} else {2.0},
+        "quantity":1.0,"unit":"linear_meter","minimum_quantity":0.1,"order_increment":0.05,
+        "currency":"USD","region":"US","quality":"test","terms":"ex-tax-shipping",
+        "observed_on":"2026-10-18","available":true,"available_quantity":0.15,
+        "maximum_continuous_quantity":0.12,"source":"test:split-orders","source_sha256":"0".repeat(64)
+    })).to_vec();
+    let market = serde_json::from_value(json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-18","max_age_days":3,
+        "require_observed_quantity":true,"require_observed_continuous_length":true,
+        "split_orders":{"schema":"ftx-cut-order-allocation/1","max_search_nodes":10000}}))
+    .unwrap();
+    (plan, quotes, market)
+}
+
+fn split_quote_book(quotes: Vec<Value>) -> ftx_pattern::material_cost::QuoteBook {
+    serde_json::from_value(json!({"schema":"ftx-textile-quotes/1","quotes":quotes})).unwrap()
+}
+
+#[test]
+fn whole_markers_can_use_multiple_finite_suppliers_with_canonical_order_rounding() {
+    use ftx_export::cutting::procurement::evaluate;
+    use ftx_pattern::material_cost::Scope;
+    let (plan, quotes, mut market) = split_order_fixture();
+    let book = split_quote_book(quotes);
+    let priced = evaluate(&plan, &book, &market).unwrap();
+    assert_eq!(priced["schema"], "ftx-cut-procurement/3");
+    assert_eq!(priced["complete_offer_coverage"], true);
+    assert_eq!(priced["complete_observed_quantity_coverage"], true);
+    assert_eq!(priced["complete_continuous_length_limit_coverage"], true);
+    assert_eq!(priced["order_allocation_optimality_proven"], true);
+    assert!((priced["selected_observed_order_total"].as_f64().unwrap() - 0.45).abs() < 1e-12);
+    assert_eq!(
+        priced["selected_observed_order_total"],
+        priced["least_observed_independent_order_total"]
+    );
+    let allocation = &priced["material_orders"][0]["allocation"];
+    assert_eq!(allocation["whole_order_sample"]["offers"], json!([]));
+    let orders = allocation["selected_orders"].as_array().unwrap();
+    assert_eq!(orders.len(), 2);
+    let mut markers = Vec::new();
+    for order in orders {
+        let scope: Scope = serde_json::from_value(order["scope"].clone()).unwrap();
+        let canonical = book.evaluate(&plan.rolls[0].material, &scope).unwrap();
+        let selected = canonical
+            .offers
+            .iter()
+            .find(|offer| order["offer"]["quote"]["offer_id"] == offer.quote.offer_id)
+            .unwrap();
+        assert_eq!(order["offer"], serde_json::to_value(selected).unwrap());
+        assert!((selected.order_quantity - 0.15).abs() < 1e-12);
+        assert_eq!(order["required_continuous_length_m"], 0.12);
+        markers.extend(
+            order["roll_indices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i.as_u64().unwrap()),
+        );
+    }
+    markers.sort();
+    assert_eq!(markers, [0, 1]);
+    // Opt-in does not change the old whole-order consumer or silently split geometry for it.
+    market.split_orders = None;
+    let original = evaluate(&plan, &book, &market).unwrap();
+    assert_eq!(original["schema"], "ftx-cut-procurement/2");
+    assert_eq!(original["complete_offer_coverage"], false);
+    assert!(original["least_observed_independent_order_total"].is_null());
+    assert_eq!(priced["cut_plan"], original["cut_plan"]);
+}
+
+#[test]
+fn bounded_supplier_search_keeps_only_complete_incumbents_and_proves_cost_when_exhaustive() {
+    use ftx_export::cutting::procurement::evaluate;
+    let (plan, mut quotes, mut market) = split_order_fixture();
+    let mut full = quotes[0].clone();
+    full["offer_id"] = json!("whole");
+    full["supplier"] = json!("synthetic-whole");
+    full["price"] = json!(10.0);
+    full["available_quantity"] = json!(1.0);
+    quotes.push(full);
+    let book = split_quote_book(quotes);
+    market.split_orders.as_mut().unwrap().max_search_nodes = 1;
+    let limited = evaluate(&plan, &book, &market).unwrap();
+    assert_eq!(limited["complete_offer_coverage"], true);
+    assert_eq!(limited["selected_observed_order_total"], 2.5);
+    assert!(limited["least_observed_independent_order_total"].is_null());
+    assert_eq!(limited["order_allocation_optimality_proven"], false);
+    assert_eq!(limited["budget_exhausted"], true);
+    assert_eq!(limited["quote_evaluations"], 1);
+    assert_eq!(limited["search_nodes"], 0);
+    let orders = limited["material_orders"][0]["allocation"]["selected_orders"]
+        .as_array()
+        .unwrap();
+    assert_eq!(orders.len(), 1);
+    assert_eq!(orders[0]["roll_indices"], json!([0, 1]));
+    market.split_orders.as_mut().unwrap().max_search_nodes = 10000;
+    let optimum = evaluate(&plan, &book, &market).unwrap();
+    assert!((optimum["selected_observed_order_total"].as_f64().unwrap() - 0.45).abs() < 1e-12);
+    assert_eq!(optimum["order_allocation_optimality_proven"], true);
+    assert_eq!(optimum["budget_exhausted"], false);
+    // A budget without an incumbent cannot report a subtotal as a feasible cheap order.
+    let (plan, quotes, mut market) = split_order_fixture();
+    market.split_orders.as_mut().unwrap().max_search_nodes = 1;
+    let unknown = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+    assert_eq!(unknown["complete_offer_coverage"], false);
+    assert!(unknown["selected_observed_order_total"].is_null());
+    assert_eq!(
+        unknown["material_orders"][0]["allocation"]["no_feasible_listed_allocation"],
+        false
+    );
+}
+
+#[test]
+fn assigned_markers_share_one_supplier_minimum_increment_and_capacity() {
+    use ftx_export::cutting::procurement::evaluate;
+    let (_, mut quotes, market) = split_order_fixture();
+    let mut o = options();
+    o.copies = 5;
+    o.maximum_marker_length_m = Some(0.12);
+    let plan = CutPlan::build(&pattern(vec![piece("front", 40.0, 100.0)]), &o).unwrap();
+    assert_eq!(plan.rolls.len(), 3);
+    quotes[0]["minimum_quantity"] = json!(0.2);
+    quotes[0]["available_quantity"] = json!(0.25);
+    quotes[1]["price"] = json!(4.0);
+    quotes[1]["available_quantity"] = json!(0.2);
+    let mut whole = quotes[1].clone();
+    whole["offer_id"] = json!("whole");
+    whole["supplier"] = json!("synthetic-whole");
+    whole["price"] = json!(3.0);
+    whole["available_quantity"] = json!(0.4);
+    quotes.push(whole);
+    let priced = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+    assert_eq!(priced["order_allocation_optimality_proven"], true);
+    // The whole-capacity offer may supply a subset too: 0.25 m at 1/m plus 0.15 m at 3/m.
+    // Treating it as a whole-job-only fallback would miss this cheaper feasible allocation.
+    assert!(
+        (priced["selected_observed_order_total"].as_f64().unwrap() - 0.70).abs() < 1e-12,
+        "{priced:#}"
+    );
+    let orders = priced["material_orders"][0]["allocation"]["selected_orders"]
+        .as_array()
+        .unwrap();
+    assert_eq!(orders.len(), 2);
+    assert_eq!(orders[0]["offer"]["quote"]["offer_id"], "a");
+    assert_eq!(orders[0]["roll_indices"].as_array().unwrap().len(), 2);
+    assert_eq!(orders[0]["offer"]["order_quantity"], 0.25);
+    assert_eq!(orders[1]["roll_indices"].as_array().unwrap().len(), 1);
+    assert_eq!(orders[1]["offer"]["quote"]["offer_id"], "whole");
+    assert!((orders[1]["offer"]["order_quantity"].as_f64().unwrap() - 0.15).abs() < 1e-12);
+}
+
+#[test]
+fn supplier_allocation_keeps_expensive_prefixes_that_reach_cheaper_all_unit_tiers() {
+    use ftx_export::cutting::procurement::evaluate;
+    let (_, mut quotes, market) = split_order_fixture();
+    let mut o = options();
+    o.copies = 5;
+    o.maximum_marker_length_m = Some(0.12);
+    let plan = CutPlan::build(&pattern(vec![piece("front", 40.0, 100.0)]), &o).unwrap();
+    assert_eq!(plan.rolls.len(), 3);
+    quotes[0]["price"] = json!(100.0);
+    quotes[0]["available_quantity"] = json!(0.25);
+    quotes[0]["price_breaks"] = json!([{"minimum_quantity":0.25,"price":1.0,"sku":"bulk-a"}]);
+    quotes[1]["price"] = json!(4.0);
+    quotes[1]["available_quantity"] = json!(1.0);
+    let book = split_quote_book(quotes);
+    let mut bounded = market.clone();
+    bounded.split_orders.as_mut().unwrap().max_search_nodes = 1;
+    let baseline = evaluate(&plan, &book, &bounded).unwrap();
+    assert!((baseline["selected_observed_order_total"].as_f64().unwrap() - 1.6).abs() < 1e-12);
+    let priced = evaluate(&plan, &book, &market).unwrap();
+    // A single marker at a's base rate costs 15, above the 1.6 incumbent. Two markers reach
+    // its all-unit tier and cost only 0.25; b supplies the final 0.15-m rounded order for 0.6.
+    assert!(
+        (priced["selected_observed_order_total"].as_f64().unwrap() - 0.85).abs() < 1e-12,
+        "{priced:#}"
+    );
+    assert_eq!(priced["order_allocation_optimality_proven"], true);
+    let orders = priced["material_orders"][0]["allocation"]["selected_orders"]
+        .as_array()
+        .unwrap();
+    assert_eq!(orders.len(), 2);
+    assert_eq!(orders[0]["offer"]["quote"]["offer_id"], "a");
+    assert_eq!(orders[0]["offer"]["order_quantity"], 0.25);
+    assert_eq!(orders[0]["offer"]["applied_price_break"]["sku"], "bulk-a");
+}
+
+#[test]
+fn supplier_tier_sku_aliases_cannot_create_additional_independent_stock() {
+    use ftx_export::cutting::procurement::evaluate;
+    for shared_tier_only in [false, true] {
+        let (plan, mut quotes, market) = split_order_fixture();
+        quotes[0]["price_breaks"] =
+            json!([{"minimum_quantity":0.25,"price":1.0,"sku":"shared-stock"}]);
+        quotes[1]["supplier"] = quotes[0]["supplier"].clone();
+        quotes[1]["sku"] = json!(if shared_tier_only {
+            "other-base"
+        } else {
+            "shared-stock"
+        });
+        if shared_tier_only {
+            quotes[1]["price_breaks"] =
+                json!([{"minimum_quantity":0.25,"price":1.0,"sku":"shared-stock"}]);
+        }
+        let priced = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+        assert_eq!(priced["complete_offer_coverage"], false);
+        assert!(priced["selected_observed_order_total"].is_null());
+        assert_eq!(
+            priced["material_orders"][0]["allocation"]["no_feasible_listed_allocation"],
+            true
+        );
+    }
+}
+
+#[test]
+fn supplier_tiers_never_multiply_stock_and_unlocked_or_short_offers_cannot_fill_markers() {
+    use ftx_export::cutting::procurement::evaluate;
+    let (plan, mut quotes, market) = split_order_fixture();
+    quotes[1]["supplier"] = quotes[0]["supplier"].clone();
+    let tiers = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+    assert_eq!(tiers["complete_offer_coverage"], false);
+    assert_eq!(
+        tiers["material_orders"][0]["allocation"]["no_feasible_listed_allocation"],
+        true
+    );
+    let (_, mut quotes, _) = split_order_fixture();
+    quotes[0]["material_sha256"] = Value::Null;
+    let unlocked = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+    assert_eq!(unlocked["complete_offer_coverage"], false);
+    assert_eq!(
+        unlocked["material_orders"][0]["allocation"]["excluded_unlocked_offer_ids"],
+        json!(["a"])
+    );
+    let (_, mut quotes, _) = split_order_fixture();
+    for quote in &mut quotes {
+        quote["available_quantity"] = json!(100.0);
+        quote["maximum_continuous_quantity"] = json!(0.119);
+    }
+    let short = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+    assert_eq!(short["complete_offer_coverage"], false);
+    assert!(short["selected_observed_order_total"].is_null());
+}
+
+#[test]
+fn split_orders_keep_latest_source_state_and_charge_one_shared_budget() {
+    use ftx_export::cutting::procurement::evaluate;
+    let (plan, mut quotes, mut market) = split_order_fixture();
+    let mut later = quotes[0].clone();
+    later["observed_on"] = json!("2026-10-19");
+    later["available_quantity"] = json!(0.0);
+    quotes.push(later);
+    market.as_of = "2026-10-19".into();
+    let depleted = evaluate(&plan, &split_quote_book(quotes), &market).unwrap();
+    assert_eq!(depleted["complete_offer_coverage"], false);
+    assert!(depleted["selected_observed_order_total"].is_null());
+    let mut lining = piece("lining", 40.0, 100.0);
+    lining["fabric"] = fabric("lining", 0.1);
+    let mixed = CutPlan::build(
+        &pattern(vec![piece("front", 40.0, 100.0), lining]),
+        &options(),
+    )
+    .unwrap();
+    let (_, quotes, mut market) = split_order_fixture();
+    market.split_orders.as_mut().unwrap().max_search_nodes = 1;
+    let bounded = evaluate(&mixed, &split_quote_book(quotes), &market).unwrap();
+    assert_eq!(bounded["quote_evaluations"], 1);
+    assert_eq!(bounded["search_nodes"], 0);
+    assert_eq!(bounded["budget_exhausted"], true);
+    assert_eq!(bounded["complete_offer_coverage"], false);
+    assert!(bounded["selected_observed_order_total"].is_null());
+    market.split_orders.as_mut().unwrap().max_search_nodes = 0;
+    assert!(evaluate(&mixed, &split_quote_book(vec![]), &market).is_err());
+}
+
 #[test]
 fn grouped_orders_keep_materials_separate_and_missing_coverage_makes_total_unknown() {
     use ftx_export::cutting::procurement::{Market, evaluate};
