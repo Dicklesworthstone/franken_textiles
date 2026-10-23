@@ -23,8 +23,9 @@ For ChArUco, optionally select an existing `ftx-camera-calibration/1` report or
 clockwise rotation for **this photo**; these assertions are not filled from the
 calibration. Image size, lens ID and rotation must match exactly. The browser reuses
 the native retained-report verifier, detector, inverse lens geometry and uncertainty
-engine. It does not estimate a new camera model or infer unchanged focus/zoom settings.
-Use `ftx measure calibrate-camera` to identify the camera first.
+engine. Analyzing a measurement photo does not re-estimate the camera or infer unchanged focus/zoom settings.
+Create the retained report in the page's optional **Calibrate a camera locally** section,
+or with `ftx measure calibrate-camera`, before analyzing the measurement photo.
 
 When the retained calibration carries intrinsic covariance, describe the measurement
 photo's independent acquisition in the evidence field. The full covariance contributes
@@ -59,10 +60,58 @@ or ChArUco reference never falls back to plain-paper detection.
 This page connects the existing native plain-paper, ChArUco and calibrated uncertainty engines. Its limits
 are the same 64 MiB/16-million-pixel photo boundary and native bootstrap/point limits,
 plus 256 KiB for sidecar/points/options JSON and 16 MiB for retained calibration JSON.
-Invalid UTF-8 source bytes are refused; JSON is not normalized before hashing. Camera
-identification, imported-coordinate acquisition and the additional native photo options
-below remain CLI workflows. Digital synthetic tests establish numerical and
+Invalid UTF-8 source bytes are refused; JSON is not normalized before hashing. The additional
+native photo options below remain CLI workflows. Digital synthetic tests establish numerical and
 workflow behavior, not physical paper size/flatness, camera accuracy or real-person fit.
+
+### Create and reuse a camera calibration in the browser
+
+Expand **Calibrate a camera locally**. Choose either an existing
+`ftx-camera-calibration-input/1` coordinate document, or a
+`ftx-camera-calibration-images/1` manifest with its original ChArUco sheet sidecar and
+all the named local photographs. These are the same declared acquisitions used by the
+native command; see [camera-calibration.md](camera-calibration.md) for input examples,
+Pinhole/Brown assumptions, minimum independent views and FIT/CHECK corner requirements.
+The browser does not generate timestamps, select held-out evidence, infer unchanged
+lens settings or invent a noise level.
+
+For image acquisition, select individual files whose names exactly match
+`views[].image`, or select the directory relative to which those paths were authored.
+Nested paths are relative to that selected directory; no basename fallback or source
+path rewriting occurs. Choose one selection method. Every selected PNG/JPEG must occur
+in the manifest, and every declared image must be present. Non-image files in a selected
+directory are ignored. The worker checks the complete selection before reading an image,
+then reads and detects at most one photograph at a time. It uses the same Rust detector
+and calibration authority as the portable/native workflow; it never substitutes the
+measurement photo-scale fit or silently drops corners or views.
+
+An optional separate `ftx-calibration-corner-noise/1` file carries your explicit noise
+and independence assumptions. Inline noise remains available in the original input;
+combining it with a separate noise file refuses. Acquisition input and separate noise
+are each limited to 16 MiB, the sheet to 256 KiB, and the batch to 32 photos, each within
+the ordinary encoded-size and pixel limits. Inputs retain their original UTF-8 bytes.
+
+**Calibrate camera** displays acquisition progress, the native acceptance status,
+per-view FIT/CHECK counts and residuals, failures, refinement and conditional uncertainty.
+Download the ordinary `camera-calibration.json`, exact original coordinate input or image
+manifest, exact sheet/noise documents, and the detected coordinate input with its retained
+partitions. The complete report also retains acquisition identities, source hashes and
+every observation. A rejected fit or unavailable requested uncertainty remains inspectable
+and downloadable, but **Use this calibration for the photo** stays disabled.
+
+For an accepted result, that button selects the exact retained report directly for the
+current photo; downloading and reselecting it is unnecessary. It switches to ChArUco
+measurement and withdraws the old scale, point pairs and measurements. The current photo's
+lens ID, rotation and independence assertions are still yours to supply, and the ordinary
+retained-calibration verifier checks the report again before measurement.
+
+Changing any acquisition source, cancelling, or starting another calibration withdraws
+its generated result and any photo scale that used it. A separately loaded calibration
+file and unrelated photo evidence remain available. Calibration and photo computation
+run one at a time; cancellation terminates the disposable worker, and superseded reads
+or replies cannot publish. Nothing is uploaded, stored in browser storage or written
+without an explicit download. This is numerical camera identification under declared
+evidence, not empirical camera qualification or proof of real-person measurement accuracy.
 
 ## Detect plain paper directly from a photo
 

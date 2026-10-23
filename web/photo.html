@@ -11,16 +11,58 @@ h1,h2{line-height:1.2}label{display:inline-block;margin:6px 14px 6px 0}input,sel
 button{cursor:pointer}button:disabled{cursor:default;opacity:.5}textarea{width:100%;box-sizing:border-box;font:14px monospace}
 canvas{display:block;width:100%;height:auto;cursor:crosshair}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px;border-bottom:1px solid #ddd}
-a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error{color:#a02020}small{color:#42515a}
+a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error,#cameraError{color:#a02020}small{color:#42515a}
 [hidden]{display:none!important}
 </style>
 </head>
 <body>
 <h1>Photo measurements</h1>
 <p>Measure lengths or angles using a flat reference sheet in the photo: blank US Letter/A4
-  or a printed ChArUco calibration board, with optional existing lens calibration.
+  or a printed ChArUco calibration board, with optional lens calibration created here or retained from an earlier session.
   Photos and clicks stay in this browser; nothing is uploaded or saved in browser storage.
   <a href="index.html">Return to the Pattern Workbench</a>.</p>
+<section>
+  <details>
+    <summary><b>Calibrate a camera locally</b> — optional</summary>
+    <p>Identify the camera from several views of a measured, rigid, flat reference. Supply your declared
+      lens model, unchanged capture settings, actual frame identities and FIT/CHECK assignments before fitting.
+      Use different out-of-plane tilts. The shared calibration engine keeps every acquired corner and reports failed gates.</p>
+    <label>Acquisition <select id="cameraMode"><option value="images">Local ChArUco photos</option><option value="coordinates">Existing reference coordinates</option></select></label>
+    <label><span id="cameraInputLabel">Image manifest</span> <input id="cameraInput" type="file" accept="application/json,.json"></label>
+    <div id="cameraImageControls">
+      <label>Original sheet description <input id="cameraSheet" type="file" accept="application/json,.json"></label>
+      <label>Calibration photos <input id="cameraImages" type="file" multiple accept="image/png,image/jpeg,.png,.jpg,.jpeg"></label>
+      <label>Or choose their directory <input id="cameraDirectory" type="file" webkitdirectory multiple></label>
+      <p><small>The manifest uses <code>ftx-camera-calibration-images/1</code>. Each <code>views[].image</code>
+        must exactly match a selected filename, or a path relative to the chosen directory. Select either files or a directory.
+        All selected PNG/JPEG photos must be declared; other directory files are ignored. Up to 32 images are read
+        and detected one at a time. No FIT/CHECK split, timestamp, image model or noise value is inferred.</small></p>
+    </div>
+    <label>Corner-noise declaration (optional) <input id="cameraNoise" type="file" accept="application/json,.json"></label>
+    <button id="cameraClearNoise" type="button" disabled>Remove separate noise</button>
+    <p><small>Coordinate input uses <code>ftx-camera-calibration-input/1</code>. Separate noise uses
+      <code>ftx-calibration-corner-noise/1</code>; keep its uncertainty and independence evidence explicit.
+      Do not combine separate noise with an inline noise declaration. JSON limits: 16 MiB for input/noise,
+      256 KiB for the sheet; each image has the ordinary 64 MiB/16-million-pixel limit.
+      See the <a href="https://github.com/Dicklesworthstone/franken_textiles/blob/main/docs/camera-calibration.md">camera calibration input guide</a> for the exact schemas and capture requirements.</small></p>
+    <p><button id="cameraRun" disabled>Calibrate camera</button> <button id="cameraCancel" disabled>Cancel calibration</button></p>
+    <p id="cameraStatus" role="status" aria-live="polite">Choose the original acquisition documents and local images.</p>
+    <pre id="cameraError" role="alert"></pre>
+    <details><summary>Image acquisition progress</summary><pre id="cameraProgress"></pre></details>
+    <div id="cameraResult" hidden>
+      <h2>Camera calibration result</h2>
+      <p id="cameraSummary"></p>
+      <table><thead><tr><th>Frame</th><th>View partition</th><th>FIT / CHECK corners</th><th>Maximum residual (px)</th><th>Failure</th></tr></thead><tbody id="cameraChecks"></tbody></table>
+      <p><button id="cameraUse" disabled>Use this calibration for the photo</button></p>
+      <p><small>Accepted calibration can be used immediately below. Enter the current photo's lens/settings ID,
+        rotation and independence evidence yourself. A rejected calibration remains inspectable and downloadable;
+        it cannot supply measurement intrinsics. Numerical acceptance does not establish camera accuracy, unchanged
+        physical settings, correct print size or real-person fit.</small></p>
+      <div id="cameraDownloads" class="files"></div>
+      <details><summary>Complete calibration, source observations and uncertainty</summary><pre id="cameraReport"></pre></details>
+    </div>
+  </details>
+</section>
 <section>
   <h2>1. Find the reference sheet</h2>
   <p>Show all four paper edges against a darker background. Verify the actual paper size and keep
@@ -37,6 +79,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error{color
       <a href="calibration/calib-sheet-a4.pdf" download>A4 board</a> and <a href="calibration/calib-sheet-a4.json" download>A4 sidecar</a>.</small></p>
     <label>Existing lens calibration (optional) <input id="calibration" type="file" accept="application/json,.json"></label>
     <button id="clearCalibration" type="button">Remove calibration</button>
+    <p id="cameraActive"></p>
     <div id="lensControls" hidden>
       <label>Lens/settings ID for this photo <input id="lensId" maxlength="256" autocomplete="off"></label>
       <label>Already-applied clockwise rotation <select id="rotation"><option value="">Choose rotation</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
@@ -45,7 +88,7 @@ a{color:#17608a}.files a{display:inline-block;margin:6px 18px 6px 0}#error{color
       <p><small>Use a saved ftx-camera-calibration/1 report or ftx-photo-lens/1 document for the exact lens, focus, zoom,
         resolution and orientation. Retained calibration is checked against its saved observations. These fields assert
         the current capture settings; they do not rotate or resize the photo. Known calibration-photo reuse is refused
-        when uncertainty requires independence. This page consumes calibration; identify the camera with the native workflow.</small></p>
+        when uncertainty requires independence. You can create a retained calibration in the optional section above.</small></p>
     </div>
   </div>
   <p><button id="analyze" disabled>Analyze photo</button> <button id="cancel" disabled>Cancel</button></p>

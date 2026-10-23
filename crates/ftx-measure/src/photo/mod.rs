@@ -4,6 +4,7 @@
 //! Image decoding stays with the caller. A homography measures only the sheet's plane.
 
 pub mod acquisition;
+pub mod calibration_images;
 mod camera;
 mod charuco;
 mod charuco_detect;

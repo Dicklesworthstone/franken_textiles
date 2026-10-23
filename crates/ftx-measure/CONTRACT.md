@@ -70,6 +70,20 @@ unstable consensus are explicit errors. Blur, if supplied, is external metadata,
 computed image diagnostic. No claim of OpenCV RANSAC/noisy-fit or NumPy RNG parity.
 Runnable CLI and input examples are in `docs/photo-measurement.md`.
 
+**Portable camera acquisition.** `photo::calibration_images::Acquisition` shares the native
+manifest, board, capture and predeclared FIT/held-out admission with file-free callers. It freezes
+the original manifest and sheet before detection, admits exactly one decoded image at a time in
+canonical frame order, rejects duplicate decoded pixels before detection and retains every identified
+corner without photo-scale RANSAC or fitted-lens redetection. Failed additions commit no state;
+incomplete batches cannot calibrate. The existing 32-image, 16-million-pixel/image, 128-million-pixel
+batch and 16-MiB JSON bounds apply. Receipts preserve original text hashes, capture labels and
+partitions, detector identity and decoded/encoded hashes without retaining pixels.
+`intrinsics::calibrate_document` supplies the common coordinate/noise source envelope around the
+unchanged calibration and covariance engines. Tests cover partition/order invariance, raw Brown
+admission, transactional acquisition and exact native/portable source replay. Synthetic raster
+calibration in `ftx-wasm/tests/photo.rs` establishes software behavior, not empirical camera,
+reference print-scale, lens-setting or wearer-fit accuracy.
+
 **Conditional intrinsic covariance.** Opt-in Brown `corner_noise` declares independent isotropic
 per-coordinate pixel noise and its evidence, never derived from residual RMS. The undamped
 full fit-only Jacobian yields a nine-parameter covariance after marginalizing fitted poses;

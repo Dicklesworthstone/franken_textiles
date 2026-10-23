@@ -25,6 +25,49 @@ use super::geometry;
 const MIN_PIVOT_RATIO: f64 = 1e-6;
 const MAX_ERROR_PX: f64 = 3.0;
 
+/// Fit original coordinate JSON with optional original corner-noise JSON, retaining their exact
+/// byte identities. Native and portable acquisition adapters use this same report envelope.
+/// Rejected or unobservable calibrations return diagnostics with no usable solution.
+///
+/// # Errors
+/// Oversized/malformed input, unsupported or conflicting noise assumptions, or the canonical
+/// calibration engine's input/domain/budget refusals. Numerical gate failures remain reports.
+pub fn calibrate_document(
+    input_bytes: &[u8],
+    noise_bytes: Option<&[u8]>,
+) -> Result<(CalibrationReport, Value), Refusal> {
+    let limit = super::acquisition::MAX_CALIBRATION_JSON_BYTES;
+    if input_bytes.len() > limit || noise_bytes.is_some_and(|bytes| bytes.len() > limit) {
+        return Err(Refusal::new(
+            RefusalCode::BudgetExceeded,
+            "camera calibration JSON exceeds 16 MiB",
+        ));
+    }
+    let input: CalibrationInput = serde_json::from_slice(input_bytes)
+        .map_err(|e| invalid(format!("invalid camera calibration: {e}")))?;
+    let noise = noise_bytes
+        .map(|bytes| {
+            let value: Value = serde_json::from_slice(bytes)
+                .map_err(|e| invalid(format!("invalid calibration corner noise: {e}")))?;
+            let parsed: uncertainty::CalibrationNoise = serde_json::from_value(value.clone())
+                .map_err(|e| invalid(format!("invalid calibration corner noise: {e}")))?;
+            Ok::<_, Refusal>((parsed, value, bytes))
+        })
+        .transpose()?;
+    let report = if let Some((noise, _, _)) = &noise {
+        uncertainty::calibrate_camera_with_uncertainty(&input, noise)?
+    } else {
+        calibrate_camera(&input)?
+    };
+    let mut value = serde_json::to_value(&report).map_err(|e| invalid(e.to_string()))?;
+    value["input_sha256"] = json!(ftx_core::receipt::sha256_hex(input_bytes));
+    if let Some((_, input, bytes)) = noise {
+        value["corner_noise_input"] =
+            json!({"input":input,"sha256":ftx_core::receipt::sha256_hex(bytes)});
+    }
+    Ok((report, value))
+}
+
 /// Recompute a retained calibration before using its lens or uncertainty in another acquisition.
 /// Stored success flags, matrices and covariance are never treated as independent evidence.
 /// Capture lens identity, oriented image size and applied rotation must still match at the caller.

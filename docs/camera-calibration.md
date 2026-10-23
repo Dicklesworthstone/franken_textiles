@@ -135,20 +135,22 @@ requiring you to guess a focal length. No images or model assets are downloaded.
 
 ## Calibrate directly from ChArUco photographs
 
-The image path detects corners locally with the same optional OpenCV adapter used by
-photo measurement, then gives **all** identified corners to the existing Rust camera
-solver. It does not run photo-scale RANSAC, discard inconvenient corners, or re-detect
-with a fitted camera. It consumes the sidecar produced by `ftx measure calib-sheet`:
+The native and browser image paths share capture admission and the existing Rust camera solver.
+The pure Rust detector gives **all** identified corners to that solver. Acquisition does not run
+photo-scale RANSAC, discard inconvenient corners, or re-detect with a fitted camera. It consumes
+the sidecar produced by `ftx measure calib-sheet`:
 
 ```sh
 ftx measure calib-sheet --paper letter --out sheet --json
 ftx measure calibrate-camera --images capture/views.json \
   --sheet sheet/calib-sheet-letter.json \
-  --detector-python .venv-charuco/bin/python --out camera.json --json
+  --detector-python rust --out camera.json --json
 ```
 
-The detector environment needs `opencv-python-headless==4.13.0.92`; installation is
-explicit, never performed by `ftx`. The coordinate-only command below remains Python-free.
+The explicit `rust` backend needs no Python or OpenCV. The native command retains its existing
+default `python3` adapter for compatibility; an explicit Python path also selects that optional
+adapter and requires `opencv-python-headless==4.13.0.92`. Installation is never performed by `ftx`.
+The browser and coordinate-only command require no Python.
 Print at actual size, check both reference rulers, and use a rigid flat board. Photograph
 it at different **out-of-plane** tilts without changing the camera settings or image
 geometry. Apply orientation before exporting opaque 8-bit RGB/grayscale PNGs without EXIF.
@@ -218,17 +220,51 @@ hashes proves physical camera settings or authenticity of the photographed refer
 
 The batch is limited to 32 images, 16 million pixels and 64 MiB encoded per image, and
 128 million pixels across the batch; manifest/sidecar JSON retain the 16 MiB input limit.
-One image is decoded and released at a time. The existing 30-second detector deadline
-applies to each view. Limits refuse without resizing, truncating a batch or publishing a
+One image is decoded and released at a time. The optional OpenCV adapter's existing 30-second
+detector deadline applies to each view; the Rust detector enforces its own work bounds.
+Limits refuse without resizing, truncating a batch or publishing a
 partial calibration. New outputs never overwrite earlier evidence or input aliases.
 
 Run the synthetic image-to-calibration-to-pose workflow, including optional OpenCV tests:
 
 ```sh
 cargo test -p ftx-cli --test camera_image_workflow -- --include-ignored
-cargo test -p ftx-cli --bin ftx calibration_images
+cargo test -p ftx-measure calibration_images
+cargo test -p ftx-wasm --test photo
 cargo test -p ftx-measure --test camera_brown
 ```
+
+## Acquire a camera in the browser
+
+Open the photo-measurement page and choose camera calibration from coordinate observations or
+from ChArUco images. Coordinate mode accepts the original `ftx-camera-calibration-input/1` JSON.
+Image mode accepts the same `ftx-camera-calibration-images/1` manifest and explicit sheet sidecar
+as the native command, plus local files whose names match every manifest `views[].image` exactly.
+For nested names, select their directory; paths are resolved relative to that selected root.
+The page checks the complete selection before the worker reads images. Files remain on the device.
+
+Both modes accept an optional separate corner-noise document. This is the same conditional Brown
+covariance request described above; it cannot silently replace inline noise or make algebraic
+pinhole uncertainty available. Original text is retained, so whitespace and ordering remain bound
+to the reported source hashes. Image FIT/held-out assignments and corner holdouts are fixed before
+any detection. The worker decodes, detects and releases one image at a time and reports progress
+in canonical frame order. Cancelling discards that worker; editing source documents withdraws the
+generated calibration and any photo result that depended on it.
+
+Download the original source documents and ordinary calibration report for replay. Rejected or
+unobservable calibrations retain diagnostics and downloads, but cannot be activated for photo
+measurement. An accepted calibration with any requested uncertainty available can be used directly
+as the retained camera in the existing ChArUco photo workflow. Declare that measurement photo's
+matching lens ID and already-applied rotation, plus independent-acquisition evidence when covariance
+is used. Camera input is recomputed and checked on reuse; generated reports do not bypass the
+existing covariance, capture-geometry or image-reuse guards.
+
+The file-free Rust APIs are `ftx_wasm::photo::camera_calibration(input, corner_noise)` and
+`CameraCalibration::new(manifest, sheet, corner_noise)`. The corresponding browser exports are
+`camera_calibration` and `WebCameraCalibration`. The latter exposes `image_ids()`,
+`add_image(image, bytes)`, non-consuming `finish()`, and `free()`; empty noise text means no
+separate noise document. These adapters delegate acquisition and solving to the shared native
+authorities and return the ordinary report, rather than defining another camera format.
 
 ## Run the complete synthetic example
 

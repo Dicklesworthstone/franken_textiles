@@ -6,6 +6,69 @@ use wasm_bindgen::prelude::*;
 
 use crate::{fold, page};
 
+/// Fit local coordinate evidence with the canonical camera and conditional uncertainty engines.
+///
+/// # Errors
+/// The shared input, evidence, domain or budget guards refuse.
+#[wasm_bindgen]
+pub fn camera_calibration(input: &str, corner_noise: &str) -> Result<String, JsError> {
+    crate::photo::camera_calibration(input, corner_noise)
+        .map(|value| value.to_string())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Incremental local camera acquisition. This handle retains no decoded image pixels.
+#[wasm_bindgen]
+pub struct WebCameraCalibration {
+    inner: crate::photo::CameraCalibration,
+}
+
+#[wasm_bindgen]
+impl WebCameraCalibration {
+    /// Freeze a native image manifest, original sheet and optional declared corner-noise request.
+    ///
+    /// # Errors
+    /// The portable acquisition's source, schema, evidence or budget checks refuse.
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        manifest: &str,
+        sheet: &str,
+        corner_noise: &str,
+    ) -> Result<WebCameraCalibration, JsError> {
+        crate::photo::CameraCalibration::new(manifest, sheet, corner_noise)
+            .map(|inner| Self { inner })
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// JSON array of exact file labels in canonical frame order.
+    #[must_use]
+    pub fn image_ids(&self) -> String {
+        serde_json::json!(self.inner.image_ids()).to_string()
+    }
+
+    /// Admit one original image; release pixels before returning its source/partition diagnostics.
+    ///
+    /// # Errors
+    /// Image decoding, identity, geometry, duplicate, detection or observation admission refuses.
+    pub fn add_image(&mut self, image: &str, bytes: &[u8]) -> Result<String, JsError> {
+        self.inner
+            .add_image(image, bytes)
+            .map(|value| value.to_string())
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Ordinary retained camera-calibration JSON, including rejected diagnostics.
+    ///
+    /// # Errors
+    /// The batch is incomplete or canonical calibration/noise input guards refuse.
+    pub fn finish(&self) -> Result<String, JsError> {
+        self.inner
+            .finish()
+            .map(|value| value.to_string())
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+}
+
 /// Local photo evidence; the same strict pixels and unrounded calibration as the native commands.
 #[wasm_bindgen]
 pub struct WebPhoto {

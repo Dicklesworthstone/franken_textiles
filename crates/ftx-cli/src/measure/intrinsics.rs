@@ -3,13 +3,7 @@
 use std::{fs::File, io::Read};
 
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
-use ftx_measure::{
-    camera::Camera,
-    photo::intrinsics::{
-        CalibrationInput, calibrate_camera,
-        uncertainty::{CalibrationNoise, calibrate_camera_with_uncertainty},
-    },
-};
+use ftx_measure::{camera::Camera, photo::intrinsics::calibrate_document};
 use serde_json::{Value, json};
 
 use super::{no_files, option, photo, single};
@@ -49,7 +43,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "measure calibrate-camera",
         &["images", "sheet", "detector-python", "corner-noise", "out"],
     )?;
-    let (input, bytes, acquisition) = if let Some(path) = option(args, "images") {
+    let (bytes, acquisition) = if let Some(path) = option(args, "images") {
         no_files(args, "calibrate-camera --images")?;
         let (input, receipt) = photo::calibration_images::load(
             path,
@@ -57,27 +51,20 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             option(args, "detector-python").unwrap_or("python3"),
         )?;
         let bytes = serde_json::to_vec(&input).map_err(|e| bad_input(e.to_string()))?;
-        (input, bytes, Some(receipt))
+        (bytes, Some(receipt))
     } else {
         if option(args, "sheet").is_some() || option(args, "detector-python").is_some() {
             return Err(bad_input("--sheet and --detector-python require --images"));
         }
         let file = single(args, "calibrate-camera")?;
-        let (value, bytes) = read_document(file)?;
-        let input: CalibrationInput = serde_json::from_value(value)
-            .map_err(|e| bad_input(format!("invalid camera calibration: {e}")))?;
-        (input, bytes, None)
+        let (_, bytes) = read_document(file)?;
+        (bytes, None)
     };
     let noise = option(args, "corner-noise")
         .map(read_document)
         .transpose()?;
-    let report = if let Some((value, _)) = &noise {
-        let noise: CalibrationNoise = serde_json::from_value(value.clone())
-            .map_err(|e| bad_input(format!("invalid calibration corner noise: {e}")))?;
-        calibrate_camera_with_uncertainty(&input, &noise)?
-    } else {
-        calibrate_camera(&input)?
-    };
+    let (report, mut value) =
+        calibrate_document(&bytes, noise.as_ref().map(|(_, bytes)| bytes.as_slice()))?;
     let code = if report.solution.is_some()
         && report
             .conditional_uncertainty
@@ -116,13 +103,6 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
     }
     text.push_str(&format!("\n{}", report.no_claim));
-    let mut value = serde_json::to_value(&report).map_err(|e| bad_input(e.to_string()))?;
-    value["input_sha256"] = json!(sha256_hex(&bytes));
-    if let Some((input, bytes)) = noise {
-        // Keep the explicit request separately from its result. A missing result is not
-        // permission to reinterpret a requested uncertain camera as an exact one.
-        value["corner_noise_input"] = json!({"input":input,"sha256":sha256_hex(&bytes)});
-    }
     if let Some(receipt) = acquisition {
         value["image_acquisition"] = receipt;
     }

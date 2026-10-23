@@ -69,8 +69,25 @@ with unknown capture date. JSON is limited to 256 KiB per document; encoded imag
 decoded images to 16 million pixels. Existing engine bootstrap/point/detector limits still apply.
 The disposable worker/page in `web/photo*` keeps source pixels local, cancels old requests and
 withdraws affected downloads on edits. Plain-paper detection does not identify physical paper,
-body landmarks or girths. ChArUco/lens controls, empirical camera/print accuracy and fit remain
-outside this browser slice; see `docs/photo-measurement.md`.
+body landmarks or girths. Explicit ChArUco sidecars and retained same-lens calibrations use
+`Photo::with_reference`; empirical camera/print accuracy and fit remain outside this browser slice.
+See `docs/photo-measurement.md`.
+
+**Local camera calibration.** `photo::camera_calibration` / wasm32 `camera_calibration` fit original
+coordinate JSON with optional original corner-noise JSON through `calibrate_document`.
+`photo::CameraCalibration` / wasm32 `WebCameraCalibration` accept an original image manifest and
+sheet, expose exact `image_ids`, acquire one selected PNG/JPEG per `add_image`, and solve the complete
+batch with non-consuming `finish`. The shared acquisition authority freezes capture and held-out
+identities, checks duplicate decoded pixels and retains all raw corners; it runs no photo-scale
+RANSAC. JSON is bounded to 16 MiB; the native 32-image, 64-MiB encoded/image, 16-million-pixel/image
+and 128-million-pixel batch limits apply. Original text, image identities, detector receipts and
+requested uncertainty survive in the ordinary retained report, which `Photo::with_reference`
+recomputes before reuse. Rejected calibrations remain inspectable but supply no usable camera.
+The disposable browser worker reads selected files sequentially and uploads nothing. Source edits
+cancel pending acquisition and withdraw stale generated calibration/photo results. Tests cover known
+coordinate answers, Brown covariance, independently rendered multi-view images, native receipt
+equality, direct photo reuse, refusal paths and actual compiled-WASM replay. See
+`docs/camera-calibration.md`; these are synthetic software checks, not empirical camera qualification.
 
 **Potential vapor transport.** `thermal::vapor` and wasm32 `thermal_vapor(input)` delegate the
 bounded `ftx-vapor-stack/1` request to `ftx_pattern::material_vapor`. They preserve canonical Ret

@@ -4,13 +4,102 @@ use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_measure::photo::{
     MAX_PHOTO_PIXELS, PhotoOptions, PhotoScale,
     acquisition::{PhotoLens, analyze_charuco_image, annotate_charuco},
-    analyze_plain_sheet, measure_photo,
+    analyze_plain_sheet,
+    calibration_images::Acquisition,
+    detect_charuco,
+    intrinsics::{calibrate_document, uncertainty::CalibrationNoise},
+    measure_photo,
 };
 use ftx_trace::raster::image::{Bgr, encode_png_bgr, load_photo_with_limit};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 const MAX_JSON: usize = 256 * 1024;
+
+/// Fit original coordinate observations through the shared camera engine. Empty noise means no
+/// separate noise document; explicit requests retain source bytes and never imply zero covariance.
+///
+/// # Errors
+/// The shared input-size, schema, calibration-domain or explicit-noise guards refuse.
+pub fn camera_calibration(input: &str, corner_noise: &str) -> Result<Value, Refusal> {
+    calibrate_document(
+        input.as_bytes(),
+        (!corner_noise.is_empty()).then_some(corner_noise.as_bytes()),
+    )
+    .map(|(_, value)| value)
+}
+
+/// One bounded image batch. Decoded photos are released after each call; only corner observations
+/// and source receipts survive until the canonical calibration is solved.
+pub struct CameraCalibration {
+    acquisition: Acquisition,
+    corner_noise: String,
+}
+
+impl CameraCalibration {
+    /// Freeze the original native image manifest, sheet and optional noise request before pixels.
+    ///
+    /// # Errors
+    /// Invalid/oversized source documents, unsupported acquisition or noise, missing independent
+    /// observations, or a declared image batch exceeding the shared bounds.
+    pub fn new(manifest: &str, sheet: &str, corner_noise: &str) -> Result<Self, Refusal> {
+        if corner_noise.len() > ftx_measure::photo::acquisition::MAX_CALIBRATION_JSON_BYTES {
+            return Err(Refusal::new(
+                RefusalCode::BudgetExceeded,
+                "camera calibration JSON exceeds 16 MiB",
+            ));
+        }
+        if !corner_noise.is_empty() {
+            let noise: CalibrationNoise = serde_json::from_str(corner_noise)
+                .map_err(|e| invalid(format!("invalid calibration corner noise: {e}")))?;
+            noise.validate()?;
+        }
+        Ok(Self {
+            acquisition: Acquisition::new(manifest.as_bytes(), sheet.as_bytes())?,
+            corner_noise: corner_noise.into(),
+        })
+    }
+
+    /// Exact manifest names, sorted by the native frame identity; every name must be supplied once.
+    #[must_use]
+    pub fn image_ids(&self) -> Vec<String> {
+        self.acquisition.image_ids()
+    }
+
+    /// Decode and detect one full-resolution PNG/JPEG using the same Rust authorities as photos.
+    /// Neither the lens fit nor photo-scale RANSAC participates in acquisition.
+    ///
+    /// # Errors
+    /// Out-of-order, invalid, oversized, wrong-sized or duplicate image; detector refusal;
+    /// or insufficient observations for the original FIT/held-out partitions.
+    pub fn add_image(&mut self, image: &str, bytes: &[u8]) -> Result<Value, Refusal> {
+        self.acquisition.check_next_image(image)?;
+        let (pixels, receipt) = load_photo_with_limit(bytes, MAX_PHOTO_PIXELS)?;
+        self.acquisition.add_image(
+            image,
+            &pixels.data,
+            [pixels.w, pixels.h],
+            receipt,
+            |sheet| detect_charuco(&pixels.data, pixels.w, pixels.h, sheet, None),
+        )
+    }
+
+    /// Fit only the complete original batch. Failed calibration gates remain ordinary inspectable
+    /// reports; missing images or malformed evidence refuse without fitting a partial batch.
+    ///
+    /// # Errors
+    /// Incomplete acquisition or canonical calibration/noise input refusal.
+    pub fn finish(&self) -> Result<Value, Refusal> {
+        let (input, acquisition) = self.acquisition.finish()?;
+        let bytes = serde_json::to_vec(&input).map_err(|e| invalid(e.to_string()))?;
+        let (_, mut report) = calibrate_document(
+            &bytes,
+            (!self.corner_noise.is_empty()).then_some(self.corner_noise.as_bytes()),
+        )?;
+        report["image_acquisition"] = acquisition;
+        Ok(report)
+    }
+}
 
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)

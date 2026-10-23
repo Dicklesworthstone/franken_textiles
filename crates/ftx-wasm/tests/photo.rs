@@ -11,7 +11,7 @@ use ftx_trace::raster::{
     Gray,
     image::{encode_png_gray, load_photo_with_limit, load_png},
 };
-use ftx_wasm::photo::Photo;
+use ftx_wasm::photo::{CameraCalibration, Photo, camera_calibration};
 use serde_json::{Value, json};
 
 const SHEET: &str = include_str!("../../../web/calibration/calib-sheet-letter.json");
@@ -371,4 +371,303 @@ fn calibrated_photo_requires_explicit_matching_capture_without_silent_fallback()
         )
         .is_err()
     );
+}
+
+#[test]
+fn portable_coordinate_calibration_preserves_native_answers_source_and_rejection() {
+    let source = include_str!("../../../docs/examples/camera-calibration.json");
+    let report = camera_calibration(source, "").unwrap();
+    let input: CalibrationInput = serde_json::from_str(source).unwrap();
+    let native = serde_json::to_value(calibrate_camera(&input).unwrap()).unwrap();
+    assert_eq!(report["status"], "ACCEPTED");
+    assert_eq!(report["solution"], native["solution"]);
+    assert_eq!(report["checks"], native["checks"]);
+    assert_eq!(report["input_sha256"], sha256_hex(source.as_bytes()));
+    let focal = &report["solution"]["intrinsics"]["focal_px"];
+    assert!((focal[0].as_f64().unwrap() - 960.).abs() < 1e-6);
+    assert!((focal[1].as_f64().unwrap() - 1000.).abs() < 1e-6);
+    let mut bad: Value = serde_json::from_str(source).unwrap();
+    bad["views"][3]["corners"][1]["pixel_px"] = json!([20., 20.]);
+    let rejected = camera_calibration(&bad.to_string(), "").unwrap();
+    assert_eq!(rejected["status"], "REJECTED");
+    assert!(rejected["solution"].is_null());
+    assert!(!rejected["flags"].as_array().unwrap().is_empty());
+    assert!(camera_calibration("{}", "").is_err());
+    assert!(camera_calibration(source, "{}").is_err());
+    assert!(camera_calibration(&" ".repeat(16 * 1024 * 1024 + 1), "").is_err());
+}
+
+fn corner_noise() -> String {
+    serde_json::to_string_pretty(&json!({"schema":"ftx-calibration-corner-noise/1",
+        "sigma_px":0.2,"evidence":"Declared synthetic independent per-coordinate noise",
+        "independence_evidence":"Separate synthetic observations; not empirical camera precision"}))
+    .unwrap()
+}
+
+#[test]
+fn portable_brown_calibration_retains_declared_noise_and_hands_off_to_photos() {
+    let source = serde_json::to_string_pretty(&retained_brown()["input"]).unwrap();
+    let inline = camera_calibration(&source, "").unwrap();
+    assert_eq!(inline["solution"], retained_brown()["solution"]);
+    assert_eq!(inline["uncertainty"], retained_brown()["uncertainty"]);
+    let noise = corner_noise();
+    assert!(camera_calibration(&source, &noise).is_err());
+    let mut coordinates = retained_brown()["input"].clone();
+    coordinates["distortion_fit"]
+        .as_object_mut()
+        .unwrap()
+        .remove("corner_noise");
+    let original = serde_json::to_string_pretty(&coordinates).unwrap();
+    let separate = camera_calibration(&original, &noise).unwrap();
+    assert_eq!(separate["input_sha256"], sha256_hex(original.as_bytes()));
+    assert_eq!(
+        separate["corner_noise_input"]["sha256"],
+        sha256_hex(noise.as_bytes())
+    );
+    assert_eq!(
+        separate["corner_noise_input"]["input"],
+        serde_json::from_str::<Value>(&noise).unwrap()
+    );
+    assert_eq!(separate["conditional_uncertainty"]["status"], "AVAILABLE");
+    assert_eq!(
+        separate["conditional_uncertainty"]["estimate"]["covariance"],
+        inline["uncertainty"]["covariance"]
+    );
+    let bytes = brown_photo();
+    let capture = json!({"capture_lens_id":"synthetic-brown","rotation_cw_deg":0,
+        "independent_calibration_evidence":"Separate synthetic raster and analytic calibration observations"}).to_string();
+    let photo = Photo::with_reference(&bytes, SHEET, &separate.to_string(), &capture).unwrap();
+    assert_eq!(photo.report()["ok"], true);
+    let point = |x: f64, y: f64| {
+        brown_project(Vec2::new(
+            (400. + 3. * x - 790.) / 1050.,
+            (300. + 3. * y - 610.) / 1000.,
+        ))
+    };
+    let points = json!({"across_back":[point(30.,20.),point(230.,20.)]}).to_string();
+    let measured = photo.measure(&points, "{}").unwrap();
+    assert!((measured["records"][0]["value_mm"].as_f64().unwrap() - 200.).abs() < 0.5);
+    assert!(
+        measured["records"][0]["sigma_terms_mm"]["intrinsics"]
+            .as_f64()
+            .unwrap()
+            > 0.
+    );
+    assert_eq!(measured["photo"]["lens_input"]["recomputed"], true);
+}
+
+fn camera_manifest() -> Value {
+    json!({"schema":"ftx-camera-calibration-images/1","image_model":"pinhole_zero_skew",
+        "lens_id":"synthetic-pinhole","pinhole_evidence":"Independent pinhole image renderer; no lens distortion",
+        "reference_evidence":"Synthetic sheet with exact 22 mm squares; no real photograph",
+        "image_size_px":[1600,1200],"rotation_cw_deg":0,"held_out_corner_ids":[0,6,28,34],
+        "views":(0..4).map(|i|json!({"image":format!("view{i}.png"),
+            "frame":{"stream":"synthetic-burst","timestamp_us":i*100_000},
+            "partition":if i==3 {"held_out"} else {"fit"}})).collect::<Vec<_>>()})
+}
+
+// Independent ray/plane renderer. The page-to-board pixel convention is fixed by the public
+// sheet sidecar; neither the candidate camera projection nor a fitted homography renders pixels.
+fn pinhole_photo(index: usize) -> (Vec<u8>, [[f64; 2]; 2]) {
+    let angles: [(f64, f64, f64); 5] = [
+        (25., -17., 4.),
+        (-23., 24., -7.),
+        (16., 28., 12.),
+        (-27., -18., 6.),
+        (18., -26., 9.),
+    ];
+    let (x, y, z) = angles[index];
+    let r = Mat3::rotation(Vec3::new(0., 0., 1.), z.to_radians())
+        * Mat3::rotation(Vec3::new(0., 1., 0.), y.to_radians())
+        * Mat3::rotation(Vec3::new(1., 0., 0.), x.to_radians());
+    let t = Vec3::new(-0.085, -0.063, 0.40 + index as f64 * 0.02);
+    let inverse = r.transpose();
+    let origin = inverse.mul_vec(t);
+    let board = load_png(SHEET_PNG).unwrap();
+    let mut photo = Gray::filled(1600, 1200, 85);
+    for y in 0..photo.h {
+        for x in 0..photo.w {
+            let ray = inverse.mul_vec(Vec3::new(
+                (x as f64 - 800.) / 1400.,
+                (y as f64 - 600.) / 1380.,
+                1.,
+            ));
+            let p = ray * (origin.z / ray.z) - origin;
+            let px = 134.5 + p.x * 2079. / 0.176;
+            let py = 93.5 + p.y * 1559. / 0.132;
+            if px < 0. || py < 0. || px >= (board.w - 1) as f64 || py >= (board.h - 1) as f64 {
+                continue;
+            }
+            let (ix, iy) = (px.floor() as usize, py.floor() as usize);
+            let (dx, dy) = (px - ix as f64, py - iy as f64);
+            let sample = |xx, yy| f64::from(board.at(xx, yy)[0]);
+            let value = (1. - dy) * ((1. - dx) * sample(ix, iy) + dx * sample(ix + 1, iy))
+                + dy * ((1. - dx) * sample(ix, iy + 1) + dx * sample(ix + 1, iy + 1));
+            photo.data[y * photo.w + x] = value.round() as u8;
+        }
+    }
+    let point = |x, y| {
+        let q = r.mul_vec(Vec3::new(x, y, 0.)) + t;
+        [1400. * q.x / q.z + 800., 1380. * q.y / q.z + 600.]
+    };
+    (
+        encode_png_gray(&photo),
+        [point(0.044, 0.044), point(0.132, 0.044)],
+    )
+}
+
+#[test]
+fn local_images_calibrate_through_shared_acquisition_and_replay_into_photo_measurement() {
+    use ftx_measure::photo::{
+        calibration_images::Acquisition, detect_charuco, intrinsics::calibrate_document,
+    };
+    let manifest = serde_json::to_string_pretty(&camera_manifest()).unwrap();
+    let mut portable = CameraCalibration::new(&manifest, SHEET, "").unwrap();
+    let mut native = Acquisition::new(manifest.as_bytes(), SHEET.as_bytes()).unwrap();
+    assert_eq!(
+        portable.image_ids(),
+        ["view0.png", "view1.png", "view2.png", "view3.png"]
+    );
+    assert!(portable.finish().is_err());
+    assert!(
+        portable
+            .add_image("view1.png", b"do not decode out-of-order input")
+            .is_err()
+    );
+    let mut images = Vec::new();
+    for (i, id) in portable.image_ids().iter().enumerate() {
+        let (bytes, _) = pinhole_photo(i);
+        let receipt = portable.add_image(id, &bytes).unwrap();
+        let (image, decoded) = load_photo_with_limit(&bytes, 16_000_000).unwrap();
+        let shared = native
+            .add_image(id, &image.data, [image.w, image.h], decoded, |sheet| {
+                detect_charuco(&image.data, image.w, image.h, sheet, None)
+            })
+            .unwrap();
+        assert_eq!(receipt, shared);
+        assert_eq!(receipt["sha256"], sha256_hex(&bytes));
+        assert_eq!(receipt["pixels_bgr_sha256"], sha256_hex(&image.data));
+        assert_eq!(receipt["image"], *id);
+        assert_eq!(receipt["held_out_corners"], 4);
+        assert_eq!(receipt["detector"]["uses_lens_intrinsics"], false);
+        if i == 0 {
+            let duplicate = portable.add_image("view1.png", &bytes).unwrap_err();
+            assert!(
+                duplicate
+                    .message
+                    .contains("duplicate decoded calibration image")
+            );
+        }
+        images.push(bytes);
+    }
+    let report = portable.finish().unwrap();
+    let (input, acquisition) = native.finish().unwrap();
+    let (_, mut expected) = calibrate_document(&serde_json::to_vec(&input).unwrap(), None).unwrap();
+    expected["image_acquisition"] = acquisition;
+    assert_eq!(report, expected);
+    assert_eq!(report["status"], "ACCEPTED");
+    assert_eq!(
+        report["image_acquisition"]["manifest_sha256"],
+        sha256_hex(manifest.as_bytes())
+    );
+    assert_eq!(
+        report["image_acquisition"]["sheet_sha256"],
+        sha256_hex(SHEET.as_bytes())
+    );
+    assert_eq!(report["input"]["views"][3]["partition"], "held_out");
+    for view in report["input"]["views"].as_array().unwrap() {
+        assert_eq!(
+            view["corners"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| p["partition"] == "held_out")
+                .count(),
+            4
+        );
+    }
+    let k = &report["solution"]["intrinsics"];
+    for (field, want, tolerance) in [
+        ("focal_px", [1400., 1380.], 10.),
+        ("principal_px", [800., 600.], 5.),
+    ] {
+        for j in 0..2 {
+            assert!(
+                (k[field][j].as_f64().unwrap() - want[j]).abs() < tolerance,
+                "{k}"
+            );
+        }
+    }
+    assert_eq!(portable.finish().unwrap(), report);
+    assert!(portable.add_image("view0.png", &images[0]).is_err());
+    let (independent, points) = pinhole_photo(4);
+    let photo = Photo::with_reference(
+        &independent,
+        SHEET,
+        &report.to_string(),
+        r#"{"capture_lens_id":"synthetic-pinhole","rotation_cw_deg":0}"#,
+    )
+    .unwrap();
+    assert_eq!(photo.report()["ok"], true);
+    let measured = photo
+        .measure(&json!({"across_back":points}).to_string(), "{}")
+        .unwrap();
+    assert!((measured["records"][0]["value_mm"].as_f64().unwrap() - 88.).abs() < 0.4);
+    assert_eq!(measured["photo"]["lens_input"]["recomputed"], true);
+    if let Ok(directory) = std::env::var("FTX_CAMERA_WEB_FIXTURES") {
+        use std::io::Write;
+        let directory = std::path::Path::new(&directory);
+        std::fs::create_dir_all(directory).unwrap();
+        let mut exports = vec![
+            ("manifest.json".to_string(), manifest.as_bytes().to_vec()),
+            ("sheet.json".to_string(), SHEET.as_bytes().to_vec()),
+            (
+                "report.json".to_string(),
+                serde_json::to_vec(&report).unwrap(),
+            ),
+        ];
+        exports.extend(
+            images
+                .into_iter()
+                .enumerate()
+                .map(|(i, bytes)| (format!("view{i}.png"), bytes)),
+        );
+        for (name, bytes) in exports {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(directory.join(name))
+                .unwrap()
+                .write_all(&bytes)
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn image_calibration_refuses_changed_capture_incomplete_evidence_and_budget_overruns() {
+    let manifest = camera_manifest().to_string();
+    let mut batch = CameraCalibration::new(&manifest, SHEET, "").unwrap();
+    assert!(batch.add_image("view0.png", SHEET_PNG).is_err());
+    assert!(
+        batch
+            .add_image(
+                "view0.png",
+                &encode_png_gray(&Gray::filled(1600, 1200, 127))
+            )
+            .is_err()
+    );
+    assert!(batch.finish().is_err());
+    for case in 0..4 {
+        let mut bad = camera_manifest();
+        match case {
+            0 => bad["views"][3]["partition"] = json!("fit"),
+            1 => bad["held_out_corner_ids"] = json!([0, 6, 28]),
+            2 => bad["image_size_px"] = json!([5000, 4000]),
+            _ => bad["views"][1]["frame"] = bad["views"][0]["frame"].clone(),
+        }
+        assert!(CameraCalibration::new(&bad.to_string(), SHEET, "").is_err());
+    }
+    assert!(CameraCalibration::new(&manifest, SHEET, "{}").is_err());
+    assert!(CameraCalibration::new(&" ".repeat(16 * 1024 * 1024 + 1), SHEET, "").is_err());
 }

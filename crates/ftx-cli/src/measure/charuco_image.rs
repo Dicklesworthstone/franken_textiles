@@ -137,6 +137,9 @@ pub(super) fn calibration_corners(
     sheet: &Value,
     python: &str,
 ) -> Result<Value, Refusal> {
+    if python == "rust" {
+        return ftx_measure::photo::detect_charuco(&image.data, image.w, image.h, sheet, None);
+    }
     let mut response = detect(image, sheet, python, None)?;
     response["adapter_sha256"] = json!(sha256_hex(DETECTOR.as_bytes()));
     Ok(response)

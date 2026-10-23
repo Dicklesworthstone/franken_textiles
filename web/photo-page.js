@@ -1,15 +1,26 @@
 const $ = id => document.getElementById(id);
 let worker = null, ticket = 0, busy = false, scale = null, bitmap = null, pending = [];
 let sourceUrls = [], resultUrls = [];
+let cameraWorker = null, cameraTicket = 0, cameraBusy = false, cameraResult = null, generatedCalibration = null;
+const cameraUrls = [];
 const status = text => {$("status").textContent=text;};
 function controls() {
-  const charuco=$("referenceMode").value==="charuco", calibrated=charuco && $("calibration").files.length>0;
+  const charuco=$("referenceMode").value==="charuco", calibrated=charuco && ($("calibration").files.length>0 || generatedCalibration!==null);
   $("plainControls").hidden=charuco; $("charucoControls").hidden=!charuco; $("lensControls").hidden=!calibrated;
   $("paper").disabled=charuco; $("sheet").disabled=!charuco; $("calibration").disabled=!charuco;
   $("clearCalibration").disabled=!calibrated;
-  $("analyze").disabled=busy || !$("photo").files.length || (charuco && !$("sheet").files.length);
-  $("measure").disabled=busy || scale?.ok !== true;
+  $("analyze").disabled=busy || cameraBusy || !$("photo").files.length || (charuco && !$("sheet").files.length);
+  $("measure").disabled=busy || cameraBusy || scale?.ok !== true;
   $("cancel").disabled=!busy;
+  const images=$("cameraMode").value==="images";
+  $("cameraImageControls").hidden=!images;
+  $("cameraInputLabel").textContent=images?"Image manifest":"Reference-coordinate input";
+  $("cameraRun").disabled=busy || cameraBusy || !$("cameraInput").files.length ||
+    (images && (!$("cameraSheet").files.length || (!$("cameraImages").files.length && !$("cameraDirectory").files.length)));
+  $("cameraCancel").disabled=!cameraBusy;
+  $("cameraClearNoise").disabled=!$("cameraNoise").files.length;
+  $("cameraUse").disabled=busy || cameraBusy || cameraResult?.accepted!==true;
+  $("cameraActive").textContent=generatedCalibration?`Using the locally generated calibration for ${generatedCalibration.lensId}.`:"";
 }
 function kill() { worker?.terminate(); worker=null; busy=false; controls(); }
 function revoke(urls) { urls.forEach(u=>URL.revokeObjectURL(u)); urls.length=0; }
@@ -57,12 +68,104 @@ async function readJsonFile(file) {
   // Replacing invalid bytes or stripping a BOM would change the source identity before hashing.
   return new TextDecoder("utf-8",{fatal:true,ignoreBOM:true}).decode(await file.arrayBuffer());
 }
+function stopCamera() { cameraWorker?.terminate(); cameraWorker=null; cameraBusy=false; controls(); }
+function withdrawCamera() {
+  ++cameraTicket; stopCamera();
+  if(generatedCalibration!==null) {generatedCalibration=null; withdraw(true);}
+  cameraResult=null; revoke(cameraUrls); $("cameraDownloads").replaceChildren();
+  $("cameraResult").hidden=true; $("cameraReport").textContent=""; $("cameraSummary").textContent="";
+  $("cameraChecks").replaceChildren(); $("cameraProgress").textContent=""; $("cameraError").textContent="";
+  controls();
+}
+function publishCamera(text, sources) {
+  const report=JSON.parse(text);
+  if(report.schema!=="ftx-camera-calibration/1" || !Array.isArray(report.flags) || !Array.isArray(report.checks)) {
+    throw Error("The calibration engine did not return an ordinary retained camera report.");
+  }
+  const accepted=report.status==="ACCEPTED" && report.solution!=null && report.flags.length===0 &&
+    (report.conditional_uncertainty===undefined || report.conditional_uncertainty.estimate!=null);
+  cameraResult={text,accepted,lensId:report.input?.lens_id};
+  $("cameraReport").textContent=text; $("cameraResult").hidden=false;
+  const uncertainty=report.conditional_uncertainty?` Conditional intrinsic uncertainty: ${report.conditional_uncertainty.status}.`:
+    report.uncertainty?" Conditional intrinsic covariance retained.":" No intrinsic uncertainty was estimated.";
+  $("cameraSummary").textContent=`${report.status}: ${report.input?.lens_id || "unnamed lens"}, ${report.input?.image_model || "unknown model"}.`+
+    uncertainty+" "+[...report.flags,...(report.advisories || []),...(report.conditional_uncertainty?.flags || [])].join(" ");
+  for(const check of report.checks) {
+    const corners=check.corners || [], fit=corners.filter(c=>c.partition==="fit").length;
+    const residuals=corners.map(c=>c.error_px).filter(Number.isFinite), row=document.createElement("tr");
+    for(const value of [`${check.frame?.stream} @ ${check.frame?.timestamp_us} μs`,check.partition,
+      `${fit} / ${corners.length-fit}`,residuals.length?Math.max(...residuals):"unavailable",check.failure || "—"]) {
+      const cell=document.createElement("td"); cell.textContent=String(value); row.append(cell);
+    }
+    $("cameraChecks").append(row);
+  }
+  link($("cameraDownloads"),text,"camera-calibration.json","application/json",cameraUrls);
+  link($("cameraDownloads"),sources.input,sources.mode==="images"?"camera-image-manifest.json":"camera-coordinate-input.json","application/json",cameraUrls);
+  if(sources.mode==="images") {
+    link($("cameraDownloads"),sources.sheet,"camera-sheet.json","application/json",cameraUrls);
+    link($("cameraDownloads"),JSON.stringify(report.input,null,2),"camera-detected-coordinates.json","application/json",cameraUrls);
+  }
+  if(sources.noise) link($("cameraDownloads"),sources.noise,"camera-corner-noise.json","application/json",cameraUrls);
+  $("cameraStatus").textContent=accepted?"Calibration accepted. Review every FIT/CHECK result, then use it for the measurement photo.":
+    "Calibration or its requested uncertainty was not accepted. Diagnostics are available; no measurement calibration was activated.";
+}
+async function runCamera() {
+  if(busy || cameraBusy) return;
+  const mode=$("cameraMode").value, inputFile=$("cameraInput").files[0], noiseFile=$("cameraNoise").files[0];
+  const sheetFile=mode==="images"?$("cameraSheet").files[0]:null;
+  const direct=Array.from($("cameraImages").files), directory=Array.from($("cameraDirectory").files);
+  withdrawCamera(); const id=cameraTicket;
+  try {
+    if(!inputFile || (mode==="images" && !sheetFile)) throw Error("Choose the original calibration input and, for images, its sheet description.");
+    if(inputFile.size>16*1024*1024 || noiseFile?.size>16*1024*1024 || sheetFile?.size>256*1024) {
+      throw Error("Calibration input/noise must be at most 16 MiB and sheet JSON at most 256 KiB. No source was read.");
+    }
+    let images=[];
+    if(mode==="images") {
+      if(direct.length && directory.length) throw Error("Select calibration photos or their directory, not both. Clear the other selection first.");
+      const selected=directory.length?directory.filter(f=>/\.(png|jpe?g)$/i.test(f.name)):direct;
+      if(selected.length<1 || selected.length>32) throw Error("Choose 1–32 declared calibration photos; no image was read.");
+      images=selected.map(file=>{
+        if(file.size>64*1024*1024) throw Error(`Calibration image ${file.name} exceeds 64 MiB; no image was read.`);
+        const name=directory.length?file.webkitRelativePath.slice(file.webkitRelativePath.indexOf("/")+1):file.name;
+        if(!name) throw Error("A selected image has no relative filename.");
+        return {id:name,file};
+      });
+    }
+    cameraBusy=true; controls(); $("cameraStatus").textContent="Reading the local calibration declarations…";
+    const [input,sheet,noise]=await Promise.all([readJsonFile(inputFile),readJsonFile(sheetFile),readJsonFile(noiseFile)]);
+    if(id!==cameraTicket) return;
+    const sources={mode,input,sheet,noise}, current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); cameraWorker=current;
+    current.onmessage=({data:m})=>{
+      if(current!==cameraWorker || m.request!==cameraTicket) return;
+      if(m.type==="progress") {$("cameraStatus").textContent=m.text; return;}
+      if(m.type==="calibration-view") {
+        $("cameraProgress").textContent+=`${m.done}/${m.total} ${m.image}\n${JSON.stringify(m.diagnostics,null,2)}\n`;
+        return;
+      }
+      stopCamera();
+      if(m.type==="error") {$("cameraError").textContent=m.message; $("cameraStatus").textContent="Calibration failed; no measurement calibration was activated."; return;}
+      try {publishCamera(m.report,sources);} catch(e) {withdrawCamera(); $("cameraError").textContent=String(e.message || e); $("cameraStatus").textContent="No calibration published.";}
+      controls();
+    };
+    current.onerror=e=>{
+      if(current!==cameraWorker) return;
+      withdrawCamera(); $("cameraError").textContent=e.message; $("cameraStatus").textContent="Calibration worker stopped; run the current acquisition again.";
+    };
+    current.postMessage({request:id,op:mode==="images"?"calibrate-images":"calibrate-coordinates",input,sheet,noise,images});
+  } catch(e) {
+    if(id!==cameraTicket) return;
+    stopCamera(); $("cameraError").textContent=String(e.message || e); $("cameraStatus").textContent="No calibration published.";
+  }
+}
 async function run(op) {
+  if(cameraBusy) return;
   const file=$("photo").files[0], points=$("points").value, opts=options(), paper=$("paper").value;
   const referenceMode=$("referenceMode").value, charuco=referenceMode==="charuco";
   const sheetFile=charuco?$("sheet").files[0]:null, calibrationFile=charuco?$("calibration").files[0]:null;
+  const generated=charuco?generatedCalibration:null;
   const captureFields={};
-  if(calibrationFile) {
+  if(calibrationFile || generated) {
     captureFields.capture_lens_id=$("lensId").value;
     if($("rotation").value!=="") captureFields.rotation_cw_deg=Number($("rotation").value);
     if($("independence").value!=="") captureFields.independent_calibration_evidence=$("independence").value;
@@ -78,7 +181,7 @@ async function run(op) {
   }
   busy=true; controls(); status("Reading the local photo…");
   try {
-    const [bytes,sheet,calibration]=await Promise.all([file.arrayBuffer(),readJsonFile(sheetFile),readJsonFile(calibrationFile)]);
+    const [bytes,sheet,calibration]=await Promise.all([file.arrayBuffer(),readJsonFile(sheetFile),calibrationFile?readJsonFile(calibrationFile):Promise.resolve(generated?.text || "")]);
     if(id!==ticket) return;
     const current=new Worker(new URL("photo-worker.js",import.meta.url),{type:"module"}); worker=current;
     current.onmessage=async ({data:m})=>{
@@ -102,7 +205,7 @@ async function run(op) {
           if(charuco) {
             link($("sourceDownloads"),sheet,"photo-sheet.json","application/json",sourceUrls);
             link($("sourceDownloads"),capture,"photo-capture.json","application/json",sourceUrls);
-            if(calibrationFile) link($("sourceDownloads"),calibration,"photo-calibration.json","application/json",sourceUrls);
+            if(calibration) link($("sourceDownloads"),calibration,"photo-calibration.json","application/json",sourceUrls);
           }
           status(scale.ok?"Review the detected sheet, then choose point pairs.":"Reference rejected; no measurement calibration available.");
         } else {
@@ -128,9 +231,24 @@ async function run(op) {
 }
 $("analyze").onclick=()=>run("analyze"); $("measure").onclick=()=>run("measure");
 $("cancel").onclick=()=>{withdraw(); status("Cancelled; no measurements published.");};
-for(const id of ["photo","paper","referenceMode","sheet","calibration","rotation"]) $(id).addEventListener("change",()=>{withdraw(true); status("Source changed; analyze the current photo.");});
+for(const id of ["photo","paper","referenceMode","sheet","calibration","rotation"]) $(id).addEventListener("change",()=>{if(id==="calibration")generatedCalibration=null; withdraw(true); status("Source changed; analyze the current photo.");});
 for(const id of ["lensId","independence"]) $(id).addEventListener("input",()=>{withdraw(true); status("Capture evidence changed; analyze the current photo.");});
-$("clearCalibration").onclick=()=>{$("calibration").value=""; $("lensId").value=""; $("rotation").value=""; $("independence").value=""; withdraw(true); status("Calibration removed; analyze the current photo.");};
+$("clearCalibration").onclick=()=>{generatedCalibration=null; $("calibration").value=""; $("lensId").value=""; $("rotation").value=""; $("independence").value=""; withdraw(true); status("Calibration removed; analyze the current photo.");};
+$("cameraRun").onclick=runCamera;
+$("cameraCancel").onclick=()=>{withdrawCamera(); $("cameraStatus").textContent="Calibration cancelled; no result published.";};
+$("cameraClearNoise").onclick=()=>{$("cameraNoise").value=""; withdrawCamera(); $("cameraStatus").textContent="Separate noise declaration removed; calibrate from the current input.";};
+$("cameraUse").onclick=()=>{
+  if(cameraResult?.accepted!==true || busy || cameraBusy) return;
+  generatedCalibration=cameraResult; $("calibration").value=""; $("referenceMode").value="charuco";
+  withdraw(true); status("Generated calibration selected. Assert this photo's capture settings and analyze it.");
+};
+for(const id of ["cameraMode","cameraInput","cameraSheet","cameraImages","cameraDirectory","cameraNoise"]) {
+  $(id).addEventListener("change",()=>{
+    if(id==="cameraImages" && $(id).files.length) $("cameraDirectory").value="";
+    if(id==="cameraDirectory" && $(id).files.length) $("cameraImages").value="";
+    withdrawCamera(); $("cameraStatus").textContent="Acquisition changed; calibrate from the current declarations and images.";
+  });
+}
 for(const id of ["distance","depth","click","level","bootstrap","points"]) $(id).addEventListener("input",()=>{withdraw(); draw(); status("Inputs changed; measure again.");});
 $("name").addEventListener("input",()=>{pending=[]; withdraw(); draw();});
 $("clearPoints").onclick=()=>{$("points").value="{}"; pending=[]; withdraw(); draw();};
@@ -150,5 +268,5 @@ $("image").onclick=e=>{
   }
   $("clickStatus").textContent=pending.length?"First point selected; click the second.":"Pair added. Review its name and coordinates."; draw();
 };
-window.addEventListener("pagehide",()=>withdraw(true));
+window.addEventListener("pagehide",()=>{withdrawCamera(); withdraw(true);});
 controls();
