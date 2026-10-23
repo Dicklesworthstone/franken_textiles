@@ -821,13 +821,13 @@ impl Policy {
             transient_coverage: None,
         };
         if self.consumers().contains(&Consumer::VaporSurface) && !simulation.is_null() {
-            match admit_vapor_surface(descriptor, simulation) {
+            match admit_vapor_surface(row, descriptor, simulation) {
                 Ok(vapor) => admitted.vapor_surface = vapor,
                 Err(e) => result.exclusions.push(e),
             }
         }
         if self.consumers().contains(&Consumer::VaporCoverage) && !simulation.is_null() {
-            match admit_vapor_coverage(descriptor, simulation) {
+            match admit_vapor_coverage(row, descriptor, simulation) {
                 Ok(vapor) => admitted.vapor_coverage = Some(vapor),
                 Err(e) => result.exclusions.push(e),
             }
@@ -1457,6 +1457,7 @@ fn motion_vapor_bounds(history: &Value) -> Result<Option<TransferBounds>, Refusa
 }
 
 fn admit_vapor_surface<'a>(
+    alternative: &Alternative,
     descriptor: &Value,
     simulation: &'a Value,
 ) -> Result<&'a Value, Refusal> {
@@ -1535,6 +1536,7 @@ fn admit_vapor_surface<'a>(
     {
         return Err(fail());
     }
+    admit_vapor_assignments(alternative, instances, owners, patches, selections)?;
     let mut consumed = BTreeMap::new();
     let mut totals = [0.0; 3];
     for (((patch, triangle), reading), owner) in
@@ -1686,6 +1688,55 @@ fn vapor_index(value: &Value) -> Result<usize, Refusal> {
         .as_u64()
         .and_then(|i| usize::try_from(i).ok())
         .ok_or_else(|| invalid("covered vapor needs an integer retained index"))
+}
+
+// Self-consistent callback receipts do not establish which material belongs to an alternative.
+// Resolve each original physical instance through the final source-locked binding, independently
+// of column order/deduplication and of the material receipt carried by the numerical result.
+fn admit_vapor_assignments(
+    alternative: &Alternative,
+    instances: &[Value],
+    owners: &[Value],
+    patches: &[Value],
+    materials: &[Value],
+) -> Result<(), Refusal> {
+    let fail =
+        || invalid("vapor source differs from this alternative's final material assignments");
+    if owners.len() != patches.len() {
+        return Err(fail());
+    }
+    let bound = alternative.binding.value().ok_or_else(fail)?;
+    let pattern = ftx_pattern::Pattern::new(bound["pattern"].clone());
+    let changes = alternative.frozen_changes.as_ref().ok_or_else(fail)?;
+    let catalog = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    };
+    let selections = instances
+        .iter()
+        .map(|instance| {
+            let piece = &pattern
+                .instance(instance.as_str().ok_or_else(fail)?)
+                .ok_or_else(fail)?
+                .piece;
+            let selection = changes
+                .pieces
+                .get(piece)
+                .or(changes.default.as_ref())
+                .ok_or_else(fail)?;
+            serde_json::to_value(catalog.resolve(selection)?.frozen_selection()).map_err(|_| fail())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for (patch, owner) in patches.iter().zip(owners) {
+        let expected = selections.get(vapor_index(owner)?).ok_or_else(fail)?;
+        let actual = materials
+            .get(vapor_index(&patch["column"])?)
+            .ok_or_else(fail)?;
+        if expected != actual {
+            return Err(fail());
+        }
+    }
+    Ok(())
 }
 
 // A caller-supplied material-report digest is not evidence that the embedded source still uses
@@ -1853,6 +1904,7 @@ fn covered_vapor_protocols(vapor: &Value) -> Result<BTreeSet<String>, Refusal> {
 }
 
 fn admit_vapor_coverage<'a>(
+    alternative: &Alternative,
     descriptor: &Value,
     simulation: &'a Value,
 ) -> Result<&'a Value, Refusal> {
@@ -1868,6 +1920,14 @@ fn admit_vapor_coverage<'a>(
     if simulation["vapor_coverage"]["status"] != "available" {
         return Err(invalid("covered vapor result unavailable"));
     }
+    let source = &result["request"]["source"];
+    admit_vapor_assignments(
+        alternative,
+        vapor_array(source, "instances")?,
+        vapor_array(source, "triangle_instance")?,
+        vapor_array(source, "patches")?,
+        vapor_array(source, "materials")?,
+    )?;
     admit_vapor_frame(
         policy,
         result,
@@ -2038,42 +2098,14 @@ fn admit_motion_vapor_coverage<'a>(
     {
         return Err(fail());
     }
-    let bound = alternative.binding.value().ok_or_else(fail)?;
-    let pattern = ftx_pattern::Pattern::new(bound["pattern"].clone());
-    let changes = alternative.frozen_changes.as_ref().ok_or_else(fail)?;
     let source = &initial_request["source"];
-    let instances = vapor_array(source, "instances")?;
-    let catalog = Catalog {
-        schema: CATALOG_SCHEMA.into(),
-        materials: vec![],
-    };
-    let selections = instances
-        .iter()
-        .map(|instance| {
-            let piece = &pattern
-                .instance(instance.as_str().ok_or_else(fail)?)
-                .ok_or_else(fail)?
-                .piece;
-            let selection = changes
-                .pieces
-                .get(piece)
-                .or(changes.default.as_ref())
-                .ok_or_else(fail)?;
-            serde_json::to_value(catalog.resolve(selection)?.frozen_selection()).map_err(|_| fail())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    for (patch, owner) in vapor_array(source, "patches")?
-        .iter()
-        .zip(vapor_array(source, "triangle_instance")?)
-    {
-        if selections.get(vapor_index(owner)?)
-            != source["materials"].get(vapor_index(&patch["column"])?)
-        {
-            return Err(invalid(
-                "moving covered vapor source differs from this alternative's final material assignments",
-            ));
-        }
-    }
+    admit_vapor_assignments(
+        alternative,
+        vapor_array(source, "instances")?,
+        vapor_array(source, "triangle_instance")?,
+        vapor_array(source, "patches")?,
+        vapor_array(source, "materials")?,
+    )?;
     let mut time = 0.;
     let mut energy = 0.;
     let mut mass = 0.;

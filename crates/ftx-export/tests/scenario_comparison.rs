@@ -2673,7 +2673,7 @@ fn synthetic_vapor(p: &Pattern, d: &Value, selections: Vec<Value>, assigned: &[u
     let topology: Vec<_> = triangles.iter().zip(assigned).map(|(vertices, column)|
         json!({"vertices":vertices,"column":column,"reference_area_m2":0.5})).collect();
     let owners: Vec<_> = (0..assigned.len()).collect();
-    let instances: Vec<_> = owners.iter().map(|i| format!("band-{i}")).collect();
+    let instances: Vec<_> = ["band", "back"].into_iter().take(assigned.len()).collect();
     let mut material = json!({"basis":"per_piece_characterization","records":{},"instances":[]});
     for (instance, &column) in instances.iter().zip(assigned) {
         let record = &records[column];
@@ -2748,6 +2748,110 @@ fn run_vapor(r: &Request, d: &Value, mut change: impl FnMut(&str, &mut Value)) -
         .unwrap(),
     )
     .unwrap()
+}
+
+fn two_piece_vapor_pattern() -> Pattern {
+    let mut raw: Value = serde_json::from_str(PATTERN).unwrap();
+    let mut back = raw["pieces"][0].clone();
+    back["id"] = json!("back");
+    raw["pieces"].as_array_mut().unwrap().push(back);
+    Pattern::new(raw)
+}
+
+#[test]
+fn static_sheet_vapor_rejects_coherent_material_substitution_in_both_comparison_bases() {
+    use ftx_export::material_study::comparison::Basis;
+    for basis in [Basis::Nominal, Basis::ReportedBounds] {
+        let (mut request, descriptor) = vapor_inputs();
+        request.comparison.as_mut().unwrap().basis = basis;
+        request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+        bound_vapor_variants(&mut request, [Some([1., 4.]), Some([5., 9.])]);
+        let report = serde_json::to_value(
+            request
+                .evaluate_with(
+                    &Pattern::from_json(PATTERN).unwrap(),
+                    &descriptor,
+                    |key, pattern| {
+                        let mut material = pattern.raw()["fabric"]["material"].clone();
+                        if key == "b" {
+                            material["expected_sha256"] = Value::Null;
+                            material["record"]["properties"]["vapor_resistance"]["value"] =
+                                json!(0.5);
+                            material["record"]["properties"]["vapor_resistance"]["bounds"] =
+                                json!([0.25, 0.75]);
+                        }
+                        // Every source, model, frame and network receipt is freshly canonical;
+                        // the callback still claims the real bound pattern's identity.
+                        Ok(synthetic_vapor(pattern, &descriptor, vec![material], &[0]))
+                    },
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["comparison"]["frontier"], json!(["a"]));
+        let rejected = &report["comparison"]["alternatives"][1];
+        assert_eq!(rejected["eligible"], false);
+        assert!(rejected["readings"].as_object().unwrap().is_empty());
+        assert!(rejected["exclusions"].as_array().unwrap().iter().any(|e| {
+            e["message"]
+                .as_str()
+                .unwrap()
+                .contains("final material assignments")
+        }));
+        assert_eq!(
+            report["manufacturing"]["alternatives"][1]["cutting"]["status"],
+            "available"
+        );
+    }
+}
+
+#[test]
+fn static_covered_vapor_rejects_coherent_material_substitution_in_both_comparison_bases() {
+    use ftx_export::material_study::comparison::Basis;
+    for basis in [Basis::Nominal, Basis::ReportedBounds] {
+        let (mut request, descriptor) = vapor_coverage_inputs();
+        request.comparison.as_mut().unwrap().basis = basis;
+        request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+        bound_vapor_variants(&mut request, [Some([8., 12.]), Some([18., 22.])]);
+        let report = serde_json::to_value(
+            request
+                .evaluate_with(
+                    &Pattern::from_json(PATTERN).unwrap(),
+                    &descriptor,
+                    |key, pattern| {
+                        let mut raw = pattern.raw().clone();
+                        if key == "b" {
+                            let material = &mut raw["fabric"]["material"];
+                            material["expected_sha256"] = Value::Null;
+                            material["record"]["properties"]["vapor_resistance"]["value"] =
+                                json!(0.5);
+                            material["record"]["properties"]["vapor_resistance"]["bounds"] =
+                                json!([0.25, 0.75]);
+                        }
+                        let mut simulation =
+                            synthetic_vapor_coverage(&Pattern::new(raw), &descriptor);
+                        simulation["pattern_sha256"] = json!(digest(pattern.raw()));
+                        Ok(simulation)
+                    },
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["comparison"]["frontier"], json!(["a"]));
+        let rejected = &report["comparison"]["alternatives"][1];
+        assert_eq!(rejected["eligible"], false);
+        assert!(rejected["readings"].as_object().unwrap().is_empty());
+        assert!(rejected["exclusions"].as_array().unwrap().iter().any(|e| {
+            e["message"]
+                .as_str()
+                .unwrap()
+                .contains("final material assignments")
+        }));
+        assert_eq!(
+            report["manufacturing"]["alternatives"][1]["cutting"]["status"],
+            "available"
+        );
+    }
 }
 
 #[test]
@@ -2923,25 +3027,45 @@ fn draped_vapor_missing_stale_or_malformed_results_never_rank_as_zero() {
 fn draped_vapor_protocols_follow_instance_ownership_not_column_order_or_unused_records() {
     let (mut r, d) = vapor_inputs();
     let evaluate = |r: &Request, case: &str| {
+        let mut request = r.clone();
+        for variant in &mut request.variants {
+            let first = variant.changes.default.clone().unwrap();
+            let mut second = first.clone();
+            second
+                .record
+                .as_mut()
+                .unwrap()
+                .properties
+                .get_mut("vapor_resistance")
+                .unwrap()
+                .method = if case == "unused" && variant.key == "b" {
+                "Unused different protocol"
+            } else {
+                "Second synthetic protocol"
+            }
+            .into();
+            if case == "swapped_owners" && variant.key == "b" {
+                variant.changes.pieces.insert("band".into(), second);
+                variant.changes.pieces.insert("back".into(), first);
+            } else {
+                variant.changes.pieces.insert("back".into(), second);
+            }
+        }
         serde_json::to_value(
-            r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |key, p| {
-                let first = p.raw()["fabric"]["material"].clone();
-                let mut second = first.clone();
-                second["expected_sha256"] = Value::Null;
-                second["record"]["properties"]["vapor_resistance"]["method"] =
-                    json!(if case == "unused" && key == "b" {
-                        "Unused different protocol"
-                    } else {
-                        "Second synthetic protocol"
-                    });
-                Ok(match (case, key) {
-                    ("reordered", "b") => synthetic_vapor(p, &d, vec![second, first], &[1, 0]),
-                    ("swapped_owners", "b") => synthetic_vapor(p, &d, vec![first, second], &[1, 0]),
-                    ("unused", _) => synthetic_vapor(p, &d, vec![first, second], &[0]),
-                    _ => synthetic_vapor(p, &d, vec![first, second], &[0, 1]),
+            request
+                .evaluate_with(&two_piece_vapor_pattern(), &d, |key, p| {
+                    let first = p.raw()["pieces"][0]["fabric"]
+                        .get("material")
+                        .unwrap_or(&p.raw()["fabric"]["material"])
+                        .clone();
+                    let second = p.raw()["pieces"][1]["fabric"]["material"].clone();
+                    Ok(match (case, key) {
+                        ("reordered", "b") => synthetic_vapor(p, &d, vec![second, first], &[1, 0]),
+                        ("unused", _) => synthetic_vapor(p, &d, vec![first, second], &[0]),
+                        _ => synthetic_vapor(p, &d, vec![first, second], &[0, 1]),
+                    })
                 })
-            })
-            .unwrap(),
+                .unwrap(),
         )
         .unwrap()
     };
@@ -3146,23 +3270,29 @@ fn independent_vapor_protocols_follow_consumed_qualifications_not_column_dedupli
             "thermal_conductivity".into(),
             serde_json::from_value(dry).unwrap(),
         );
+    let mut assigned = r.clone();
+    let mut second = json!(assigned.variants[0].changes.default.as_ref().unwrap());
+    second["expected_sha256"] = Value::Null;
+    second["record"]["properties"]["vapor_resistance"]["value"] = json!(10.0);
+    second["record"]["properties"]["vapor_resistance"]["source"] = json!("different-source-id");
+    second["record"]["sources"]["different-source-id"] =
+        second["record"]["sources"]["test"].clone();
+    assigned.variants[0]
+        .changes
+        .pieces
+        .insert("back".into(), serde_json::from_value(second).unwrap());
     let report = serde_json::to_value(
-        r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |key, p| {
-            let first = p.raw()["fabric"]["material"].clone();
-            Ok(if key == "a" {
-                let mut duplicate = first.clone();
-                duplicate["expected_sha256"] = Value::Null;
-                duplicate["record"]["properties"]["vapor_resistance"]["value"] = json!(10.0);
-                duplicate["record"]["properties"]["vapor_resistance"]["source"] =
-                    json!("different-source-id");
-                duplicate["record"]["sources"]["different-source-id"] =
-                    duplicate["record"]["sources"]["test"].clone();
-                synthetic_vapor(p, &d, vec![first, duplicate], &[0, 1])
-            } else {
-                synthetic_vapor(p, &d, vec![first], &[0, 0])
+        assigned
+            .evaluate_with(&two_piece_vapor_pattern(), &d, |key, p| {
+                let first = p.raw()["fabric"]["material"].clone();
+                Ok(if key == "a" {
+                    let duplicate = p.raw()["pieces"][1]["fabric"]["material"].clone();
+                    synthetic_vapor(p, &d, vec![first, duplicate], &[0, 1])
+                } else {
+                    synthetic_vapor(p, &d, vec![first], &[0, 0])
+                })
             })
-        })
-        .unwrap(),
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(report["comparison"]["frontier"], json!(["a"]));
@@ -3222,37 +3352,48 @@ fn draped_vapor_material_ownership_and_within_result_protocol_consent_are_indepe
         if fault == "mixed_columns_without_consent" {
             d["scenario"]["vapor_surface"]["allow_mixed_protocols"] = json!(false);
         }
+        let mut request = r.clone();
+        for variant in &mut request.variants {
+            let mut second = variant.changes.default.clone().unwrap();
+            let observation = second
+                .record
+                .as_mut()
+                .unwrap()
+                .properties
+                .get_mut("vapor_resistance")
+                .unwrap();
+            observation.value = 10.;
+            if fault == "mixed_columns_without_consent" && variant.key == "a" {
+                observation.method = "Different column protocol".into();
+            }
+            variant.changes.pieces.insert("back".into(), second);
+        }
         let report = serde_json::to_value(
-            r.evaluate_with(&Pattern::from_json(PATTERN).unwrap(), &d, |key, p| {
-                let first = p.raw()["fabric"]["material"].clone();
-                let mut second = first.clone();
-                second["expected_sha256"] = Value::Null;
-                second["record"]["properties"]["vapor_resistance"]["value"] = json!(10.0);
-                if fault == "mixed_columns_without_consent" && key == "a" {
-                    second["record"]["properties"]["vapor_resistance"]["method"] =
-                        json!("Different column protocol");
-                }
-                let mut v = synthetic_vapor(p, &d, vec![first, second], &[0, 1]);
-                if fault == "rehashed_owner_material_swap" && key == "a" {
-                    let a = v["drape"]["material"]["instances"][0]["record_sha256"].clone();
-                    let b = v["drape"]["material"]["instances"][1]["record_sha256"].clone();
-                    v["drape"]["material"]["instances"][0]["record_sha256"] = b;
-                    v["drape"]["material"]["instances"][1]["record_sha256"] = a;
-                    let mut frame = v["drape"]["vapor_surface"].clone();
-                    frame["material_report_sha256"] = json!(digest(&v["drape"]["material"]));
-                    frame.as_object_mut().unwrap().remove("sha256");
-                    frame["sha256"] = json!(digest(&frame));
-                    v["drape"]["vapor_surface"] = frame.clone();
-                    v["vapor_surface"]["result"]["drape_vapor_frame_sha256"] =
-                        frame["sha256"].clone();
-                    v["vapor_surface"]["result"]["request"]["report"] =
-                        json!({"material":v["drape"]["material"],"vapor_surface":frame});
-                    v["vapor_surface"]["result"]["request_sha256"] =
-                        json!(digest(&v["vapor_surface"]["result"]["request"]));
-                }
-                Ok(v)
-            })
-            .unwrap(),
+            request
+                .evaluate_with(&two_piece_vapor_pattern(), &d, |key, p| {
+                    let first = p.raw()["fabric"]["material"].clone();
+                    let second = p.raw()["pieces"][1]["fabric"]["material"].clone();
+                    let mut v = synthetic_vapor(p, &d, vec![first, second], &[0, 1]);
+                    if fault == "rehashed_owner_material_swap" && key == "a" {
+                        let a = v["drape"]["material"]["instances"][0]["record_sha256"].clone();
+                        let b = v["drape"]["material"]["instances"][1]["record_sha256"].clone();
+                        v["drape"]["material"]["instances"][0]["record_sha256"] = b;
+                        v["drape"]["material"]["instances"][1]["record_sha256"] = a;
+                        let mut frame = v["drape"]["vapor_surface"].clone();
+                        frame["material_report_sha256"] = json!(digest(&v["drape"]["material"]));
+                        frame.as_object_mut().unwrap().remove("sha256");
+                        frame["sha256"] = json!(digest(&frame));
+                        v["drape"]["vapor_surface"] = frame.clone();
+                        v["vapor_surface"]["result"]["drape_vapor_frame_sha256"] =
+                            frame["sha256"].clone();
+                        v["vapor_surface"]["result"]["request"]["report"] =
+                            json!({"material":v["drape"]["material"],"vapor_surface":frame});
+                        v["vapor_surface"]["result"]["request_sha256"] =
+                            json!(digest(&v["vapor_surface"]["result"]["request"]));
+                    }
+                    Ok(v)
+                })
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(report["comparison"]["frontier"], json!(["b"]), "{fault}");
