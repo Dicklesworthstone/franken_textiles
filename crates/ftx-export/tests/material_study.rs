@@ -1041,7 +1041,11 @@ fn reported_mass_policy_refuses_unsupported_objectives_and_constraints_before_ev
             panic!("unsupported interval policy must refuse before any scenario evaluation")
         })
         .unwrap_err();
-    assert!(rejected.message.contains("supports only assembly_mass_kg"));
+    assert!(
+        rejected.message.contains(
+            "other computed objectives and constraints have no propagated reported bounds"
+        )
+    );
     r.comparison.as_mut().unwrap().objectives[0].metric = Metric::AssemblyMassKg;
     r.comparison.as_mut().unwrap().constraints = vec![
         serde_json::from_value(json!({
@@ -1049,10 +1053,9 @@ fn reported_mass_policy_refuses_unsupported_objectives_and_constraints_before_ev
         .unwrap(),
     ];
     assert!(
-        r.evaluate(&p)
-            .unwrap_err()
-            .message
-            .contains("supports only assembly_mass_kg")
+        r.evaluate(&p).unwrap_err().message.contains(
+            "other computed objectives and constraints have no propagated reported bounds"
+        )
     );
 }
 
@@ -1169,6 +1172,78 @@ fn comparison_excludes_missing_required_values_not_unrelated_consumer_refusals()
         row(&priced["comparison"], "thick")["readings"]
             .get("observed_order_cost")
             .is_none()
+    );
+}
+
+#[test]
+fn selected_supplier_allocation_cost_keeps_a_complete_incumbent_and_charges_study_work() {
+    use ftx_pattern::materials::{CATALOG_SCHEMA, Catalog};
+    let p = Pattern::from_json(PATTERN).unwrap();
+    let mut r = request();
+    r.variants.retain(|v| v.key == "wide");
+    r.sewing = None;
+    let material = Catalog {
+        schema: CATALOG_SCHEMA.into(),
+        materials: vec![],
+    }
+    .resolve(r.variants[0].changes.default.as_ref().unwrap())
+    .unwrap();
+    let purchasing = r.purchasing.as_mut().unwrap();
+    purchasing.quotes.quotes.retain(|q| q.material_id == "wide");
+    purchasing.quotes.quotes[0].material_sha256 = Some(material.sha256().into());
+    let mut alternative = purchasing.quotes.quotes[0].clone();
+    alternative.offer_id = "synthetic/other".into();
+    alternative.supplier = "Another synthetic supplier".into();
+    alternative.price *= 2.;
+    purchasing.quotes.quotes.push(alternative);
+    purchasing.market.split_orders = Some(
+        serde_json::from_value(json!({
+        "schema":"ftx-cut-order-allocation/1","max_search_nodes":1}))
+        .unwrap(),
+    );
+    comparison(
+        &mut r,
+        json!([{"metric":"selected_observed_order_cost","direction":"minimize"}]),
+        json!([]),
+        json!(["purchasing"]),
+    );
+    let report = evaluate(&r, &p);
+    let priced = &row(&report, "wide")["purchasing"]["result"];
+    assert_eq!(priced["complete_offer_coverage"], true);
+    assert_eq!(priced["order_allocation_optimality_proven"], false);
+    assert!(priced["least_observed_independent_order_total"].is_null());
+    let candidate = row(&report["comparison"], "wide");
+    assert_eq!(candidate["eligible"], true);
+    assert_eq!(
+        candidate["readings"]["selected_observed_order_cost"]["value"],
+        priced["selected_observed_order_total"]
+    );
+    comparison(
+        &mut r,
+        json!([{"metric":"observed_order_cost","direction":"minimize"}]),
+        json!([]),
+        json!([]),
+    );
+    assert_eq!(
+        row(&evaluate(&r, &p)["comparison"], "wide")["eligible"],
+        false
+    );
+    let mut second = r.variants[0].clone();
+    second.key = "second".into();
+    r.variants.push(second);
+    r.purchasing
+        .as_mut()
+        .unwrap()
+        .market
+        .split_orders
+        .as_mut()
+        .unwrap()
+        .max_search_nodes = 100_001;
+    assert!(
+        r.evaluate(&p)
+            .unwrap_err()
+            .message
+            .contains("aggregate supplier-allocation")
     );
 }
 

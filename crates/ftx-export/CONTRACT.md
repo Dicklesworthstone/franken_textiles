@@ -69,8 +69,10 @@ unchanged pattern and shared process inputs. Canonical metric names fix m², kg,
 the exact market currency. Required unknown/refused/incomplete outputs exclude the candidate,
 never score zero. Default dominance requires matching relevant reported protocols by source piece;
 mixed protocols require deliberate consent. Nominal mode retains its existing point comparisons.
-Reported-bounds mode supports only complete `assembly_mass_kg` endpoints from the real mass consumer,
-conditional on fixed authored geometry and additive inventory. Inclusive constraints must contain
+Reported-bounds mode supports complete `assembly_mass_kg` endpoints and all eight vapor potential
+metrics from their canonical consumers. Mass holds authored geometry and additive inventory fixed;
+vapor holds current geometry, boundaries, films, interfaces and integration policy fixed while
+propagating complete source Ret endpoints. Inclusive constraints must contain
 the whole range; dominance requires strictly separated ranges, while overlap/touching and missing
 bounds remain explicit. Other objective/constraint metrics refuse this mode before evaluation;
 source bounds are not relabeled as numerical-solver or physical-garment uncertainty. Required
@@ -104,8 +106,10 @@ The canonical `material_vapor` evaluator supplies its independent report/refusal
 replay. Common area, pressures, films and latent heat are explicit shared assumptions; source-piece
 membership does not infer geometry, coverage or gaps. Optional nominal potential-power/mass-flow
 comparison requires available vapor results and uses only the consumed observations' complete
-protocols. Missing data stays unknown; reported bounds cannot masquerade as propagated output
-uncertainty. Omission preserves existing study serialization. Tests: `material_study_vapor` and the
+protocols. Conditional reported-bound comparisons additionally require complete canonical endpoint
+propagation. Missing bounds retain nominal values but exclude robust ranking; endpoints do not
+represent statistical confidence or uncertainty in geometry and boundary assumptions.
+Omission preserves existing study serialization. Tests: `material_study_vapor` and the
 native/portable `material_study_consumers`; no actual evaporation, comfort or empirical assembly claim.
 
 **Draped vapor comparison** (`material_study::comparison`, plan §25.55 / `ftx-vc4`). Nominal
@@ -290,6 +294,16 @@ roll orders and used exact finite items only with complete offer coverage. Physi
 offers cannot also supply rolls. Missing prices preserve geometry and stay unknown. Material studies
 rerun the complete job after substitution, independently of sewing and physics. See
 `docs/mixed-stock-cutting.md` and `tests/cutting_job.rs`; synthetic verification is not machine approval.
+
+**Bounded split supplier orders.** Optional `market.split_orders` produces `ftx-cut-procurement/3`
+by assigning indivisible markers to current exact-material-locked offers. Each aggregated order
+reuses canonical quote rounding, capacity, continuous-cut and quantity-price evaluation. Connected
+supplier/base/tier SKU aliases share one stock identity, including links through unselected offers
+and other material groups. The shared work bound charges prefix extensions and uncached quote
+evaluations; studies reserve configured work across every alternative against a 200000-unit cap.
+Complete feasible selected costs remain available after exhaustion, while minimum-cost metrics
+require completed proof. Mixed jobs add exact finite-item prices only when all routes are complete.
+Neither an incomplete subtotal nor duplicated physical stock may supply a comparison value.
 
 **Error model.** `Refusal` `invalid_document` for a missing vertex, a malformed curve, a seam allowance
 outline without area; `unscaled` for a pattern traced in pixels; `out_of_range` for a projector page over

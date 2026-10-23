@@ -203,6 +203,8 @@ fn complete_same_market_job_cost_counts_each_roll_order_and_used_hide_once() {
     let pricing = plan.purchasing.as_ref().unwrap();
     assert!(pricing.complete_offer_coverage && pricing.complete_observed_quantity_coverage);
     near(pricing.least_observed_independent_order_total.unwrap(), 8.0);
+    near(pricing.selected_observed_order_total.unwrap(), 8.0);
+    assert!(pricing.order_allocation_optimality_proven);
     assert!(!pricing.execution_authorized);
     let expected_roll = procurement::evaluate(
         plan.roll.as_ref().unwrap(),
@@ -229,6 +231,81 @@ fn complete_same_market_job_cost_counts_each_roll_order_and_used_hide_once() {
                 .build(&Pattern::from_json(&plan.pattern_json).unwrap())
                 .unwrap()
         )
+    );
+}
+
+#[test]
+fn bounded_split_order_incumbent_remains_a_complete_job_and_an_explicit_study_objective() {
+    let (pattern, request) = inputs();
+    let mut request = priced(&pattern, &request);
+    let mut other = request
+        .purchasing
+        .as_ref()
+        .unwrap()
+        .quotes
+        .quotes
+        .last()
+        .unwrap()
+        .clone();
+    other.offer_id = "roll/alternative".into();
+    other.supplier = "Another synthetic supplier".into();
+    other.price *= 2.;
+    request
+        .purchasing
+        .as_mut()
+        .unwrap()
+        .quotes
+        .quotes
+        .push(other);
+    request.purchasing.as_mut().unwrap().market.split_orders = Some(
+        serde_json::from_value(json!({"schema":"ftx-cut-order-allocation/1",
+            "max_search_nodes":1}))
+        .unwrap(),
+    );
+    let plan = request.build(&pattern).unwrap();
+    let pricing = plan.purchasing.as_ref().unwrap();
+    assert!(pricing.complete_offer_coverage && pricing.complete_observed_quantity_coverage);
+    near(pricing.selected_observed_order_total.unwrap(), 8.0);
+    assert!(pricing.least_observed_independent_order_total.is_none());
+    assert!(!pricing.order_allocation_optimality_proven);
+    assert_eq!(value(&pricing.roll)["result"]["budget_exhausted"], true);
+    let mut study: Value = serde_json::from_str(STUDY).unwrap();
+    study["cutting_job"] = value(&request);
+    for (metric, eligible) in [
+        ("cutting_job_selected_order_cost", true),
+        ("cutting_job_observed_order_cost", false),
+    ] {
+        study["comparison"] = json!({"basis":"nominal",
+            "required_consumers":["cutting_job_purchasing"],
+            "objectives":[{"metric":metric,"direction":"minimize"}]});
+        let evaluated = value(
+            &serde_json::from_value::<material_study::Request>(study.clone())
+                .unwrap()
+                .evaluate(&pattern)
+                .unwrap(),
+        );
+        let candidate = &evaluated["comparison"]["alternatives"][0];
+        assert_eq!(candidate["eligible"], eligible, "{metric}: {candidate}");
+        assert_eq!(
+            evaluated["alternatives"][0]["metrics"]["cutting_job_selected_order_cost"],
+            8.0
+        );
+        if eligible {
+            assert_eq!(candidate["readings"][metric]["value"], 8.0);
+            assert_eq!(candidate["readings"][metric]["unit"], "USD");
+        }
+    }
+    request.purchasing.as_mut().unwrap().quotes.quotes[0].available = false;
+    let failed = request.build(&pattern).unwrap();
+    assert!(failed.complete_inventory);
+    assert!(!failed.purchasing.as_ref().unwrap().complete_offer_coverage);
+    assert!(
+        failed
+            .purchasing
+            .as_ref()
+            .unwrap()
+            .selected_observed_order_total
+            .is_none()
     );
 }
 

@@ -1343,6 +1343,41 @@ fn frozen_vapor_material(value: &Value) -> ResolvedMaterial {
     .unwrap()
 }
 
+fn vapor_test_bounds<'a>(
+    terms: impl IntoIterator<Item = (&'a Value, f64)>,
+    input_names: [&str; 2],
+    output_names: [&str; 2],
+) -> Value {
+    let mut total = [[0.; 2]; 2];
+    for (bounds, weight) in terms {
+        if bounds.is_null() {
+            return Value::Null;
+        }
+        for (range, name) in total.iter_mut().zip(input_names) {
+            let incoming: [f64; 2] = serde_json::from_value(bounds[name].clone()).unwrap();
+            for (sum, endpoint) in range.iter_mut().zip(incoming) {
+                *sum += endpoint * weight;
+            }
+        }
+    }
+    json!({(output_names[0]):total[0],(output_names[1]):total[1]})
+}
+
+fn bound_vapor_variants(request: &mut Request, bounds: [Option<[f64; 2]>; 2]) {
+    for (variant, bounds) in request.variants.iter_mut().zip(bounds) {
+        let selection = variant.changes.default.as_mut().unwrap();
+        selection.expected_sha256 = None;
+        selection
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("vapor_resistance")
+            .unwrap()
+            .bounds = bounds;
+    }
+}
+
 // Known equal-area single-sheet regions use the production material authority. The deliberately
 // synthetic projection tests comparison admission independently of the drape projection kernel.
 fn canonical_vapor_column(conditions: &Value, selection: &Value, area: f64) -> Value {
@@ -1386,6 +1421,14 @@ fn synthetic_vapor_coverage(pattern: &Pattern, d: &Value) -> Value {
             "instance_layers":d["scenario"]["vapor_coverage"]["instance_layers"],
             "settings":d["scenario"]["vapor_coverage"]["settings"]},"conditions":conditions});
     let vapor = canonical_vapor_column(&conditions, &source["materials"][0], 0.5);
+    let bounds = vapor_test_bounds(
+        [(&vapor["reported_bounds"], 1.)],
+        ["potential_heat_flow_w", "potential_mass_flow_kg_s"],
+        [
+            "covered_potential_heat_flow_w",
+            "covered_potential_mass_flow_kg_s",
+        ],
+    );
     simulation["vapor_coverage"] = json!({"status":"available","result":{
         "schema":"ftx-vapor-coverage-report/1","request":request,
         "request_sha256":digest(&request),"source_sha256":digest(&source),
@@ -1397,6 +1440,7 @@ fn synthetic_vapor_coverage(pattern: &Pattern, d: &Value) -> Value {
             "body":[{"area_m2":0.5,"covered_area_m2":0.5,"uncovered_area_m2":0.}],
             "covered_potential_heat_flow_w":vapor["potential_heat_flow_w"],
             "covered_potential_mass_flow_kg_s":vapor["potential_mass_flow_kg_s"],
+            "reported_bounds":bounds,
             "regions":[{"id":"body-0-region-0", "body_triangle":0,
                 "body_area_m2":0.5,"layer_area_m2":[0.5],"vapor":vapor}]}}});
     simulation
@@ -1535,7 +1579,9 @@ fn covered_vapor_protocols_follow_consumed_layers_and_require_separate_compariso
     assert_eq!(evaluate(&r)["comparison"]["frontier"], json!(["a"]));
     r.comparison.as_mut().unwrap().basis =
         ftx_export::material_study::comparison::Basis::ReportedBounds;
-    assert!(r.comparison.as_ref().unwrap().validate(&r, true).is_err());
+    assert!(r.comparison.as_ref().unwrap().validate(&r, true).is_ok());
+    // A canonical nominal network cannot acquire absent source bounds by selecting this policy.
+    assert_eq!(evaluate(&r)["comparison"]["frontier"], json!([]));
 }
 
 fn moving_vapor_inputs() -> (Request, Value) {
@@ -1611,6 +1657,13 @@ fn moving_vapor_frame(pattern: &Pattern, d: &Value, width: f64) -> Value {
     result["coverage"]["regions"][0]["layer_area_m2"] = json!([width * 0.5]);
     result["coverage"]["covered_potential_heat_flow_w"] = json!(vapor.potential_heat_flow_w);
     result["coverage"]["covered_potential_mass_flow_kg_s"] = json!(vapor.potential_mass_flow_kg_s);
+    result["coverage"]["reported_bounds"] = vapor
+        .reported_bounds
+        .map(|b| {
+            json!({"covered_potential_heat_flow_w":b.potential_heat_flow_w,
+            "covered_potential_mass_flow_kg_s":b.potential_mass_flow_kg_s})
+        })
+        .unwrap_or(Value::Null);
     result["coverage"]["regions"][0]["vapor"] = json!(vapor);
     result["projection"]["geometry_operations"] = json!(11);
     result["source_sha256"] = json!(digest(&result["request"]["source"]));
@@ -1649,6 +1702,7 @@ fn synthetic_moving_vapor_with_widths(pattern: &Pattern, d: &Value, widths: [f64
     let mut previous_flow = initial_result["coverage"]["covered_potential_mass_flow_kg_s"]
         .as_f64()
         .unwrap();
+    let mut previous_bounds = initial_result["coverage"]["reported_bounds"].clone();
     for (i, width) in widths.into_iter().enumerate() {
         let frame = moving_vapor_frame(pattern, d, width);
         let result = &frame["vapor_coverage"]["result"];
@@ -1675,27 +1729,51 @@ fn synthetic_moving_vapor_with_widths(pattern: &Pattern, d: &Value, widths: [f64
             ),
             _ => panic!("unsupported synthetic quadrature"),
         };
+        let terms = match integration {
+            "right_endpoint" => vec![(&result["coverage"]["reported_bounds"], 0.5)],
+            "composite_trapezoid" => vec![
+                (&previous_bounds, 0.25),
+                (&result["coverage"]["reported_bounds"], 0.25),
+            ],
+            _ => unreachable!(),
+        };
+        let bounds = vapor_test_bounds(
+            terms,
+            [
+                "covered_potential_heat_flow_w",
+                "covered_potential_mass_flow_kg_s",
+            ],
+            ["potential_energy_j", "potential_mass_kg"],
+        );
         previous_power = power;
         previous_flow = flow;
+        previous_bounds = result["coverage"]["reported_bounds"].clone();
         energy += e;
         mass += m;
         rows.push(
             json!({"sample_index":i,"time_s":sample["time_s"],"dt_s":0.5,
             "positions_sha256":digest(&sample["positions_m"]),
             "body_positions_sha256":digest(&sample["body_positions_m"]),
-            "result":result,"potential_energy_j":e,"potential_mass_kg":m}),
+            "result":result,"potential_energy_j":e,"potential_mass_kg":m,
+            "reported_bounds":bounds}),
         );
         retained.push(sample);
     }
     let request = json!({"schema":"ftx-vapor-coverage-history/1",
         "policy":d["scenario"]["motion"]["vapor_coverage_history"],
         "initial":initial_request,"samples":retained,"path_sha256":motion["path_sha256"]});
+    let bounds = vapor_test_bounds(
+        rows.iter().map(|row| (&row["reported_bounds"], 1.)),
+        ["potential_energy_j", "potential_mass_kg"],
+        ["potential_energy_j", "potential_mass_kg"],
+    );
     motion["vapor_coverage_history"] = json!({"status":"available","result":{
         "schema":"ftx-vapor-coverage-history-report/1","request":request,
         "request_sha256":digest(&request),"replay_request_json":serde_json::to_string(&request).unwrap(),
         "path_sha256":motion["path_sha256"],"initial_positions_sha256":simulation["positions_sha256"],
         "duration_s":1.,"integration":integration,"geometry_operations":33,
-        "initial":initial,"samples":rows,"totals":{"potential_energy_j":energy,"potential_mass_kg":mass}}});
+        "initial":initial,"samples":rows,"totals":{"potential_energy_j":energy,"potential_mass_kg":mass,
+            "reported_bounds":bounds}}});
     simulation["motion"] = json!({"status":"available","result":motion});
     simulation["surface"] = json!({"status":"refused"});
     simulation["coverage"] = json!({"status":"refused"});
@@ -1754,6 +1832,255 @@ fn moving_vapor_objectives_integrate_every_current_area_and_remain_independent_o
         report["manufacturing"]["alternatives"][0]["cutting"]["status"],
         "available"
     );
+}
+
+#[test]
+fn reported_bounds_admit_canonical_covered_networks_and_reject_forged_ranges() {
+    let (mut request, descriptor) = moving_vapor_inputs();
+    request.comparison = Some(
+        serde_json::from_value(json!({"basis":"reported_bounds",
+        "objectives":[{"metric":"covered_vapor_potential_heat_flow_w","direction":"maximize"},
+            {"metric":"covered_vapor_potential_mass_flow_kg_s","direction":"maximize"}],
+        "required_consumers":["vapor_coverage"]}))
+        .unwrap(),
+    );
+    for fault in ["none", "missing_source", "forged_total", "forged_network"] {
+        let mut input = request.clone();
+        bound_vapor_variants(
+            &mut input,
+            [
+                if fault == "missing_source" {
+                    None
+                } else {
+                    Some([8., 12.])
+                },
+                Some([18., 22.]),
+            ],
+        );
+        let report =
+            serde_json::to_value(
+                input
+                    .evaluate_with(
+                        &Pattern::from_json(PATTERN).unwrap(),
+                        &descriptor,
+                        |key, pattern| {
+                            let mut simulation = moving_vapor_frame(pattern, &descriptor, 1.);
+                            if key == "a" && fault.starts_with("forged") {
+                                let result = &mut simulation["vapor_coverage"]["result"];
+                                result["coverage"]["reported_bounds"] = json!({
+                        "covered_potential_heat_flow_w":[30.,40.],
+                        "covered_potential_mass_flow_kg_s":[30./2500000.,40./2500000.]});
+                                if fault == "forged_network" {
+                                    result["coverage"]["regions"][0]["vapor"]["reported_bounds"]
+                                        ["potential_heat_flow_w"] = json!([30., 40.]);
+                                    result["coverage"]["regions"][0]["vapor"]["reported_bounds"]
+                                        ["potential_mass_flow_kg_s"] =
+                                        json!([30. / 2500000., 40. / 2500000.]);
+                                }
+                            }
+                            Ok(simulation)
+                        },
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}: {}",
+            report["comparison"]
+        );
+        assert_eq!(
+            report["simulations"][0]["evaluation"]["result"]["vapor_coverage"]["status"],
+            "available"
+        );
+        let reading = &report["comparison"]["alternatives"][0]["readings"]["covered_vapor_potential_heat_flow_w"];
+        if fault == "forged_network" {
+            assert!(reading.is_null());
+        } else {
+            assert_eq!(reading["value"], 500. / 15.);
+        }
+        if fault == "none" {
+            assert_eq!(reading["reported_bounds"], json!([500. / 17., 500. / 13.]));
+        } else {
+            assert_eq!(report["comparison"]["alternatives"][0]["eligible"], false);
+        }
+    }
+}
+
+#[test]
+fn reported_motion_vapor_ranges_require_every_interval_and_preserve_nominal_outputs() {
+    let (mut request, descriptor) = moving_vapor_inputs();
+    request.comparison.as_mut().unwrap().basis =
+        ftx_export::material_study::comparison::Basis::ReportedBounds;
+    for fault in ["none", "missing_source", "late_range", "forged_aggregate"] {
+        let mut input = request.clone();
+        bound_vapor_variants(
+            &mut input,
+            [
+                if fault == "missing_source" {
+                    None
+                } else {
+                    Some([8., 12.])
+                },
+                Some([18., 22.]),
+            ],
+        );
+        let report = serde_json::to_value(input.evaluate_with(
+            &Pattern::from_json(PATTERN).unwrap(), &descriptor, |key, pattern| {
+                let mut simulation = synthetic_moving_vapor(pattern, &descriptor);
+                if key == "a" {
+                    let history = &mut simulation["motion"]["result"]["vapor_coverage_history"]["result"];
+                    match fault {
+                        "late_range" => history["samples"][1]["reported_bounds"] = Value::Null,
+                        "forged_aggregate" => history["totals"]["reported_bounds"] = json!({
+                            "potential_energy_j":[55.,60.],
+                            "potential_mass_kg":[55./2500000.,60./2500000.]}),
+                        _ => {}
+                    }
+                }
+                Ok(simulation)
+            }).unwrap()).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}: {}",
+            report["comparison"]
+        );
+        let reading = &report["comparison"]["alternatives"][0]["readings"]["motion_covered_vapor_potential_energy_j"];
+        assert!((reading["value"].as_f64().unwrap() - 875. / 15.).abs() < 1e-12);
+        if fault == "none" {
+            for (endpoint, resistance) in [17., 13.].into_iter().enumerate() {
+                assert!(
+                    (reading["reported_bounds"][endpoint].as_f64().unwrap() - 875. / resistance)
+                        .abs()
+                        < 1e-12
+                );
+            }
+        }
+        assert_eq!(
+            report["simulations"][0]["evaluation"]["result"]["motion"]["result"]["vapor_coverage_history"]
+                ["status"],
+            "available"
+        );
+        assert_eq!(
+            report["manufacturing"]["alternatives"][0]["cutting"]["status"],
+            "available"
+        );
+    }
+}
+
+#[test]
+fn reported_motion_ranges_follow_the_rule_and_require_each_weighted_endpoint() {
+    for integration in ["right_endpoint", "composite_trapezoid"] {
+        let (mut request, mut descriptor) = moving_vapor_inputs();
+        descriptor["scenario"]["motion"]["vapor_coverage_history"]["integration"] =
+            json!(integration);
+        request.comparison.as_mut().unwrap().basis =
+            ftx_export::material_study::comparison::Basis::ReportedBounds;
+        bound_vapor_variants(&mut request, [Some([8., 12.]), Some([18., 22.])]);
+        for fault in [
+            "none",
+            "missing_initial_range",
+            "right_endpoint_ranges",
+            "missing_late_range",
+        ] {
+            if integration == "right_endpoint"
+                && matches!(fault, "right_endpoint_ranges" | "missing_late_range")
+            {
+                continue;
+            }
+            let report = serde_json::to_value(request.evaluate_with(
+                &Pattern::from_json(PATTERN).unwrap(), &descriptor, |key, pattern| {
+                    let mut simulation = synthetic_moving_vapor_with_widths(pattern, &descriptor, [2.5, 2.]);
+                    if key == "a" {
+                        let history = &mut simulation["motion"]["result"]["vapor_coverage_history"]["result"];
+                        match fault {
+                            "missing_initial_range" => {
+                                history["initial"]["result"]["coverage"]["reported_bounds"] = Value::Null;
+                                if integration == "composite_trapezoid" {
+                                    history["samples"][0]["reported_bounds"] = Value::Null;
+                                    history["totals"]["reported_bounds"] = Value::Null;
+                                }
+                            }
+                            "right_endpoint_ranges" => {
+                                // Keep nominal trapezoid integrals intact and make every forged
+                                // range internally consistent with the wrong endpoint weights.
+                                for sample in history["samples"].as_array_mut().unwrap() {
+                                    sample["reported_bounds"] = vapor_test_bounds(
+                                        [(&sample["result"]["coverage"]["reported_bounds"], 0.5)],
+                                        ["covered_potential_heat_flow_w", "covered_potential_mass_flow_kg_s"],
+                                        ["potential_energy_j", "potential_mass_kg"],
+                                    );
+                                }
+                                history["totals"]["reported_bounds"] = vapor_test_bounds(
+                                    history["samples"].as_array().unwrap().iter()
+                                        .map(|sample| (&sample["reported_bounds"], 1.)),
+                                    ["potential_energy_j", "potential_mass_kg"],
+                                    ["potential_energy_j", "potential_mass_kg"],
+                                );
+                            }
+                            "missing_late_range" => {
+                                history["samples"][1]["reported_bounds"] = Value::Null;
+                                history["totals"]["reported_bounds"] = Value::Null;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ok(simulation)
+                }).unwrap()).unwrap();
+            let eligible = fault == "none"
+                || (integration == "right_endpoint" && fault == "missing_initial_range");
+            assert_eq!(
+                report["comparison"]["frontier"],
+                if eligible { json!(["a"]) } else { json!(["b"]) },
+                "{integration}/{fault}: {}",
+                report["comparison"]
+            );
+            let candidate = &report["comparison"]["alternatives"][0];
+            assert_eq!(candidate["eligible"], eligible);
+            let coefficient = if integration == "right_endpoint" {
+                1125.
+            } else {
+                1000.
+            };
+            for (metric, conversion) in [
+                ("motion_covered_vapor_potential_energy_j", 1.),
+                ("motion_covered_vapor_potential_mass_kg", 2500000.),
+            ] {
+                let reading = &candidate["readings"][metric];
+                assert!(
+                    (reading["value"].as_f64().unwrap() - coefficient / 15. / conversion).abs()
+                        < 1e-12 / conversion
+                );
+                if eligible {
+                    for (endpoint, resistance) in [17., 13.].into_iter().enumerate() {
+                        assert!(
+                            (reading["reported_bounds"][endpoint].as_f64().unwrap()
+                                - coefficient / resistance / conversion)
+                                .abs()
+                                < 1e-12 / conversion
+                        );
+                    }
+                } else {
+                    assert!(reading["reported_bounds"].is_null());
+                }
+            }
+            assert_eq!(
+                report["simulations"][0]["evaluation"]["result"]["motion"]["result"]["vapor_coverage_history"]
+                    ["status"],
+                "available"
+            );
+        }
+    }
 }
 
 #[test]
@@ -2142,6 +2469,16 @@ fn synthetic_piece_vapor(pattern: &Pattern, d: &Value, refined: bool) -> Value {
             "body_area_m2":area,"layer_area_m2":[area],"vapor":vapor})
         })
         .collect();
+    result["coverage"]["reported_bounds"] = vapor_test_bounds(
+        regions
+            .iter()
+            .map(|region| (&region["vapor"]["reported_bounds"], 1.)),
+        ["potential_heat_flow_w", "potential_mass_flow_kg_s"],
+        [
+            "covered_potential_heat_flow_w",
+            "covered_potential_mass_flow_kg_s",
+        ],
+    );
     result["coverage"]["regions"] = json!(regions);
     result["coverage"]["covered_potential_heat_flow_w"] = json!(power);
     result["coverage"]["covered_potential_mass_flow_kg_s"] = json!(flow);
@@ -2379,6 +2716,13 @@ fn synthetic_vapor(p: &Pattern, d: &Value, selections: Vec<Value>, assigned: &[u
         })
         .collect();
     let mut v = synthetic(p, 0.0, 0.1);
+    let bounds = vapor_test_bounds(
+        assigned
+            .iter()
+            .map(|&column| (&columns[column]["reported_bounds"], 0.5)),
+        ["potential_heat_flux_w_m2", "potential_mass_flux_kg_m2_s"],
+        ["potential_heat_flow_w", "potential_mass_flow_kg_s"],
+    );
     v["surface"] = json!({"status":"refused","refusal":{"message":"No dry heat data"}});
     v["drape"]["material"] = material;
     v["drape"]["vapor_surface"] = frame.clone();
@@ -2390,7 +2734,7 @@ fn synthetic_vapor(p: &Pattern, d: &Value, selections: Vec<Value>, assigned: &[u
         "drape_vapor_frame_sha256":frame["sha256"],"model_sha256":model["sha256"],
         "positions_m":positions,"patch_topology":topology,"triangle_instance":owners,"instances":instances,
         "columns":columns,"patches":patches,"area_m2":assigned.len() as f64 * 0.5,
-        "potential_heat_flow_w":heat,"potential_mass_flow_kg_s":mass}});
+        "potential_heat_flow_w":heat,"potential_mass_flow_kg_s":mass,"reported_bounds":bounds}});
     v
 }
 
@@ -2428,14 +2772,76 @@ fn draped_vapor_metrics_use_qualified_sheet_totals_independently_from_dry_heat()
     );
     r.comparison.as_mut().unwrap().basis =
         ftx_export::material_study::comparison::Basis::ReportedBounds;
-    assert!(
-        r.evaluate_with(
-            &Pattern::from_json(PATTERN).unwrap(),
-            &d,
-            |_, _| -> Result<Value, Refusal> { unreachable!() }
-        )
-        .is_err()
+    let unbounded = run_vapor(&r, &d, |_, _| {});
+    assert_eq!(unbounded["comparison"]["frontier"], json!([]));
+    assert_eq!(
+        unbounded["simulations"][0]["evaluation"]["result"]["vapor_surface"]["status"],
+        "available"
     );
+}
+
+#[test]
+fn reported_sheet_ranges_drive_inclusive_constraints_and_leave_overlap_unresolved() {
+    let (mut input, descriptor) = vapor_inputs();
+    input.comparison.as_mut().unwrap().basis =
+        ftx_export::material_study::comparison::Basis::ReportedBounds;
+    bound_vapor_variants(&mut input, [Some([1., 4.]), Some([5., 9.])]);
+    let result = run_vapor(&input, &descriptor, |_, _| {});
+    assert_eq!(
+        result["comparison"]["frontier"],
+        json!(["a"]),
+        "{}",
+        result["comparison"]
+    );
+    let reading = &result["comparison"]["alternatives"][0]["readings"]["independent_vapor_potential_heat_flow_w"];
+    assert_eq!(reading["reported_bounds"], json!([500. / 9., 500. / 6.]));
+    input.comparison.as_mut().unwrap().constraints.push(
+        serde_json::from_value(json!({"metric":"independent_vapor_potential_heat_flow_w",
+            "minimum":500./9.,"maximum":500./6.}))
+        .unwrap(),
+    );
+    let inclusive = run_vapor(&input, &descriptor, |_, _| {});
+    assert_eq!(inclusive["comparison"]["frontier"], json!(["a"]));
+    // A nominally passing threshold still excludes an interval extending below that threshold.
+    input.comparison.as_mut().unwrap().constraints[1].minimum = Some(500. / 7.);
+    assert_eq!(
+        run_vapor(&input, &descriptor, |_, _| {})["comparison"]["frontier"],
+        json!([])
+    );
+    input.comparison.as_mut().unwrap().constraints.truncate(1);
+    bound_vapor_variants(&mut input, [Some([1., 8.]), Some([5., 9.])]);
+    let overlap = run_vapor(&input, &descriptor, |_, _| {});
+    assert_eq!(overlap["comparison"]["frontier"], json!(["a", "b"]));
+    assert_eq!(
+        overlap["comparison"]["incomparable"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    bound_vapor_variants(&mut input, [None, Some([5., 9.])]);
+    let missing = run_vapor(&input, &descriptor, |_, _| {});
+    assert_eq!(missing["comparison"]["frontier"], json!(["b"]));
+    assert_eq!(
+        missing["comparison"]["alternatives"][0]["readings"]["independent_vapor_potential_heat_flow_w"]
+            ["value"],
+        500. / 7.
+    );
+    assert_eq!(
+        missing["simulations"][0]["evaluation"]["result"]["vapor_surface"]["status"],
+        "available"
+    );
+
+    bound_vapor_variants(&mut input, [Some([1., 4.]), Some([5., 9.])]);
+    let forged = run_vapor(&input, &descriptor, |key, simulation| {
+        if key == "a" {
+            simulation["vapor_surface"]["result"]["reported_bounds"] = json!({
+                "potential_heat_flow_w":[60.,80.],
+                "potential_mass_flow_kg_s":[60./2000000.,80./2000000.]});
+        }
+    });
+    assert_eq!(forged["comparison"]["frontier"], json!(["b"]));
 }
 
 #[test]
@@ -2603,13 +3009,29 @@ fn independent_vapor_objectives_read_admitted_sheet_outputs_with_fixed_units() {
     assert_eq!(report["comparison"]["physical_validation_claim"], false);
     r.comparison.as_mut().unwrap().basis =
         ftx_export::material_study::comparison::Basis::ReportedBounds;
-    assert!(
-        r.evaluate_with(
-            &Pattern::from_json(PATTERN).unwrap(),
-            &d,
-            |_, _| -> Result<Value, Refusal> { unreachable!() }
-        )
-        .is_err()
+    let unbounded = run_vapor(&r, &d, |_, _| {});
+    assert_eq!(unbounded["comparison"]["frontier"], json!([]));
+    for (candidate, nominal_heat) in unbounded["comparison"]["alternatives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip([3., 1.])
+    {
+        assert_eq!(candidate["eligible"], false);
+        for (metric, value) in [
+            ("independent_vapor_potential_heat_flow_w", nominal_heat),
+            (
+                "independent_vapor_potential_mass_flow_kg_s",
+                nominal_heat / 2e6,
+            ),
+        ] {
+            assert_eq!(candidate["readings"][metric]["value"], value);
+            assert!(candidate["readings"][metric]["reported_bounds"].is_null());
+        }
+    }
+    assert_eq!(
+        unbounded["simulations"][0]["evaluation"]["result"]["vapor_surface"]["status"],
+        "available"
     );
 }
 

@@ -21,8 +21,8 @@ mod heating_tests;
 pub enum Basis {
     /// Explicitly compare nominal computed results, without a propagated uncertainty claim.
     Nominal,
-    /// Require complete reported assembly-mass endpoints at fixed authored geometry/inventory.
-    /// Other computed metrics have no supported output intervals and refuse this policy.
+    /// Require complete source-reported endpoints for assembly mass or vapor potential.
+    /// Geometry, inventory, pressure/film/interface boundaries and the sampled path stay fixed.
     ReportedBounds,
 }
 
@@ -94,8 +94,12 @@ pub enum Metric {
     CuttingJobStockMassKg,
     /// Complete observed independent order cost across both routes in the job's market currency.
     CuttingJobObservedOrderCost,
+    /// Complete feasible selected job cost; split roll allocation may retain an unproved incumbent.
+    CuttingJobSelectedOrderCost,
     /// Least observed independent whole-order total in the explicit market currency.
     ObservedOrderCost,
+    /// Complete feasible selected roll-order total, without requiring an allocation minimum proof.
+    SelectedObservedOrderCost,
     /// Traversed stitch intervals, including declared locks and repeated passes.
     StitchIntervals,
     /// Feed-only time in seconds; not a robot cycle-time estimate.
@@ -168,8 +172,10 @@ impl Metric {
             Self::CuttingJobExternalCutAreaM2
             | Self::CuttingJobStockAreaM2
             | Self::CuttingJobStockMassKg => Consumer::CuttingJob,
-            Self::CuttingJobObservedOrderCost => Consumer::CuttingJobPurchasing,
-            Self::ObservedOrderCost => Consumer::Purchasing,
+            Self::CuttingJobObservedOrderCost | Self::CuttingJobSelectedOrderCost => {
+                Consumer::CuttingJobPurchasing
+            }
+            Self::ObservedOrderCost | Self::SelectedObservedOrderCost => Consumer::Purchasing,
             Self::StitchIntervals
             | Self::FeedSeconds
             | Self::SewingSetupSeconds
@@ -214,9 +220,10 @@ impl Metric {
             | Self::UsedStockMassKg
             | Self::CuttingJobStockMassKg
             | Self::MotionCoveredVaporPotentialMassKg => "kg",
-            Self::ObservedOrderCost | Self::CuttingJobObservedOrderCost => {
-                currency.unwrap_or("unavailable currency")
-            }
+            Self::ObservedOrderCost
+            | Self::SelectedObservedOrderCost
+            | Self::CuttingJobObservedOrderCost
+            | Self::CuttingJobSelectedOrderCost => currency.unwrap_or("unavailable currency"),
             Self::StitchIntervals | Self::UsedStockCount => "count",
             Self::FeedSeconds | Self::SewingSetupSeconds | Self::SewingFeedAndSetupSeconds => "s",
             Self::VaporPotentialHeatFlowW
@@ -258,7 +265,9 @@ impl Metric {
             Self::CuttingJobStockAreaM2 => row.metrics.cutting_job_stock_area_m2,
             Self::CuttingJobStockMassKg => row.metrics.cutting_job_stock_mass_kg,
             Self::CuttingJobObservedOrderCost => row.metrics.cutting_job_observed_order_cost,
+            Self::CuttingJobSelectedOrderCost => row.metrics.cutting_job_selected_order_cost,
             Self::ObservedOrderCost => row.metrics.least_observed_independent_order_total,
+            Self::SelectedObservedOrderCost => row.metrics.selected_observed_order_total,
             Self::StitchIntervals => row.metrics.stitch_intervals.map(|n| n as f64),
             Self::FeedSeconds => row.metrics.feed_seconds,
             Self::SewingSetupSeconds => row.metrics.sewing_setup_seconds,
@@ -358,6 +367,44 @@ impl Metric {
                 | Self::TransientCoverageFinalMaxTemperatureC
         )
     }
+
+    fn supports_bounds(self) -> bool {
+        matches!(
+            self,
+            Self::AssemblyMassKg
+                | Self::VaporPotentialHeatFlowW
+                | Self::VaporPotentialMassFlowKgS
+                | Self::IndependentVaporPotentialHeatFlowW
+                | Self::IndependentVaporPotentialMassFlowKgS
+                | Self::CoveredVaporPotentialHeatFlowW
+                | Self::CoveredVaporPotentialMassFlowKgS
+                | Self::MotionCoveredVaporPotentialEnergyJ
+                | Self::MotionCoveredVaporPotentialMassKg
+        )
+    }
+
+    fn reported_bounds(
+        self,
+        row: &Alternative,
+        derived: &BTreeMap<Consumer, TransferBounds>,
+    ) -> Option<[f64; 2]> {
+        match self {
+            Self::AssemblyMassKg => row.assembly_mass.value()?.assembly_mass.reported_bounds_kg,
+            Self::VaporPotentialHeatFlowW => {
+                Some(row.vapor.value()?.reported_bounds?.potential_heat_flow_w)
+            }
+            Self::VaporPotentialMassFlowKgS => {
+                Some(row.vapor.value()?.reported_bounds?.potential_mass_flow_kg_s)
+            }
+            Self::IndependentVaporPotentialHeatFlowW
+            | Self::CoveredVaporPotentialHeatFlowW
+            | Self::MotionCoveredVaporPotentialEnergyJ => Some(derived.get(&self.consumer())?[0]),
+            Self::IndependentVaporPotentialMassFlowKgS
+            | Self::CoveredVaporPotentialMassFlowKgS
+            | Self::MotionCoveredVaporPotentialMassKg => Some(derived.get(&self.consumer())?[1]),
+            _ => None,
+        }
+    }
 }
 
 /// One independent preference; every objective must be available for a row to be eligible.
@@ -386,7 +433,7 @@ pub struct Constraint {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
-    /// Explicit nominal outputs or supported, conditionally propagated reported mass bounds.
+    /// Explicit nominal outputs or supported conditional mass/vapor source bounds.
     pub basis: Basis,
     /// One to sixteen unique objective metrics. No hidden scalarization or automatic winner.
     pub objectives: Vec<Objective>,
@@ -460,7 +507,7 @@ pub struct Report {
     pub frontier: Vec<String>,
     /// Explicit protocol incompatibilities or unresolved reported-range overlap.
     pub incomparable: Vec<Incomparable>,
-    /// Always false. Conditional mass endpoints are not a general uncertainty estimate for the
+    /// Always false. Conditional source endpoints are not a general uncertainty estimate for the
     /// geometry, inventory, numerical solvers or physical garment.
     pub uncertainty_propagated: bool,
     /// Always false, including when all computed constraints pass.
@@ -506,10 +553,10 @@ impl Policy {
             }
         }
         if matches!(self.basis, Basis::ReportedBounds)
-            && self.metrics().iter().any(|m| *m != Metric::AssemblyMassKg)
+            && self.metrics().iter().any(|m| !m.supports_bounds())
         {
             return Err(invalid(
-                "reported_bounds comparison supports only assembly_mass_kg; other computed objectives and constraints have no propagated reported bounds",
+                "reported_bounds comparison supports assembly_mass_kg and vapor potential metrics only; other computed objectives and constraints have no propagated reported bounds",
             ));
         }
         let unique: BTreeSet<_> = self.required_consumers.iter().collect();
@@ -660,7 +707,7 @@ impl Policy {
                 } else if matches!(self.basis, Basis::ReportedBounds) {
                     incomparable.push(Incomparable {
                         alternatives: [candidates[i].key.clone(), candidates[j].key.clone()],
-                        reason: "Reported assembly-mass ranges overlap or touch; no guaranteed strict dominance inferred.",
+                        reason: "Reported ranges overlap, touch or trade off; no guaranteed strict dominance inferred.",
                     });
                 }
             }
@@ -687,7 +734,7 @@ impl Policy {
                         "Nominal computed outputs only; source bounds are not propagated uncertainty intervals. Estimate permission stays with each source selection."
                     }
                     Basis::ReportedBounds => {
-                        "Assembly-mass constraints must contain the entire reported range. Dominance requires no worse endpoints with a strict improvement; overlapping or touching ranges remain unresolved. Bounds propagate only through fixed authored areas and additive inventory, not finishing, omitted components, geometry uncertainty or a confidence model. Estimate permission stays with each source selection."
+                        "Constraints must contain the entire reported range. Dominance requires no worse endpoints with a strict improvement; overlapping or touching ranges remain unresolved. Mass bounds use fixed authored areas and additive inventory. Vapor bounds use complete positive source Ret endpoints through the canonical network with fixed geometry, films, interfaces, pressures and latent heat; motion additionally fixes the retained path and integration rule. No confidence level, independent errors, geometry uncertainty, unsampled-motion bound or measured garment performance is inferred. Estimate permission stays with each source selection."
                     }
                 },
                 "The frontier is conditional on the evaluated alternatives, constraints, process policy and reported-protocol admission. Scalar pre-screening may have removed better garment alternatives.",
@@ -724,6 +771,11 @@ impl Policy {
             || self.consumers().contains(&Consumer::CuttingJobPurchasing)
         {
             report.notes.push("Cutting-job objectives cover every routed physical piece exactly once. Gross stock includes roll-marker waste and entire used finite-stock items; complete same-market observed costs do not reserve inventory or include undeclared shipping/handling.");
+        }
+        if self.consumers().contains(&Consumer::Purchasing)
+            || self.consumers().contains(&Consumer::CuttingJobPurchasing)
+        {
+            report.notes.push("Selected order cost objectives admit only complete feasible orders. A bounded split-supplier search may retain such an incumbent without proving it cheapest; the observed_order_cost and cutting_job_observed_order_cost objectives require the corresponding allocation minimum. Source quantity and continuous-cut limits apply to each selected aggregate supplier order, without splitting markers or reserving stock.");
         }
         report
     }
@@ -815,6 +867,40 @@ impl Policy {
                 )));
             }
         }
+        let mut derived_bounds = BTreeMap::new();
+        if matches!(self.basis, Basis::ReportedBounds) {
+            for consumer in [
+                Consumer::VaporSurface,
+                Consumer::VaporCoverage,
+                Consumer::MotionVaporCoverage,
+            ] {
+                if !self.metrics().iter().any(|m| m.consumer() == consumer)
+                    || !consumer_available(row, consumer, &admitted)
+                {
+                    continue;
+                }
+                let bounds = match consumer {
+                    Consumer::VaporSurface => sheet_vapor_bounds(admitted.vapor_surface),
+                    Consumer::VaporCoverage => {
+                        let result = admitted.vapor_coverage.expect("admitted covered vapor");
+                        covered_vapor_bounds(result)
+                    }
+                    Consumer::MotionVaporCoverage => motion_vapor_bounds(
+                        admitted
+                            .motion_vapor_coverage
+                            .expect("admitted moving vapor"),
+                    ),
+                    _ => unreachable!(),
+                };
+                match bounds {
+                    Ok(Some(range)) => {
+                        derived_bounds.insert(consumer, range);
+                    }
+                    Ok(None) => {}
+                    Err(e) => result.exclusions.push(e),
+                }
+            }
+        }
         for metric in self.metrics() {
             match metric
                 .value(row, &admitted)
@@ -823,10 +909,8 @@ impl Policy {
                 Some(value) if consumer_available(row, metric.consumer(), &admitted) => {
                     let reported_bounds = match self.basis {
                         Basis::Nominal => None,
-                        Basis::ReportedBounds => row
-                            .assembly_mass
-                            .value()
-                            .and_then(|r| r.assembly_mass.reported_bounds_kg)
+                        Basis::ReportedBounds => metric
+                            .reported_bounds(row, &derived_bounds)
                             .filter(|[lo, hi]| {
                                 lo.is_finite()
                                     && hi.is_finite()
@@ -849,7 +933,7 @@ impl Policy {
                         Basis::ReportedBounds => {
                             let Some(bounds) = reported_bounds else {
                                 result.exclusions.push(invalid(format!(
-                                    "{metric:?} has no complete valid reported bounds; nominal mass remains visible but no exact range is substituted"
+                                    "{metric:?} has no complete valid reported bounds; its nominal value remains visible but no exact range is substituted"
                                 )));
                                 continue;
                             };
@@ -888,7 +972,9 @@ impl Policy {
                 let reading = &candidate.readings[&objective.metric];
                 match self.basis {
                     Basis::Nominal => [reading.value, reading.value],
-                    Basis::ReportedBounds => reading.reported_bounds.expect("admitted mass range"),
+                    Basis::ReportedBounds => {
+                        reading.reported_bounds.expect("admitted source range")
+                    }
                 }
             };
             let [al, ah] = interval(a);
@@ -1159,7 +1245,7 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
             .value()
             .is_some_and(|r| r.complete_inventory),
         Consumer::CuttingJobPurchasing => row.cutting_job.value().is_some_and(|r| {
-            r.complete_inventory && row.metrics.cutting_job_observed_order_cost.is_some()
+            r.complete_inventory && row.metrics.cutting_job_selected_order_cost.is_some()
         }),
         Consumer::Sewing => row.sewing.value().is_some(),
         Consumer::Purchasing => row
@@ -1219,6 +1305,155 @@ fn admit_simulation(
         ));
     }
     Ok(())
+}
+
+// These endpoints are conditional on the already admitted geometry and canonical source network.
+// Summing monotone endpoints does not assume independent specimens or turn SD/CV into limits.
+type TransferBounds = [[f64; 2]; 2];
+
+fn read_transfer_bounds(
+    value: &Value,
+    names: [&str; 2],
+) -> Result<Option<TransferBounds>, Refusal> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let mut result: TransferBounds = [[0.; 2]; 2];
+    for (range, name) in result.iter_mut().zip(names) {
+        *range = serde_json::from_value(value[name].clone())
+            .map_err(|_| invalid("vapor reported bounds need two complete endpoints per metric"))?;
+        if range.iter().any(|v| !v.is_finite() || *v < 0.) || range[0] > range[1] {
+            return Err(invalid(
+                "vapor reported bounds must be finite, nonnegative and ordered",
+            ));
+        }
+    }
+    Ok(Some(result))
+}
+
+fn accumulate_transfer_bounds(
+    total: &mut Option<TransferBounds>,
+    term: Option<TransferBounds>,
+    scale: f64,
+) {
+    let (Some(mut sum), Some(term)) = (*total, term) else {
+        *total = None;
+        return;
+    };
+    for (sum, range) in sum.iter_mut().zip(term) {
+        for (sum, endpoint) in sum.iter_mut().zip(range) {
+            let value = endpoint * scale;
+            let next = *sum + value;
+            if !scale.is_finite()
+                || scale <= 0.
+                || !value.is_finite()
+                || (endpoint > 0. && value <= 0.)
+                || !next.is_finite()
+                || (value > 0. && next <= *sum)
+                || (*sum > 0. && value > 0. && next <= value)
+            {
+                *total = None;
+                return;
+            }
+            *sum = next;
+        }
+    }
+    *total = Some(sum);
+}
+
+fn match_transfer_bounds(
+    expected: Option<TransferBounds>,
+    actual: &Value,
+    names: [&str; 2],
+) -> Result<Option<TransferBounds>, Refusal> {
+    if read_transfer_bounds(actual, names)? != expected {
+        return Err(invalid(
+            "vapor reported bounds differ from complete canonical source endpoints at the admitted geometry and sample times",
+        ));
+    }
+    Ok(expected)
+}
+
+fn sheet_vapor_bounds(result: &Value) -> Result<Option<TransferBounds>, Refusal> {
+    let mut total = Some([[0.; 2]; 2]);
+    for patch in vapor_array(result, "patches")? {
+        let column = vapor_index(&patch["column"])?;
+        let bounds = read_transfer_bounds(
+            &result["columns"][column]["reported_bounds"],
+            ["potential_heat_flux_w_m2", "potential_mass_flux_kg_m2_s"],
+        )?;
+        let area = finite(&patch["area_m2"])
+            .ok_or_else(|| invalid("vapor bounds require the admitted patch area"))?;
+        accumulate_transfer_bounds(&mut total, bounds, area);
+    }
+    match_transfer_bounds(
+        total,
+        &result["reported_bounds"],
+        ["potential_heat_flow_w", "potential_mass_flow_kg_s"],
+    )
+}
+
+fn covered_vapor_bounds(result: &Value) -> Result<Option<TransferBounds>, Refusal> {
+    let mut total = Some([[0.; 2]; 2]);
+    for region in vapor_array(&result["coverage"], "regions")? {
+        let bounds = read_transfer_bounds(
+            &region["vapor"]["reported_bounds"],
+            ["potential_heat_flow_w", "potential_mass_flow_kg_s"],
+        )?;
+        accumulate_transfer_bounds(&mut total, bounds, 1.);
+    }
+    match_transfer_bounds(
+        total,
+        &result["coverage"]["reported_bounds"],
+        [
+            "covered_potential_heat_flow_w",
+            "covered_potential_mass_flow_kg_s",
+        ],
+    )
+}
+
+fn motion_vapor_bounds(history: &Value) -> Result<Option<TransferBounds>, Refusal> {
+    let trapezoid = match history["integration"].as_str() {
+        Some("right_endpoint") => false,
+        Some("composite_trapezoid") => true,
+        _ => {
+            return Err(invalid(
+                "vapor bounds require the admitted integration rule",
+            ));
+        }
+    };
+    let mut previous = if trapezoid {
+        covered_vapor_bounds(&history["initial"]["result"])?
+    } else {
+        None
+    };
+    let mut total = Some([[0.; 2]; 2]);
+    for sample in vapor_array(history, "samples")? {
+        // The existing motion admission has already replayed each canonical regional network.
+        let bounds = covered_vapor_bounds(&sample["result"])?;
+        let dt = finite(&sample["dt_s"])
+            .ok_or_else(|| invalid("vapor bounds require the admitted sample interval"))?;
+        let mut interval = Some([[0.; 2]; 2]);
+        if trapezoid {
+            // Match the canonical producer's two weighted endpoints, including time zero.
+            accumulate_transfer_bounds(&mut interval, previous, 0.5 * dt);
+            accumulate_transfer_bounds(&mut interval, bounds, 0.5 * dt);
+        } else {
+            accumulate_transfer_bounds(&mut interval, bounds, dt);
+        }
+        match_transfer_bounds(
+            interval,
+            &sample["reported_bounds"],
+            ["potential_energy_j", "potential_mass_kg"],
+        )?;
+        accumulate_transfer_bounds(&mut total, interval, 1.);
+        previous = bounds;
+    }
+    match_transfer_bounds(
+        total,
+        &history["totals"]["reported_bounds"],
+        ["potential_energy_j", "potential_mass_kg"],
+    )
 }
 
 fn admit_vapor_surface<'a>(

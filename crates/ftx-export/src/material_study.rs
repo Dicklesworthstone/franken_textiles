@@ -214,9 +214,15 @@ pub struct Metrics {
     /// Complete same-market whole-job order total; never a subtotal of only available prices.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutting_job_observed_order_cost: Option<f64>,
+    /// Complete feasible mixed-job order cost; a bounded allocation need not prove its minimum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutting_job_selected_order_cost: Option<f64>,
     /// Least observed independent whole-order total in the request currency; absent for any
     /// missing offer. Neither a live quote guarantee nor a market-population percentile.
     pub least_observed_independent_order_total: Option<f64>,
+    /// Complete feasible roll-order cost, including a bounded split-supplier allocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_observed_order_total: Option<f64>,
     /// Sew-plan stitch intervals, including its declared directed passes/backtacks.
     pub stitch_intervals: Option<usize>,
     /// Declared stitch-rate feed time; excludes handling, robot movement and machine setup.
@@ -590,6 +596,24 @@ impl Request {
         if let Some(selection) = &self.sewing_selection {
             recipes::check_budget(selection, variants.len())?;
         }
+        let allocation_work = [
+            self.purchasing.as_ref().map(|p| &p.market),
+            self.cutting_job
+                .as_ref()
+                .and_then(|j| j.purchasing.as_ref())
+                .map(|p| &p.market),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|market| market.split_orders.as_ref())
+        .fold(0usize, |sum, policy| {
+            sum.saturating_add(policy.max_search_nodes.saturating_mul(variants.len()))
+        });
+        if allocation_work > 200_000 {
+            return Err(budget(
+                "material study exceeds 200000 aggregate supplier-allocation work units; reduce alternatives or each split_orders limit",
+            ));
+        }
         variants.sort_by(|a, b| a.variant.key.cmp(&b.variant.key));
         let mut alternatives = Vec::new();
         let mut stations = 0usize;
@@ -881,10 +905,21 @@ impl Request {
                 .as_ref()
                 .filter(|p| p.complete_offer_coverage)
                 .and_then(|p| p.least_observed_independent_order_total);
+            row.metrics.cutting_job_selected_order_cost = plan
+                .purchasing
+                .as_ref()
+                .filter(|p| p.complete_offer_coverage)
+                .and_then(|p| p.selected_observed_order_total);
         }
         if let Some(priced) = row.purchasing.value() {
             row.metrics.least_observed_independent_order_total =
                 priced["least_observed_independent_order_total"].as_f64();
+            row.metrics.selected_observed_order_total =
+                if priced["schema"] == "ftx-cut-procurement/3" {
+                    priced["selected_observed_order_total"].as_f64()
+                } else {
+                    row.metrics.least_observed_independent_order_total
+                };
         }
         row.binding = Outcome::Available { result: bound };
         Ok(row)

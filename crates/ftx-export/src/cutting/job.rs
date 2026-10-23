@@ -143,7 +143,12 @@ pub struct PriceReport {
     /// Every selected offer additionally has enough observed whole-order inventory.
     pub complete_observed_quantity_coverage: bool,
     /// Roll orders plus whole used finite items, counted once each, or unknown.
+    /// For split roll orders, this requires a proved minimum over the admitted assignment search.
     pub least_observed_independent_order_total: Option<f64>,
+    /// Complete feasible selected order cost, including a bounded split-order incumbent.
+    pub selected_observed_order_total: Option<f64>,
+    /// Every engaged roll allocation completed its search; finite-item quotes are evaluated fully.
+    pub order_allocation_optimality_proven: bool,
     /// Failure to form a complete finite total; independent route reports remain inspectable.
     pub aggregation_refusal: Option<Refusal>,
     /// Quotes do not authorize checkout or reserve inventory.
@@ -676,6 +681,8 @@ fn price(
                 complete_offer_coverage: false,
                 complete_observed_quantity_coverage: false,
                 least_observed_independent_order_total: None,
+                selected_observed_order_total: None,
+                order_allocation_optimality_proven: false,
                 aggregation_refusal: Some(refusal),
                 execution_authorized: false,
             };
@@ -715,14 +722,21 @@ fn price(
         None => Outcome::NotRequested,
     };
     let mut total = Some(0.0);
+    let mut selected = Some(0.0);
     let mut observed = true;
     match &roll {
         Outcome::Available { result } => {
             total = result["least_observed_independent_order_total"].as_f64();
+            selected = if result["schema"] == "ftx-cut-procurement/3" {
+                result["selected_observed_order_total"].as_f64()
+            } else {
+                total
+            };
             observed &= result["complete_observed_quantity_coverage"] == true;
         }
         Outcome::Refused { .. } => {
             total = None;
+            selected = None;
             observed = false;
         }
         Outcome::NotRequested => {}
@@ -732,19 +746,26 @@ fn price(
             total = total
                 .zip(result.least_observed_independent_order_total)
                 .map(|(a, b)| a + b);
+            selected = selected
+                .zip(result.least_observed_independent_order_total)
+                .map(|(a, b)| a + b);
             observed &= result.complete_observed_quantity_coverage;
         }
         Outcome::Refused { .. } => {
             total = None;
+            selected = None;
             observed = false;
         }
         Outcome::NotRequested => {}
     }
     let aggregation_refusal = total
-        .filter(|x| !x.is_finite())
-        .map(|_| invalid("complete cutting job order total overflows"));
+        .into_iter()
+        .chain(selected)
+        .any(|x| !x.is_finite())
+        .then(|| invalid("complete cutting job order total overflows"));
     if aggregation_refusal.is_some() {
         total = None;
+        selected = None;
         observed = false;
     }
     PriceReport {
@@ -753,9 +774,11 @@ fn price(
         roll,
         finite_stock,
         currency: request.market.currency.clone(),
-        complete_offer_coverage: total.is_some(),
-        complete_observed_quantity_coverage: observed && total.is_some(),
+        complete_offer_coverage: selected.is_some(),
+        complete_observed_quantity_coverage: observed && selected.is_some(),
         least_observed_independent_order_total: total,
+        selected_observed_order_total: selected,
+        order_allocation_optimality_proven: total.is_some(),
         aggregation_refusal,
         execution_authorized: false,
     }

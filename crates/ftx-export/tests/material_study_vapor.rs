@@ -225,7 +225,71 @@ fn only_consumed_protocols_control_comparison_and_bounds_are_not_invented() {
     );
     request["comparison"]["basis"] = json!("reported_bounds");
     let typed: Request = serde_json::from_value(request).unwrap();
-    assert!(typed.evaluate(&pattern()).is_err());
+    let unavailable = serde_json::to_value(typed.evaluate(&pattern()).unwrap()).unwrap();
+    assert_eq!(unavailable["comparison"]["frontier"], json!([]));
+    assert_eq!(row(&unavailable, "a-fast")["vapor"]["status"], "available");
+    assert!(row(&unavailable["comparison"], "a-fast")["readings"]
+        ["vapor_potential_mass_flow_kg_s"]["reported_bounds"].is_null());
+}
+
+#[test]
+fn robust_stack_tradeoffs_use_all_bound_layer_endpoints_and_inclusive_limits() {
+    let mut pattern = pattern().raw().clone();
+    pattern["pieces"][1]["fabric"]["material"]["record"]["properties"]["vapor_resistance"]["bounds"] =
+        json!([2., 4.]);
+    let pattern = Pattern::new(pattern);
+    let mut request = request();
+    request["variants"].as_array_mut().unwrap().truncate(2);
+    request["variants"][0]["changes"]["default"]["record"]["properties"]["vapor_resistance"]["bounds"] =
+        json!([1., 3.]);
+    request["variants"][1]["changes"]["default"]["record"]["properties"]["vapor_resistance"]["bounds"] =
+        json!([6., 8.]);
+    request["comparison"]["basis"] = json!("reported_bounds");
+    request["comparison"]["objectives"] = json!([
+        {"metric":"vapor_potential_heat_flow_w","direction":"maximize"},
+        {"metric":"vapor_potential_mass_flow_kg_s","direction":"maximize"}]);
+    let report = run(&request, &pattern);
+    assert_eq!(report["comparison"]["frontier"], json!(["a-fast"]));
+    let readings = &row(&report["comparison"], "a-fast")["readings"];
+    let heat: [f64; 2] =
+        serde_json::from_value(readings["vapor_potential_heat_flow_w"]["reported_bounds"].clone())
+            .unwrap();
+    let mass: [f64; 2] = serde_json::from_value(
+        readings["vapor_potential_mass_flow_kg_s"]["reported_bounds"].clone(),
+    )
+    .unwrap();
+    for (actual, expected) in heat.into_iter().zip([500. / 12., 500. / 8.]) {
+        assert!((actual - expected).abs() < 1e-12);
+    }
+    for (actual, expected) in mass.into_iter().zip(heat.map(|x| x / 2e6)) {
+        assert!((actual - expected).abs() < 1e-18);
+    }
+    request["comparison"]["constraints"] = json!([
+        {"metric":"vapor_potential_heat_flow_w","minimum":heat[0],"maximum":heat[1]}]);
+    assert_eq!(
+        row(&run(&request, &pattern)["comparison"], "a-fast")["eligible"],
+        true
+    );
+    request["comparison"]["constraints"][0]["maximum"] = json!(50.);
+    assert_eq!(
+        row(&run(&request, &pattern)["comparison"], "a-fast")["eligible"],
+        false
+    );
+    request["comparison"]["constraints"] = json!([]);
+    request["variants"][1]["changes"]["default"]["record"]["properties"]["vapor_resistance"]["bounds"] =
+        json!([1.5, 9.]);
+    assert_eq!(
+        run(&request, &pattern)["comparison"]["frontier"],
+        json!(["a-fast", "b-slow"])
+    );
+    let mut missing = pattern.raw().clone();
+    missing["pieces"][1]["fabric"]["material"]["record"]["properties"]["vapor_resistance"]
+        .as_object_mut()
+        .unwrap()
+        .remove("bounds");
+    let unavailable = run(&request, &Pattern::new(missing));
+    assert_eq!(unavailable["comparison"]["frontier"], json!([]));
+    assert_eq!(row(&unavailable, "a-fast")["vapor"]["status"], "available");
 }
 
 #[test]
