@@ -3054,6 +3054,26 @@ Original requests and exact selections, bindings and interfaces remain downloada
 These connected workflows do not supply missing observations or establish empirical garment fit.
 See [browser-material-workbench.md](docs/browser-material-workbench.md).
 
+---
+
+### 25.67 Plan manufacturing against the reported lower roll width
+
+**Delivered software (`ftx-ms2`, supporting `ftx-tm7`).** Existing roll options accept
+`width_basis: "reported_lower_bound"` to place and nest complete cut pieces inside the admitted
+source width's lower endpoint, with the same declared margins and marker-length limit. Missing or
+invalid bounds refuse that cutting consumer. A narrower layout can require longer or additional
+markers, changing complete supplier orders and the material-study frontier through existing planners.
+Mixed jobs preserve their independent finite-stock geometry and exact whole-job replay.
+
+Reports and SVG retain both the used layout width and source range. Nominal source width remains the
+basis for gross stock area, mass and invoice conversion at the newly planned length; no area, mass
+or price interval is inferred. Default nominal requests retain their previous output. Native cutting,
+purchasing and inventory regressions verify changed feasibility, order quantities, source preservation
+and a production study decision while independent assembly mass survives missing width bounds.
+These are conditional source endpoints with fixed cut geometry, not guaranteed stock tolerances,
+confidence intervals, empirical garment accuracy or machine qualification. Those acceptance gates
+remain open. See [cutting-plans.md](docs/cutting-plans.md).
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

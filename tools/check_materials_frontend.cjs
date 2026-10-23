@@ -2241,13 +2241,17 @@ test('bounded-marker purchasing shows one whole order and preserves exact totals
 
 test('marker selection forwards a zero-based index and withdraws stale preview replies independently of price', async () => {
   const p=await pageModule();await p.load();await p.bind();
-  p.select('cutOptions','{"copies":3,"maximum_marker_length_m":0.12}');
+  const options='{"copies":3,"maximum_marker_length_m":0.12,"width_basis":"reported_lower_bound"}';
+  p.select('cutOptions',options);
   p.select('quotes');p.select('market');await p.e.price.onclick();
   p.emit({roll_prices:[],least_observed_independent_order_total:2.5},[{name:'price.json',text:'{"total":2.5}',mime:'application/json'}]);
   const price=section(p,'price'), priceLink=descendants(price).find(n=>n.download==='price.json');
   p.e.rollPreview.value='2';await p.e.cut.onclick();
   assert.equal(p.current().messages.at(-1).rollIndex,1);
-  const plan={schema:'ftx-roll-cut-plan/2',options:{maximum_marker_length_m:0.12},rolls:[{length_m:0.12},{length_m:0.12}],limitations:[]};
+  assert.equal(p.current().messages.at(-1).options,options);
+  const layout={width_m:0.075,reported_bounds_m:[0.075,0.11],notes:['Fixed source lower width; nominal purchase width retained']};
+  const plan={schema:'ftx-roll-cut-plan/2',options:JSON.parse(options),
+    rolls:[{width_m:0.1,layout_width:layout,length_m:0.12},{width_m:0.1,layout_width:layout,length_m:0.12}],limitations:[]};
   p.emit(plan,[{name:'cut-plan.json',text:JSON.stringify(plan),mime:'application/json'},
     {name:'roll-1.svg',text:'<svg id="second"/>',mime:'image/svg+xml'}]);
   const cut=section(p,'cut'), preview=p.e.marker.src;
@@ -2256,6 +2260,8 @@ test('marker selection forwards a zero-based index and withdraws stale preview r
   const summary=JSON.parse(cut.children[1].textContent);
   assert.equal(summary.maximum_marker_length_m,0.12);
   assert.deepEqual(summary.rolls.map(r=>r.marker_number),[1,2]);
+  assert.equal(summary.rolls[1].width_m,0.1);
+  assert.deepEqual(summary.rolls[1].layout_width,layout);
   p.e.rollPreview.value='1';p.e.rollPreview.handlers.change();
   assert.equal(cut.hidden,true);assert.equal(p.e.marker.hidden,true);assert.equal(p.live.has(preview),false);
   assert.equal(price.hidden,false);assert.equal(p.live.has(priceLink.href),true);
@@ -3927,6 +3933,52 @@ test('compiled WASM bounded markers retain whole geometry, selected SVG and one 
     assert.equal(depleted.result.material_orders[0].allocation.no_feasible_listed_allocation,true);
     const invalid=await w.send({type:'cut',request:54,pattern,options,rollIndex:2});
     assert.equal(invalid.type,'error');assert.match(invalid.message,/between 1 and 2/);
+
+    // The source range changes actual complete-marker placement, while purchasing keeps nominal width.
+    const widthSource=JSON.parse(pattern);
+    widthSource.fabric.material.record.properties.width.bounds=[0.075,0.11];
+    const widthPattern=JSON.stringify(widthSource);
+    const widthNominal=await w.send({type:'cut',request:58,pattern:widthPattern,options,rollIndex:1});
+    assert.equal(widthNominal.type,'result',widthNominal.message);
+    assert.equal(widthNominal.result.rolls.length,2);
+    assert.ok(widthNominal.result.rolls.every(r=>r.width_m===0.1&&!('layout_width' in r)));
+    const widthOptions=JSON.stringify({...JSON.parse(options),width_basis:'reported_lower_bound'});
+    const widthCut=await w.send({type:'cut',request:59,pattern:widthPattern,options:widthOptions,rollIndex:2});
+    assert.equal(widthCut.type,'result',widthCut.message);
+    assert.equal(widthCut.files[0].text,ftx.cut_plan(widthPattern,widthOptions));
+    assert.deepEqual(widthCut.result.rolls.map(r=>r.length_m),[0.12,0.12,0.12]);
+    assert.deepEqual(widthCut.result.rolls.flatMap(r=>r.placements.map(p=>[p.instance,p.copy])),
+      [['front',0],['front',1],['front',2]]);
+    for(const marker of widthCut.result.rolls) {
+      assert.equal(marker.width_m,0.1);assert.equal(marker.layout_width.width_m,0.075);
+      assert.deepEqual(marker.layout_width.reported_bounds_m,[0.075,0.11]);
+      assert.equal(marker.material.sha256,widthNominal.result.rolls[0].material.sha256);
+      assert.ok(Math.abs(marker.stock_area_m2-0.012)<1e-12);
+      assert.ok(Math.abs(marker.stock_mass_kg-0.0024)<1e-12);
+      assert.equal(marker.placements.length,1);
+      assert.ok(marker.placements[0].bounds_mm[2]<=70);
+    }
+    assert.equal(widthCut.files[1].name,'roll-2.svg');
+    assert.equal(widthCut.files[1].text,ftx.cut_svg(widthPattern,widthOptions,2));
+    assert.match(widthCut.files[1].text,/id="stock" width="100"/);
+    assert.match(widthCut.files[1].text,/id="layout-width" width="75"/);
+    assert.match(widthCut.files[1].text,/data-copy="2"/);
+    const widthBook=JSON.stringify({schema:'ftx-textile-quotes/1',quotes:[{...quote,
+      offer_id:'width-whole-order',sku:'width-whole-order',price:10,available_quantity:0.4,
+      material_sha256:widthCut.result.rolls[0].material.sha256}]});
+    const widthPrice=await w.send({type:'price',request:60,pattern:widthPattern,options:widthOptions,quotes:widthBook,market});
+    assert.equal(widthPrice.type,'result',widthPrice.message);
+    assert.equal(widthPrice.files[0].text,ftx.cut_price(widthPattern,widthOptions,widthBook,market));
+    assert.deepEqual(widthPrice.result.cut_plan,widthCut.result);
+    assert.equal(widthPrice.result.complete_offer_coverage,true);
+    const widthOrder=widthPrice.result.material_orders[0];
+    assert.deepEqual(widthOrder.roll_indices,[0,1,2]);
+    assert.ok(Math.abs(widthOrder.required_length_m-0.36)<1e-12);
+    assert.ok(Math.abs(widthOrder.required_stock_area_m2-0.036)<1e-12);
+    assert.ok(Math.abs(widthOrder.sample.scope.requirement-0.036)<1e-12);
+    assert.equal(widthOrder.required_continuous_length_m,0.12);
+    assert.equal(widthOrder.least_observed_order.order_quantity,0.4);
+    assert.equal(widthPrice.result.least_observed_independent_order_total,4);
   });
 
 test('compiled WASM fresh scalar and area identification publishes a reusable law with exact CHECK replay',
@@ -4201,6 +4253,12 @@ test('material scenarios retain finite body water separately from potential dema
   report.scenario.scenario={motion:{vapor_coverage_history:{wet_film:{}}}};
   const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
   initial.motion=outcome({duration_s:1,trials:2,samples:[{},{}],keyframes:[],vapor_coverage_history:outcome(history)});
+  const evaporation='motion_wet_film_evaporated_mass_kg', latent='motion_wet_film_body_reservoir_latent_energy_j';
+  report.comparison={policy:{basis:'nominal',allow_mixed_protocols:false,required_consumers:['motion_wet_film'],
+    objectives:[{metric:evaporation,direction:'maximize'}],constraints:[{metric:latent,max:10}]},
+    motion_required:true,frontier:['A'],incomparable:[],alternatives:[
+      {key:'A',eligible:true,dominated_by:[],exclusions:[],readings:{[evaporation]:{value:0.000004,unit:'kg'},[latent]:{value:10,unit:'J'}}},
+      {key:'B',eligible:false,dominated_by:[],exclusions:[{message:'complete finite-water history unavailable'}],readings:{}}]};
   p.emit(report);
   const s=section(p,'Fresh drape and heat alternatives');
   const table=label=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===label);
@@ -4210,13 +4268,23 @@ test('material scenarios retain finite body water separately from potential dema
   assert.equal(water.children[5].children[1].textContent,'0.000004');
   assert.equal(water.children[8].children[1].textContent,'10');
   assert.equal(table('B: finite body water and latent energy'),undefined);
+  const comparison=()=>table('Declared computed objectives — authoritative Rust comparison');
+  assert.deepEqual(plain(comparison().children[2].children.map(n=>n.textContent)),['A','Eligible','None reported','0.000004 kg','10 J']);
+  assert.deepEqual(plain(comparison().children[3].children.slice(3).map(n=>n.textContent)),['Unknown','Unknown']);
+  assert.match(visibleText(s),/water is not pooled between triangles/);
+  assert.match(visibleText(s),/do not propagate water-state uncertainty/);
   const link=descendants(s).find(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json');
   assert.equal(await p.blobs.get(link.href).text(),history.replay_request_json);
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
   await p.e.scenario.onclick();
-  initial.motion.result.vapor_coverage_history=refused('body water is bound to a different initial mesh'); p.emit(report);
+  initial.motion.result.vapor_coverage_history=refused('body water is bound to a different initial mesh');
+  report.comparison.frontier=[];
+  Object.assign(report.comparison.alternatives[0],{eligible:false,readings:{},exclusions:[{message:'body water is bound to a different initial mesh'}]});
+  p.emit(report);
   assert.equal(table('A: finite body water and latent energy'),undefined);
   assert.match(visibleText(table('A: moving layered vapor potential')),/different initial mesh/);
+  assert.match(comparison().children[2].children[1].textContent,/Excluded: body water is bound/);
+  assert.deepEqual(plain(comparison().children[2].children.slice(3).map(n=>n.textContent)),['Unknown','Unknown']);
   assert.equal(descendants(s).some(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json'),false);
 });
 

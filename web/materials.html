@@ -177,6 +177,10 @@ It does not replace the inspected material selection. Freeze selections &amp; bi
 <h3>Cutting, purchasing and sewing</h3>
 <label>Roll-planning options JSON <input id="cutOptions" type="file" accept=".json,application/json"></label>
 <p class="note">Set <code>maximum_marker_length_m</code> in the options to place complete pieces across separate markers within a cutting-table or continuous-cut limit. Purchasing normally combines markers of the same material into one order; optional supplier allocation can distribute whole markers across qualified offers.</p>
+<p class="note">Set <code>width_basis: "reported_lower_bound"</code> to plan inside the lower endpoint of each roll material's
+source-reported width range. Missing bounds refuse this option. The preview and report retain the narrower layout boundary;
+marker length and purchasing are recomputed. Nominal purchase width, invoiced area and nominal stock mass keep their original
+meaning. Omit this option for nominal-width planning. Finite hides and remnants retain their supplied polygons.</p>
 <label>Preview marker number <input id="rollPreview" type="number" min="1" step="1" value="1"></label>
 <button id="cut" data-command="cut" disabled>Plan rolls &amp; preview</button>
 <label>Finite hides / remnants with defect maps JSON <input id="stockRequest" type="file" accept=".json,application/json"></label>
@@ -338,11 +342,14 @@ per selected body triangle. The same policy works in standalone history replay. 
 through pose and coverage changes; modeled evaporation consumes only available liquid. Results show liquid supply,
 depletion, unmet demand and latent energy supplied by the prescribed body reservoir. These inputs do not infer
 sweating, bare-body transfer, wet textile properties or latent feedback into textile temperatures.</p>
-<p class="note">For a nominal comparison of finite body water, require <code>motion_wet_film</code> or select objectives
-<code>motion_wet_film_evaporated_mass_kg</code>, <code>motion_wet_film_remaining_liquid_mass_kg</code>,
+<p class="note">To compare these finite-water outcomes, use nominal objectives or inclusive constraints named
+<code>motion_wet_film_evaporated_mass_kg</code>, <code>motion_wet_film_body_reservoir_latent_energy_j</code>,
 <code>motion_wet_film_unmet_demand_mass_kg</code>, <code>motion_wet_film_supplied_mass_kg</code> or
-<code>motion_wet_film_body_reservoir_latent_energy_j</code>. These require a complete covered history with the exact film policy;
-reported-bound comparison is unavailable for these liquid balances. Potential vapor demand remains a separate result.</p>
+<code>motion_wet_film_remaining_liquid_mass_kg</code>.
+Requiring <code>motion_wet_film</code> also admits the complete source-bound water balance when optimizing another metric.
+Every selected body triangle must remain covered throughout the declared history. The same metrics work inside named matrices;
+an unavailable or inconsistent film excludes that case while its independent results remain visible. Potential Ret ranges do not
+become uncertainty bounds for the evolving water state.</p>
 <p class="note">Optional <code>motion</code> in the scenario (<code>ftx-drape-motion/1</code>) continues that same sewn cloth through
 declared time/arm-angle keyframes, preserving velocities and material history. It uses the selected shape without refitting.
 Each interval follows checked linear body-vertex chords, not a certified anatomical joint path. The report retains every accepted

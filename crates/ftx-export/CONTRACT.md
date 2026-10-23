@@ -303,6 +303,17 @@ offers cannot also supply rolls. Missing prices preserve geometry and stay unkno
 rerun the complete job after substitution, independently of sewing and physics. See
 `docs/mixed-stock-cutting.md` and `tests/cutting_job.rs`; synthetic verification is not machine approval.
 
+**Source-reported lower roll width.** Optional `CutOptions.width_basis: "reported_lower_bound"`
+uses each admitted width observation's positive lower bound for complete shelf placement, polygon
+nesting and marker partitioning, before subtracting edge margins. Missing bounds refuse; source
+records, estimate admission and cut geometry remain unchanged. Each marker's optional `layout_width`
+retains the used width, complete normalized source range and scope notes; the SVG shows that envelope.
+Nominal `width_m` still supplies gross area, mass and invoice-unit conversions using the newly planned
+length. This policy does not produce area/mass/cost intervals or a physical stock guarantee. Existing
+whole/split supplier orders, mixed-job roll routes and material studies consume the same replanned
+markers; finite-stock polygons remain independent. Omission or explicit `nominal` preserves existing
+schemas and nominal serialization. See `docs/cutting-plans.md` and `tests/{cutting,cutting_job}.rs`.
+
 **Bounded split supplier orders.** Optional `market.split_orders` produces `ftx-cut-procurement/3`
 by assigning indivisible markers to current exact-material-locked offers. Each aggregated order
 reuses canonical quote rounding, capacity, continuous-cut and quantity-price evaluation. Connected

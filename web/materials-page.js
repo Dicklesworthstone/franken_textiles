@@ -297,10 +297,12 @@ function objectiveComparison(parent, r) {
     motion_wet_film_body_reservoir_latent_energy_j: "Prescribed-body latent energy"
   };
   if (metrics.some(o => Object.hasOwn(wetFilmLabels, o.metric)) || r.policy.required_consumers?.includes("motion_wet_film")) {
-    const film = document.createElement("p");
-    film.textContent = "Finite body water comparison requires complete covered motion and the exact declared film policy. " +
-      "Values are nominal modeled liquid and demand balances. Prescribed-body latent energy does not include textile-temperature feedback or establish wearer cooling.";
-    parent.append(film);
+    const water = document.createElement("p");
+    water.textContent = "Finite body water comparison requires complete covered motion and the exact declared film policy. " +
+      "Modeled evaporation is limited by each triangle's initial liquid and prescribed supply; water is not pooled between triangles. " +
+      "Prescribed-body latent energy does not include textile-temperature feedback or establish wearer cooling. " +
+      "These nominal results do not propagate water-state uncertainty or describe bare-body transfer or physiological sweating.";
+    parent.append(water);
   }
   const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",
     ...metrics.map(o => `${wetFilmLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
@@ -1600,7 +1602,8 @@ function show(op, msg) {
       op === "fold" ? { settled: r.settled, flags: r.flags, material: r.material?.basis } :
       op === "cut" ? { pattern_sha256: r.pattern_sha256, maximum_marker_length_m: r.options?.maximum_marker_length_m,
         rolls: r.rolls.map((x, i) => ({ marker_number: i + 1, material: x.material?.authored?.id,
-        width_m: x.width_m, length_m: x.length_m, stock_mass_kg: x.stock_mass_kg, utilization: x.utilization })), limitations: r.limitations } :
+        width_m: x.width_m, ...(x.layout_width ? { layout_width: x.layout_width } : {}),
+        length_m: x.length_m, stock_mass_kg: x.stock_mass_kg, utilization: x.utilization })), limitations: r.limitations } :
       op === "price" ? procurementResult(s.comparison, r) :
       op === "stock" ? { used_stock_count: r.used_stock_count, used_gross_area_m2: r.used_gross_area_m2,
         external_cut_area_m2: r.external_cut_area_m2, markers: r.markers.map(m => ({ id: m.id, pieces: m.placements.length,
