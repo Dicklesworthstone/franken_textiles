@@ -151,6 +151,34 @@ class SpecificationTests(unittest.TestCase):
         self.assertEqual({x["path"] for x in report["offers"][0]["changes"]},
                          {"/selected/row/WIDTH", "/selected/row/WEAVE"})
 
+    def test_csv_price_break_rates_refresh_but_threshold_changes_require_review(self):
+        e = locked(csv_entry())
+        e["columns"]["price_breaks"] = "ALL_UNIT_PRICES"
+        row = dict(SKU="TEST-42", PRICE="12.99", CURRENCY="USD", AVAILABLE="yes",
+                   QUANTITY="0.5", UNIT="linear_yard", MINIMUM_QUANTITY="1.0", ORDER_INCREMENT="0.5",
+                   MARKET="US", SIZE="yardage")
+        row["ALL_UNIT_PRICES"] = json.dumps([{"minimum_quantity": 5, "price": 10.99}])
+        old, evidence = snapshot(e, csv_raw([row]))
+        with tempfile.TemporaryDirectory() as directory:
+            for name, data in evidence.items():
+                (Path(directory) / name).write_bytes(data)
+            self.assertEqual(s.replay(old, Path(directory)), old)
+        row["ALL_UNIT_PRICES"] = json.dumps([{"minimum_quantity": 5, "price": 9.99}])
+        market, _ = snapshot(e, csv_raw([row]))
+        self.assertTrue(s.compare(old, market)["quote_publication_allowed"])
+        row["ALL_UNIT_PRICES"] = json.dumps([{"minimum_quantity": 6, "price": 9.99}])
+        revised, _ = snapshot(e, csv_raw([row]))
+        report = s.compare(old, revised)
+        self.assertFalse(report["quote_publication_allowed"])
+        self.assertEqual(report["offers"][0]["changes"][0]["path"],
+                         "/selected/price_break_conditions")
+        row["ALL_UNIT_PRICES"] = json.dumps([{"minimum_quantity": 5, "price": 10.99, "sku": "TEST-42-bulk"}])
+        rebound, _ = snapshot(e, csv_raw([row]))
+        self.assertFalse(s.compare(old, rebound)["quote_publication_allowed"])
+        row["ALL_UNIT_PRICES"] = "[]"
+        removed, _ = snapshot(e, csv_raw([row]))
+        self.assertFalse(s.compare(old, removed)["quote_publication_allowed"])
+
     def test_jsonld_replays_linked_original_quantities_and_ignores_offer_prices(self):
         e, source = jsonld_fixture()
         old, _ = snapshot(e, raw(source))

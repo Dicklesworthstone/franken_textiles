@@ -1,0 +1,33 @@
+{
+  "schema": "ftx-textile-quotes/2",
+  "quotes": [
+    {
+      "offer_id": "organiccottonplus/THR4800-5000WHT/white-cone-quantity-schedule",
+      "material_id": "organiccottonplus/THR4800-5000WHT",
+      "material_sha256": "ab36ca22f2b0ab6e48549e2354d6c4da2b5fe0b290d0a15a00ab878c6ddf09f1",
+      "supplier": "Organic Cotton Plus",
+      "sku": "THR4800-5000WHT",
+      "price": 49.99,
+      "price_breaks": [
+        {
+          "minimum_quantity": 25000.0,
+          "price": 47.49,
+          "sku": "THR4800-5000WHT-t"
+        }
+      ],
+      "quantity": 5000.0,
+      "unit": "linear_meter",
+      "minimum_quantity": 5000.0,
+      "order_increment": 5000.0,
+      "currency": "USD",
+      "region": "US",
+      "quality": "supplier-retail-grade-unspecified",
+      "terms": "listed-merchandise-tax-shipping-unqualified",
+      "observed_on": "2026-10-23",
+      "observed_at": "2026-10-23T00:49:06.669093Z",
+      "available": true,
+      "source": "https://organiccottonplus.com/products/thread-5000-meter-cone-1",
+      "source_sha256": "2bbf6e94fd642ebb3b89c8081db688409b024869d17617261caec0b2c10b1822"
+    }
+  ]
+}

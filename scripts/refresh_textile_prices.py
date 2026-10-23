@@ -500,7 +500,7 @@ def validate_csv(entry: dict) -> None:
         raise ValueError("CSV and selling-basis evidence must share the supplier origin")
     columns = entry["columns"]
     if (not isinstance(columns, dict)
-            or set(columns) - {"available_quantity", "maximum_continuous_quantity"} != CSV_FIELDS
+            or set(columns) - {"available_quantity", "maximum_continuous_quantity", "price_breaks"} != CSV_FIELDS
             or any(not isinstance(c, str) or not c.strip() for c in columns.values())
             or len(set(columns.values())) != len(columns)):
         raise ValueError("CSV needs distinct, explicit column names for every observed field")
@@ -522,6 +522,30 @@ def validate_csv(entry: dict) -> None:
         raise ValueError("CSV availability tokens overlap or repeat")
     if entry["delimiter"] not in (",", ";", "\t"):
         raise ValueError("CSV delimiter must explicitly be comma, semicolon or tab")
+
+
+def price_breaks(value, minimum_quantity):
+    """Complete all-unit schedule in original sale units, never inferred package counts."""
+    if not isinstance(value, list) or len(value) > 64:
+        raise ValueError("price_breaks must be an array of at most 64 all-unit thresholds")
+    previous = minimum_quantity
+    for tier in value:
+        if not isinstance(tier, dict) or set(tier) - {"sku"} != {"minimum_quantity", "price"}:
+            raise ValueError("price break needs minimum_quantity and price, with only an optional sku")
+        if "sku" in tier and (not isinstance(tier["sku"], str) or not tier["sku"].strip()):
+            raise ValueError("a source tier SKU must be nonempty text")
+        for key in ("minimum_quantity", "price"):
+            number = tier[key]
+            try:
+                finite = type(number) in (int, float) and math.isfinite(number)
+            except OverflowError:
+                finite = False
+            if not finite or number <= 0:
+                raise ValueError("price-break quantities and prices must be finite and positive")
+        if tier["minimum_quantity"] <= previous:
+            raise ValueError("price-break quantities must increase strictly above the base minimum")
+        previous = tier["minimum_quantity"]
+    return value
 
 
 def extract_csv(entry: dict, source_raw: bytes, observed: dt.datetime, *, intraday=False) -> tuple[dict, dict]:
@@ -574,6 +598,11 @@ def extract_csv(entry: dict, source_raw: bytes, observed: dt.datetime, *, intrad
                  source=entry["source_url"], source_sha256=digest)
     if "available_quantity" in columns:
         quote["available_quantity"] = float(decimal_number(row[columns["available_quantity"]], allow_zero=True))
+    if "price_breaks" in columns:
+        schedule = price_breaks(load(row[columns["price_breaks"]].encode(), object_only=False),
+                                entry["minimum_quantity"])
+        if schedule:
+            quote["price_breaks"] = schedule
     receipt = {"schema": "ftx-source-refresh/1", "adapter": "csv_v1", "observed_at": observed.isoformat(),
                "manifest_entry": entry, "source_sha256": digest, "selected_record": number,
                "quantity_basis": "source_columns_checked_against_reviewed_manifest",

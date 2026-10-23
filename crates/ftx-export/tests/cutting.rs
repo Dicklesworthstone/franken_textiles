@@ -671,6 +671,47 @@ fn multiple_markers_share_one_rounded_order_and_cannot_reuse_finite_stock() {
 }
 
 #[test]
+fn complete_marker_order_earns_one_source_price_break_after_combined_rounding() {
+    use ftx_export::cutting::procurement::{Market, evaluate};
+    use ftx_pattern::material_cost::QuoteBook;
+    let p = pattern(vec![piece("front", 40.0, 100.0)]);
+    let mut o = options();
+    o.copies = 3;
+    o.maximum_marker_length_m = Some(0.12);
+    let plan = CutPlan::build(&p, &o).unwrap();
+    let mut source = json!({"offer_id":"tiered-stock", "material_id":"shell", "supplier":"Synthetic supplier", "sku":"shell",
+        "price":10.0,"quantity":1.0,"unit":"linear_meter","minimum_quantity":0.2,"order_increment":0.05,
+        "price_breaks":[{"minimum_quantity":0.25,"price":8.0}],
+        "currency":"USD","region":"US","quality":"test","terms":"ex-tax-shipping",
+        "observed_on":"2026-10-18","available":true,"available_quantity":0.25,
+        "maximum_continuous_quantity":0.12,"source":"test:tiered-marker-order","source_sha256":"0".repeat(64)});
+    let market: Market =
+        serde_json::from_value(json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-18","max_age_days":3,
+        "require_observed_quantity":true,"require_observed_continuous_length":true}))
+        .unwrap();
+    let prices = |source: &Value| {
+        let book: QuoteBook =
+            serde_json::from_value(json!({"schema":"ftx-textile-quotes/1","quotes":[source]}))
+                .unwrap();
+        evaluate(&plan, &book, &market).unwrap()
+    };
+    let result = prices(&source);
+    let order = &result["material_orders"][0]["least_observed_order"];
+    assert_eq!(order["order_quantity"], 0.25); // Two 0.12-m markers share the rounded order.
+    assert_eq!(order["applied_price_break"]["minimum_quantity"], 0.25);
+    assert_eq!(order["order_cost"], 2.0);
+    assert_eq!(result["least_observed_independent_order_total"], 2.0);
+    source["available_quantity"] = json!(0.24);
+    let missing = prices(&source);
+    assert_eq!(missing["complete_offer_coverage"], false);
+    assert!(missing["least_observed_independent_order_total"].is_null());
+    source["available_quantity"] = json!(0.25);
+    source["maximum_continuous_quantity"] = json!(0.119);
+    assert_eq!(prices(&source)["complete_offer_coverage"], false);
+}
+
+#[test]
 fn grouped_orders_keep_materials_separate_and_missing_coverage_makes_total_unknown() {
     use ftx_export::cutting::procurement::{Market, evaluate};
     use ftx_pattern::material_cost::QuoteBook;

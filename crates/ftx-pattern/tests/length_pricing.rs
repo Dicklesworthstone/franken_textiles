@@ -1,4 +1,5 @@
-//! Linear procurement known answers. Invented supplier offers, never live prices or textile data.
+//! Linear procurement known answers. Synthetic offers remain separate from the explicitly retained
+//! source-observed thread quote used by the final regression.
 use ftx_pattern::material_catalog::{ResolvedMaterial, Selection};
 use ftx_pattern::material_cost::{Basis, ExclusionReason, Quote, QuoteBook, SaleUnit, Scope};
 use ftx_pattern::materials::Catalog;
@@ -176,4 +177,60 @@ fn requested_uninterrupted_length_cannot_exceed_the_total_order_or_hide_bad_numb
     let roundtrip: Scope = serde_json::from_value(serde_json::to_value(&r.scope).unwrap()).unwrap();
     assert_eq!(roundtrip.basis, Basis::Length);
     assert_eq!(roundtrip.requirement, 2.0);
+}
+
+#[test]
+fn observed_white_thread_tiers_price_whole_cones_and_preserve_unknown_inventory() {
+    let quotes: QuoteBook = serde_json::from_str(include_str!(
+        "../../../docs/examples/textile-thread-tier-quotes-2026-10-23.json"
+    ))
+    .unwrap();
+    assert_eq!(quotes.quotes.len(), 1);
+    let q = &quotes.quotes[0];
+    let material = Catalog::builtin()
+        .unwrap()
+        .resolve(&Selection {
+            id: q.material_id.clone(),
+            ..Selection::default()
+        })
+        .unwrap();
+    assert_eq!(q.material_sha256.as_deref(), Some(material.sha256()));
+    assert_eq!(q.sku, "THR4800-5000WHT");
+    assert_eq!(q.price_breaks[0].sku.as_deref(), Some("THR4800-5000WHT-t"));
+    assert!(q.available_quantity.is_none());
+    assert!(material.mechanics().is_err());
+    let mut request = Scope {
+        currency: q.currency.clone(),
+        region: q.region.clone(),
+        quality: q.quality.clone(),
+        terms: q.terms.clone(),
+        as_of: q.observed_on.clone(),
+        as_of_at: q.observed_at.clone(),
+        max_age_days: 0,
+        requirement: 20_000.0,
+        basis: Basis::Length,
+        require_observed_quantity: false,
+        continuous_length_m: None,
+        require_observed_continuous_length: false,
+    };
+    let base = quotes.evaluate(&material, &request).unwrap();
+    near(base.offers[0].order_quantity, 20_000.0);
+    near(base.offers[0].order_cost, 199.96);
+    assert!(base.offers[0].applied_price_break.is_none());
+    request.requirement = 20_001.0;
+    let bulk = quotes.evaluate(&material, &request).unwrap();
+    near(bulk.offers[0].order_quantity, 25_000.0);
+    near(bulk.offers[0].order_cost, 237.45);
+    assert_eq!(
+        bulk.offers[0].applied_price_break,
+        Some(q.price_breaks[0].clone())
+    );
+    assert!(!bulk.population_claim);
+    request.require_observed_quantity = true;
+    let unknown = quotes.evaluate(&material, &request).unwrap();
+    assert!(unknown.offers.is_empty());
+    assert_eq!(
+        unknown.excluded_offers[0].reason,
+        ExclusionReason::UnknownQuantity
+    );
 }

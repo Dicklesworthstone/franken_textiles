@@ -52,15 +52,20 @@ def _facts(entry, source, receipt, public_sources=()):
     observed = dt.datetime.fromisoformat(receipt["observed_at"])
     adapter = receipt["adapter"]
     if adapter == "csv_v1":
-        _, checked = prices.extract_csv(entry, source, observed)
+        quote, checked = prices.extract_csv(entry, source, observed)
         if checked["selected_record"] != receipt["selected_record"]:
             raise ValueError("CSV source no longer reproduces its recorded selection")
         rows = list(csv.reader(io.StringIO(source.decode("utf-8-sig"), newline=""),
                                delimiter=entry["delimiter"], strict=True))
         row = dict(zip(rows[0], rows[checked["selected_record"] - 1]))
-        omitted = {entry["columns"][k] for k in ("price", "available", "available_quantity")
+        omitted = {entry["columns"][k] for k in ("price", "available", "available_quantity", "price_breaks")
                    if k in entry["columns"]}
         selected = {"row": {k: v for k, v in row.items() if k not in omitted}}
+        if "price_breaks" in entry["columns"]:
+            # Rates may refresh as market observations, but changed eligibility thresholds are
+            # a selling-basis revision requiring review. Source bytes retain the exact schedule.
+            selected["price_break_conditions"] = [{k: v for k, v in tier.items() if k != "price"}
+                                                  for tier in quote.get("price_breaks", [])]
     elif adapter == "jsonld_v1":
         prices.extract_jsonld(entry, source, observed,
                               intraday=receipt.get("quote_schema") == prices.INTRADAY_SCHEMA)

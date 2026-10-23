@@ -35,6 +35,21 @@ pub enum Basis {
     Length,
 }
 
+/// One source-observed all-unit price threshold, in the parent quote's physical sale units.
+/// This is not a graduated marginal rate: once reached, it prices the entire rounded order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PriceBreak {
+    /// Inclusive threshold in `Quote::unit`, never a count of priced packages.
+    pub minimum_quantity: f64,
+    /// Price for the unchanged `Quote::quantity`, in the unchanged quote currency.
+    pub price: f64,
+    /// Exact supplier SKU when its declared quantity tier has a different order locator for the
+    /// same reviewed material. Absence retains `Quote::sku`; no material substitution is inferred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sku: Option<String>,
+}
+
 /// One observation of an exact supplier offer, including its selling increment and minimum order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,6 +67,11 @@ pub struct Quote {
     pub sku: String,
     /// Price for `quantity` sale units in the stated currency.
     pub price: f64,
+    /// Optional complete all-unit price schedule above the base minimum, in increasing quantity
+    /// order. The base price applies before the first threshold; the last applies thereafter.
+    /// Every threshold and price must come from the same retained source observation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub price_breaks: Vec<PriceBreak>,
     /// Number of sale units represented by `price`, e.g. 0.5 for a half-yard listing.
     pub quantity: f64,
     /// Dimension of the offered quantity.
@@ -153,7 +173,8 @@ pub struct Scope {
 pub struct Offer {
     /// Source observation, including the exact date and evidence hash.
     pub quote: Quote,
-    /// Currency per m², kg or m according to scope.basis, before minimum/increment rounding.
+    /// Currency per m², kg or m according to scope.basis, at the price reached by the rounded
+    /// order. This unit rate excludes the cost of excess quantity purchased through rounding.
     pub rate: f64,
     /// Ordered quantity in this quote's original sale unit.
     pub order_quantity: f64,
@@ -161,6 +182,10 @@ pub struct Offer {
     pub acquired: f64,
     /// Merchandise cost on the quote's stated terms, not a checkout or landed-cost guarantee.
     pub order_cost: f64,
+    /// Source-observed threshold reached by the complete rounded order. None retains the base
+    /// quote price. This does not authorize buying extra stock to reach a cheaper threshold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applied_price_break: Option<PriceBreak>,
     /// The source supplied enough quantity for this rounded order on its observation date.
     /// False means unknown capacity, never unlimited stock or a failed quantity check.
     pub quantity_sufficiency_observed: bool,
@@ -221,7 +246,8 @@ pub struct PriceSample {
     /// Ineligible latest observations in the same market, in stable offer-ID order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub excluded_offers: Vec<ExcludedOffer>,
-    /// Linear-interpolated p10, median and p90 of offered unit rates; None for an empty sample.
+    /// Linear-interpolated p10, median and p90 of unit rates applicable to this requirement's
+    /// rounded orders, including admitted price breaks; None for an empty sample.
     pub rate_p10_p50_p90: Option<[f64; 3]>,
     /// This statistic summarizes observed offers, not the unknown worldwide market population.
     pub population_claim: bool,
@@ -420,6 +446,23 @@ impl Quote {
         ] {
             positive(name, v)?;
         }
+        if self.price_breaks.len() > 64 {
+            return Err(invalid("a quote supports at most 64 all-unit price breaks"));
+        }
+        let mut previous = self.minimum_quantity;
+        for tier in &self.price_breaks {
+            positive("price-break minimum quantity", tier.minimum_quantity)?;
+            positive("price-break price", tier.price)?;
+            if tier.sku.as_ref().is_some_and(|sku| sku.trim().is_empty()) {
+                return Err(invalid("a source tier SKU must not be empty"));
+            }
+            if tier.minimum_quantity <= previous {
+                return Err(invalid(
+                    "price-break quantities must increase strictly above the base minimum",
+                ));
+            }
+            previous = tier.minimum_quantity;
+        }
         Ok(())
     }
 
@@ -472,14 +515,32 @@ impl Quote {
             }
             _ => return Ok(None),
         };
-        let rate = positive("unit rate", (self.price / self.quantity) / factor)?;
         let needed = (scope.requirement / factor).max(self.minimum_quantity);
-        let order_quantity = positive(
-            "order quantity",
-            (needed / self.order_increment).ceil() * self.order_increment,
-        )?;
+        let increments = (needed / self.order_increment).ceil();
+        let rounded = positive("order quantity", increments * self.order_increment)?;
+        // A rounded division such as 0.07 / 0.01 can lie one ULP above an integer. Test the
+        // previous whole increment against the same endpoint rule used for observed stock.
+        // This prevents an arithmetic artifact from buying an extra unit and earning a tier.
+        let previous = (increments - 1.0) * self.order_increment;
+        let order_quantity = if previous < rounded && within_capacity(needed, previous) {
+            previous
+        } else {
+            rounded
+        };
+        // Thresholds use the complete order, after both minimum and increment rounding. Like
+        // stock admission, allow only one final multiplication rounding step at an endpoint.
+        let applied_price_break = self
+            .price_breaks
+            .iter()
+            .rev()
+            .find(|tier| within_capacity(tier.minimum_quantity, order_quantity))
+            .cloned();
+        let price = applied_price_break
+            .as_ref()
+            .map_or(self.price, |tier| tier.price);
+        let rate = positive("unit rate", (price / self.quantity) / factor)?;
         let acquired = positive("acquired quantity", order_quantity * factor)?;
-        let order_cost = positive("order cost", order_quantity * (self.price / self.quantity))?;
+        let order_cost = positive("order cost", order_quantity * (price / self.quantity))?;
         if acquired < scope.requirement * (1.0 - 1e-12) {
             return Err(invalid("order arithmetic lost required quantity"));
         }
@@ -489,6 +550,7 @@ impl Quote {
             order_quantity,
             acquired,
             order_cost,
+            applied_price_break,
             quantity_sufficiency_observed: self.available_quantity.is_some(),
             within_observed_continuous_limit: scope
                 .continuous_length_m
@@ -752,6 +814,7 @@ mod tests {
             supplier: "supplier".into(),
             sku: "sku/retail".into(),
             price: 10.,
+            price_breaks: Vec::new(),
             quantity: 0.5,
             unit: SaleUnit::LinearYard,
             minimum_quantity: 1.,
@@ -1416,6 +1479,231 @@ mod tests {
         assert_eq!(out.offers.len(), 3);
         assert_eq!(out.rate_p10_p50_p90, Some([12., 20., 28.]));
         assert!(!out.population_claim);
+    }
+
+    #[test]
+    fn all_unit_price_breaks_follow_rounded_sale_quantity_and_reach_area_statistics() {
+        let m = material();
+        let width = m.material().require("width", "m", true).unwrap();
+        let mut q = quote(); // Ten dollars per HALF yard; thresholds are actual yards.
+        q.price_breaks = vec![
+            PriceBreak {
+                minimum_quantity: 2.5,
+                price: 8.0,
+                sku: Some("sku/bulk".into()),
+            },
+            PriceBreak {
+                minimum_quantity: 5.0,
+                price: 6.0,
+                sku: None,
+            },
+        ];
+        let mut s = scope();
+        s.requirement = 2.1 * 0.9144 * width;
+        let result = book(vec![q.clone()]).evaluate(&m, &s).unwrap();
+        let offer = &result.offers[0];
+        assert_eq!(offer.order_quantity, 2.5);
+        assert_eq!(offer.order_cost, 40.0);
+        assert_eq!(offer.applied_price_break, Some(q.price_breaks[0].clone()));
+        assert_eq!(offer.rate, 16.0 / (0.9144 * width));
+        assert_eq!(result.rate_p10_p50_p90, Some([offer.rate; 3]));
+        assert_eq!(offer.quote.price, 10.0); // Original source base price is retained.
+
+        s.requirement = 4.49 * 0.9144 * width;
+        let offer = &book(vec![q.clone()]).evaluate(&m, &s).unwrap().offers[0];
+        assert_eq!(offer.order_quantity, 4.5); // No extra purchase to chase the cheaper five-yard rate.
+        assert_eq!(offer.order_cost, 72.0);
+        s.requirement = 4.6 * 0.9144 * width;
+        let offer = &book(vec![q.clone()]).evaluate(&m, &s).unwrap().offers[0];
+        assert_eq!(offer.order_quantity, 5.0);
+        assert_eq!(offer.order_cost, 60.0);
+        assert_eq!(offer.applied_price_break, Some(q.price_breaks[1].clone()));
+    }
+
+    #[test]
+    fn tier_selection_works_in_original_area_mass_and_length_units_after_minimum_rounding() {
+        for (unit, basis, factor) in [
+            (SaleUnit::SquareMeter, Basis::Area, 1.0),
+            (SaleUnit::Kilogram, Basis::Mass, 1.0),
+            (SaleUnit::LinearMeter, Basis::Length, 1.0),
+            (SaleUnit::LinearYard, Basis::Length, 0.9144),
+        ] {
+            let mut q = quote();
+            q.unit = unit;
+            q.minimum_quantity = 2.6;
+            q.price_breaks = vec![PriceBreak {
+                minimum_quantity: 3.0,
+                price: 8.0,
+                sku: None,
+            }];
+            let mut s = scope();
+            s.requirement = 0.1;
+            s.basis = basis;
+            let result = book(vec![q]).evaluate(&material(), &s).unwrap();
+            let offer = &result.offers[0];
+            assert_eq!(offer.order_quantity, 3.0); // Minimum then increment, before threshold.
+            assert_eq!(offer.order_cost, 48.0);
+            assert_eq!(offer.rate, 16.0 / factor);
+            assert_eq!(offer.acquired, 3.0 * factor);
+        }
+    }
+
+    #[test]
+    fn quantity_tiers_do_not_bypass_stock_or_revive_old_observations() {
+        let mut old = quote();
+        old.unit = SaleUnit::SquareMeter;
+        old.price_breaks = vec![PriceBreak {
+            minimum_quantity: 2.5,
+            price: 1.0,
+            sku: None,
+        }];
+        let mut s = scope();
+        s.requirement = 2.1;
+        let mut latest = old.clone();
+        latest.observed_on = "2026-10-14".into();
+        latest.price_breaks.clear();
+        s.as_of = latest.observed_on.clone();
+        let result = book(vec![old.clone(), latest.clone()])
+            .evaluate(&material(), &s)
+            .unwrap();
+        assert_eq!(result.offers[0].order_cost, 50.0);
+        assert!(result.offers[0].applied_price_break.is_none());
+        latest.price_breaks = old.price_breaks.clone();
+        latest.available_quantity = Some(2.4);
+        let result = book(vec![old.clone(), latest.clone()])
+            .evaluate(&material(), &s)
+            .unwrap();
+        assert!(result.offers.is_empty());
+        assert_eq!(
+            result.excluded_offers[0].reason,
+            ExclusionReason::InsufficientQuantity
+        );
+        latest.available_quantity = Some(3.0);
+        latest.material_sha256 = Some("a".repeat(64));
+        let result = book(vec![old, latest]).evaluate(&material(), &s).unwrap();
+        assert!(result.offers.is_empty());
+        assert_eq!(
+            result.excluded_offers[0].reason,
+            ExclusionReason::MaterialSnapshotMismatch
+        );
+    }
+
+    #[test]
+    fn price_break_endpoints_allow_only_one_final_rounding_step() {
+        let mut q = quote();
+        q.unit = SaleUnit::SquareMeter;
+        q.minimum_quantity = 0.3;
+        q.order_increment = 0.3;
+        q.price_breaks = vec![PriceBreak {
+            minimum_quantity: 0.9,
+            price: 5.0,
+            sku: None,
+        }];
+        let mut s = scope();
+        s.requirement = 0.89;
+        let result = book(vec![q.clone()]).evaluate(&material(), &s).unwrap();
+        assert_eq!(result.offers[0].order_quantity, 0.3 * 3.0);
+        assert!(result.offers[0].applied_price_break.is_some());
+        q.price_breaks[0].minimum_quantity = 0.9 + 1e-12;
+        let result = book(vec![q]).evaluate(&material(), &s).unwrap();
+        assert!(result.offers[0].applied_price_break.is_none());
+
+        let mut q = quote();
+        q.unit = SaleUnit::SquareMeter;
+        q.minimum_quantity = 0.01;
+        q.order_increment = 0.01;
+        q.price_breaks = vec![PriceBreak {
+            minimum_quantity: 0.08,
+            price: 5.0,
+            sku: None,
+        }];
+        s.requirement = 0.07;
+        let result = book(vec![q.clone()]).evaluate(&material(), &s).unwrap();
+        assert_eq!(result.offers[0].order_quantity, 0.07);
+        assert!(result.offers[0].applied_price_break.is_none());
+        s.requirement = 0.07 + 1e-12;
+        let result = book(vec![q]).evaluate(&material(), &s).unwrap();
+        assert_eq!(result.offers[0].order_quantity, 0.08);
+        assert!(result.offers[0].applied_price_break.is_some());
+    }
+
+    #[test]
+    fn malformed_ambiguous_and_overflowing_price_breaks_refuse_without_changing_legacy_output() {
+        let base = quote();
+        assert!(
+            serde_json::to_value(&base)
+                .unwrap()
+                .get("price_breaks")
+                .is_none()
+        );
+        let out = book(vec![base.clone()])
+            .evaluate(&material(), &scope())
+            .unwrap();
+        assert!(
+            serde_json::to_value(&out.offers[0])
+                .unwrap()
+                .get("applied_price_break")
+                .is_none()
+        );
+        for (minimum_quantity, price) in [
+            (0.0, 1.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
+            (f64::NAN, 1.0),
+            (f64::INFINITY, 1.0),
+            (2.0, 0.0),
+            (2.0, -1.0),
+            (2.0, f64::NAN),
+            (2.0, f64::INFINITY),
+        ] {
+            let mut q = base.clone();
+            q.price_breaks = vec![PriceBreak {
+                minimum_quantity,
+                price,
+                sku: None,
+            }];
+            assert!(q.validate().is_err());
+        }
+        for thresholds in [
+            vec![3.0, 2.0],
+            vec![2.0, 2.0],
+            (2..67).map(f64::from).collect(),
+        ] {
+            let mut q = base.clone();
+            q.price_breaks = thresholds
+                .into_iter()
+                .map(|minimum_quantity| PriceBreak {
+                    minimum_quantity,
+                    price: 8.0,
+                    sku: None,
+                })
+                .collect();
+            assert!(q.validate().is_err());
+        }
+        let mut value = serde_json::to_value(&base).unwrap();
+        value["price_breaks"] =
+            serde_json::json!([{ "minimum_quantity":2.0,"price":8.0,"maximum_quantity":4.0 }]);
+        assert!(serde_json::from_value::<Quote>(value).is_err());
+        let mut q = base;
+        q.unit = SaleUnit::SquareMeter;
+        q.price_breaks = vec![PriceBreak {
+            minimum_quantity: 2.0,
+            price: f64::MAX,
+            sku: None,
+        }];
+        assert!(
+            book(vec![q.clone()])
+                .evaluate(&material(), &scope())
+                .is_err()
+        );
+        q.price_breaks[0].price = 5.0;
+        q.price_breaks[0].sku = Some(" ".into());
+        assert!(q.validate().is_err());
+        q.price_breaks[0].sku = None;
+        let mut s = scope();
+        s.requirement = f64::MAX;
+        q.order_increment = f64::MIN_POSITIVE;
+        assert!(book(vec![q]).evaluate(&material(), &s).is_err());
     }
 
     #[test]

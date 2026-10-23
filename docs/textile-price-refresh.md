@@ -206,10 +206,116 @@ cells are supported. Missing/duplicate headers and malformed rows refuse the ent
 
 One supplier-feed URL is fetched once per batch and all selected rows share its bytes and timestamp.
 Original bytes are retained as `<sha256>.csv`; the receipt records the selected logical record number
-(header is record 1), source hash and mapping. Bounded quantity tiers cannot be represented by the
-current quote schema and must not be configured as unconditional offers. Authenticated feeds, conditional/negotiated prices and
+(header is record 1), source hash and mapping. Complete all-unit quantity schedules can use the
+explicit source-column mapping below; graduated or incompletely bounded tiers must not be configured
+as unconditional offers. Authenticated feeds, conditional/negotiated prices and
 unknown quantity conventions require separate qualification. CSV tests use synthetic observations,
 not live supplier prices. The existing robots, pacing and immutable-publication policy is unchanged.
+
+## Quantity prices on the complete rounded order
+
+Both existing quote-book versions accept an optional `price_breaks` array on each exact
+source observation. It represents a **complete all-unit schedule**: every unit in an order
+has the price of the highest threshold reached. It does not represent graduated marginal
+pricing, coupons, negotiated terms or an incomplete table whose last row has a finite upper
+bound. Omitting the field or using an empty array preserves the original single-price behavior.
+
+This fragment belongs to a complete **synthetic** quote, not a live supplier observation:
+
+```json
+{
+  "price": 10.0,
+  "quantity": 0.5,
+  "unit": "linear_yard",
+  "minimum_quantity": 1.0,
+  "order_increment": 0.5,
+  "price_breaks": [
+    { "minimum_quantity": 2.5, "price": 8.0 },
+    { "minimum_quantity": 5.0, "price": 6.0 }
+  ]
+}
+```
+
+The base price is 10 currency units per half yard. At 2.5 actual yards the price becomes
+8 per half yard for the entire order; at 5 yards it becomes 6. Thresholds use the quote's
+original **physical sale unit**, never package counts, canonical square metres or cut-piece
+area. The `quantity` denominator, currency, reviewed material and scope remain unchanged. All thresholds
+and prices belong to the same retained source bytes and observation timestamp as the base rate.
+
+`QuoteBook::evaluate` first converts the actual requirement using its ordinary source-qualified
+width or exact linear-unit conversion, applies the order minimum, then rounds to the sale
+increment. Only then does it choose the applicable price. A 2.1-yard requirement therefore
+orders 2.5 yards and costs 40; a 4.49-yard requirement orders 4.5 yards and costs 72. The evaluator
+does not buy extra stock to reach five yards even if that larger order would cost less. Such
+overbuying is a separate purchasing objective requiring an explicit policy. A threshold endpoint
+tolerates only one final multiplication-rounding step, matching the existing stock arithmetic.
+
+The resulting offer retains `applied_price_break` alongside the original quote. Its `rate` and
+`order_cost` use the selected price; the observed-offer p10/median/p90 are therefore conditional
+on this request's complete rounded orders. These remain sample summaries, not population or
+supplier-balanced market statistics. Existing area, mass and length purchases, grouped roll-marker
+procurement and material studies use this same evaluator. Multiple markers for one exact material
+snapshot reach a threshold on their combined order, never by pricing each marker independently or
+pooling different materials. Whole-order stock, continuous-cut length, material-hash, expiry and
+latest-observation checks remain in force. A later removed tier does not revive an older discount.
+
+Schedules are limited to 64 entries. Every threshold and price must be finite and positive;
+thresholds must increase strictly above the base order minimum. Duplicate, unordered or overlapping
+threshold declarations, unrecognized fields and unrepresentable order arithmetic refuse. Prices
+need not decrease: the source's values remain authoritative, and no discount is inferred.
+
+### Refresh schedules from a reviewed CSV column
+
+Add `"price_breaks": "ALL_UNIT_PRICES"` to the existing CSV `columns` mapping. Each selected
+row's cell must contain a JSON array in the form above, correctly quoted according to the CSV
+dialect. The exact source row must supply the complete schedule in the same physical units and
+priced quantity as its other columns. An optional `sku` retains a source-declared tier order
+locator for the same reviewed material; omission keeps the base quote SKU. The field cannot
+establish that a different product, color or lot is physically equivalent. `[]` explicitly reports
+no breaks; missing, blank,
+malformed or ambiguous values stop the refresh. Static prices or thresholds cannot be inserted
+through the manifest. The source bytes, exact cell and source-column mapping remain replayable
+through the existing evidence receipt.
+
+Supplier specification review treats a rate change at unchanged thresholds as a market observation.
+A changed, added or removed threshold or tier SKU changes the selling basis and withholds new quotes pending
+review. The retained source bytes contain every original price. Shopify and JSON-LD conditional
+or aggregate pricing still require separate adapter qualification; this CSV capability does not
+reinterpret their existing scalar-price fields or silently admit their unsupported ladders.
+
+### Independently observed White cotton-thread schedule
+
+[textile-thread-tier-quotes-2026-10-23.json](examples/textile-thread-tier-quotes-2026-10-23.json)
+retains a fresh, manually reviewed observation of
+[Organic Cotton Plus's Tex 35 White cotton thread](https://organiccottonplus.com/products/thread-5000-meter-cone-1),
+retrieved at **2026-10-23T00:49:06.669093Z** with the required user agent through the collector's
+robots-aware public session. The complete source HTML SHA-256 is
+`2bbf6e94fd642ebb3b89c8081db688409b024869d17617261caec0b2c10b1822`.
+Only these factual observations are retained in the repository; the supplier page, images and
+reviews are not redistributed.
+
+The selected White table declares 1–4 cones at **USD 49.99 per cone**, and five or more at
+**USD 47.49 per cone**. Each cone contains **5,000 metres**. The source distinguishes base
+variant `6056123465756` / SKU `THR4800-5000WHT` and bulk variant `6056123498524` / SKU
+`THR4800-5000WHT-t`; the page's tier labels link those exact variants. Both were explicitly
+available, with one-cone increments. The quote preserves the bulk SKU and expresses its threshold
+as 25,000 metres, with prices still per 5,000 metres. It does not use the page's AggregateOffer
+minimum as an unconditional retail price. The aggregate's expiry is not promoted to a separately
+qualified exact-tier expiry; callers must declare an observation-age policy.
+
+For a requirement of 20,000 metres the canonical evaluator returns four cones and **USD 199.96**.
+A requirement of 20,001 metres rounds to five cones and **USD 237.45**, using the source bulk
+schedule. This is an order-size comparison, not extra purchasing chosen by an optimizer. The
+supplier exposes untracked inventory with overselling permitted, so `available_quantity` remains
+absent; strict finite-stock evaluation excludes the quote as unknown. Shipping, taxes, quality
+grading and measured-lot identity remain unqualified. The quote locks the existing catalog's exact
+cotton-thread snapshot as `ab36ca22f2b0ab6e48549e2354d6c4da2b5fe0b290d0a15a00ab878c6ddf09f1`;
+its yarn level cannot become shell mechanics, and a same-ID source revision cannot inherit this offer.
+
+This is an independently reviewed source snapshot, **not** a new automatic HTML-tier adapter or a
+claim that the CSV refresh ingested this page. A later page revision requires another explicit
+source review. The synthetic adapter tests and the retained live-snapshot consumer test establish
+software propagation separately from stock guarantees, physical thread characterization and checkout.
 
 ## Structured Product/Offer pages (JSON-LD)
 

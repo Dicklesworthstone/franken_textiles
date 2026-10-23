@@ -344,6 +344,50 @@ class RefreshTests(unittest.TestCase):
 
 
 class CsvRefreshTests(unittest.TestCase):
+    def test_all_unit_price_breaks_are_read_from_exact_source_cells_in_sale_units(self):
+        e = csv_entry()
+        e["columns"]["price_breaks"] = "ALL_UNIT_PRICES"
+        row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
+        schedule = [{"minimum_quantity": 2.5, "price": 10.99, "sku": "TEST-42-bulk"},
+                    {"minimum_quantity": 5, "price": 9.99}]
+        data = csv_raw([dict(row, ALL_UNIT_PRICES=json.dumps(schedule))])
+        q, receipt = r.extract_csv(e, data, NOW, intraday=True)
+        self.assertEqual(q["price_breaks"], schedule)
+        self.assertEqual(q["quantity"], 0.5)  # Thresholds are yards, not half-yard packages.
+        self.assertEqual(q["price"], 12.99)
+        self.assertEqual(q["source_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(receipt["manifest_entry"]["columns"]["price_breaks"], "ALL_UNIT_PRICES")
+        self.assertEqual(q["observed_at"], "2026-10-13T12:00:00.000000Z")
+        empty, _ = r.extract_csv(e, csv_raw([dict(row, ALL_UNIT_PRICES="[]")]), NOW)
+        self.assertNotIn("price_breaks", empty)
+        unreviewed, _ = r.extract_csv(csv_entry(), data, NOW)
+        self.assertNotIn("price_breaks", unreviewed)
+        with self.assertRaises(ValueError):
+            r.extract_csv(e, csv_raw(), NOW)
+
+    def test_price_break_schedule_refuses_ambiguity_nonfinite_and_unsupported_tier_semantics(self):
+        e = csv_entry()
+        e["columns"]["price_breaks"] = "ALL_UNIT_PRICES"
+        row = next(csv.DictReader(io.StringIO(csv_raw().decode())))
+        invalid = ["", "null", "{}", '[{"minimum_quantity":2,"price":8,"price":7}]',
+                   '[{"minimum_quantity":2,"price":NaN}]',
+                   '[{"minimum_quantity":2,"price":1e999}]',
+                   '[{"minimum_quantity":2,"price":8,"maximum_quantity":5}]',
+                   '[{"minimum_quantity":2,"price":8,"sku":" "}]',
+                   '[{"minimum_quantity":2,"price":8,"sku":3}]']
+        for threshold, price in [(0, 8), (1, 8), (True, 8), (-1, 8), (2, 0), (2, -1),
+                                 (2, True), ("2", 8), (2, "8"), (10**400, 8), (2, 10**400)]:
+            invalid.append(json.dumps([{"minimum_quantity": threshold, "price": price}]))
+        invalid += [json.dumps([{"minimum_quantity": n, "price": 8} for n in ns])
+                    for ns in ([3, 2], [2, 2], range(2, 67))]
+        for cell in invalid:
+            with self.subTest(cell=cell), self.assertRaises(ValueError):
+                r.extract_csv(e, csv_raw([dict(row, ALL_UNIT_PRICES=cell)]), NOW)
+        # A manifest cannot smuggle assumed rates into observations.
+        e["price_breaks"] = [{"minimum_quantity": 2, "price": 8}]
+        with self.assertRaises(ValueError):
+            r.validate_csv(e)
+
     def test_continuous_cut_column_is_checked_and_cannot_be_inferred_from_inventory(self):
         e = csv_entry()
         e["maximum_continuous_quantity"] = 5
