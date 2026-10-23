@@ -30,6 +30,7 @@ impl Kind {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Heating {
     kind: Kind,
     previous_j: Vec<f64>,

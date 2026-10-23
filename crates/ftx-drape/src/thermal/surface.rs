@@ -212,6 +212,17 @@ impl Surface {
         input
     }
 
+    pub(crate) fn patches(&self) -> &[Patch] {
+        &self.patches
+    }
+
+    pub(crate) fn require_constant_liquid_model(&self) -> Result<(), Refusal> {
+        for column in &self.columns {
+            column.with_inner_liquid_capacity(0.)?;
+        }
+        Ok(())
+    }
+
     /// Initialize every material cell to the same specified temperature. Changing a material
     /// requires initialization of a new state; remapping stored heat is an explicit separate problem.
     ///
@@ -241,7 +252,7 @@ impl Surface {
         positions_m: &[Vec3],
         boundaries: &[Boundary],
     ) -> Result<SurfaceStep, Refusal> {
-        self.evaluate(None, positions_m, 0.0, boundaries, None, None)
+        self.evaluate(None, positions_m, 0.0, boundaries, None, None, None)
     }
 
     /// Advance material temperatures on the supplied CURRENT geometry. This is backward Euler on
@@ -263,7 +274,15 @@ impl Surface {
                 "thermal state belongs to a different material or reference mesh",
             ));
         }
-        self.evaluate(Some(old), positions_m, seconds, boundaries, None, None)
+        self.evaluate(
+            Some(old),
+            positions_m,
+            seconds,
+            boundaries,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Advance with one explicitly supplied energy in J per retained patch/cell. Energies belong
@@ -294,6 +313,7 @@ impl Surface {
             boundaries,
             None,
             Some(heat_j),
+            None,
         )
     }
 
@@ -309,7 +329,15 @@ impl Surface {
         boundaries: &[Boundary],
         exteriors: &[Exterior],
     ) -> Result<SurfaceStep, Refusal> {
-        self.evaluate(None, positions_m, 0.0, boundaries, Some(exteriors), None)
+        self.evaluate(
+            None,
+            positions_m,
+            0.0,
+            boundaries,
+            Some(exteriors),
+            None,
+            None,
+        )
     }
 
     /// Advance with source-qualified exterior exchange on CURRENT triangle areas while keeping
@@ -339,6 +367,7 @@ impl Surface {
             seconds,
             boundaries,
             Some(exteriors),
+            None,
             None,
         )
     }
@@ -370,9 +399,48 @@ impl Surface {
             boundaries,
             Some(exteriors),
             Some(heat_j),
+            None,
         )
     }
 
+    // Signed latent energy and remaining-liquid capacity are admitted only by the source-qualified
+    // water consumer. Returned storage remains DRY textile sensible energy; the caller owns liquid
+    // storage and exported vapor enthalpy. The balance residual includes the added sensible capacity.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn advance_with_liquid(
+        &self,
+        old: &SurfaceState,
+        positions: &[Vec3],
+        seconds: f64,
+        boundaries: &[Boundary],
+        exteriors: Option<&[Exterior]>,
+        heat_j: &[Vec<f64>],
+        capacity_j_k: &[f64],
+    ) -> Result<SurfaceStep, Refusal> {
+        positive("surface thermal time step", seconds)?;
+        if old.sha256 != self.sha256 || old.temperature_c.len() != self.patches.len() {
+            return Err(invalid(
+                "thermal state belongs to a different material or reference mesh",
+            ));
+        }
+        let mut step = self.evaluate(
+            Some(old),
+            positions,
+            seconds,
+            boundaries,
+            exteriors,
+            Some(heat_j),
+            Some(capacity_j_k),
+        )?;
+        for (i, capacity) in capacity_j_k.iter().enumerate() {
+            let added = capacity * (step.state.temperature_c[i][0] - old.temperature_c[i][0]);
+            step.patches[i].stored_change_j -= added;
+            step.stored_change_j -= added;
+        }
+        Ok(step)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn evaluate(
         &self,
         old: Option<&SurfaceState>,
@@ -381,6 +449,7 @@ impl Surface {
         boundaries: &[Boundary],
         exteriors: Option<&[Exterior]>,
         heat_j: Option<&[Vec<f64>]>,
+        liquid_capacity_j_k: Option<&[f64]>,
     ) -> Result<SurfaceStep, Refusal> {
         if positions.len() != self.vertex_count
             || positions.iter().any(|v| !v.is_finite())
@@ -395,11 +464,23 @@ impl Surface {
             heat.len() != self.patches.len()
                 || heat.iter().zip(&self.patches).any(|(cells, patch)| {
                     cells.len() != self.columns[patch.column].cells()
-                        || cells.iter().any(|q| !q.is_finite() || *q < 0.0)
+                        || cells
+                            .iter()
+                            .any(|q| !q.is_finite() || (*q < 0.0 && liquid_capacity_j_k.is_none()))
                 })
         }) {
             return Err(invalid(
                 "surface internal heat needs one finite nonnegative energy per patch cell",
+            ));
+        }
+        if liquid_capacity_j_k.is_some_and(|c| {
+            old.is_none()
+                || heat_j.is_none()
+                || c.len() != self.patches.len()
+                || c.iter().any(|v| !v.is_finite() || *v < 0.)
+        }) {
+            return Err(invalid(
+                "surface liquid needs one finite nonnegative heat capacity per patch",
             ));
         }
         let mut result = SurfaceStep {
@@ -437,7 +518,28 @@ impl Surface {
             // Delta H_ref/(J*dt) = L(T) is exactly the column equation with dt' = J*dt.
             // R(T) remains per current area. Integrating Cp(T) against reference mass, NOT current
             // area, keeps material mass and stored heat invariant as a sheet stretches or changes pose.
-            let state = if let Some(exteriors) = exteriors {
+            let state = if let Some(capacity) = liquid_capacity_j_k {
+                let augmented =
+                    column.with_inner_liquid_capacity(capacity[i] / p.reference_area_m2)?;
+                let (state, exchange) = augmented.advance_signed_heat(
+                    &old.expect("validated transient liquid state").temperature_c[i],
+                    positive("geometry-scaled thermal time step", seconds * ratio)?,
+                    boundary,
+                    exteriors.map(|e| &e[p.column]),
+                    heat.as_deref().expect("validated liquid energies"),
+                )?;
+                if let Some(exchange) = exchange {
+                    let total = result
+                        .exterior_exchange
+                        .as_mut()
+                        .expect("requested exchange");
+                    total.convective_heat_w += area * exchange.convective_flux_w_m2;
+                    total.radiative_heat_w += area * exchange.radiative_flux_w_m2;
+                    total.balance_residual_w += area * exchange.balance_residual_w_m2;
+                    total.patches.push(exchange);
+                }
+                state
+            } else if let Some(exteriors) = exteriors {
                 let step = match (old, heat.as_deref()) {
                     (Some(old), Some(heat)) => column.advance_exterior_with_heat(
                         &old.temperature_c[i],

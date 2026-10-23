@@ -189,6 +189,69 @@ pub struct Report {
     pub notes: Vec<String>,
 }
 
+/// Nominal flux at explicitly supplied pressures through an already qualified fixed network.
+#[derive(Clone, Copy, Debug)]
+pub struct PotentialFlux {
+    /// Potential latent heat in W/m²; actual evaporation still needs a liquid/energy owner.
+    pub heat_w_m2: f64,
+    /// Potential water transport in kg/(m²·s), using the network's declared latent heat.
+    pub mass_kg_m2_s: f64,
+}
+
+impl Report {
+    /// Reuse this canonical network at new prescribed pressures. This does not qualify any
+    /// temperature dependence or liquid boundary; the calling model must supply that evidence.
+    ///
+    /// # Errors
+    /// Negative/nonfinite or reversed pressures, invalid coefficients, or unrepresentable flux.
+    pub fn flux_at_pressures(
+        &self,
+        inside_pa: f64,
+        outside_pa: f64,
+    ) -> Result<PotentialFlux, Refusal> {
+        potential_flux(
+            inside_pa,
+            outside_pa,
+            self.total_resistance_m2_pa_w,
+            self.request.latent_heat_j_kg,
+        )
+    }
+}
+
+fn potential_flux(
+    inside: f64,
+    outside: f64,
+    resistance: f64,
+    latent: f64,
+) -> Result<PotentialFlux, Refusal> {
+    if !inside.is_finite()
+        || !outside.is_finite()
+        || outside < 0.
+        || inside < outside
+        || !positive(resistance)
+        || !positive(latent)
+    {
+        return Err(invalid(
+            "vapor flux needs finite nonnegative ordered pressures and positive resistance/latent heat",
+        ));
+    }
+    let difference = inside - outside;
+    let heat_w_m2 = difference / resistance;
+    let mass_kg_m2_s = heat_w_m2 / latent;
+    if [heat_w_m2, mass_kg_m2_s]
+        .iter()
+        .any(|v| !v.is_finite() || (difference > 0. && *v <= 0.))
+    {
+        return Err(invalid(
+            "vapor stack flux arithmetic overflows or underflows",
+        ));
+    }
+    Ok(PotentialFlux {
+        heat_w_m2,
+        mass_kg_m2_s,
+    })
+}
+
 fn invalid(message: impl Into<String>) -> Refusal {
     Refusal::new(RefusalCode::InvalidDocument, message)
 }
@@ -376,9 +439,15 @@ impl Request {
         let total_resistance =
             add_resistance(total_resistance, self.outside_film_resistance_m2_pa_w)?;
         let pressure_difference = self.inside_vapor_pressure_pa - self.outside_vapor_pressure_pa;
-        let heat_flux = pressure_difference / total_resistance;
+        let flux = potential_flux(
+            self.inside_vapor_pressure_pa,
+            self.outside_vapor_pressure_pa,
+            total_resistance,
+            self.latent_heat_j_kg,
+        )?;
+        let heat_flux = flux.heat_w_m2;
         let heat_flow = heat_flux * self.area_m2;
-        let mass_flux = heat_flux / self.latent_heat_j_kg;
+        let mass_flux = flux.mass_kg_m2_s;
         let mass_flow = mass_flux * self.area_m2;
         let inner_drop = heat_flux * self.inside_film_resistance_m2_pa_w;
         let outer_drop = heat_flux * self.outside_film_resistance_m2_pa_w;

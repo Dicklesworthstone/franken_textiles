@@ -157,6 +157,28 @@ fn qualified_maxwell_and_disjoint_plastic_sources_reconcile_storage_once() {
 }
 
 #[test]
+fn coupled_surface_water_cannot_pass_the_dry_history_comparison_ledger() {
+    for location in 0..3 {
+        let (a, mut descriptor, mut motion) = case(false);
+        match location {
+            0 => {
+                descriptor["scenario"]["motion"]["transient_surface"]["surface_water"] =
+                    json!({"schema":"ftx-textile-surface-water/1"});
+                motion["transient_surface"]["result"]["request"] =
+                    descriptor["scenario"]["motion"]["transient_surface"].clone();
+            }
+            1 => motion["transient_surface"]["result"]["surface_water"] = json!({}),
+            _ => motion["transient_surface"]["result"]["trace"][0]["surface_water"] = json!({}),
+        }
+        let refusal = admit_heat(&a, &descriptor, &motion, Consumer::TransientSurface)
+            .err()
+            .unwrap();
+        assert!(refusal.message.contains("liquid and vapor enthalpy ledger"));
+        assert_eq!(motion["transient_surface"]["status"], "available");
+    }
+}
+
+#[test]
 fn inconsistent_maxwell_evidence_or_work_cannot_qualify_a_heat_objective() {
     for fault in 0..15 {
         let (a, d, mut m) = case(true);

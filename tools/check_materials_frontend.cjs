@@ -3974,6 +3974,37 @@ test('transient heat displays signed energy and remap separately, preserving ref
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
+test('textile water cooling exposes separate conserved mass and full sensible-latent ledgers without ranking claims', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const report=scenarioReport(); report.scenario.scenario={motion:{transient_surface:{surface_water:{schema:'ftx-textile-surface-water/1'}}}};
+  const water={initial_liquid_kg:0.005,evaporated_liquid_kg:0.003,remaining_liquid_kg:0.002,
+    mass_balance_error_kg:0,dryout_events:2,latent_energy_j:7500,
+    exported_vapor_sensible_energy_j:252,liquid_stored_change_j:-254,balance_error_j:0,
+    request:{source:{reference:'<independent free-liquid acquisition>'}},
+    patches:[{instance:'<wet panel>',remaining_liquid_kg:0},{instance:'dry panel',remaining_liquid_kg:0}],
+    unit_pressure_networks:[{source:'<canonical Ret>'}]};
+  const heat={duration_s:1,thermal_steps:12,trace:[{temperature_range_c:[15,20],surface_water:water}],
+    net_boundary_energy_j:0,stored_change_j:-7498,balance_error_j:0,surface_water:water};
+  const motion={samples:[{}],keyframes:[],transient_surface:outcome(heat)};
+  report.simulations.find(row=>row.key==='A').evaluation.result.motion=outcome(motion);
+  await p.e.scenario.onclick(); p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=name=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===name);
+  assert.deepEqual(plain(table('A: textile surface liquid — conserved initial inventory').children[2].children.map(n=>n.textContent)),
+    ['0.005','0.003','0.002','0','2']);
+  assert.deepEqual(plain(table('A: textile evaporation and sensible energy').children[2].children.map(n=>n.textContent)),
+    ['7500','252','-254','0']);
+  assert.match(visibleText(s),/temperature feeds the declared vapor-pressure table/);
+  assert.match(visibleText(s),/heat-objective ranking remains unavailable/);
+  const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: textile liquid source, exact patches and canonical vapor paths (display only)');
+  source.open=true; source.handlers.toggle(); assert.match(visibleText(source),/<independent free-liquid acquisition>/);
+  motion.transient_surface=refused('source pressure table exceeded');
+  await p.e.scenario.onclick(); p.emit(report);
+  assert.equal(table('A: textile evaporation and sensible energy'),undefined);
+  assert.match(visibleText(s),/source pressure table exceeded/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
 test('plastic and relaxation heat display each domain source separately and preserve independent refusals', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   const report = scenarioReport(); report.scenario.scenario = { motion: { transient_surface: {}, transient_coverage: {} } };

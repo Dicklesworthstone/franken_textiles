@@ -11,6 +11,9 @@ use ftx_pattern::Pattern;
 use ftx_wasm::materials::scenario::on_body;
 use serde_json::{Value, json};
 
+#[path = "material_scenario/surface_water.rs"]
+mod surface_water;
+
 const PATTERN: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-scenario-pattern.json");
 const SCENARIO: &str = include_str!("../../../tests/fixtures/materials/synthetic-scenario.json");

@@ -10,6 +10,9 @@ use ftx_drape::{
 use ftx_pattern::Pattern;
 use serde_json::{Value, json};
 
+#[path = "relaxation_heating/surface_water.rs"]
+mod surface_water;
+
 fn maxwell(fraction: f64) -> Value {
     let mut s: Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/materials/synthetic-relaxation-heat.json"

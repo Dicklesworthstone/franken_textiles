@@ -386,7 +386,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     .filter(([name]) => policy?.[name] || result?.[name]);
   if (!consumers.length) return;
   const t = table(parent, `${key}: transient heat — complete time history or refusal`, ["Thermal domain", "Status", "Duration (s)",
-    "Thermal substeps", "Final temperature range (°C)", "Net boundary energy (J)", "Physical stored change (J)",
+    "Thermal substeps", "Final temperature range (°C)", "Net boundary energy (J)", "Textile sensible change (J)",
     "Energy residual (J)", "Signed remap residual (J)"]);
   for (const [name, label] of consumers) {
     const output = result?.[name], h = available(output), range = h?.trace?.at(-1)?.temperature_range_c;
@@ -395,6 +395,26 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       metric(h?.physical_stored_change_j ?? h?.stored_change_j), metric(h?.balance_error_j),
       name === "transient_surface" ? "Not applicable" : metric(h?.signed_remap_residual_j)]);
     detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
+    if (h?.surface_water) {
+      const water = h.surface_water;
+      const mass = table(parent, `${key}: textile surface liquid — conserved initial inventory`,
+        ["Initial liquid (kg)", "Evaporated liquid (kg)", "Remaining liquid (kg)", "Mass residual (kg)", "Dryout events"]);
+      cells(mass, [metric(water.initial_liquid_kg), metric(water.evaporated_liquid_kg), metric(water.remaining_liquid_kg),
+        metric(water.mass_balance_error_kg), metric(water.dryout_events)]);
+      const energy = table(parent, `${key}: textile evaporation and sensible energy`,
+        ["Latent energy (J)", "Exported vapor sensible energy (J)", "Liquid sensible change (J)", "Combined energy residual (J)"]);
+      cells(energy, [metric(water.latent_energy_j), metric(water.exported_vapor_sensible_energy_j),
+        metric(water.liquid_stored_change_j), metric(water.balance_error_j)]);
+      const scope = document.createElement("p");
+      scope.textContent = "This explicitly sourced initial free liquid shares the inner textile cell temperature. Evaporation cools that cell, " +
+        "and the temperature feeds the declared vapor-pressure table. Dryout ends evaporation; the remaining interval uses the dry heat model. " +
+        "The combined balance includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, " +
+        "against boundary energy plus qualified material heat. The initial-only model adds no mechanical water mass or replenishment. " +
+        "It does not infer absorbed moisture, wicking, body sweat or wet material properties. These coupled histories are available for inspection; " +
+        "heat-objective ranking remains unavailable until its admission checks cover the complete liquid and vapor ledger.";
+      parent.append(scope);
+      detail(parent, `${key}: textile liquid source, exact patches and canonical vapor paths (display only)`, water);
+    }
     const channels = [
       ["plastic_dissipation_heat", "Plastic yield", "plastic_dissipation_j", "initial_plastic_dissipation_j"],
       ["relaxation_dissipation_heat", "Maxwell dashpots", "viscous_dissipation_j", "initial_viscous_dissipation_j"],
@@ -414,7 +434,9 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         });
       }
       const scope = document.createElement("p");
-      scope.textContent = "The energy residual is physical stored change minus net boundary energy minus the sum of qualified source heat. " +
+      scope.textContent = (h.surface_water ?
+        "The energy residual includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, minus net boundary energy and qualified source heat. " :
+        "The energy residual is physical stored change minus net boundary energy minus the sum of qualified source heat. ") +
         "Each source needs its own material conversion evidence. Work already accumulated in the initial drape, reversible storage and numerical loss are excluded. " +
         (channels.every(([field]) => h[field].distribution === "uniform_reference_thickness" && h[field].temporal_distribution === "uniform_over_accepted_interval") ?
           "Converted heat is distributed uniformly through each sheet's reference thickness and over its accepted motion interval. " :

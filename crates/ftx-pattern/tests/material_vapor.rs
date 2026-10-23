@@ -63,6 +63,28 @@ fn bounded_request() -> Request {
 }
 
 #[test]
+fn retained_network_pressure_updates_use_the_same_canonical_flux_authority() {
+    let mut input = request();
+    let report = input.evaluate(&empty_catalog()).unwrap();
+    for [inside, outside] in [[2000., 1000.], [900., 900.], [3500., 50.]] {
+        input.inside_vapor_pressure_pa = inside;
+        input.outside_vapor_pressure_pa = outside;
+        let direct = input.evaluate(&empty_catalog()).unwrap();
+        let flux = report.flux_at_pressures(inside, outside).unwrap();
+        assert_eq!(flux.heat_w_m2, direct.potential_heat_flux_w_m2);
+        assert_eq!(flux.mass_kg_m2_s, direct.potential_mass_flux_kg_m2_s);
+    }
+    for [inside, outside] in [
+        [999., 1000.],
+        [0., -1.],
+        [f64::NAN, 0.],
+        [1., f64::INFINITY],
+    ] {
+        assert!(report.flux_at_pressures(inside, outside).is_err());
+    }
+}
+
+#[test]
 fn complete_source_bounds_reverse_resistance_endpoints_and_replay_exactly() {
     let input = bounded_request();
     let report = input.evaluate(&empty_catalog()).unwrap();

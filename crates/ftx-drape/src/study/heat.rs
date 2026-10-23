@@ -18,6 +18,7 @@ use crate::{
 
 pub mod coverage;
 mod plastic;
+pub mod surface_water;
 
 /// Explicit closure for converting qualified material dissipation into sheet heat.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -60,6 +61,10 @@ pub struct SurfaceRequest {
     /// and temperature evidence. Initial drape work and recoverable curvature storage are excluded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bending_plastic_dissipation_heat: Option<DissipationHeatDistribution>,
+    /// Optional source-qualified initial textile-owned free liquid, with conservative evaporation
+    /// and latent temperature feedback. Independent of the prescribed body's wet-film consumer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_water: Option<surface_water::Request>,
     /// Maximum thermal substep in seconds, in 1e-9..=1. Geometry stays at the accepted mechanical
     /// sample's right endpoint during these thermal substeps; no unseen cloth motion is invented.
     pub max_step_s: f64,
@@ -167,6 +172,14 @@ impl SurfaceRequest {
                 plastic::Kind::Bending,
             )?);
         }
+        if let Some(request) = &self.surface_water {
+            history.water = Some(surface_water::Water::new(
+                request.clone(),
+                &history.model,
+                run,
+                self.initial_temperature_c,
+            )?);
+        }
         Ok(history)
     }
 
@@ -201,10 +214,14 @@ impl SurfaceRequest {
                 }
             }
         }
+        if let Some(water) = &self.surface_water {
+            water.validate(intervals)?;
+        }
         Ok(())
     }
 }
 
+#[derive(Clone)]
 pub(super) struct SurfaceHistory {
     request: SurfaceRequest,
     model: Surface,
@@ -224,8 +241,10 @@ pub(super) struct SurfaceHistory {
     plastic: Option<plastic::Heating>,
     relaxation: Option<plastic::Heating>,
     bending: Option<plastic::Heating>,
+    water: Option<surface_water::Water>,
 }
 
+#[derive(Clone)]
 struct SurfaceField {
     area_m2: f64,
     inside_heat_w: f64,
@@ -263,6 +282,7 @@ impl SurfaceHistory {
             plastic: None,
             relaxation: None,
             bending: None,
+            water: None,
         })
     }
 
@@ -288,8 +308,57 @@ impl SurfaceHistory {
                 .map_or(0., plastic::Heating::supplied_j)
     }
 
+    fn balance_error_j(&self) -> f64 {
+        self.stored_j
+            + self
+                .water
+                .as_ref()
+                .map_or(0., surface_water::Water::energy_correction_j)
+            - self.net_j
+            - self.supplied_heat_j()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn advance(
+        &mut self,
+        positions: &[Vec3],
+        time_s: f64,
+        interval: usize,
+        sample_index: usize,
+        plastic_dissipation_j: Option<&[f64]>,
+        relaxation_dissipation_j: Option<&[f64]>,
+        bending_dissipation_j: Option<&[f64]>,
+    ) -> Result<(), Refusal> {
+        // Temperature, liquid and every opted-in mechanical-source counter commit together only
+        // after the complete accepted interval succeeds, including all event-driven substeps.
+        if self.water.is_some() {
+            let mut trial = self.clone();
+            trial.advance_inner(
+                positions,
+                time_s,
+                interval,
+                sample_index,
+                plastic_dissipation_j,
+                relaxation_dissipation_j,
+                bending_dissipation_j,
+            )?;
+            *self = trial;
+            Ok(())
+        } else {
+            self.advance_inner(
+                positions,
+                time_s,
+                interval,
+                sample_index,
+                plastic_dissipation_j,
+                relaxation_dissipation_j,
+                bending_dissipation_j,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn advance_inner(
         &mut self,
         positions: &[Vec3],
         time_s: f64,
@@ -338,7 +407,7 @@ impl SurfaceHistory {
             ));
         }
         let count = count as usize;
-        let dt = seconds / count as f64;
+        let maximum_dt = seconds / count as f64;
         let mut source = self
             .plastic
             .as_mut()
@@ -375,14 +444,65 @@ impl SurfaceHistory {
         if !self.supplied_heat_j().is_finite() {
             return Err(invalid("combined dissipation heat accumulation overflows"));
         }
-        for substep in 0..count {
+        let mut substep = 0usize;
+        let mut regular_interval = 0usize;
+        let mut elapsed = 0.;
+        let mut source_remaining = source.clone();
+        while if self.water.is_some() {
+            regular_interval < count
+        } else {
+            substep < count
+        } {
+            if substep >= available {
+                return Err(budget(
+                    "surface-water dryout substeps exceed the thermal cell-step budget; no partial history published",
+                ));
+            }
+            // Anchor regular endpoints instead of accumulating dt: non-binary subdivisions must
+            // not create an epsilon-sized extra step. Dryout only splits its own regular interval.
+            let scheduled_end = if regular_interval + 1 == count {
+                seconds
+            } else {
+                seconds * (regular_interval + 1) as f64 / count as f64
+            };
+            let proposed_dt = if self.water.is_some() {
+                scheduled_end - elapsed
+            } else {
+                maximum_dt
+            };
+            let water_plan = self
+                .water
+                .as_ref()
+                .map(|water| water.plan(&self.model, &self.state, positions, interval, proposed_dt))
+                .transpose()?;
+            let dt = water_plan.as_ref().map_or(proposed_dt, |plan| plan.seconds);
+            let final_substep = dt == seconds - elapsed;
+            if elapsed + dt <= elapsed {
+                return Err(invalid(
+                    "surface-water thermal substep loses positive physical time",
+                ));
+            }
             let heat = source.as_ref().map(|patches| {
                 patches
                     .iter()
-                    .map(|cells| {
+                    .enumerate()
+                    .map(|(patch, cells)| {
                         cells
                             .iter()
-                            .map(|q| {
+                            .enumerate()
+                            .map(|(cell, q)| {
+                                if self.water.is_some() {
+                                    let remaining = &mut source_remaining
+                                        .as_mut()
+                                        .expect("source remaining")[patch][cell];
+                                    let part = if final_substep {
+                                        *remaining
+                                    } else {
+                                        q * (dt / seconds)
+                                    };
+                                    *remaining -= part;
+                                    return part;
+                                }
                                 let part = q / count as f64;
                                 if substep + 1 == count {
                                     q - part * (count - 1) as f64
@@ -394,26 +514,62 @@ impl SurfaceHistory {
                     })
                     .collect::<Vec<_>>()
             });
-            let next = match (&exteriors, &heat) {
-                (Some(e), Some(q)) => self.model.advance_exterior_with_heat(
+            let next = if let Some(plan) = water_plan {
+                if heat.as_ref().is_some_and(|patches| {
+                    patches.iter().flatten().any(|q| !q.is_finite() || *q < 0.)
+                }) {
+                    return Err(invalid(
+                        "surface-water substep loses a nonnegative mechanical heat contribution",
+                    ));
+                }
+                let mut signed_heat = heat.unwrap_or_else(|| {
+                    self.state
+                        .temperature_c()
+                        .iter()
+                        .map(|cells| vec![0.; cells.len()])
+                        .collect()
+                });
+                for (cells, latent) in signed_heat.iter_mut().zip(&plan.latent_j) {
+                    cells[0] -= latent;
+                }
+                let mut next = self.model.advance_with_liquid(
                     &self.state,
                     positions,
                     dt,
                     &boundaries,
-                    e,
-                    q,
-                )?,
-                (None, Some(q)) => {
-                    self.model
-                        .advance_with_heat(&self.state, positions, dt, &boundaries, q)?
+                    exteriors.as_deref(),
+                    &signed_heat,
+                    &plan.capacity_j_k,
+                )?;
+                self.water.as_mut().expect("planned water").accept(
+                    &self.state,
+                    &mut next,
+                    plan,
+                    interval,
+                )?;
+                next
+            } else {
+                match (&exteriors, &heat) {
+                    (Some(e), Some(q)) => self.model.advance_exterior_with_heat(
+                        &self.state,
+                        positions,
+                        dt,
+                        &boundaries,
+                        e,
+                        q,
+                    )?,
+                    (None, Some(q)) => {
+                        self.model
+                            .advance_with_heat(&self.state, positions, dt, &boundaries, q)?
+                    }
+                    (Some(e), None) => {
+                        self.model
+                            .advance_exterior(&self.state, positions, dt, &boundaries, e)?
+                    }
+                    (None, None) => self
+                        .model
+                        .advance(&self.state, positions, dt, &boundaries)?,
                 }
-                (Some(e), None) => {
-                    self.model
-                        .advance_exterior(&self.state, positions, dt, &boundaries, e)?
-                }
-                (None, None) => self
-                    .model
-                    .advance(&self.state, positions, dt, &boundaries)?,
             };
             for heating in [&self.plastic, &self.relaxation, &self.bending]
                 .into_iter()
@@ -440,6 +596,13 @@ impl SurfaceHistory {
                 exterior_exchange: next.exterior_exchange,
             });
             self.state = next.state;
+            substep += 1;
+            if self.water.is_some() && dt == proposed_dt {
+                elapsed = scheduled_end;
+                regular_interval += 1;
+            } else {
+                elapsed = if final_substep { seconds } else { elapsed + dt };
+            }
         }
         if [
             self.inside_j,
@@ -455,8 +618,8 @@ impl SurfaceHistory {
         {
             return Err(invalid("motion heat energy accumulation overflow"));
         }
-        self.cell_steps += count * self.model.cells() * cell_cost;
-        self.thermal_steps += count;
+        self.cell_steps += substep * self.model.cells() * cell_cost;
+        self.thermal_steps += substep;
         self.time_s = time_s;
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
         for &t in self.state.temperature_c().iter().flatten() {
@@ -468,12 +631,16 @@ impl SurfaceHistory {
             .as_ref()
             .ok_or_else(|| invalid("missing heat step"))?;
         let mut sample = json!({"sample_index":sample_index,"interval_index":interval,
-            "time_s":time_s,"thermal_substeps":count,"positions_sha256":hash(&positions)?,
+            "time_s":time_s,"thermal_substeps":substep,"positions_sha256":hash(&positions)?,
             "temperature_range_c":[lo,hi],"inside_heat_w":field.inside_heat_w,
             "outside_heat_w":field.outside_heat_w,
             "inside_energy_j":self.inside_j,"outside_energy_j":self.outside_j,
             "net_boundary_energy_j":self.net_j,"stored_change_j":self.stored_j,
-            "balance_error_j":self.stored_j-self.net_j-self.supplied_heat_j()});
+            "balance_error_j":self.balance_error_j()});
+        if let Some(water) = &self.water {
+            sample["surface_water"] =
+                water.snapshot(self.state.temperature_c(), false, self.balance_error_j())?;
+        }
         if let Some(heating) = &self.plastic {
             sample["plastic_dissipation_heat"] = heating.snapshot(false);
         }
@@ -503,7 +670,12 @@ impl SurfaceHistory {
                 "motion heat history does not cover the complete mechanical path",
             ));
         }
-        let supplied_heat_j = self.supplied_heat_j();
+        let balance_error_j = self.balance_error_j();
+        let water_receipt = self
+            .water
+            .as_ref()
+            .map(|water| water.snapshot(self.state.temperature_c(), true, balance_error_j))
+            .transpose()?;
         let f = self
             .final_field
             .ok_or_else(|| invalid("missing final heat field"))?;
@@ -523,7 +695,7 @@ impl SurfaceHistory {
             "cell_steps":self.cell_steps,"thermal_steps":self.thermal_steps,
             "inside_energy_j":self.inside_j,"outside_energy_j":self.outside_j,
             "net_boundary_energy_j":self.net_j,"stored_change_j":self.stored_j,
-            "balance_error_j":self.stored_j-self.net_j-supplied_heat_j,
+            "balance_error_j":balance_error_j,
             "absolute_step_balance_error_j":self.absolute_error_j,
             "trace":self.trace,"final":final_field,
             "uncertainty_propagated":false,"physical_validation_claim":false,"comfort_claim":false,
@@ -548,6 +720,12 @@ impl SurfaceHistory {
             result["bending_plastic_dissipation_heat"] = heating.snapshot(true);
             result["scope"] = json!(
                 "One-way independent-sheet heat on accepted mechanical geometry with source-qualified irreversible source-panel bending work, plus independently requested membrane yield and Maxwell dissipation. Each source triangle supplies heat once through reference thickness and over its accepted interval. Initial drape work, recoverable elastic/hardening storage, numerical loss, seam plasticity and contact friction are excluded. No temperature feedback, inferred overlap, body heat loss, moisture, comfort or empirical garment claim."
+            );
+        }
+        if let Some(water) = water_receipt {
+            result["surface_water"] = water;
+            result["scope"] = json!(
+                "Independent-sheet heat on accepted mechanical geometry with explicitly qualified initial textile-owned free liquid and latent cooling. Vapor rates and exported sensible enthalpy sample old inner-cell temperature; implicit dry heat uses remaining liquid capacity. Event splitting handles dryout. All liquid and dry-textile energy terms are retained. Separately requested qualified mechanical heat is added once. No condensation, replenishment, sorption, wet-property inference, body-water transfer, temperature feedback to mechanics, added mechanical water mass, comfort or empirical garment claim."
             );
         }
         Ok(result)

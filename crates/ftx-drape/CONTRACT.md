@@ -447,6 +447,30 @@ transactionally, preserving independent mechanics and endpoints. Exact replay in
 declaration. No textile-temperature feedback, textile moisture storage, inter-triangle water transport,
 bare-body evaporation, uncertainty propagation, physiology or empirical garment claim follows.
 
+**Textile-owned initial free liquid** (`study::heat::surface_water`, bounded `ftx-vc2` slice).
+Optional `motion.transient_surface.surface_water` binds every cloth instance to its exact frozen
+material and explicit kg/m² reference-area loading, including dry zeros. Independently admitted
+source evidence qualifies the authored liquid capacity, latent heat, pressure/temperature table,
+vapor films and retention of constant dry thermal/Ret observations over the complete temperature
+and [0, maximum loading] domains. Missing evidence or Ret refuses only this heat consumer.
+The inner thermal cell and its free liquid share temperature. Each substep samples pressure and
+vapor sensible outflow at the old temperature using the canonical retained Ret flux authority.
+The earliest exact mass-depletion time splits the step. The existing implicit dry heat/exterior
+solver advances with remaining-liquid sensible capacity and signed latent energy; after dryout its
+dry remainder uses the same solver. Dry storage + liquid storage change + exported vapor sensible
+energy + latent energy balances signed boundary input plus separately opted-in mechanical heat.
+Reference material area owns water and current area conducts vapor. Cumulative and per-triangle
+receipts retain initial/remaining/evaporated water, dryout counts and signed mass/energy residuals.
+Any late domain, arithmetic or work-budget failure rolls back the whole accepted heat interval.
+Replenishment must be explicitly zero. Raw temperature-domain departure and condensation refuse;
+there is no sorption, wicking, wet-property inference, added mechanical mass, body-water transfer,
+thermal feedback to mechanics or empirical validation. Explicit mass transfer needs time/space
+refinement; numerical conservation alone does not establish accuracy. Existing dry-heat optimization
+admission excludes this different energy-ownership model until it has a matching canonical decision
+consumer. Native/portable scenario JSON already carries the new policy. Analytic/refinement/rollback
+tests live with the module; sewn-garment and portable study tests exercise the actual moving solver.
+Complete request and ledger definitions: `docs/textile-surface-water.md`.
+
 **Geometry-derived thermal correspondence** (`thermal::surface::projection`, `ftx-tmb`).
 `project` partitions body triangles by local-normal cloth projection using bounded convex clipping,
 retains inverse-mapped cloth subpolygons and mid-surface distance ranges, and emits the existing

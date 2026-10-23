@@ -10,6 +10,68 @@ use super::steady::exterior::Exterior;
 use super::{Boundary, DryThermalModel, Refusal, State, invalid, nonnegative, positive};
 
 impl DryThermalModel {
+    // The explicitly qualified free-liquid consumer adds remaining liquid capacity at the inner
+    // cell and supplies signed latent energy. Keep the canonical dry model and its receipt intact.
+    pub(in crate::thermal) fn with_inner_liquid_capacity(
+        &self,
+        capacity: f64,
+    ) -> Result<Self, Refusal> {
+        nonnegative("remaining liquid capacity", capacity)?;
+        if self.variable.is_some() {
+            return Err(invalid(
+                "surface liquid currently requires constant dry thermal properties",
+            ));
+        }
+        let mut model = self.clone();
+        model.capacity[0] = positive("dry plus liquid capacity", model.capacity[0] + capacity)?;
+        if capacity > 0. && model.capacity[0] <= self.capacity[0] {
+            return Err(invalid(
+                "liquid heat capacity is lost in floating-point addition",
+            ));
+        }
+        Ok(model)
+    }
+
+    pub(in crate::thermal) fn advance_signed_heat(
+        &self,
+        old: &[f64],
+        seconds: f64,
+        boundary: Boundary,
+        exterior: Option<&Exterior>,
+        heat: &[f64],
+    ) -> Result<(State, Option<super::exterior::ExteriorFlux>), Refusal> {
+        positive("thermal time step", seconds)?;
+        if self.variable.is_some()
+            || old.len() != self.cells()
+            || heat.len() != self.cells()
+            || heat.iter().any(|v| !v.is_finite())
+        {
+            return Err(invalid(
+                "signed liquid heat needs constant dry properties and one finite energy per cell",
+            ));
+        }
+        let heated = old
+            .iter()
+            .zip(heat)
+            .enumerate()
+            .map(|(cell, (&t, &q))| {
+                self.check_temperature(t)?;
+                self.preload_cell(cell, t, q)
+            })
+            .collect::<Result<Vec<_>, Refusal>>()?;
+        let supplied: f64 = heat.iter().sum();
+        let (state, exchange) = if let Some(exterior) = exterior {
+            let step = self.advance_exterior(&heated, seconds, boundary, exterior)?;
+            (step.state, Some(step.exchange))
+        } else {
+            (self.advance(&heated, seconds, boundary)?, None)
+        };
+        Ok((
+            self.account_heat(old, &heated, seconds, supplied, state)?,
+            exchange,
+        ))
+    }
+
     /// Advance with one nonnegative internal energy per cell, in J/m² of reference material area.
     /// These are energies delivered during this step, not powers or replacement temperatures.
     /// Their physical origin and distribution must be qualified by the calling consumer.
@@ -188,8 +250,8 @@ impl DryThermalModel {
         }
         let net = seconds * (state.inside_flux_w_m2 - state.outside_flux_w_m2);
         let error = stored - net - supplied;
-        let tolerance =
-            1024.0 * f64::EPSILON * rounding + 1e-9 * (1.0 + stored.abs() + net.abs() + supplied);
+        let tolerance = 1024.0 * f64::EPSILON * rounding
+            + 1e-9 * (1.0 + stored.abs() + net.abs() + supplied.abs());
         if [stored, net, error, rounding, tolerance]
             .iter()
             .any(|value| !value.is_finite())

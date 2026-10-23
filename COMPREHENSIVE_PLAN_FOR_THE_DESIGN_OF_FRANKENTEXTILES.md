@@ -3228,6 +3228,34 @@ open gates. See [material-screening-and-studies.md](docs/material-screening-and-
 
 ---
 
+### 25.74 Cool moving textiles with explicitly supplied initial free liquid
+
+Optional `motion.transient_surface.surface_water` delivers a bounded conservative software slice
+of `ftx-vc2`: initial textile-owned liquid follows reference material triangles while current area
+conducts vapor through the canonical Ret authority. Exact material locks and independent source
+evidence qualify constant dry thermal/Ret properties, liquid capacity, latent heat and an authored
+pressure/temperature table over explicit temperature and loading domains. Dry instances retain
+explicit zero loading; missing qualification refuses only this heat consumer.
+
+Pressure and exported vapor sensible enthalpy sample the initial inner-cell temperature of each
+thermal substep. The existing implicit heat/exterior solver uses remaining-liquid sensible capacity
+and signed latent energy, together with separately requested qualified mechanical heat. Exact
+dryout splits its containing substep; anchored regular endpoints prevent phantom rounding steps.
+Dry-textile storage, liquid storage, vapor sensible export and latent energy balance the signed
+boundary and mechanical input. Temperature, water, source counters and trace commit together only
+after the complete accepted interval succeeds. Reports retain per-triangle water, actual cooling,
+source networks and signed mass/energy residuals; native and portable scenarios share this path.
+
+Replenishment must be zero. Condensation and raw temperature-domain departure refuse. Sorption,
+wicking, absorbed moisture, wet-dependent properties, added mechanical water mass, body-water
+transfer and empirical garment validation remain open. Time/space refinement is still required,
+and existing dry-heat optimization admission excludes this different energy-ownership model until
+it has a matching canonical decision consumer. Analytic conservation/refinement/rollback and real
+moving-garment/portable-study regressions cover this slice. See
+[textile-surface-water.md](docs/textile-surface-water.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

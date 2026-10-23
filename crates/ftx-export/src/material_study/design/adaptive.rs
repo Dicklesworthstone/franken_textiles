@@ -402,7 +402,7 @@ impl Request {
             .map(|variable| variable.initial_step_mm)
             .collect();
         let stop_reason = 'search: loop {
-            if discovery.chosen.len() - 1 >= self.max_designs {
+            if discovery.chosen.len() > self.max_designs {
                 break StopReason::QualifiedDesignLimit;
             }
             if discovery.rows.len() >= self.max_evaluations {
@@ -433,7 +433,7 @@ impl Request {
                     if improves(&discovery.rows[index], &discovery.rows[best]) {
                         best = index;
                     }
-                    if discovery.chosen.len() - 1 >= self.max_designs {
+                    if discovery.chosen.len() > self.max_designs {
                         break 'search StopReason::QualifiedDesignLimit;
                     }
                 }

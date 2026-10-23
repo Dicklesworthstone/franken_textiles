@@ -424,6 +424,14 @@ Use <code>min_sample_temperature_c</code> or <code>max_sample_temperature_c</cod
 these differ from the final endpoint temperature and are not continuous-time bounds.
 Select minimize or maximize explicitly: signed energy can reverse with the environment. Internal sources and boundary exchange contribute separately to stored heat.
 No two-way thermomechanical, body self-intersection, seated/squat or empirical ride-up claim is made.</p>
+<p class="note">Optional <code>motion.transient_surface.surface_water</code> enables source-qualified initial free-liquid
+evaporation and temperature feedback on the textile. The <code>ftx-textile-surface-water/1</code> request declares exact
+instance/material bindings and initial loadings, liquid heat capacity and latent heat, a bounded pressure–temperature table,
+ambient pressures and film resistances. Its independent source must qualify the fixed dry thermal and vapor observations
+throughout that domain. Replenishment is explicitly zero. The result separates remaining water, latent cooling, vapor sensible
+export and liquid storage; it preserves dryout events and refuses condensation or extrapolation. The liquid is thermal-only,
+with no added mechanical mass, inferred sorption or body sweat. Coupled heat histories remain inspectable, while thermal
+comparison objectives refuse them until their admission covers the complete water/energy ledger.</p>
 <p class="note">Scenario comparisons require a settled initial drape with clear gating. Static heat, strain and simulated-cloth-mass objectives describe
 that initial frame. Motion objectives additionally require complete, converged continuation; the final moving state need not be at rest.
 Signed surface power and body-coverage power have different bases and are not interchangeable.

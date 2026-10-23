@@ -2788,6 +2788,16 @@ fn admit_heat<'a>(
     let request = &descriptor["scenario"]["motion"][name];
     let h = &motion[name]["result"];
     let fail = |message: &str| invalid(format!("{consumer:?}: {message}"));
+    if !request["surface_water"].is_null()
+        || !h["surface_water"].is_null()
+        || h["trace"]
+            .as_array()
+            .is_some_and(|trace| trace.iter().any(|row| !row["surface_water"].is_null()))
+    {
+        return Err(fail(
+            "textile surface-water histories remain available for inspection, but heat-objective admission requires validation of their coupled liquid and vapor enthalpy ledger",
+        ));
+    }
     if request["schema"] != request_schema
         || motion[name]["status"] != "available"
         || h["schema"] != schema
