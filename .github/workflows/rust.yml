@@ -44,6 +44,7 @@ jobs:
         run: |
           cargo install wasm-bindgen-cli --version 0.2.128 --locked
           sh tools/build_web.sh
+          FTX_REAL_WASM=1 node --experimental-vm-modules --test tools/check_materials_frontend.cjs
       - name: Preserve browser bundle
         if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[browser-bundle]')
         uses: actions/upload-artifact@v4

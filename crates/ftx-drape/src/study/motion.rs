@@ -503,9 +503,20 @@ fn evaluate_path(
     if let Some(history) = vapor_history {
         result["vapor_coverage_history"] =
             outcome(history.and_then(|h| h.finish(Some(path.sha256.clone()))));
-        result["vapor_basis"] = json!(
-            "Independent steady endpoints and a separately requested right-endpoint integral of covered prescribed-reservoir potential on every accepted sample. No stored moisture or latent cooling is modeled."
-        );
+        let integration = match request
+            .vapor_coverage_history
+            .as_ref()
+            .expect("requested vapor history")
+            .integration
+        {
+            crate::vapor::coverage::history::Integration::RightEndpoint => "right-endpoint",
+            crate::vapor::coverage::history::Integration::CompositeTrapezoid => {
+                "composite-trapezoid"
+            }
+        };
+        result["vapor_basis"] = json!(format!(
+            "Independent steady endpoints and a separately requested {integration} integral of covered prescribed-reservoir potential on every accepted sample. No stored moisture or latent cooling is modeled."
+        ));
     }
     Ok(result)
 }

@@ -116,9 +116,19 @@ nonuniform binding refuses instead of resetting the field.
 
 For each accepted interval, `right_endpoint` evaluates the newly accepted geometry and multiplies
 covered potential W and kg/s by elapsed seconds. The initial state is retained but contributes no
-interval. This declared first-order quadrature neither interpolates unseen motion nor establishes
-an adaptive transport error bound. Ret observations and original reference areas stay unchanged;
+interval. Alternatively, set `integration` to `composite_trapezoid` to average the previous and
+newly accepted potential rates over that interval, including the initial rate on the first interval.
+Both rules use the same retained projections and geometry-operation budget. The trapezoid rule is
+exact for linearly changing potential rates and gives second-order refinement for smooth rates;
+coverage transitions still require adequate motion sampling. Neither rule establishes an adaptive
+error bound or resolves unseen geometry. Ret observations and original reference areas stay unchanged;
 current conducting layer and boundary areas come from each new projection.
+
+When every contributing sample has complete reported Ret bounds, optional integral ranges use the
+same endpoint weights as the nominal integral. For `composite_trapezoid`, this includes the initial
+bounds on the first interval. A missing or unrepresentable contributing range leaves the affected
+integral range unavailable while preserving nominal potential; source ranges do not bound sampling,
+geometry or physical-model error.
 
 The independent `motion.result.vapor_coverage_history` outcome contains a complete result or a
 refusal. Its `ftx-vapor-coverage-history-report/1` result retains the initial coverage report and one
@@ -156,7 +166,8 @@ wet/dry garment experiments remain separate open work.
 
 Independent series/area/time tests check accounting, source substitutions, nonuniform pressure
 identity, stale-input refusal, transactional failures and exact replay. An analytic linearly increasing
-area demonstrates first-order time refinement. Production tests verify accepted geometry throughout
+area demonstrates first-order right-endpoint refinement and exact trapezoidal integration; quadratic
+area checks second-order trapezoid refinement. Production tests verify accepted geometry throughout
 the history and that failed transport reservations preserve complete mechanics.
 
 ## Runnable example and software verification

@@ -154,6 +154,30 @@ fn both_binaries_replay_moving_layered_potential_with_the_exact_shared_integral(
             ),
         );
     }
+
+    let mut trapezoid: Value = serde_json::from_str(&input).unwrap();
+    trapezoid["policy"]["integration"] = json!("composite_trapezoid");
+    let request: ftx_drape::vapor::coverage::history::Request =
+        serde_json::from_value(trapezoid.clone()).unwrap();
+    let expected = request.evaluate().unwrap();
+    let energy = 1000.0 * 0.002 / (2.0 * 11.27 + 5.0) * 4.0;
+    assert!((expected["totals"]["potential_energy_j"].as_f64().unwrap() - energy).abs() < 1e-12);
+    for main in [false, true] {
+        for document in [
+            trapezoid.to_string(),
+            expected["replay_request_json"].as_str().unwrap().into(),
+        ] {
+            assert_eq!(
+                success(&invoke_action(
+                    main,
+                    "thermal-vapor-coverage-history",
+                    &document,
+                    &[]
+                )),
+                expected
+            );
+        }
+    }
 }
 
 #[test]

@@ -1620,6 +1620,10 @@ fn moving_vapor_frame(pattern: &Pattern, d: &Value, width: f64) -> Value {
 }
 
 fn synthetic_moving_vapor(pattern: &Pattern, d: &Value) -> Value {
+    synthetic_moving_vapor_with_widths(pattern, d, [1.5, 2.])
+}
+
+fn synthetic_moving_vapor_with_widths(pattern: &Pattern, d: &Value, widths: [f64; 2]) -> Value {
     let mut simulation = moving_vapor_frame(pattern, d, 1.);
     simulation["positions_sha256"] = json!(digest(&simulation["positions_m"]));
     let mut motion = synthetic_motion(pattern, 3.)["motion"]["result"].clone();
@@ -1636,7 +1640,16 @@ fn synthetic_moving_vapor(pattern: &Pattern, d: &Value) -> Value {
     let mut retained = Vec::new();
     let mut energy = 0.;
     let mut mass = 0.;
-    for (i, width) in [1.5, 2.].into_iter().enumerate() {
+    let integration = d["scenario"]["motion"]["vapor_coverage_history"]["integration"]
+        .as_str()
+        .unwrap();
+    let mut previous_power = initial_result["coverage"]["covered_potential_heat_flow_w"]
+        .as_f64()
+        .unwrap();
+    let mut previous_flow = initial_result["coverage"]["covered_potential_mass_flow_kg_s"]
+        .as_f64()
+        .unwrap();
+    for (i, width) in widths.into_iter().enumerate() {
         let frame = moving_vapor_frame(pattern, d, width);
         let result = &frame["vapor_coverage"]["result"];
         let sample = json!({"time_s":0.5 * (i + 1) as f64,"positions_m":frame["positions_m"],
@@ -1648,14 +1661,22 @@ fn synthetic_moving_vapor(pattern: &Pattern, d: &Value) -> Value {
             sample["body_positions_m"],
             motion["body_triangles"]
         ])));
-        let e = result["coverage"]["covered_potential_heat_flow_w"]
+        let power = result["coverage"]["covered_potential_heat_flow_w"]
             .as_f64()
-            .unwrap()
-            * 0.5;
-        let m = result["coverage"]["covered_potential_mass_flow_kg_s"]
+            .unwrap();
+        let flow = result["coverage"]["covered_potential_mass_flow_kg_s"]
             .as_f64()
-            .unwrap()
-            * 0.5;
+            .unwrap();
+        let (e, m) = match integration {
+            "right_endpoint" => (power * 0.5, flow * 0.5),
+            "composite_trapezoid" => (
+                previous_power * 0.25 + power * 0.25,
+                previous_flow * 0.25 + flow * 0.25,
+            ),
+            _ => panic!("unsupported synthetic quadrature"),
+        };
+        previous_power = power;
+        previous_flow = flow;
         energy += e;
         mass += m;
         rows.push(
@@ -1673,7 +1694,7 @@ fn synthetic_moving_vapor(pattern: &Pattern, d: &Value) -> Value {
         "schema":"ftx-vapor-coverage-history-report/1","request":request,
         "request_sha256":digest(&request),"replay_request_json":serde_json::to_string(&request).unwrap(),
         "path_sha256":motion["path_sha256"],"initial_positions_sha256":simulation["positions_sha256"],
-        "duration_s":1.,"integration":"right_endpoint","geometry_operations":33,
+        "duration_s":1.,"integration":integration,"geometry_operations":33,
         "initial":initial,"samples":rows,"totals":{"potential_energy_j":energy,"potential_mass_kg":mass}}});
     simulation["motion"] = json!({"status":"available","result":motion});
     simulation["surface"] = json!({"status":"refused"});
@@ -1733,6 +1754,105 @@ fn moving_vapor_objectives_integrate_every_current_area_and_remain_independent_o
         report["manufacturing"]["alternatives"][0]["cutting"]["status"],
         "available"
     );
+}
+
+#[test]
+fn moving_vapor_trapezoid_uses_initial_and_every_sample_and_refuses_relabelled_integrals() {
+    let (mut request, mut descriptor) = moving_vapor_inputs();
+    descriptor["scenario"]["motion"]["vapor_coverage_history"]["integration"] =
+        json!("composite_trapezoid");
+    request.comparison.as_mut().unwrap().allow_mixed_protocols = true;
+    for fault in [
+        "none",
+        "right_endpoint",
+        "missing_initial",
+        "stale_previous",
+        "missing_sample",
+    ] {
+        let report = serde_json::to_value(request.evaluate_with(
+            &Pattern::from_json(PATTERN).unwrap(), &descriptor, |key, pattern| {
+                let mut produced = descriptor.clone();
+                if key == "a" && fault == "right_endpoint" {
+                    produced["scenario"]["motion"]["vapor_coverage_history"]["integration"] =
+                        json!("right_endpoint");
+                }
+                let mut simulation = synthetic_moving_vapor_with_widths(pattern, &produced, [2.5, 2.]);
+                if key == "a" && fault != "none" {
+                    let history = &mut simulation["motion"]["result"]["vapor_coverage_history"]["result"];
+                    if fault == "missing_initial" || fault == "stale_previous" {
+                        let index = if fault == "missing_initial" { 0 } else { 1 };
+                        for (rate, integral) in [("covered_potential_heat_flow_w", "potential_energy_j"),
+                            ("covered_potential_mass_flow_kg_s", "potential_mass_kg")] {
+                            let initial = if fault == "missing_initial" { 0. } else {
+                                history["initial"]["result"]["coverage"][rate].as_f64().unwrap()
+                            };
+                            let current = history["samples"][index]["result"]["coverage"][rate]
+                                .as_f64().unwrap();
+                            history["samples"][index][integral] = json!(initial * 0.25 + current * 0.25);
+                        }
+                    } else if fault == "missing_sample" {
+                        history["samples"].as_array_mut().unwrap().remove(0);
+                        history["request"]["samples"].as_array_mut().unwrap().remove(0);
+                    }
+                    // Keep aggregate totals and exact replay identities consistent, so each
+                    // rejection depends on the declared rule and complete canonical sample data.
+                    for integral in ["potential_energy_j", "potential_mass_kg"] {
+                        history["totals"][integral] = json!(history["samples"].as_array().unwrap()
+                            .iter().map(|row| row[integral].as_f64().unwrap()).sum::<f64>());
+                    }
+                    history["integration"] = json!("composite_trapezoid");
+                    history["request"]["policy"] = descriptor["scenario"]["motion"]["vapor_coverage_history"].clone();
+                    history["request_sha256"] = json!(digest(&history["request"]));
+                    history["replay_request_json"] = json!(serde_json::to_string(&history["request"]).unwrap());
+                }
+                Ok(simulation)
+            }).unwrap()).unwrap();
+        assert_eq!(
+            report["comparison"]["frontier"],
+            if fault == "none" {
+                json!(["a"])
+            } else {
+                json!(["b"])
+            },
+            "{fault}: {}",
+            report["comparison"]
+        );
+        assert_eq!(
+            report["comparison"]["alternatives"][0]["eligible"],
+            fault == "none",
+            "{fault}"
+        );
+        if fault == "none" {
+            // Body areas are 0.5, 1.25 and 1 m² at 0, 0.5 and 1 s. Integrating both
+            // intervals gives (0.5 + 2*1.25 + 1)*0.25*1000/(10+1+4), or 66 2/3 J.
+            let readings = &report["comparison"]["alternatives"][0]["readings"];
+            let expected = 1000. / 15.;
+            assert!(
+                (readings["motion_covered_vapor_potential_energy_j"]["value"]
+                    .as_f64()
+                    .unwrap()
+                    - expected)
+                    .abs()
+                    < 1e-12
+            );
+            assert!(
+                (readings["motion_covered_vapor_potential_mass_kg"]["value"]
+                    .as_f64()
+                    .unwrap()
+                    - expected / 2500000.)
+                    .abs()
+                    < 1e-18
+            );
+            assert_eq!(
+                readings["motion_covered_vapor_potential_energy_j"]["unit"],
+                "J"
+            );
+            assert_eq!(
+                readings["motion_covered_vapor_potential_mass_kg"]["unit"],
+                "kg"
+            );
+        }
+    }
 }
 
 #[test]

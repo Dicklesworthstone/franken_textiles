@@ -292,6 +292,89 @@ fn an_unbounded_time_zero_layer_does_not_invalidate_later_complete_integral_rang
 }
 
 #[test]
+fn composite_trapezoid_ret_ranges_include_both_distinct_endpoints_and_replay_exactly() {
+    let mut input = trapezoid_area_history(2, |t| 1.0 + t);
+    input.initial = with_bounds(input.initial);
+    let result = input.evaluate().unwrap();
+    // Areas 0.5, 0.75 and 1 m² give interval area-time integrals 0.3125 and 0.4375 m²s.
+    for (endpoint, resistance) in [14., 10.].into_iter().enumerate() {
+        let energy = 1000. * 0.75 / resistance;
+        close(
+            &result["totals"]["reported_bounds"]["potential_energy_j"][endpoint],
+            energy,
+        );
+        close(
+            &result["totals"]["reported_bounds"]["potential_mass_kg"][endpoint],
+            energy / 2_500_000.,
+        );
+        for (sample, area_time) in [0.3125, 0.4375].into_iter().enumerate() {
+            let bounds = &result["samples"][sample]["reported_bounds"];
+            close(
+                &bounds["potential_energy_j"][endpoint],
+                1000. * area_time / resistance,
+            );
+            close(
+                &bounds["potential_mass_kg"][endpoint],
+                1000. * area_time / resistance / 2_500_000.,
+            );
+            assert_eq!(result["samples"][sample]["bounds_unavailable"], json!([]));
+        }
+    }
+    assert_eq!(result["totals"]["bounds_unavailable"], json!([]));
+    let replay: history::Request =
+        serde_json::from_str(result["replay_request_json"].as_str().unwrap()).unwrap();
+    assert_eq!(replay.evaluate().unwrap(), result);
+}
+
+#[test]
+fn composite_trapezoid_missing_time_zero_bounds_invalidates_first_interval_and_total_range() {
+    let mut initial = with_bounds(request());
+    set_bounds(&mut initial.source.materials[1], None);
+    let mut input = history_request(initial);
+    input.policy.integration = history::Integration::CompositeTrapezoid;
+    for sample in &mut input.samples {
+        for p in &mut sample.positions_m[3..] {
+            p.x += 4.;
+        }
+    }
+    let result = input.evaluate().unwrap();
+    assert!(result["initial"]["result"]["coverage"]["reported_bounds"].is_null());
+    assert!(result["samples"][0]["reported_bounds"].is_null());
+    assert!(
+        result["samples"][0]["bounds_unavailable"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("sample 0 start:")
+    );
+    assert!(result["samples"][1]["reported_bounds"].is_object());
+    assert!(result["totals"]["reported_bounds"].is_null());
+    assert!(
+        !result["totals"]["bounds_unavailable"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // The first interval still integrates the nominal two-layer initial potential.
+    let energy = 1000. * ((0.5 / 12. + 0.5 / 7.) * 0.05 + (0.5 / 7. + 1. / 7.) * 0.075);
+    close(&result["totals"]["potential_energy_j"], energy);
+    close(&result["totals"]["potential_mass_kg"], energy / 2_500_000.);
+    for (endpoint, resistance) in [8., 6.].into_iter().enumerate() {
+        let bounds = &result["samples"][1]["reported_bounds"];
+        close(
+            &bounds["potential_energy_j"][endpoint],
+            1000. * (0.5 + 1.) * 0.075 / resistance,
+        );
+        close(
+            &bounds["potential_mass_kg"][endpoint],
+            1000. * (0.5 + 1.) * 0.075 / resistance / 2_500_000.,
+        );
+    }
+    let replay: history::Request =
+        serde_json::from_str(result["replay_request_json"].as_str().unwrap()).unwrap();
+    assert_eq!(replay.evaluate().unwrap(), result);
+}
+
+#[test]
 fn moving_nonuniform_pressures_follow_verified_original_body_triangles() {
     let mut initial = request();
     initial.map.body_positions_m.push(Vec3::new(0.5, 0.5, 0.0));
@@ -445,6 +528,141 @@ fn right_endpoint_potential_converges_to_independent_linear_area_time_integral()
     }
     assert!((errors[0] / errors[1] - 2.0).abs() < 1e-10);
     assert!((errors[1] / errors[2] - 2.0).abs() < 1e-10);
+}
+
+fn trapezoid_area_history(n: usize, scale: impl Fn(f64) -> f64) -> history::Request {
+    let mut input = history_request(request());
+    input.policy.integration = history::Integration::CompositeTrapezoid;
+    input.samples = (1..=n)
+        .map(|i| {
+            let time = i as f64 / n as f64;
+            let factor = scale(time);
+            let stretch = |p: &Vec3| Vec3::new(p.x * factor, p.y, p.z);
+            history::Sample {
+                time_s: time,
+                positions_m: input
+                    .initial
+                    .source
+                    .positions_m
+                    .iter()
+                    .map(stretch)
+                    .collect(),
+                body_positions_m: input
+                    .initial
+                    .map
+                    .body_positions_m
+                    .iter()
+                    .map(stretch)
+                    .collect(),
+            }
+        })
+        .collect();
+    input
+}
+
+#[test]
+fn composite_trapezoid_integrates_linear_area_exactly_and_replays_the_same_samples() {
+    // A(t)=0.5*(1+t) m² integrates to 0.75 m²s without another geometric evaluation.
+    let exact = 1000.0 / 12.0 * 0.75;
+    for n in [1, 3, 8] {
+        let input = trapezoid_area_history(n, |t| 1.0 + t);
+        let report = input.evaluate().unwrap();
+        assert_eq!(report["integration"], "composite_trapezoid");
+        close(&report["totals"]["potential_energy_j"], exact);
+        close(&report["totals"]["potential_mass_kg"], exact / 2_500_000.0);
+        let mut previous = 0.0;
+        for (sample, row) in input
+            .samples
+            .iter()
+            .zip(report["samples"].as_array().unwrap())
+        {
+            let t = sample.time_s;
+            // Integrate the prescribed linear area analytically on this exact interval.
+            let area_time = 0.5 * (t - previous) + 0.25 * (t * t - previous * previous);
+            close(&row["potential_energy_j"], 1000.0 / 12.0 * area_time);
+            close(
+                &row["potential_mass_kg"],
+                1000.0 / 12.0 * area_time / 2_500_000.0,
+            );
+            previous = t;
+        }
+        let frozen: history::Request =
+            serde_json::from_str(report["replay_request_json"].as_str().unwrap()).unwrap();
+        assert_eq!(frozen.evaluate().unwrap(), report);
+
+        let mut right = input.clone();
+        right.policy.integration = history::Integration::RightEndpoint;
+        let baseline = right.evaluate().unwrap();
+        assert_eq!(
+            baseline["geometry_operations"],
+            report["geometry_operations"]
+        );
+        assert_eq!(baseline["request"]["samples"], report["request"]["samples"]);
+        assert_ne!(baseline["request_sha256"], report["request_sha256"]);
+    }
+}
+
+#[test]
+fn composite_trapezoid_refines_quadratically_for_nonlinear_area() {
+    // A(t)=0.5*(1+t²) m²: its independent integral is 2/3 m²s. The sampled rule's
+    // error is exactly 1/(12*n²) m²s, so doubling the samples reduces it by four.
+    let exact = 1000.0 / 12.0 * (2.0 / 3.0);
+    let mut errors = Vec::new();
+    for n in [2, 4, 8] {
+        let report = trapezoid_area_history(n, |t| 1.0 + t * t)
+            .evaluate()
+            .unwrap();
+        let energy = report["totals"]["potential_energy_j"].as_f64().unwrap();
+        let error = energy - exact;
+        assert!(error > 0.0);
+        assert!((error - 1000.0 / (144.0 * (n * n) as f64)).abs() < 1e-10);
+        close(&report["totals"]["potential_mass_kg"], energy / 2_500_000.0);
+        errors.push(error);
+    }
+    assert!((errors[0] / errors[1] - 4.0).abs() < 1e-10);
+    assert!((errors[1] / errors[2] - 4.0).abs() < 1e-10);
+}
+
+#[test]
+fn composite_trapezoid_keeps_initial_flow_when_later_coverage_vanishes() {
+    let mut input = history_request(request());
+    input.policy.integration = history::Integration::CompositeTrapezoid;
+    let away: Vec<_> = input
+        .initial
+        .source
+        .positions_m
+        .iter()
+        .map(|p| *p + Vec3::new(2.0, 0.0, 0.0))
+        .collect();
+    input.samples = [1.0, 3.0]
+        .into_iter()
+        .map(|time_s| history::Sample {
+            time_s,
+            positions_m: away.clone(),
+            body_positions_m: input.initial.map.body_positions_m.clone(),
+        })
+        .collect();
+    let report = input.evaluate().unwrap();
+    // Initial potential is 1000*0.5/12 W; only its half of the first interval contributes.
+    let energy = 1000.0 * 0.5 / 12.0 * 0.5;
+    close(&report["totals"]["potential_energy_j"], energy);
+    close(&report["totals"]["potential_mass_kg"], energy / 2_500_000.0);
+    close(&report["samples"][0]["potential_energy_j"], energy);
+    assert_eq!(report["samples"][1]["potential_energy_j"], 0.0);
+    assert_eq!(report["samples"][1]["potential_mass_kg"], 0.0);
+    for row in report["samples"].as_array().unwrap() {
+        assert_eq!(row["result"]["coverage"]["uncovered_area_m2"], 0.5);
+        assert_eq!(
+            row["result"]["coverage"]["covered_potential_heat_flow_w"],
+            0.0
+        );
+    }
+    assert_eq!(report["latent_heat_coupled"], false);
+    input.policy.integration = history::Integration::RightEndpoint;
+    assert_eq!(
+        input.evaluate().unwrap()["totals"]["potential_energy_j"],
+        0.0
+    );
 }
 
 #[test]

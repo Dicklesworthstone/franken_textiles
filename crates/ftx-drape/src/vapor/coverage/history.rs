@@ -20,6 +20,9 @@ const MAX_VERTICES: usize = 2_000_000;
 pub enum Integration {
     /// Hold the newly accepted body/cloth geometry through its preceding mechanical interval.
     RightEndpoint,
+    /// Average the two sampled endpoint potentials over each accepted mechanical interval.
+    /// This interpolates potential rates, not unobserved geometry or a moisture state.
+    CompositeTrapezoid,
 }
 
 /// Opt-in integration policy. The scenario's existing vapor-coverage settings remain authoritative.
@@ -164,6 +167,15 @@ fn integral(rate: f64, duration: f64) -> Result<f64, Refusal> {
     Ok(value)
 }
 
+fn trapezoid(previous_rate: f64, current_rate: f64, duration: f64) -> Result<f64, Refusal> {
+    // Scale before adding so two finite large rates need not overflow their intermediate sum.
+    // Each endpoint contribution must also survive the existing positive-transfer checks.
+    let half_duration = 0.5 * duration;
+    let mut value = integral(previous_rate, half_duration)?;
+    add(&mut value, integral(current_rate, half_duration)?)?;
+    Ok(value)
+}
+
 fn operations(report: &Value) -> Result<usize, Refusal> {
     report["projection"]["geometry_operations"]
         .as_u64()
@@ -278,36 +290,68 @@ impl History {
             .filter(|&n| n <= self.request.policy.max_geometry_operations)
             .ok_or_else(|| budget("vapor history exhausts aggregate projection work"))?;
         let dt = sample.time_s - self.time_s;
-        let energy = integral(
-            number(
-                &result["coverage"]["covered_potential_heat_flow_w"],
-                "power",
-            )?,
-            dt,
-        )?;
-        let mass = integral(
-            number(
-                &result["coverage"]["covered_potential_mass_flow_kg_s"],
-                "mass flow",
-            )?,
-            dt,
-        )?;
+        let integrate = |key: &str, name: &str| {
+            let rate = number(&result["coverage"][key], name)?;
+            match self.request.policy.integration {
+                Integration::RightEndpoint => integral(rate, dt),
+                Integration::CompositeTrapezoid => {
+                    let previous = self.rows.last().unwrap_or(&self.initial);
+                    trapezoid(
+                        number(&previous["result"]["coverage"][key], name)?,
+                        rate,
+                        dt,
+                    )
+                }
+            }
+        };
+        let energy = integrate("covered_potential_heat_flow_w", "power")?;
+        let mass = integrate("covered_potential_mass_flow_kg_s", "mass flow")?;
         let mut total_energy = self.potential_energy_j;
         let mut total_mass = self.potential_mass_kg;
         add(&mut total_energy, energy)?;
         add(&mut total_mass, mass)?;
         let label = format!("sample {}", self.rows.len());
         let mut interval_bounds = BoundsSum::new();
-        interval_bounds.add_scaled(
-            TransferBounds::from_json(
-                &result["coverage"]["reported_bounds"],
-                "covered_potential_heat_flow_w",
-                "covered_potential_mass_flow_kg_s",
+        match self.request.policy.integration {
+            Integration::RightEndpoint => interval_bounds.add_scaled(
+                TransferBounds::from_json(
+                    &result["coverage"]["reported_bounds"],
+                    "covered_potential_heat_flow_w",
+                    "covered_potential_mass_flow_kg_s",
+                ),
+                dt,
+                [energy, mass],
+                &label,
             ),
-            dt,
-            [energy, mass],
-            &label,
-        );
+            Integration::CompositeTrapezoid => {
+                let previous = self.rows.last().unwrap_or(&self.initial);
+                let half_dt = 0.5 * dt;
+                for (coverage, endpoint) in [
+                    (&previous["result"]["coverage"], "start"),
+                    (&result["coverage"], "end"),
+                ] {
+                    interval_bounds.add_scaled(
+                        TransferBounds::from_json(
+                            &coverage["reported_bounds"],
+                            "covered_potential_heat_flow_w",
+                            "covered_potential_mass_flow_kg_s",
+                        ),
+                        half_dt,
+                        [
+                            integral(
+                                number(&coverage["covered_potential_heat_flow_w"], "power")?,
+                                half_dt,
+                            )?,
+                            integral(
+                                number(&coverage["covered_potential_mass_flow_kg_s"], "mass flow")?,
+                                half_dt,
+                            )?,
+                        ],
+                        &format!("{label} {endpoint}"),
+                    );
+                }
+            }
+        }
         let mut total_bounds = self.bounds.clone();
         total_bounds.add_scaled(interval_bounds.value, 1., [energy, mass], &label);
         let row = json!({"sample_index":self.rows.len(),"time_s":sample.time_s,"dt_s":dt,
@@ -345,6 +389,22 @@ impl History {
         validate_path(path_sha256.as_deref())?;
         self.request.path_sha256 = path_sha256;
         let request = serde_json::to_value(&self.request).map_err(|e| invalid(e.to_string()))?;
+        let integration_note = match self.request.policy.integration {
+            Integration::RightEndpoint => {
+                "Each right-endpoint potential uses newly projected body and cloth geometry with fixed material observations, triangle identities, vapor reservoirs and explicitly supplied interfaces. No unsampled geometry or strain-dependent Ret is inferred."
+            }
+            Integration::CompositeTrapezoid => {
+                "Each composite-trapezoid interval averages its two sampled endpoint potentials, beginning with the initial state. Each endpoint uses newly projected body and cloth geometry with fixed material observations, triangle identities, vapor reservoirs and explicitly supplied interfaces. No unsampled geometry or strain-dependent Ret is inferred."
+            }
+        };
+        let bounds_note = match self.request.policy.integration {
+            Integration::RightEndpoint => {
+                "Complete source Ret endpoints propagate through each fixed accepted sample and its exact positive duration, then sum without an independence assumption. Time-zero bounds are reported separately and carry no elapsed-time weight. Missing or unrepresentable sampled ranges leave integral ranges unavailable. These conditional ranges do not bound unsampled geometry, temporal quadrature, source SD/CV or physical model error."
+            }
+            Integration::CompositeTrapezoid => {
+                "Complete source Ret endpoints propagate through both sampled endpoints of each interval with half its exact positive duration, then sum without an independence assumption. Time-zero bounds contribute to the first interval. Missing or unrepresentable endpoint ranges leave the affected interval and total ranges unavailable. These conditional ranges do not bound unsampled geometry, temporal quadrature, source SD/CV or physical model error."
+            }
+        };
         let result = json!({"schema":"ftx-vapor-coverage-history-report/1",
         "request_sha256":digest(&request)?,
         "replay_request_json":serde_json::to_string(&self.request).map_err(|e| invalid(e.to_string()))?,
@@ -359,9 +419,9 @@ impl History {
         "storage_required":false,"dry_thermal_properties_required":false,
         "latent_heat_coupled":false,"physical_validation_claim":false,"comfort_claim":false,
         "notes":[
-            "Each right-endpoint potential uses newly projected body and cloth geometry with fixed material observations, triangle identities, vapor reservoirs and explicitly supplied interfaces. No unsampled geometry or strain-dependent Ret is inferred.",
+            integration_note,
             "Integrals include covered body regions only. Uncovered transfer remains unknown; missing or ambiguous samples refuse the complete history instead of contributing zero.",
-            "Complete source Ret endpoints propagate through each fixed accepted sample and its exact positive duration, then sum without an independence assumption. Time-zero bounds are reported separately and carry no elapsed-time weight. Missing or unrepresentable sampled ranges leave integral ranges unavailable. These conditional ranges do not bound unsampled geometry, temporal quadrature, source SD/CV or physical model error.",
+            bounds_note,
             "Potential joules and kilograms are prescribed-reservoir quadrature, not actual evaporation, sweat supply, stored moisture, latent cooling or an error-bounded transport solution."
         ]});
         bounded(&result)?;
@@ -379,6 +439,10 @@ mod tests {
         assert!(integral(f64::MIN_POSITIVE, 1e-9).unwrap() > 0.0);
         assert!(integral(f64::from_bits(1), 1e-9).is_err());
         assert!(integral(f64::MAX, 60.0).is_err());
+        assert_eq!(trapezoid(f64::MAX, f64::MAX, 1.0).unwrap(), f64::MAX);
+        assert_eq!(trapezoid(2.0, 0.0, 1.0).unwrap(), 1.0);
+        assert!(trapezoid(f64::from_bits(1), 0.0, 1e-9).is_err());
+        assert!(trapezoid(2.0, f64::from_bits(1), 2.0).is_err());
         let mut total = 1.0;
         assert!(add(&mut total, f64::from_bits(1)).is_err());
         assert_eq!(total, 1.0);

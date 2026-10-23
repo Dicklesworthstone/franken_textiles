@@ -73,6 +73,42 @@ fn portable_moving_coverage_preserves_the_shared_report_and_rejects_stale_source
 }
 
 #[test]
+fn portable_moving_coverage_honors_the_declared_quadrature_and_exact_replay() {
+    let initial: Value = serde_json::from_str(include_str!(
+        "../../../examples/vapor-coverage/layered.json"
+    ))
+    .unwrap();
+    let mut cloth = initial["source"]["positions_m"].clone();
+    let mut body = initial["map"]["body_positions_m"].clone();
+    for positions in [&mut cloth, &mut body] {
+        for vertex in positions.as_array_mut().unwrap() {
+            vertex[0] = json!(2.0 * vertex[0].as_f64().unwrap());
+        }
+    }
+    for (rule, area_time_factor) in [("right_endpoint", 4.0), ("composite_trapezoid", 3.0)] {
+        let input = json!({"schema":"ftx-vapor-coverage-history/1",
+            "policy":{"schema":"ftx-motion-vapor-coverage/1","integration":rule,"max_geometry_operations":10000},
+            "initial":initial,"samples":[{"time_s":2,"positions_m":cloth,"body_positions_m":body}]}).to_string();
+        let output = thermal::vapor_coverage_history(&input).unwrap();
+        let report: Value = serde_json::from_str(&output).unwrap();
+        // The illustrative boundary and measured Ret give an independent series-network power.
+        // Doubling projected area over two seconds yields distinct declared quadrature values.
+        let energy = 1000.0 * 0.002 / (2.0 * 11.27 + 5.0) * area_time_factor;
+        assert_eq!(report["integration"], rule);
+        assert!((report["totals"]["potential_energy_j"].as_f64().unwrap() - energy).abs() < 1e-12);
+        assert!(
+            (report["totals"]["potential_mass_kg"].as_f64().unwrap() - energy / 2_500_000.0).abs()
+                < 1e-18
+        );
+        assert_eq!(
+            thermal::vapor_coverage_history(report["replay_request_json"].as_str().unwrap())
+                .unwrap(),
+            output
+        );
+    }
+}
+
+#[test]
 fn portable_entry_returns_the_exact_shared_report_and_frozen_offline_replay() {
     let request: Request = serde_json::from_str(INPUT).unwrap();
     let report = request

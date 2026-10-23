@@ -2553,6 +2553,20 @@ test('compiled WASM moving vapor integrates changing area and replays the comple
     assert.equal(report.samples.length,2); assert.equal(report.duration_s,3);
     assert.equal(report.latent_heat_coupled,false);
     assert.equal(ftx.thermal_vapor_coverage_history(report.replay_request_json),raw);
+    const compositeInput=JSON.stringify({...input,policy:{...input.policy,integration:'composite_trapezoid'}});
+    const worker=await workerModule({bindings:ftx});
+    const composite=await worker.send({type:'vapor',request:17,vaporRequest:compositeInput});
+    assert.equal(composite.type,'result',composite.message);
+    const compositeReport=composite.result, compositeRaw=ftx.thermal_vapor_coverage_history(compositeInput);
+    // One second at initial power, then two seconds averaging the original and doubled areas.
+    const compositeEnergy=1000*0.002/(2*11.27+5)*4;
+    assert.equal(compositeReport.integration,'composite_trapezoid');
+    assert.ok(Math.abs(compositeReport.totals.potential_energy_j-compositeEnergy)<1e-12);
+    assert.ok(Math.abs(compositeReport.totals.potential_mass_kg-compositeEnergy/2500000)<1e-18);
+    assert.deepEqual(plain(composite.files.map(f=>[f.name,f.text])),[
+      ['vapor-report.json',compositeRaw],['vapor-request.json',compositeInput],
+      ['vapor-replay-request.json',compositeReport.replay_request_json]]);
+    assert.equal(ftx.thermal_vapor_coverage_history(compositeReport.replay_request_json),compositeRaw);
     if(process.env.FTX_VAPOR_HISTORY_REPLAY) {
       assert.deepEqual(report,JSON.parse(fs.readFileSync(process.env.FTX_VAPOR_HISTORY_REPLAY,'utf8')));
     }

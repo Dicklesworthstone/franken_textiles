@@ -2830,7 +2830,10 @@ their initial body identity before following those triangles through the new pos
 conductivity or heat capacity is required.
 
 The declared right-endpoint rule integrates each new sample's covered potential power and mass
-flow over its preceding interval. Initial geometry, every accepted sample, projected coverage,
+flow over its preceding interval. An optional composite-trapezoid rule averages the previous and
+current rates using the same projections, including the initial state. Analytical linear and quadratic
+area histories verify exactness and second-order refinement without additional geometry solves.
+Initial geometry, every accepted sample, projected coverage,
 per-interval values and exact frozen replay remain in the report. Bounded projection work and
 retention are charged before further work; failed samples refuse the complete vapor history while
 retaining independent mechanics and other available consumers. A new native command and portable

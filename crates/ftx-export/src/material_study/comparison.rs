@@ -126,9 +126,9 @@ pub enum Metric {
     CoveredVaporPotentialMassFlowKgS,
     /// Peak absolute original-panel edge strain (%) over the initial state and accepted motion samples.
     MotionMaxAbsoluteEdgeStrainPct,
-    /// Right-endpoint integral of covered vapor potential over the requested motion, in joules.
+    /// Declared quadrature of covered vapor potential over the requested motion, in joules.
     MotionCoveredVaporPotentialEnergyJ,
-    /// Right-endpoint integral of covered vapor potential mass flow, in kilograms; no water supply.
+    /// Declared quadrature of covered vapor potential mass flow, in kilograms; no water supply.
     MotionCoveredVaporPotentialMassKg,
     /// Signed incoming-side energy (J) for all independent sheets over the whole requested motion.
     TransientSurfaceInsideEnergyJ,
@@ -710,7 +710,7 @@ impl Policy {
             report.notes.push("Covered vapor objectives require the whole declared body domain to be covered on the admitted drape. Partial covered subtotals stay visible but cannot be ranked as complete-domain transfer. Actual layer areas, explicit interlayer resistance, pressure boundaries and films define the potential network; no sweat supply, condensation, thermal feedback or comfort is inferred.");
         }
         if self.consumers().contains(&Consumer::MotionVaporCoverage) {
-            report.notes.push("Moving covered vapor objectives require complete declared body coverage at the initial state and every accepted mechanical sample, with the current material, path and prescribed conditions. Potential energy and mass integrate right-endpoint power and flow over the actual sample intervals; they do not establish water availability, actual evaporation, latent cooling, continuous-time accuracy or comfort.");
+            report.notes.push("Moving covered vapor objectives require complete declared body coverage at the initial state and every accepted mechanical sample, with the current material, path and prescribed conditions. Potential energy and mass integrate sampled power and flow over the actual intervals using the declared right-endpoint or composite-trapezoid rule; they do not establish water availability, actual evaporation, latent cooling, continuous-time accuracy or comfort.");
         }
         if self.metrics().iter().any(|metric| {
             matches!(
@@ -1732,6 +1732,11 @@ fn admit_motion_vapor_coverage<'a>(
         )
     };
     let policy = &descriptor["scenario"]["motion"]["vapor_coverage_history"];
+    let trapezoid = match policy["integration"].as_str() {
+        Some("right_endpoint") => false,
+        Some("composite_trapezoid") => true,
+        _ => return Err(fail()),
+    };
     let coverage_policy = &descriptor["scenario"]["vapor_coverage"];
     let history = &motion["vapor_coverage_history"]["result"];
     let request = &history["request"];
@@ -1743,11 +1748,10 @@ fn admit_motion_vapor_coverage<'a>(
     let retained = vapor_array(request, "samples")?;
     if motion["vapor_coverage_history"]["status"] != "available"
         || policy["schema"] != "ftx-motion-vapor-coverage/1"
-        || policy["integration"] != "right_endpoint"
         || history["schema"] != "ftx-vapor-coverage-history-report/1"
         || request["schema"] != "ftx-vapor-coverage-history/1"
         || request["policy"] != *policy
-        || history["integration"] != "right_endpoint"
+        || history["integration"] != policy["integration"]
         || rows.len() != samples.len()
         || retained.len() != samples.len()
         || initial["time_s"].as_f64() != Some(0.)
@@ -1839,6 +1843,27 @@ fn admit_motion_vapor_coverage<'a>(
     let mut energy = 0.;
     let mut mass = 0.;
     let mut work = 0_u64;
+    let mut previous = (0., 0.);
+    let interval = |previous: f64, current: f64, dt: f64| -> Result<f64, Refusal> {
+        if !trapezoid {
+            return Ok(current * dt);
+        }
+        // Preserve the production history's operation order: two half-interval products,
+        // then checked addition. Averaging the rates first can overflow a finite integral.
+        let first = previous * (0.5 * dt);
+        let second = current * (0.5 * dt);
+        let total = first + second;
+        if !first.is_finite()
+            || !second.is_finite()
+            || !total.is_finite()
+            || (previous > 0. && first <= 0.)
+            || (current > 0. && second <= 0.)
+            || (second > 0. && total <= first)
+        {
+            return Err(fail());
+        }
+        Ok(total)
+    };
     for (index, (row, sample)) in std::iter::once((initial, &motion["initial_sample"]))
         .chain(rows.iter().zip(samples))
         .enumerate()
@@ -1898,10 +1923,12 @@ fn admit_motion_vapor_coverage<'a>(
         if index != 0 {
             let t = finite(&sample["time_s"]).ok_or_else(fail)?;
             let dt = t - time;
-            let delta_energy = power * dt;
-            let delta_mass = flow * dt;
-            if dt < 1e-9
-                || (power > 0. && delta_energy <= 0.)
+            if dt < 1e-9 {
+                return Err(fail());
+            }
+            let delta_energy = interval(previous.0, power, dt)?;
+            let delta_mass = interval(previous.1, flow, dt)?;
+            if (power > 0. && delta_energy <= 0.)
                 || (flow > 0. && delta_mass <= 0.)
                 || (delta_energy > 0. && energy + delta_energy <= energy)
                 || (delta_mass > 0. && mass + delta_mass <= mass)
@@ -1920,6 +1947,7 @@ fn admit_motion_vapor_coverage<'a>(
             mass += delta_mass;
             time = t;
         }
+        previous = (power, flow);
     }
     let limit = policy["max_geometry_operations"]
         .as_u64()
