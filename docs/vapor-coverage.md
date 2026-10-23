@@ -155,8 +155,10 @@ The shared Rust API is `ftx_drape::vapor::coverage::history::Request::evaluate`.
 has time zero; accepted times increase through at most 60 seconds. Frozen replay reproduces the
 complete report with no body-model installation, live catalog or hidden previous projection.
 
-Histories allow at most 512 accepted samples, two million retained body/cloth vertex samples and
-64 MiB of input/output. Full nested reports and escaped replay retention are charged before append.
+Histories allow at most 512 accepted samples, two million retained body/cloth vertex samples plus
+optional wet-film scalar equivalents, and 64 MiB of input/output. Each retained wet-film body row
+counts as 16 scalar equivalents; geometry and water counts remain separately reported. Full nested
+reports and escaped replay retention are charged before append.
 `max_geometry_operations` is in 1–20,000,000 and includes the initial projection; each kernel receives
 only the remaining allowance. Each material-study attempt reserves its complete history allowance
 against 40,000,000 session operations, including histories that later refuse. Mechanical retention
@@ -166,14 +168,82 @@ A failed later sample publishes no partial integral and does not contribute zero
 mechanics and independent instantaneous endpoints remain available. Uncovered body transfer is
 unknown at each sample: partial coverage can be inspected but cannot rank as a complete covered-domain
 comparison. These potential joules and kilograms are neither actual evaporation nor moisture storage
-and do not enter the dry-heat solver. Moisture availability, conservative latent feedback and qualified
-wet/dry garment experiments remain separate open work.
+and do not enter the dry-heat solver. Explicit finite body-water availability can be supplied as below;
+textile moisture storage, conservative textile-temperature feedback and qualified wet/dry garment
+experiments remain separate open work.
 
 Independent series/area/time tests check accounting, source substitutions, nonuniform pressure
 identity, stale-input refusal, transactional failures and exact replay. An analytic linearly increasing
 area demonstrates first-order right-endpoint refinement and exact trapezoidal integration; quadratic
 area checks second-order trapezoid refinement. Production tests verify accepted geometry throughout
 the history and that failed transport reservations preserve complete mechanics.
+
+## Finite body water during material-bound motion
+
+An optional `wet_film` in the same history policy supplies finite liquid on the selected body
+triangles. It works in both standalone history requests and
+`scenario.motion.vapor_coverage_history`, with the existing native, portable and browser consumers.
+For a one-triangle experiment, the shape is:
+
+```json
+"wet_film": {
+  "schema": "ftx-body-wet-film/1",
+  "body_mesh_sha256": "<exact initial coverage report body_mesh_sha256>",
+  "source": "declared synthetic experiment; not an acquired wearer measurement",
+  "basis": "prescribed initial liquid and constant supply on the selected body triangle",
+  "initial_liquid_mass_kg": [0.000003],
+  "supply_rate_kg_s": [0.000001]
+}
+```
+
+These example numbers are authored inputs, not textile or physiological observations. Replace the
+hash placeholder with the initial coverage result's exact lowercase SHA-256. Each vector must have
+one finite, nonnegative value per `initial.map.body_triangles` entry, in that order; a scenario uses
+its selected `body_triangle_ids` order. The binding includes the initial body positions and ordered
+triangles. `source` and `basis` each require 8–4096 trimmed UTF-8 bytes. Missing film data leaves the
+existing potential-only calculation unchanged. A malformed or stale film refuses the independent
+history while complete mechanics, dry heat and instantaneous vapor endpoints remain available.
+
+Water belongs to stable body triangles, so a moving region or repeated fabric layer cannot create
+another copy of it. Each interval sums canonical covered-region mass-flow demand for that triangle
+and applies the chosen right-endpoint or composite-trapezoid rule. The model treats this interval's
+average demand and the declared supply rate as constant throughout the interval. For each triangle:
+
+```text
+supplied = supply_rate × dt
+available = starting_liquid + supplied
+evaporated = min(potential_demand, available)
+remaining_liquid = available − evaporated
+unmet_demand = potential_demand − evaporated
+body_reservoir_latent_energy = evaporated × declared_boundary_latent_heat
+```
+
+This is a finite-reservoir approximation under the declared sampling rule; it does not reconstruct
+unsampled coverage changes. Water cannot move between body triangles. Supply on an uncovered
+triangle remains stored, and uncovered-body evaporation stays unknown. Each triangle retains its
+original boundary's latent-heat conversion through motion, including nonuniform boundaries.
+
+Each accepted sample has a `wet_film` step receipt; the complete history has a `wet_film` report.
+Both retain per-body-triangle rows and totals for starting liquid, supplied mass, potential demand,
+modeled evaporation, unmet demand, remaining liquid and body-reservoir latent energy. Signed
+`mass_balance_error_kg` and `demand_balance_error_kg` retain numerical reconciliation residuals.
+The top-level report also retains the source, basis and initial body identity. Failed numerical or
+retention checks commit no water state and publish no partial history. Frozen replay retains the
+complete film declaration and reproduces the ledger.
+
+The prescribed body reservoir supplies this latent energy. It is not withdrawn from textile
+sensible heat, and textile temperature, garment mass and wet constitutive properties do not change.
+The report states `textile_temperature_coupled: false` and `uncertainty_propagated: false`; source Ret
+ranges still describe the separate potential outputs, not bounds on the evolving water state.
+Existing potential objectives retain their meaning. No sweat physiology, sorption, condensation,
+whole-wearer water loss, comfort or measured garment performance is inferred.
+
+Independent regressions cover depletion and replenishment, dry and surplus reservoirs, changing
+coverage, disjoint paths over one reservoir, nonuniform latent heat, exact replay, stale identities,
+overflow and transactional failure. Production tests change only Ret on the same sewn motion and
+verify the independently computed difference in remaining water while mechanics and dry heat stay
+unchanged. The browser displays the Rust ledger and withdraws it when inputs change or a history
+refuses.
 
 ## Conditional ranges from source-reported resistance bounds
 

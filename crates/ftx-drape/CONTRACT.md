@@ -433,6 +433,16 @@ Covered potential-flow subtotals exclude unknown uncovered body fractions; no sw
 coupling, comfort or measured garment claim is made. Complete source geometry and exact offline replay
 are bounded; missing Ret refuses only this consumer. See `docs/vapor-coverage.md`.
 
+**Finite body wet film** (`vapor::coverage::history`, `ftx-wf1`). Optional, sourced initial liquid
+and constant supply bind to the exact initial selected-body mesh. Canonical regional Ret demand is
+summed per stable body triangle before the declared interval quadrature; available liquid caps modeled
+covered evaporation without duplicating water across regions or layers. Step and cumulative receipts
+retain supply, evaporation, unmet demand, remaining mass, prescribed-body-reservoir latent energy and
+signed mass/demand residuals. Invalid inputs or failed numerical/retention checks refuse the history
+transactionally, preserving independent mechanics and endpoints. Exact replay includes the water
+declaration. No textile-temperature feedback, textile moisture storage, inter-triangle water transport,
+bare-body evaporation, uncertainty propagation, physiology or empirical garment claim follows.
+
 **Geometry-derived thermal correspondence** (`thermal::surface::projection`, `ftx-tmb`).
 `project` partitions body triangles by local-normal cloth projection using bounded convex clipping,
 retains inverse-mapped cloth subpolygons and mid-surface distance ranges, and emits the existing

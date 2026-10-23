@@ -1,6 +1,7 @@
 //! Bounded moving-coverage potential integrals under fixed prescribed vapor reservoirs.
 //! Every accepted position sample reuses the ordinary geometry and canonical Ret evaluator.
-//! No water state, latent cooling, unseen motion or empirical garment response is inferred.
+//! Optional explicitly supplied body liquid is conserved separately from textile temperature.
+//! No water supply, latent cooling of cloth, unseen motion or empirical garment response is inferred.
 
 use ftx_core::{Refusal, Vec3};
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,9 @@ use serde_json::{Value, json};
 
 use super::{MAX_BYTES, Request as CoverageRequest, add, bounded, budget, digest, invalid};
 use crate::vapor::{BoundsSum, TransferBounds};
+
+mod wet_film;
+pub use wet_film::WetFilm;
 
 /// Portable complete moving-coverage experiment, independent of a body-model installation.
 pub const SCHEMA: &str = "ftx-vapor-coverage-history/1";
@@ -36,6 +40,10 @@ pub struct Policy {
     /// Total clipping/candidate/allocation operations across initial and accepted samples,
     /// in 1..=20000000. The remaining allowance is enforced inside the existing projection kernel.
     pub max_geometry_operations: usize,
+    /// Optional prescribed body-side liquid and supply, bound to the exact initial body mesh.
+    /// Missing data is not inferred; invalid data refuses this history independently of mechanics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wet_film: Option<WetFilm>,
 }
 
 impl Policy {
@@ -121,9 +129,13 @@ impl Request {
                 .saturating_add(sample.positions_m.len())
                 .saturating_add(sample.body_positions_m.len());
         }
-        if count > MAX_VERTICES {
+        let wet_scalars = self.policy.wet_film.as_ref().map_or(0, |_| {
+            wet_film::scalar_equivalents(self.initial.map.body_triangles.len())
+                .saturating_mul(self.samples.len().saturating_add(1))
+        });
+        if count.saturating_add(wet_scalars) > MAX_VERTICES {
             return Err(budget(
-                "vapor history exceeds two million retained vertices",
+                "vapor history exceeds two million retained vertices and wet-film scalar equivalents",
             ));
         }
         validate_path(self.path_sha256.as_deref())?;
@@ -191,25 +203,35 @@ pub(crate) struct History {
     time_s: f64,
     geometry_operations: usize,
     retained_vertices: usize,
+    retained_wet_film_scalars: usize,
     retained_bytes: usize,
     potential_energy_j: f64,
     potential_mass_kg: f64,
     bounds: BoundsSum,
+    wet_film: Option<wet_film::State>,
 }
 
 impl History {
     pub(crate) fn new(initial: CoverageRequest, policy: Policy) -> Result<Self, Refusal> {
         policy.validate()?;
+        let retained_wet_film_scalars = policy.wet_film.as_ref().map_or(0, |_| {
+            wet_film::scalar_equivalents(initial.map.body_triangles.len())
+        });
         let retained_vertices = initial
             .source
             .positions_m
             .len()
             .saturating_add(initial.map.body_positions_m.len());
-        if retained_vertices > MAX_VERTICES {
+        if retained_vertices.saturating_add(retained_wet_film_scalars) > MAX_VERTICES {
             return Err(budget(
                 "vapor history initial geometry exceeds retention budget",
             ));
         }
+        let wet_film = policy
+            .wet_film
+            .as_ref()
+            .map(|p| wet_film::State::new(p, &initial))
+            .transpose()?;
         let result = initial.evaluate_with_geometry_budget(policy.max_geometry_operations)?;
         let geometry_operations = operations(&result)?;
         // Use the canonical frozen request, including its verified initial body identity.
@@ -243,10 +265,12 @@ impl History {
             time_s: 0.0,
             geometry_operations,
             retained_vertices,
+            retained_wet_film_scalars,
             retained_bytes,
             potential_energy_j: 0.0,
             potential_mass_kg: 0.0,
             bounds: BoundsSum::new(),
+            wet_film,
         })
     }
 
@@ -265,7 +289,12 @@ impl History {
             .saturating_add(sample.positions_m.len())
             .saturating_add(sample.body_positions_m.len());
         let sample_bytes = bytes(&sample)?.saturating_mul(4);
-        if retained_vertices > MAX_VERTICES
+        let retained_wet_film_scalars =
+            self.retained_wet_film_scalars
+                .saturating_add(self.wet_film.as_ref().map_or(0, |_| {
+                    wet_film::scalar_equivalents(self.request.initial.map.body_triangles.len())
+                }));
+        if retained_vertices.saturating_add(retained_wet_film_scalars) > MAX_VERTICES
             || self.retained_bytes.saturating_add(sample_bytes) >= MAX_BYTES
         {
             return Err(budget(
@@ -354,12 +383,27 @@ impl History {
         }
         let mut total_bounds = self.bounds.clone();
         total_bounds.add_scaled(interval_bounds.value, 1., [energy, mass], &label);
-        let row = json!({"sample_index":self.rows.len(),"time_s":sample.time_s,"dt_s":dt,
+        let wet_film = self
+            .wet_film
+            .as_ref()
+            .map(|state| {
+                state.advance(
+                    &self.rows.last().unwrap_or(&self.initial)["result"],
+                    &result,
+                    self.request.policy.integration,
+                    dt,
+                )
+            })
+            .transpose()?;
+        let mut row = json!({"sample_index":self.rows.len(),"time_s":sample.time_s,"dt_s":dt,
             "positions_sha256":digest(&json!(sample.positions_m))?,
             "body_positions_sha256":digest(&json!(sample.body_positions_m))?,"result":result,
             "potential_energy_j":energy,"potential_mass_kg":mass,
             "reported_bounds":interval_bounds.json("potential_energy_j","potential_mass_kg"),
             "bounds_unavailable":interval_bounds.unavailable});
+        if let Some((_, receipt)) = &wet_film {
+            row["wet_film"] = receipt.clone();
+        }
         let retained_bytes = self
             .retained_bytes
             .saturating_add(sample_bytes)
@@ -372,10 +416,12 @@ impl History {
         // Commit only a complete accepted numerical observation; caller discards a failed history.
         self.geometry_operations = geometry_operations;
         self.retained_vertices = retained_vertices;
+        self.retained_wet_film_scalars = retained_wet_film_scalars;
         self.retained_bytes = retained_bytes;
         self.potential_energy_j = total_energy;
         self.potential_mass_kg = total_mass;
         self.bounds = total_bounds;
+        self.wet_film = wet_film.map(|(state, _)| state);
         self.time_s = sample.time_s;
         self.request.samples.push(sample);
         self.rows.push(row);
@@ -405,7 +451,7 @@ impl History {
                 "Complete source Ret endpoints propagate through both sampled endpoints of each interval with half its exact positive duration, then sum without an independence assumption. Time-zero bounds contribute to the first interval. Missing or unrepresentable endpoint ranges leave the affected interval and total ranges unavailable. These conditional ranges do not bound unsampled geometry, temporal quadrature, source SD/CV or physical model error."
             }
         };
-        let result = json!({"schema":"ftx-vapor-coverage-history-report/1",
+        let mut result = json!({"schema":"ftx-vapor-coverage-history-report/1",
         "request_sha256":digest(&request)?,
         "replay_request_json":serde_json::to_string(&self.request).map_err(|e| invalid(e.to_string()))?,
         "request":request,"path_sha256":self.request.path_sha256,
@@ -424,6 +470,13 @@ impl History {
             bounds_note,
             "Potential joules and kilograms are prescribed-reservoir quadrature, not actual evaporation, sweat supply, stored moisture, latent cooling or an error-bounded transport solution."
         ]});
+        if let Some(state) = &self.wet_film {
+            result["wet_film"] = state.report()?;
+            result["retained_wet_film_scalar_equivalents"] = json!(self.retained_wet_film_scalars);
+            result["notes"].as_array_mut().expect("history notes").push(json!(
+                "An explicit finite body wet film is accounted separately in wet_film. Its modeled covered evaporation and body-reservoir latent energy do not change the potential integrals or couple into textile temperature."
+            ));
+        }
         bounded(&result)?;
         Ok(result)
     }
@@ -432,6 +485,61 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_late_retention_refusal_does_not_consume_body_liquid_or_commit_history() {
+        let initial: CoverageRequest = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/vapor-coverage/layered.json"
+        )))
+        .unwrap();
+        let count = initial.map.body_triangles.len();
+        let policy = Policy {
+            schema: "ftx-motion-vapor-coverage/1".into(),
+            integration: Integration::RightEndpoint,
+            max_geometry_operations: 1_000_000,
+            wet_film: Some(WetFilm {
+                schema: "ftx-body-wet-film/1".into(),
+                body_mesh_sha256: initial.body_sha256().unwrap(),
+                source: "local:wet-film-transaction-test".into(),
+                basis:
+                    "Synthetic finite liquid for exact rollback; no sweat or garment measurement"
+                        .into(),
+                initial_liquid_mass_kg: vec![1e-9; count],
+                supply_rate_kg_s: vec![0.; count],
+            }),
+        };
+        let sample = Sample {
+            time_s: 1.,
+            positions_m: initial.source.positions_m.clone(),
+            body_positions_m: initial.map.body_positions_m.clone(),
+        };
+        let mut history = History::new(initial.clone(), policy.clone()).unwrap();
+        let liquid = history.wet_film.as_ref().unwrap().report().unwrap();
+        let original_bytes = history.retained_bytes;
+        let original_operations = history.geometry_operations;
+        let original_scalars = history.retained_wet_film_scalars;
+        // Admit the geometry/replay sample, then reject the larger evaluated row only after
+        // numerical water depletion has been computed. All state must remain pre-step.
+        history.retained_bytes = MAX_BYTES - bytes(&sample).unwrap() * 4 - 1;
+        let error = history.advance(sample.clone()).unwrap_err();
+        assert_eq!(error.code, ftx_core::RefusalCode::BudgetExceeded);
+        assert_eq!(history.wet_film.as_ref().unwrap().report().unwrap(), liquid);
+        assert_eq!(history.time_s, 0.);
+        assert_eq!(history.potential_mass_kg, 0.);
+        assert_eq!(history.geometry_operations, original_operations);
+        assert_eq!(history.retained_wet_film_scalars, original_scalars);
+        assert!(history.rows.is_empty());
+        assert!(history.request.samples.is_empty());
+        history.retained_bytes = original_bytes;
+        history.advance(sample.clone()).unwrap();
+        let mut uninterrupted = History::new(initial, policy).unwrap();
+        uninterrupted.advance(sample).unwrap();
+        assert_eq!(
+            history.finish(None).unwrap(),
+            uninterrupted.finish(None).unwrap()
+        );
+    }
 
     #[test]
     fn interval_arithmetic_retains_subnormal_transfer_or_refuses_its_loss() {

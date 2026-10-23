@@ -462,6 +462,164 @@ fn moving_layered_vapor_uses_actual_endpoint_geometry_and_canonical_source_repla
 }
 
 #[test]
+fn moving_wet_film_tracks_material_dependent_depletion_without_changing_mechanics() {
+    let form = form();
+    let body = body(&form);
+    let mut raw = vapor_pattern().raw().clone();
+    raw["fabric"]["material"]["record"]["properties"]["thermal_conductivity"] =
+        pattern().raw()["fabric"]["material"]["record"]["properties"]["thermal_conductivity"]
+            .clone();
+    let p = Pattern::new(raw);
+    let mut s = vapor_coverage_scenario();
+    s.motion.as_mut().unwrap().vapor_coverage_history = Some(
+        serde_json::from_value(json!({"schema":"ftx-motion-vapor-coverage/1",
+            "integration":"right_endpoint","max_geometry_operations":1_000_000}))
+        .unwrap(),
+    );
+    let mut baseline = Session::new(&s, &body).unwrap();
+    baseline.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let reference = baseline.evaluate(&p, |_| {}).unwrap();
+    let motion = &reference["motion"]["result"];
+    let potential = &motion["vapor_coverage_history"]["result"];
+    assert_eq!(motion["vapor_coverage_history"]["status"], "available");
+
+    // Calculate the higher-Ret alternative independently on the retained sewn geometry.
+    // Choose one finite film between the two demands: the lower resistance empties it,
+    // while the higher resistance leaves some water. There is no reset at keyframes.
+    let mut previous = 0.0;
+    let mut slower_demand = 0.0;
+    for row in potential["samples"].as_array().unwrap() {
+        let time = row["time_s"].as_f64().unwrap();
+        let rate: f64 = row["result"]["coverage"]["regions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                let body_area = r["body_area_m2"].as_f64().unwrap();
+                let cloth_area = r["layer_area_m2"][0].as_f64().unwrap();
+                1000.0 * body_area / (1.0 + 17.0 * body_area / cloth_area + 2.0) / 2_500_000.0
+            })
+            .sum();
+        slower_demand += rate * (time - previous);
+        previous = time;
+    }
+    let faster_demand = potential["totals"]["potential_mass_kg"].as_f64().unwrap();
+    assert!(slower_demand > 0.0 && slower_demand < faster_demand);
+    let initial_water = 0.5 * (slower_demand + faster_demand);
+    let mut policy = serde_json::to_value(
+        s.motion
+            .as_ref()
+            .unwrap()
+            .vapor_coverage_history
+            .as_ref()
+            .unwrap(),
+    )
+    .unwrap();
+    policy["wet_film"] = json!({"schema":"ftx-body-wet-film/1",
+        "body_mesh_sha256":reference["vapor_coverage"]["result"]["body_mesh_sha256"],
+        "source":"test:sewn-body-wet-film","basis":"Synthetic finite film on the selected body triangle; no wearer data",
+        "initial_liquid_mass_kg":[initial_water],"supply_rate_kg_s":[0.0]});
+    s.motion.as_mut().unwrap().vapor_coverage_history =
+        Some(serde_json::from_value(policy.clone()).unwrap());
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let faster = session.evaluate(&p, |_| {}).unwrap();
+    let slower = session
+        .evaluate(&changed(&p, "vapor_resistance", 17.0), |_| {})
+        .unwrap();
+    for result in [&faster, &slower] {
+        let current_motion = &result["motion"]["result"];
+        assert_eq!(result["motion"]["status"], "available");
+        assert_eq!(current_motion["samples"], motion["samples"]);
+        assert_eq!(
+            current_motion["vapor_coverage_history"]["status"],
+            "available"
+        );
+        assert_eq!(
+            result["metrics"]["cloth_mass_kg"],
+            reference["metrics"]["cloth_mass_kg"]
+        );
+        assert_eq!(
+            result["metrics"]["body_coverage_power_w"],
+            reference["metrics"]["body_coverage_power_w"]
+        );
+        assert_eq!(
+            result["metrics"]["independent_surface_power_w"],
+            reference["metrics"]["independent_surface_power_w"]
+        );
+        let history = &current_motion["vapor_coverage_history"]["result"];
+        assert_eq!(
+            history["wet_film"]["body_mesh_sha256"],
+            policy["wet_film"]["body_mesh_sha256"]
+        );
+        assert_eq!(history["wet_film"]["body"].as_array().unwrap().len(), 1);
+        assert_eq!(history["wet_film"]["textile_temperature_coupled"], false);
+        let mut remaining = initial_water;
+        let mut evaporated = 0.0;
+        for row in history["samples"].as_array().unwrap() {
+            let water = &row["wet_film"]["body"][0];
+            assert_eq!(water["body_triangle"], 0);
+            assert_eq!(water["starting_liquid_mass_kg"], remaining);
+            assert_eq!(water["supplied_mass_kg"], 0.0);
+            evaporated += water["evaporated_mass_kg"].as_f64().unwrap();
+            remaining = water["remaining_liquid_mass_kg"].as_f64().unwrap();
+            assert!(water["mass_balance_error_kg"].as_f64().unwrap().abs() < 1e-18);
+        }
+        let water = &history["wet_film"]["totals"];
+        assert!((evaporated + remaining - initial_water).abs() < 1e-18);
+        assert!((water["evaporated_mass_kg"].as_f64().unwrap() - evaporated).abs() < 1e-18);
+        assert!(
+            (water["body_reservoir_latent_energy_j"].as_f64().unwrap() - evaporated * 2_500_000.0)
+                .abs()
+                < 1e-12
+        );
+        assert_eq!(water["remaining_liquid_mass_kg"], remaining);
+        let replay: ftx_drape::vapor::coverage::history::Request =
+            serde_json::from_str(history["replay_request_json"].as_str().unwrap()).unwrap();
+        assert_eq!(replay.evaluate().unwrap(), *history);
+    }
+    let faster_water =
+        &faster["motion"]["result"]["vapor_coverage_history"]["result"]["wet_film"]["totals"];
+    let slower_water =
+        &slower["motion"]["result"]["vapor_coverage_history"]["result"]["wet_film"]["totals"];
+    assert!((faster_water["evaporated_mass_kg"].as_f64().unwrap() - initial_water).abs() < 1e-18);
+    assert_eq!(faster_water["remaining_liquid_mass_kg"], 0.0);
+    assert!((slower_water["evaporated_mass_kg"].as_f64().unwrap() - slower_demand).abs() < 1e-18);
+    assert!(slower_water["remaining_liquid_mass_kg"].as_f64().unwrap() > 0.0);
+
+    // Water is tied to the initial selected body topology. Bad water inputs refuse that
+    // history alone; instantaneous vapor, dry heat, and all accepted mechanics survive.
+    for (field, value) in [
+        ("body_mesh_sha256", json!("0".repeat(64))),
+        (
+            "initial_liquid_mass_kg",
+            json!([initial_water, initial_water]),
+        ),
+    ] {
+        let mut bad_policy = policy.clone();
+        bad_policy["wet_film"][field] = value;
+        let mut invalid = s.clone();
+        invalid.motion.as_mut().unwrap().vapor_coverage_history =
+            Some(serde_json::from_value(bad_policy).unwrap());
+        let mut rejected = Session::new(&invalid, &body).unwrap();
+        rejected.set_motion_path(Ok(path(&invalid, &body))).unwrap();
+        let result = rejected.evaluate(&p, |_| {}).unwrap();
+        assert_eq!(result["motion"]["status"], "available");
+        assert_eq!(result["motion"]["result"]["samples"], motion["samples"]);
+        assert_eq!(
+            result["motion"]["result"]["vapor_coverage_history"]["status"],
+            "refused"
+        );
+        assert!(result["motion"]["result"]["vapor_coverage_history"]["result"].is_null());
+        for endpoint in result["motion"]["result"]["keyframes"].as_array().unwrap() {
+            assert_eq!(endpoint["vapor_coverage"]["status"], "available");
+            assert_eq!(endpoint["surface"]["status"], "available");
+            assert_eq!(endpoint["coverage"]["status"], "available");
+        }
+    }
+}
+
+#[test]
 fn moving_layered_vapor_refusals_preserve_motion_and_reserve_retained_geometry() {
     let form = form();
     let body = body(&form);

@@ -135,6 +135,7 @@ fn history_request(initial: Request) -> history::Request {
             schema: "ftx-motion-vapor-coverage/1".into(),
             integration: history::Integration::RightEndpoint,
             max_geometry_operations: 1_000_000,
+            wet_film: None,
         },
         initial,
         samples: vec![
@@ -151,6 +152,281 @@ fn history_request(initial: Request) -> history::Request {
         ],
         path_sha256: Some(sha256_hex(b"declared synthetic prescribed path")),
     }
+}
+
+fn wet_film(initial: &Request, mass: Vec<f64>, supply: Vec<f64>) -> history::WetFilm {
+    history::WetFilm {
+        schema: "ftx-body-wet-film/1".into(),
+        body_mesh_sha256: sha256_hex(&serde_json::to_vec(&json!({
+            "positions_m":initial.map.body_positions_m,"triangles":initial.map.body_triangles
+        })).unwrap()),
+        source: "local:synthetic-body-wet-film".into(),
+        basis: "Authored body-side liquid and constant supply for analytical software tests; no measured sweating".into(),
+        initial_liquid_mass_kg: mass,
+        supply_rate_kg_s: supply,
+    }
+}
+
+#[test]
+fn wet_film_depletes_finite_liquid_and_supplied_water_without_changing_potential() {
+    let mut input = history_request(request());
+    let potential = input.evaluate().unwrap();
+    assert!(potential.get("wet_film").is_none());
+    assert!(potential["request"]["policy"].get("wet_film").is_none());
+    input.policy.wet_film = Some(wet_film(&input.initial, vec![3e-6], vec![2e-6]));
+    let report = input.evaluate().unwrap();
+    assert_eq!(report["totals"], potential["totals"]);
+    assert_eq!(report["initial"], potential["initial"]);
+    assert_eq!(
+        report["retained_vertex_samples"],
+        potential["retained_vertex_samples"]
+    );
+    assert_eq!(report["retained_wet_film_scalar_equivalents"], 48);
+    assert_eq!(report["latent_heat_coupled"], false);
+    assert_eq!(report["wet_film"]["textile_temperature_coupled"], false);
+    assert_eq!(report["wet_film"]["uncertainty_propagated"], false);
+    assert!(report["wet_film"].get("reported_bounds").is_none());
+    let mass_rate = 1000. / 12. * 0.5 / 2_500_000.;
+    let first = &report["samples"][0]["wet_film"]["totals"];
+    close(&first["supplied_mass_kg"], 0.1 * 2e-6);
+    close(&first["evaporated_mass_kg"], mass_rate * 0.1);
+    close(
+        &first["remaining_liquid_mass_kg"],
+        3e-6 + 0.1 * 2e-6 - mass_rate * 0.1,
+    );
+    close(&first["unmet_demand_mass_kg"], 0.);
+    let total = &report["wet_film"]["totals"];
+    let demand = mass_rate * (0.1 + 2. * 0.15);
+    close(&total["starting_liquid_mass_kg"], 3e-6);
+    close(&total["supplied_mass_kg"], 0.25 * 2e-6);
+    close(&total["potential_evaporation_mass_kg"], demand);
+    close(&total["evaporated_mass_kg"], 3.5e-6);
+    close(&total["remaining_liquid_mass_kg"], 0.);
+    close(&total["unmet_demand_mass_kg"], demand - 3.5e-6);
+    close(
+        &total["body_reservoir_latent_energy_j"],
+        3.5e-6 * 2_500_000.,
+    );
+    assert!(total["mass_balance_error_kg"].as_f64().unwrap().abs() < 1e-20);
+    assert!(total["demand_balance_error_kg"].as_f64().unwrap().abs() < 1e-20);
+    for (actual, original) in report["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(potential["samples"].as_array().unwrap())
+    {
+        assert_eq!(actual["result"], original["result"]);
+        assert_eq!(actual["potential_energy_j"], original["potential_energy_j"]);
+    }
+    let replay: history::Request =
+        serde_json::from_str(report["replay_request_json"].as_str().unwrap()).unwrap();
+    assert_eq!(replay.evaluate().unwrap(), report);
+}
+
+#[test]
+fn wet_film_supply_surplus_and_dry_reservoirs_obey_the_same_covered_demand() {
+    let mut input = history_request(request());
+    input.policy.wet_film = Some(wet_film(&input.initial, vec![0.], vec![6e-5]));
+    let report = input.evaluate().unwrap();
+    let demand = 1000. / 12. * (0.5 * 0.1 + 1. * 0.15) / 2_500_000.;
+    let total = &report["wet_film"]["totals"];
+    close(&total["evaporated_mass_kg"], demand);
+    close(&total["remaining_liquid_mass_kg"], 6e-5 * 0.25 - demand);
+    close(&total["unmet_demand_mass_kg"], 0.);
+    input.policy.wet_film.as_mut().unwrap().supply_rate_kg_s[0] = 0.;
+    let dry = input.evaluate().unwrap();
+    close(&dry["wet_film"]["totals"]["evaporated_mass_kg"], 0.);
+    close(&dry["wet_film"]["totals"]["unmet_demand_mass_kg"], demand);
+    close(
+        &dry["wet_film"]["totals"]["body_reservoir_latent_energy_j"],
+        0.,
+    );
+    assert_eq!(dry["totals"], report["totals"]);
+}
+
+#[test]
+fn wet_film_follows_body_triangles_across_coverage_changes_and_distinct_latent_heats() {
+    let mut initial = request();
+    initial.map.body_positions_m.extend([
+        Vec3::new(2., 0., 0.),
+        Vec3::new(3., 0., 0.),
+        Vec3::new(2., 1., 0.),
+    ]);
+    initial.map.body_triangles.push([3, 4, 5]);
+    let mut other = initial.conditions.boundaries[0];
+    other.latent_heat_j_kg = 1_250_000.;
+    initial.conditions.boundaries.push(other);
+    let policy = wet_film(&initial, vec![1e-6, 0.], vec![1e-5, 2e-6]);
+    initial.conditions.body_mesh_sha256 = Some(policy.body_mesh_sha256.clone());
+    let mut input = history_request(initial);
+    input.policy.wet_film = Some(policy);
+    for (i, sample) in input.samples.iter_mut().enumerate() {
+        sample.body_positions_m = input.initial.map.body_positions_m.clone();
+        sample.positions_m = input
+            .initial
+            .source
+            .positions_m
+            .iter()
+            .map(|p| Vec3::new(p.x + 2. * i as f64, p.y, p.z))
+            .collect();
+    }
+    let report = input.evaluate().unwrap();
+    let body = &report["wet_film"]["body"];
+    let first_evaporation = 1000. / 12. * 0.5 / 2_500_000. * 0.1;
+    close(&body[0]["evaporated_mass_kg"], first_evaporation);
+    close(
+        &body[0]["remaining_liquid_mass_kg"],
+        1e-6 + 1e-5 * 0.25 - first_evaporation,
+    );
+    close(&body[1]["evaporated_mass_kg"], 2e-6 * 0.25);
+    close(&body[1]["remaining_liquid_mass_kg"], 0.);
+    close(
+        &report["samples"][0]["wet_film"]["body"][1]["remaining_liquid_mass_kg"],
+        2e-6 * 0.1,
+    );
+    close(
+        &report["samples"][1]["wet_film"]["body"][0]["potential_evaporation_mass_kg"],
+        0.,
+    );
+    close(
+        &report["wet_film"]["totals"]["body_reservoir_latent_energy_j"],
+        first_evaporation * 2_500_000. + 2e-6 * 0.25 * 1_250_000.,
+    );
+    for sample in report["samples"].as_array().unwrap() {
+        close(&sample["result"]["coverage"]["uncovered_area_m2"], 0.5);
+        assert_eq!(sample["wet_film"]["body"].as_array().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn wet_film_sums_fractional_layer_paths_before_consuming_one_body_reservoir() {
+    let mut input = history_request(request());
+    input.policy.wet_film = Some(wet_film(&input.initial, vec![1e-6], vec![0.]));
+    for (i, sample) in input.samples.iter_mut().enumerate() {
+        sample.body_positions_m = input.initial.map.body_positions_m.clone();
+        sample.positions_m = input.initial.source.positions_m.clone();
+        for p in &mut sample.positions_m[3..] {
+            p.x += if i == 0 { 0.5 } else { 2. };
+        }
+    }
+    let report = input.evaluate().unwrap();
+    assert!(
+        report["samples"][0]["result"]["coverage"]["regions"]
+            .as_array()
+            .unwrap()
+            .len()
+            > 1
+    );
+    // The first frame has 0.125 m² with both layers (Ret=12), and 0.375 m² with only
+    // lining (Ret=7); the second has 0.5 m² of lining only. One triangle owns one film.
+    let demand = (1000. * (0.125 / 12. + 0.375 / 7.) * 0.1 + 1000. * 0.5 / 7. * 0.15) / 2_500_000.;
+    close(
+        &report["wet_film"]["totals"]["potential_evaporation_mass_kg"],
+        demand,
+    );
+    close(&report["wet_film"]["totals"]["evaporated_mass_kg"], 1e-6);
+    close(
+        &report["wet_film"]["totals"]["body_reservoir_latent_energy_j"],
+        2.5,
+    );
+    close(
+        &report["samples"][1]["wet_film"]["totals"]["evaporated_mass_kg"],
+        0.,
+    );
+}
+
+#[test]
+fn wet_film_material_substitution_and_declared_quadrature_change_depletion() {
+    let mut input = history_request(request());
+    input.policy.wet_film = Some(wet_film(&input.initial, vec![6e-6], vec![0.]));
+    let right = input.evaluate().unwrap();
+    close(&right["wet_film"]["totals"]["remaining_liquid_mass_kg"], 0.);
+    input.policy.integration = history::Integration::CompositeTrapezoid;
+    let trapezoid = input.evaluate().unwrap();
+    let demand = 1000. / 12. * (0.5 * 0.1 + 0.75 * 0.15) / 2_500_000.;
+    close(
+        &trapezoid["wet_film"]["totals"]["evaporated_mass_kg"],
+        demand,
+    );
+    close(
+        &trapezoid["wet_film"]["totals"]["remaining_liquid_mass_kg"],
+        6e-6 - demand,
+    );
+    input.initial.source.materials[1] = material("higher-ret-shell", 15.);
+    let changed = input.evaluate().unwrap();
+    close(
+        &changed["wet_film"]["totals"]["evaporated_mass_kg"],
+        demand / 2.,
+    );
+    close(
+        &changed["wet_film"]["totals"]["remaining_liquid_mass_kg"],
+        6e-6 - demand / 2.,
+    );
+    assert_eq!(
+        changed["request"]["samples"],
+        trapezoid["request"]["samples"]
+    );
+    assert_eq!(
+        changed["request"]["policy"]["wet_film"],
+        trapezoid["request"]["policy"]["wet_film"]
+    );
+    assert_ne!(
+        changed["initial"]["result"]["source_sha256"],
+        trapezoid["initial"]["result"]["source_sha256"]
+    );
+}
+
+#[test]
+fn wet_film_refuses_unknown_water_and_stale_initial_body_before_geometry_work() {
+    let mut original = history_request(request());
+    original.policy.wet_film = Some(wet_film(&original.initial, vec![1e-6], vec![0.]));
+    for fault in [
+        "schema", "hash", "source", "basis", "count", "negative", "nan", "supply", "overflow",
+    ] {
+        let mut input = original.clone();
+        let film = input.policy.wet_film.as_mut().unwrap();
+        match fault {
+            "schema" => film.schema = "unknown".into(),
+            "hash" => film.body_mesh_sha256 = "0".repeat(64),
+            "source" => film.source.clear(),
+            "basis" => film.basis = " ".repeat(8),
+            "count" => film.initial_liquid_mass_kg.clear(),
+            "negative" => film.initial_liquid_mass_kg[0] = -1.,
+            "nan" => film.supply_rate_kg_s[0] = f64::NAN,
+            "supply" => film.supply_rate_kg_s.push(0.),
+            "overflow" => {
+                film.initial_liquid_mass_kg[0] = f64::MAX;
+                film.supply_rate_kg_s[0] = f64::MAX;
+            }
+            _ => unreachable!(),
+        }
+        assert!(input.evaluate().is_err(), "{fault}");
+    }
+    let mut stale = original.clone();
+    stale.initial.map.body_positions_m[1].x += 0.01;
+    assert!(
+        stale
+            .evaluate()
+            .unwrap_err()
+            .message
+            .contains("wet film body_mesh_sha256")
+    );
+    let mut malformed = original;
+    malformed.policy.max_geometry_operations = 1;
+    malformed
+        .policy
+        .wet_film
+        .as_mut()
+        .unwrap()
+        .initial_liquid_mass_kg
+        .clear();
+    assert!(
+        malformed
+            .evaluate()
+            .unwrap_err()
+            .message
+            .contains("wet film needs")
+    );
 }
 
 #[test]

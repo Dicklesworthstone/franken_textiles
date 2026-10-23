@@ -109,6 +109,87 @@ fn portable_moving_coverage_honors_the_declared_quadrature_and_exact_replay() {
 }
 
 #[test]
+fn portable_wet_film_keeps_mass_with_body_identity_and_declared_quadrature() {
+    let initial: Value = serde_json::from_str(include_str!(
+        "../../../examples/vapor-coverage/layered.json"
+    ))
+    .unwrap();
+    let coverage: ftx_drape::vapor::coverage::Request =
+        serde_json::from_value(initial.clone()).unwrap();
+    let initial_report = coverage.evaluate().unwrap();
+    let mut cloth = initial["source"]["positions_m"].clone();
+    let mut body = initial["map"]["body_positions_m"].clone();
+    for positions in [&mut cloth, &mut body] {
+        for vertex in positions.as_array_mut().unwrap() {
+            vertex[0] = json!(2.0 * vertex[0].as_f64().unwrap());
+        }
+    }
+    let rate = 1000.0 * 0.002 / (2.0 * 11.27 + 5.0) / 2_500_000.0;
+    for (rule, factor) in [("right_endpoint", 4.0), ("composite_trapezoid", 3.0)] {
+        let mut input = json!({"schema":"ftx-vapor-coverage-history/1",
+            "policy":{"schema":"ftx-motion-vapor-coverage/1","integration":rule,
+                "max_geometry_operations":10000,"wet_film":{"schema":"ftx-body-wet-film/1",
+                    "body_mesh_sha256":initial_report["body_mesh_sha256"],
+                    "source":"test:portable-body-film","basis":"Synthetic finite wet film; no wearer measurement",
+                    "initial_liquid_mass_kg":[10.0*rate],"supply_rate_kg_s":[0.0]}},
+            "initial":initial,"samples":[{"time_s":2,"positions_m":cloth,"body_positions_m":body}]});
+        let request: ftx_drape::vapor::coverage::history::Request =
+            serde_json::from_value(input.clone()).unwrap();
+        let output = thermal::vapor_coverage_history(&input.to_string()).unwrap();
+        assert_eq!(
+            output,
+            serde_json::to_string(&request.evaluate().unwrap()).unwrap()
+        );
+        let report: Value = serde_json::from_str(&output).unwrap();
+        let water = &report["wet_film"]["totals"];
+        assert!((water["evaporated_mass_kg"].as_f64().unwrap() - factor * rate).abs() < 1e-18);
+        assert!(
+            (water["remaining_liquid_mass_kg"].as_f64().unwrap() - (10.0 - factor) * rate).abs()
+                < 1e-18
+        );
+        assert!(
+            (water["body_reservoir_latent_energy_j"].as_f64().unwrap()
+                - factor * rate * 2_500_000.0)
+                .abs()
+                < 1e-12
+        );
+        assert_eq!(
+            report["wet_film"]["body_mesh_sha256"],
+            initial_report["body_mesh_sha256"]
+        );
+        assert_ne!(
+            report["samples"][0]["result"]["body_mesh_sha256"],
+            initial_report["body_mesh_sha256"]
+        );
+        assert_eq!(report["wet_film"]["textile_temperature_coupled"], false);
+        assert_eq!(
+            thermal::vapor_coverage_history(report["replay_request_json"].as_str().unwrap())
+                .unwrap(),
+            output
+        );
+        for (field, invalid) in [
+            ("source", json!("")),
+            ("initial_liquid_mass_kg", json!([-1.0])),
+            ("supply_rate_kg_s", json!([0.0, 0.0])),
+            ("body_mesh_sha256", json!("0".repeat(64))),
+        ] {
+            let mut bad = input.clone();
+            bad["policy"]["wet_film"][field] = invalid;
+            assert!(
+                thermal::vapor_coverage_history(&bad.to_string()).is_err(),
+                "{field}"
+            );
+        }
+        input["policy"].as_object_mut().unwrap().remove("wet_film");
+        let unbounded: Value =
+            serde_json::from_str(&thermal::vapor_coverage_history(&input.to_string()).unwrap())
+                .unwrap();
+        assert_eq!(report["totals"], unbounded["totals"]);
+        assert!(unbounded.get("wet_film").is_none());
+    }
+}
+
+#[test]
 fn portable_entry_returns_the_exact_shared_report_and_frozen_offline_replay() {
     let request: Request = serde_json::from_str(INPUT).unwrap();
     let report = request

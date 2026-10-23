@@ -181,6 +181,84 @@ fn both_binaries_replay_moving_layered_potential_with_the_exact_shared_integral(
 }
 
 #[test]
+fn both_binaries_conserve_finite_wet_film_across_moving_coverage_and_replay() {
+    let initial: Value = serde_json::from_str(include_str!(
+        "../../../examples/vapor-coverage/layered.json"
+    ))
+    .unwrap();
+    let coverage: ftx_drape::vapor::coverage::Request =
+        serde_json::from_value(initial.clone()).unwrap();
+    let initial_report = coverage.evaluate().unwrap();
+    let mut cloth = initial["source"]["positions_m"].clone();
+    let mut body = initial["map"]["body_positions_m"].clone();
+    for positions in [&mut cloth, &mut body] {
+        for vertex in positions.as_array_mut().unwrap() {
+            vertex[0] = json!(2.0 * vertex[0].as_f64().unwrap());
+        }
+    }
+    // Two measured-Ret layers share ONE synthetic body-side reservoir. Its initial water
+    // and supply are deliberately below the independent series-network potential demand.
+    let rate = 1000.0 * 0.002 / (2.0 * 11.27 + 5.0) / 2_500_000.0;
+    let input = json!({"schema":"ftx-vapor-coverage-history/1",
+        "policy":{"schema":"ftx-motion-vapor-coverage/1","integration":"right_endpoint",
+            "max_geometry_operations":10000,"wet_film":{"schema":"ftx-body-wet-film/1",
+                "body_mesh_sha256":initial_report["body_mesh_sha256"],
+                "source":"test:finite-body-film","basis":"Synthetic finite film and constant supply; no wearer measurement",
+                "initial_liquid_mass_kg":[0.5*rate],"supply_rate_kg_s":[0.25*rate]}},
+        "samples":[
+            {"time_s":1,"positions_m":initial["source"]["positions_m"],"body_positions_m":initial["map"]["body_positions_m"]},
+            {"time_s":3,"positions_m":cloth,"body_positions_m":body}],"initial":initial});
+    let request: ftx_drape::vapor::coverage::history::Request =
+        serde_json::from_value(input.clone()).unwrap();
+    let expected = request.evaluate().unwrap();
+    let water = &expected["wet_film"]["totals"];
+    assert!((water["evaporated_mass_kg"].as_f64().unwrap() - 1.25 * rate).abs() < 1e-18);
+    assert!((water["supplied_mass_kg"].as_f64().unwrap() - 0.75 * rate).abs() < 1e-18);
+    assert_eq!(water["remaining_liquid_mass_kg"], 0.0);
+    assert!(water["mass_balance_error_kg"].as_f64().unwrap().abs() < 1e-18);
+    assert!(
+        (water["body_reservoir_latent_energy_j"].as_f64().unwrap() - 1.25 * rate * 2_500_000.0)
+            .abs()
+            < 1e-12
+    );
+    assert_eq!(expected["wet_film"]["body"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        expected["samples"][1]["wet_film"]["body"][0]["starting_liquid_mass_kg"],
+        0.0
+    );
+    assert_eq!(expected["wet_film"]["textile_temperature_coupled"], false);
+    let replay = expected["replay_request_json"].as_str().unwrap();
+    let mut stale = input.clone();
+    stale["policy"]["wet_film"]["body_mesh_sha256"] = json!("0".repeat(64));
+    let mut malformed = input.clone();
+    malformed["policy"]["wet_film"]["initial_liquid_mass_kg"] = json!([rate, rate]);
+    for main in [false, true] {
+        for document in [input.to_string(), replay.into()] {
+            assert_eq!(
+                success(&invoke_action(
+                    main,
+                    "thermal-vapor-coverage-history",
+                    &document,
+                    &[]
+                )),
+                expected
+            );
+        }
+        for invalid in [&stale, &malformed] {
+            refusal(
+                main,
+                &invoke_action(
+                    main,
+                    "thermal-vapor-coverage-history",
+                    &invalid.to_string(),
+                    &[],
+                ),
+            );
+        }
+    }
+}
+
+#[test]
 fn both_binaries_match_core_preserve_source_conditions_and_replay_offline() {
     let request: Request = serde_json::from_str(INPUT).unwrap();
     let expected = serde_json::to_value(
