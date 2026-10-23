@@ -2965,6 +2965,31 @@ See [material-screening-and-studies.md](docs/material-screening-and-studies.md) 
 
 ---
 
+### 25.63 Finite body water through moving material-bound vapor paths
+
+**Delivered software (`ftx-wf1`, a bounded part of `ftx-vc2`).** The existing moving vapor history
+accepts sourced initial liquid and constant supply on each selected body triangle, bound to the exact
+initial body geometry. It reuses canonical Ret transport and accepted cloth/body projections; a
+material change automatically changes potential demand and resulting depletion. Regional paths sum
+before consuming one reservoir per body triangle, so layers and moving overlap cannot duplicate
+water. The declared interval-average demand and supply approximation yields finite modeled covered
+evaporation, remaining water and unmet demand through either supported quadrature.
+
+Per-step and cumulative balances retain signed conservation residuals and latent energy supplied by
+the prescribed body reservoir. Full source-bearing state survives native/portable replay and browser
+inspection. Invalid identities, nonfinite arithmetic or exhausted retention budgets refuse the
+complete history without erasing independent mechanics, dry heat or instantaneous vapor results.
+Independent analytical and real sewn-motion tests check depletion, source substitution, changing
+coverage, nonuniform boundaries, carryover and transactional rejection.
+
+This does not couple latent energy into textile temperature or infer textile moisture laws,
+physiological sweating, bare-body transfer, water redistribution or whole-wearer heat loss. Ret ranges
+remain conditional potential ranges; uncertainty in the evolving film is not propagated. Source-qualified
+textile storage/sorption, conservative temperature feedback and held-out wet/dry garment experiments
+remain open under `ftx-vc2`/`ftx-tmc`. See [vapor-coverage.md](docs/vapor-coverage.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

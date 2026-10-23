@@ -9,6 +9,65 @@ const PATTERN: &str =
 const STOCK: &str = include_str!("../../../tests/fixtures/materials/synthetic-stock-request.json");
 
 #[test]
+fn portable_split_supplier_study_replays_complete_purchases_and_retains_budget_proof_status() {
+    let pattern = include_str!("../../../examples/mixed-cutting/pattern.json");
+    let mut input: Value = serde_json::from_str(include_str!(
+        "../../../examples/mixed-cutting/split-orders-study.json"
+    ))
+    .unwrap();
+    for budget in [1, 10000] {
+        input["cutting_job"]["purchasing"]["market"]["split_orders"]["max_search_nodes"] =
+            json!(budget);
+        let typed: Request = serde_json::from_value(input.clone()).unwrap();
+        let expected = serde_json::to_value(
+            typed
+                .evaluate(&Pattern::from_json(pattern).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let report: Value =
+            serde_json::from_str(&materials::study(pattern, &input.to_string()).unwrap()).unwrap();
+        assert_eq!(report, expected);
+        assert_eq!(
+            report["comparison"]["frontier"],
+            json!(["mixed-shell-and-lining"])
+        );
+        let job = &report["alternatives"][0]["cutting_job"]["result"];
+        assert_eq!(job["inventory"].as_array().unwrap().len(), 15);
+        let price = &job["purchasing"];
+        assert_eq!(price["schema"], "ftx-cutting-job-procurement/1");
+        assert_eq!(price["complete_offer_coverage"], true);
+        assert_eq!(price["order_allocation_optimality_proven"], budget > 1);
+        assert_eq!(
+            price["least_observed_independent_order_total"].is_null(),
+            budget == 1
+        );
+        let expected_cost = if budget == 1 { 8.0 } else { 7.09 };
+        assert!(
+            (price["selected_observed_order_total"].as_f64().unwrap() - expected_cost).abs()
+                < 1e-12
+        );
+        let replay: Value = serde_json::from_str(
+            &ftx_wasm::manufacturing::cut_job(
+                job["pattern_json"].as_str().unwrap(),
+                job["replay_request_json"].as_str().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&replay, job);
+    }
+    input["cutting_job"]["purchasing"]["finite_bindings"] = json!([]);
+    let incomplete: Value =
+        serde_json::from_str(&materials::study(pattern, &input.to_string()).unwrap()).unwrap();
+    assert_eq!(incomplete["comparison"]["frontier"], json!([]));
+    let price = &incomplete["alternatives"][0]["cutting_job"]["result"]["purchasing"];
+    assert_eq!(price["complete_offer_coverage"], false);
+    assert!(price["selected_observed_order_total"].is_null());
+    assert_eq!(price["roll"]["result"]["complete_offer_coverage"], true);
+}
+
+#[test]
 fn portable_mixed_job_replays_every_physical_part_and_refuses_an_unmatched_material() {
     let pattern = include_str!("../../../examples/mixed-cutting/pattern.json");
     let input = include_str!("../../../examples/mixed-cutting/study.json");

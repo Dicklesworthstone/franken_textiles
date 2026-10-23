@@ -58,6 +58,82 @@ fn row<'a>(report: &'a Value, key: &str) -> &'a Value {
 }
 
 #[test]
+fn selected_purchase_objectives_admit_complete_incumbents_and_keep_least_cost_unknown() {
+    let mut source: Value =
+        serde_json::from_str(include_str!("../../../examples/mixed-cutting/pattern.json")).unwrap();
+    let lining = source["pieces"][1].clone();
+    source["fabric"] = lining["fabric"].clone();
+    source["pieces"] = json!([lining]);
+    let pattern = Pattern::new(source);
+    let mut request: Value = serde_json::from_str(include_str!(
+        "../../../examples/mixed-cutting/split-orders-study.json"
+    ))
+    .unwrap();
+    let job = request
+        .as_object_mut()
+        .unwrap()
+        .remove("cutting_job")
+        .unwrap();
+    request["cutting"] = job["roll"].clone();
+    request["purchasing"] =
+        json!({"market":job["purchasing"]["market"],"quotes":job["purchasing"]["quotes"]});
+    request["purchasing"]["market"]["split_orders"]["max_search_nodes"] = json!(1);
+    request["comparison"] = json!({"basis":"nominal","required_consumers":["purchasing"],
+        "objectives":[{"metric":"selected_observed_order_cost","direction":"minimize"}],"constraints":[]});
+    let report = evaluate(&serde_json::from_value(request.clone()).unwrap(), &pattern);
+    let selected = &report["alternatives"][0];
+    assert_eq!(
+        selected["purchasing"]["result"]["schema"],
+        "ftx-cut-procurement/3"
+    );
+    assert_eq!(selected["metrics"]["selected_observed_order_total"], 1.0);
+    assert!(selected["metrics"]["least_observed_independent_order_total"].is_null());
+    assert_eq!(
+        selected["purchasing"]["result"]["order_allocation_optimality_proven"],
+        false
+    );
+    assert_eq!(
+        report["comparison"]["frontier"],
+        json!(["mixed-shell-and-lining"])
+    );
+    assert_eq!(
+        report["comparison"]["alternatives"][0]["readings"]["selected_observed_order_cost"]["value"],
+        1.0
+    );
+    request["comparison"]["objectives"][0]["metric"] = json!("observed_order_cost");
+    let unproved = evaluate(&serde_json::from_value(request.clone()).unwrap(), &pattern);
+    assert_eq!(unproved["comparison"]["frontier"], json!([]));
+    assert_eq!(unproved["alternatives"], report["alternatives"]);
+    request["purchasing"]["market"]["split_orders"]["max_search_nodes"] = json!(10000);
+    let proved = evaluate(&serde_json::from_value(request.clone()).unwrap(), &pattern);
+    assert_eq!(
+        proved["comparison"]["frontier"],
+        json!(["mixed-shell-and-lining"])
+    );
+    let metrics = &proved["alternatives"][0]["metrics"];
+    assert!((metrics["selected_observed_order_total"].as_f64().unwrap() - 0.09).abs() < 1e-12);
+    assert_eq!(
+        metrics["selected_observed_order_total"],
+        metrics["least_observed_independent_order_total"]
+    );
+    request["comparison"]["objectives"][0]["metric"] = json!("selected_observed_order_cost");
+    for quote in request["purchasing"]["quotes"]["quotes"]
+        .as_array_mut()
+        .unwrap()
+    {
+        quote["available"] = json!(false);
+    }
+    let missing = evaluate(&serde_json::from_value(request).unwrap(), &pattern);
+    assert_eq!(missing["comparison"]["frontier"], json!([]));
+    assert_eq!(
+        missing["alternatives"][0]["purchasing"]["result"]["complete_offer_coverage"],
+        false
+    );
+    assert!(missing["alternatives"][0]["metrics"]["selected_observed_order_total"].is_null());
+    assert_eq!(missing["alternatives"][0]["cutting"], selected["cutting"]);
+}
+
+#[test]
 fn material_changes_reach_real_markers_seams_mass_and_whole_orders_without_geometry_changes() {
     let p = Pattern::from_json(PATTERN).unwrap();
     let original = p.raw().clone();

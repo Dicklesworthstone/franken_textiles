@@ -310,8 +310,14 @@ source, layer and boundary policy. Results retain coverage and potential transfe
 <code>thermal-vapor-coverage-history</code> replay download. Use <code>motion_covered_vapor_potential_energy_j</code>
 or <code>motion_covered_vapor_potential_mass_kg</code> as objectives, or require <code>motion_vapor_coverage</code>;
 comparison requires the entire declared body domain to be covered at every retained state.
-The integral uses each new sample's flow over its preceding interval and depends on motion resolution.
-It supplies no moisture state, actual sweating or latent cooling.</p>
+The potential integral follows the declared temporal rule and depends on motion resolution.</p>
+<p class="note">For finite body-side water, add optional <code>wet_film</code> to that history policy with
+<code>schema: "ftx-body-wet-film/1"</code>, the exact initial <code>body_mesh_sha256</code>, a <code>source</code>
+and model <code>basis</code>, and one <code>initial_liquid_mass_kg</code> and <code>supply_rate_kg_s</code> value
+per selected body triangle. The same policy works in standalone history replay. Each triangle retains its liquid
+through pose and coverage changes; modeled evaporation consumes only available liquid. Results show liquid supply,
+depletion, unmet demand and latent energy supplied by the prescribed body reservoir. These inputs do not infer
+sweating, bare-body transfer, wet textile properties or latent feedback into textile temperatures.</p>
 <p class="note">Optional <code>motion</code> in the scenario (<code>ftx-drape-motion/1</code>) continues that same sewn cloth through
 declared time/arm-angle keyframes, preserving velocities and material history. It uses the selected shape without refitting.
 Each interval follows checked linear body-vertex chords, not a certified anatomical joint path. The report retains every accepted

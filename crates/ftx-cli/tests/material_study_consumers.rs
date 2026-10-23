@@ -52,6 +52,104 @@ fn run(main: bool, dir: &Path) -> Value {
 }
 
 #[test]
+fn both_native_study_commands_preserve_split_purchase_incumbents_and_replay_orders() {
+    let pattern = include_str!("../../../examples/mixed-cutting/pattern.json");
+    let mut input: Value = serde_json::from_str(include_str!(
+        "../../../examples/mixed-cutting/split-orders-study.json"
+    ))
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-split-study-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), pattern).unwrap();
+    for budget in [1, 10000] {
+        input["cutting_job"]["purchasing"]["market"]["split_orders"]["max_search_nodes"] =
+            json!(budget);
+        let text = input.to_string();
+        fs::write(dir.join("study.json"), &text).unwrap();
+        let typed: Request = serde_json::from_value(input.clone()).unwrap();
+        let expected = serde_json::to_value(
+            typed
+                .evaluate(&Pattern::from_json(pattern).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let job = &expected["alternatives"][0]["cutting_job"]["result"];
+        fs::write(
+            dir.join("job-pattern.json"),
+            job["pattern_json"].as_str().unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("job-request.json"),
+            job["replay_request_json"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            expected["comparison"]["frontier"],
+            json!(["mixed-shell-and-lining"])
+        );
+        let price = &job["purchasing"];
+        assert_eq!(price["schema"], "ftx-cutting-job-procurement/1");
+        assert_eq!(price["complete_offer_coverage"], true);
+        assert_eq!(price["order_allocation_optimality_proven"], budget > 1);
+        assert_eq!(
+            price["least_observed_independent_order_total"].is_null(),
+            budget == 1
+        );
+        let expected_cost = if budget == 1 { 8.0 } else { 7.09 };
+        assert!(
+            (price["selected_observed_order_total"].as_f64().unwrap() - expected_cost).abs()
+                < 1e-12
+        );
+        for main in [false, true] {
+            assert_eq!(run(main, &dir), expected);
+            let mut command = Command::new(if main {
+                env!("CARGO_BIN_EXE_ftx")
+            } else {
+                env!("CARGO_BIN_EXE_ftx-materials")
+            });
+            command.current_dir(&dir);
+            if main {
+                command.args(["--json", "materials"]);
+            }
+            let output = command
+                .args(["cut-job", "job-pattern.json", "job-request.json"])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let replay: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(replay.get("result").unwrap_or(&replay), job);
+        }
+        assert_eq!(fs::read_to_string(dir.join("study.json")).unwrap(), text);
+    }
+    input["cutting_job"]["purchasing"]["finite_bindings"] = json!([]);
+    fs::write(dir.join("study.json"), input.to_string()).unwrap();
+    for main in [false, true] {
+        let incomplete = run(main, &dir);
+        assert_eq!(incomplete["comparison"]["frontier"], json!([]));
+        let price = &incomplete["alternatives"][0]["cutting_job"]["result"]["purchasing"];
+        assert_eq!(price["complete_offer_coverage"], false);
+        assert!(price["selected_observed_order_total"].is_null());
+        assert_eq!(price["roll"]["result"]["complete_offer_coverage"], true);
+    }
+    assert_eq!(
+        fs::read_to_string(dir.join("pattern.json")).unwrap(),
+        pattern
+    );
+}
+
+#[test]
 fn both_study_commands_and_cut_job_replay_allocate_the_complete_mixed_inventory() {
     let pattern = include_str!("../../../examples/mixed-cutting/pattern.json");
     let input = include_str!("../../../examples/mixed-cutting/study.json");

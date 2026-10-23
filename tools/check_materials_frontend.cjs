@@ -53,6 +53,24 @@ function vaporHistoryReport(integration='right_endpoint') {
         potential_energy_j:trapezoid?18.75:7.5,potential_mass_kg:trapezoid?0.0000075:0.000003}
     ],latent_heat_coupled:false,physical_validation_claim:false};
 }
+function wetFilmHistoryReport() {
+  const r=vaporHistoryReport();
+  const first={starting_liquid_mass_kg:0.000003,supplied_mass_kg:0.00000025,
+    potential_evaporation_mass_kg:0.000004,evaporated_mass_kg:0.00000325,unmet_demand_mass_kg:0.00000075,
+    remaining_liquid_mass_kg:0,body_reservoir_latent_energy_j:8.125,mass_balance_error_kg:0};
+  const last={starting_liquid_mass_kg:0,supplied_mass_kg:0.00000075,
+    potential_evaporation_mass_kg:0.000003,evaporated_mass_kg:0.00000075,unmet_demand_mass_kg:0.00000225,
+    remaining_liquid_mass_kg:0,body_reservoir_latent_energy_j:1.875,mass_balance_error_kg:0};
+  const totals={starting_liquid_mass_kg:0.000003,supplied_mass_kg:0.000001,
+    potential_evaporation_mass_kg:0.000007,evaporated_mass_kg:0.000004,unmet_demand_mass_kg:0.000003,
+    remaining_liquid_mass_kg:0,body_reservoir_latent_energy_j:10,mass_balance_error_kg:0};
+  r.wet_film={source:'<literal wet-film acquisition>',basis:'Explicit synthetic body-film model',
+    body_mesh_sha256:'b'.repeat(64),textile_temperature_coupled:false,uncertainty_propagated:false,
+    body:[{body_triangle:0,...totals}],totals};
+  for (const [i,totals] of [first,last].entries()) r.samples[i].wet_film={body:[{body_triangle:0,...totals}],totals};
+  r.replay_request_json=' {"schema":"ftx-vapor-coverage-history/1","policy":{"wet_film":{"initial_liquid_mass_kg":[0.0000030]}},"value":1.0,"x":-0.0}\n';
+  return r;
+}
 function calibrationReport(mode = 'nonlinear', admission = false, check = true) {
   if (mode === 'membrane_plasticity') return permanentCalibration('ACCEPTED', admission, check);
   if (mode === 'clamped_strip') return stripCalibration('ACCEPTED', admission, check);
@@ -831,7 +849,8 @@ test('vapor calculation works without a pattern and preserves unrelated inspecte
 test('standalone coverage and history replays retain source bytes, units, integration rules and initial samples', async () => {
   const cases=[['thermal_vapor_coverage',vaporCoverageReport()],
     ['thermal_vapor_coverage_history',vaporHistoryReport()],
-    ['thermal_vapor_coverage_history',vaporHistoryReport('composite_trapezoid')]];
+    ['thermal_vapor_coverage_history',vaporHistoryReport('composite_trapezoid')],
+    ['thermal_vapor_coverage_history',wetFilmHistoryReport()]];
   for (const [engine,report] of cases) {
     const p=await pageModule(), raw=` ${JSON.stringify(report)}\n`;
     const w=await workerModule({bindings:{default:()=>Promise.resolve(),[engine]:()=>raw}});
@@ -875,6 +894,21 @@ test('standalone coverage and history replays retain source bytes, units, integr
       const d=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('Replay: moving vapor sources'));
       d.open=true; d.handlers.toggle(); assert.match(visibleText(d),/history-lock/);
       assert.match(visibleText(d),/motion-lock/); assert.match(visibleText(d),/Original <measurement>/);
+      if (report.wet_film) {
+        const water=table('Replay: finite body water and latent energy');
+        assert.deepEqual(plain(water.children.slice(2).map(row=>row.children.slice(1).map(n=>n.textContent))),[
+          ['0.000003','kg'],['0.000001','kg'],['0.000007','kg'],['0.000004','kg'],
+          ['0.000003','kg'],['0','kg'],['10','J'],['0','kg']]);
+        const trace=table('Replay: body water at accepted motion samples');
+        assert.deepEqual(plain(trace.children[2].children.map(n=>n.textContent)),
+          ['0.25','2.5e-7','0.00000325','7.5e-7','0','8.125','0']);
+        assert.deepEqual(plain(trace.children[3].children.map(n=>n.textContent)),
+          ['1','7.5e-7','7.5e-7','0.00000225','0','1.875','0']);
+        const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.includes('body water source'));
+        source.open=true; source.handlers.toggle(); assert.match(visibleText(source),/<literal wet-film acquisition>/);
+        assert.match(visibleText(s),/prescribed body reservoir supplies the reported latent energy/);
+        assert.match(visibleText(s),/Textile temperatures, garment mass and wet-material properties are unchanged/);
+      } else assert.equal(table('Replay: finite body water and latent energy'),undefined);
     }
     for (const [name,text] of [['vapor-report.json',raw],['vapor-request.json',report.replay_request_json],
       ['vapor-replay-request.json',report.replay_request_json]]) {
@@ -3704,6 +3738,31 @@ test('moving layered vapor displays accepted coverage, exact replay and independ
   assert.match(visibleText(table('A: moving layered vapor potential')),/late geometry budget exhausted/);
   assert.equal(table('A: moving layered vapor potential').children[2].children.slice(1).every(n=>n.textContent==='Unknown'),true);
   assert.ok(table('A: endpoint vapor potentials — covered layers'));
+  assert.equal(descendants(s).some(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json'),false);
+});
+
+test('material scenarios retain finite body water separately from potential demand and withdraw stale ledgers', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
+  const report=scenarioReport(), history=wetFilmHistoryReport();
+  report.scenario.scenario={motion:{vapor_coverage_history:{wet_film:{}}}};
+  const initial=report.simulations.find(row=>row.key==='A').evaluation.result;
+  initial.motion=outcome({duration_s:1,trials:2,samples:[{},{}],keyframes:[],vapor_coverage_history:outcome(history)});
+  p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives');
+  const table=label=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===label);
+  assert.deepEqual(plain(table('A: moving layered vapor potential').children[2].children.slice(3,5).map(n=>n.textContent)),
+    ['17.5','0.000007']);
+  const water=table('A: finite body water and latent energy');
+  assert.equal(water.children[5].children[1].textContent,'0.000004');
+  assert.equal(water.children[8].children[1].textContent,'10');
+  assert.equal(table('B: finite body water and latent energy'),undefined);
+  const link=descendants(s).find(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json');
+  assert.equal(await p.blobs.get(link.href).text(),history.replay_request_json);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+  await p.e.scenario.onclick();
+  initial.motion.result.vapor_coverage_history=refused('body water is bound to a different initial mesh'); p.emit(report);
+  assert.equal(table('A: finite body water and latent energy'),undefined);
+  assert.match(visibleText(table('A: moving layered vapor potential')),/different initial mesh/);
   assert.equal(descendants(s).some(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json'),false);
 });
 

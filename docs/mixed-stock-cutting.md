@@ -168,6 +168,37 @@ The selected total does not infer shipping discounts, reserve stock or
 authorize a purchase. All alternatives use the same dated inputs; no wall-clock source refresh occurs
 inside a solve.
 
+### Run a complete split-supplier purchase
+
+[split-orders-study.json](../examples/mixed-cutting/split-orders-study.json) uses the same miniature
+pattern with five garment copies: ten mirrored shell panels occupy one finite hide, and five unfolded
+linings occupy two continuous 0.029 m roll markers. The fixture contains exact material and physical
+stock locks, a single synthetic dated market, two suppliers with 0.03 m each, and a more expensive
+whole-order fallback. All geometry, prices and stock observations are synthetic software examples.
+
+```sh
+ftx-materials study examples/mixed-cutting/pattern.json examples/mixed-cutting/split-orders-study.json
+ftx materials study examples/mixed-cutting/pattern.json examples/mixed-cutting/split-orders-study.json --json
+```
+
+The declared 10,000-unit search assigns one marker to each limited supplier. Each 0.029 m marker
+rounds to a 0.03 m purchase; the two orders cost 0.03 USD and 0.06 USD. Adding the indivisible 7 USD
+hide gives a complete selected and proved least cost of **7.09 USD**. The same whole-order observations
+exclude both limited suppliers from supplying the combined 0.058 m requirement; their selected subset
+orders are independently evaluated with the canonical quantity, increment and continuity rules.
+
+Change only `cutting_job.purchasing.market.split_orders.max_search_nodes` to `1` to retain the
+whole-order fallback. Both markers then share one 0.1 m minimum order costing 1 USD, for a complete
+selected cost of **8 USD** including the hide. `complete_offer_coverage` remains true,
+`order_allocation_optimality_proven` becomes false, and the proved least total remains unknown.
+The declared `cutting_job_selected_order_cost` objective can compare that complete feasible order;
+`cutting_job_observed_order_cost` would exclude it until a minimum is proved.
+
+Each report retains `pattern_json` and `replay_request_json` for exact `cut-job` replay, including the
+source quote book, chosen search budget and finite bindings. Removing the hide's purchasing binding
+keeps the geometric inventory and roll allocation inspectable but makes the complete purchase cost
+unknown. A remaining roll subtotal is never reported as a complete garment purchase.
+
 For `/2` alternatives with no engaged finite route, the finite purchasing outcome is `not_requested`.
 Its dormant bindings remain in the replay request and their offers remain excluded from roll supply.
 Only engaged orders contribute to the complete total; inactive inventory is neither charged nor

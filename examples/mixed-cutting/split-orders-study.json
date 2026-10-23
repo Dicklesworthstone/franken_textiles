@@ -1,0 +1,58 @@
+{
+  "schema": "ftx-material-study/1",
+  "variants": [{"key":"mixed-shell-and-lining","changes":{"schema":"ftx-material-bindings/1"}}],
+  "cutting_job": {
+    "schema": "ftx-cutting-job/1",
+    "routes": [{"piece":"shell","stock":"finite_stock"},{"piece":"lining","stock":"roll"}],
+    "roll": {"copies":5,"maximum_marker_length_m":0.029,"gap_mm":2,"edge_margin_mm":2,"end_margin_mm":2},
+    "finite_stock": {
+      "schema": "ftx-finite-stock-request/1",
+      "stocks": [{
+        "id": "hide-001",
+        "material": {"id":"mixed-example-hide","allow_estimates":true,
+          "record":{"id":"mixed-example-hide","name":"Synthetic finite hide","form":"hide",
+            "properties":{"areal_density":{"value":0.5,"unit":"kg/m2","evidence":"estimate","source":"test","method":"Synthetic numerical observation"}},
+            "sources":{"test":{"reference":"test:mixed-cutting","accessed_on":"2026-10-22","note":"Synthetic material and geometry for software checks only"}}}},
+        "outline_mm": [[0,0],[100,0],[100,100],[0,100]],
+        "defects_mm": [[[75,75],[85,75],[85,85],[75,85]]],
+        "grain_mm": [[0,0],[0,10]],
+        "geometry_source": {"reference":"test:mixed-cutting-stock","accessed_on":"2026-10-22","note":"Synthetic physical boundary and defect; not a hide scan"}
+      }],
+      "options":{"copies":5,"gap_mm":2,"boundary_margin_mm":2,"step_mm":2,"work_limit":1000000}
+    },
+    "purchasing": {
+      "market":{"currency":"USD","region":"test","quality":"synthetic","terms":"no-shipping",
+        "as_of":"2026-10-22","max_age_days":0,"require_observed_quantity":true,
+        "split_orders":{"schema":"ftx-cut-order-allocation/1","max_search_nodes":10000}},
+      "finite_bindings":[{"stock_id":"hide-001","stock_sha256":"89a8bef76a6be6bf542373cb6e5a0498855e2e292e6aa63f888a454faf1af021","offer_ids":["item/hide-001"]}],
+      "quotes":{"schema":"ftx-textile-quotes/1","quotes":[
+        {"offer_id":"item/hide-001","material_id":"mixed-example-hide","material_sha256":"1e5cc5cb9f031e91ce720d6cc950e6563cfead7c09eb746157e93ccd70392106",
+          "supplier":"Synthetic hide supplier","sku":"hide-001","price":7,"quantity":0.01,"unit":"square_meter",
+          "minimum_quantity":0.01,"order_increment":0.01,"available_quantity":0.01,
+          "currency":"USD","region":"test","quality":"synthetic","terms":"no-shipping","observed_on":"2026-10-22","available":true,
+          "source":"test:mixed-split-order-hide","source_sha256":"1111111111111111111111111111111111111111111111111111111111111111"},
+        {"offer_id":"roll/a","material_id":"mixed-example-lining","material_sha256":"d76cf28025f07ace1517b119ecbcdc12f166bd5b0e87e6a3eef98f46b23d3435",
+          "supplier":"Synthetic roll supplier A","sku":"lining-a","price":1,"quantity":1,"unit":"linear_meter",
+          "minimum_quantity":0.01,"order_increment":0.01,"available_quantity":0.03,"maximum_continuous_quantity":0.029,
+          "currency":"USD","region":"test","quality":"synthetic","terms":"no-shipping","observed_on":"2026-10-22","available":true,
+          "source":"test:mixed-split-order-roll-a","source_sha256":"2222222222222222222222222222222222222222222222222222222222222222"},
+        {"offer_id":"roll/b","material_id":"mixed-example-lining","material_sha256":"d76cf28025f07ace1517b119ecbcdc12f166bd5b0e87e6a3eef98f46b23d3435",
+          "supplier":"Synthetic roll supplier B","sku":"lining-b","price":2,"quantity":1,"unit":"linear_meter",
+          "minimum_quantity":0.01,"order_increment":0.01,"available_quantity":0.03,"maximum_continuous_quantity":0.029,
+          "currency":"USD","region":"test","quality":"synthetic","terms":"no-shipping","observed_on":"2026-10-22","available":true,
+          "source":"test:mixed-split-order-roll-b","source_sha256":"3333333333333333333333333333333333333333333333333333333333333333"},
+        {"offer_id":"roll/whole","material_id":"mixed-example-lining","material_sha256":"d76cf28025f07ace1517b119ecbcdc12f166bd5b0e87e6a3eef98f46b23d3435",
+          "supplier":"Synthetic whole-order supplier","sku":"lining-whole","price":10,"quantity":1,"unit":"linear_meter",
+          "minimum_quantity":0.1,"order_increment":0.1,"available_quantity":2,"maximum_continuous_quantity":0.029,
+          "currency":"USD","region":"test","quality":"synthetic","terms":"no-shipping","observed_on":"2026-10-22","available":true,
+          "source":"test:mixed-split-order-whole","source_sha256":"4444444444444444444444444444444444444444444444444444444444444444"}
+      ]}
+    }
+  },
+  "comparison": {
+    "basis":"nominal",
+    "required_consumers":["cutting_job","cutting_job_purchasing"],
+    "objectives":[{"metric":"cutting_job_selected_order_cost","direction":"minimize"}],
+    "constraints":[]
+  }
+}

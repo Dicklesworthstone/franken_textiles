@@ -464,6 +464,36 @@ function motionSamples(parent, key, motion) {
     }
   });
 }
+function wetFilmResult(parent, key, history) {
+  const film = history.wet_film;
+  if (!film) return;
+  const totals = table(parent, `${key}: finite body water and latent energy`, ["Quantity", "Value", "Unit"]);
+  for (const [label, field, unit] of [
+    ["Initial body-side liquid", "starting_liquid_mass_kg", "kg"],
+    ["Prescribed liquid supplied", "supplied_mass_kg", "kg"],
+    ["Covered-path potential demand", "potential_evaporation_mass_kg", "kg"],
+    ["Modeled evaporation from available liquid", "evaporated_mass_kg", "kg"],
+    ["Unmet covered-path demand", "unmet_demand_mass_kg", "kg"],
+    ["Remaining body-side liquid", "remaining_liquid_mass_kg", "kg"],
+    ["Latent energy supplied by prescribed body reservoir", "body_reservoir_latent_energy_j", "J"],
+    ["Liquid mass balance residual", "mass_balance_error_kg", "kg"]
+  ]) cells(totals, [label, metric(film.totals?.[field]), unit]);
+  const note = document.createElement("p");
+  note.textContent = "Liquid belongs to the same body triangles throughout motion. Each interval uses its declared average covered-path demand and constant liquid supply; " +
+    "evaporation is limited by the liquid available to each triangle. Uncovered transfer remains unknown. " +
+    "The prescribed body reservoir supplies the reported latent energy. Textile temperatures, garment mass and wet-material properties are unchanged by this body-film model. " +
+    "The source and model assumptions are retained below; this is not a sweat-production or wearer-comfort prediction.";
+  parent.append(note);
+  const samples = table(parent, `${key}: body water at accepted motion samples`, ["Time (s)", "Supplied liquid (kg)",
+    "Modeled evaporation (kg)", "Unmet demand (kg)", "Remaining liquid (kg)", "Body latent energy (J)", "Mass balance residual (kg)"]);
+  for (const sample of history.samples || []) {
+    const water = sample.wet_film?.totals;
+    cells(samples, [metric(sample.time_s), metric(water?.supplied_mass_kg), metric(water?.evaporated_mass_kg),
+      metric(water?.unmet_demand_mass_kg), metric(water?.remaining_liquid_mass_kg),
+      metric(water?.body_reservoir_latent_energy_j), metric(water?.mass_balance_error_kg)]);
+  }
+  detail(parent, `${key}: body water source, model assumptions and per-triangle ledger`, film);
+}
 function vaporHistoryResult(parent, key, history, statusLabel, refusal) {
   const summary = table(parent, `${key}: moving layered vapor potential`, ["History", "Duration (s)",
     "Accepted samples", "Potential energy (J)", "Potential water mass (kg)", "Integration rule"]);
@@ -479,7 +509,9 @@ function vaporHistoryResult(parent, key, history, statusLabel, refusal) {
   note.textContent = "Each accepted body/cloth sample recomputes the covered layer paths under the fixed declared vapor boundaries. " +
     integration + "refining motion samples can change the integral. " +
     "Uncovered body transfer remains unknown, and complete-domain comparisons require coverage at every sample. " +
-    "These potentials do not model water supply, actual evaporation, moisture storage or cooling supplied to dry heat.";
+    (history?.wet_film ?
+      "Potential transfer and the finite body-water ledger below retain separate meanings; the latter limits modeled evaporation by the supplied liquid." :
+      "These potentials do not model water supply, actual evaporation, moisture storage or cooling supplied to dry heat.");
   parent.append(note);
   vaporBoundsNote(parent, history?.totals, `${key}: moving vapor source bounds`);
   detail(parent, `${key}: moving vapor sources, sample coverage and exact replay (display only)`,
@@ -496,6 +528,7 @@ function vaporHistoryResult(parent, key, history, statusLabel, refusal) {
       initial ? "Initial only" : vaporMetric(sample, "potential_energy_j"),
       initial ? "Initial only" : vaporMetric(sample, "potential_mass_kg")]);
   }
+  wetFilmResult(parent, key, history);
 }
 function motionVaporComparison(op, parent, key, index, motion, dependency, requested) {
   const output = motion?.vapor_coverage_history;
@@ -849,6 +882,7 @@ function vaporResult(parent, r) {
     vaporHistoryResult(parent, "Replay", r, "Available");
     return { schema: r.schema, request_sha256: r.request_sha256, path_sha256: r.path_sha256,
       integration: r.integration, latent_heat_coupled: r.latent_heat_coupled,
+      ...(r.wet_film ? { body_wet_film: "Available", textile_temperature_coupled: r.wet_film.textile_temperature_coupled } : {}),
       physical_validation_claim: r.physical_validation_claim,
       next: "Download the exact report, original input and frozen replay request. Replay it in this panel without a body model." };
   }

@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 const PATTERN: &str = include_str!("../../../examples/mixed-cutting/pattern.json");
 const STUDY: &str = include_str!("../../../examples/mixed-cutting/study.json");
+const SPLIT_STUDY: &str = include_str!("../../../examples/mixed-cutting/split-orders-study.json");
 
 fn inputs() -> (Pattern, job::Request) {
     let study: material_study::Request = serde_json::from_str(STUDY).unwrap();
@@ -231,6 +232,177 @@ fn complete_same_market_job_cost_counts_each_roll_order_and_used_hide_once() {
                 .build(&Pattern::from_json(&plan.pattern_json).unwrap())
                 .unwrap()
         )
+    );
+}
+
+#[test]
+fn split_suppliers_keep_complete_job_incumbents_separate_from_proved_minimum_cost() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let study: material_study::Request = serde_json::from_str(SPLIT_STUDY).unwrap();
+    let mut request = study.cutting_job.unwrap();
+    let exhaustive = request.build(&pattern).unwrap();
+    assert_eq!(exhaustive.inventory.len(), 15);
+    assert_eq!(exhaustive.roll.as_ref().unwrap().rolls.len(), 2);
+    let optimum = exhaustive.purchasing.as_ref().unwrap();
+    assert_eq!(optimum.schema, "ftx-cutting-job-procurement/1");
+    assert!(optimum.complete_offer_coverage && optimum.complete_observed_quantity_coverage);
+    near(optimum.selected_observed_order_total.unwrap(), 7.09);
+    near(
+        optimum.least_observed_independent_order_total.unwrap(),
+        7.09,
+    );
+    assert!(optimum.order_allocation_optimality_proven);
+    let roll = value(&optimum.roll);
+    let allocation = &roll["result"]["material_orders"][0]["allocation"];
+    let orders = allocation["selected_orders"].as_array().unwrap();
+    assert_eq!(orders.len(), 2);
+    assert_eq!(orders[0]["offer"]["quote"]["offer_id"], "roll/a");
+    assert_eq!(orders[1]["offer"]["quote"]["offer_id"], "roll/b");
+    for order in orders {
+        near(order["offer"]["order_quantity"].as_f64().unwrap(), 0.03);
+        assert_eq!(order["roll_indices"].as_array().unwrap().len(), 1);
+        assert_eq!(order["offer"]["quantity_sufficiency_observed"], true);
+    }
+    assert_ne!(orders[0]["roll_indices"], orders[1]["roll_indices"]);
+    assert_eq!(
+        allocation["whole_order_sample"]["excluded_offers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    request
+        .purchasing
+        .as_mut()
+        .unwrap()
+        .market
+        .split_orders
+        .as_mut()
+        .unwrap()
+        .max_search_nodes = 1;
+    let bounded = request.build(&pattern).unwrap();
+    assert_eq!(bounded.inventory, exhaustive.inventory);
+    assert_eq!(value(&bounded.roll), value(&exhaustive.roll));
+    assert_eq!(
+        value(&bounded.finite_stock),
+        value(&exhaustive.finite_stock)
+    );
+    let selected = bounded.purchasing.as_ref().unwrap();
+    assert!(selected.complete_offer_coverage && selected.complete_observed_quantity_coverage);
+    near(selected.selected_observed_order_total.unwrap(), 8.0);
+    assert!(selected.least_observed_independent_order_total.is_none());
+    assert!(!selected.order_allocation_optimality_proven);
+    assert_eq!(value(&selected.roll)["result"]["budget_exhausted"], true);
+    assert_eq!(
+        value(&selected.roll)["result"]["material_orders"][0]["allocation"]["selected_orders"][0]["roll_indices"],
+        json!([0, 1])
+    );
+    let replay: job::Request = serde_json::from_str(&bounded.replay_request_json).unwrap();
+    assert_eq!(
+        value(&bounded),
+        value(
+            &replay
+                .build(&Pattern::from_json(&bounded.pattern_json).unwrap())
+                .unwrap()
+        )
+    );
+
+    // Either missing physical-hide evidence or missing roll offers invalidates the whole-job
+    // cost. A valid counterpart remains inspectable, never relabeled as the complete purchase.
+    for finite_missing in [true, false] {
+        let mut missing = request.clone();
+        let purchasing = missing.purchasing.as_mut().unwrap();
+        if finite_missing {
+            purchasing.finite_bindings.clear();
+        } else {
+            purchasing
+                .quotes
+                .quotes
+                .retain(|q| q.offer_id.starts_with("item/"));
+        }
+        let result = missing.build(&pattern).unwrap();
+        assert_eq!(result.inventory, bounded.inventory);
+        let price = result.purchasing.as_ref().unwrap();
+        assert!(!price.complete_offer_coverage && !price.complete_observed_quantity_coverage);
+        assert!(price.selected_observed_order_total.is_none());
+        assert!(price.least_observed_independent_order_total.is_none());
+        assert!(!price.order_allocation_optimality_proven);
+        if finite_missing {
+            assert_eq!(
+                value(&price.roll)["result"]["selected_observed_order_total"],
+                1.0
+            );
+        } else {
+            assert_eq!(
+                value(&price.finite_stock)["result"]["least_observed_independent_order_total"],
+                7.0
+            );
+        }
+    }
+}
+
+#[test]
+fn studies_can_compare_complete_split_purchases_without_claiming_unproved_least_cost() {
+    let pattern = Pattern::from_json(PATTERN).unwrap();
+    let mut request: Value = serde_json::from_str(SPLIT_STUDY).unwrap();
+    request["cutting_job"]["purchasing"]["market"]["split_orders"]["max_search_nodes"] = json!(1);
+    let evaluate = |request: &Value| {
+        value(
+            &serde_json::from_value::<material_study::Request>(request.clone())
+                .unwrap()
+                .evaluate(&pattern)
+                .unwrap(),
+        )
+    };
+    let feasible = evaluate(&request);
+    assert_eq!(
+        feasible["alternatives"][0]["metrics"]["cutting_job_selected_order_cost"],
+        8.0
+    );
+    assert!(feasible["alternatives"][0]["metrics"]["cutting_job_observed_order_cost"].is_null());
+    assert_eq!(
+        feasible["comparison"]["frontier"],
+        json!(["mixed-shell-and-lining"])
+    );
+    assert_eq!(
+        feasible["comparison"]["alternatives"][0]["readings"]["cutting_job_selected_order_cost"]["value"],
+        8.0
+    );
+    request["comparison"]["objectives"][0]["metric"] = json!("cutting_job_observed_order_cost");
+    let unproved = evaluate(&request);
+    assert_eq!(unproved["alternatives"], feasible["alternatives"]);
+    assert_eq!(unproved["comparison"]["frontier"], json!([]));
+
+    request["cutting_job"]["purchasing"]["market"]["split_orders"]["max_search_nodes"] =
+        json!(10000);
+    let proved = evaluate(&request);
+    assert_eq!(
+        proved["comparison"]["frontier"],
+        json!(["mixed-shell-and-lining"])
+    );
+    near(
+        proved["alternatives"][0]["metrics"]["cutting_job_observed_order_cost"]
+            .as_f64()
+            .unwrap(),
+        7.09,
+    );
+    assert_eq!(
+        proved["alternatives"][0]["metrics"]["cutting_job_observed_order_cost"],
+        proved["alternatives"][0]["metrics"]["cutting_job_selected_order_cost"]
+    );
+    request["comparison"]["objectives"][0]["metric"] = json!("cutting_job_selected_order_cost");
+    request["cutting_job"]["purchasing"]["finite_bindings"] = json!([]);
+    let incomplete = evaluate(&request);
+    assert_eq!(incomplete["comparison"]["frontier"], json!([]));
+    assert!(incomplete["alternatives"][0]["metrics"]["cutting_job_selected_order_cost"].is_null());
+    assert_eq!(
+        incomplete["alternatives"][0]["cutting_job"]["status"],
+        "available"
+    );
+    assert_eq!(
+        incomplete["alternatives"][0]["cutting_job"]["result"]["purchasing"]["roll"]["result"]["complete_offer_coverage"],
+        true
     );
 }
 
