@@ -103,10 +103,7 @@ fn changed(pattern: &Pattern, key: &str, value: f64) -> Pattern {
     Pattern::new(raw)
 }
 
-#[test]
-fn vapor_substitution_uses_current_sewn_geometry_without_dry_heat_or_storage() {
-    let form = form();
-    let body = body(&form);
+fn vapor_pattern() -> Pattern {
     let mut raw = pattern().raw().clone();
     raw["fabric"]["material"]["record"]["properties"]
         .as_object_mut()
@@ -115,7 +112,14 @@ fn vapor_substitution_uses_current_sewn_geometry_without_dry_heat_or_storage() {
     raw["fabric"]["material"]["record"]["properties"]["vapor_resistance"] = json!({
         "value":7.,"unit":"m2*Pa/W","source":"test","evidence":"estimate",
         "method":"Synthetic software gate; not measured textile data"});
-    let p = Pattern::new(raw);
+    Pattern::new(raw)
+}
+
+#[test]
+fn vapor_substitution_uses_current_sewn_geometry_without_dry_heat_or_storage() {
+    let form = form();
+    let body = body(&form);
+    let p = vapor_pattern();
     let mut s = scenario();
     s.vapor_surface = Some(
         serde_json::from_value(json!({
@@ -321,6 +325,230 @@ fn vapor_substitution_uses_current_sewn_geometry_without_dry_heat_or_storage() {
             .contains("reserved session"),
         "{refusal}"
     );
+}
+
+fn vapor_coverage_scenario() -> Scenario {
+    let mut s = motion_scenario();
+    s.vapor_coverage = Some(
+        serde_json::from_value(json!({
+            "body_triangle_ids":[0],"instance_layers":{"band":"shell"},
+            "settings":{"max_distance_m":0.08,"min_normal_cosine":0.1,
+                "separation_tolerance_m":0.00001,"interfaces":[]},
+            "conditions":{"boundaries":[{
+                "inside_vapor_pressure_pa":2000.,"outside_vapor_pressure_pa":1000.,
+                "inside_film_resistance_m2_pa_w":1.,"outside_film_resistance_m2_pa_w":2.,
+                "latent_heat_j_kg":2_500_000.}]}}))
+        .unwrap(),
+    );
+    s
+}
+
+#[test]
+fn moving_layered_vapor_uses_actual_endpoint_geometry_and_canonical_source_replay() {
+    use ftx_drape::vapor::coverage::Request;
+
+    let form = form();
+    let body = body(&form);
+    let s = vapor_coverage_scenario();
+    let p = vapor_pattern();
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let result = session.evaluate(&p, |_| {}).unwrap();
+    let initial = &result["vapor_coverage"]["result"];
+    assert_eq!(result["vapor_coverage"]["status"], "available");
+    assert_eq!(result["motion"]["status"], "available");
+    let motion = &result["motion"]["result"];
+    assert!(
+        motion["vapor_basis"]
+            .as_str()
+            .unwrap()
+            .contains("snapshots")
+    );
+    for endpoint in motion["keyframes"].as_array().unwrap() {
+        let sample = &motion["samples"][endpoint["sample_index"].as_u64().unwrap() as usize];
+        let vapor = &endpoint["vapor_coverage"];
+        assert_eq!(vapor["status"], "available", "{vapor}");
+        assert_eq!(endpoint["surface"]["status"], "refused");
+        assert_eq!(endpoint["coverage"]["status"], "refused");
+        let report = &vapor["result"];
+        let frozen = &report["request"];
+        assert_eq!(frozen["source"]["positions_m"], sample["positions_m"]);
+        assert_eq!(
+            frozen["map"]["body_positions_m"],
+            sample["body_positions_m"]
+        );
+        assert_eq!(frozen["map"]["body_triangles"], json!([form.triangles[0]]));
+        assert_ne!(frozen["source"]["positions_m"], result["positions_m"]);
+        assert_ne!(frozen["map"]["body_positions_m"], json!(form.vertices));
+        assert_ne!(report["request_sha256"], initial["request_sha256"]);
+        assert_ne!(report["body_mesh_sha256"], initial["body_mesh_sha256"]);
+        assert_eq!(
+            frozen["source"]["materials"],
+            initial["request"]["source"]["materials"]
+        );
+        assert_eq!(
+            frozen["source"]["patches"],
+            initial["request"]["source"]["patches"]
+        );
+        let replay: Request =
+            serde_json::from_str(report["replay_request_json"].as_str().unwrap()).unwrap();
+        replay
+            .source
+            .matches_material(&result["drape"]["material"])
+            .unwrap();
+        assert_eq!(replay.evaluate().unwrap(), *report);
+        let mut wrong_protocol = replay.clone();
+        wrong_protocol.conditions.required_method = Some("different source acquisition".into());
+        assert!(wrong_protocol.evaluate().is_err());
+
+        // Independent resistance/area answer, summed over disjoint BODY regions. The actual
+        // curved cloth area, rather than reference or projected area, scales each source Ret.
+        let expected: f64 = report["coverage"]["regions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|region| {
+                let body_area = region["body_area_m2"].as_f64().unwrap();
+                let cloth_area = region["layer_area_m2"][0].as_f64().unwrap();
+                1000. * body_area / (1. + 7. * body_area / cloth_area + 2.)
+            })
+            .sum();
+        assert!(expected > 0.0);
+        let actual = report["coverage"]["covered_potential_heat_flow_w"]
+            .as_f64()
+            .unwrap();
+        assert!((actual - expected).abs() < 1e-12);
+        let mass = report["coverage"]["covered_potential_mass_flow_kg_s"]
+            .as_f64()
+            .unwrap();
+        assert!((mass - expected / 2_500_000.).abs() < 1e-18);
+
+        let mut stale = replay;
+        stale.source.materials[0]
+            .record
+            .as_mut()
+            .unwrap()
+            .properties
+            .get_mut("vapor_resistance")
+            .unwrap()
+            .value = 8.;
+        assert!(stale.evaluate().is_err());
+    }
+    let substituted = session
+        .evaluate(&changed(&p, "vapor_resistance", 17.), |_| {})
+        .unwrap();
+    assert_eq!(
+        motion["samples"],
+        substituted["motion"]["result"]["samples"]
+    );
+    for (a, b) in motion["keyframes"].as_array().unwrap().iter().zip(
+        substituted["motion"]["result"]["keyframes"]
+            .as_array()
+            .unwrap(),
+    ) {
+        let a = &a["vapor_coverage"]["result"];
+        let b = &b["vapor_coverage"]["result"];
+        assert_ne!(a["source_sha256"], b["source_sha256"]);
+        assert_eq!(a["projection"]["footprints"], b["projection"]["footprints"]);
+        assert!(
+            b["coverage"]["covered_potential_heat_flow_w"]
+                .as_f64()
+                .unwrap()
+                < a["coverage"]["covered_potential_heat_flow_w"]
+                    .as_f64()
+                    .unwrap()
+        );
+    }
+}
+
+#[test]
+fn moving_layered_vapor_refusals_preserve_motion_and_reserve_retained_geometry() {
+    let form = form();
+    let body = body(&form);
+    let p = pattern(); // Mechanics and dry heat are available; Ret is deliberately missing.
+    let ordinary = motion_scenario();
+    let mut baseline = Session::new(&ordinary, &body).unwrap();
+    baseline
+        .set_motion_path(Ok(path(&ordinary, &body)))
+        .unwrap();
+    let reference = baseline.evaluate(&p, |_| {}).unwrap();
+    let s = vapor_coverage_scenario();
+    let mut session = Session::new(&s, &body).unwrap();
+    session.set_motion_path(Ok(path(&s, &body))).unwrap();
+    let missing = session.evaluate(&p, |_| {}).unwrap();
+    assert_eq!(missing["vapor_coverage"]["status"], "refused");
+    assert_eq!(missing["motion"]["status"], "available");
+    let motion = &missing["motion"]["result"];
+    assert_eq!(motion["samples"], reference["motion"]["result"]["samples"]);
+    assert!(
+        motion["reserved_retained_vertices"].as_u64().unwrap()
+            > reference["motion"]["result"]["reserved_retained_vertices"]
+                .as_u64()
+                .unwrap()
+    );
+    for endpoint in motion["keyframes"].as_array().unwrap() {
+        assert_eq!(endpoint["vapor_coverage"]["status"], "refused");
+        assert!(endpoint["vapor_coverage"]["result"].is_null());
+        assert_eq!(endpoint["surface"]["status"], "available");
+        assert_eq!(endpoint["coverage"]["status"], "available");
+    }
+
+    let available = session.evaluate(&vapor_pattern(), |_| {}).unwrap();
+    let mut locked = s.clone();
+    locked
+        .vapor_coverage
+        .as_mut()
+        .unwrap()
+        .conditions
+        .body_mesh_sha256 = Some(
+        available["vapor_coverage"]["result"]["body_mesh_sha256"]
+            .as_str()
+            .unwrap()
+            .into(),
+    );
+    let mut bound = Session::new(&locked, &body).unwrap();
+    bound.set_motion_path(Ok(path(&locked, &body))).unwrap();
+    let r = bound.evaluate(&vapor_pattern(), |_| {}).unwrap();
+    assert_eq!(r["vapor_coverage"]["status"], "available");
+    assert_eq!(r["motion"]["status"], "available");
+    for endpoint in r["motion"]["result"]["keyframes"].as_array().unwrap() {
+        let coverage = &endpoint["vapor_coverage"];
+        assert_eq!(coverage["status"], "available");
+        assert_ne!(
+            coverage["result"]["request"]["conditions"]["body_mesh_sha256"],
+            r["vapor_coverage"]["result"]["body_mesh_sha256"]
+        );
+        assert_eq!(
+            coverage["result"]["request"]["conditions"]["body_mesh_sha256"],
+            coverage["result"]["body_mesh_sha256"]
+        );
+    }
+    // Moving fields can follow verified body-triangle identities, but an initially stale
+    // boundary cannot acquire a valid identity merely because a motion was requested.
+    locked
+        .vapor_coverage
+        .as_mut()
+        .unwrap()
+        .conditions
+        .body_mesh_sha256 = Some("0".repeat(64));
+    let mut stale = Session::new(&locked, &body).unwrap();
+    stale.set_motion_path(Ok(path(&locked, &body))).unwrap();
+    let refused = stale.evaluate(&vapor_pattern(), |_| {}).unwrap();
+    assert_eq!(refused["vapor_coverage"]["status"], "refused");
+    assert_eq!(refused["motion"]["status"], "available");
+    assert_eq!(
+        refused["motion"]["result"]["samples"],
+        r["motion"]["result"]["samples"]
+    );
+    for endpoint in refused["motion"]["result"]["keyframes"].as_array().unwrap() {
+        assert_eq!(endpoint["vapor_coverage"]["status"], "refused");
+        assert!(
+            endpoint["vapor_coverage"]["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("body_mesh_sha256")
+        );
+    }
 }
 
 #[test]

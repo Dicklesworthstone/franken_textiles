@@ -1829,9 +1829,10 @@ test('bounded-marker purchasing shows one whole order and preserves exact totals
   p.select('cutOptions',options);p.select('quotes',quotes);p.select('market',market);
   await p.e.price.onclick();
   assert.equal(p.current().messages.at(-1).options,options);
-  const quote={offer_id:'<whole order>',observed_on:'2026-10-21',unit:'linear_meter',
+  const tier={minimum_quantity:0.25,price:10,sku:'<bulk-lot>'};
+  const quote={offer_id:'<whole order>',observed_on:'2026-10-21',unit:'linear_meter',price:12,quantity:1,price_breaks:[tier],
     available_quantity:0.25,maximum_continuous_quantity:0.12};
-  const offer={quote,order_quantity:0.25,order_cost:2.5,quantity_sufficiency_observed:true,within_observed_continuous_limit:true};
+  const offer={quote,order_quantity:0.25,order_cost:2.5,applied_price_break:tier,quantity_sufficiency_observed:true,within_observed_continuous_limit:true};
   const report={schema:'ftx-cut-procurement/2',currency:'USD',complete_offer_coverage:true,
     complete_observed_quantity_coverage:true,complete_continuous_length_limit_coverage:true,
     least_observed_independent_order_total:2.5,limits:['Requested segmentation, not guaranteed supplier fulfillment'],
@@ -1849,6 +1850,8 @@ test('bounded-marker purchasing shows one whole order and preserves exact totals
     ['Eligible','0.25 linear_meter','2.5','0.12 linear_meter; within observed limit']);
   assert.deepEqual(plain(tables[0].children[3].children.slice(3,6).map(n=>n.textContent)),
     ['Excluded: insufficient quantity','0.25 linear_meter','Unknown']);
+  assert.equal(tables[0].children[2].children[7].textContent,'From 0.25 linear_meter: 10 USD per 1 linear_meter; SKU <bulk-lot>');
+  assert.equal(tables[0].children[3].children[7].textContent,'Not applied: excluded');
   assert.match(visibleText(s),/Markers 1, 2 require 0.12, 0.12 m respectively/);
   assert.match(visibleText(s),/total 0.24 m, longest continuous segment 0.12 m/);
   assert.match(visibleText(s),/available stock apply once to the combined material order/);
@@ -1966,6 +1969,8 @@ test('mixed cutting jobs retain complete inventory, independent pricing and exac
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const a=studyRow('<mixed job>'), b=studyRow('unpriced'), c=studyRow('missing inventory');
   const job={complete_inventory:true,inventory:[{piece:'shell',stock:'finite_stock'},{piece:'lining',stock:'roll'}],
+    resolved_routes:[{piece:'shell',stock:'finite_stock',material_sha256:'exact-hide-source'},
+      {piece:'lining',stock:'roll',material_sha256:'exact-roll-source'}],
     roll:{rolls:[{}]},finite_stock:{used_stock_count:1},
     stock_area_m2:0.1,external_cut_area_m2:0.03,stock_mass_kg:null,
     purchasing:{currency:'USD',complete_offer_coverage:true,least_observed_independent_order_total:12.5,
@@ -1990,6 +1995,11 @@ test('mixed cutting jobs retain complete inventory, independent pricing and exac
       ['unpriced','Available','Yes','2','1','1','0.1','0.03','Unknown','Incomplete offer coverage','Unknown']);
     assert.deepEqual(plain(t.children[4].children.map(n=>n.textContent)),
       ['missing inventory','Refused: No finite stock matches the substituted shell','Unknown','Unknown','Unknown','Unknown','Unknown','Unknown','Unknown','Unknown','Unknown']);
+    const routes=descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='<mixed job>: cutting routes for the selected materials');
+    assert.deepEqual(plain(routes.children[2].children.map(n=>n.textContent)),
+      ['shell','Finite hide, sheet or remnant','exact-hide-source']);
+    assert.deepEqual(plain(routes.children[3].children.map(n=>n.textContent)),
+      ['lining','Roll','exact-roll-source']);
     for (const [suffix,expected] of [['pattern',job.pattern_json],['request',job.replay_request_json]]) {
       const download=descendants(s).find(n=>n.download===`alternative-1-cut-job-${suffix}.json`);
       assert.equal(await p.blobs.get(download.href).text(),expected);
@@ -2217,6 +2227,38 @@ test('motion displays complete continuation separately from initial static heat 
   assert.match(visibleText(table('Prescribed motion')), /trajectory budget exhausted/);
   assert.equal(table('A: endpoint'), undefined);
   assert.equal(table('Initial static-drape').children[2].children[5].textContent, '-4.5');
+});
+
+test('moving layered vapor preserves endpoint source replay and refusals without accumulating potential transfer', async () => {
+  const p = await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
+  const report = scenarioReport(); report.scenario.scenario = { motion: {}, vapor_coverage: {} };
+  const initial = report.simulations.find(r => r.key === 'A').evaluation.result;
+  const replay = ' {"schema":"ftx-vapor-coverage/1","value":1.0,"coordinate":-0.0,"source":"<literal>"}\n';
+  initial.motion = outcome({ duration_s: 2, samples: [{}, {}], trials: 2, metrics: {},
+    keyframes: [{ time_s: 1, surface: omitted(), coverage: omitted(), vapor_surface: omitted(),
+      vapor_coverage: outcome({ replay_request_json: replay, coverage: { covered_area_m2: 0.4, uncovered_area_m2: 0.1,
+        covered_potential_heat_flow_w: -2.5, covered_potential_mass_flow_kg_s: -0.000001,
+        regions: [{ source: '<literal material source>' }] } }) },
+      { time_s: 2, surface: omitted(), coverage: omitted(), vapor_surface: omitted(),
+        vapor_coverage: refused('boundary geometry lock does not match this endpoint') }] });
+  p.emit(report);
+  const s = section(p, 'Fresh drape and heat alternatives');
+  const table = () => descendants(s).find(n => n.tag === 'table' && n.children[0].textContent === 'A: endpoint vapor potentials — covered layers');
+  assert.deepEqual(plain(table().children[2].children.map(n => n.textContent)),
+    ['1', 'Available', '0.4', '0.1', '-2.5', '-0.000001']);
+  assert.deepEqual(plain(table().children[3].children.map(n => n.textContent)),
+    ['2', 'Refused: boundary geometry lock does not match this endpoint', 'Unknown', 'Unknown', 'Unknown', 'Unknown']);
+  assert.match(visibleText(s), /endpoint rates are separate from the optional history integral/);
+  const download = descendants(s).find(n => n.download === 'alternative-1-motion-endpoint-1-vapor-coverage-replay.json');
+  assert.equal(await p.blobs.get(download.href).text(), replay);
+  assert.equal(descendants(s).some(n => n.download === 'alternative-1-motion-endpoint-2-vapor-coverage-replay.json'), false);
+  const d = descendants(s).find(n => n.tag === 'details' && n.children[0].textContent.startsWith('A: endpoint 1 vapor layers'));
+  d.open = true; d.handlers.toggle(); assert.match(visibleText(d), /<literal material source>/);
+  assert.equal(descendants(s).some(n => 'innerHTML' in n), false);
+  p.e.scenarioRequest.handlers.change(); assert.equal(p.live.has(download.href), false); assert.equal(s.hidden, true);
+  await p.e.scenario.onclick(); initial.motion = refused('complete motion failed'); p.emit(report);
+  assert.equal(table(), undefined);
+  assert.equal(descendants(s).some(n => n.download?.includes('motion-endpoint')), false);
 });
 
 test('motion inspector selects exact adaptive states at one physical scale, including accepted-only reports', async () => {

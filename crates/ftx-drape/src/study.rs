@@ -42,7 +42,8 @@ pub struct Coverage {
     pub conditions: coverage::Conditions,
 }
 
-/// Independent potential vapor transfer through layers on the newly draped body domain.
+/// Independent potential vapor transfer through layers on the newly draped body domain and
+/// each requested motion endpoint. Every endpoint reprojects the actual body and sewn cloth.
 /// Its geometric closure and pressure boundaries do not require dry-heat or storage properties.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -328,6 +329,8 @@ impl<'a, 'body> Session<'a, 'body> {
                 endpoint_copies += 4 * request.keyframes.len();
             }
             if self.scenario.vapor_coverage.is_some() {
+                // Source/body arrays appear in both the frozen request and replay text;
+                // reserve additional copies for their retained projection and source geometry.
                 endpoint_copies += 4 * request.keyframes.len();
             }
             // Endpoint heat receipts duplicate geometry; final velocities retain one more array.

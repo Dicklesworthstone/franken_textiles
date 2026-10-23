@@ -152,19 +152,26 @@ function procurementResult(parent, r) {
       "The report retains the latest observed offer and its exclusion; an older price is not substituted. " +
       "A source continuous-cut limit is an upper limit, not a guarantee of continuous inventory.";
     parent.append(note);
-    const t = table(parent, `${label} — latest supplier observations`,
-      ["Offer", "Observed (UTC)", "Valid through (UTC)", "Admission", "Order quantity", `Merchandise cost (${scope.currency})`, "Source continuous-cut limit"]);
     const entries = [...sample.offers.map(offer => ({ offer, quote: offer.quote })),
       ...(sample.excluded_offers || []).map(excluded => ({ excluded, quote: excluded.quote }))];
+    const hasPriceBreaks = entries.some(({ quote, offer }) => quote.price_breaks?.length || offer?.applied_price_break);
+    const t = table(parent, `${label} — latest supplier observations`,
+      ["Offer", "Observed (UTC)", "Valid through (UTC)", "Admission", "Order quantity", `Merchandise cost (${scope.currency})`, "Source continuous-cut limit",
+        ...(hasPriceBreaks ? ["Applied source price"] : [])]);
     for (const { quote: q, offer, excluded } of entries) {
       const expiry = [q.valid_through_at, q.valid_through ? `${q.valid_through} (date limit)` : null].filter(Boolean).join("; ");
       const quantity = offer?.order_quantity ?? excluded?.required_order_quantity;
       const continuity = q.maximum_continuous_quantity == null ? "Not reported" :
         `${metric(q.maximum_continuous_quantity)} ${q.unit}` +
         (offer?.within_observed_continuous_limit === true ? "; within observed limit" : "");
+      const tier = offer?.applied_price_break;
+      const appliedPrice = excluded ? "Not applied: excluded" : tier ?
+        `From ${metric(tier.minimum_quantity)} ${q.unit}: ${metric(tier.price)} ${scope.currency} per ${metric(q.quantity)} ${q.unit}` +
+          (tier.sku == null ? "" : `; SKU ${tier.sku}`) : "Base quote";
       cells(t, [q.offer_id, q.observed_at || `${q.observed_on} (date only)`, expiry || "Not reported",
         excluded ? `Excluded: ${excluded.reason.replaceAll("_", " ")}` : "Eligible",
-        typeof quantity === "number" ? `${metric(quantity)} ${q.unit}` : "Unknown", metric(offer?.order_cost), continuity]);
+        typeof quantity === "number" ? `${metric(quantity)} ${q.unit}` : "Unknown", metric(offer?.order_cost), continuity,
+        ...(hasPriceBreaks ? [appliedPrice] : [])]);
     }
     if (!entries.length) cells(t, ["No observation in the requested market at this time", "Unknown", "Unknown", "No eligible offer", "Unknown", "Unknown", "Not reported"]);
     detail(parent, `${label}: selected order, source evidence and stock exclusions`, row);
@@ -465,14 +472,25 @@ function motionComparison(op, parent, rows, simulations, requested) {
       }
     }
     if (result.keyframes.some(e => e.vapor_coverage && e.vapor_coverage.status !== "not_requested")) {
+      const note = document.createElement("p");
+      note.textContent = "Layered vapor transfer follows the cloth and body at each endpoint. These are steady potential rates for covered regions; " +
+        "endpoint rates are separate from the optional history integral. Neither result models sweat supply or cooling supplied to the dry heat simulation.";
+      parent.append(note);
       const vapor = table(parent, `${row.key}: endpoint vapor potentials — covered layers`,
         ["Time (s)", "Vapor coverage", "Covered body (m²)", "Uncovered body (m²)",
           "Potential power (W)", "Potential water flow (kg/s)"]);
-      for (const endpoint of result.keyframes) {
-        const coverage = available(endpoint.vapor_coverage)?.coverage;
+      for (const [j, endpoint] of result.keyframes.entries()) {
+        const transfer = available(endpoint.vapor_coverage), coverage = transfer?.coverage;
         cells(vapor, [metric(endpoint.time_s), state(endpoint.vapor_coverage), metric(coverage?.covered_area_m2),
           metric(coverage?.uncovered_area_m2), metric(coverage?.covered_potential_heat_flow_w),
           metric(coverage?.covered_potential_mass_flow_kg_s)]);
+        detail(parent, `${row.key}: endpoint ${j + 1} vapor layers, sources and boundary conditions (display only)`,
+          transfer || { refusal: endpoint.vapor_coverage?.refusal });
+        if (typeof transfer?.replay_request_json === "string") {
+          const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
+          link(op, actions, { name: `alternative-${index + 1}-motion-endpoint-${j + 1}-vapor-coverage-replay.json`,
+            text: transfer.replay_request_json, mime: "application/json" });
+        }
       }
     }
     detail(parent, `${row.key}: motion identities, material history and endpoint refusals (display only)`, {
@@ -484,7 +502,7 @@ function motionComparison(op, parent, rows, simulations, requested) {
       endpoints: result.keyframes.map(e => ({ time_s: e.time_s, positions_sha256: e.positions_sha256,
         body_collision_sha256: e.body_collision_sha256, surface_refusal: e.surface?.refusal, coverage_refusal: e.coverage?.refusal,
         vapor_refusal: e.vapor_surface?.refusal, vapor_coverage_refusal: e.vapor_coverage?.refusal })),
-      scope: result.scope, thermal_basis: result.thermal_basis });
+      scope: result.scope, thermal_basis: result.thermal_basis, vapor_basis: result.vapor_basis });
     motionSamples(parent, row.key, result);
   }
 }
@@ -636,6 +654,13 @@ function cuttingJobComparison(op, parent, alternatives) {
     detail(parent, `${row.key}: routed physical inventory, source materials and purchasing outcomes (display only)`,
       r || { refusal: row.cutting_job?.refusal });
     if (!r) continue;
+    if (r.resolved_routes?.length) {
+      const routes = table(parent, `${row.key}: cutting routes for the selected materials`,
+        ["Source piece", "Stock route", "Material snapshot"]);
+      for (const route of r.resolved_routes) cells(routes, [route.piece,
+        route.stock === "roll" ? "Roll" : route.stock === "finite_stock" ? "Finite hide, sheet or remnant" : "Unknown",
+        route.material_sha256]);
+    }
     const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
     if (typeof r.pattern_json === "string") link(op, actions,
       { name: `alternative-${i + 1}-cut-job-pattern.json`, text: r.pattern_json, mime: "application/json" });

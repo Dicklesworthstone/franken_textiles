@@ -239,6 +239,10 @@ with schema <code>ftx-cutting-job/1</code>, explicit <code>routes</code> for eve
 and <code>finite_stock</code> inputs. This replaces separate <code>cutting</code>, <code>finite_stock</code> and
 <code>purchasing</code> inputs. Each physical cut instance and copy is allocated exactly once; optional job purchasing
 retains incomplete offers independently. Download the frozen job pattern and request to replay using <code>cut-job</code>.</p>
+<p class="note">To let a material change switch a piece between roll fabric and a hide or remnant, use
+<code>ftx-cutting-job/2</code> with <code>material_routes</code>. Each source piece lists its allowed exact material
+snapshots and stock routes. The study selects the matching route after each material substitution and shows that
+selection in the results. Supply stock and planner options for all declared choices; an unlisted material refuses.</p>
 <p class="note">Add optional <code>vapor</code> to recompute potential vapor transfer for each material alternative.
 Its ordered <code>layers</code> name occurrence keys and targets such as <code>{"scope":"piece","id":"front"}</code>
 or <code>{"scope":"default"}</code>; the final pattern assignments supply their materials.

@@ -517,6 +517,10 @@ fn evaluate_path(
         result["vapor_basis"] = json!(format!(
             "Independent steady endpoints and a separately requested {integration} integral of covered prescribed-reservoir potential on every accepted sample. No stored moisture or latent cooling is modeled."
         ));
+    } else if scenario.vapor_surface.is_some() || scenario.vapor_coverage.is_some() {
+        result["vapor_basis"] = json!(
+            "Independent isothermal potential-transfer snapshots on each actual motion endpoint. Layered coverage reprojects the current body and cloth; uncovered transfer remains unknown. No time-integrated evaporation, water supply, moisture storage or latent heat feedback is inferred."
+        );
     }
     Ok(result)
 }

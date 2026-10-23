@@ -2854,6 +2854,75 @@ under `ftx-vc2`/`ftx-tmc`. See [vapor-coverage.md](docs/vapor-coverage.md).
 
 ---
 
+### 25.58 Material substitutions choose their actual stock routes
+
+**Delivered software (`ftx-cj2`, supporting `ftx-tm7`/`ftx-ms2`).** The fixed-pattern jacket scenario
+allows the same source piece to move from linen or knit roll stock to an individually identified leather
+hide without changing its geometry or rewriting the study. An explicit `ftx-cutting-job/2` request maps
+each source piece's exact permitted material snapshots to roll or finite stock. Final canonical
+material binding selects the route; unlisted or ambiguous snapshots refuse. Fixed `/1` routes retain
+their original behavior. No fiber label, material name or proximity to an available hide chooses a route.
+
+Retain the full immutable route, stock and source-qualified grain-permission pools for replay, but run
+only the planners engaged by the current alternative. Both route options must agree on copies and
+effective seam allowance even when one is dormant. Preserve complete physical inventory checks,
+finite-item identity, defect/zone constraints and independent purchasing. Dormant hide offers cannot
+become roll supply; missing offers cannot produce a partial cheap total. Native, portable and browser
+consumers report the selected source-piece/material/stock mapping and replay the same job. Retained
+dormant geometry and source bindings pass the same canonical bounds as engaged planners.
+
+Acceptance covers one unchanged pattern switching roll → hide → roll, mixed shell/lining inventory,
+same-ID changed-snapshot refusal, scoped grain permissions and unchanged complete purchasing. This
+delivers automatic manufacturing routing through existing planners; measured cutter/seam recipes,
+physical sewing feasibility and robot execution remain separate gates. See
+[mixed-stock-cutting.md](docs/mixed-stock-cutting.md).
+
+---
+
+### 25.59 Source-observed quantity pricing follows the complete order
+
+**Delivered software (`ftx-qt1`, supporting `ftx-tm6`/`ftx-pq1`).** Dated supplier observations may retain
+an explicit all-unit quantity-price schedule in the quote's original physical sale units. Every break
+belongs to the same source, material, currency and selling terms, with any tier-specific SKU retained;
+it is not a separate competing supplier or a marginal graduated rate. Apply minimum quantity and selling increment to the entire required order
+first, then choose the highest reached break and price that complete order. Do not automatically buy
+extra stock to chase a discount. A quoted price still covers the quote's stated physical quantity.
+
+The canonical quote evaluator remains the only pricing authority for area, mass and linear requirements,
+combined marker orders, finite stock and material-study objectives. Reports retain the actual selected
+threshold and effective unit price. Latest-observation, exact-material, expiry, observed-stock and
+continuous-cut gates remain in force. Missing prices, rates outside a declared schedule or unsupported
+source semantics cannot become bargains. Explicit CSV source mappings and immutable source replay
+preserve observed schedules; adapters without qualified tier support continue to refuse those inputs.
+
+Acceptance uses original-unit conversion, MOQ/increment threshold crossings, aggregate markers,
+malformed schedules, stale/unavailable latest offers and source revision review. A dated public
+5,000-metre thread-cone observation exercises regular and five-cone pricing with exact material and
+tier-specific SKU identity. The browser displays the selected threshold and source price without
+recalculating the Rust result. Other live quotes still need actual source retrieval and exact product/lot qualification; observed-offer percentiles do not
+become a market survey, checkout or reserved inventory. See
+[textile-price-refresh.md](docs/textile-price-refresh.md).
+
+---
+
+### 25.60 Source-qualified endpoint replay and physical-consumer independence
+
+**Delivered checks and workbench integration (`ftx-vc5`, supporting `ftx-vc2`).** Extend the shared
+moving-vapor path in §25.57 with production-motion regressions against actual retained cloth/body
+samples, independent area/resistance arithmetic, Ret-only material substitution with unchanged
+mechanics, source tampering and exact frozen replay. Valid initially qualified boundary fields
+follow the same body triangles; stale initial geometry locks remain refusals. Missing Ret or dry
+heat properties preserve each independent consumer's result. Retained replay geometry remains
+charged in the aggregate motion budget.
+
+The browser exposes each endpoint's source evidence and lossless standalone replay download as well
+as the optional complete-history replay. Endpoint rates keep their instantaneous meaning; only the
+explicit accepted-sample history supplies the potential integral. Neither asserts actual water
+availability, evaporation or latent cooling. The broader moisture/storage and matched empirical
+transport gates stay open. See [vapor-coverage.md](docs/vapor-coverage.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

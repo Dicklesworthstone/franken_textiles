@@ -92,6 +92,11 @@ The shared geometry kernel retains its existing bounded work and finite allocati
 
 ## Moving coverage and complete potential histories
 
+The shared `ftx-drape-scenario/1` scenario accepts a `vapor_coverage` policy containing
+`body_triangle_ids`, `instance_layers`, `settings` and `conditions`. The triangle IDs select the
+scenario's actual collision-body domain in pressure-boundary order. Every material alternative
+rebuilds its initial coverage from the newly sewn cloth and frozen assignments.
+
 When a scenario requests `vapor_coverage` and prescribed motion, every motion keyframe receives a
 fresh layered `vapor_coverage` result on its accepted body and sewn-cloth coordinates. Initial
 overlap and old material-area values are never reused. Missing inputs or ambiguous coverage refuse
@@ -194,3 +199,8 @@ the explicit zero interface and film resistances 1 and 4 produce the independent
 coverage, unused reference area, material substitution, absent dry properties, missing interfaces,
 invalid geometry and exact offline replay. They establish software behavior, not empirical textile
 or garment acceptance.
+The `material_scenario` moving-layer regressions additionally exercise actual sewn cloth and body
+motion, independently calculated current-area resistance answers, source-locked offline replay,
+material substitution, verified boundary rebinding and stale initial geometry-lock refusal,
+missing vapor properties, independent dry-heat
+availability and aggregate retained-geometry accounting.
