@@ -930,6 +930,26 @@ function manufacturingComparison(op, parent, study, computed) {
       detail(parent, `${row.key}: sewing recipe choices, work limits and refusals (display only)`,
         plan || { refusal: row.sewing_selection?.refusal });
     }
+    const costSearches = study.alternatives.filter(row => {
+      const result = available(row.sewing_selection);
+      return result?.request?.objective === "minimize_thread_observed_order_cost" ||
+        result?.objective_currency != null;
+    });
+    if (costSearches.length) {
+      const costs = table(parent, "Thread-cost-directed recipe search", ["Alternative",
+        "Selected complete thread order cost", "Currency", "Listed cost optimum proved", "Unresolved trials"]);
+      for (const row of costSearches) {
+        const result = available(row.sewing_selection);
+        cells(costs, [row.key, metric(result.selected_thread_order_cost), result.objective_currency ?? "Unknown",
+          String(result.optimality_proven), metric(result.unresolved_trials)]);
+      }
+      const scope = document.createElement("p");
+      scope.textContent = "Recipe selection uses each complete job's source-qualified thread orders, including supplier minimums, " +
+        "increments and applicable price tiers. Trials with incomplete consumption or prices remain unresolved. " +
+        "A retained order can be usable before the search is complete; the proof applies only to the declared recipes and dated observations. " +
+        "Cutting costs, setup time and undeclared supplier bundles are outside this objective.";
+      parent.append(scope);
+    }
   }
   if (study.alternatives.some(row => row.metrics?.sewing_setup_seconds != null ||
       row.metrics?.sewing_feed_and_setup_seconds != null) ||

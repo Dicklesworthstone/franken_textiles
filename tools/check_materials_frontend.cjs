@@ -2539,6 +2539,50 @@ test('material study sewing choices retain bounded search status separately from
   p.e.studyRequest.handlers.change(); assert.equal(s.hidden, true); assert.equal(p.live.size, 0);
 });
 
+test('thread-cost recipe selection displays only the canonical complete incumbent and its proof scope', async () => {
+  const p = await pageModule(); await p.load(); p.select('studyRequest', '{}');
+  const selected = studyRow('least cost'), bounded = studyRow('bounded cost'), missing = studyRow('unpriced');
+  for (const row of [selected,bounded,missing]) {
+    row.sewing_selection = outcome({request:{objective:'minimize_thread_observed_order_cost'},
+      selected_choices:{hem:'qualified recipe'},objective_currency:'EUR',selected_thread_order_cost:14,
+      trials:[{thread_order_cost:14},{thread_order_cost:28}],search_complete:true,
+      budget_exhausted:false,optimality_proven:true,unresolved_trials:0});
+  }
+  Object.assign(bounded.sewing_selection.result,{search_complete:false,budget_exhausted:true,optimality_proven:false});
+  Object.assign(missing.sewing_selection.result,{selected_choices:null,selected_thread_order_cost:null,
+    trials:[{feed_seconds:0.01,objective_unavailable:{code:'invalid_document',message:'Missing <source> price'}}],
+    optimality_proven:false,unresolved_trials:1});
+  missing.sewing = refused('No complete cost-ranked recipe available');
+  await p.e.study.onclick(); p.emit(studyReport([selected,bounded,missing]));
+  const s = section(p, 'Fixed-pattern manufacturing alternatives');
+  const costs = descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent==='Thread-cost-directed recipe search');
+  assert.deepEqual(plain(costs.children.slice(2).map(row=>row.children.map(n=>n.textContent))),[
+    ['least cost','14','EUR','true','0'],['bounded cost','14','EUR','false','0'],['unpriced','Unknown','EUR','false','1']]);
+  assert.match(visibleText(s),/Trials with incomplete consumption or prices remain unresolved/);
+  const receipt = descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent.startsWith('unpriced: sewing recipe choices'));
+  receipt.open=true; receipt.handlers.toggle(); assert.match(visibleText(receipt),/Missing <source> price/);
+  p.e.studyRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
+});
+
+test('compiled WASM thread-cost recipe and study results equal both native commands with incomplete orders retained',
+  {skip:process.env.FTX_REAL_WASM!=='1' || !process.env.FTX_THREAD_COST_REPLAY}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const dir=process.env.FTX_THREAD_COST_REPLAY, input=name=>fs.readFileSync(path.join(dir,name),'utf8');
+    assert.deepEqual(JSON.parse(ftx.sew_select(input('pattern.json'),input('selection.json'))),JSON.parse(input('selection-report.json')));
+    const w=await workerModule({bindings:ftx});
+    for(const name of ['priced','unpriced']) {
+      const result=await w.send({type:'study',request:190,pattern:input('pattern.json'),studyRequest:input(`${name}-study.json`)});
+      assert.equal(result.type,'result',result.message);
+      assert.deepEqual(result.result,JSON.parse(input(`${name}-report.json`)));
+      const search=result.result.alternatives[0].sewing_selection.result;
+      assert.equal(search.objective_currency,'USD'); assert.equal(search.no_feasible_listed_recipe,false);
+      assert.equal(search.optimality_proven,name==='priced');
+      assert.equal(result.files.find(file=>file.name==='study-request.json').text,input(`${name}-study.json`));
+    }
+  });
+
 test('study timing separates sourced setup duration from feed time and preserves missing evidence', async () => {
   const p = await pageModule(); await p.load(); scenarioInputs(p);
   for (const op of ['study', 'scenario']) {

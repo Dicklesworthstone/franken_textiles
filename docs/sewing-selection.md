@@ -2,8 +2,8 @@
 
 `ftx materials sew-select PATTERN.json REQUEST.json --json` searches explicit needle, thread,
 maximum-pitch and stitch-rate choices using the **existing complete sewing planner**. It selects the
-admitted complete job with the least generated continuous-feed time, or explicitly qualified feed-plus-setup
-time in version 2. It does not manufacture process
+admitted complete job with the least generated continuous-feed time, explicitly qualified feed-plus-setup
+time in version 2, or complete source-qualified thread order cost in version 3. It does not manufacture process
 qualification from fiber names, machine capabilities alone, or synthetic material presets.
 
 ## Runnable synthetic job
@@ -66,6 +66,9 @@ There are at most 64 complete-plan evaluations, including refusals, up to 64 tem
 plan retains its existing bounded geometry/station/pressure work. With ordering enabled, the product
 of the recipe evaluation cap and each job's ordering-node cap cannot exceed 200000. This bounds
 repeated ordering work without silently reducing the caller's chosen per-job limit.
+Thread purchasing is separately bounded to 200000 configured quote/stock-alias work units across
+every allowed recipe trial; cost mode also reserves its one common-market preflight. Studies reserve
+this entire search bound for every expanded material/design row before evaluating alternatives.
 
 The report retains every attempted choice and its original refusal or actual generated time/count.
 `search_complete` means every listed combination was examined, not that unlisted recipes were ruled
@@ -133,6 +136,71 @@ Feed and setup seconds exclude handling, loading, acceleration, parallel machine
 reset. Source timing conditions are retained, not matched automatically to machine sensors or workers.
 Neither timing measurements nor successful recipe qualification demonstrate empirical seam quality or
 total garment cycle time. Timing-estimate permission cannot relax any material or process evidence gate.
+
+## Choose recipes by complete observed thread order cost
+
+Set **`schema: "ftx-sewing-selection/3"`** and
+**`objective: "minimize_thread_observed_order_cost"`** to select by the actual complete thread
+orders. The ordinary template must explicitly include `options.consumables.purchasing`, its quote
+book and market. Each candidate still passes the complete production sewing planner; the selector
+then consumes that plan's unchanged `consumables.purchasing.least_observed_independent_order_total`.
+It does not estimate consumption from seam length, assign a universal thread ratio, or reconstruct
+prices from nominal unit costs.
+
+The admitted qualification for every operation must supply its own independently sourced
+`thread_consumption` model and declare all required channels. The shared consumer counts the actual
+generated stitch intervals, including reverse travel, backtacks and reinforcement, then adds the
+declared start/end allowance once per operation/channel. It aggregates each exact frozen yarn
+snapshot across the complete job **before** the canonical quote engine applies order minimums,
+increments, all-unit price thresholds, stock and continuous-length limits. Different recipe setups
+may use different qualified consumption observations and yarn selections; each observation remains
+applicable only inside its admitted parent process window.
+
+```sh
+cargo run -p ftx-cli --bin ftx -- materials sew-select \
+  tests/fixtures/materials/synthetic-sewing-pattern.json \
+  examples/sewing-thread-cost-selection.json --json > thread-cost-selection.json
+```
+
+This example is entirely synthetic. Its original four-second recipe needs 1.7 metres across the two
+declared thread channels. A two-metre minimum/increment produces a USD 10 order. The qualified
+two-second alternative uses 3.5 metres under its independently declared consumption model: a
+four-metre order costs USD 14 after its all-unit threshold. Cost selection retains the USD 10
+template; feed-only selection chooses the two-second alternative. Neither number is a real supplier
+quote or a measured thread-use claim. Separate regressions also cover a larger-demand recipe whose
+whole-order threshold makes it cheaper, so the search never prunes on an assumed monotone cost.
+
+The quote book and market remain identical across all recipes, including currency, region, condition,
+cost basis, evaluation time and stock-observation policy. The canonical market selector validates
+them before enumeration. There is no currency conversion, revival of superseded locked offers,
+independent reuse of aliased supplier stock, or relaxation of expiry and capacity checks. The
+market's `require_observed_quantity` and `require_observed_continuous_length` settings remain
+explicit: a complete observed price under a policy allowing unknown stock does not establish
+observed stock sufficiency or guaranteed availability. Those coverage flags stay in the selected
+plan's canonical purchasing receipt.
+
+Version-3 trials retain `thread_order_cost` only when the entire sewing demand and every exact-yarn
+order are covered. A successfully planned recipe with missing consumption, partial channel coverage
+or an excluded/missing order instead retains `objective_unavailable`, independently of the ordinary
+production `refusal`. These are **unresolved** trials, never zero-cost winners or proof that the
+listed sewing recipes are infeasible. A complete priced incumbent remains available, but an
+exhaustive search with any such unknown cannot claim `optimality_proven`. A source or machine
+qualification refusal remains the original production refusal. Budget exhaustion likewise retains
+only a complete incumbent and no optimum claim.
+
+The report supplies `selected_thread_order_cost` and the one `objective_currency`; the latter is
+retained even if no complete priced incumbent exists. Exact cost ties prefer the original template,
+then the existing operation/recipe ID traversal. The selected plan retains its full consumption
+sources, exact yarn snapshots and canonical supplier order receipts, and its options replay through
+the ordinary sewing commands. Feed/setup objectives keep their existing schemas and serialized
+fields. The cost objective does not require an optimal operation ordering because ordering cannot
+change the declared operation set, traversed intervals or per-operation thread allowances.
+
+This objective covers the independently priced thread orders for the one complete sewing job. It
+does not combine them with fabric cutting costs, infer batch-copy quantities, value worker time, or
+optimize a coupled supplier shipping bundle. Production quality and hardware permission retain their
+independent gates. Material-study comparisons continue applying their explicit source-protocol
+policy to each actual selected plan.
 
 ## Replay and browser boundary
 

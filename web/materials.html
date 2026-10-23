@@ -312,7 +312,8 @@ still require the nominal basis.</p>
 complete feasible order found by the bounded search. <code>observed_order_cost</code> requires its least cost to be proved.
 Mixed cutting jobs expose the corresponding <code>cutting_job_selected_order_cost</code> and
 <code>cutting_job_observed_order_cost</code>. Missing or incomplete assignments never supply a partial cheap total.</p>
-<p class="note">Optional <code>sewing_selection</code> accepts an existing <code>ftx-sewing-selection/1</code> request instead of
+<p class="note">Optional <code>sewing_selection</code> accepts a <code>ftx-sewing-selection/1</code> feed-time request,
+<code>/2</code> feed-and-setup-time request or <code>/3</code> thread-cost request instead of
 <code>sewing</code>. Each material alternative searches its own source-qualified recipe choices; the report retains trials, work limits
 and the selected plan. If no listed recipe qualifies, sewing remains unavailable for that alternative.</p>
 <p class="note">When the sewing plan includes source-qualified setup timing, use <code>sewing_setup_seconds</code>
@@ -326,6 +327,12 @@ The workbench shows the actual selected operation/channel requirements and retai
 Thread purchasing has its own currency and market, which may differ from cutting. It describes one sewing job;
 cutting copies do not multiply thread demand. Prices are not combined with cutting costs, purchased length is not retained garment mass,
 and time-based recipe selection does not prove a thread-cost optimum.</p>
+<p class="note">To choose the recipe by thread purchasing cost, set <code>sewing_selection.schema</code> to
+<code>ftx-sewing-selection/3</code> and <code>objective</code> to <code>minimize_thread_observed_order_cost</code>.
+Supply <code>options.consumables.purchasing</code> with the dated quote book and explicit market.
+The search compares complete orders for each qualified job, including quantity thresholds and price tiers;
+it can choose a slower recipe when its order costs less. Missing channel quantities or eligible offers remain unresolved,
+and an exhausted search retains a complete incumbent without claiming the least cost is proved.</p>
 </div><div>
 <h3>Fresh body, drape and heat studies</h3>
 <label>Scenario or named matrix JSON (<code>ftx-drape-scenario/1</code> or <code>ftx-drape-scenario-matrix/1</code>) <input id="scenarioRequest" type="file" accept=".json,application/json"></label>

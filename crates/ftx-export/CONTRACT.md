@@ -80,6 +80,21 @@ Missing/stale source qualification preserves independent manufacturing and simul
 Omitted selection retains legacy serialization. Tests: `material_study`, native and file-free WASM
 `material_study_consumers`; source admission is not physical seam validation or hardware permission.
 
+**Complete thread-cost recipe selection** (`sewing_selection`, plan §25.4 / `ftx-tm7`). The explicit
+`ftx-sewing-selection/3` objective `minimize_thread_observed_order_cost` requires dated thread
+purchasing and consumes only the complete canonical order total from each freshly admitted
+`SewPlan`. No independent thread estimator, unit-price scorer or cost-monotonicity pruning exists.
+The common market is validated canonically before enumeration, and its additional quote scan is
+included in `Request::purchasing_work_bound()` alongside every configured trial. The total bound
+must fit 200000 work units, including expanded study rows. Missing quantities, partial channels or
+ineligible orders produce separate `objective_unavailable` trials: they cannot win, prove an optimum
+or establish that all production recipes are infeasible. A complete priced incumbent survives
+finite interruption; exact ties retain the original canonical recipe traversal. The report retains
+`selected_thread_order_cost`, its own `objective_currency` and the unchanged selected source/price
+receipts. Versions 1 and 2 retain their wire output and time objectives. Thread prices remain
+independent of cutting copies, labor, supplier bundles and hardware permission. Tests:
+`sewing_consumables::selection`, native/portable selection replay. See `docs/sewing-selection.md`.
+
 **Qualified sewing consumables** (`sewing::consumables`, `ftx-tm6` / `ftx-tm7`). Optional
 `SewOptions.consumables` produces `ftx-sewing-plan/11` from the actual selected operation traversals.
 Independently sourced consumption models require a complete channel declaration, frozen yarn

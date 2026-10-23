@@ -1,0 +1,106 @@
+{
+  "schema": "ftx-sewing-selection/3",
+  "objective": "minimize_thread_observed_order_cost",
+  "max_plan_evaluations": 2,
+  "options": {
+    "machine": {
+      "id": "example-configuration-not-a-qualified-machine",
+      "stitch_mm": [0.5, 5.0], "feed_b_over_a": [0.5, 2.0],
+      "max_stack_mm": 3.0, "max_stitches_per_minute": 1000.0
+    },
+    "seam_tolerance_mm": 0.5,
+    "passes": [{
+      "seam": "side", "max_stitch_mm": 2.5, "plies": [1, 1],
+      "minimum_allowance_mm": 6.0, "stitches_per_minute": 600.0,
+      "needle": "operator-selected-needle", "thread": "operator-selected-thread", "after": []
+    }],
+    "require_qualification": true,
+    "qualifications": [
+      {
+        "id": "synthetic-original",
+        "materials": ["529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b", "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"],
+        "machine": "example-configuration-not-a-qualified-machine",
+        "needle": "operator-selected-needle", "thread": "operator-selected-thread",
+        "stitch_mm": [0.5, 3.0], "feed_b_over_a": [0.9, 1.1], "stack_mm": [0.7, 0.9],
+        "stitches_per_minute": [500.0, 650.0], "allow_reverse": false,
+        "evidence": "estimate", "allow_estimates": true,
+        "source": {"reference": "test:synthetic-sewing-cost-selection", "accessed_on": "2026-10-23", "note": "Invented software fixture, not measured seam or machine evidence"},
+        "method": "Synthetic process-window software oracle; not a sewing recommendation",
+        "thread_consumption": {
+          "channels_complete": true, "evidence": "estimate", "allow_estimates": true,
+          "source": {"reference": "test:synthetic-independent-consumption", "accessed_on": "2026-10-23", "note": "Invented independent consumption observations for software verification only"},
+          "method": "Synthetic effective per-traversal model with explicit operation allowances",
+          "conditions": {"scope": "software arithmetic only"},
+          "channels": [
+            {"id": "needle", "metres_per_traversal": 0.01, "start_allowance_m": 0.1, "end_allowance_m": 0.2,
+              "material": {
+                "id": "synthetic-thread-a", "expected_sha256": "3250df7cc7debac646e29ff5266d3179bf7ece9eed8d938d2802763bb3141140",
+                "record": {"id": "synthetic-thread-a", "name": "Synthetic source-locked thread", "form": "yarn", "properties": {},
+                  "sources": {"fixture": {"reference": "test:thread-material", "accessed_on": "2026-10-23", "note": "Synthetic software fixture, not a measured thread"}}}
+              }},
+            {"id": "bobbin", "metres_per_traversal": 0.02, "start_allowance_m": 0.05, "end_allowance_m": 0.15,
+              "material": {
+                "id": "synthetic-thread-a", "expected_sha256": "3250df7cc7debac646e29ff5266d3179bf7ece9eed8d938d2802763bb3141140",
+                "record": {"id": "synthetic-thread-a", "name": "Synthetic source-locked thread", "form": "yarn", "properties": {},
+                  "sources": {"fixture": {"reference": "test:thread-material", "accessed_on": "2026-10-23", "note": "Synthetic software fixture, not a measured thread"}}}
+              }}
+          ]
+        }
+      },
+      {
+        "id": "synthetic-alternative",
+        "materials": ["529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b", "529e6486960db99a98f265bf24fdede0296592e3be9cfd4fdf2d2aec43cddc4b"],
+        "machine": "example-configuration-not-a-qualified-machine",
+        "needle": "synthetic-needle-b", "thread": "synthetic-thread-b",
+        "stitch_mm": [3.0, 4.0], "feed_b_over_a": [0.9, 1.1], "stack_mm": [0.7, 0.9],
+        "stitches_per_minute": [700.0, 800.0], "allow_reverse": false,
+        "evidence": "estimate", "allow_estimates": true,
+        "source": {"reference": "test:synthetic-sewing-cost-selection", "accessed_on": "2026-10-23", "note": "Invented software fixture, not measured seam or machine evidence"},
+        "method": "Synthetic process-window software oracle; not a sewing recommendation",
+        "thread_consumption": {
+          "channels_complete": true, "evidence": "estimate", "allow_estimates": true,
+          "source": {"reference": "test:synthetic-independent-consumption", "accessed_on": "2026-10-23", "note": "Invented independent consumption observations for software verification only"},
+          "method": "Synthetic effective per-traversal model with explicit operation allowances",
+          "conditions": {"scope": "software arithmetic only"},
+          "channels": [
+            {"id": "needle", "metres_per_traversal": 0.04, "start_allowance_m": 0.1, "end_allowance_m": 0.2,
+              "material": {
+                "id": "synthetic-thread-a", "expected_sha256": "3250df7cc7debac646e29ff5266d3179bf7ece9eed8d938d2802763bb3141140",
+                "record": {"id": "synthetic-thread-a", "name": "Synthetic source-locked thread", "form": "yarn", "properties": {},
+                  "sources": {"fixture": {"reference": "test:thread-material", "accessed_on": "2026-10-23", "note": "Synthetic software fixture, not a measured thread"}}}
+              }},
+            {"id": "bobbin", "metres_per_traversal": 0.08, "start_allowance_m": 0.05, "end_allowance_m": 0.15,
+              "material": {
+                "id": "synthetic-thread-a", "expected_sha256": "3250df7cc7debac646e29ff5266d3179bf7ece9eed8d938d2802763bb3141140",
+                "record": {"id": "synthetic-thread-a", "name": "Synthetic source-locked thread", "form": "yarn", "properties": {},
+                  "sources": {"fixture": {"reference": "test:thread-material", "accessed_on": "2026-10-23", "note": "Synthetic software fixture, not a measured thread"}}}
+              }}
+          ]
+        }
+      }
+    ],
+    "consumables": {"purchasing": {
+      "quote_book": {"schema": "ftx-textile-quotes/1", "quotes": [{
+        "offer_id": "synthetic-thread-cone", "material_id": "synthetic-thread-a",
+        "material_sha256": "3250df7cc7debac646e29ff5266d3179bf7ece9eed8d938d2802763bb3141140",
+        "supplier": "synthetic-supplier", "sku": "synthetic-thread-a",
+        "price": 10.0, "quantity": 2.0, "unit": "linear_meter",
+        "minimum_quantity": 2.0, "order_increment": 2.0,
+        "price_breaks": [{"minimum_quantity": 4.0, "price": 7.0}],
+        "currency": "USD", "region": "test", "quality": "new", "terms": "synthetic merchandise only",
+        "observed_on": "2026-10-23", "available": true, "available_quantity": 4.0,
+        "maximum_continuous_quantity": 3.0, "source": "test:synthetic-thread-offer",
+        "source_sha256": "abababababababababababababababababababababababababababababababab"
+      }]},
+      "market": {
+        "currency": "USD", "region": "test", "quality": "new", "terms": "synthetic merchandise only",
+        "as_of": "2026-10-23", "max_age_days": 2,
+        "require_observed_quantity": true, "require_observed_continuous_length": true
+      }
+    }}
+  },
+  "alternatives": [{"operation": "side", "recipes": [{
+    "id": "faster-qualified", "needle": "synthetic-needle-b", "thread": "synthetic-thread-b",
+    "max_stitch_mm": 4.0, "stitches_per_minute": 750.0
+  }]}]
+}

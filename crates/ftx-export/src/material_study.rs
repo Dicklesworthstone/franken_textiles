@@ -744,22 +744,18 @@ impl Request {
             recipes::check_budget(selection, variants.len())?;
         }
         if let Some(options) = self.sewing_options() {
-            let per_plan = match crate::sewing::consumables::purchasing_work_bound(options) {
+            let configured_work = self.sewing_selection.as_ref().map_or_else(
+                || crate::sewing::consumables::purchasing_work_bound(options),
+                sewing_selection::Request::purchasing_work_bound,
+            );
+            let work = match configured_work {
                 Ok(work) => work,
                 Err(refusal) if refusal.code == RefusalCode::BudgetExceeded => return Err(refusal),
                 // Invalid source/market options remain the independent sewing consumer's refusal;
                 // its admission fails before the purchasing evaluator can perform quote work.
                 Err(_) => 0,
             };
-            let trials = self
-                .sewing_selection
-                .as_ref()
-                .map_or(1, |s| s.max_plan_evaluations);
-            if per_plan
-                .saturating_mul(trials)
-                .saturating_mul(variants.len())
-                > 200_000
-            {
+            if work.saturating_mul(variants.len()) > 200_000 {
                 return Err(budget(
                     "material/design study exceeds 200000 aggregate thread-purchasing work units; reduce variants, recipe trials or quote observations",
                 ));
@@ -860,7 +856,7 @@ impl Request {
             .sewing_options()
             .is_some_and(|s| s.consumables.is_some())
         {
-            notes.push("Thread demand uses the selected plan's actual traversals, independently qualified channel coefficients and once-per-operation allowances. Each exact yarn is aggregated before canonical whole-order pricing. Missing consumption or offers keep the complete metric unknown. Thread purchasing uses its own declared market and describes one sewing job, independently of cutting copies; it is not retained assembly mass or a combined cut-and-sew cost. Recipe selection still optimizes its declared time objective, not thread cost.");
+            notes.push("Thread demand uses the selected plan's actual traversals, independently qualified channel coefficients and once-per-operation allowances. Each exact yarn is aggregated before canonical whole-order pricing. Missing consumption or offers keep the complete metric unknown. Thread purchasing uses its own declared market and describes one sewing job, independently of cutting copies; it is not retained assembly mass or a combined cut-and-sew cost. Recipe selection follows its explicit declared objective; only thread-cost selection searches these order totals, and its separate proof and unresolved-trial status remain authoritative.");
         }
         if self.vapor.is_some() {
             notes.push("Potential vapor transport uses explicit common-area layer occurrences resolved from each final material assignment. It infers no overlap, body coverage, air-gap resistance, sweat supply, evaporation or coupled heat; canonical source qualifications and boundary assumptions remain in every available result.");

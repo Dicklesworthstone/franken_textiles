@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 
 #[path = "sewing_consumables/material_study.rs"]
 mod material_study;
+#[path = "sewing_consumables/selection.rs"]
+mod selection;
 
 fn yarn(id: &str) -> Selection {
     let selection = serde_json::from_value(json!({"id":id,"record":{

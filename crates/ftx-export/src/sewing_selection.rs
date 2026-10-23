@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::sewing::{SewOptions, SewPlan, SewingPass, consumables, ordering};
 
+mod thread_cost;
+
 const MAX_TRIALS: usize = 64;
 const MAX_OPERATIONS: usize = 64;
 const MAX_GROUPS: usize = 12;
@@ -64,19 +66,22 @@ pub enum Objective {
     /// Minimize generated feed plus source-qualified setup seconds, including initial setup.
     /// Requires the timed ordering objective; neither term includes handling or final reset.
     MinimizeFeedAndSetupSeconds,
+    /// Minimize complete source-locked thread orders from the shared consumables price result.
+    /// Unknown consumption or incomplete eligible offer coverage cannot supply a score.
+    MinimizeThreadObservedOrderCost,
 }
 
 /// Search a finite Cartesian product of recipes, retaining the original complete job as a candidate.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// `/1` for feed only; `/2` for the explicit joint feed-and-setup objective.
+    /// `/1` for feed only; `/2` for feed plus setup; `/3` for complete thread order cost.
     pub schema: String,
     /// Complete template job. `require_qualification` must be true; it is never silently enabled.
     pub options: SewOptions,
     /// One to twelve operations with explicit alternatives; unlisted operations remain unchanged.
     pub alternatives: Vec<Alternatives>,
-    /// Explicit feed-only or joint feed-and-setup objective; neither is total production time.
+    /// Explicit feed, feed-plus-setup or complete observed thread-order objective.
     pub objective: Objective,
     /// Maximum complete-plan evaluations, including refused trials and the original template, 1..64.
     pub max_plan_evaluations: usize,
@@ -99,12 +104,19 @@ pub struct Trial {
     /// Inner schedule proof for a timed trial. False retains a complete incumbent, not an optimum.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ordering_optimality_proven: Option<bool>,
+    /// Canonical complete thread-order score, in the request's one unchanged market currency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_order_cost: Option<f64>,
+    /// Production succeeded but complete consumption or eligible source prices are unavailable.
+    /// This is unresolved objective evidence, never a production infeasibility or a zero score.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective_unavailable: Option<Refusal>,
 }
 
 /// Complete incumbent plus explicit finite-search status. A refused template does not stop repair.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
-    /// `/1` for feed only, `/2` for the joint timed objective.
+    /// `/1` for feed only, `/2` for joint time, `/3` for complete thread order cost.
     pub schema: &'static str,
     /// Original request, including all candidate settings and independent qualification evidence.
     pub request: Request,
@@ -121,7 +133,13 @@ pub struct Report {
     /// Joint feed-and-setup score for the incumbent; omitted in feed-only mode or with no incumbent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_objective_seconds: Option<f64>,
-    /// Trials interrupted by resource/convergence limits, or unproved inner schedules in timed mode.
+    /// Canonical complete thread-order total for the incumbent, omitted for time objectives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_thread_order_cost: Option<f64>,
+    /// Exact common thread market currency for cost mode, including when no incumbent exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective_currency: Option<String>,
+    /// Resource/convergence limits, unproved timed schedules, or unavailable complete cost evidence.
     /// They are not infeasible recipes; a complete admitted incumbent may still be retained.
     pub unresolved_trials: usize,
     /// Every supplied combination was examined; no assertion about unlisted process recipes.
@@ -154,14 +172,43 @@ struct Group<'a> {
 }
 
 impl Request {
+    /// Reserve the complete configured recipe search's thread-purchasing work before evaluation.
+    /// Cost mode additionally validates the common canonical market once, visiting every quote.
+    /// Studies must multiply this reservation by all expanded material/design rows.
+    ///
+    /// # Errors
+    /// Unsupported thread inputs, arithmetic overflow or more than 200000 total work units.
+    pub fn purchasing_work_bound(&self) -> Result<usize, Refusal> {
+        let per_plan = consumables::purchasing_work_bound(&self.options)?;
+        let preflight = if self.objective == Objective::MinimizeThreadObservedOrderCost {
+            thread_cost::purchasing(&self.options)?
+                .quote_book
+                .quotes
+                .len()
+        } else {
+            0
+        };
+        self.max_plan_evaluations
+            .checked_mul(per_plan)
+            .and_then(|work| work.checked_add(preflight))
+            .filter(|work| *work <= MAX_PURCHASING_WORK)
+            .ok_or_else(|| {
+                Refusal::new(
+                    RefusalCode::BudgetExceeded,
+                    "combined recipe/thread purchasing exceeds 200000 configured quote/stock-alias work units",
+                )
+            })
+    }
+
     fn groups(&self) -> Result<Vec<Group<'_>>, Refusal> {
         let schema = match self.objective {
             Objective::MinimizeFeedSeconds => "ftx-sewing-selection/1",
             Objective::MinimizeFeedAndSetupSeconds => "ftx-sewing-selection/2",
+            Objective::MinimizeThreadObservedOrderCost => "ftx-sewing-selection/3",
         };
         if self.schema != schema || !self.options.require_qualification {
             return Err(invalid(
-                "sewing selection needs schema /1 for feed only or /2 for feed plus setup, and explicit require_qualification=true",
+                "sewing selection needs schema /1 for feed, /2 for feed plus setup or /3 for thread cost, and explicit require_qualification=true",
             ));
         }
         if !(1..=MAX_TRIALS).contains(&self.max_plan_evaluations)
@@ -191,16 +238,9 @@ impl Request {
                 "combined recipe/ordering search exceeds 200000 configured ordering nodes",
             ));
         }
-        let purchasing_work = consumables::purchasing_work_bound(&self.options)?;
-        if self
-            .max_plan_evaluations
-            .checked_mul(purchasing_work)
-            .is_none_or(|n| n > MAX_PURCHASING_WORK)
-        {
-            return Err(Refusal::new(
-                RefusalCode::BudgetExceeded,
-                "combined recipe/thread purchasing exceeds 200000 configured quote/stock-alias work units",
-            ));
+        self.purchasing_work_bound()?;
+        if self.objective == Objective::MinimizeThreadObservedOrderCost {
+            thread_cost::validate(&self.options)?;
         }
         let mut ids = BTreeMap::new();
         for (index, pass) in self.options.passes.iter().enumerate() {
@@ -307,6 +347,17 @@ impl Request {
         let mut selected_plan: Option<SewPlan> = None;
         let mut selected_choices = None;
         let timed = self.objective == Objective::MinimizeFeedAndSetupSeconds;
+        let cost = self.objective == Objective::MinimizeThreadObservedOrderCost;
+        let objective_currency = if cost {
+            Some(
+                thread_cost::purchasing(&self.options)?
+                    .market
+                    .currency
+                    .clone(),
+            )
+        } else {
+            None
+        };
         let mut selected_score = None;
         let mut indices = vec![0; groups.len()];
         loop {
@@ -329,12 +380,25 @@ impl Request {
                 refusal: None,
                 objective_seconds: None,
                 ordering_optimality_proven: None,
+                thread_order_cost: None,
+                objective_unavailable: None,
             };
             match SewPlan::build(pattern, &options) {
                 Ok(plan) => {
                     trial.feed_seconds = Some(plan.feed_seconds);
                     trial.stitch_intervals = Some(plan.stitch_intervals);
-                    let score = if timed {
+                    let score = if let Some(currency) = objective_currency.as_deref() {
+                        match thread_cost::score(&plan, currency) {
+                            Ok(score) => {
+                                trial.thread_order_cost = Some(score);
+                                Some(score)
+                            }
+                            Err(refusal) => {
+                                trial.objective_unavailable = Some(refusal);
+                                None
+                            }
+                        }
+                    } else if timed {
                         let schedule = plan
                             .ordering
                             .as_ref()
@@ -344,14 +408,16 @@ impl Request {
                         })?;
                         trial.objective_seconds = Some(time.feed_and_setup_seconds);
                         trial.ordering_optimality_proven = Some(schedule.optimality_proven);
-                        time.feed_and_setup_seconds
+                        Some(time.feed_and_setup_seconds)
                     } else {
-                        plan.feed_seconds
+                        Some(plan.feed_seconds)
                     };
-                    if !score.is_finite() {
+                    if score.is_some_and(|score| !score.is_finite()) {
                         return Err(invalid("nonrepresentable sewing selection objective"));
                     }
-                    if selected_score.is_none_or(|old| score < old) {
+                    if let Some(score) = score
+                        && selected_score.is_none_or(|old| score < old)
+                    {
                         selected_score = Some(score);
                         selected_choices = Some(trial.choices.clone());
                         selected_plan = Some(plan);
@@ -383,10 +449,13 @@ impl Request {
                         RefusalCode::BudgetExceeded | RefusalCode::NotConverged | RefusalCode::Io
                     )
                 }) || trial.ordering_optimality_proven == Some(false)
+                    || trial.objective_unavailable.is_some()
             })
             .count();
         Ok(Report {
-            schema: if timed {
+            schema: if cost {
+                "ftx-sewing-selection-report/3"
+            } else if timed {
                 "ftx-sewing-selection-report/2"
             } else {
                 "ftx-sewing-selection-report/1"
@@ -398,12 +467,16 @@ impl Request {
             selected_choices,
             selected_plan,
             selected_objective_seconds: if timed { selected_score } else { None },
+            selected_thread_order_cost: if cost { selected_score } else { None },
+            objective_currency,
             unresolved_trials,
             search_complete,
             budget_exhausted: !search_complete,
             optimality_proven: search_complete && has_plan && unresolved_trials == 0,
             no_feasible_listed_recipe: search_complete && !has_plan && unresolved_trials == 0,
-            tie_break: if timed {
+            tie_break: if cost {
+                "template first, then operation ID / recipe ID lexicographic; retain first equal complete thread order cost"
+            } else if timed {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal feed-plus-setup time"
             } else {
                 "template first, then operation ID / recipe ID lexicographic; retain first equal feed time"

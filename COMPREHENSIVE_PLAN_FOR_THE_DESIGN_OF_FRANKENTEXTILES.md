@@ -3193,6 +3193,23 @@ No safe-fit threshold, empirical wearer fit or global optimum is inferred.
 
 ---
 
+### 25.72 Choose qualified sewing recipes by complete thread order cost
+
+`ftx-sewing-selection/3` adds an explicit `minimize_thread_observed_order_cost` objective to the
+existing bounded production recipe search (`ftx-tm7` / `ftx-ms2`). Every candidate still runs the
+same sewing planner; its exact yarn demands aggregate before canonical whole-order purchasing
+applies supplier minimums, increments, price tiers and the declared dated market. A slower recipe
+can therefore win on its complete order cost, while quantity thresholds can also make a larger
+order cheaper. No price or thread-use model is inferred.
+
+Missing consumption or eligible offers leave a built trial unscored and unresolved, prevent a
+false optimum or infeasibility proof, and never become a zero cost. A bounded search may retain a
+complete incumbent without proving it cheapest. The selected plan and exact replay flow through
+material/design studies and native/browser clients. The objective excludes cutting costs, setup
+time, undeclared supplier bundles and empirical seam quality. See [sewing-selection.md](docs/sewing-selection.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

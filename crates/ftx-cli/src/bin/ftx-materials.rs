@@ -24,6 +24,8 @@ mod nonlinear_calibration;
 mod scenarios;
 #[path = "../materials/screen.rs"]
 mod screening;
+#[path = "../materials/sewing_selection.rs"]
+mod sewing_selection;
 #[path = "../materials/thermal.rs"]
 mod steady_workbench;
 #[path = "../materials/strip.rs"]
@@ -101,6 +103,7 @@ ftx-materials cut-job PATTERN.json REQUEST.json
 ftx-materials cut-price PATTERN.json OPTIONS.json QUOTES.json MARKET.json
 ftx-materials cut-svg PATTERN.json OPTIONS.json ROLL-INDEX NEW.svg
 ftx-materials sew-plan PATTERN.json OPTIONS.json
+ftx-materials sew-select PATTERN.json REQUEST.json
 ftx-materials sew-stitches PATTERN.json OPTIONS.json
 ftx-materials sew-svg PATTERN.json OPTIONS.json OPERATION-ID NEW.svg
 
@@ -142,6 +145,7 @@ JSON output. `show` includes a portable selection, missing-property coverage and
 `cut-price` prices gross marker stock, including layout waste; missing offers remain unknown.
 `cut-svg` writes a new source-locked planning preview, not device execution code.
 `sew-plan` checks material thickness, allowances, local feed and multi-pass/reverse/backtack order.
+`sew-select` searches explicit qualified recipes by feed time, feed plus setup time or complete thread order cost; its exact selected options replay through `sew-plan`.
 `sew-stitches` expands all directed stitch travel in paired pattern frames; neither command authorizes hardware.
 `sew-svg` writes a new operation preview with source/offset paths and needle stations; never a machine file.
 Fitted coefficients are estimates: --allow-estimates explicitly admits them for commands listing that flag; forward strip requests retain their frozen selection's policy.";
@@ -282,6 +286,9 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         }
         ["cut-plan", pattern, options] => cutting::plan(pattern, options),
         ["cut-job", pattern, request] => cutting::job(pattern, request),
+        ["sew-select", pattern, request] => {
+            sewing_selection::run(pattern, request).map(|(report, _, _)| report)
+        }
         ["sew-plan", pattern, options] => {
             let pattern = Pattern::new(read::<Value>(pattern)?);
             let options = read::<ftx_export::sewing::SewOptions>(options)?;
@@ -431,7 +438,13 @@ fn main() -> ExitCode {
         Ok(value) => match serde_json::to_string_pretty(&value) {
             Ok(text) => {
                 println!("{text}");
-                ExitCode::SUCCESS
+                if args.first().is_some_and(|arg| arg == "sew-select")
+                    && !value["selected_options_json"].is_string()
+                {
+                    ExitCode::from(2)
+                } else {
+                    ExitCode::SUCCESS
+                }
             }
             Err(e) => {
                 eprintln!("{e}");

@@ -52,6 +52,99 @@ fn run(main: bool, dir: &Path) -> Value {
 }
 
 #[test]
+fn thread_cost_selection_matches_portable_and_both_native_commands() {
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let selection = include_str!("../../../examples/sewing-thread-cost-selection.json");
+    let selected: Value =
+        serde_json::from_str(&ftx_wasm::sew_select(pattern, selection).unwrap()).unwrap();
+    assert_eq!(selected["report"]["selected_thread_order_cost"], 10.0);
+    assert_eq!(selected["report"]["objective_currency"], "USD");
+    assert_eq!(selected["report"]["optimality_proven"], true);
+    let source: Value = serde_json::from_str(pattern).unwrap();
+    let mut study = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"original","changes":{"schema":"ftx-material-bindings/1",
+            "default":source["fabric"]["material"]}}],
+        "sewing_selection":serde_json::from_str::<Value>(selection).unwrap(),
+        "comparison":{"basis":"nominal","required_consumers":["sewing_purchasing"],
+            "objectives":[{"metric":"thread_observed_order_cost","direction":"minimize"}]}});
+    let dir = std::env::temp_dir().join(format!(
+        "ftx-thread-cost-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("pattern.json"), pattern).unwrap();
+    fs::write(dir.join("selection.json"), selection).unwrap();
+    for (binary, prefix) in [
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            &["--json", "materials", "sew-select"][..],
+        ),
+        (env!("CARGO_BIN_EXE_ftx-materials"), &["sew-select"][..]),
+    ] {
+        let output = Command::new(binary)
+            .current_dir(&dir)
+            .args(prefix)
+            .args(["pattern.json", "selection.json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} / {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(actual.get("result").unwrap_or(&actual), &selected);
+    }
+    for unpriced in [false, true] {
+        if unpriced {
+            study["sewing_selection"]["options"]["consumables"]["purchasing"]["quote_book"]["quotes"] =
+                json!([]);
+        }
+        let text = study.to_string();
+        fs::write(dir.join("study.json"), &text).unwrap();
+        let portable: Value =
+            serde_json::from_str(&ftx_wasm::materials::study(pattern, &text).unwrap()).unwrap();
+        for main in [false, true] {
+            assert_eq!(run(main, &dir), portable);
+        }
+        let row = &portable["alternatives"][0];
+        let search = &row["sewing_selection"]["result"];
+        assert_eq!(search["objective_currency"], "USD");
+        assert_eq!(search["no_feasible_listed_recipe"], false);
+        assert_eq!(search["optimality_proven"], !unpriced);
+        assert_eq!(search["unresolved_trials"], if unpriced { 2 } else { 0 });
+        if unpriced {
+            assert!(row["metrics"]["thread_observed_order_cost"].is_null());
+            assert_eq!(row["sewing"]["status"], "refused");
+            assert_eq!(portable["comparison"]["frontier"], json!([]));
+        } else {
+            assert_eq!(row["metrics"]["thread_observed_order_cost"], 10.0);
+            assert_eq!(search["selected_thread_order_cost"], 10.0);
+            assert_eq!(portable["comparison"]["frontier"], json!(["original"]));
+        }
+        if let Some(export) = std::env::var_os("FTX_THREAD_COST_REPLAY") {
+            let export = std::path::PathBuf::from(export);
+            fs::create_dir_all(&export).unwrap();
+            fs::write(export.join("pattern.json"), pattern).unwrap();
+            fs::write(export.join("selection.json"), selection).unwrap();
+            fs::write(export.join("selection-report.json"), selected.to_string()).unwrap();
+            let name = if unpriced { "unpriced" } else { "priced" };
+            fs::write(export.join(format!("{name}-study.json")), text).unwrap();
+            fs::write(
+                export.join(format!("{name}-report.json")),
+                portable.to_string(),
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
 fn both_native_commands_expand_design_material_pairs_and_preserve_exact_replay() {
     let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
     let input = include_str!("../../../examples/design-study.json");

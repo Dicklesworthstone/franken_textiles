@@ -27,6 +27,12 @@ pub struct Selection {
     pub selected_choices: Option<BTreeMap<String, String>>,
     /// Selected objective, including qualified setup time when requested by the selector.
     pub selected_objective_seconds: Option<f64>,
+    /// Complete canonical thread order cost for a cost-directed search; never a partial total.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_thread_order_cost: Option<f64>,
+    /// Exact thread-market currency; no conversion to cutting or other costs is inferred.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective_currency: Option<String>,
     /// Trials whose resource/convergence refusal prevents a proof of infeasibility or optimality.
     pub unresolved_trials: usize,
     /// All supplied combinations were examined; not a global manufacturing search.
@@ -92,6 +98,8 @@ pub(super) fn evaluate(
         trials,
         selected_choices,
         selected_objective_seconds,
+        selected_thread_order_cost,
+        objective_currency,
         selected_plan,
         unresolved_trials,
         search_complete,
@@ -114,7 +122,7 @@ pub(super) fn evaluate(
                 if no_feasible_listed_recipe {
                     "Every listed sewing recipe combination was refused by the production planner; inspect sewing_selection.trials for source qualification and machine limits"
                 } else {
-                    "No qualified sewing plan was found before the recipe search stopped or encountered unresolved trials; this does not establish infeasibility"
+                    "No complete sewing plan with an available requested objective was selected; inspect production refusals and objective_unavailable in the recipe trials. This does not establish infeasibility"
                 },
             ),
         },
@@ -130,6 +138,8 @@ pub(super) fn evaluate(
                 trials,
                 selected_choices,
                 selected_objective_seconds,
+                selected_thread_order_cost,
+                objective_currency,
                 unresolved_trials,
                 search_complete,
                 budget_exhausted,
