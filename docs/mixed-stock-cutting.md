@@ -140,7 +140,17 @@ exact material hash and whether the item was used. Follow
 [finite-stock purchasing](cutting-plans.md) for the required indivisible-item quote normalization.
 
 Roll procurement uses actual gross markers, summed per material into whole orders with their existing
-minimums, increments and longest continuous-cut checks. Finite procurement buys each used physical item
+minimums, increments and longest continuous-cut checks. Optional
+`purchasing.market.split_orders: {"schema":"ftx-cut-order-allocation/1","max_search_nodes":50000}`
+instead assigns whole roll markers across exact material-revision-locked supplier offers. Each selected
+order applies those same rules to its aggregate quantity; a marker is never split. A quote's base SKU
+and all declared price-break SKUs are treated as aliases of the same physical stock. Offers from one
+supplier that share any such alias cannot create additional stock. The actual ordered SKU comes from
+the applied price break when it declares one, otherwise from the quote's base SKU.
+The shared work limit bounds the search. A material study reserves this limit for every alternative,
+including alternatives that subsequently fail or leave a route dormant, and caps their aggregate at
+200,000 work units before evaluation.
+Finite procurement buys each used physical item
 once, using its complete polygon area and exact stock lock, including defects and prior cuts. An offer
 explicitly bound to a physical finite item is excluded from roll procurement even when both routes use
 the same material snapshot: one remnant cannot also become a second roll supply.
@@ -148,7 +158,13 @@ the same material snapshot: one remnant cannot also become a second roll supply.
 The job's purchasing report retains both canonical outcomes and their source exclusions. Missing,
 stale, unavailable or mismatched prices do not erase geometric allocation. The complete total remains
 unknown unless every used roll material and finite item has an admitted offer in the common market.
-The selected total does not pool suppliers' inventory, infer shipping discounts, reserve stock or
+`selected_observed_order_total` is the complete feasible roll allocation plus all selected finite-item
+orders. When a bounded roll search finds a complete allocation but cannot prove it least-cost, this
+selected total remains available while `least_observed_independent_order_total` stays unknown and
+`order_allocation_optimality_proven` is false. The latter proof concerns purchasing for the already
+selected markers/items, not a globally optimal finite-stock geometry search. If either route lacks a
+complete order, neither complete total is published.
+The selected total does not infer shipping discounts, reserve stock or
 authorize a purchase. All alternatives use the same dated inputs; no wall-clock source refresh occurs
 inside a solve.
 
@@ -169,7 +185,10 @@ after allocation without pretending that their selected allocation minimizes cos
 ## Study objectives and interpretation
 
 The study exposes `cutting_job_external_cut_area_m2`, `cutting_job_stock_area_m2`,
-`cutting_job_stock_mass_kg` and `cutting_job_observed_order_cost`. Required consumers are `cutting_job`
+`cutting_job_stock_mass_kg`, `cutting_job_selected_order_cost` and `cutting_job_observed_order_cost`.
+The selected-cost objective admits a complete feasible order retained at the search limit; the
+observed-order-cost objective additionally requires proof of the least purchasing cost for the
+fixed allocation. Required consumers are `cutting_job`
 for complete geometry and `cutting_job_purchasing` for a complete observed order total. Cost uses the
 job's declared market currency. Nominal outputs are not propagated confidence intervals.
 

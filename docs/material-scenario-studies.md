@@ -393,8 +393,12 @@ explicit sourced retained extras, independently of the body. Unknown components 
 inventory block that mass objective, not valid drape/heat or other manufacturing results. It is one
 pre-finishing assembly, not purchased waste or a weighed finished garment. Explicit `reported_bounds`
 comparison can use its complete conditional mass range for whole-range constraints and separated-range
-dominance. That mode permits only `assembly_mass_kg` objectives/constraints; additional required
-consumers still keep their ordinary gates. See `docs/material-screening-and-studies.md`.
+dominance. The same mode supports all eight vapor potential objectives from source-reported Ret
+endpoints, including common stacks, independent sheets, covered body regions and motion integrals.
+It checks canonical source/network ranges and their area/time aggregates; motion follows the declared
+right-endpoint or composite-trapezoid rule. Missing endpoints preserve nominal results but exclude
+robust ranking. Additional required consumers keep their ordinary gates. See
+`docs/material-screening-and-studies.md`.
 
 Every scenario objective requires this bound pattern's identity, the retained body/scenario identities,
 `drape.settled == true`, empty drape gating and `simulation_gating_clear == true`. Successful thermal
@@ -407,9 +411,10 @@ request identity; there is no misleading manufacturing-only frontier nested bene
 Relevant reported methods, full conditions and evidence must match by source piece unless explicitly
 relaxed. Different nonlinear/relaxation/temperature records and constitutive-model selectors use
 conservative exact-record comparison. Protocol override never bypasses freshness, settledness or
-missing-value checks. Nominal comparison requires explicit consent: source ranges are not propagated
-drape/thermal objective intervals. Reported assembly-mass bounds hold authored geometry and inventory
-fixed and do not establish general scenario uncertainty. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
+missing-value checks. Nominal comparison requires explicit consent. Source ranges do not establish
+mechanical or dry-thermal objective intervals. Reported assembly-mass bounds hold authored geometry
+and inventory fixed; vapor bounds hold geometry, boundaries and integration policy fixed. Neither
+establishes general scenario uncertainty. Geometric settledness is not viscoelastic equilibrium, measured fit, thermal
 comfort or proof that the requested run duration was physically sufficient. Positive admission tests
 use synthetic callback outcomes and an actual production sewing-only band after 120 sewing steps;
 the latter explicitly reports that gravity was not simulated. The short cylinder integration also

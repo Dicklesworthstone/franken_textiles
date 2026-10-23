@@ -2923,6 +2923,48 @@ transport gates stay open. See [vapor-coverage.md](docs/vapor-coverage.md).
 
 ---
 
+### 25.61 Bounded purchasing across multiple suppliers
+
+The optional `market.split_orders` policy assigns complete, indivisible markers to source-locked
+offers through the existing quote evaluator. Each supplier order aggregates its marker lengths
+before applying minimum quantities, increments, observed stock, continuous-cut limits and sourced
+quantity prices. A material can therefore have a complete purchasing plan even when no single
+supplier can fulfill all its markers. Latest-observation, currency and source qualification retain
+their existing meaning, and aliases cannot create duplicate stock.
+
+The bounded search reports a complete feasible selected order separately from a proved minimum.
+Budget exhaustion preserves a feasible incumbent without claiming optimality; an incomplete order
+never supplies a cheap subtotal. Mixed roll/finite-stock jobs and fixed-pattern studies retain this
+distinction through explicit selected-cost objectives. Study requests reserve the declared work
+across every alternative against one aggregate cap. Native, portable and browser consumers show the
+same assignments, quote evidence, costs and search status. This software path does not reserve stock
+or establish live supplier fulfillment; qualification remains open under `ftx-tm6`/`ftx-pq1`.
+See [mixed-stock-cutting.md](docs/mixed-stock-cutting.md).
+
+---
+
+### 25.62 Source-reported Ret ranges through layered geometry and motion
+
+The canonical vapor evaluator now propagates complete positive source-reported Ret endpoints
+through fixed layer areas, declared boundary/interface resistances and vapor-pressure conditions.
+Resistance sums retain endpoint order; potential heat and mass transfer invert the resistance
+endpoints. Independent sheets, disjoint covered-body regions and accepted motion intervals carry
+the same conditional ranges through their actual area and time accounting. Missing endpoints or
+unrepresentable interval arithmetic leave nominal results inspectable and report why ranges are
+unavailable. They never become zero-width uncertainty estimates.
+
+The existing `reported_bounds` comparison policy accepts these eight vapor objectives alongside
+assembly mass. Inclusive constraints require the complete range; strict guaranteed dominance
+requires separated ranges, leaving overlaps and touching endpoints unresolved. Admission checks
+the current sources, geometry, canonical networks and aggregate endpoints before ranking. Browser
+tables and frozen replay retain both nominal values and ranges. These are conditional source
+endpoints, not confidence intervals or uncertainty in geometry, boundary conditions, moisture supply
+or latent feedback. Those model and empirical gates remain open under `ftx-ms2`/`ftx-vc2`/`ftx-tmc`.
+See [material-screening-and-studies.md](docs/material-screening-and-studies.md) and
+[vapor-coverage.md](docs/vapor-coverage.md).
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

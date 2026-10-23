@@ -2420,8 +2420,8 @@ test('reported mass comparisons display admitted ranges and unresolved alternati
     p.emit(op === 'study' ? { ...manufacturing, comparison } : { ...scenarioReport(), manufacturing, comparison });
     const s = section(p, op === 'study' ? 'Fixed-pattern manufacturing alternatives' : 'Fresh drape and heat alternatives');
     assert.match(visibleText(s), /Computed reported_bounds frontier: A, B/);
-    assert.match(visibleText(s), /complete reported mass ranges at fixed authored geometry and inventory/);
-    assert.match(visibleText(s), /Declared assembly mass ranges evaluated by Rust/);
+    assert.match(visibleText(s), /mass at fixed authored geometry and inventory/);
+    assert.match(visibleText(s), /Complete source-reported ranges evaluated by Rust/);
     assert.doesNotMatch(visibleText(s), /Declared nominal objectives/);
     assert.match(visibleText(s), /A \/ B: Reported mass ranges overlap/);
     const t = descendants(s).find(n => n.tag === 'table');
@@ -3379,6 +3379,64 @@ test('compiled WASM bounded markers retain whole geometry, selected SVG and one 
     const row=study.result.alternatives[0];
     assert.equal(row.cutting.status,'available');assert.equal(row.cutting.result.rolls.length,2);
     assert.equal(row.purchasing.status,'available');assert.equal(row.metrics.least_observed_independent_order_total,2.5);
+    // Each current source-locked supplier can cover one intact marker, but not the complete order.
+    const locked={...quote,material_sha256:cut.result.rolls[0].material.sha256};
+    const splitBook={schema:'ftx-textile-quotes/1',quotes:[
+      {...locked,offer_id:'supplier-a',supplier:'Synthetic A',sku:'stock-a'},
+      {...locked,offer_id:'supplier-b',supplier:'Synthetic B',sku:'stock-b',price:2}]};
+    const splitMarket={...JSON.parse(market),
+      split_orders:{schema:'ftx-cut-order-allocation/1',max_search_nodes:1000}};
+    const splitQuotes=JSON.stringify(splitBook), splitPolicy=JSON.stringify(splitMarket);
+    const split=await w.send({type:'price',request:55,pattern,options,quotes:splitQuotes,market:splitPolicy});
+    assert.equal(split.type,'result',split.message);
+    assert.equal(split.files[0].text,ftx.cut_price(pattern,options,splitQuotes,splitPolicy));
+    assert.equal(split.result.schema,'ftx-cut-procurement/3');
+    assert.deepEqual(split.result.cut_plan,cut.result);
+    assert.equal(split.result.complete_offer_coverage,true);
+    assert.equal(split.result.complete_observed_quantity_coverage,true);
+    assert.equal(split.result.complete_continuous_length_limit_coverage,true);
+    assert.equal(split.result.search_complete,true);assert.equal(split.result.budget_exhausted,false);
+    assert.equal(split.result.order_allocation_optimality_proven,true);
+    assert.ok(Math.abs(split.result.selected_observed_order_total-0.6)<1e-12);
+    assert.equal(split.result.least_observed_independent_order_total,split.result.selected_observed_order_total);
+    const allocation=split.result.material_orders[0].allocation, orders=allocation.selected_orders;
+    assert.deepEqual(allocation.whole_order_sample.offers,[]);
+    assert.equal(orders.length,2);
+    assert.deepEqual(orders.flatMap(o=>o.roll_indices).sort((a,b)=>a-b),[0,1]);
+    assert.deepEqual(orders.map(o=>o.offer.quote.offer_id),['supplier-a','supplier-b']);
+    for(const selected of orders) {
+      assert.equal(selected.offer.quote.material_sha256,locked.material_sha256);
+      assert.equal(selected.offer.order_quantity,0.2);
+      assert.equal(selected.required_continuous_length_m,0.12);
+      assert.equal(selected.offer.quantity_sufficiency_observed,true);
+      assert.equal(selected.offer.within_observed_continuous_limit,true);
+    }
+    // One canonical evaluation can retain a whole-order fallback without claiming a minimum.
+    const fallbackBook=JSON.stringify({...splitBook,quotes:[...splitBook.quotes,
+      {...locked,offer_id:'whole-fallback',supplier:'Synthetic whole',sku:'whole',price:10,available_quantity:0.25}]});
+    const boundedMarket=JSON.stringify({...splitMarket,split_orders:{...splitMarket.split_orders,max_search_nodes:1}});
+    const bounded=await w.send({type:'price',request:56,pattern,options,quotes:fallbackBook,market:boundedMarket});
+    assert.equal(bounded.type,'result',bounded.message);
+    assert.equal(bounded.files[0].text,ftx.cut_price(pattern,options,fallbackBook,boundedMarket));
+    assert.equal(bounded.result.complete_offer_coverage,true);
+    assert.equal(bounded.result.selected_observed_order_total,2.5);
+    assert.equal(bounded.result.least_observed_independent_order_total,null);
+    assert.equal(bounded.result.order_allocation_optimality_proven,false);
+    assert.equal(bounded.result.search_complete,false);assert.equal(bounded.result.budget_exhausted,true);
+    assert.equal(bounded.result.search_nodes+bounded.result.quote_evaluations,1);
+    const fallbackOrders=bounded.result.material_orders[0].allocation.selected_orders;
+    assert.equal(fallbackOrders.length,1);assert.deepEqual(fallbackOrders[0].roll_indices,[0,1]);
+    assert.equal(fallbackOrders[0].offer.quote.offer_id,'whole-fallback');
+    // Losing observed capacity removes both complete totals, never substituting a partial subtotal.
+    const depletedBook=JSON.stringify({...splitBook,quotes:splitBook.quotes.map(q=>({...q,available_quantity:0.1}))});
+    const depleted=await w.send({type:'price',request:57,pattern,options,quotes:depletedBook,market:splitPolicy});
+    assert.equal(depleted.type,'result',depleted.message);
+    assert.equal(depleted.files[0].text,ftx.cut_price(pattern,options,depletedBook,splitPolicy));
+    assert.equal(depleted.result.complete_offer_coverage,false);
+    assert.equal(depleted.result.selected_observed_order_total,null);
+    assert.equal(depleted.result.least_observed_independent_order_total,null);
+    assert.equal(depleted.result.material_orders[0].allocation.selected_orders,null);
+    assert.equal(depleted.result.material_orders[0].allocation.no_feasible_listed_allocation,true);
     const invalid=await w.send({type:'cut',request:54,pattern,options,rollIndex:2});
     assert.equal(invalid.type,'error');assert.match(invalid.message,/between 1 and 2/);
   });
@@ -3647,4 +3705,141 @@ test('moving layered vapor displays accepted coverage, exact replay and independ
   assert.equal(table('A: moving layered vapor potential').children[2].children.slice(1).every(n=>n.textContent==='Unknown'),true);
   assert.ok(table('A: endpoint vapor potentials — covered layers'));
   assert.equal(descendants(s).some(n=>n.download==='alternative-1-motion-vapor-coverage-replay.json'),false);
+});
+
+function splitPurchaseReport() {
+  const scope={currency:'USD',region:'US',quality:'test',terms:'merchandise only',as_of:'2026-10-22'};
+  const offer=(supplier,offer_id,cost,quantity)=>({quote:{supplier,offer_id,sku:`${offer_id}/base`,unit:'linear_meter',
+    observed_on:'2026-10-22',material_sha256:'locked-revision',available_quantity:quantity,maximum_continuous_quantity:5},
+    order_cost:cost,order_quantity:quantity,quantity_sufficiency_observed:true,within_observed_continuous_limit:true});
+  const selected_orders=[
+    {offer:offer('<Supplier A>','A/retail',12,5),roll_indices:[0,2],required_length_m:5,
+      required_stock_area_m2:6,required_continuous_length_m:3,scope},
+    {offer:offer('Supplier B','B/retail',11.5,5),roll_indices:[1],required_length_m:5,
+      required_stock_area_m2:6,required_continuous_length_m:5,scope}];
+  const tier={minimum_quantity:5,price:2.4,sku:'A-five'};
+  selected_orders[0].offer.quote.price_breaks=[tier];
+  selected_orders[0].offer.applied_price_break=tier;
+  return {schema:'ftx-cut-procurement/3',market:{...scope,split_orders:{schema:'ftx-cut-order-allocation/1',max_search_nodes:30}},
+    quotes:{schema:'ftx-textile-quotes/1',quotes:selected_orders.map(o=>o.offer.quote)},currency:'USD',
+    complete_offer_coverage:true,complete_observed_quantity_coverage:true,complete_continuous_length_limit_coverage:true,
+    selected_observed_order_total:23.5,least_observed_independent_order_total:null,
+    order_allocation_optimality_proven:false,search_complete:false,budget_exhausted:true,search_nodes:20,quote_evaluations:10,
+    material_orders:[{material_order_index:0,material_sha256:'locked-revision',roll_indices:[0,1,2],
+      marker_lengths_m:[3,5,2],required_length_m:10,required_stock_area_m2:12,required_continuous_length_m:5,
+      allocation:{selected_orders,candidate_offer_ids:['A/retail','B/retail'],excluded_unlocked_offer_ids:['unlocked'],
+        search_nodes:20,quote_evaluations:10,search_complete:false,budget_exhausted:true,optimality_proven:false}}],
+    limits:['Synthetic UI display only']};
+}
+
+test('split supplier purchasing displays whole-marker assignments and bounded feasible cost without inventing a minimum', async () => {
+  const p=await pageModule(); await p.load(); await p.bind();
+  const market='{"split_orders":{"schema":"ftx-cut-order-allocation/1","max_search_nodes":30},"value":-0.0}';
+  p.select('cutOptions'); p.select('quotes'); p.select('market',market); await p.e.price.onclick();
+  assert.equal(p.current().messages.at(-1).market,market);
+  const report=splitPurchaseReport(), raw=JSON.stringify(report);
+  p.emit(report,[{name:'split-orders.json',text:raw,mime:'application/json'}]);
+  const s=section(p,'price'), t=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+  assert.deepEqual(plain(t('Whole-marker supplier allocation').children[2].children.map(n=>n.textContent)),
+    ['Yes','23.5 USD','Unknown','false','true','false','20','10']);
+  const assigned=t('Whole-marker supplier allocation: material order 1');
+  assert.deepEqual(plain(assigned.children[2].children.map(n=>n.textContent)),
+    ['<Supplier A> / A/retail','1, 3','6','5 linear_meter','12','5 linear_meter','3','5 linear_meter; within observed limit','A-five; tier from 5 linear_meter']);
+  assert.equal(assigned.children[3].children[1].textContent,'2');
+  assert.equal(assigned.children[3].children[8].textContent,'B/retail/base');
+  assert.match(visibleText(s),/complete feasible allocation remains usable/);
+  assert.match(visibleText(s),/Least cost has not been proved/);
+  assert.match(visibleText(s),/does not reserve stock|do not reserve stock/);
+  assert.equal(descendants(s).some(n=>'innerHTML' in n),false);
+  const download=descendants(s).find(n=>n.download==='split-orders.json');
+  assert.equal(await p.blobs.get(download.href).text(),raw);
+  p.e.market.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.has(download.href),false);
+  await p.e.price.onclick();
+  report.complete_offer_coverage=false; report.selected_observed_order_total=null;
+  report.material_orders[0].allocation.selected_orders=null; p.emit(report);
+  assert.deepEqual(plain(t('Whole-marker supplier allocation').children[2].children.slice(0,3).map(n=>n.textContent)),
+    ['No complete allocation found','Unknown','Unknown']);
+  assert.match(visibleText(t('Whole-marker supplier allocation: material order 1')),/No complete allocation found within the work limit/);
+  assert.doesNotMatch(visibleText(s),/23.5 USD/);
+});
+
+test('studies retain split order assignments and distinguish mixed-job selected cost from unproved minimum', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p);
+  const a=studyRow('roll orders'), b=studyRow('mixed job'), purchase=splitPurchaseReport();
+  a.purchasing=outcome(purchase); a.metrics.selected_observed_order_total=23.5;
+  b.cutting_job=outcome({complete_inventory:true,inventory:[{},{}],roll:{rolls:[{},{}]},finite_stock:{used_stock_count:1},
+    stock_area_m2:13,external_cut_area_m2:8,stock_mass_kg:2,
+    purchasing:{currency:'USD',complete_offer_coverage:true,selected_observed_order_total:33.5,
+      least_observed_independent_order_total:null,order_allocation_optimality_proven:false,
+      roll:outcome(purchase),finite_stock:outcome({complete_offer_coverage:true,least_observed_independent_order_total:10})}});
+  for (const op of ['study','scenario']) {
+    await p.e[op].onclick(); const report=studyReport([a,b]);
+    p.emit(op==='study'?report:{...scenarioReport(),manufacturing:report});
+    const s=section(p,op==='study'?'Fixed-pattern manufacturing alternatives':'Fresh drape and heat alternatives');
+    const t=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+    assert.deepEqual(plain(t('mixed job: complete mixed-stock purchasing').children[2].children.map(n=>n.textContent)),
+      ['Yes','33.5 USD','Unknown','false']);
+    for (const caption of ['roll orders: whole-marker supplier allocation','mixed job: roll-route supplier allocation']) {
+      assert.equal(t(caption).children[2].children[1].textContent,'23.5 USD');
+      assert.equal(t(caption).children[2].children[2].textContent,'Unknown');
+      assert.equal(t(`${caption}: material order 1`).children[2].children[1].textContent,'1, 3');
+    }
+    assert.equal(t('Independent manufacturing outcomes').children[2].children[8].textContent,'Unknown');
+  }
+  p.e.studyRequest.handlers.change();
+  assert.equal(section(p,'Fixed-pattern manufacturing alternatives').hidden,true);
+  assert.equal(section(p,'Fresh drape and heat alternatives').hidden,true);
+});
+
+test('vapor bounds stay source-qualified and missing endpoints retain nominal display', async () => {
+  const p=await pageModule(); p.select('vaporRequest'); await p.e.vapor.onclick();
+  const report=vaporReport();
+  report.reported_bounds={layer_resistance_m2_pa_w:[15,30],total_resistance_m2_pa_w:[35,50],
+    potential_heat_flux_w_m2:[40,57],potential_heat_flow_w:[40,57],
+    potential_mass_flux_kg_m2_s:[0.000016,0.000023],potential_mass_flow_kg_s:[0.000016,0.000023]};
+  report.bounds_unavailable=[]; report.layers[0].observation.bounds=[15,30]; p.emit(report);
+  const s=section(p,'Potential evaporative transfer'), t=()=>descendants(s).filter(n=>n.tag==='table');
+  assert.deepEqual(plain(t()[0].children[2].children.map(n=>n.textContent)),
+    ['Total vapor resistance','40; reported range [35, 50]','m²·Pa/W']);
+  assert.equal(t()[0].children[5].children[1].textContent,'50; reported range [40, 57]');
+  assert.equal(t()[1].children[2].children[2].textContent,'20; source bounds [15, 30]');
+  assert.match(visibleText(s),/not confidence intervals/);
+  await p.e.vapor.onclick(); report.reported_bounds=null;
+  report.bounds_unavailable=['<shell>: source resistance bounds are not reported']; p.emit(report);
+  assert.equal(t()[0].children[5].children[1].textContent,'50');
+  assert.match(visibleText(s),/<shell>: source resistance bounds are not reported/);
+  assert.match(visibleText(s),/missing bounds are not replaced with an exact range/);
+  assert.doesNotMatch(visibleText(t()[0]),/reported range/);
+  p.e.vaporRequest.handlers.change(); assert.equal(s.hidden,true);
+});
+
+test('vapor range comparisons and motion samples display Rust intervals without nominal reranking', async () => {
+  const p=await pageModule(); await p.load(); scenarioInputs(p); await p.e.scenario.onclick();
+  const report=scenarioReport(), initial=report.simulations.find(r=>r.key==='A').evaluation.result;
+  const energy={potential_energy_j:[8,12],potential_mass_kg:[0.0000032,0.0000048]};
+  const flow={covered_potential_heat_flow_w:[8,12],covered_potential_mass_flow_kg_s:[0.0000032,0.0000048]};
+  const transfer={coverage:{body_area_m2:0.5,covered_area_m2:0.5,uncovered_area_m2:0,unassigned_cloth_reference_area_m2:0,
+    covered_potential_heat_flow_w:10,covered_potential_mass_flow_kg_s:0.000004,reported_bounds:flow,bounds_unavailable:[]}};
+  initial.vapor_coverage=outcome(transfer);
+  initial.motion=outcome({duration_s:1,trials:1,samples:[{}],keyframes:[],vapor_coverage_history:outcome({
+    duration_s:1,integration:'right_endpoint',totals:{potential_energy_j:10,potential_mass_kg:0.000004,
+      reported_bounds:energy,bounds_unavailable:[]},initial:{time_s:0,result:transfer},samples:[{time_s:1,dt_s:1,
+      result:transfer,potential_energy_j:10,potential_mass_kg:0.000004,reported_bounds:energy,bounds_unavailable:[]}]})});
+  report.comparison={policy:{basis:'reported_bounds',allow_mixed_protocols:false,
+    objectives:[{metric:'motion_covered_vapor_potential_energy_j',direction:'maximize'}],constraints:[]},
+    frontier:['A','B'],motion_required:true,incomparable:[{alternatives:['A','B'],reason:'Reported intervals overlap'}],
+    alternatives:['A','B'].map((key,i)=>({key,eligible:true,dominated_by:[],exclusions:[],readings:{
+      motion_covered_vapor_potential_energy_j:{value:10+i,unit:'J',reported_bounds:[8+i,12+i]}}}))};
+  p.emit(report);
+  const s=section(p,'Fresh drape and heat alternatives'), t=caption=>descendants(s).find(n=>n.tag==='table'&&n.children[0].textContent===caption);
+  assert.match(visibleText(s),/Computed reported_bounds frontier: A, B/);
+  assert.match(visibleText(s),/vapor potential at fixed geometry, boundaries and retained sampling/);
+  assert.deepEqual(plain(t('Declared computed objectives — authoritative Rust comparison').children[2].children.map(n=>n.textContent)),
+    ['A','Eligible','None reported','10 J; reported range [8, 12] J']);
+  assert.equal(t('A: moving layered vapor potential').children[2].children[3].textContent,'10; reported range [8, 12]');
+  assert.equal(t('A: vapor coverage at accepted motion samples').children[3].children[7].textContent,'10; reported range [8, 12]');
+  assert.equal(t('Draped layered vapor coverage — covered-region potentials').children[2].children[6].textContent,
+    '10; reported range [8, 12]');
+  assert.match(visibleText(s),/A \/ B: Reported intervals overlap/);
+  p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true);
 });

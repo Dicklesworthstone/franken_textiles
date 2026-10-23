@@ -118,6 +118,18 @@ const state = outcome => outcome?.status === "available" ? "Available" :
   outcome?.status === "not_requested" ? "Not requested" : outcome?.status === "refused" ?
   `Refused: ${outcome.refusal?.message || "See report"}` : "Unavailable";
 const metric = value => typeof value === "number" && Number.isFinite(value) ? String(value) : "Unknown";
+const vaporMetric = (result, name) => metric(result?.[name]) +
+  (result?.reported_bounds?.[name] ? `; reported range [${result.reported_bounds[name].map(metric).join(", ")}]` : "");
+function vaporBoundsNote(parent, result, label = "Vapor source bounds") {
+  if (!result || !Object.hasOwn(result, "reported_bounds")) return;
+  const note = document.createElement("p");
+  note.textContent = `${label}: ` + (result.reported_bounds ?
+    "complete reported resistance endpoints propagated through the fixed geometry, pressures, films, interfaces and latent-heat conversion. " +
+    "These conditional ranges are not confidence intervals or uncertain-geometry, moisture or empirical garment predictions." :
+    `unavailable${result.bounds_unavailable?.length ? ` — ${result.bounds_unavailable.join("; ")}` : ""}. ` +
+    "Nominal results remain visible; missing bounds are not replaced with an exact range.");
+  parent.append(note);
+}
 function table(parent, caption, headings) {
   const t = document.createElement("table"), c = document.createElement("caption"), head = document.createElement("tr");
   c.textContent = caption; t.append(c);
@@ -137,6 +149,7 @@ function detail(parent, title, value) {
   d.addEventListener("toggle", () => { if (d.open && !shown) { pre.textContent = text(value); shown = true; } });
 }
 function procurementResult(parent, r) {
+  if (r.schema === "ftx-cut-procurement/3") return splitProcurementResult(parent, r);
   const grouped = Array.isArray(r.material_orders);
   for (const row of (grouped ? r.material_orders : r.roll_prices) || []) {
     const sample = row.sample, scope = sample.scope;
@@ -181,6 +194,59 @@ function procurementResult(parent, r) {
     complete_continuous_length_limit_coverage: r.complete_continuous_length_limit_coverage,
     least_observed_independent_order_total: r.least_observed_independent_order_total, limits: r.limits };
 }
+function splitProcurementResult(parent, r, label = "Whole-marker supplier allocation") {
+  const summary = table(parent, label, ["Complete offer coverage", "Selected complete cost", "Proven least cost",
+    "Search complete", "Budget exhausted", "Optimality proven", "Search nodes", "Quote evaluations"]);
+  const cost = value => typeof value === "number" ? `${metric(value)} ${r.currency}` : "Unknown";
+  cells(summary, [r.complete_offer_coverage ? "Yes" : "No complete allocation found",
+    cost(r.selected_observed_order_total), cost(r.least_observed_independent_order_total),
+    String(r.search_complete), String(r.budget_exhausted), String(r.order_allocation_optimality_proven),
+    metric(r.search_nodes), metric(r.quote_evaluations)]);
+  const note = document.createElement("p");
+  note.textContent = "Each marker stays whole and is assigned once. Minimum quantities, increments and observed capacity apply once to each selected supplier order. " +
+    "A complete feasible allocation remains usable when the work limit prevents proof of the least cost; no partial allocation is priced as a complete job. " +
+    "Only source-locked offers for the exact material revision are considered. Requested cuts and dated stock observations do not reserve stock or guarantee fulfillment.";
+  parent.append(note);
+  for (const row of r.material_orders || []) {
+    const allocation = row.allocation, selected = allocation?.selected_orders;
+    const title = `${label}: material order ${row.material_order_index + 1}`;
+    const t = table(parent, title, ["Supplier / offer", "Assigned markers", "Required stock (m²)", "Rounded order quantity",
+      `Selected cost (${r.currency})`, "Observed available quantity", "Longest marker (m)", "Continuous-cut limit", "Order SKU / price tier"]);
+    for (const order of selected || []) {
+      const offer = order.offer, q = offer.quote;
+      const tier = offer.applied_price_break;
+      const orderSku = (tier?.sku ?? q.sku ?? "Not reported") +
+        (tier ? `; tier from ${metric(tier.minimum_quantity)} ${q.unit}` : "");
+      const continuity = q.maximum_continuous_quantity == null ? "Not reported" :
+        `${metric(q.maximum_continuous_quantity)} ${q.unit}` +
+        (offer.within_observed_continuous_limit === true ? "; within observed limit" : "");
+      cells(t, [`${q.supplier || "Supplier not named"} / ${q.offer_id}`, order.roll_indices.map(i => i + 1).join(", "),
+        metric(order.required_stock_area_m2), `${metric(offer.order_quantity)} ${q.unit}`, metric(offer.order_cost),
+        q.available_quantity == null ? "Not reported" : `${metric(q.available_quantity)} ${q.unit}`,
+        metric(order.required_continuous_length_m), continuity, orderSku]);
+    }
+    if (!selected?.length) cells(t, [allocation?.search_complete ? "No feasible allocation among admitted offers" :
+      "No complete allocation found within the work limit", "Unassigned", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown"]);
+    const status = document.createElement("p");
+    status.textContent = `Markers ${(row.roll_indices || []).map(i => i + 1).join(", ")}; ` +
+      `total required length ${metric(row.required_length_m)} m. ` +
+      (allocation?.optimality_proven ? "Least cost proved for these whole markers and admitted offers. " :
+        "Least cost has not been proved. ") +
+      (allocation?.budget_exhausted ? "Search reached its declared work limit. " : "") +
+      `Candidate offers: ${(allocation?.candidate_offer_ids || []).join(", ") || "None"}.`;
+    parent.append(status);
+    detail(parent, `${title}: selected orders, market scopes, source evidence and search result`, row);
+  }
+  detail(parent, `${label}: dated market and retained quote book`, { market: r.market, quotes: r.quotes });
+  return { complete_offer_coverage: r.complete_offer_coverage,
+    complete_observed_quantity_coverage: r.complete_observed_quantity_coverage,
+    complete_continuous_length_limit_coverage: r.complete_continuous_length_limit_coverage, currency: r.currency,
+    selected_observed_order_total: r.selected_observed_order_total,
+    least_observed_independent_order_total: r.least_observed_independent_order_total,
+    order_allocation_optimality_proven: r.order_allocation_optimality_proven,
+    search_complete: r.search_complete, budget_exhausted: r.budget_exhausted,
+    search_nodes: r.search_nodes, quote_evaluations: r.quote_evaluations, limits: r.limits };
+}
 function screening(parent, r) {
   const properties = [...new Set(r.alternatives.flatMap(row => Object.keys(row.readings)))].sort();
   const t = table(parent, "Scalar-property screening only — not garment-level ranking", ["Alternative", "Admission", "Dominated by", ...properties]);
@@ -196,11 +262,12 @@ function screening(parent, r) {
 }
 function objectiveComparison(parent, r) {
   const motionQualified = r.motion_required === true;
-  const massBounds = r.policy.basis === "reported_bounds";
+  const reportedBounds = r.policy.basis === "reported_bounds";
   const note = document.createElement("p");
   note.textContent = `Computed ${r.policy.basis} frontier: ${r.frontier.length ? r.frontier.join(", ") : "No eligible non-dominated alternatives"}. ` +
     (r.policy.allow_mixed_protocols ? "Mixed source protocols explicitly admitted. " : "Reported input protocols must match. ") +
-    (massBounds ? "Mass limits and dominance use complete reported mass ranges at fixed authored geometry and inventory. " +
+    (reportedBounds ? "Limits and dominance use complete source-reported ranges: mass at fixed authored geometry and inventory, " +
+      "and vapor potential at fixed geometry, boundaries and retained sampling. " +
       "Conditional on these inputs and evaluated alternatives; no general scenario uncertainty, confidence level, empirical fit or global optimum claim." :
       "Conditional on these inputs and evaluated alternatives; no propagated uncertainty, empirical fit or global optimum claim.");
   parent.append(note);
@@ -223,7 +290,7 @@ function objectiveComparison(parent, r) {
         const q = row.readings[o.metric];
         if (!q) return "Unknown";
         const range = q.reported_bounds ? `; reported range [${q.reported_bounds.map(metric).join(", ")}] ${q.unit}` :
-          massBounds ? "; reported range unknown" : "";
+          reportedBounds ? "; reported range unknown" : "";
         return `${metric(q.value)} ${q.unit}${range}`;
       })]);
   }
@@ -401,8 +468,8 @@ function vaporHistoryResult(parent, key, history, statusLabel, refusal) {
   const summary = table(parent, `${key}: moving layered vapor potential`, ["History", "Duration (s)",
     "Accepted samples", "Potential energy (J)", "Potential water mass (kg)", "Integration rule"]);
   cells(summary, [statusLabel, metric(history?.duration_s),
-    metric(history?.samples?.length), metric(history?.totals?.potential_energy_j),
-    metric(history?.totals?.potential_mass_kg), history?.integration || "Unknown"]);
+    metric(history?.samples?.length), vaporMetric(history?.totals, "potential_energy_j"),
+    vaporMetric(history?.totals, "potential_mass_kg"), history?.integration || "Unknown"]);
   const note = document.createElement("p");
   const integration = history?.integration === "right_endpoint" ?
     "The right-endpoint rule holds each accepted sample's potential flow over its preceding interval; " :
@@ -414,6 +481,7 @@ function vaporHistoryResult(parent, key, history, statusLabel, refusal) {
     "Uncovered body transfer remains unknown, and complete-domain comparisons require coverage at every sample. " +
     "These potentials do not model water supply, actual evaporation, moisture storage or cooling supplied to dry heat.";
   parent.append(note);
+  vaporBoundsNote(parent, history?.totals, `${key}: moving vapor source bounds`);
   detail(parent, `${key}: moving vapor sources, sample coverage and exact replay (display only)`,
     history || { refusal });
   if (!history) return;
@@ -424,8 +492,9 @@ function vaporHistoryResult(parent, key, history, statusLabel, refusal) {
     const coverage = sample.result?.coverage, initial = sample.time_s === 0;
     cells(samples, [metric(sample.time_s), initial ? "Initial only" : metric(sample.dt_s),
       metric(coverage?.covered_area_m2), metric(coverage?.uncovered_area_m2), metric(coverage?.unassigned_cloth_reference_area_m2),
-      metric(coverage?.covered_potential_heat_flow_w), metric(coverage?.covered_potential_mass_flow_kg_s),
-      initial ? "Initial only" : metric(sample.potential_energy_j), initial ? "Initial only" : metric(sample.potential_mass_kg)]);
+      vaporMetric(coverage, "covered_potential_heat_flow_w"), vaporMetric(coverage, "covered_potential_mass_flow_kg_s"),
+      initial ? "Initial only" : vaporMetric(sample, "potential_energy_j"),
+      initial ? "Initial only" : vaporMetric(sample, "potential_mass_kg")]);
   }
 }
 function motionVaporComparison(op, parent, key, index, motion, dependency, requested) {
@@ -468,7 +537,7 @@ function motionComparison(op, parent, rows, simulations, requested) {
       for (const endpoint of result.keyframes) {
         const transfer = available(endpoint.vapor_surface);
         cells(vapor, [metric(endpoint.time_s), state(endpoint.vapor_surface), metric(transfer?.area_m2),
-          metric(transfer?.potential_heat_flow_w), metric(transfer?.potential_mass_flow_kg_s)]);
+          vaporMetric(transfer, "potential_heat_flow_w"), vaporMetric(transfer, "potential_mass_flow_kg_s")]);
       }
     }
     if (result.keyframes.some(e => e.vapor_coverage && e.vapor_coverage.status !== "not_requested")) {
@@ -482,8 +551,8 @@ function motionComparison(op, parent, rows, simulations, requested) {
       for (const [j, endpoint] of result.keyframes.entries()) {
         const transfer = available(endpoint.vapor_coverage), coverage = transfer?.coverage;
         cells(vapor, [metric(endpoint.time_s), state(endpoint.vapor_coverage), metric(coverage?.covered_area_m2),
-          metric(coverage?.uncovered_area_m2), metric(coverage?.covered_potential_heat_flow_w),
-          metric(coverage?.covered_potential_mass_flow_kg_s)]);
+          metric(coverage?.uncovered_area_m2), vaporMetric(coverage, "covered_potential_heat_flow_w"),
+          vaporMetric(coverage, "covered_potential_mass_flow_kg_s")]);
         detail(parent, `${row.key}: endpoint ${j + 1} vapor layers, sources and boundary conditions (display only)`,
           transfer || { refusal: endpoint.vapor_coverage?.refusal });
         if (typeof transfer?.replay_request_json === "string") {
@@ -521,7 +590,7 @@ function comparison(op, r) {
       Object.entries(row.choices || {}).map(([group, choice]) => `${group}: ${choice}`).join("; ")]);
   }
   const t = table(parent, "Independent manufacturing outcomes", ["Alternative", "Binding", "Cutting", "Sewing", "Purchasing",
-    "Stock area (m²)", "Cut area (m²)", "Complete stock mass (kg)", "Observed order cost", "Stitch intervals", "Feed-only seconds"]);
+    "Stock area (m²)", "Cut area (m²)", "Complete stock mass (kg)", "Proven least order cost", "Stitch intervals", "Feed-only seconds"]);
   for (const [i, row] of study.alternatives.entries()) {
     const m = row.metrics || {}, purchase = available(row.purchasing);
     const cost = metric(m.least_observed_independent_order_total);
@@ -539,6 +608,9 @@ function comparison(op, r) {
       pattern_sha256: binding?.pattern_sha256, choices: row.choices, frozen_changes: row.frozen_changes, pieces: binding?.pieces,
       refusals: { binding: row.binding.refusal, cutting: row.cutting.refusal, finite_stock: row.finite_stock?.refusal,
         cutting_job: row.cutting_job?.refusal, sewing: row.sewing.refusal, purchasing: row.purchasing.refusal } });
+    if (purchase?.schema === "ftx-cut-procurement/3") {
+      splitProcurementResult(parent, purchase, `${row.key}: whole-marker supplier allocation`);
+    }
   }
   if (study.alternatives.some(row => row.finite_stock && row.finite_stock.status !== "not_requested")) {
     const stock = table(parent, "Finite hides and remnants — used physical inventory", ["Alternative", "Finite stock",
@@ -614,7 +686,8 @@ function comparison(op, r) {
       for (const row of study.alternatives) {
         const outcome = simulations.get(row.key), initial = available(outcome), transfer = available(initial?.vapor_surface);
         cells(vapor, [row.key, initial ? state(initial.vapor_surface) : state(outcome), metric(transfer?.area_m2),
-          metric(transfer?.potential_heat_flow_w), metric(transfer?.potential_mass_flow_kg_s)]);
+          vaporMetric(transfer, "potential_heat_flow_w"), vaporMetric(transfer, "potential_mass_flow_kg_s")]);
+        vaporBoundsNote(parent, transfer, `${row.key}: independent-sheet vapor bounds`);
         detail(parent, `${row.key}: vapor conditions, source columns and refusal (display only)`,
           transfer || { refusal: initial?.vapor_surface?.refusal || outcome?.refusal });
       }
@@ -628,7 +701,7 @@ function comparison(op, r) {
     hardware_execution_authorized: study.hardware_execution_authorized, notes: study.notes,
     computed_frontier: r.comparison?.frontier ?? null,
     comparison_basis: r.comparison ? (r.comparison.policy.basis === "reported_bounds" ?
-      "Declared assembly mass ranges evaluated by Rust with fixed authored geometry and inventory; unresolved overlap and unknown ranges remain explicit." :
+      "Complete source-reported ranges evaluated by Rust at fixed declared inputs; unresolved overlap and unknown ranges remain explicit." :
       "Declared nominal objectives evaluated by Rust; conditional Pareto set, not an empirical fit/warmth claim or global optimum.") :
       "Actual consumer results; no computed objectives requested. Unknowns are not zero, and no ranking is inferred by this page." };
 }
@@ -641,7 +714,7 @@ function cuttingJobComparison(op, parent, alternatives) {
   parent.append(note);
   const t = table(parent, "Complete cutting jobs — rolls, hides and remnants", ["Alternative", "Cutting job", "Complete inventory",
     "Allocated instances / copies", "Roll markers", "Used finite items", "Engaged stock area (m²)",
-    "External cut area (m²)", "Complete engaged-stock mass (kg)", "Purchasing", "Observed complete order cost"]);
+    "External cut area (m²)", "Complete engaged-stock mass (kg)", "Purchasing", "Proven least complete cost"]);
   for (const [i, row] of alternatives.entries()) {
     const r = available(row.cutting_job), purchase = r?.purchasing;
     const cost = metric(purchase?.least_observed_independent_order_total);
@@ -660,6 +733,16 @@ function cuttingJobComparison(op, parent, alternatives) {
       for (const route of r.resolved_routes) cells(routes, [route.piece,
         route.stock === "roll" ? "Roll" : route.stock === "finite_stock" ? "Finite hide, sheet or remnant" : "Unknown",
         route.material_sha256]);
+    }
+    const rollPurchase = available(purchase?.roll);
+    if (rollPurchase?.schema === "ftx-cut-procurement/3") {
+      const selected = table(parent, `${row.key}: complete mixed-stock purchasing`,
+        ["Complete offer coverage", "Selected complete cost", "Proven least complete cost", "Allocation optimum proved"]);
+      const showCost = value => value == null ? "Unknown" : `${metric(value)} ${purchase.currency}`;
+      cells(selected, [purchase.complete_offer_coverage ? "Yes" : "No",
+        showCost(purchase.selected_observed_order_total), showCost(purchase.least_observed_independent_order_total),
+        String(purchase.order_allocation_optimality_proven)]);
+      splitProcurementResult(parent, rollPurchase, `${row.key}: roll-route supplier allocation`);
     }
     const actions = document.createElement("div"); actions.className = "links"; parent.append(actions);
     if (typeof r.pattern_json === "string") link(op, actions,
@@ -682,7 +765,8 @@ function vaporCoverageComparison(op, parent, alternatives, simulations, requeste
     const evaluation = simulations.get(row.key), initial = available(evaluation), r = available(initial?.vapor_coverage), c = r?.coverage;
     cells(t, [row.key, initial ? state(initial.vapor_coverage) : state(evaluation), metric(c?.body_area_m2),
       metric(c?.covered_area_m2), metric(c?.uncovered_area_m2), metric(c?.unassigned_cloth_reference_area_m2),
-      metric(c?.covered_potential_heat_flow_w), metric(c?.covered_potential_mass_flow_kg_s)]);
+      vaporMetric(c, "covered_potential_heat_flow_w"), vaporMetric(c, "covered_potential_mass_flow_kg_s")]);
+    vaporBoundsNote(parent, c, `${row.key}: covered vapor source bounds`);
     detail(parent, `${row.key}: vapor coverage regions, source observations and boundary assumptions (display only)`,
       r || { refusal: initial?.vapor_coverage?.refusal || evaluation?.refusal });
     if (typeof r?.replay_request_json === "string") {
@@ -703,9 +787,10 @@ function vaporComparison(op, parent, alternatives) {
     "Total Ret (m²·Pa/W)", "Potential latent heat flow (W)", "Potential water mass flow (kg/s)", "Layer protocols"]);
   for (const [i, row] of alternatives.entries()) {
     const r = available(row.vapor);
-    cells(t, [row.key, state(row.vapor), metric(r?.request.area_m2), metric(r?.total_resistance_m2_pa_w),
-      metric(r?.potential_heat_flow_w), metric(r?.potential_mass_flow_kg_s),
+    cells(t, [row.key, state(row.vapor), metric(r?.request.area_m2), vaporMetric(r, "total_resistance_m2_pa_w"),
+      vaporMetric(r, "potential_heat_flow_w"), vaporMetric(r, "potential_mass_flow_kg_s"),
       r ? (r.mixed_protocols ? "Mixed; explicitly admitted" : "Reported protocols match") : "Unknown"]);
+    vaporBoundsNote(parent, r, `${row.key}: vapor source bounds`);
     detail(parent, `${row.key}: vapor layers, source observations and boundary assumptions (display only)`,
       r || { refusal: row.vapor?.refusal });
     if (typeof r?.replay_request_json === "string") {
@@ -769,12 +854,13 @@ function vaporResult(parent, r) {
   }
   if (r.schema === "ftx-vapor-coverage-report/1") {
     const totals = table(parent, "Layered vapor coverage", ["Quantity", "Value", "Unit"]);
-    for (const [label, value, unit] of [
-      ["Covered body area", r.coverage.covered_area_m2, "m²"],
-      ["Uncovered body area — transfer unknown", r.coverage.uncovered_area_m2, "m²"],
-      ["Covered potential heat flow", r.coverage.covered_potential_heat_flow_w, "W"],
-      ["Covered potential water flow", r.coverage.covered_potential_mass_flow_kg_s, "kg/s"]
-    ]) cells(totals, [label, metric(value), unit]);
+    for (const [label, name, unit] of [
+      ["Covered body area", "covered_area_m2", "m²"],
+      ["Uncovered body area — transfer unknown", "uncovered_area_m2", "m²"],
+      ["Covered potential heat flow", "covered_potential_heat_flow_w", "W"],
+      ["Covered potential water flow", "covered_potential_mass_flow_kg_s", "kg/s"]
+    ]) cells(totals, [label, vaporMetric(r.coverage, name), unit]);
+    vaporBoundsNote(parent, r.coverage);
     detail(parent, "Ordered layers, pressure profiles and source conditions", r.coverage.regions);
     detail(parent, "Projection and boundary assumptions", { projection: r.projection, request: r.request });
     return { schema: r.schema, request_sha256: r.request_sha256, physical_validation_claim: r.physical_validation_claim,
@@ -788,20 +874,22 @@ function vaporResult(parent, r) {
     "Source measurement conditions remain attached to each layer; they are not an operating range for this model.";
   parent.append(note);
   const totals = table(parent, "Potential vapor and latent heat exchange", ["Quantity", "Value", "Unit"]);
-  for (const [label, value, unit] of [
-    ["Total vapor resistance", r.total_resistance_m2_pa_w, "m²·Pa/W"],
-    ["Boundary vapor pressure difference", r.pressure_difference_pa, "Pa"],
-    ["Potential latent heat flux", r.potential_heat_flux_w_m2, "W/m²"],
-    ["Potential latent heat flow", r.potential_heat_flow_w, "W"],
-    ["Potential water mass flux", r.potential_mass_flux_kg_m2_s, "kg/(m²·s)"],
-    ["Potential water mass flow", r.potential_mass_flow_kg_s, "kg/s"],
-    ["Inside film pressure drop", r.inside_film_pressure_drop_pa, "Pa"],
-    ["Outside film pressure drop", r.outside_film_pressure_drop_pa, "Pa"]
-  ]) cells(totals, [label, metric(value), unit]);
+  for (const [label, name, unit] of [
+    ["Total vapor resistance", "total_resistance_m2_pa_w", "m²·Pa/W"],
+    ["Boundary vapor pressure difference", "pressure_difference_pa", "Pa"],
+    ["Potential latent heat flux", "potential_heat_flux_w_m2", "W/m²"],
+    ["Potential latent heat flow", "potential_heat_flow_w", "W"],
+    ["Potential water mass flux", "potential_mass_flux_kg_m2_s", "kg/(m²·s)"],
+    ["Potential water mass flow", "potential_mass_flow_kg_s", "kg/s"],
+    ["Inside film pressure drop", "inside_film_pressure_drop_pa", "Pa"],
+    ["Outside film pressure drop", "outside_film_pressure_drop_pa", "Pa"]
+  ]) cells(totals, [label, vaporMetric(r, name), unit]);
+  vaporBoundsNote(parent, r);
   const layers = table(parent, "Layer resistances and vapor pressure drops — inside to outside",
     ["Layer", "Material", "Ret (m²·Pa/W)", "Inside pressure (Pa)", "Outside pressure (Pa)", "Drop (Pa)", "Evidence"]);
   for (const row of r.layers) {
-    cells(layers, [row.key, row.selection.id, metric(row.observation.value), metric(row.inside_pressure_pa),
+    cells(layers, [row.key, row.selection.id, metric(row.observation.value) +
+      (row.observation.bounds ? `; source bounds [${row.observation.bounds.map(metric).join(", ")}]` : ""), metric(row.inside_pressure_pa),
       metric(row.outside_pressure_pa), metric(row.pressure_drop_pa), row.observation.evidence]);
     detail(parent, `${row.key}: measurement method, conditions and exact source`, row);
   }
@@ -817,14 +905,15 @@ function vaporSurfaceResult(parent, r) {
     "actual wearer evaporation or latent cooling of the dry-heat model.";
   parent.append(note);
   const totals = table(parent, "Potential transfer on current cloth geometry", ["Quantity", "Value", "Unit"]);
-  for (const [label, value, unit] of [
-    ["Current cloth area", r.area_m2, "m²"],
-    ["Potential latent heat flow", r.potential_heat_flow_w, "W"],
-    ["Potential water mass flow", r.potential_mass_flow_kg_s, "kg/s"]
-  ]) cells(totals, [label, metric(value), unit]);
+  for (const [label, name, unit] of [
+    ["Current cloth area", "area_m2", "m²"],
+    ["Potential latent heat flow", "potential_heat_flow_w", "W"],
+    ["Potential water mass flow", "potential_mass_flow_kg_s", "kg/s"]
+  ]) cells(totals, [label, vaporMetric(r, name), unit]);
+  vaporBoundsNote(parent, r);
   const pieces = table(parent, "Independent piece potentials", ["Piece", "Area (m²)", "Potential heat (W)", "Potential water (kg/s)"]);
   for (const row of r.pieces) cells(pieces, [row.instance, metric(row.area_m2),
-    metric(row.potential_heat_flow_w), metric(row.potential_mass_flow_kg_s)]);
+    vaporMetric(row, "potential_heat_flow_w"), vaporMetric(row, "potential_mass_flow_kg_s")]);
   detail(parent, "Original resistance observations, boundaries and source protocols", r.columns);
   return { schema: r.schema, model_sha256: r.model_sha256, request_sha256: r.request_sha256,
     scope: r.scope, physical_validation_claim: r.physical_validation_claim,

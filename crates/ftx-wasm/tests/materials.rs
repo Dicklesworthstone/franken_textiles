@@ -767,6 +767,87 @@ fn bounded_markers_share_one_order_in_portable_consumers_and_studies() {
 }
 
 #[test]
+fn split_supplier_purchasing_keeps_native_allocations_and_incomplete_totals_in_portable_output() {
+    let raw: Value = serde_json::from_str(PATTERN).unwrap();
+    let bound = bind(&raw, &changes(selection(0.1, 0.4)));
+    let pattern = bound["pattern_json"].as_str().unwrap();
+    let mut options: Value = serde_json::from_str(&cut()).unwrap();
+    options["copies"] = json!(3);
+    options["maximum_marker_length_m"] = json!(0.12);
+    let plan = CutPlan::build(
+        &Pattern::from_json(pattern).unwrap(),
+        &serde_json::from_value(options.clone()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plan.rolls.len(), 3);
+    let first = json!({"offer_id":"first/retail","material_id":"synthetic-sewing-sheet",
+        "material_sha256":plan.rolls[0].material.sha256(),"supplier":"Synthetic first supplier",
+        "sku":"same-specimen","price":10.0,"quantity":1.0,"unit":"linear_meter",
+        "minimum_quantity":0.05,"order_increment":0.05,"currency":"USD","region":"US",
+        "quality":"test","terms":"test","observed_on":"2026-10-21","available":true,
+        "available_quantity":0.25,"maximum_continuous_quantity":0.12,
+        "source":"test:split-purchase","source_sha256":"0".repeat(64)});
+    let mut second = first.clone();
+    second["offer_id"] = json!("second/retail");
+    second["supplier"] = json!("Synthetic second supplier");
+    second["price"] = json!(12.0);
+    let mut book = json!({"schema":"ftx-textile-quotes/1","quotes":[first,second]});
+    let market = json!({"currency":"USD","region":"US","quality":"test","terms":"test",
+        "as_of":"2026-10-21","max_age_days":1,"require_observed_quantity":true,
+        "require_observed_continuous_length":true,
+        "split_orders":{"schema":"ftx-cut-order-allocation/1","max_search_nodes":1000}});
+    for enough in [true, false] {
+        if !enough {
+            for quote in book["quotes"].as_array_mut().unwrap() {
+                quote["available_quantity"] = json!(0.1);
+            }
+        }
+        let expected = procurement::evaluate(
+            &plan,
+            &serde_json::from_value(book.clone()).unwrap(),
+            &serde_json::from_value(market.clone()).unwrap(),
+        )
+        .unwrap();
+        let portable: Value = serde_json::from_str(
+            &manufacturing::cut_price(
+                pattern,
+                &options.to_string(),
+                &book.to_string(),
+                &market.to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(portable, expected);
+        assert_eq!(portable["schema"], "ftx-cut-procurement/3");
+        assert_eq!(portable["complete_offer_coverage"], enough);
+        assert_eq!(portable["market"], market);
+        assert_eq!(portable["quotes"], book);
+        let allocation = &portable["material_orders"][0]["allocation"];
+        if enough {
+            let orders = allocation["selected_orders"].as_array().unwrap();
+            assert_eq!(orders.len(), 2);
+            let mut assigned: Vec<_> = orders
+                .iter()
+                .flat_map(|order| order["roll_indices"].as_array().unwrap())
+                .map(|index| index.as_u64().unwrap())
+                .collect();
+            assigned.sort_unstable();
+            assert_eq!(assigned, vec![0, 1, 2]);
+            assert_eq!(portable["order_allocation_optimality_proven"], true);
+            assert_eq!(
+                portable["selected_observed_order_total"],
+                portable["least_observed_independent_order_total"]
+            );
+        } else {
+            assert!(allocation["selected_orders"].is_null());
+            assert!(portable["selected_observed_order_total"].is_null());
+            assert!(portable["least_observed_independent_order_total"].is_null());
+        }
+    }
+}
+
+#[test]
 fn intraday_procurement_and_studies_share_native_expiry_and_complete_order_semantics() {
     let raw: Value = serde_json::from_str(PATTERN).unwrap();
     let bound = bind(&raw, &changes(selection(0.1, 0.4)));

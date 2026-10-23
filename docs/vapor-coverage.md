@@ -175,6 +175,35 @@ area demonstrates first-order right-endpoint refinement and exact trapezoidal in
 area checks second-order trapezoid refinement. Production tests verify accepted geometry throughout
 the history and that failed transport reservations preserve complete mechanics.
 
+## Conditional ranges from source-reported resistance bounds
+
+Every canonical vapor stack also attempts to propagate the original positive `vapor_resistance`
+`bounds`. It keeps the nominal result when bounds are missing or their arithmetic cannot be
+represented, with `reported_bounds: null` and explicit `bounds_unavailable` reasons. It never infers
+endpoints from standard deviations, coefficients of variation or an unbounded nominal observation.
+
+With complete endpoints, fixed layer-area ratios scale both resistance bounds, and fixed film and
+interface resistances enter both sums. Lower potential transfer uses the larger resistance endpoint;
+upper transfer uses the smaller one. No statistical independence is assumed, including for repeated
+occurrences of the same material. The frozen geometry, pressures, films, interfaces, latent-heat
+conversion and measured transport qualification remain the calculation's conditions.
+
+The coverage report places the complete regional sums in `coverage.reported_bounds`, with
+`covered_potential_heat_flow_w` and `covered_potential_mass_flow_kg_s` endpoint arrays. A missing
+consumed region bound makes the aggregate unavailable. Motion samples place interval bounds in
+`sample.reported_bounds`, while `totals.reported_bounds` retains the complete integral ranges under
+`potential_energy_j` and `potential_mass_kg`. These intervals use the same retained geometry and
+selected time-integration rule as the nominal history. They do not bound unsampled motion or numerical
+quadrature error. Independent-sheet reports expose corresponding complete potential-flow ranges.
+
+Material comparisons can request `basis: "reported_bounds"` for the existing vapor objectives,
+including covered and motion-integrated transfer. An inclusive constraint must contain the whole
+range. Overlapping ranges remain unresolved; absent ranges exclude the candidate while leaving its
+nominal result inspectable. The existing current-source, complete-body-coverage and motion-admission
+checks still apply. The browser shows these returned intervals and reasons without another transport
+or comparison implementation. These are conditional ranges from reported endpoints, not confidence
+intervals, uncertain geometry, moisture availability, actual cooling or measured garment performance.
+
 ## Runnable example and software verification
 
 Run the [layered example](../examples/vapor-coverage/layered.json) with:

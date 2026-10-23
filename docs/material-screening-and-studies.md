@@ -78,6 +78,33 @@ and mass-only studies are allowed. Purchasing contains the existing `quotes` boo
 `market` scope and requires cutting: required stock comes from actual markers, including waste,
 width, margins, minimum orders and sale increments, never just net pattern-piece area.
 
+When separate suppliers must fulfill one material requirement, set
+`purchasing.market.split_orders` to
+`{"schema":"ftx-cut-order-allocation/1","max_search_nodes":50000}`. The existing bounded
+markers remain indivisible: each is assigned once to an exact material-revision-locked offer.
+Minimum quantities, increments and observed capacity apply once to each assigned supplier order;
+the longest assigned marker determines the continuous-cut check. Each quote's base SKU and all
+declared price-break SKUs are treated as aliases of one physical stock; offers from one supplier
+sharing any such alias cannot multiply available stock. The limit is shared across material groups and
+charges attempted assignments and uncached canonical quote evaluations. The optional path supports
+up to 32 markers, 12 per material and eight current locked offers per material; omission preserves
+ordinary single-offer whole-material purchasing. No inventory is reserved.
+
+Before evaluating alternatives, a study reserves each requested `max_search_nodes` for every
+alternative, including later failures and dormant cutting-job routes. The combined reservation for
+ordinary and mixed-job purchasing must not exceed 200,000 work units. Reduce the number of alternatives
+or each limit when the request exceeds that bound.
+
+The purchasing result retains `material_orders[].allocation.selected_orders`, including the exact
+quote, rounded quantity, cost, original marker indices and evaluated market scope. The actual order
+SKU is `offer.applied_price_break.sku` when present, otherwise `offer.quote.sku`; the original quote
+and its complete price schedule remain available for replay. A complete
+feasible result can survive search exhaustion: `selected_observed_order_total` remains available,
+while `least_observed_independent_order_total` requires proven optimality over the admitted offers.
+`search_complete`, `budget_exhausted` and `order_allocation_optimality_proven` distinguish these
+outcomes. With no complete allocation, both totals remain unknown; no partial purchase becomes a
+cheap completed job. The browser displays assignments and both cost meanings separately.
+
 Select exactly one alternative source:
 
 ```json
@@ -426,6 +453,10 @@ sewing. Other metrics are `stock_area_m2`, `external_cut_area_m2`, `stitch_inter
 `feed_seconds`, `sewing_setup_seconds` and `sewing_feed_and_setup_seconds`. Timing objectives use
 the selected production plan and cannot turn missing source-qualified setup durations into zeroes.
 Dimensions are fixed by their names; order cost uses the exact request currency.
+`selected_observed_order_cost` compares the complete feasible purchasing allocation actually
+selected, including an incumbent retained at the work limit. `observed_order_cost` requires the
+least cost to be proved. Both are conditional on the unchanged marker plan and the supplied dated
+offers; neither establishes the cheapest possible nesting or an unlisted supplier's price.
 One to sixteen unique objectives, up to 64 constraints and unique required consumers are accepted.
 Every requested value must be available and finite, every inclusive constraint must pass, and
 required purchasing must have complete offer coverage. An unrequested consumer is an invalid
@@ -441,9 +472,9 @@ policy. Equal protocols are not empirical comparability. Full source observation
 binding and ordinary planner reports; those outputs do not change when comparison is requested.
 
 `basis` is required. `nominal` explicitly compares computed central values and preserves the existing
-behavior for every metric. The separate `reported_bounds` mode below is limited to complete declared
-assembly mass; it does not turn source ranges into intervals for cutting choices, sewing, cost, drape
-or heat.
+behavior for every metric. The separate `reported_bounds` mode below supports complete declared
+assembly mass and vapor-potential transfer. It does not turn source ranges into intervals for cutting
+choices, sewing, cost, mechanical response or dry heat.
 This finite-candidate frontier is conditional on upstream screening, process options, quantities,
 market date and input data. It is not optimal nesting, a global material optimum or physical validation.
 
@@ -481,13 +512,35 @@ on the frontier with an explicit unresolved-range reason. They cannot be ordered
 values. Reported methods, conditions, evidence, exact material binding and complete-inventory gates
 still apply; allowing mixed protocols never bypasses missing bounds or a failed required consumer.
 
-Only `assembly_mass_kg` objectives and constraints currently support this mode. Any other requested
-metric refuses the policy before evaluation, including mixing a nominal cost objective into a
-reported-bounds comparison. Use explicit nominal mode for existing mixed computed objectives.
+`assembly_mass_kg` and the vapor metrics below support this mode. Unsupported metrics refuse the
+policy before evaluation, including mixing a nominal cost objective into a reported-bounds
+comparison. Use explicit nominal mode when comparing those other computed objectives.
 The guarantee is conditional on the reported endpoints, fixed authored geometry and additive
 pre-finishing inventory. It does not cover omitted components, finishing changes, geometric error,
 source truth or confidence levels. `uncertainty_propagated` and `physical_validation_claim` remain
 false; this is the specific mass-endpoint propagation already reported by the mass consumer.
+
+### Vapor-potential limits over reported resistance bounds
+
+The same `reported_bounds` policy admits `vapor_potential_heat_flow_w` and
+`vapor_potential_mass_flow_kg_s` from the declared stack. Scenario studies additionally support the
+independent-sheet, covered-body and motion-integrated vapor objectives. Every consumed Ret
+observation must have complete positive source-reported endpoints; standard deviation or coefficient
+of variation is not converted into a range. Missing endpoints or unrepresentable range arithmetic
+retain the nominal consumer result but exclude it from a range comparison.
+
+The canonical vapor engine sums resistance endpoints using the fixed areas, films and interfaces,
+then reverses the resistance endpoints when computing transfer. Coverage sums complete regional
+ranges, and motion sums interval ranges using the declared right-endpoint sampling. Geometry,
+boundary pressures, latent heat, material assignments and sample times remain fixed. Repeated
+occurrences of a material do not become statistically independent observations.
+
+Limits must contain the entire returned transfer range. Overlapping ranges remain unresolved even
+when their nominal transfer rates differ; the browser displays the Rust comparison without ranking
+those central values. Current-geometry, full-coverage, complete-motion and source-protocol admission
+still apply. These conditional source ranges are not confidence intervals, uncertainty in garment
+geometry, water availability or actual evaporative cooling. See
+[vapor coverage](vapor-coverage.md#conditional-ranges-from-source-reported-resistance-bounds).
 
 `tests/fixtures/materials/study-compared-insulation.json` is an executable example using the same
 synthetic sewing pattern and source-bearing insulation records. It compares gross marker mass and

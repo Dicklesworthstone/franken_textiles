@@ -200,6 +200,76 @@ fn bounded_markers_and_combined_orders_reach_both_native_commands() {
 }
 
 #[test]
+fn split_supplier_orders_preserve_complete_assignments_through_both_native_commands() {
+    let w = setup();
+    let mut p = pattern();
+    p["pieces"] = json!([piece("front", 50., 100.)]);
+    w.write("pattern.json", &p);
+    let mut policy = options();
+    policy["copies"] = json!(2);
+    policy["maximum_marker_length_m"] = json!(0.13);
+    w.write("options.json", &policy);
+    let plan = w.ok(PLAN);
+    assert_eq!(plan["rolls"].as_array().unwrap().len(), 2);
+    let mut first = quote("shell", 10.0);
+    first["material_sha256"] = plan["rolls"][0]["material"]["sha256"].clone();
+    first["available_quantity"] = json!(0.15);
+    first["maximum_continuous_quantity"] = json!(0.13);
+    let mut second = first.clone();
+    second["offer_id"] = json!("second/shell");
+    second["supplier"] = json!("Second synthetic supplier");
+    second["price"] = json!(15.0);
+    w.write(
+        "quotes.json",
+        &json!({"schema":"ftx-textile-quotes/1","quotes":[first,second]}),
+    );
+    let mut market = json!({"currency":"USD","region":"US","quality":"test",
+        "terms":"ex-tax-shipping","as_of":"2026-10-14","max_age_days":3,
+        "require_observed_quantity":true,"require_observed_continuous_length":true});
+    w.write("market.json", &market);
+    assert_eq!(w.ok(PRICE)["complete_offer_coverage"], false);
+    market["split_orders"] = json!({"schema":"ftx-cut-order-allocation/1","max_search_nodes":1000});
+    w.write("market.json", &market);
+    let result = w.ok(PRICE);
+    assert_eq!(result["schema"], "ftx-cut-procurement/3");
+    assert_eq!(result["cut_plan"], plan);
+    assert_eq!(result["market"], market);
+    assert_eq!(result["complete_offer_coverage"], true);
+    assert_eq!(result["complete_observed_quantity_coverage"], true);
+    assert_eq!(result["order_allocation_optimality_proven"], true);
+    assert!((result["selected_observed_order_total"].as_f64().unwrap() - 7.5).abs() < 1e-10);
+    assert_eq!(
+        result["least_observed_independent_order_total"],
+        result["selected_observed_order_total"]
+    );
+    let orders = result["material_orders"][0]["allocation"]["selected_orders"]
+        .as_array()
+        .unwrap();
+    assert_eq!(orders.len(), 2);
+    let mut assigned: Vec<_> = orders
+        .iter()
+        .flat_map(|order| order["roll_indices"].as_array().unwrap())
+        .map(|index| index.as_u64().unwrap())
+        .collect();
+    assigned.sort_unstable();
+    assert_eq!(assigned, vec![0, 1]);
+    let primary = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&w.0)
+        .arg("materials")
+        .args(PRICE)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        primary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&primary.stderr)
+    );
+    let primary: Value = serde_json::from_slice(&primary.stdout).unwrap();
+    assert_eq!(primary["result"], result);
+}
+
+#[test]
 fn cli_derives_mixed_material_stock_without_requiring_mechanical_data() {
     let w = setup();
     let p = w.ok(PLAN);

@@ -61,7 +61,8 @@ Download a replay from a scenario result and open it here to repeat its covered-
 <p class="note">For a stack, supply the ordered material layers, area, inside/outside vapor pressures in pascals,
 boundary-film resistances and latent heat in J/kg. The shared material engine uses each layer's
 source-qualified <code>vapor_resistance</code> and reports potential latent heat and water transfer,
-with every pressure drop, measurement protocol and frozen material source retained.
+with every pressure drop, measurement protocol and frozen material source retained. Complete source-reported
+resistance bounds also produce conditional transfer ranges; missing bounds leave the nominal result available.
 Different reported protocols require explicit admission in the request. Estimated material observations
 require their own selection consent. This fixed-resistance, isothermal calculation does not determine
 sweat availability, actual wearer cooling, condensation or garment comfort; it does not add an
@@ -162,7 +163,7 @@ An empty list <code>[]</code> explicitly removes all pairs; omitting a replaceme
 </div><div>
 <h3>Cutting, purchasing and sewing</h3>
 <label>Roll-planning options JSON <input id="cutOptions" type="file" accept=".json,application/json"></label>
-<p class="note">Set <code>maximum_marker_length_m</code> in the options to place complete pieces across separate markers within a cutting-table or continuous-cut limit. Purchasing combines markers of the same material into one order.</p>
+<p class="note">Set <code>maximum_marker_length_m</code> in the options to place complete pieces across separate markers within a cutting-table or continuous-cut limit. Purchasing normally combines markers of the same material into one order; optional supplier allocation can distribute whole markers across qualified offers.</p>
 <label>Preview marker number <input id="rollPreview" type="number" min="1" step="1" value="1"></label>
 <button id="cut" data-command="cut" disabled>Plan rolls &amp; preview</button>
 <label>Finite hides / remnants with defect maps JSON <input id="stockRequest" type="file" accept=".json,application/json"></label>
@@ -175,6 +176,12 @@ An empty list <code>[]</code> explicitly removes all pairs; omitting a replaceme
 and supply an explicit <code>as_of_at</code> in the market scope. Times use UTC with up to nine fractional-second digits;
 the retained <code>observed_on</code> and <code>as_of</code> dates must match them. Version-1 books keep date-only behavior.
 The latest observation at the requested time controls availability and expiry; an older offer cannot fill a gap.</p>
+<p class="note">To fulfill a job across multiple suppliers, add
+<code>split_orders: {"schema":"ftx-cut-order-allocation/1","max_search_nodes":50000}</code>
+to the market scope. The bounded search assigns each whole marker once to an exact revision-locked offer,
+applying minimum quantities, increments and observed capacity to each selected order. It never splits a marker
+or pools stock across material revisions. Review the selected complete cost separately from the proven least cost;
+a work-limited feasible result does not prove an optimum. These are dated observations, not stock reservations.</p>
 <label>Sewing recipe and machine limits JSON <input id="sewOptions" type="file" accept=".json,application/json"></label>
 <button id="sew" data-command="sew" disabled>Evaluate sewing &amp; stitch paths</button>
 <p class="note">To reduce needle and thread changes, add <code>ordering</code> to the recipe with
@@ -259,9 +266,16 @@ not stock waste, a simulated subset or a weighed finished garment. Mass and ever
 <p class="note">Add an optional <code>comparison</code> to the study request with explicit <code>basis: "nominal"</code>,
 <code>objectives</code>, inclusive <code>constraints</code> and <code>required_consumers</code>. The shared Rust engine reports
 the computed Pareto alternatives, exclusions and protocol-incomparable pairs separately from scalar screening.
-For <code>assembly_mass_kg</code>, <code>basis: "reported_bounds"</code> uses complete reported mass endpoints at fixed authored
-geometry and inventory. Limits must contain the whole range, and overlapping or touching ranges remain unresolved.
-Missing bounds exclude an alternative while its nominal mass remains visible. Other computed metrics currently require the nominal basis.</p>
+Use <code>basis: "reported_bounds"</code> for <code>assembly_mass_kg</code> or the vapor-potential objectives.
+Mass ranges retain fixed authored geometry and inventory. Vapor ranges propagate complete source-reported Ret endpoints
+with fixed geometry, boundary pressures, films, interfaces, latent heat and motion sampling. Limits must contain the
+whole range, and overlapping or touching ranges remain unresolved. Missing bounds exclude an alternative while its
+nominal result remains visible. These are conditional reported ranges, not confidence intervals; other computed metrics
+still require the nominal basis.</p>
+<p class="note">For purchasing with optional supplier allocation, <code>selected_observed_order_cost</code> compares the
+complete feasible order found by the bounded search. <code>observed_order_cost</code> requires its least cost to be proved.
+Mixed cutting jobs expose the corresponding <code>cutting_job_selected_order_cost</code> and
+<code>cutting_job_observed_order_cost</code>. Missing or incomplete assignments never supply a partial cheap total.</p>
 <p class="note">Optional <code>sewing_selection</code> accepts an existing <code>ftx-sewing-selection/1</code> request instead of
 <code>sewing</code>. Each material alternative searches its own source-qualified recipe choices; the report retains trials, work limits
 and the selected plan. If no listed recipe qualifies, sewing remains unavailable for that alternative.</p>
