@@ -3082,7 +3082,7 @@ remain open. See [cutting-plans.md](docs/cutting-plans.md).
 
 ### 25.68 Compare explicit garment alterations and material choices together
 
-**Implementation (`ftx-ds1`), final runtime verification pending.** The opt-in
+**Implemented and software acceptance verified (`ftx-ds1`, 2026-10-24).** The opt-in
 `ftx-design-study/1` request crosses independently authored canonical alteration sequences with
 explicit, screened or grouped material alternatives. It always retains the original-geometry
 baseline. Width/ease, length, vertex, seam-truing and cap-ease changes use existing operators; each
