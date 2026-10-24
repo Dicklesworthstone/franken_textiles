@@ -1265,6 +1265,393 @@ fn computed_scenario_objectives_use_actual_heat_and_strain_without_weakening_adm
     );
 }
 
+const MATERIAL_STRAIN_METRICS: [&str; 6] = [
+    "min_warp_green_strain",
+    "max_warp_green_strain",
+    "min_weft_green_strain",
+    "max_weft_green_strain",
+    "min_engineering_shear_green_strain",
+    "max_engineering_shear_green_strain",
+];
+
+fn raw_material_strain(source: &Value, positions: &Value) -> [[f64; 2]; 3] {
+    let positions: Vec<Vec3> = serde_json::from_value(positions.clone()).unwrap();
+    let mut range = [[f64::INFINITY, f64::NEG_INFINITY]; 3];
+    for triangle in source["triangles"].as_array().unwrap() {
+        let element = ftx_drape::elements::MembraneElement {
+            v: serde_json::from_value(triangle["vertices"].clone()).unwrap(),
+            area: triangle["reference_area_m2"].as_f64().unwrap(),
+            g: serde_json::from_value(triangle["material_gradients_m_inv"].clone()).unwrap(),
+        };
+        for (bounds, value) in range.iter_mut().zip(element.strain(&positions)) {
+            bounds[0] = bounds[0].min(value);
+            bounds[1] = bounds[1].max(value);
+        }
+    }
+    range
+}
+
+#[test]
+fn material_strain_signed_constraints_select_actual_designs_and_replay_frozen_sources() {
+    let cylinder = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&cylinder.vertices, &cylinder.triangles),
+        display: (&cylinder.vertices, &cylinder.triangles),
+        arm_deg: 35.,
+    };
+    let mut pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    // Raw mechanical strain must remain usable without dry-thermal characterization.
+    pattern["fabric"]["material"]["record"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("thermal_conductivity");
+    let mut scenario = matrix_scenario()["cases"][0]["scenario"].clone();
+    scenario["surface"] = Value::Null;
+    scenario["coverage"] = Value::Null;
+    scenario["material_strain"] = json!({"schema":"ftx-material-strain/1",
+        "instances":["band"],"max_triangle_samples":100000});
+    let mut input = json!({"schema":"ftx-design-study/1",
+        "designs":[{"key":"narrower","operations":[{"op":"slash_spread",
+            "piece":"band","axis":"x","at_mm":125.,"add_mm":-10.}]}],
+        "variants":[{"key":"sheet","changes":{"schema":"ftx-material-bindings/1"}}],
+        "cutting":{"copies":1,"gap_mm":1.,"edge_margin_mm":0.,"end_margin_mm":0.,"seam_allowance_mm":0.},
+        "comparison":{"basis":"nominal","required_consumers":["material_strain"],
+            "objectives":[{"metric":"simulated_cloth_mass_kg","direction":"minimize"}],
+            "constraints":MATERIAL_STRAIN_METRICS.iter().map(|metric| json!({
+                "metric":metric,"minimum":-1000000.,"maximum":1000000.
+            })).collect::<Vec<_>>()}});
+    let evaluate = |input: &Value| -> Value {
+        serde_json::from_str(
+            &on_body(
+                &body,
+                &pattern.to_string(),
+                &input.to_string(),
+                &scenario.to_string(),
+                |_| {},
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let baseline = evaluate(&input);
+    let manufacturing = baseline["manufacturing"]["alternatives"]
+        .as_array()
+        .unwrap();
+    let comparisons = baseline["comparison"]["alternatives"].as_array().unwrap();
+    assert_eq!(comparisons.len(), 2);
+    let original = manufacturing
+        .iter()
+        .position(|r| r["design"]["key"] == "baseline")
+        .unwrap();
+    let narrower = manufacturing
+        .iter()
+        .position(|r| r["design"]["key"] == "narrower")
+        .unwrap();
+    assert_eq!(
+        baseline["comparison"]["frontier"],
+        json!([comparisons[narrower]["key"]]),
+        "{}",
+        baseline["comparison"]
+    );
+    for (i, row) in comparisons.iter().enumerate() {
+        assert_eq!(row["eligible"], true, "{row}");
+        assert_eq!(manufacturing[i]["cutting"]["status"], "available");
+        let simulation = &baseline["simulations"][i]["evaluation"]["result"];
+        let outcome = &simulation["material_strain"];
+        assert_eq!(outcome["status"], "available", "{outcome}");
+        let strain = &outcome["result"];
+        assert_eq!(strain["strain_convention"], "material_green_E11_E22_2E12");
+        assert_eq!(strain["source"]["instances"], json!(["band"]));
+        assert_eq!(strain["scope"], "initial_state");
+        assert_eq!(
+            strain["green_strain_range"],
+            json!(raw_material_strain(
+                &strain["source"],
+                &simulation["positions_m"]
+            ))
+        );
+        for (j, metric) in MATERIAL_STRAIN_METRICS.iter().enumerate() {
+            assert_eq!(
+                row["readings"][metric]["value"],
+                strain["green_strain_range"][j / 2][j % 2]
+            );
+            assert_eq!(row["readings"][metric]["unit"], "1");
+        }
+        for claim in [
+            "physical_validation_claim",
+            "fit_claim",
+            "safe_strain_claim",
+            "continuous_time_bound",
+        ] {
+            assert_eq!(strain[claim], false);
+        }
+    }
+    // Select an actually negative raw component that changes under this real geometry edit.
+    // A singleton band verifies inclusive signed limits without rounding or an inferred safe value.
+    let metric = MATERIAL_STRAIN_METRICS
+        .iter()
+        .step_by(2)
+        .find(|&&metric| {
+            comparisons[original]["readings"][metric]["value"]
+                .as_f64()
+                .unwrap()
+                < 0.
+                && comparisons[original]["readings"][metric]["value"]
+                    != comparisons[narrower]["readings"][metric]["value"]
+        })
+        .copied()
+        .expect("the altered sewn band must change a compressive material component");
+    let limit = comparisons[original]["readings"][metric]["value"].clone();
+    for constraint in input["comparison"]["constraints"].as_array_mut().unwrap() {
+        if constraint["metric"] == metric {
+            constraint["minimum"] = limit.clone();
+            constraint["maximum"] = limit.clone();
+        }
+    }
+    let selected = evaluate(&input);
+    assert_eq!(
+        selected["comparison"]["alternatives"][original]["eligible"],
+        true
+    );
+    assert_eq!(
+        selected["comparison"]["alternatives"][narrower]["eligible"],
+        false
+    );
+    assert_eq!(
+        selected["comparison"]["frontier"],
+        json!([comparisons[original]["key"]])
+    );
+    assert_eq!(selected["simulations"], baseline["simulations"]);
+    assert_eq!(
+        selected["manufacturing"]["alternatives"],
+        baseline["manufacturing"]["alternatives"]
+    );
+    input["variants"][0]["changes"] = manufacturing[original]["frozen_changes"].clone();
+    let replay = evaluate(&input);
+    assert_eq!(replay["simulations"], selected["simulations"]);
+    assert_eq!(
+        replay["comparison"]["alternatives"],
+        selected["comparison"]["alternatives"]
+    );
+    assert_eq!(
+        replay["comparison"]["frontier"],
+        selected["comparison"]["frontier"]
+    );
+}
+
+#[test]
+fn material_strain_motion_scopes_raw_samples_and_refuses_partial_decisions_independently() {
+    let cylinder = form();
+    let body = DrapeBody {
+        frames: &Form,
+        collision: (&cylinder.vertices, &cylinder.triangles),
+        display: (&cylinder.vertices, &cylinder.triangles),
+        arm_deg: 35.,
+    };
+    let mut pattern: Value = serde_json::from_str(PATTERN).unwrap();
+    let mut upper = pattern["pieces"][0].clone();
+    upper["id"] = json!("upper");
+    upper["placement"]["y0"] = json!(-50.);
+    upper["grain"] = json!([[0., 0.], [20., 20.]]);
+    pattern["pieces"].as_array_mut().unwrap().push(upper);
+    pattern["seams"].as_array_mut().unwrap().push(json!({
+        "id":"join-upper","a":"upper/right","b":"upper/left"}));
+    let pattern = Pattern::new(pattern);
+    let mut scenario = matrix_scenario()["cases"][0]["scenario"].clone();
+    scenario["surface"] = Value::Null;
+    scenario["coverage"] = Value::Null;
+    scenario["max_vertex_frames"] = json!(2_000_000);
+    scenario["material_strain"] = json!({"schema":"ftx-material-strain/1",
+        "instances":["band"],"max_triangle_samples":100000});
+    scenario["motion"] = json!({"schema":"ftx-drape-motion/1",
+        "keyframes":[{"time_s":0.002,"arm_abduction_deg":35.},
+            {"time_s":0.004,"arm_abduction_deg":36.}],
+        "max_step_s":0.001,"max_trials":16,"max_pairs":100000,"max_sample_vertices":10000});
+    let mut input = json!({"schema":"ftx-material-study/1",
+        "variants":[{"key":"sheet","changes":{"schema":"ftx-material-bindings/1"}}],
+        "cutting":{"copies":1,"gap_mm":1.,"edge_margin_mm":0.,"end_margin_mm":0.,"seam_allowance_mm":0.},
+        "comparison":{"basis":"nominal","required_consumers":["material_strain","motion_material_strain"],
+            "objectives":MATERIAL_STRAIN_METRICS.iter().enumerate().map(|(i, metric)| json!({
+                "metric":format!("motion_{metric}"),"direction":if i % 2 == 0 {"maximize"} else {"minimize"}
+            })).collect::<Vec<_>>(),
+            "constraints":MATERIAL_STRAIN_METRICS.iter().map(|metric| json!({
+                "metric":metric,"minimum":-1000000.,"maximum":1000000.
+            })).collect::<Vec<_>>()}});
+    let evaluate = |input: &Value, scenario: &Value| -> Value {
+        let scenario: Scenario = serde_json::from_value(scenario.clone()).unwrap();
+        let endpoints = [0.0001, 0.0002]
+            .into_iter()
+            .map(|z| {
+                cylinder
+                    .vertices
+                    .iter()
+                    .map(|p| *p + Vec3::new(0., 0., z))
+                    .collect()
+            })
+            .collect();
+        let path = ftx_drape::study::motion::Path::new(
+            scenario.motion.as_ref().unwrap(),
+            body.collision,
+            endpoints,
+        )
+        .unwrap();
+        let mut session = Session::new(&scenario, &body).unwrap();
+        session.set_motion_path(Ok(path)).unwrap();
+        let request: Request = serde_json::from_value(input.clone()).unwrap();
+        serde_json::to_value(
+            request
+                .evaluate_with(&pattern, &session.descriptor(), |_, p| {
+                    session.evaluate(p, |_| {})
+                })
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let baseline = evaluate(&input, &scenario);
+    assert_eq!(
+        baseline["comparison"]["frontier"],
+        json!(["sheet"]),
+        "{}",
+        baseline["comparison"]
+    );
+    let compared = &baseline["comparison"]["alternatives"][0];
+    let simulation = &baseline["simulations"][0]["evaluation"]["result"];
+    assert_eq!(simulation["material_strain"]["status"], "available");
+    assert_eq!(
+        simulation["motion"]["status"], "available",
+        "{}",
+        simulation["motion"]
+    );
+    let motion = &simulation["motion"]["result"];
+    let history = &motion["material_strain"]["result"];
+    assert_eq!(
+        motion["material_strain"]["status"], "available",
+        "{}",
+        motion["material_strain"]
+    );
+    assert_eq!(
+        simulation["material_strain_ownership"]["instances"],
+        json!(["band", "upper"])
+    );
+    assert_eq!(history["source"]["instances"], json!(["band"]));
+    let selected = history["source"]["triangles"].as_array().unwrap();
+    assert!(selected.len() < simulation["triangles"].as_array().unwrap().len());
+    assert!(selected.iter().all(|t| t["instance"] == "band"));
+    let samples: Vec<_> = std::iter::once(&motion["initial_sample"])
+        .chain(motion["samples"].as_array().unwrap())
+        .collect();
+    assert_eq!(history["frames"].as_array().unwrap().len(), samples.len());
+    assert_eq!(history["triangle_samples"], samples.len() * selected.len());
+    let mut overall = [[f64::INFINITY, f64::NEG_INFINITY]; 3];
+    for (index, (frame, sample)) in history["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(&samples)
+        .enumerate()
+    {
+        let raw = raw_material_strain(&history["source"], &sample["positions_m"]);
+        assert_eq!(frame["sample_index"], index);
+        assert_eq!(frame["time_s"], sample["time_s"]);
+        assert_eq!(frame["green_strain_range"], json!(raw));
+        for (total, current) in overall.iter_mut().zip(raw) {
+            total[0] = total[0].min(current[0]);
+            total[1] = total[1].max(current[1]);
+        }
+    }
+    assert_eq!(history["green_strain_range"], json!(overall));
+    assert_eq!(history["scope"], "accepted_motion_samples");
+    assert_eq!(
+        history["frames"][0]["green_strain_range"],
+        simulation["material_strain"]["result"]["green_strain_range"]
+    );
+    for (i, metric) in MATERIAL_STRAIN_METRICS.iter().enumerate() {
+        assert_eq!(
+            compared["readings"][format!("motion_{metric}")]["value"],
+            history["green_strain_range"][i / 2][i % 2]
+        );
+        assert_eq!(
+            compared["readings"][format!("motion_{metric}")]["unit"],
+            "1"
+        );
+        assert_eq!(
+            compared["readings"][metric]["value"],
+            simulation["material_strain"]["result"]["green_strain_range"][i / 2][i % 2]
+        );
+    }
+    input["variants"][0]["changes"] =
+        baseline["manufacturing"]["alternatives"][0]["frozen_changes"].clone();
+    let replay = evaluate(&input, &scenario);
+    assert_eq!(replay["simulations"], baseline["simulations"]);
+    assert_eq!(
+        replay["comparison"]["alternatives"],
+        baseline["comparison"]["alternatives"]
+    );
+    for fault in [
+        "late_budget",
+        "initial_budget",
+        "unknown_scope",
+        "not_requested",
+    ] {
+        let mut changed = scenario.clone();
+        match fault {
+            "late_budget" => {
+                changed["material_strain"]["max_triangle_samples"] = json!(selected.len())
+            }
+            "initial_budget" => changed["material_strain"]["max_triangle_samples"] = json!(1),
+            "unknown_scope" => changed["material_strain"]["instances"] = json!(["absent"]),
+            _ => changed["material_strain"] = Value::Null,
+        }
+        let limited = evaluate(&input, &changed);
+        let actual = &limited["simulations"][0]["evaluation"]["result"];
+        assert_eq!(
+            limited["manufacturing"]["alternatives"][0]["cutting"]["status"], "available",
+            "{fault}"
+        );
+        assert_eq!(actual["drape"], simulation["drape"], "{fault}");
+        assert_eq!(
+            actual["motion"]["status"], "available",
+            "{fault}: {}",
+            actual["motion"]
+        );
+        assert_eq!(
+            actual["motion"]["result"]["samples"], motion["samples"],
+            "{fault}"
+        );
+        if fault == "not_requested" {
+            assert!(actual.get("material_strain").is_none());
+            assert!(actual["motion"]["result"].get("material_strain").is_none());
+        } else {
+            assert_eq!(
+                actual["material_strain"]["status"],
+                if fault == "late_budget" {
+                    "available"
+                } else {
+                    "refused"
+                }
+            );
+            assert_eq!(
+                actual["motion"]["result"]["material_strain"]["status"],
+                "refused"
+            );
+        }
+        assert_eq!(
+            limited["comparison"]["alternatives"][0]["eligible"], false,
+            "{fault}"
+        );
+        assert_eq!(limited["comparison"]["frontier"], json!([]), "{fault}");
+        for metric in MATERIAL_STRAIN_METRICS {
+            assert!(
+                limited["comparison"]["alternatives"][0]["readings"]
+                    .get(format!("motion_{metric}"))
+                    .is_none(),
+                "{fault}: {metric}"
+            );
+        }
+    }
+}
+
 #[test]
 fn joint_outfit_boundary_uses_real_contact_and_ordered_layer_heat_with_frozen_replay() {
     use ftx_drape::{run::DrapeOptions, study_input::PreparedInput};

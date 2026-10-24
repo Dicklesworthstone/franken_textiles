@@ -484,11 +484,32 @@ Any late domain, arithmetic or work-budget failure rolls back the whole accepted
 Replenishment must be explicitly zero. Raw temperature-domain departure and condensation refuse;
 there is no sorption, wicking, wet-property inference, added mechanical mass, body-water transfer,
 thermal feedback to mechanics or empirical validation. Explicit mass transfer needs time/space
-refinement; numerical conservation alone does not establish accuracy. Existing dry-heat optimization
-admission excludes this different energy-ownership model until it has a matching canonical decision
-consumer. Native/portable scenario JSON already carries the new policy. Analytic/refinement/rollback
+refinement; numerical conservation alone does not establish accuracy. Nominal comparison admission
+independently checks this complete mass/energy ownership through canonical material and Ret replay;
+thermal and water uncertainty bounds remain unsupported. Native/portable scenario JSON carries the
+same policy. Analytic/refinement/rollback
 tests live with the module; sewn-garment and portable study tests exercise the actual moving solver.
 Complete request and ledger definitions: `docs/textile-surface-water.md`.
+
+**Source-qualified textile liquid delivery** (`study::heat::surface_water`, `ftx-vc2`).
+Request version 2 replaces the initial-only zero replenishment declaration with independently
+sourced per-instance, per-keyframe-interval reference-area delivery rates and incoming liquid
+temperatures. Complete instance bindings include explicit zero rates; missing qualification,
+unadmitted estimates or temperatures outside the material/liquid domain refuse. Version 1 keeps
+its original input/output semantics. Current area conducts evaporation while reference area owns
+initial liquid and supplied mass. The net depletion rate defines exact dryout events; dry patches
+can evaporate delivered liquid at the lesser of supply and potential demand, or rewet under excess
+delivery. A qualified maximum-loading crossing refuses the whole interval without inferred drainage.
+The existing implicit thermal solver uses remaining liquid capacity and signed source
+`mechanical heat - latent + supplied mass * cp * (incoming temperature - old cell temperature)`.
+Final/sample/patch receipts retain supplied mass and incoming sensible enthalpy. The full energy
+ledger subtracts that incoming enthalpy; the mass ledger includes initial plus supplied inventory.
+Supply shares complete accepted-interval rollback with liquid, heat, source work and trace.
+Analytic tests cover hot/cold feed, interval changes, dryout/rewetting, source/domain refusal,
+reference invariance, time refinement and late overflow rollback; a moving sewn-garment regression
+checks actual reference-area delivery, Maxwell coexistence, unchanged mechanics and exact replay.
+No body transfer, absorption, capillary transport, inferred wet-property law, mechanical liquid mass
+or empirical fabric/comfort claim is supplied by this boundary condition.
 
 **Geometry-derived thermal correspondence** (`thermal::surface::projection`, `ftx-tmb`).
 `project` partitions body triangles by local-normal cloth projection using bounded convex clipping,
@@ -612,6 +633,20 @@ publishes no partial success. Frozen inputs replay offline. Synthetic analytical
 reactions/work, continuous Maxwell ramp/hold refinement, mass-dependent dynamics and refusal tests
 are in `tests/strip_history.rs`. This is constrained planar dynamics, not buckling, parameter fitting,
 measured coupon qualification, inferred heat or actual garment fit.
+
+**Material-frame strain consumer** (`study::strain`, `ftx-ds2`). Optional scenario `material_strain`
+requests raw `[E11, E22, 2E12]` on explicitly selected retained instances or the whole retained garment.
+The ordinary production membrane gradients and welded triangle ownership define material axes;
+no edge-percentage, global percentile or softened strain is substituted. Dimensionless signed extrema
+retain the responsible source triangle, instance, exact material and earliest accepted sample. The
+initial state and every accepted motion state contribute, with exact geometry/time identities and
+one aggregate bounded triangle-sample reservation across alternatives. An unavailable or exhausted
+strain consumer preserves independent drape, motion and thermal outputs. Full source snapshots,
+fitted/tabulated strain boxes and any physical-area support remain visible; their characterization
+domains are not rupture limits or safe-fit thresholds. Comparison bands are authored design
+requirements, never an inferred comfort criterion or continuous-time bound. Analytic frame/shear,
+deterministic witness and transactional checks accompany actual sewn static/motion replay and
+source/scope/budget refusal tests in `tests/material_scenario/strain.rs`.
 
 **Named operating cases.** `study::matrix` admits `ftx-drape-scenario-matrix/1` through the existing
 scenario adapters. The common body is selected once; each case owns a fresh ordinary session and

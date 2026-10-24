@@ -1,4 +1,4 @@
-//! Initial free liquid owned by stable textile triangles, with explicit temperature feedback.
+//! Free liquid owned by stable textile triangles, with explicit temperature feedback.
 //! This is an inner-cell equilibrium film, not sorption, sweat, capillary transport or wet cloth
 //! mechanics. A separate source must qualify fixed dry thermal/Ret properties over the full domain.
 
@@ -29,11 +29,40 @@ pub struct Binding {
     pub initial_liquid_kg_m2: f64,
 }
 
-/// Explicit initial-only free-film closure for the material-following thermal history.
+/// Prescribed liquid delivery to one instance, constant over each mechanical keyframe interval.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupplyBinding {
+    /// Nonnegative kg/(reference m²·s), with an explicit value for every interval.
+    pub rate_kg_m2_s: Vec<f64>,
+    /// Incoming liquid temperature in °C, with an explicit value for every interval.
+    pub temperature_c: Vec<f64>,
+}
+
+/// Independently qualified liquid supply; no body reservoir or unreported transfer is implied.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Supply {
+    /// Must be `ftx-textile-liquid-supply/1`.
+    pub schema: String,
+    /// Every water-bound instance, including explicitly zero rates.
+    pub bindings: BTreeMap<String, SupplyBinding>,
+    /// Provenance for delivery rates and temperatures of the same declared liquid.
+    pub source: Source,
+    /// Independent evidence class for the supplied boundary values.
+    pub evidence: Evidence,
+    /// Explicit consent for estimated supply inputs.
+    #[serde(default)]
+    pub allow_estimates: bool,
+    /// Source method for the imposed delivery histories.
+    pub method: String,
+}
+
+/// Explicit free-film closure for the material-following thermal history.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    /// Must be `ftx-textile-surface-water/1`.
+    /// Version 1 is initial-only; version 2 requires an independently qualified supply.
     pub schema: String,
     /// Must be `inner_cell_equilibrium_free_film_frozen_properties/1`.
     pub model: String,
@@ -56,8 +85,12 @@ pub struct Request {
     pub inside_film_resistance_m2_pa_w: f64,
     /// Positive declared film resistance after the textile Ret, m²·Pa/W.
     pub outside_film_resistance_m2_pa_w: f64,
-    /// Must be exactly zero. No supplied mass or supply enthalpy is omitted from this model.
-    pub replenishment_kg_m2_s: f64,
+    /// Version 1 requires exactly zero; version 2 omits this scalar in favor of `supply`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replenishment_kg_m2_s: Option<f64>,
+    /// Required by version 2 and forbidden by version 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supply: Option<Supply>,
     /// Provenance for all fluid/boundary values and this exact material-domain qualification.
     pub source: Source,
     /// Independent of the evidence and estimate policy of each selected material.
@@ -75,11 +108,19 @@ pub struct Request {
 impl Request {
     pub(super) fn validate(&self, intervals: usize) -> Result<(), Refusal> {
         let text = |s: &str| !s.trim().is_empty() && s.len() <= 4096;
-        if self.schema != "ftx-textile-surface-water/1"
+        let version_valid = match self.schema.as_str() {
+            "ftx-textile-surface-water/1" => {
+                self.replenishment_kg_m2_s == Some(0.) && self.supply.is_none()
+            }
+            "ftx-textile-surface-water/2" => {
+                self.replenishment_kg_m2_s.is_none() && self.supply.is_some()
+            }
+            _ => false,
+        };
+        if !version_valid
             || self.model != "inner_cell_equilibrium_free_film_frozen_properties/1"
             || self.bindings.is_empty()
             || self.bindings.len() > 65_536
-            || self.replenishment_kg_m2_s != 0.
             || !self.enthalpy_reference_c.is_finite()
             || self.enthalpy_reference_c < -273.15
             || [
@@ -123,7 +164,32 @@ impl Request {
             })
         {
             return Err(invalid(
-                "surface water needs its explicit initial-only model, locked bindings, positive SI inputs, monotone pressure table, source-qualified domain and independent estimate consent",
+                "surface water needs its explicit versioned liquid model, locked bindings, positive SI inputs, monotone pressure table, source-qualified domain and independent estimate consent",
+            ));
+        }
+        if let Some(supply) = &self.supply
+            && (supply.schema != "ftx-textile-liquid-supply/1"
+                || supply.bindings.keys().ne(self.bindings.keys())
+                || !text(&supply.source.reference)
+                || !text(&supply.source.note)
+                || supply.source.accessed_on.len() != 10
+                || !text(&supply.method)
+                || (supply.evidence == Evidence::Estimate && !supply.allow_estimates)
+                || supply.bindings.values().any(|binding| {
+                    binding.rate_kg_m2_s.len() != intervals
+                        || binding.temperature_c.len() != intervals
+                        || binding
+                            .rate_kg_m2_s
+                            .iter()
+                            .any(|v| !v.is_finite() || *v < 0.)
+                        || binding
+                            .temperature_c
+                            .iter()
+                            .any(|&t| self.pressure(t).is_err())
+                }))
+        {
+            return Err(invalid(
+                "textile liquid supply needs complete instance/interval rates and qualified incoming temperatures, source metadata and its own estimate consent",
             ));
         }
         Ok(())
@@ -157,6 +223,8 @@ pub(super) struct Water {
     initial: Vec<f64>,
     remaining: Vec<f64>,
     evaporated: Vec<f64>,
+    supplied: Vec<f64>,
+    supplied_sensible_j: Vec<f64>,
     initial_temperature_c: f64,
     latent_j: f64,
     exported_sensible_j: f64,
@@ -168,8 +236,12 @@ pub(super) struct Plan {
     pub seconds: f64,
     remaining: Vec<f64>,
     evaporated: Vec<f64>,
+    supplied: Vec<f64>,
+    supplied_sensible_j: Vec<f64>,
+    supplied_old_sensible_j: f64,
     pub capacity_j_k: Vec<f64>,
     pub latent_j: Vec<f64>,
+    pub liquid_heat_j: Vec<f64>,
     exported_sensible_j: f64,
     dryout_events: usize,
 }
@@ -296,6 +368,8 @@ impl Water {
             instances: patch_instances,
             remaining: initial.clone(),
             evaporated: vec![0.; initial.len()],
+            supplied: vec![0.; initial.len()],
+            supplied_sensible_j: vec![0.; initial.len()],
             initial,
             initial_temperature_c: initial_c,
             latent_j: 0.,
@@ -325,7 +399,20 @@ impl Water {
             for &t in &old.temperature_c()[i] {
                 self.request.pressure(t)?;
             }
-            let rate = if self.remaining[i] == 0. {
+            let (supply_rate, supply_temperature) = match &self.request.supply {
+                Some(supply) => {
+                    let binding = &supply.bindings[&self.instances[i]];
+                    let rate = binding.rate_kg_m2_s[interval] * patch.reference_area_m2;
+                    if !rate.is_finite() || (binding.rate_kg_m2_s[interval] > 0. && rate <= 0.) {
+                        return Err(invalid(
+                            "reference-area liquid supply rate is unrepresentable",
+                        ));
+                    }
+                    (rate, binding.temperature_c[interval])
+                }
+                None => (0., old.temperature_c()[i][0]),
+            };
+            let potential_rate = if self.remaining[i] == 0. && supply_rate == 0. {
                 0.
             } else {
                 let inside = self.request.pressure(old.temperature_c()[i][0])?;
@@ -348,13 +435,20 @@ impl Water {
                 }
                 rate
             };
-            let dry_time = if rate == 0. {
-                f64::INFINITY
+            // At zero inventory, freshly delivered liquid can evaporate continuously but no
+            // unmet potential may create negative storage. A positive net delivery rewets it.
+            let rate = if self.remaining[i] == 0. {
+                potential_rate.min(supply_rate)
             } else {
-                self.remaining[i] / rate
+                potential_rate
+            };
+            let dry_time = if self.remaining[i] > 0. && rate > supply_rate {
+                self.remaining[i] / (rate - supply_rate)
+            } else {
+                f64::INFINITY
             };
             seconds = seconds.min(dry_time);
-            rates.push(rate);
+            rates.push((rate, supply_rate, supply_temperature));
             dry_times.push(dry_time);
         }
         if !seconds.is_finite() || seconds <= 0. {
@@ -364,26 +458,51 @@ impl Water {
             seconds,
             remaining: Vec::new(),
             evaporated: Vec::new(),
+            supplied: Vec::new(),
+            supplied_sensible_j: Vec::new(),
+            supplied_old_sensible_j: 0.,
             capacity_j_k: Vec::new(),
             latent_j: Vec::new(),
+            liquid_heat_j: Vec::new(),
             exported_sensible_j: 0.,
             dryout_events: 0,
         };
-        for (i, rate) in rates.into_iter().enumerate() {
+        for (i, (rate, supply_rate, supply_temperature)) in rates.into_iter().enumerate() {
+            let supplied = supply_rate * seconds;
             let evaporated = if dry_times[i] == seconds {
-                self.remaining[i]
+                self.remaining[i] + supplied
+            } else if self.remaining[i] == 0. && rate == supply_rate {
+                supplied
             } else {
                 rate * seconds
             };
-            let remaining = self.remaining[i] - evaporated;
+            let remaining = if dry_times[i] == seconds {
+                0.
+            } else if supply_rate == 0. {
+                self.remaining[i] - evaporated
+            } else {
+                self.remaining[i] + (supplied - evaporated)
+            };
             let latent = evaporated * self.request.latent_heat_j_kg;
             let capacity = remaining * self.request.liquid_specific_heat_j_kg_k;
+            let maximum =
+                self.request.maximum_liquid_loading_kg_m2 * model.patches()[i].reference_area_m2;
+            if self.request.supply.is_some() && (!maximum.is_finite() || remaining > maximum) {
+                return Err(invalid(
+                    "liquid supply exceeds the qualified reference-area loading domain; no overflow or drainage law is declared",
+                ));
+            }
             if !remaining.is_finite()
                 || remaining < 0.
+                || !supplied.is_finite()
+                || !evaporated.is_finite()
+                || (supply_rate > 0. && supplied <= 0.)
                 || !latent.is_finite()
                 || !capacity.is_finite()
-                || (rate > 0.
-                    && (evaporated <= 0. || remaining >= self.remaining[i] || latent <= 0.))
+                || (rate > 0. && (evaporated <= 0. || latent <= 0.))
+                || (supplied > evaporated && remaining <= self.remaining[i])
+                || (supplied < evaporated && remaining >= self.remaining[i])
+                || (dry_times[i] == seconds && evaporated <= supplied)
                 || (remaining > 0. && capacity <= 0.)
             {
                 return Err(invalid(
@@ -393,15 +512,30 @@ impl Water {
             plan.dryout_events += usize::from(self.remaining[i] > 0. && remaining == 0.);
             plan.remaining.push(remaining);
             plan.evaporated.push(evaporated);
+            plan.supplied.push(supplied);
             plan.capacity_j_k.push(capacity);
             plan.latent_j.push(latent);
+            let supplied_capacity = supplied * self.request.liquid_specific_heat_j_kg_k;
+            let supplied_sensible =
+                supplied_capacity * (supply_temperature - self.request.enthalpy_reference_c);
+            let mixing = supplied_capacity * (supply_temperature - old.temperature_c()[i][0]);
+            plan.supplied_sensible_j.push(supplied_sensible);
+            plan.supplied_old_sensible_j +=
+                supplied_capacity * (old.temperature_c()[i][0] - self.request.enthalpy_reference_c);
+            plan.liquid_heat_j.push(mixing - latent);
             // Outflow samples the OLD temperature, exactly as the explicit pressure/rate law.
             plan.exported_sensible_j += evaporated
                 * self.request.liquid_specific_heat_j_kg_k
                 * (old.temperature_c()[i][0] - self.request.enthalpy_reference_c);
         }
-        if !plan.exported_sensible_j.is_finite() {
-            return Err(invalid("exported vapor sensible enthalpy overflows"));
+        if !plan.exported_sensible_j.is_finite()
+            || !plan.supplied_old_sensible_j.is_finite()
+            || plan.supplied_sensible_j.iter().any(|v| !v.is_finite())
+            || plan.liquid_heat_j.iter().any(|v| !v.is_finite())
+        {
+            return Err(invalid(
+                "supplied liquid or exported vapor sensible enthalpy overflows",
+            ));
         }
         Ok(plan)
     }
@@ -421,7 +555,7 @@ impl Water {
             for &t in &next.state.temperature_c()[i] {
                 self.request.pressure(t)?;
             }
-            if plan.remaining[i] > 0.
+            if (plan.remaining[i] > 0. || plan.supplied[i] > 0.)
                 && self.request.pressure(next.state.temperature_c()[i][0])?
                     < self.request.outside_vapor_pressure_pa[interval]
             {
@@ -433,16 +567,18 @@ impl Water {
                 * (plan.remaining[i] * (next.state.temperature_c()[i][0] - reference)
                     - self.remaining[i] * (old.temperature_c()[i][0] - reference));
         }
-        // supplied_heat is mechanical input MINUS latent removal. The vapor sensible export and
-        // liquid storage give the remaining-capacity equation used by the shared thermal solver.
+        // The solver source is mechanical - latent + supplied*cp*(T_feed-T_old). Subtracting
+        // supplied sensible enthalpy at T_old below completes the actual incoming-enthalpy ledger.
         let error = next.stored_change_j + liquid_step + plan.exported_sensible_j
             - plan.seconds * (next.inside_heat_w - next.outside_heat_w)
-            - next.supplied_heat_j;
+            - next.supplied_heat_j
+            - plan.supplied_old_sensible_j;
         let scale = 1.
             + next.stored_change_j.abs()
             + liquid_step.abs()
             + plan.exported_sensible_j.abs()
-            + next.supplied_heat_j.abs();
+            + next.supplied_heat_j.abs()
+            + plan.supplied_old_sensible_j.abs();
         if !error.is_finite() || !scale.is_finite() || error.abs() > 1e-8 * scale {
             return Err(invalid(
                 "surface-water sensible/latent energy balance failed",
@@ -455,6 +591,21 @@ impl Water {
         for (total, increment) in self.evaporated.iter_mut().zip(plan.evaporated) {
             add_positive(total, increment)?;
         }
+        for (total, increment) in self.supplied.iter_mut().zip(plan.supplied) {
+            add_positive(total, increment)?;
+        }
+        for (total, increment) in self
+            .supplied_sensible_j
+            .iter_mut()
+            .zip(plan.supplied_sensible_j)
+        {
+            *total += increment;
+            if !total.is_finite() {
+                return Err(invalid(
+                    "cumulative supplied liquid sensible enthalpy overflows",
+                ));
+            }
+        }
         self.remaining = plan.remaining;
         next.balance_error_j = error;
         self.snapshot(next.state.temperature_c(), false, 0.)?;
@@ -463,6 +614,7 @@ impl Water {
 
     pub(super) fn energy_correction_j(&self) -> f64 {
         self.liquid_stored_j + self.exported_sensible_j + self.latent_j
+            - self.supplied_sensible_j.iter().sum::<f64>()
     }
 
     pub(super) fn snapshot(
@@ -474,7 +626,9 @@ impl Water {
         let initial = positive_sum(&self.initial)?;
         let remaining = positive_sum(&self.remaining)?;
         let evaporated = positive_sum(&self.evaporated)?;
-        let error = remaining + evaporated - initial;
+        let supplied = positive_sum(&self.supplied)?;
+        let supplied_sensible: f64 = self.supplied_sensible_j.iter().sum();
+        let error = remaining + evaporated - initial - supplied;
         let reconstructed: f64 = self
             .initial
             .iter()
@@ -491,6 +645,8 @@ impl Water {
             initial,
             remaining,
             evaporated,
+            supplied,
+            supplied_sensible,
             error,
             reconstructed,
             self.latent_j,
@@ -500,7 +656,7 @@ impl Water {
         ]
         .iter()
         .any(|v| !v.is_finite())
-            || error.abs() > 1024. * f64::EPSILON * initial
+            || error.abs() > 1024. * f64::EPSILON * (initial + supplied)
             || (reconstructed - self.liquid_stored_j).abs()
                 > 1e-8 * (1. + reconstructed.abs() + self.liquid_stored_j.abs())
             || (self.latent_j - evaporated * self.request.latent_heat_j_kg).abs()
@@ -515,6 +671,11 @@ impl Water {
             "latent_energy_j":self.latent_j,"exported_vapor_sensible_energy_j":self.exported_sensible_j,
             "liquid_stored_change_j":self.liquid_stored_j,"mass_balance_error_kg":error,
             "dryout_events":self.dryout_events,"balance_error_j":balance_error_j});
+        if self.request.supply.is_some() {
+            result["schema"] = json!("ftx-textile-surface-water-result/2");
+            result["supplied_liquid_kg"] = json!(supplied);
+            result["supplied_liquid_sensible_energy_j"] = json!(supplied_sensible);
+        }
         if full {
             result["request"] = json!(self.request);
             result["unit_pressure_networks"] = json!(self.networks);
@@ -522,9 +683,25 @@ impl Water {
                 "source_triangle":i,"instance":self.instances[i],"initial_liquid_kg":self.initial[i],
                 "remaining_liquid_kg":self.remaining[i],"evaporated_liquid_kg":self.evaporated[i]
             })).collect::<Vec<_>>());
+            if self.request.supply.is_some() {
+                for (i, patch) in result["patches"]
+                    .as_array_mut()
+                    .expect("patch array")
+                    .iter_mut()
+                    .enumerate()
+                {
+                    patch["supplied_liquid_kg"] = json!(self.supplied[i]);
+                    patch["supplied_liquid_sensible_energy_j"] = json!(self.supplied_sensible_j[i]);
+                }
+            }
             result["scope"] = json!(
                 "Source-qualified initial free liquid shares the inner textile cell temperature. Constant dry thermal and effective Ret properties are explicitly qualified over the authored temperature/loading domain. Pressure and vapor sensible export sample each substep's initial temperature; dry conduction is implicit. Earliest dryout splits the step and the dry remainder uses the same heat solver. Reference area owns water; current area conducts vapor. No replenishment, condensation, sorption, wicking, absorbed moisture, wet-property inference, added mechanical mass, body-water transfer or empirical/comfort claim. Time/space refinement remains required."
             );
+            if self.request.supply.is_some() {
+                result["scope"] = json!(
+                    "Source-qualified free liquid shares the inner textile cell temperature. An independently sourced piecewise-constant delivery specifies reference-area mass rates and incoming liquid temperatures for every instance and interval. Supplied sensible enthalpy enters the same conservative thermal balance. Pressure and vapor sensible export sample old inner-cell temperature; implicit heat uses remaining liquid capacity. Net depletion splits at exact dryout; dry liquid supply can sustain limited evaporation or rewet the patch. Reference area owns liquid and delivery; current area conducts vapor. Qualified loading-domain overflow refuses without drainage or clamping. No condensation, sorption, wicking, absorbed moisture, wet-property inference, added mechanical mass, body-water transfer or empirical/comfort claim. Time/space refinement remains required."
+                );
+            }
         }
         Ok(result)
     }

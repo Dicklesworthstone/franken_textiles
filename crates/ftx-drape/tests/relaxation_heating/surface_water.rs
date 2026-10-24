@@ -139,3 +139,73 @@ fn textile_water_and_maxwell_heat_have_separate_conservative_ledgers_and_local_r
     );
     assert_eq!(missing["motion"]["status"], "available");
 }
+
+#[test]
+fn moving_textile_supply_replays_reference_area_delivery_and_keeps_maxwell_energy_separate() {
+    let (pattern, scenario) = inputs();
+    let mut raw = serde_json::to_value(&scenario).unwrap();
+    let policy = &mut raw["motion"]["transient_surface"];
+    policy["relaxation_dissipation_heat"] = json!("uniform_reference_thickness");
+    let water = &mut policy["surface_water"];
+    water["schema"] = json!("ftx-textile-surface-water/2");
+    water
+        .as_object_mut()
+        .unwrap()
+        .remove("replenishment_kg_m2_s");
+    water["bindings"]["front"]["initial_liquid_kg_m2"] = json!(0.);
+    water["supply"] = json!({"schema":"ftx-textile-liquid-supply/1",
+        "bindings":{"front":{"rate_kg_m2_s":[1e-5],"temperature_c":[40.]},
+            "back":{"rate_kg_m2_s":[0.],"temperature_c":[20.]}},
+        "source":{"reference":"test:moving-liquid-feed","accessed_on":"2026-10-23",
+            "note":"Synthetic delivery to the front sheet, no physiological source"},
+        "evidence":"estimate","allow_estimates":true,"method":"Prescribed reference-area liquid feed"});
+    let supplied_scenario: Scenario = serde_json::from_value(raw.clone()).unwrap();
+    let result = evaluate(&supplied_scenario, &pattern);
+    let h = heat(&result);
+    let water = &h["surface_water"];
+    assert_eq!(water["schema"], "ftx-textile-surface-water-result/2");
+    let duration = h["duration_s"].as_f64().unwrap();
+    let mut expected_mass = 0.;
+    for (i, patch) in water["patches"].as_array().unwrap().iter().enumerate() {
+        let area = h["model"]["patches"][i]["reference_area_m2"]
+            .as_f64()
+            .unwrap();
+        let expected = if patch["instance"] == "front" {
+            area * 1e-5 * duration
+        } else {
+            0.
+        };
+        expected_mass += expected;
+        assert!((patch["supplied_liquid_kg"].as_f64().unwrap() - expected).abs() < 1e-20);
+        assert!(
+            (patch["supplied_liquid_sensible_energy_j"].as_f64().unwrap() - expected * 4200. * 40.)
+                .abs()
+                < 1e-12
+        );
+    }
+    assert!(expected_mass > 0.);
+    assert!((water["supplied_liquid_kg"].as_f64().unwrap() - expected_mass).abs() < 1e-20);
+    assert!(water["evaporated_liquid_kg"].as_f64().unwrap() > 0.);
+    let mechanical = h["relaxation_dissipation_heat"]["supplied_heat_j"]
+        .as_f64()
+        .unwrap();
+    assert!(mechanical > 0.);
+    let balance = h["stored_change_j"].as_f64().unwrap()
+        + water["liquid_stored_change_j"].as_f64().unwrap()
+        + water["exported_vapor_sensible_energy_j"].as_f64().unwrap()
+        + water["latent_energy_j"].as_f64().unwrap()
+        - water["supplied_liquid_sensible_energy_j"].as_f64().unwrap()
+        - h["net_boundary_energy_j"].as_f64().unwrap()
+        - mechanical;
+    assert!(balance.abs() < 1e-10);
+    assert_eq!(heat(&evaluate(&supplied_scenario, &pattern)), h);
+    unchanged_mechanics(&result, &evaluate(&scenario, &pattern));
+
+    raw["motion"]["transient_surface"]["surface_water"]["supply"]["allow_estimates"] = json!(false);
+    let refused = evaluate(&serde_json::from_value(raw).unwrap(), &pattern);
+    assert_eq!(
+        refused["motion"]["result"]["transient_surface"]["status"],
+        "refused"
+    );
+    unchanged_mechanics(&result, &refused);
+}

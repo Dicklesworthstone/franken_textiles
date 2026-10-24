@@ -73,6 +73,219 @@ fn near(a: f64, b: f64) {
     );
 }
 
+fn supplied_fixture(
+    loading: f64,
+    step: f64,
+    rates: Vec<f64>,
+    temperatures: Vec<f64>,
+) -> SurfaceHistory {
+    let mut history = fixture(loading, step);
+    let intervals = rates.len();
+    let mut request = history.water.as_ref().unwrap().request.clone();
+    request.schema = "ftx-textile-surface-water/2".into();
+    request.replenishment_kg_m2_s = None;
+    request.outside_vapor_pressure_pa = vec![1000.; intervals];
+    request.supply = Some(serde_json::from_value(json!({
+        "schema":"ftx-textile-liquid-supply/1", "bindings":{"sheet":{
+            "rate_kg_m2_s":rates,"temperature_c":temperatures}},
+        "source":{"reference":"test:prescribed-textile-delivery","accessed_on":"2026-10-23",
+            "note":"Synthetic reference-area delivery of the declared liquid, no body transfer"},
+        "evidence":"estimate","allow_estimates":true,"method":"Artificial piecewise constant feed"
+    })).unwrap());
+    request.validate(intervals).unwrap();
+    history.water.as_mut().unwrap().request = request.clone();
+    history.request.surface_water = Some(request);
+    history.request.boundaries = vec![history.request.boundaries[0]; intervals];
+    history
+}
+
+#[test]
+fn supplied_liquid_enthalpy_enters_the_actual_heat_solve_and_balances_independently() {
+    let mut warm = supplied_fixture(0.05, 1., vec![0.01], vec![40.]);
+    let mut cold = supplied_fixture(0.05, 1., vec![0.01], vec![0.]);
+    // Reference area .5: .025 kg initially, .005 kg delivered, .015 kg evaporated.
+    // Warm incoming liquid adds 100 J of mixing heat; latent removal is 150 J.
+    let remaining = 0.025 + (0.005 - 0.015);
+    let capacity = 100. + remaining * 1000.;
+    let conductance = 0.5 / 1.2;
+    let expected =
+        (capacity * 20. + 2. * conductance * 20. + 100. - 150.) / (capacity + 2. * conductance);
+    advance(&mut warm, 0.5, 1.).unwrap();
+    advance(&mut cold, 0.5, 1.).unwrap();
+    near(warm.state.temperature_c()[0][0], expected);
+    assert!(cold.state.temperature_c()[0][0] < warm.state.temperature_c()[0][0]);
+    let result = warm.finish("path", "initial", 1.).unwrap();
+    let water = &result["surface_water"];
+    assert_eq!(water["schema"], "ftx-textile-surface-water-result/2");
+    near(water["supplied_liquid_kg"].as_f64().unwrap(), 0.005);
+    near(
+        water["supplied_liquid_sensible_energy_j"].as_f64().unwrap(),
+        200.,
+    );
+    near(
+        water["patches"][0]["supplied_liquid_sensible_energy_j"]
+            .as_f64()
+            .unwrap(),
+        200.,
+    );
+    near(water["remaining_liquid_kg"].as_f64().unwrap(), remaining);
+    near(water["evaporated_liquid_kg"].as_f64().unwrap(), 0.015);
+    near(water["mass_balance_error_kg"].as_f64().unwrap(), 0.);
+    let balance = result["stored_change_j"].as_f64().unwrap()
+        + water["liquid_stored_change_j"].as_f64().unwrap()
+        + water["exported_vapor_sensible_energy_j"].as_f64().unwrap()
+        + water["latent_energy_j"].as_f64().unwrap()
+        - water["supplied_liquid_sensible_energy_j"].as_f64().unwrap()
+        - result["net_boundary_energy_j"].as_f64().unwrap();
+    near(balance, 0.);
+    near(result["balance_error_j"].as_f64().unwrap(), balance);
+    near(
+        result["trace"][0]["surface_water"]["supplied_liquid_kg"]
+            .as_f64()
+            .unwrap(),
+        0.005,
+    );
+}
+
+#[test]
+fn continuous_supply_survives_exact_dryout_and_rewets_an_empty_patch() {
+    let mut history = supplied_fixture(0.015, 1., vec![0.01], vec![20.]);
+    // Initial .0075 kg / (.015 evaporation - .005 supply) kg/s = .75 s to dryout.
+    // The remaining .25 s is supply limited, not an omitted dry interval.
+    advance(&mut history, 0.5, 1.).unwrap();
+    assert_eq!(history.thermal_steps, 2);
+    let water = history.water.as_ref().unwrap();
+    assert_eq!(water.dryout_events, 1);
+    assert_eq!(water.remaining, vec![0.]);
+    near(water.supplied[0], 0.005);
+    near(water.evaporated[0], 0.0125);
+    near(water.latent_j, 125.);
+    near(history.balance_error_j(), 0.);
+
+    let mut dry = supplied_fixture(0., 1., vec![0.01, 0.08], vec![20., 20.]);
+    dry.advance(&geometry(0.5), 0.5, 0, 0, None, None, None)
+        .unwrap();
+    assert_eq!(dry.water.as_ref().unwrap().remaining, vec![0.]);
+    near(dry.water.as_ref().unwrap().evaporated[0], 0.0025);
+    dry.advance(&geometry(0.5), 1., 1, 1, None, None, None)
+        .unwrap();
+    assert!(dry.water.as_ref().unwrap().remaining[0] > 0.);
+    near(dry.water.as_ref().unwrap().supplied[0], 0.0025 + 0.02);
+    near(dry.balance_error_j(), 0.);
+}
+
+#[test]
+fn interval_supply_uses_reference_area_and_preserves_sensible_reference_and_refinement() {
+    let mut reference = supplied_fixture(0.05, 0.1, vec![0.01, 0.02], vec![40., 5.]);
+    let mut shifted = reference.clone();
+    shifted.water.as_mut().unwrap().request.enthalpy_reference_c = 15.;
+    for history in [&mut reference, &mut shifted] {
+        history
+            .advance(&geometry(0.5), 0.5, 0, 0, None, None, None)
+            .unwrap();
+        history
+            .advance(&geometry(1.), 1., 1, 1, None, None, None)
+            .unwrap();
+        near(
+            history.water.as_ref().unwrap().supplied[0],
+            0.5 * (0.01 * 0.5 + 0.02 * 0.5),
+        );
+        near(history.balance_error_j(), 0.);
+    }
+    assert_eq!(
+        reference.state.temperature_c(),
+        shifted.state.temperature_c()
+    );
+    near(
+        reference.water.as_ref().unwrap().energy_correction_j(),
+        shifted.water.as_ref().unwrap().energy_correction_j(),
+    );
+    near(
+        reference.water.as_ref().unwrap().supplied_sensible_j[0],
+        1000. * 0.5 * (0.01 * 0.5 * 40. + 0.02 * 0.5 * 5.),
+    );
+    let temperature = |step| {
+        let mut history = supplied_fixture(0.05, step, vec![0.01], vec![40.]);
+        advance(&mut history, 0.5, 1.).unwrap();
+        history.state.temperature_c()[0][0]
+    };
+    let refined = temperature(1. / 512.);
+    assert!((temperature(0.125) - refined).abs() < 0.6 * (temperature(0.25) - refined).abs());
+}
+
+#[test]
+fn supply_requires_independent_complete_sources_and_overflow_rolls_back_the_interval() {
+    let mut history = supplied_fixture(0., 0.5, vec![0.15], vec![20.]);
+    let mut request = history.water.as_ref().unwrap().request.clone();
+    let supply = request.supply.as_mut().unwrap();
+    supply.allow_estimates = false;
+    assert!(request.validate(1).is_err());
+    request.supply.as_mut().unwrap().allow_estimates = true;
+    request
+        .supply
+        .as_mut()
+        .unwrap()
+        .bindings
+        .get_mut("sheet")
+        .unwrap()
+        .temperature_c[0] = 81.;
+    assert!(request.validate(1).is_err());
+    request
+        .supply
+        .as_mut()
+        .unwrap()
+        .bindings
+        .get_mut("sheet")
+        .unwrap()
+        .temperature_c[0] = 20.;
+    request
+        .supply
+        .as_mut()
+        .unwrap()
+        .bindings
+        .get_mut("sheet")
+        .unwrap()
+        .rate_kg_m2_s
+        .push(0.);
+    assert!(request.validate(1).is_err());
+    request
+        .supply
+        .as_mut()
+        .unwrap()
+        .bindings
+        .get_mut("sheet")
+        .unwrap()
+        .rate_kg_m2_s
+        .pop();
+    request.replenishment_kg_m2_s = Some(0.);
+    assert!(request.validate(1).is_err());
+    request.replenishment_kg_m2_s = None;
+    request.schema = "ftx-textile-surface-water/1".into();
+    assert!(request.validate(1).is_err());
+    // The first half second wets the patch within its .05 kg limit. The second overfills it,
+    // so neither successful prefix state nor delivered mass/enthalpy may survive.
+    let before = history
+        .water
+        .as_ref()
+        .unwrap()
+        .snapshot(history.state.temperature_c(), true, 0.)
+        .unwrap();
+    assert!(advance(&mut history, 0.5, 1.).is_err());
+    assert_eq!(history.state.temperature_c(), &[vec![20.]]);
+    assert_eq!(history.time_s, 0.);
+    assert_eq!(history.cell_steps, 0);
+    assert!(history.trace.is_empty());
+    assert_eq!(
+        history
+            .water
+            .as_ref()
+            .unwrap()
+            .snapshot(history.state.temperature_c(), true, 0.)
+            .unwrap(),
+        before
+    );
+}
+
 #[test]
 fn explicit_temperature_evaporation_balances_dry_and_liquid_sensible_plus_vapor_export() {
     let mut history = fixture(0.1, 1.);
@@ -204,9 +417,9 @@ fn invalid_source_condensation_and_late_domain_or_event_budget_failure_are_trans
     request.allow_estimates = false;
     assert!(request.validate(1).is_err());
     request.allow_estimates = true;
-    request.replenishment_kg_m2_s = 1e-9;
+    request.replenishment_kg_m2_s = Some(1e-9);
     assert!(request.validate(1).is_err());
-    request.replenishment_kg_m2_s = 0.;
+    request.replenishment_kg_m2_s = Some(0.);
     request.wet_vapor_pressure_pa[1][0] = request.wet_vapor_pressure_pa[0][0];
     assert!(request.validate(1).is_err());
     // Initial minimum work fits, but dryout creates a second necessary step. Roll back its first

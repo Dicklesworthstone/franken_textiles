@@ -436,10 +436,33 @@ and energy objectives after complete source, geometry, water and energy admissio
 <code>textile_water_latent_energy_j</code> as nominal objectives or inclusive constraints to compare the textile's own water.
 These quantities are separate from body-reservoir water. Missing material qualification, inconsistent ledgers and incomplete
 motion exclude the affected alternative; source-reported uncertainty ranges are not inferred.</p>
+<p class="note">Use <code>ftx-textile-surface-water/2</code> for continuous liquid delivery. Omit
+<code>replenishment_kg_m2_s</code> and add <code>supply</code> with schema <code>ftx-textile-liquid-supply/1</code>,
+its own <code>source</code>, <code>evidence</code>, <code>allow_estimates</code> and <code>method</code>.
+Each exact instance binding supplies <code>rate_kg_m2_s</code> and <code>temperature_c</code> arrays, one entry
+per mechanical keyframe interval, including explicit zero delivery. Rates use reference material area;
+incoming liquid contributes its own sensible heat. A dry patch may evaporate its incoming supply or rewet.
+The source-qualified loading cap is enforced without silently discarding excess water.
+Add <code>textile_water_supplied_mass_kg</code> to constrain or optimize delivered liquid alongside cooling;
+the complete incoming-water and energy histories must qualify before comparison.</p>
 <p class="note">Scenario comparisons require a settled initial drape with clear gating. Static heat, strain and simulated-cloth-mass objectives describe
 that initial frame. Motion objectives additionally require complete, converged continuation; the final moving state need not be at rest.
 Signed surface power and body-coverage power have different bases and are not interchangeable.
 There is no hidden weighted score, whole-wearer warmth rating or global garment winner.</p>
+<p class="note">For material-direction strain, add scenario <code>material_strain</code> with
+<code>{"schema":"ftx-material-strain/1","max_triangle_samples":100000}</code>.
+Optional <code>instances</code> selects exact retained piece instances; omission selects all of them.
+The work budget includes the initial state and every accepted motion sample. The report retains signed,
+dimensionless warp <code>E11</code>, weft <code>E22</code> and engineering shear <code>2E12</code> extrema,
+their source triangles, material identities and sample times. Add nominal metrics
+<code>min_warp_green_strain</code>, <code>max_warp_green_strain</code>,
+<code>min_weft_green_strain</code>, <code>max_weft_green_strain</code>,
+<code>min_engineering_shear_green_strain</code> or <code>max_engineering_shear_green_strain</code>;
+prefix each with <code>motion_</code> to include every accepted motion state.
+Consumers <code>material_strain</code> and <code>motion_material_strain</code> can also be required independently.
+These values are raw material Green strains, not percent extension or a softened solver surrogate.
+Inclusive limits are declared design requirements; characterized material domains are not rupture or comfort limits.
+An exhausted strain budget refuses that consumer while preserving independent mechanical and manufacturing results.</p>
 <p>Changing either request, measurements, body or original pattern withdraws affected results. Cancel terminates the worker,
 including synchronous simulation. Raw reports and exact input JSON are downloadable; keep the source-identified body model locally for replay.</p>
 </div></div>

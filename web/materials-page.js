@@ -304,12 +304,28 @@ function objectiveComparison(parent, r) {
   const textileWaterLabels = {
     textile_water_evaporated_mass_kg: "Evaporated textile water",
     textile_water_remaining_mass_kg: "Remaining textile liquid",
+    textile_water_supplied_mass_kg: "Supplied textile liquid",
     textile_water_latent_energy_j: "Textile evaporation latent energy"
   };
+  const strainLabels = {};
+  for (const [prefix, scope] of [["", "Initial"], ["motion_", "Motion"]]) {
+    for (const [axis, label] of [["warp", "warp E11"], ["weft", "weft E22"], ["engineering_shear", "shear 2E12"]]) {
+      strainLabels[`${prefix}min_${axis}_green_strain`] = `${scope} minimum ${label}`;
+      strainLabels[`${prefix}max_${axis}_green_strain`] = `${scope} maximum ${label}`;
+    }
+  }
+  if (metrics.some(o => Object.hasOwn(strainLabels, o.metric)) ||
+      r.policy.required_consumers?.some(name => ["material_strain", "motion_material_strain"].includes(name))) {
+    const strain = document.createElement("p");
+    strain.textContent = "Material-direction objectives use signed, dimensionless Green strains in the retained warp and weft frame. " +
+      "The requested instances define the spatial scope; motion extrema include the initial state and every accepted sample. " +
+      "Inclusive constraints are declared design requirements. They do not establish fabric rupture limits, continuous-time bounds, wearer comfort or measured fit.";
+    parent.append(strain);
+  }
   if (metrics.some(o => Object.hasOwn(textileWaterLabels, o.metric))) {
     const textileWater = document.createElement("p");
     textileWater.textContent = "Textile water objectives use the complete admitted coupled temperature history. " +
-      "The Rust comparison checks exact material and geometry ownership, canonical vapor paths, water inventory and the combined sensible/latent energy balance. " +
+      "The Rust comparison checks exact material and geometry ownership, canonical vapor paths, initial and supplied water inventory, incoming sensible heat and the combined sensible/latent energy balance. " +
       "These nominal quantities account for textile-owned liquid; body-reservoir water has separate objectives. " +
       "Source uncertainty, physical garment validation and a globally optimal design are not established.";
     parent.append(textileWater);
@@ -341,7 +357,7 @@ function objectiveComparison(parent, r) {
     parent.append(water);
   }
   const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",
-    ...metrics.map(o => `${wetFilmLabels[o.metric] || textileWaterLabels[o.metric] || threadLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
+    ...metrics.map(o => `${wetFilmLabels[o.metric] || textileWaterLabels[o.metric] || strainLabels[o.metric] || threadLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
   for (const row of r.alternatives) {
     cells(t, [row.key, row.eligible ? "Eligible" : `Excluded: ${row.exclusions.map(e => e.message).join("; ")}`,
       row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
@@ -394,6 +410,31 @@ function attachedMassComparison(parent, rows, simulations) {
       report || { refusal: outcome?.refusal });
   }
 }
+function materialStrainComparison(parent, key, output, dependency, requested, moving = false) {
+  if (!requested && (!output || output.status === "not_requested")) return;
+  const result = available(output), label = moving ? "accepted-motion" : "initial";
+  const status = document.createElement("p");
+  status.textContent = `${key}: ${label} material-direction strain — ${output ? state(output) : `Unavailable: ${state(dependency)}`}. ` +
+    (result ? `${metric(result.triangle_samples)} triangle evaluations; sampled duration ${metric(result.duration_s)} s.` : "");
+  parent.append(status);
+  if (result) {
+    const t = table(parent, `${key}: ${label} material-direction strain`,
+      ["Scope", "Direction", "Minimum (1)", "Minimum location", "Maximum (1)", "Maximum location"]);
+    const witness = w => w ? `Triangle ${metric(w.source_triangle)}, sample ${metric(w.sample_index)} at ${metric(w.time_s)} s` : "Unknown";
+    for (const [scope, values] of [["Selected scope", result], ...Object.entries(result.instances || {})]) {
+      ["Warp E11", "Weft E22", "Engineering shear 2E12"].forEach((axis, i) => {
+        cells(t, [scope, axis, metric(values.green_strain_range?.[i]?.[0]), witness(values.minimum_witness?.[i]),
+          metric(values.green_strain_range?.[i]?.[1]), witness(values.maximum_witness?.[i])]);
+      });
+    }
+    const note = document.createElement("p");
+    note.textContent = "Raw material Green strain [E11, E22, 2E12] is dimensionless and retains its sign; it is not engineering extension percent. " +
+      "Values use the production material frame before numerical compression or gather softening. Witnesses retain the earliest sampled extreme and its source triangle. " +
+      "Characterization domains describe supported material observations; declared comparison limits do not establish rupture, safe strain, continuous-time bounds or physical garment fit.";
+    parent.append(note);
+  }
+  detail(parent, `${key}: ${label} strain scope, sources and sampled witnesses (display only)`, result || {refusal: output?.refusal || dependency?.refusal});
+}
 function transientHeatComparison(parent, key, result, dependency, policy) {
   const consumers = [["transient_surface", "Independent sheets"], ["transient_coverage", "Body coverage + exposed cloth"]]
     .filter(([name]) => policy?.[name] || result?.[name]);
@@ -410,19 +451,24 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
     detail(parent, `${key}: ${label} temperature history, source and energy accounting (display only)`, h || { refusal: output?.refusal || dependency?.refusal });
     if (h?.surface_water) {
       const water = h.surface_water;
-      const mass = table(parent, `${key}: textile surface liquid — conserved initial inventory`,
-        ["Initial liquid (kg)", "Evaporated liquid (kg)", "Remaining liquid (kg)", "Mass residual (kg)", "Dryout events"]);
-      cells(mass, [metric(water.initial_liquid_kg), metric(water.evaporated_liquid_kg), metric(water.remaining_liquid_kg),
+      const supplied = water.schema === "ftx-textile-surface-water-result/2";
+      const mass = table(parent, `${key}: textile surface liquid — conserved ${supplied ? "initial and supplied" : "initial"} inventory`,
+        ["Initial liquid (kg)", ...(supplied ? ["Supplied liquid (kg)"] : []), "Evaporated liquid (kg)", "Remaining liquid (kg)", "Mass residual (kg)", "Dryout events"]);
+      cells(mass, [metric(water.initial_liquid_kg), ...(supplied ? [metric(water.supplied_liquid_kg)] : []), metric(water.evaporated_liquid_kg), metric(water.remaining_liquid_kg),
         metric(water.mass_balance_error_kg), metric(water.dryout_events)]);
       const energy = table(parent, `${key}: textile evaporation and sensible energy`,
-        ["Latent energy (J)", "Exported vapor sensible energy (J)", "Liquid sensible change (J)", "Combined energy residual (J)"]);
+        ["Latent energy (J)", "Exported vapor sensible energy (J)", "Liquid sensible change (J)",
+          ...(supplied ? ["Incoming liquid sensible energy (J)"] : []), "Combined energy residual (J)"]);
       cells(energy, [metric(water.latent_energy_j), metric(water.exported_vapor_sensible_energy_j),
-        metric(water.liquid_stored_change_j), metric(water.balance_error_j)]);
+        metric(water.liquid_stored_change_j), ...(supplied ? [metric(water.supplied_liquid_sensible_energy_j)] : []), metric(water.balance_error_j)]);
       const scope = document.createElement("p");
-      scope.textContent = "This explicitly sourced initial free liquid shares the inner textile cell temperature. Evaporation cools that cell, " +
-        "and the temperature feeds the declared vapor-pressure table. Dryout ends evaporation; the remaining interval uses the dry heat model. " +
+      scope.textContent = "This explicitly sourced free liquid shares the inner textile cell temperature. Evaporation cools that cell, " +
+        "and the temperature feeds the declared vapor-pressure table. " +
+        (supplied ? "Each mechanical interval has independently sourced delivery rates and incoming temperatures per instance. Supply uses reference material area, can support evaporation on a dry patch and can rewet it. " :
+          "Dryout ends evaporation; the remaining interval uses the dry heat model. ") +
         "The combined balance includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, " +
-        "against boundary energy plus qualified material heat. The initial-only model adds no mechanical water mass or replenishment. " +
+        "against boundary energy plus qualified material heat" + (supplied ? " and incoming liquid sensible energy. Loading beyond the qualified cap refuses the interval. " : ". The initial-only model has zero replenishment. ") +
+        "The liquid adds no mechanical water mass. " +
         "It does not infer absorbed moisture, wicking, body sweat or wet material properties. Comparison admission checks the complete liquid and vapor ledger, " +
         "including exact material bindings and canonical vapor paths, before temperature, energy or textile-water objectives can qualify.";
       parent.append(scope);
@@ -448,7 +494,7 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
       }
       const scope = document.createElement("p");
       scope.textContent = (h.surface_water ?
-        "The energy residual includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, minus net boundary energy and qualified source heat. " :
+        "The energy residual includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, minus net boundary energy, qualified source heat and any declared incoming liquid sensible energy. " :
         "The energy residual is physical stored change minus net boundary energy minus the sum of qualified source heat. ") +
         "Each source needs its own material conversion evidence. Work already accumulated in the initial drape, reversible storage and numerical loss are excluded. " +
         (channels.every(([field]) => h[field].distribution === "uniform_reference_thickness" && h[field].temporal_distribution === "uniform_over_accepted_interval") ?
@@ -643,6 +689,8 @@ function motionComparison(op, parent, rows, simulations, requested, filePrefix =
     cells(t, [row.key, initial ? state(initial.motion) : state(evaluation),
       initial?.drape?.settled === true ? "Yes — also review initial flags" : initial?.drape?.settled === false ? "NO — review initial state" : "Unknown",
       metric(result?.duration_s), metric(result?.samples?.length), metric(result?.trials), metric(result?.metrics?.max_absolute_edge_strain_pct)]);
+    materialStrainComparison(parent, row.key, result?.material_strain, initial?.motion || evaluation,
+      initial?.material_strain && initial.material_strain.status !== "not_requested", true);
     transientHeatComparison(parent, row.key, result, initial?.motion || evaluation, requested);
     motionVaporComparison(op, parent, row.key, index, result, initial?.motion || evaluation, requested, filePrefix);
     if (!result) continue;
@@ -722,6 +770,7 @@ function comparison(op, r, parent = sections.get(op).comparison, { skipManufactu
         scenario_sha256: result?.scenario_sha256, body_geometry_sha256: result?.body_geometry_sha256,
         placements_sha256: result?.placements_sha256, positions_sha256: result?.positions_sha256,
         surface_refusal: result?.surface?.refusal, coverage_refusal: result?.coverage?.refusal, note: result?.note });
+      materialStrainComparison(parent, row.key, result?.material_strain, outcome, r.scenario?.scenario?.material_strain);
     }
     vaporCoverageComparison(op, parent, study.alternatives, simulations, r.scenario?.scenario?.vapor_coverage, filePrefix);
     if ([...simulations.values()].some(o => {

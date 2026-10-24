@@ -29,8 +29,9 @@ fn near(a: f64, b: f64, scale: f64) -> bool {
         && (a - b).abs() <= 2048. * f64::EPSILON * scale.abs().max(a.abs()).max(b.abs())
 }
 
-fn inside(value: f64, lo: f64, hi: f64, scale: f64) -> bool {
-    (value >= lo || near(value, lo, scale)) && (value <= hi || near(value, hi, scale))
+fn inside(value: f64, lo: f64, hi: f64, scale: f64, steps: u64) -> bool {
+    (value >= lo || accumulated_near(value, lo, scale, steps))
+        && (value <= hi || accumulated_near(value, hi, scale, steps))
 }
 
 fn hashed(value: &Value) -> Result<(), Refusal> {
@@ -40,6 +41,125 @@ fn hashed(value: &Value) -> Result<(), Refusal> {
         return Err(fail());
     }
     Ok(())
+}
+
+fn source(value: &Value) -> Result<(), Refusal> {
+    let text = |v: &Value| {
+        v.as_str()
+            .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
+    };
+    let evidence: Evidence =
+        serde_json::from_value(value["evidence"].clone()).map_err(|_| fail())?;
+    if !text(&value["source"]["reference"])
+        || !text(&value["source"]["note"])
+        || !value["source"]["accessed_on"]
+            .as_str()
+            .is_some_and(|s| s.len() == 10)
+        || !text(&value["method"])
+        || (evidence == Evidence::Estimate && value["allow_estimates"] != true)
+    {
+        return Err(fail());
+    }
+    Ok(())
+}
+
+// This integrates authored delivery, not evaporation or heat. Mechanical endpoints own each
+// piecewise-constant interval; retained thermal subdivisions must not change supplied inventory.
+struct Delivery {
+    rates: Vec<[f64; 2]>,
+    total: [f64; 2],
+}
+
+struct Supply {
+    ends: Vec<f64>,
+    deliveries: BTreeMap<String, Delivery>,
+}
+
+impl Supply {
+    fn new(
+        request: &Value,
+        owners: &serde_json::Map<String, Value>,
+        motion: &Value,
+        cp: f64,
+        reference: f64,
+        domain: [f64; 2],
+    ) -> Result<Self, Refusal> {
+        source(request)?;
+        let bindings = request["bindings"].as_object().ok_or_else(fail)?;
+        if request["schema"] != "ftx-textile-liquid-supply/1" || bindings.keys().ne(owners.keys()) {
+            return Err(fail());
+        }
+        let ends = array(motion, "keyframes")?
+            .iter()
+            .map(|frame| number(frame, "time_s"))
+            .collect::<Result<Vec<_>, _>>()?;
+        if ends.is_empty()
+            || ends[0] <= 0.
+            || ends.windows(2).any(|pair| pair[1] <= pair[0])
+            || ends.last().copied() != Some(number(motion, "duration_s")?)
+        {
+            return Err(fail());
+        }
+        let mut deliveries = BTreeMap::new();
+        for (instance, binding) in bindings {
+            let mass_rates = array(binding, "rate_kg_m2_s")?;
+            let temperatures = array(binding, "temperature_c")?;
+            if mass_rates.len() != ends.len() || temperatures.len() != ends.len() {
+                return Err(fail());
+            }
+            let mut total = [0.; 2];
+            let mut rates = Vec::with_capacity(ends.len());
+            let mut previous = 0.;
+            for ((rate, t), end) in mass_rates.iter().zip(temperatures).zip(&ends) {
+                let rate = finite(rate).filter(|v| *v >= 0.).ok_or_else(fail)?;
+                let t = finite(t)
+                    .filter(|v| *v >= domain[0] && *v <= domain[1])
+                    .ok_or_else(fail)?;
+                let pair = [rate, rate * cp * (t - reference)];
+                let old_mass = total[0];
+                for (sum, rate) in total.iter_mut().zip(pair) {
+                    *sum += rate * (end - previous);
+                }
+                if pair.iter().chain(&total).any(|v| !v.is_finite())
+                    || (rate > 0. && total[0] <= old_mass)
+                {
+                    return Err(fail());
+                }
+                rates.push(pair);
+                previous = *end;
+            }
+            deliveries.insert(instance.clone(), Delivery { rates, total });
+        }
+        Ok(Self { ends, deliveries })
+    }
+
+    fn rates(&self, areas: &BTreeMap<&str, f64>) -> Result<Vec<[f64; 2]>, Refusal> {
+        let mut rates = vec![[0.; 2]; self.ends.len()];
+        for (instance, area) in areas {
+            let delivery = self.deliveries.get(*instance).ok_or_else(fail)?;
+            for (sum, per_area) in rates.iter_mut().zip(&delivery.rates) {
+                for (total, rate) in sum.iter_mut().zip(per_area) {
+                    *total += area * rate;
+                    if !total.is_finite() {
+                        return Err(fail());
+                    }
+                }
+            }
+        }
+        Ok(rates)
+    }
+}
+
+// Producer substeps accumulate ordinary floating-point increments. Permit their bounded summation
+// error against independently reconstructed inventories/enthalpy, without a unit-sized tolerance.
+fn accumulated_near(actual: f64, expected: f64, scale: f64, steps: u64) -> bool {
+    actual.is_finite()
+        && expected.is_finite()
+        && scale.is_finite()
+        && (actual - expected).abs()
+            <= (2048. + 16. * steps as f64)
+                * f64::EPSILON
+                * scale.abs().max(actual.abs()).max(expected.abs())
 }
 
 /// Return the additional liquid/vapor energy on each retained sample and the final receipt.
@@ -63,31 +183,26 @@ pub(super) fn admit(
             Err(fail())
         };
     }
-    // Supply version 2 is admitted separately; an unsupported energy owner must never be ignored.
+    let supplied = policy["schema"] == "ftx-textile-surface-water/2";
+    let version_valid = if supplied {
+        policy["replenishment_kg_m2_s"].is_null() && !policy["supply"].is_null()
+    } else {
+        policy["schema"] == "ftx-textile-surface-water/1"
+            && policy["replenishment_kg_m2_s"].as_f64() == Some(0.)
+            && policy["supply"].is_null()
+    };
     if coverage
-        || policy["schema"] != "ftx-textile-surface-water/1"
+        || !version_valid
         || policy["model"] != "inner_cell_equilibrium_free_film_frozen_properties/1"
-        || policy["replenishment_kg_m2_s"].as_f64() != Some(0.)
-        || !policy["supply"].is_null()
         || water["request"] != *policy
         || heat["initial_temperature_c"] != heat_request["initial_temperature_c"]
     {
         return Err(fail());
     }
-    let text = |v: &Value| {
-        v.as_str()
-            .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
-    };
-    let evidence: Evidence =
-        serde_json::from_value(policy["evidence"].clone()).map_err(|_| fail())?;
-    if !text(&policy["source"]["reference"])
-        || !text(&policy["source"]["note"])
-        || !policy["source"]["accessed_on"]
-            .as_str()
-            .is_some_and(|s| s.len() == 10)
-        || !text(&policy["method"])
-        || !text(&policy["qualification"])
-        || (evidence == Evidence::Estimate && policy["allow_estimates"] != true)
+    source(policy)?;
+    if !policy["qualification"]
+        .as_str()
+        .is_some_and(|s| !s.trim().is_empty() && s.len() <= 4096)
     {
         return Err(fail());
     }
@@ -160,6 +275,16 @@ pub(super) fn admit(
     let liquid_patches = array(water, "patches")?;
     let temperatures = array(&heat["final"], "temperature_c")?;
     let bindings = policy["bindings"].as_object().ok_or_else(fail)?;
+    let supply = supplied
+        .then(|| Supply::new(&policy["supply"], bindings, motion, cp, reference, domain))
+        .transpose()?;
+    let total_steps = heat["thermal_steps"].as_u64().ok_or_else(fail)?;
+    let enthalpy_scale = |mass: f64| {
+        cp * mass
+            * (domain[0] - reference)
+                .abs()
+                .max((domain[1] - reference).abs())
+    };
     if frame["available"] != true
         || frame["schema"] != "ftx-drape-thermal-surface/1"
         || model["schema"] != "ftx-thermal-surface/1"
@@ -271,9 +396,10 @@ pub(super) fn admit(
         &drape["material"],
     )?;
 
-    let mut totals = [0.; 3];
+    let mut totals = [0.; 5];
     let mut dryouts = 0_u64;
     let mut used = BTreeSet::new();
+    let mut areas = BTreeMap::new();
     let mut liquid_storage = 0.;
     let mut dry_storage = 0.;
     let mut dry_capacity = 0.;
@@ -292,6 +418,30 @@ pub(super) fn admit(
         let initial = nonnegative(row, "initial_liquid_kg")?;
         let remaining = nonnegative(row, "remaining_liquid_kg")?;
         let evaporated = nonnegative(row, "evaporated_liquid_kg")?;
+        let delivery = supply.as_ref().and_then(|s| s.deliveries.get(instance));
+        let (supplied_mass, supplied_j) = if let Some(delivery) = delivery {
+            let mass = nonnegative(row, "supplied_liquid_kg")?;
+            let energy = number(row, "supplied_liquid_sensible_energy_j")?;
+            if (delivery.total[0] > 0. && (mass <= 0. || area * delivery.total[0] <= 0.))
+                || !accumulated_near(mass, area * delivery.total[0], mass, total_steps)
+                || !accumulated_near(
+                    energy,
+                    area * delivery.total[1],
+                    enthalpy_scale(mass),
+                    total_steps,
+                )
+            {
+                return Err(fail());
+            }
+            (mass, energy)
+        } else {
+            if !row["supplied_liquid_kg"].is_null()
+                || !row["supplied_liquid_sensible_energy_j"].is_null()
+            {
+                return Err(fail());
+            }
+            (0., 0.)
+        };
         if area <= 0.
             || loading > maximum
             || (loading > 0. && initial <= 0.)
@@ -300,14 +450,25 @@ pub(super) fn admit(
             || row["source_triangle"].as_u64() != Some(i as u64)
             || row["instance"] != instance
             || initial != loading * area
-            || remaining > initial
-            || !near(remaining + evaporated, initial, initial)
+            || (supplied && !(maximum * area).is_finite())
+            || remaining > maximum * area
+            || (!supplied && remaining > initial)
+            || !near(
+                remaining + evaporated,
+                initial + supplied_mass,
+                initial + supplied_mass,
+            )
         {
             return Err(fail());
         }
         used.insert(instance);
+        *areas.entry(instance).or_insert(0.) += area;
         dryouts += u64::from(initial > 0. && remaining == 0.);
-        for (total, value) in totals.iter_mut().zip([initial, remaining, evaporated]) {
+        for (total, value) in
+            totals
+                .iter_mut()
+                .zip([initial, remaining, evaporated, supplied_mass, supplied_j])
+        {
             *total += value;
         }
         let ts = temperatures[i]
@@ -315,10 +476,11 @@ pub(super) fn admit(
             .filter(|v| v.len() == cells)
             .ok_or_else(fail)?;
         let inner = finite(&ts[0]).ok_or_else(fail)?;
-        if (initial > 0.
+        if ((initial > 0. || delivery.is_some_and(|d| d.rates[0][0] > 0.))
             && pressure(initial_temperature)?
                 < finite(ambient.first().ok_or_else(fail)?).ok_or_else(fail)?)
-            || (remaining > 0.
+            || ((remaining > 0.
+                || delivery.is_some_and(|d| d.rates.last().is_some_and(|r| r[0] > 0.)))
                 && pressure(inner)? < finite(ambient.last().ok_or_else(fail)?).ok_or_else(fail)?)
         {
             return Err(fail());
@@ -338,15 +500,13 @@ pub(super) fn admit(
     if used.len() != bindings.len()
         || totals.iter().any(|v| !v.is_finite())
         || !heat_near(dry_storage, number(heat, "stored_change_j")?)
-        || !near(
+        || !accumulated_near(
             liquid_storage,
             number(water, "liquid_stored_change_j")?,
-            cp * totals[0]
-                * (domain[0] - reference)
-                    .abs()
-                    .max((domain[1] - reference).abs()),
+            enthalpy_scale(totals[0] + totals[3]),
+            total_steps,
         )
-        || water["dryout_events"].as_u64() != Some(dryouts)
+        || (!supplied && water["dryout_events"].as_u64() != Some(dryouts))
         || trace.last().ok_or_else(fail)?["temperature_range_c"] != json!(final_range)
     {
         return Err(fail());
@@ -359,12 +519,43 @@ pub(super) fn admit(
     .into_iter()
     .zip(totals)
     {
-        if !near(number(water, field)?, expected, totals[0]) {
+        if !near(number(water, field)?, expected, totals[0] + totals[3]) {
             return Err(fail());
         }
     }
+    if supplied
+        && (!near(number(water, "supplied_liquid_kg")?, totals[3], totals[3])
+            || !near(
+                number(water, "supplied_liquid_sensible_energy_j")?,
+                totals[4],
+                enthalpy_scale(totals[3]),
+            ))
+    {
+        return Err(fail());
+    }
+    let event_bound = if supplied {
+        total_steps
+            .checked_mul(patches.len() as u64)
+            .ok_or_else(fail)?
+    } else {
+        dryouts
+    };
+    let supply_rates = supply.as_ref().map(|s| s.rates(&areas)).transpose()?;
+    let maximum_total_liquid: f64 = areas.values().map(|area| area * maximum).sum();
+    let mut supply_before_interval = vec![[0.; 2]];
+    if let (Some(s), Some(rates)) = (&supply, &supply_rates) {
+        let mut previous = 0.;
+        for (end, rate) in s.ends.iter().zip(rates) {
+            let before = supply_before_interval.last().ok_or_else(fail)?;
+            supply_before_interval.push([
+                before[0] + rate[0] * (end - previous),
+                before[1] + rate[1] * (end - previous),
+            ]);
+            previous = *end;
+        }
+    }
 
-    let mut previous = [totals[0], 0.];
+    let mut previous = [totals[0], 0., 0.];
     let mut previous_dryouts = 0;
     let mut steps = 0_u64;
     let mut corrections = Vec::with_capacity(trace.len() + 1);
@@ -377,11 +568,20 @@ pub(super) fn admit(
         let stored_j = number(w, "liquid_stored_change_j")?;
         let exported_j = number(w, "exported_vapor_sensible_energy_j")?;
         let events = w["dryout_events"].as_u64().ok_or_else(fail)?;
-        let enthalpy_scale = cp
-            * initial
-            * (domain[0] - reference)
-                .abs()
-                .max((domain[1] - reference).abs());
+        let (supplied_mass, supplied_j) = if supplied {
+            (
+                nonnegative(w, "supplied_liquid_kg")?,
+                number(w, "supplied_liquid_sensible_energy_j")?,
+            )
+        } else {
+            if !w["supplied_liquid_kg"].is_null()
+                || !w["supplied_liquid_sensible_energy_j"].is_null()
+            {
+                return Err(fail());
+            }
+            (0., 0.)
+        };
+        let available_mass = initial + supplied_mass;
         let range = if std::ptr::eq(row, heat) {
             final_range
         } else {
@@ -397,12 +597,9 @@ pub(super) fn admit(
         // Bound the sum of the producer's per-substep 1e-8 energy tolerances, including
         // temperature excursions that cancel in a cumulative receipt. No substep is solved here.
         let energy_scale = steps as f64
-            * (1. + (dry_capacity + cp * initial) * (domain[1] - domain[0]))
-            + 2. * cp
-                * evaporated
-                * (domain[0] - reference)
-                    .abs()
-                    .max((domain[1] - reference).abs())
+            * (1. + (dry_capacity + cp * available_mass) * (domain[1] - domain[0]))
+            + 2. * enthalpy_scale(evaporated + supplied_mass)
+            + cp * supplied_mass * (domain[1] - domain[0])
             + latent_j
             + mechanical_heat.get(index).copied().ok_or_else(fail)?;
         let ambient_index = if std::ptr::eq(row, heat) {
@@ -410,28 +607,83 @@ pub(super) fn admit(
         } else {
             vapor_index(&row["interval_index"])?
         };
-        let mass_error = remaining + evaporated - initial;
-        if w["schema"] != "ftx-textile-surface-water-result/1"
-            || !w["supplied_liquid_kg"].is_null()
-            || !w["supplied_liquid_sensible_energy_j"].is_null()
+        let active_supply = if let (Some(s), Some(rates)) = (&supply, &supply_rates) {
+            let rate = rates.get(ambient_index).ok_or_else(fail)?;
+            let before = supply_before_interval.get(ambient_index).ok_or_else(fail)?;
+            let start = if ambient_index == 0 {
+                0.
+            } else {
+                s.ends[ambient_index - 1]
+            };
+            let time = if std::ptr::eq(row, heat) {
+                number(heat, "duration_s")?
+            } else {
+                number(row, "time_s")?
+            };
+            if time < start
+                || time > *s.ends.get(ambient_index).ok_or_else(fail)?
+                || !accumulated_near(
+                    supplied_mass,
+                    before[0] + rate[0] * (time - start),
+                    supplied_mass,
+                    steps,
+                )
+                || !accumulated_near(
+                    supplied_j,
+                    before[1] + rate[1] * (time - start),
+                    enthalpy_scale(supplied_mass),
+                    steps,
+                )
+            {
+                return Err(fail());
+            }
+            rate[0] > 0.
+        } else {
+            false
+        };
+        let mass_error = remaining + evaporated - initial - supplied_mass;
+        let expected_schema = if supplied {
+            "ftx-textile-surface-water-result/2"
+        } else {
+            "ftx-textile-surface-water-result/1"
+        };
+        if w["schema"] != expected_schema
             || initial != totals[0]
-            || remaining > previous[0]
+            || (!supplied && remaining > previous[0])
+            || (supplied
+                && remaining > previous[0] + supplied_mass - previous[2]
+                && !near(
+                    remaining,
+                    previous[0] + supplied_mass - previous[2],
+                    available_mass,
+                ))
             || evaporated < previous[1]
+            || supplied_mass < previous[2]
             || events < previous_dryouts
-            || events > dryouts
-            || !near(remaining + evaporated, initial, initial)
-            || !near(number(w, "mass_balance_error_kg")?, mass_error, initial)
-            || !near(latent_j, evaporated * latent, latent_j)
+            || events > event_bound
+            || (supplied
+                && (events > steps.checked_mul(patches.len() as u64).ok_or_else(fail)?
+                    || !maximum_total_liquid.is_finite()
+                    || (remaining > maximum_total_liquid
+                        && !near(remaining, maximum_total_liquid, maximum_total_liquid))))
+            || !near(remaining + evaporated, available_mass, available_mass)
+            || !near(
+                number(w, "mass_balance_error_kg")?,
+                mass_error,
+                available_mass,
+            )
+            || !accumulated_near(latent_j, evaporated * latent, latent_j, steps)
             || range[0] < domain[0]
             || range[1] > domain[1]
-            || (remaining > 0.
+            || ((remaining > 0. || active_supply)
                 && pressure(range[1])?
                     < finite(ambient.get(ambient_index).ok_or_else(fail)?).ok_or_else(fail)?)
             || !inside(
                 exported_j,
                 evaporated * cp * (domain[0] - reference),
                 evaporated * cp * (domain[1] - reference),
-                enthalpy_scale,
+                enthalpy_scale(available_mass),
+                steps,
             )
             || !inside(
                 stored_j,
@@ -439,13 +691,15 @@ pub(super) fn admit(
                     - initial * (initial_temperature - reference)),
                 cp * (remaining * (range[1] - reference)
                     - initial * (initial_temperature - reference)),
-                enthalpy_scale,
+                enthalpy_scale(available_mass),
+                steps,
             )
             || !inside(
                 number(row, "stored_change_j")?,
                 dry_capacity * (range[0] - initial_temperature),
                 dry_capacity * (range[1] - initial_temperature),
                 dry_capacity * (domain[1] - domain[0]),
+                steps,
             )
             || w["balance_error_j"] != row["balance_error_j"]
             || !energy_scale.is_finite()
@@ -455,9 +709,9 @@ pub(super) fn admit(
         {
             return Err(fail());
         }
-        previous = [remaining, evaporated];
+        previous = [remaining, evaporated, supplied_mass];
         previous_dryouts = events;
-        let correction = stored_j + exported_j + latent_j;
+        let correction = stored_j + exported_j + latent_j - supplied_j;
         if !correction.is_finite() {
             return Err(fail());
         }
@@ -473,6 +727,8 @@ pub(super) fn admit(
         "mass_balance_error_kg",
         "dryout_events",
         "balance_error_j",
+        "supplied_liquid_kg",
+        "supplied_liquid_sensible_energy_j",
     ] {
         if water[field] != trace.last().ok_or_else(fail)?["surface_water"][field] {
             return Err(fail());

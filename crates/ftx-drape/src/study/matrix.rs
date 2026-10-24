@@ -104,6 +104,7 @@ impl Request {
 #[derive(Default)]
 pub struct Budget {
     heat: heat::Budget,
+    strain: super::strain::Budget,
     retained_motion_vertices: usize,
 }
 
@@ -120,12 +121,14 @@ impl Budget {
         progress: impl FnMut(&str),
     ) -> Result<Value, Refusal> {
         std::mem::swap(&mut self.heat, &mut session.heat_budget);
+        std::mem::swap(&mut self.strain, &mut session.strain_budget);
         std::mem::swap(
             &mut self.retained_motion_vertices,
             &mut session.charged_motion_vertices,
         );
         let result = session.evaluate(pattern, progress);
         std::mem::swap(&mut self.heat, &mut session.heat_budget);
+        std::mem::swap(&mut self.strain, &mut session.strain_budget);
         std::mem::swap(
             &mut self.retained_motion_vertices,
             &mut session.charged_motion_vertices,
@@ -203,7 +206,13 @@ mod tests {
 
     #[test]
     fn refused_attempts_keep_shared_reservations_and_separate_case_counters() {
-        let scenario = scenario();
+        let mut scenario = scenario();
+        scenario.material_strain = Some(
+            serde_json::from_value(json!({
+                "schema":"ftx-material-strain/1", "max_triangle_samples":32_000_000
+            }))
+            .unwrap(),
+        );
         let positions = [Vec3::ZERO, Vec3::new(1., 0., 0.), Vec3::new(0., 1., 0.)];
         let triangles = [[0, 1, 2]];
         let body = DrapeBody {
@@ -238,6 +247,19 @@ mod tests {
         assert_eq!(first.charged_motion_frames, second.charged_motion_frames);
         assert_eq!(first.charged_motion_trials, 1);
         assert_eq!(second.charged_motion_trials, 1);
+        let one = serde_json::from_value(json!({
+            "schema":"ftx-material-strain/1", "max_triangle_samples":1
+        }))
+        .unwrap();
+        assert!(work.strain.reserve(&one).is_err());
+        first
+            .strain_budget
+            .reserve(scenario.material_strain.as_ref().unwrap())
+            .unwrap();
+        second
+            .strain_budget
+            .reserve(scenario.material_strain.as_ref().unwrap())
+            .unwrap();
         assert!(work.heat.reserve_vapor_geometry(1).is_err());
         first
             .heat_budget
