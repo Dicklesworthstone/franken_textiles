@@ -15,7 +15,7 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   (exit 3) and write nothing.
 - `ftx validate PATTERN --measurements M [--fit F] [--json]`: the flat validation of `ftx-pattern`, the
   reference's text table, exit 0 CONVERGED, 2 NOT_CONVERGED, 3 BLOCKED.
-- `ftx round WS [--pattern P] [--measurements M] [--sim|--stills] [--arm-deg DEG]
+- `ftx round WS [--pattern P] [--measurements M] [--sim|--stills] [--arm-deg DEG] [--elastic-hold-steps N]
   [--res WxH] [--export] [--json]`: a new immutable round with separate construction, physics,
   manufacturing and measurement bases. `--stills` implies simulation and adds six native PNG
   views to the portable review (default 960x540), without Blender. No video is produced; this
@@ -42,9 +42,12 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
 - `ftx viewer SIMDIR [--out HTML] [--pattern P] [--json]`: rebuilds `fold_viewer.html` from an existing
   simulation directory (`fold.pc2`, `mesh_map.json`, `body.obj`, `sim_report.json`) without re-running
   the cloth solver.
-- `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--model PATH]
+- `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N] [--model PATH]
   [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--two-start] [--pose-end POSE] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
   casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does):
+  `--elastic-hold-steps N` reports casing displacement during the last N accepted gravity steps;
+  it adds no steps and changes no physics. Zero requests no window; N above `--drape` refuses.
+  Duration, endpoint speed and quietness remain separate from ideal-ring capacity and physical fit.
   an Anny body of the wearer's age (`wearer.age_months`) and sex (`wearer.sex`; unknown = sexes
   averaged), fitted on the drape pose to whichever of the 21 tape measurements of
   `ftx_body::TAPE_FIELDS` the file has fused values for (the stature from `wearer.stature_mm` first) and
