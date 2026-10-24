@@ -195,7 +195,7 @@ fn standalone_body_and_drape_ignore_poisoned_caches_but_retain_source_identity()
                 "--model",
                 model.to_str().unwrap(),
                 "--sew",
-                "1",
+                "5",
                 "--drape",
                 "1",
                 "--out",
@@ -204,7 +204,7 @@ fn standalone_body_and_drape_ignore_poisoned_caches_but_retain_source_identity()
             2,
             &drape_dir,
         );
-        // One gravity step deliberately cannot establish the required three-step quiet window.
+        // Six total steps satisfy the metrics window; one gravity step cannot establish quietness.
         assert_eq!(drape["result"]["numerical"]["settled"], false);
         let report: Value = serde_json::from_slice(
             &std::fs::read(dir.join(&drape_dir).join("sim_report.json")).unwrap(),
