@@ -5,6 +5,8 @@
 mod adaptive;
 #[path = "accepted_body_workflow/outfit.rs"]
 mod outfit;
+#[path = "accepted_body_workflow/surface_water.rs"]
+mod surface_water;
 
 use ftx_core::receipt::sha256_hex;
 use serde_json::{Value, json};

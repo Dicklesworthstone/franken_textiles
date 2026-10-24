@@ -430,8 +430,12 @@ instance/material bindings and initial loadings, liquid heat capacity and latent
 ambient pressures and film resistances. Its independent source must qualify the fixed dry thermal and vapor observations
 throughout that domain. Replenishment is explicitly zero. The result separates remaining water, latent cooling, vapor sensible
 export and liquid storage; it preserves dryout events and refuses condensation or extrapolation. The liquid is thermal-only,
-with no added mechanical mass, inferred sorption or body sweat. Coupled heat histories remain inspectable, while thermal
-comparison objectives refuse them until their admission covers the complete water/energy ledger.</p>
+with no added mechanical mass, inferred sorption or body sweat. Coupled histories can qualify existing nominal temperature
+and energy objectives after complete source, geometry, water and energy admission. Add
+<code>textile_water_evaporated_mass_kg</code>, <code>textile_water_remaining_mass_kg</code> or
+<code>textile_water_latent_energy_j</code> as nominal objectives or inclusive constraints to compare the textile's own water.
+These quantities are separate from body-reservoir water. Missing material qualification, inconsistent ledgers and incomplete
+motion exclude the affected alternative; source-reported uncertainty ranges are not inferred.</p>
 <p class="note">Scenario comparisons require a settled initial drape with clear gating. Static heat, strain and simulated-cloth-mass objectives describe
 that initial frame. Motion objectives additionally require complete, converged continuation; the final moving state need not be at rest.
 Signed surface power and body-coverage power have different bases and are not interchangeable.

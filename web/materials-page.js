@@ -301,6 +301,19 @@ function objectiveComparison(parent, r) {
     thread_required_length_m: "Required thread length",
     thread_observed_order_cost: "Complete thread order cost"
   };
+  const textileWaterLabels = {
+    textile_water_evaporated_mass_kg: "Evaporated textile water",
+    textile_water_remaining_mass_kg: "Remaining textile liquid",
+    textile_water_latent_energy_j: "Textile evaporation latent energy"
+  };
+  if (metrics.some(o => Object.hasOwn(textileWaterLabels, o.metric))) {
+    const textileWater = document.createElement("p");
+    textileWater.textContent = "Textile water objectives use the complete admitted coupled temperature history. " +
+      "The Rust comparison checks exact material and geometry ownership, canonical vapor paths, water inventory and the combined sensible/latent energy balance. " +
+      "These nominal quantities account for textile-owned liquid; body-reservoir water has separate objectives. " +
+      "Source uncertainty, physical garment validation and a globally optimal design are not established.";
+    parent.append(textileWater);
+  }
   if (metrics.some(o => Object.hasOwn(threadLabels, o.metric)) ||
       r.policy.required_consumers?.some(name => ["sewing_consumables", "sewing_purchasing"].includes(name))) {
     const thread = document.createElement("p");
@@ -328,7 +341,7 @@ function objectiveComparison(parent, r) {
     parent.append(water);
   }
   const t = table(parent, "Declared computed objectives — authoritative Rust comparison", ["Alternative", "Admission", "Dominated by",
-    ...metrics.map(o => `${wetFilmLabels[o.metric] || threadLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
+    ...metrics.map(o => `${wetFilmLabels[o.metric] || textileWaterLabels[o.metric] || threadLabels[o.metric] || o.metric} (${o.direction || "constraint"})`)]);
   for (const row of r.alternatives) {
     cells(t, [row.key, row.eligible ? "Eligible" : `Excluded: ${row.exclusions.map(e => e.message).join("; ")}`,
       row.dominated_by.length ? row.dominated_by.join(", ") : "None reported",
@@ -410,8 +423,8 @@ function transientHeatComparison(parent, key, result, dependency, policy) {
         "and the temperature feeds the declared vapor-pressure table. Dryout ends evaporation; the remaining interval uses the dry heat model. " +
         "The combined balance includes dry-textile and liquid sensible storage, exported vapor sensible energy and latent energy, " +
         "against boundary energy plus qualified material heat. The initial-only model adds no mechanical water mass or replenishment. " +
-        "It does not infer absorbed moisture, wicking, body sweat or wet material properties. These coupled histories are available for inspection; " +
-        "heat-objective ranking remains unavailable until its admission checks cover the complete liquid and vapor ledger.";
+        "It does not infer absorbed moisture, wicking, body sweat or wet material properties. Comparison admission checks the complete liquid and vapor ledger, " +
+        "including exact material bindings and canonical vapor paths, before temperature, energy or textile-water objectives can qualify.";
       parent.append(scope);
       detail(parent, `${key}: textile liquid source, exact patches and canonical vapor paths (display only)`, water);
     }

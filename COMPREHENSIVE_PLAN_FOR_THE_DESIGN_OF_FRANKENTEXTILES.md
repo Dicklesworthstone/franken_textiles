@@ -3256,6 +3256,23 @@ moving-garment/portable-study regressions cover this slice. See
 
 ---
 
+### 25.75 Compare coupled textile-water histories through actual scenario decisions
+
+The existing transient-surface decision consumer (`ftx-ms2` / `ftx-vc2`) admits qualified
+initial-liquid histories after matching source materials, reference triangles, canonical Ret
+networks, accepted motion and complete water/enthalpy accounting. Final and sampled temperature,
+boundary energy and dry sensible storage keep their existing meanings. Nominal textile-water
+evaporated mass, remaining liquid and latent energy are explicit additional objectives and
+inclusive constraints, separate from prescribed-body reservoir quantities.
+
+Missing qualification and inconsistent or incomplete histories exclude the affected alternative
+without erasing manufacturing or independently available simulation outputs. The same admitted
+readings reach native, portable and browser single/named-scenario comparisons. No water-state
+uncertainty, empirical cooling, physiological comfort or global optimum is inferred. Explicit
+material locks remain in force; source policy for one material cannot authorize a replacement.
+
+---
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

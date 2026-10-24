@@ -15,6 +15,7 @@ use super::{Alternative, Request, ScenarioAlternative, hash, invalid};
 #[cfg(test)]
 mod heating_tests;
 mod matrix;
+mod surface_water;
 mod wet_film;
 
 /// Uncertainty admission. Source intervals cannot be propagated through planners by relabeling them.
@@ -156,6 +157,12 @@ pub enum Metric {
     MotionWetFilmSuppliedMassKg,
     /// Latent energy drawn from the prescribed body reservoir, not textile sensible heat, in joules.
     MotionWetFilmBodyReservoirLatentEnergyJ,
+    /// Liquid evaporated from the qualified textile film, in kilograms; distinct from body water.
+    TextileWaterEvaporatedMassKg,
+    /// Liquid remaining on all qualified textile triangles at the final sample, in kilograms.
+    TextileWaterRemainingMassKg,
+    /// Latent energy removed from the textile/liquid system over the complete motion, in joules.
+    TextileWaterLatentEnergyJ,
     /// Signed incoming-side energy (J) for all independent sheets over the whole requested motion.
     TransientSurfaceInsideEnergyJ,
     /// Signed incoming-side energy (J) of declared body paths AND exposed-cloth films, not wearer loss.
@@ -223,6 +230,9 @@ impl Metric {
             | Self::MotionWetFilmSuppliedMassKg
             | Self::MotionWetFilmBodyReservoirLatentEnergyJ => Consumer::MotionWetFilm,
             Self::TransientSurfaceInsideEnergyJ
+            | Self::TextileWaterEvaporatedMassKg
+            | Self::TextileWaterRemainingMassKg
+            | Self::TextileWaterLatentEnergyJ
             | Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
             | Self::TransientSurfaceNetBoundaryEnergyJ
@@ -253,6 +263,7 @@ impl Metric {
             | Self::MotionWetFilmRemainingLiquidMassKg
             | Self::MotionWetFilmUnmetDemandMassKg
             | Self::MotionWetFilmSuppliedMassKg => "kg",
+            Self::TextileWaterEvaporatedMassKg | Self::TextileWaterRemainingMassKg => "kg",
             Self::ObservedOrderCost
             | Self::SelectedObservedOrderCost
             | Self::CuttingJobObservedOrderCost
@@ -276,6 +287,7 @@ impl Metric {
             | Self::TransientCoverageNetBoundaryEnergyJ
             | Self::MotionCoveredVaporPotentialEnergyJ
             | Self::MotionWetFilmBodyReservoirLatentEnergyJ => "J",
+            Self::TextileWaterLatentEnergyJ => "J",
             Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
             | Self::TransientCoverageMinSampleTemperatureC
@@ -362,6 +374,18 @@ impl Metric {
             }
             Self::MotionWetFilmBodyReservoirLatentEnergyJ => {
                 admitted.motion_wet_film?["totals"]["body_reservoir_latent_energy_j"].as_f64()
+            }
+            Self::TextileWaterEvaporatedMassKg => {
+                admitted.transient_surface.as_ref()?.result["surface_water"]["evaporated_liquid_kg"]
+                    .as_f64()
+            }
+            Self::TextileWaterRemainingMassKg => {
+                admitted.transient_surface.as_ref()?.result["surface_water"]["remaining_liquid_kg"]
+                    .as_f64()
+            }
+            Self::TextileWaterLatentEnergyJ => {
+                admitted.transient_surface.as_ref()?.result["surface_water"]["latent_energy_j"]
+                    .as_f64()
             }
             Self::TransientSurfaceInsideEnergyJ => {
                 admitted.transient_surface.as_ref()?.result["inside_energy_j"].as_f64()
@@ -843,6 +867,16 @@ impl Policy {
         if self.consumers().contains(&Consumer::Vapor) {
             report.notes.push("Vapor objectives use the declared common-area stack, pressure boundaries, films and latent heat. They describe potential transfer, not actual evaporation, sweating, condensation or wearer comfort; source protocols must be admitted independently of other thermal consumers.");
         }
+        if self.metrics().iter().any(|metric| {
+            matches!(
+                metric,
+                Metric::TextileWaterEvaporatedMassKg
+                    | Metric::TextileWaterRemainingMassKg
+                    | Metric::TextileWaterLatentEnergyJ
+            )
+        }) {
+            report.notes.push("Textile-water objectives require the source-qualified initial free-film history, canonical Ret networks and the complete liquid/vapor energy ledger on the admitted motion. Reference material area owns water; current area conducts vapor. Latent energy is removed from the textile/liquid system, separately from any prescribed body-water reservoir. These are nominal conditional computations, not wet-property characterization, continuous-time temperature bounds, supplied water, comfort or measured garment validation.");
+        }
         if self.consumers().contains(&Consumer::VaporSurface) {
             report.notes.push("Independent draped-sheet vapor objectives use the admitted initial geometry, retained source Ret and declared pressure/film/latent-heat conditions. Overlapping sheets remain independent; these potentials are not covered-body evaporation, water supply, latent cooling, continuous motion totals or comfort. Consumed column protocols require separate cross-alternative admission.");
         }
@@ -976,7 +1010,7 @@ impl Policy {
                 ),
             ] {
                 if self.consumers().contains(&consumer) {
-                    match admit_heat(row, descriptor, admitted.motion, consumer) {
+                    match admit_heat(row, descriptor, simulation, admitted.motion, consumer) {
                         Ok(heat) => *target = Some(heat),
                         Err(e) => result.exclusions.push(e),
                     }
@@ -1206,6 +1240,11 @@ impl Policy {
         if transient {
             keys.extend(["areal_density", "specific_heat", "thickness"]);
         }
+        let textile_water = consumers.contains(&Consumer::TransientSurface)
+            && !descriptor["scenario"]["motion"]["transient_surface"]["surface_water"].is_null();
+        if textile_water {
+            keys.insert("vapor_resistance");
+        }
         if [
             (Consumer::TransientSurface, "transient_surface"),
             (Consumer::TransientCoverage, "transient_coverage"),
@@ -1315,6 +1354,12 @@ impl Policy {
                 Value::Null
             },
         ))?;
+        if textile_water {
+            base = hash(&(
+                &base,
+                &descriptor["scenario"]["motion"]["transient_surface"]["surface_water"],
+            ))?;
+        }
         if thread {
             let plan = row
                 .sewing
@@ -2781,6 +2826,7 @@ fn finite(value: &Value) -> Option<f64> {
 fn admit_heat<'a>(
     alternative: &Alternative,
     descriptor: &Value,
+    simulation: &Value,
     motion: &'a Value,
     consumer: Consumer,
 ) -> Result<Heat<'a>, Refusal> {
@@ -2802,16 +2848,6 @@ fn admit_heat<'a>(
     let request = &descriptor["scenario"]["motion"][name];
     let h = &motion[name]["result"];
     let fail = |message: &str| invalid(format!("{consumer:?}: {message}"));
-    if !request["surface_water"].is_null()
-        || !h["surface_water"].is_null()
-        || h["trace"]
-            .as_array()
-            .is_some_and(|trace| trace.iter().any(|row| !row["surface_water"].is_null()))
-    {
-        return Err(fail(
-            "textile surface-water histories remain available for inspection, but heat-objective admission requires validation of their coupled liquid and vapor enthalpy ledger",
-        ));
-    }
     if request["schema"] != request_schema
         || motion[name]["status"] != "available"
         || h["schema"] != schema
@@ -2973,8 +3009,22 @@ fn admit_heat<'a>(
             None => {}
         }
     }
-    if heated {
-        for (row, supplied) in trace.iter().chain(std::iter::once(h)).zip(supplied) {
+    let liquid = surface_water::admit(
+        alternative,
+        simulation,
+        motion,
+        h,
+        request,
+        coverage,
+        &supplied,
+    )?;
+    if heated || liquid.is_some() {
+        for (i, (row, supplied)) in trace
+            .iter()
+            .chain(std::iter::once(h))
+            .zip(supplied)
+            .enumerate()
+        {
             let inside = finite(&row["inside_energy_j"])
                 .ok_or_else(|| fail("missing source/boundary balance"))?;
             let outside = finite(&row["outside_energy_j"])
@@ -2985,9 +3035,12 @@ fn admit_heat<'a>(
                 finite(&row[stored]).ok_or_else(|| fail("missing source/boundary balance"))?;
             let residual = finite(&row["balance_error_j"])
                 .ok_or_else(|| fail("missing source/boundary balance"))?;
-            if !heat_near(net, inside - outside) || !heat_near(residual, stored - net - supplied) {
+            let liquid_energy = liquid.as_ref().map_or(0., |terms| terms[i]);
+            if !heat_near(net, inside - outside)
+                || !heat_near(residual, stored + liquid_energy - net - supplied)
+            {
                 return Err(fail(
-                    "stored heat does not reconcile boundary energy and all qualified internal sources",
+                    "stored heat, liquid and vapor enthalpy ledger do not reconcile boundary energy and all qualified internal sources",
                 ));
             }
         }

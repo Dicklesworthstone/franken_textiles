@@ -96,9 +96,12 @@ The available transient heat result retains the full policy at `request.surface_
 Each retained thermal sample includes cumulative water and energy quantities. The existing top-level
 `stored_change_j` remains **dry textile sensible storage**. With surface water enabled, top-level
 `balance_error_j` includes liquid storage, vapor sensible export and latent energy as shown above.
-Temperatures and boundary fluxes are actual results of that coupled equation. Existing dry-heat
-optimization admission deliberately excludes this new energy-ownership model pending a matching
-canonical admission path; manufacturing and raw simulation reports remain available.
+Temperatures and boundary fluxes are actual results of that coupled equation. Nominal transient-surface
+comparisons admit matching source-qualified initial-water histories after canonical material/Ret
+replay, retained patch/reference ownership, cumulative mass/latent/enthalpy consistency and the full
+source/boundary balance. Sampled temperature and boundary metrics plus textile evaporated/remaining
+mass and latent energy are available. These comparisons do not propagate water or thermal bounds.
+Manufacturing and other independent consumers remain available if a water history is refused.
 
 The separate `vapor_coverage_history.wet_film` belongs to a prescribed **body** reservoir. Its latent
 energy is never deducted from this textile film. A request that enables both specifies two separate
