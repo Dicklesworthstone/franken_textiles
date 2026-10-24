@@ -1916,6 +1916,35 @@ test('primary workshop cancels delayed measurement reads and accepts only the la
   p.emit({type:'fields',request:fresh.request,program:'zouave_bolero',rows:[]});assert.equal(p.e.tapeRows.innerHTML,'');
 });
 
+test('primary workshop preserves signed body-fit precision, escapes targets and leaves readiness separate', async () => {
+  // UI transport fixture only; numerical fitting is exercised by the compiled-browser model lane.
+  const p=draftingPage();await p.e.go.handlers.click();p.result();await p.body();
+  const readiness=p.e.resStatus.textContent;
+  p.e.foldGo.handlers.click();let request=p.last('fold').request;
+  p.emit({type:'folded',request,report:{settled:true},reportText:'{}',viewer:'<html/>'});
+  assert.match(p.e.foldSummary.innerHTML,/Body-fitting residuals unavailable/);
+  p.e.foldGo.handlers.click();request=p.last('fold').request;
+  const residual=100.0004-100;
+  const report={settled:true,gating:[],body:{provenance:'MODEL_FIT',mass_kg:10.0003,fit:{
+    tape:{chest:{target_mm:100,body_mm:100.0004,residual_mm:residual},
+      '<img src=x onerror=boom>':{target_mm:100,body_mm:99.9996,residual_mm:-0.0004},
+      unavailable:{target_mm:null}},
+    weight_kg:{target_kg:10.0001,body_kg:10.0003,residual_kg:10.0003-10.0001}}}};
+  const raw=JSON.stringify(report);
+  p.emit({type:'folded',request,report,reportText:raw,viewer:'<html/>'});
+  const html=p.e.foldSummary.innerHTML;
+  assert.match(html,/MODEL_FIT/);assert.ok(html.includes('+'+String(residual)));
+  assert.ok(html.includes('100.0004'));assert.ok(html.includes('-0.0004'));
+  assert.ok(html.includes('&lt;img'));assert.equal(html.includes('<img src=x'),false);
+  assert.ok((html.match(/unavailable/g)||[]).length>=3);
+  assert.ok(html.includes('+'+String(10.0003-10.0001)));
+  assert.match(html,/do not establish measurement readiness or physical fit/);
+  assert.equal(p.e.resStatus.textContent,readiness);
+  assert.equal(await [...p.live.values()].find(b=>b.type==='application/json').text(),raw);
+  p.e.selfContact.handlers.change();assert.equal(p.e.foldSummary.textContent,'');
+  assert.equal(p.live.size,1);
+});
+
 test('primary workshop cannot install a superseded body, revive a cleared model or use a dead worker', async () => {
   const p=draftingPage(), pending=deferred();await p.e.go.handlers.click();p.result();await p.body();
   p.e.bodyFile.files=[{arrayBuffer:()=>pending.promise}];const loading=p.e.bodyFile.handlers.change();

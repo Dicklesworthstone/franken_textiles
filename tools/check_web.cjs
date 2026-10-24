@@ -431,11 +431,32 @@ async function offlineViewer(browser, file) {
         const viewer = await bytes("a[download='fold_viewer.html']");
         const viewerFile = path.join(dir, "browser_fold_viewer.html");
         fs.writeFileSync(viewerFile, viewer, { flag: "wx" });
+        const report = JSON.parse(await bytes("a[download='sim_report.json']"));
+        check(report.body?.provenance === "MODEL_FIT" && Object.keys(report.body.readings_mm).length === 21,
+          `${program} retains all body predictions as MODEL_FIT`);
+        check(report.body.model_sha256 === sha(fs.readFileSync(model))
+          && report.measurements_sha256 === sha(fs.readFileSync(path.join(dir, "measurements.json"))),
+          `${program} diagnostics identify the exact model and saved measurements`);
+        const tape = Object.entries(report.body.fit.tape);
+        check(tape.length > 0 && tape.every(([name, r]) => r.residual_mm === r.body_mm - r.target_mm
+          && r.body_mm === report.body.readings_mm[name]),
+          `${program} retains every signed unrounded body-target residual`);
+        check((await page.locator("#foldSummary table tr").count()) === tape.length + 1
+          && /MODEL_FIT/.test(await page.textContent("#foldSummary")), `${program} shows the actual body residual rows`);
+        check((await page.textContent("#resStatus")) === "CONVERGED", `${program} fold diagnostics preserve the separate round verdict`);
         await offlineViewer(browser, viewerFile);
         execFileSync(ftx, ["drape", "pattern.json", "--measurements", "measurements.json", "--fit", "fit_spec.json",
           "--self-contact-mm", "2", "--model", model, "--out", "native"], { cwd: dir, stdio: ["ignore", "pipe", "inherit"] });
         const native = fs.readFileSync(path.join(dir, "native/fold_viewer.html"));
+        const nativeBody = JSON.parse(fs.readFileSync(path.join(dir, "native/sim_report.json"))).body;
+        check(tape.every(([name, r]) => r.target_mm === nativeBody.fit.tape[name].target_mm
+          && Math.round(r.body_mm * 10) / 10 === nativeBody.fit.tape[name].body_mm),
+          `${program} fitted targets/readings agree with native at its documented 0.1mm report rounding`);
         check(sha(viewer) === sha(native), `${program} fold-up equals ftx drape's, byte for byte (${sha(native).slice(0, 12)})`);
+        await page.locator("#selfContact").uncheck();
+        check((await page.textContent("#foldSummary")) === "" && (await page.locator("#foldSummary a").count()) === 0,
+          `${program} edits withdraw residuals and downloads`);
+        await page.locator("#selfContact").check();
       }
     }
     check(errors.length === 0, `no console errors${errors.length ? ": " + errors.slice(0, 3).join(" | ") : ""}`);

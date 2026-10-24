@@ -345,6 +345,21 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   // a round or a fold-up has finished (successfully or not): tests wait on this counter
   function finished() { document.body.dataset.runs = String((+document.body.dataset.runs || 0) + 1); }
   function foldButton() { $("foldGo").disabled = dead || folding || !(foldable && bodyLoaded); }
+  function bodyFitSummary(body) {
+    const tape = body && body.fit && body.fit.tape;
+    if (!tape || typeof tape !== "object" || Array.isArray(tape)) return "<p>Body-fitting residuals unavailable.</p>";
+    const number = (v, signed = false) => typeof v === "number" && Number.isFinite(v)
+      ? (signed && v > 0 ? "+" : "") + esc(v) : "unavailable";
+    const rows = Object.entries(tape).map(([name, r]) => `<tr><td>${esc(human(name))}</td>`
+      + `<td>${number(r?.target_mm)}</td><td>${number(r?.body_mm)}</td><td>${number(r?.residual_mm, true)}</td></tr>`).join("");
+    const weight = body.fit.weight_kg;
+    return `<details open><summary>Body-fitting residuals (MODEL_FIT)</summary>`
+      + `<p>Body predictions are model estimates. Supplied targets may include chart priors; these differences do not establish measurement readiness or physical fit.</p>`
+      + (rows ? `<div class="scroll"><table><tr><th>Supplied target</th><th>Target mm</th><th>Body mm (MODEL_FIT)</th><th>Body − target mm</th></tr>${rows}</table></div>` : "<p>No supplied tape targets.</p>")
+      + `<p>Model mass: ${number(body.mass_kg)} kg.</p>`
+      + (weight ? `<p>Supplied weight: ${number(weight.target_kg)} kg; model: ${number(weight.body_kg)} kg; body − target: ${number(weight.residual_kg, true)} kg.</p>` : "")
+      + "</details>";
+  }
   let foldUrls = [];
   function dropFold() {                                     // the last fold-up's viewer, links and their URLs
     $("foldLog").textContent = ""; $("foldSummary").textContent = "";
@@ -410,7 +425,8 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       const r = msg.report, gating = r.gating || [], advisory = (r.flags || []).filter((f) => !gating.includes(f));
       $("foldSummary").innerHTML = `<b>${gating.length ? "Gating flags" : r.settled ? "Settled, no gating flag" : "Not settled"}</b>`
         + (gating.length ? "<br>" + gating.map(esc).join("<br>") : "")
-        + (advisory.length ? `<br><span class="mut">${advisory.map(esc).join("<br>")}</span>` : "");
+        + (advisory.length ? `<br><span class="mut">${advisory.map(esc).join("<br>")}</span>` : "")
+        + bodyFitSummary(r.body);
       const u = URL.createObjectURL(new Blob([msg.viewer], { type: "text/html" }));
       const ru = URL.createObjectURL(new Blob([msg.reportText], { type: "application/json" }));
       foldUrls.push(u, ru);
