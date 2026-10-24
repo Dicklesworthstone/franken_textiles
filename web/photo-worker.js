@@ -1,11 +1,17 @@
 // One request per disposable worker. Calibration images are decoded sequentially; only retained
 // source observations reach the camera solver. Files never leave the local worker/browser.
 self.onmessage = async ({data: m}) => {
-  let photo, calibration;
+  let photo, calibration, sheet;
   try {
     self.postMessage({type:"progress",request:m.request,text:"Loading the local measurement engine…"});
     const ftx = await import("./pkg/ftx_wasm.js");
     await ftx.default({module_or_path:new URL("./pkg/ftx_wasm_bg.wasm",import.meta.url)});
+    if(m.op==="calibration-sheet") {
+      sheet=new ftx.WebCalibrationSheet(m.paper,m.square,m.marker,m.dictionary);
+      const png=sheet.png(),pdf=sheet.pdf(),sidecar=sheet.sidecar();
+      self.postMessage({type:"result",request:m.request,png,pdf,sidecar},[png.buffer,pdf.buffer]);
+      return;
+    }
     if(m.op==="calibrate-coordinates") {
       self.postMessage({type:"progress",request:m.request,text:"Fitting the declared camera and checking held-out coordinates…"});
       const report=ftx.camera_calibration(m.input,m.noise);
@@ -53,5 +59,5 @@ self.onmessage = async ({data: m}) => {
     } else throw Error("Unknown photo operation");
   } catch(e) {
     self.postMessage({type:"error",request:m.request,message:String(e?.message || e)});
-  } finally { photo?.free(); calibration?.free(); }
+  } finally { photo?.free(); calibration?.free(); sheet?.free(); }
 };

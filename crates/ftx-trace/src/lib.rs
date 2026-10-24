@@ -11,6 +11,7 @@ pub mod annotate;
 pub mod audit;
 pub mod buffer;
 mod buffer_graph;
+pub mod calibration_sheet;
 pub mod geos;
 pub mod length;
 mod libcxx;

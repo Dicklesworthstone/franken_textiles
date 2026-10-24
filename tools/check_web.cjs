@@ -6,6 +6,7 @@
 //   node tools/check_web.cjs --viewer /path/to/fold_viewer.html   # offline file:// rendering and controls
 //   node tools/check_web.cjs --model PATH.ftxbody --timings 20   # browser timing lane; no native comparison
 //   node tools/check_web.cjs --calibration-sheets NATIVE_DIR  # six local downloads, without page JavaScript
+//   node tools/check_web.cjs --generated-calibration-sheets NATIVE_DIR  # actual WASM generation/replay
 //
 // Needs Playwright with its Chromium (npm i -g playwright && npx playwright install chromium).
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
@@ -22,6 +23,7 @@ const root = path.resolve(__dirname, "..");
 const model = arg("--model");
 const standalone = arg("--viewer");
 const calibrationSheets = arg("--calibration-sheets");
+const generatedSheets = arg("--generated-calibration-sheets");
 const timingArg = arg("--timings");
 const timingRuns = Number(timingArg || 0);
 if (process.argv.includes("--timings") && (!model || standalone || !/^[1-9][0-9]*$/.test(timingArg || "") || timingRuns > 100)) {
@@ -29,6 +31,9 @@ if (process.argv.includes("--timings") && (!model || standalone || !/^[1-9][0-9]
 }
 if (process.argv.includes("--calibration-sheets") && (!calibrationSheets || model || standalone || timingArg)) {
   throw Error("--calibration-sheets needs a native capture directory and runs separately from model/viewer/timing checks");
+}
+if (process.argv.includes("--generated-calibration-sheets") && (!generatedSheets || calibrationSheets || model || standalone || timingArg)) {
+  throw Error("--generated-calibration-sheets needs its native capture directory and runs separately");
 }
 const userAgent = "OpenAI File Downloader, XaiImageApiFetch/1.0";
 const ftx = arg("--ftx") || path.join(root, "target/release/ftx");
@@ -93,6 +98,93 @@ async function printableReferences(browser, origin, expectedDir) {
   } finally { await context.close(); }
 }
 
+async function generatedReferences(browser, origin, expectedDir) {
+  const assert = require("node:assert/strict");
+  const cases = [
+    ["default-letter", "letter", 22, 16, "DICT_4X4_50"],
+    ["default-a4", "a4", 22, 16, "DICT_4X4_50"],
+    ["aruco4-large", "letter", 23, 15, "DICT_4X4_1000"],
+    ["aruco5", "letter", 23, 15, "DICT_5X5_50"],
+    ["aruco6", "a4", 18, 11, "DICT_6X6_250"],
+    ["aruco7", "letter", 23, 15, "DICT_7X7_1000"],
+    ["original", "a4", 18, 11, "DICT_ARUCO_ORIGINAL"],
+    ["tag16", "letter", 22, 16, "DICT_APRILTAG_16H5"],
+    ["tag25", "a4", 18, 11, "DICT_APRILTAG_25h9"],
+    ["tag36-10", "letter", 23, 15, "DICT_APRILTAG_36H10"],
+    ["tag36-11", "a4", 18, 11, "DICT_APRILTAG_36h11"],
+    ["mip36", "letter", 22, 16, "DICT_ARUCO_MIP_36h12"],
+  ].map(([id, paper, square, marker, dictionary]) => ({ id, paper, square, marker, dictionary }));
+  const context = await browser.newContext({ userAgent, acceptDownloads: true });
+  // Hold an actual computed worker result, then deliver it after cancellation/source edits.
+  // Numeric data still comes from the unmodified production WASM, never from a test double.
+  await context.addInitScript(() => {
+    const Original = window.Worker;
+    window.Worker = class extends Original {
+      constructor(...args) {
+        super(...args);
+        this.addEventListener("message", e => {
+          if (window.__holdSheet && e.data.type === "result") {
+            e.stopImmediatePropagation(); window.__holdSheet = false;
+            window.__heldSheet = { worker: this, data: e.data };
+          }
+        });
+      }
+    };
+  });
+  const page = await context.newPage(), errors = [], requests = [];
+  context.on("request", r => requests.push({ url: r.url(), method: r.method() }));
+  page.on("pageerror", e => errors.push(String(e)));
+  const panel = page.locator("#sheetDownloads");
+  const absent = async () => assert.equal(await panel.locator("a").count(), 0);
+  const configure = async c => {
+    await page.selectOption("#sheetPaper", c.paper);
+    await page.fill("#sheetSquare", String(c.square)); await page.fill("#sheetMarker", String(c.marker));
+    await page.fill("#sheetDictionary", c.dictionary); await absent();
+  };
+  const complete = async () => {
+    await page.click("#sheetGenerate");
+    await page.waitForFunction(() => !document.getElementById("sheetGenerate").disabled, null, { timeout: 60000 });
+  };
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "ftx-generated-references-"));
+  try {
+    await page.goto(origin); await page.waitForFunction(() => document.querySelectorAll("#sheetDictionaries option").length === 27);
+    await page.locator("#calibrationSheets summary").click();
+    for (const c of cases) {
+      await configure(c); await complete(); assert.equal(await panel.locator("a").count(), 3, await page.textContent("#sheetStatus"));
+      for (const ext of ["pdf", "png", "json"]) {
+        const name = `calib-sheet-${c.paper}.${ext}`, event = page.waitForEvent("download");
+        await panel.locator(`a[download="${name}"]`).click(); const d = await event;
+        assert.equal(await d.failure(), null); const bytes = fs.readFileSync(await d.path());
+        assert.ok(bytes.equals(fs.readFileSync(path.join(expectedDir, c.id, name))), `${c.id}/${name}: WASM/native bytes differ`);
+        fs.writeFileSync(path.join(work, `${c.id}-${name}`), bytes, { flag: "wx" });
+        // Chromium throttles more than ten rapid downloads from one page. Pace clicks;
+        // keep each real download and byte comparison rather than bypassing the UI.
+        await page.waitForTimeout(150);
+      }
+      console.log(`PASS generated ${c.id}: matching native PNG/PDF/sidecar bytes`);
+    }
+    for (const negative of [{ dictionary: "DICT_5X5_51" }, { marker: 22 }, { square: 22.5 }, { square: 24 }, { marker: 0 }]) {
+      await configure({ paper: "letter", square: 22, marker: 16, dictionary: "DICT_4X4_50", ...negative });
+      await complete(); await absent(); assert.match(await page.textContent("#sheetStatus"), /refused/);
+      console.log(`PASS generated refusal ${JSON.stringify(negative)}: no stale/partial downloads`);
+    }
+    for (const change of ["cancel", "sheetPaper", "sheetSquare", "sheetMarker", "sheetDictionary"]) {
+      await configure({ paper: "letter", square: 22, marker: 16, dictionary: "DICT_4X4_50" });
+      await page.evaluate(() => { window.__heldSheet = null; window.__holdSheet = true; });
+      await page.click("#sheetGenerate"); await page.waitForFunction(() => window.__heldSheet !== null, null, { timeout: 60000 });
+      if (change === "cancel") await page.click("#sheetCancel");
+      else if (change === "sheetPaper") await page.selectOption("#sheetPaper", "a4");
+      else await page.fill("#" + change, change === "sheetDictionary" ? "DICT_5X5_50" : "18");
+      await absent();
+      await page.evaluate(() => { const h = window.__heldSheet; h.worker.dispatchEvent(new MessageEvent("message", { data: h.data })); window.__heldSheet = null; });
+      await absent(); assert.equal(await page.isDisabled("#sheetCancel"), true);
+      console.log(`PASS generated ${change}: late actual-WASM result cannot publish`);
+    }
+    assert.deepEqual(errors, []); assert.ok(requests.every(r => r.method === "GET" && r.url.startsWith(origin + "/")));
+    console.log(`PASS:12 positive/5 refusal/5 late-result controls, no page errors or uploads/external requests. Digital software checks only; physical print accuracy unproven. Downloads: ${work}`);
+  } finally { await context.close(); }
+}
+
 async function offlineViewer(browser, file) {
   const html = fs.readFileSync(file, "utf8");
   const imports = JSON.parse(html.split('<script type="importmap">')[1].split('</script>')[0]).imports;
@@ -152,8 +244,11 @@ async function offlineViewer(browser, file) {
   const srv = spawn("python3", ["-m", "http.server", String(port), "-d", path.join(root, "web")], { stdio: ["ignore", "ignore", "inherit"] });
   await new Promise((r) => setTimeout(r, 1200));
   const browser = await chromium.launch();
-  if (calibrationSheets) {
-    try { await printableReferences(browser, `http://localhost:${port}`, path.resolve(calibrationSheets)); }
+  if (calibrationSheets || generatedSheets) {
+    try {
+      if (generatedSheets) await generatedReferences(browser, `http://localhost:${port}`, path.resolve(generatedSheets));
+      else await printableReferences(browser, `http://localhost:${port}`, path.resolve(calibrationSheets));
+    }
     finally { await browser.close(); srv.kill(); }
     return;
   }

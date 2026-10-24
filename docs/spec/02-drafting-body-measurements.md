@@ -640,6 +640,15 @@ Layout (mm, page origin top-left, y down):
   row-major order: on the 8 × 6 letter board, ids 0–3 sit in row 0 columns 1, 3, 5, 7, ids 4–7 in row 1 columns 0,
   2, 4, 6, and so on; marker border 1 bit, no margin). Rendered at 12 px/mm, then nearest-neighbour resized to
   `(px(bw), px(bh))` and pasted at `(px(x0), px(y0))`.
+  Provider clarification (OpenCV 4.13.0, fixture `calibration_sheets_opencv413`): each marker's
+  canonical row-major data bits plus its one-cell black border are nearest-neighbour enlarged to
+  `12*marker` pixels. Destination pixel `x` reads source cell `floor(x*(bits+2)/(12*marker))` (likewise y);
+  this matters when the requested physical marker size is not divisible by its cell count. The 27
+  predefined names/aliases and 108 independent board rasters are frozen in
+  `tests/fixtures/oracle/measure/calibration_sheets.json`. These supplement the unchanged Python skill
+  pin, rather than replacing its fixtures. Fixed 8×6/7 sheets use only IDs 0–23/27; no arbitrary
+  dictionary editor is implied. The built-in image detector still accepts only DICT_4X4_50; other
+  printed dictionaries require matching external detection or reviewed corner-coordinate input.
 - Bars (alternate segments filled, starting filled; thin outline `px(0.25)`; end ticks `px(2.0)` beyond each side):
   `y_100mm` vertical at x = x0 + bw + 4, y = y0 + 4, 100 mm, 10 mm segments, label `100 mm`; `y_4in` at x = that +
   3.5 + 6, 101.6 mm, 12.7 mm segments, label `4 in`; `x_100mm` horizontal at (x0, y0 + bh + 6), label `100 mm  (10 mm

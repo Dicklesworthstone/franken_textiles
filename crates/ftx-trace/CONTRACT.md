@@ -13,6 +13,14 @@ and lossy VP8/VP8L/VP8X WebP inputs decode in pure Rust (`raster::jpeg`, `raster
 piece coordinates back to source pixels and is kept current through mirroring and scaling. After scale-fit
 the pattern is in millimetres (`meta.scale_status` FITTED).
 
+**Printable capture reference.** `calibration_sheet::render` owns the file-free spec 02 A.9 renderer
+shared by CLI and browser. Page geometry is millimetres, top-left origin/y down, rasterized at 300 DPI.
+PNG, lossless one-bit PDF and path-free `fabric-calib-sheet/1` metadata share pixel-edge geometry;
+`Sheet::sidecar_json` supplies identical deterministic bytes without a clock or filesystem. Invalid
+sizes/layouts and unsupported dictionary names refuse before rendering; no clipping or substitution.
+Native publication remains create-only in the CLI. Digital equality does not establish physical print
+scale, flatness, camera accuracy or fit; the printed bars still need a ruler.
+
 **Photo evidence decoding.** `raster::image::load_photo_with_limit` is the shared, file-free
 decoder for native and browser measurement adapters. It accepts only opaque, already-oriented
 8-bit gray/RGB PNG without transparency/animation/EXIF, or the existing strict complete JPEG

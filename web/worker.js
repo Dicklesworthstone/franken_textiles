@@ -34,7 +34,8 @@ onmessage = async (ev) => {
       ftx = await import(msg.pkg + "ftx_wasm.js");
       await ftx.default({ module_or_path: msg.pkg + "ftx_wasm_bg.wasm" });
       const info = JSON.parse(ftx.program_info());
-      return postMessage({ type: "ready", info, dxf: "every export built in", version: "FrankenTextiles, WebAssembly" });
+      return postMessage({ type: "ready", info, sheetDictionaries: JSON.parse(ftx.calibration_dictionaries()),
+        dxf: "every export built in", version: "FrankenTextiles, WebAssembly" });
     }
     if (msg.type === "fields") {
       const rows = JSON.parse(ftx.form_fields(JSON.stringify(msg.args), clock().today));

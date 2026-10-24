@@ -6,6 +6,57 @@ use wasm_bindgen::prelude::*;
 
 use crate::{fold, page};
 
+/// Exact predefined dictionary names accepted by the shared printable-reference renderer.
+#[wasm_bindgen]
+#[must_use]
+pub fn calibration_dictionaries() -> String {
+    serde_json::to_string(ftx_trace::calibration_sheet::dictionaries())
+        .expect("dictionary names JSON")
+}
+
+/// Matching PNG, lossless PDF and sidecar for one locally rendered print reference.
+#[wasm_bindgen]
+pub struct WebCalibrationSheet {
+    inner: ftx_trace::calibration_sheet::Sheet,
+}
+
+#[wasm_bindgen]
+impl WebCalibrationSheet {
+    /// Render the native metric reference without writing files.
+    ///
+    /// # Errors
+    /// Unsupported names, invalid dimensions or layouts that would clip marks or instructions.
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        paper: &str,
+        square_mm: f64,
+        marker_mm: f64,
+        dictionary: &str,
+    ) -> Result<Self, JsError> {
+        ftx_trace::calibration_sheet::render(paper, square_mm, marker_mm, dictionary)
+            .map(|inner| Self { inner })
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Lossless grayscale PNG with explicit 300-DPI density.
+    #[must_use]
+    pub fn png(&self) -> Vec<u8> {
+        self.inner.png.clone()
+    }
+
+    /// Lossless one-bit PDF; check the physical print with a ruler.
+    #[must_use]
+    pub fn pdf(&self) -> Vec<u8> {
+        self.inner.pdf.clone()
+    }
+
+    /// Native-identical path-free sidecar text, including its final newline.
+    #[must_use]
+    pub fn sidecar(&self) -> String {
+        String::from_utf8(self.inner.sidecar_json()).expect("calibration JSON is UTF-8")
+    }
+}
+
 /// Fit local coordinate evidence with the canonical camera and conditional uncertainty engines.
 ///
 /// # Errors

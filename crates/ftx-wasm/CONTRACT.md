@@ -73,6 +73,11 @@ body landmarks or girths. Explicit ChArUco sidecars and retained same-lens calib
 `Photo::with_reference`; empirical camera/print accuracy and fit remain outside this browser slice.
 See `docs/photo-measurement.md`.
 
+**Printable references.** `WebCalibrationSheet` delegates to `ftx-trace::calibration_sheet::render`,
+the same renderer as native `measure calib-sheet`. PNG, lossless PDF and path-free sidecar downloads
+retain identical native bytes. It performs no file IO/upload, inference or print-scale qualification.
+Invalid names/dimensions/layouts refuse without a partial sheet. See spec 02 A.9 and the trace contract.
+
 **Local camera calibration.** `photo::camera_calibration` / wasm32 `camera_calibration` fit original
 coordinate JSON with optional original corner-noise JSON through `calibrate_document`.
 `photo::CameraCalibration` / wasm32 `WebCameraCalibration` accept an original image manifest and

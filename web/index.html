@@ -129,6 +129,22 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       </table>
       <small>These default references download locally. Check the printed scale and flatness;
         a digital file cannot establish printer, camera or body-measurement accuracy.</small>
+      <div id="customSheet" hidden>
+        <h3>Generate a matching reference locally</h3>
+        <div class="row">
+          <label>Paper <select id="sheetPaper"><option value="letter">US Letter</option><option value="a4">A4</option></select></label>
+          <label>Square (mm) <input id="sheetSquare" type="number" value="22" min="1" step="1"></label>
+          <label>Marker (mm) <input id="sheetMarker" type="number" value="16" min="1" step="1"></label>
+          <label>Dictionary <input id="sheetDictionary" value="DICT_4X4_50" maxlength="80" spellcheck="false" list="sheetDictionaries"></label>
+          <datalist id="sheetDictionaries"></datalist>
+        </div>
+        <p>The built-in image detector uses DICT_4X4_50. Other dictionaries require matching external
+          detection or reviewed corner coordinates. Keep the generated JSON with the printed sheet.</p>
+        <button id="sheetGenerate" type="button">Generate PDF, PNG and JSON</button>
+        <button id="sheetCancel" type="button" disabled>Cancel generation</button>
+        <p id="sheetStatus" role="status" aria-live="polite"></p>
+        <div id="sheetDownloads"></div>
+      </div>
     </details>
   </section>
 
@@ -361,6 +377,9 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     }
     if (msg.type === "progress") status(msg.text);
     else if (msg.type === "ready") {
+      $("sheetDictionaries").replaceChildren(...msg.sheetDictionaries.map((name) => {
+        const option = document.createElement("option"); option.value = name; return option;
+      }));
       info = msg.info; ready = true;
       if (!(program in info) && program !== "audit") program = "zouave_bolero";
       renderPrograms(); onProgram();
@@ -486,5 +505,6 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   worker.postMessage({ type: "init", pkg: PKG });
 })();
 </script>
+<script type="module" src="calibration-page.js"></script>
 </body>
 </html>

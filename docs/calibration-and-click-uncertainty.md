@@ -9,8 +9,11 @@ PDF for printing and retain its sidecar with the reference. Check both ruler
 directions and paper flatness before using a printed sheet.
 
 These are the default `DICT_4X4_50` boards: 22 mm squares and 16 mm markers.
-Custom layouts use the native command below; the browser does not generate
-custom boards or perform photo measurements through these download controls.
+With JavaScript enabled, the same panel also generates custom references locally:
+choose the paper, integer square and marker sizes, and a dictionary, then select
+**Generate PDF, PNG and JSON**. Download all three matching files. Changing any
+setting or cancelling withdraws the generated links; a late result cannot restore
+them. These controls print a reference; photo analysis uses the separate photo tools.
 The packaged bytes in `web/calibration/` come from the unchanged native generator
 at `22dfe7ef214bf5ed5f105f5d9246c157d1f0d52d` (generator source SHA-256
 `d4aa9cdca4121bea47a19181df43e443966d35a0f0d3426e780366cf8fd4d805`).
@@ -37,7 +40,18 @@ The command's JSON result also includes output paths; the saved sidecar does not
 Defaults are `--square-mm 22 --marker-mm 16 --dictionary DICT_4X4_50`.
 Letter uses an 8 x 6 board; A4 uses 8 x 7. Other integer square/marker sizes are
 accepted when all marks fit without overlap, with `0 < marker < square`.
-Only `DICT_4X4_50` is implemented; another dictionary is refused, not substituted.
+All 27 predefined OpenCV dictionary names accepted by the reference are supported,
+including its upper/lowercase AprilTag aliases. The browser lists the exact names;
+unknown names are refused, not substituted. For example:
+
+```sh
+ftx measure calib-sheet --paper letter --square-mm 23 --marker-mm 15 \
+  --dictionary DICT_5X5_50 --out ./calibration-5x5 --json
+```
+
+The built-in photo detector still accepts only `DICT_4X4_50`. Other printed
+dictionaries require a matching external detector or reviewed corner coordinates;
+printing support does not extend the detector's vocabulary.
 The canonical non-legacy board starts with a black top-left square, with marker
 IDs increasing row by row across white squares.
 
@@ -51,12 +65,19 @@ Implementation boundaries relative to spec 02 A.9: the export stroke font replac
 the unpinned reference font; the PDF stores an uncompressed one-bit image rather
 than requiring CCITT. Very small boards whose vertical bars overlap lower marks
 are refused instead of drawing an ambiguous reference, and output directories
-are never reused. Native generation supplies the browser's two default download
-sets. These boundaries do not constitute completion of all FTX-19 work.
+are never reused. Native and browser generation share
+`ftx_trace::calibration_sheet::render`; the file-free WASM handle is
+`WebCalibrationSheet`. The packaged default files remain available without
+JavaScript. These boundaries do not constitute completion of all FTX-19 work or
+the full capture-to-body route.
 
-Eight Rust regressions cover the D.7 physical coordinates, dictionary bits, nearest
+Nine Rust regressions cover the D.7 physical coordinates, dictionary bits, nearest
 sampling ties, PNG round-trip and density, PDF dimensions/xref, invalid layouts,
-and exclusive multi-file output. Independent checks on the default Letter/A4
+and exclusive multi-file output. The dictionary regression checks all 27 names and
+108 board rasters against the independent OpenCV 4.13.0 / NumPy 2.2.6 capture in
+`tests/fixtures/oracle/measure/calibration_sheets.json`. This extends marker/board
+pixel evidence; it does not make the port's stroke-font labels byte-identical to
+the Python renderer. Independent checks on the default Letter/A4
 outputs with OpenCV 4.13.0 found all 35/42 corners and 24/28 markers; both board
 rasters matched OpenCV generation plus Pillow nearest resampling pixel-for-pixel.
 PyMuPDF decoded both PDF images identically to the PNG pixels. Those are digital
