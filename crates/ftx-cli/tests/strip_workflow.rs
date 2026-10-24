@@ -11,6 +11,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 const ACQUISITION: &str =
@@ -25,13 +26,15 @@ const SCALAR_AREA: &str =
     include_str!("../../../tests/fixtures/materials/synthetic-scalar-area-clamped-strip.json");
 
 fn workspace() -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let path = std::env::temp_dir().join(format!(
-        "ftx-strip-cli-{}-{}",
+        "ftx-strip-cli-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&path).unwrap();
     path
