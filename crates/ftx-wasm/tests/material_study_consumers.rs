@@ -15,6 +15,16 @@ fn portable_design_study_changes_real_manufacturing_and_replays_each_exact_patte
     let request: Value = serde_json::from_str(input).unwrap();
     let raw = materials::study(pattern, input).unwrap();
     let report: Value = serde_json::from_str(&raw).unwrap();
+    let typed: Request = serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(
+        report,
+        serde_json::to_value(
+            typed
+                .evaluate(&Pattern::from_json(pattern).unwrap())
+                .unwrap()
+        )
+        .unwrap()
+    );
     assert_eq!(report["schema"], "ftx-design-study-report/1");
     assert_eq!(report["geometry_changed"], true);
     let rows = report["alternatives"].as_array().unwrap();
@@ -28,9 +38,25 @@ fn portable_design_study_changes_real_manufacturing_and_replays_each_exact_patte
     let wider = row("more-ease", "light-sheet");
     let longer = row("longer", "light-sheet");
     assert_eq!(baseline["design"]["geometry_changed"], false);
+    // Both pairs still fit the 100 mm roll: 2 * 40 + 2 = 82 mm and
+    // 2 * 48 + 2 = 98 mm. Used cut area grows, but purchased stock does not.
+    for (candidate, cut_width_m) in [(baseline, 0.040), (wider, 0.048)] {
+        let metrics = &candidate["metrics"];
+        assert!(
+            (metrics["external_cut_area_m2"].as_f64().unwrap() - 2.0 * cut_width_m * 0.120).abs()
+                < 1e-14
+        );
+        assert!((metrics["stock_area_m2"].as_f64().unwrap() - 0.100 * 0.120).abs() < 1e-14);
+        assert!((metrics["stock_mass_kg"].as_f64().unwrap() - 0.100 * 0.120 * 0.180).abs() < 1e-14);
+    }
+    assert_eq!(
+        wider["metrics"]["stock_mass_kg"],
+        baseline["metrics"]["stock_mass_kg"]
+    );
+    assert!((longer["metrics"]["stock_area_m2"].as_f64().unwrap() - 0.100 * 0.140).abs() < 1e-14);
     assert!(
-        wider["metrics"]["stock_mass_kg"].as_f64().unwrap()
-            > baseline["metrics"]["stock_mass_kg"].as_f64().unwrap()
+        (longer["metrics"]["stock_mass_kg"].as_f64().unwrap() - 0.100 * 0.140 * 0.180).abs()
+            < 1e-14
     );
     assert_eq!(
         wider["metrics"]["feed_seconds"],
@@ -94,6 +120,43 @@ fn portable_design_study_changes_real_manufacturing_and_replays_each_exact_patte
             .code,
         ftx_core::RefusalCode::BudgetExceeded
     );
+}
+
+#[test]
+fn portable_design_study_purchases_more_stock_when_widening_crosses_the_roll_width() {
+    let pattern = include_str!("../../../tests/fixtures/materials/synthetic-sewing-pattern.json");
+    let mut request: Value =
+        serde_json::from_str(include_str!("../../../examples/design-study.json")).unwrap();
+    request["variants"].as_array_mut().unwrap().truncate(1);
+    request["variants"][0]["changes"]["default"]["record"]["properties"]["width"]["value"] =
+        json!(0.090);
+    let report: Value =
+        serde_json::from_str(&materials::study(pattern, &request.to_string()).unwrap()).unwrap();
+    let typed: Request = serde_json::from_value(request).unwrap();
+    assert_eq!(
+        report,
+        serde_json::to_value(
+            typed
+                .evaluate(&Pattern::from_json(pattern).unwrap())
+                .unwrap()
+        )
+        .unwrap()
+    );
+    let rows = report["alternatives"].as_array().unwrap();
+    // 82 mm fits the 90 mm roll; 98 mm needs two 120 mm shelves plus a 2 mm gap.
+    for (key, length_m) in [("baseline", 0.120), ("more-ease", 0.242)] {
+        let candidate = rows.iter().find(|row| row["design"]["key"] == key).unwrap();
+        assert_eq!(candidate["cutting"]["status"], "available");
+        assert!(
+            (candidate["metrics"]["stock_area_m2"].as_f64().unwrap() - 0.090 * length_m).abs()
+                < 1e-14
+        );
+        assert!(
+            (candidate["metrics"]["stock_mass_kg"].as_f64().unwrap() - 0.090 * length_m * 0.180)
+                .abs()
+                < 1e-14
+        );
+    }
 }
 
 #[test]
