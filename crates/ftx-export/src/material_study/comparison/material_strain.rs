@@ -134,8 +134,7 @@ fn source<'a>(
     let bound = alternative.binding.value().ok_or_else(fail)?;
     let pattern = ftx_pattern::Pattern::new(bound["pattern"].clone());
     let changes = alternative.frozen_changes.as_ref().ok_or_else(fail)?;
-    if vertex_count < 3
-        || vertex_count > 196_608
+    if !(3..=196_608).contains(&vertex_count)
         || vertex_count != array(simulation, "positions_m")?.len()
         || faces.is_empty()
         || faces.len() > 65_536

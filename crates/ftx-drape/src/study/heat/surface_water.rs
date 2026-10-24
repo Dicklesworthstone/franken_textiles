@@ -167,8 +167,8 @@ impl Request {
                 "surface water needs its explicit versioned liquid model, locked bindings, positive SI inputs, monotone pressure table, source-qualified domain and independent estimate consent",
             ));
         }
-        if let Some(supply) = &self.supply {
-            if supply.schema != "ftx-textile-liquid-supply/1"
+        if let Some(supply) = &self.supply
+            && (supply.schema != "ftx-textile-liquid-supply/1"
                 || supply.bindings.keys().ne(self.bindings.keys())
                 || !text(&supply.source.reference)
                 || !text(&supply.source.note)
@@ -186,12 +186,11 @@ impl Request {
                             .temperature_c
                             .iter()
                             .any(|&t| self.pressure(t).is_err())
-                })
-            {
-                return Err(invalid(
-                    "textile liquid supply needs complete instance/interval rates and qualified incoming temperatures, source metadata and its own estimate consent",
-                ));
-            }
+                }))
+        {
+            return Err(invalid(
+                "textile liquid supply needs complete instance/interval rates and qualified incoming temperatures, source metadata and its own estimate consent",
+            ));
         }
         Ok(())
     }

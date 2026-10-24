@@ -968,6 +968,74 @@ operations, 256 MiB of document-processing reservation, and 40 million measureme
 work units each. Missing selected-body context refuses the request. Failed trials remain
 inspectable without invoking their production or simulation callbacks.
 
+## Constrain material-direction strain on selected garment regions
+
+Add `material_strain` to the scenario to retain the production membrane's raw, dimensionless
+warp `E11`, weft `E22` and engineering shear `2E12` on selected physical instances:
+
+```json
+{
+  "material_strain": {
+    "schema": "ftx-material-strain/1",
+    "instances": ["band"],
+    "max_triangle_samples": 100000
+  }
+}
+```
+
+Use exact retained instance names; omit `instances` to include every retained instance. The budget
+counts each selected triangle in the initial state and every accepted motion sample. An exhausted
+or invalid strain consumer keeps the independent drape, motion and manufacturing outputs available.
+
+Both material studies and garment-design studies can consume the extrema through their ordinary
+`comparison` policy. This illustrative policy minimizes the largest sampled warp strain while
+enforcing an authored signed shear band:
+
+```json
+{
+  "comparison": {
+    "basis": "nominal",
+    "objectives": [
+      {"metric": "motion_max_warp_green_strain", "direction": "minimize"}
+    ],
+    "constraints": [
+      {"metric": "motion_min_engineering_shear_green_strain", "minimum": -0.08},
+      {"metric": "motion_max_engineering_shear_green_strain", "maximum": 0.08}
+    ]
+  }
+}
+```
+
+These example limits are synthetic design requirements. They supply no fabric failure or comfort
+evidence. Green strain is not extension percent. Use `min_` or `max_` with `warp_green_strain`,
+`weft_green_strain` or `engineering_shear_green_strain` for the six initial-state readings; prepend
+`motion_` for the six readings over the initial state plus every accepted sample. A motion request
+and its complete, converged trajectory are required for motion metrics. A settled, gating-clear
+initial drape remains required for both scopes.
+
+Reports retain extrema per selected instance, the responsible source triangle and sample time,
+exact material/frame identities and the material's characterized domains. The workbench shows
+these witnesses alongside comparison eligibility. `material_strain` or `motion_material_strain`
+may also be required independently through `required_consumers`. Sampled compliance does not
+establish continuous-time bounds, rupture limits or physical garment fit.
+
+## Compare textile cooling and supplied liquid
+
+Qualified `motion.transient_surface.surface_water` histories can drive the existing nominal
+temperature and energy objectives. Additional metrics read actual textile-owned water:
+`textile_water_evaporated_mass_kg`, `textile_water_remaining_mass_kg`,
+`textile_water_latent_energy_j` and, for version 2 delivery, `textile_water_supplied_mass_kg`.
+They remain separate from prescribed body-water metrics.
+
+The [complete textile-liquid policy](textile-surface-water.md) declares the source-qualified domain,
+locked material/instance bindings and vapor/thermal conditions. Version 2 independently sources
+delivery rates and incoming temperatures for each mechanical interval; dry patches can consume
+their supply or rewet. Incoming sensible heat and delivered mass enter the conserved history.
+Comparison reconstructs the supplied totals and requires the complete source, geometry, water and
+energy accounting. A missing source, unsupported loading or partial history excludes that consumer
+without erasing independent manufacturing results. These decisions remain nominal, without
+propagated wet-material uncertainty or empirical wearer validation.
+
 ## Budgets, tests and remaining gates
 
 Explicit variant `changes` can also include a complete `interfaces` replacement using the existing
