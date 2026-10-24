@@ -3,12 +3,12 @@
 //! fit report), with the body model read from bytes the page was given and the fold-up viewer page as text.
 
 use ftx_body::{
-    AnnyData, AnnyModel, BodyFrames, Pose, Wearer, fit_tape, pose_deltas, skin_mesh, tape_targets,
-    trimmed_skin,
+    AnnyData, AnnyModel, BodyFrames, Pose, TAPE_FIELDS, TapeFit, Wearer, fit_tape, pose_deltas,
+    skin_mesh, tape_targets, trimmed_skin,
 };
 use ftx_drape::run::{DrapeBody, DrapeOptions, drape, viewer};
 use ftx_pattern::Pattern;
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
 /// The viewer page's template (the pinned renderer and fold-up frames are embedded).
 const TEMPLATE: &str = include_str!("../../../assets/fold_viewer_template.html");
@@ -30,6 +30,34 @@ pub fn load_body(bytes: &[u8]) -> Result<AnnyModel, String> {
     AnnyData::from_bytes(bytes, false)
         .and_then(AnnyModel::from_data)
         .map_err(|r| r.message)
+}
+
+// Raw fitter outputs, in mm/kg. Supplied targets may be priors; predictions never become evidence.
+fn body_report(wearer: &Wearer, fit: &TapeFit) -> Value {
+    let tape: Map<String, Value> = fit
+        .residuals
+        .iter()
+        .map(|r| {
+            (
+                r.name.clone(),
+                json!({
+                    "target_mm": r.target_mm, "body_mm": r.body_mm,
+                    "residual_mm": r.body_mm - r.target_mm,
+                }),
+            )
+        })
+        .collect();
+    let readings: Map<String, Value> = TAPE_FIELDS
+        .iter()
+        .zip(fit.readings)
+        .map(|(name, value)| (name.to_string(), json!(value)))
+        .collect();
+    json!({"model":"anny 0.6.1", "provenance":"MODEL_FIT",
+        "age_years":wearer.years,"gender":wearer.gender,"mass_kg":fit.mass_kg,
+        "readings_mm":readings,"fit":{"iterations":fit.iterations,"tape":tape,
+            "weight_kg":wearer.weight_kg.map(|target| json!({"target_kg":target,
+                "body_kg":fit.mass_kg,"residual_kg":fit.mass_kg-target}))},
+        "no_claim":"Predicted body dimensions are MODEL_FIT. Supplied targets may include priors; residuals do not establish measurement readiness or physical fit."})
 }
 
 /// Drapes `pattern` on `model` fitted to `measurements`, judged by `fit_spec`. `self_contact_mm` > 0 turns
@@ -95,10 +123,78 @@ pub fn fold_up(
         display: (&full.vertices, &full.triangles),
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
-    let run = drape(&pat, fit_spec, &body, &opts, &mut progress).map_err(m)?;
+    let mut run = drape(&pat, fit_spec, &body, &opts, &mut progress).map_err(m)?;
+    run.report["body"] = body_report(&wearer, &fit);
     let html = viewer(&run, &pat, &body, TEMPLATE)?;
     Ok(Fold {
         report: run.report,
         viewer: html,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftx_body::{BodyParams, TapeResidual};
+
+    #[test]
+    fn body_diagnostics_keep_raw_signed_residuals_and_unmeasured_predictions() {
+        let mut wearer = Wearer {
+            years: 2.5,
+            gender: 0.5,
+            stature_mm: 920.0,
+            weight_kg: Some(10.0001),
+        };
+        let fit = TapeFit {
+            params: BodyParams {
+                phenotype: Default::default(),
+                local_changes: vec![],
+            },
+            readings: std::array::from_fn(|i| 100.0004 + i as f64),
+            mass_kg: 10.0003,
+            residuals: vec![
+                TapeResidual {
+                    name: "chest".into(),
+                    target_mm: 102.0,
+                    body_mm: 100.0004,
+                },
+                TapeResidual {
+                    name: "arm_length".into(),
+                    target_mm: 200.0,
+                    body_mm: 200.0000000003,
+                },
+            ],
+            free: std::array::from_fn(|_| 0.0),
+            iterations: 7,
+        };
+        let got = body_report(&wearer, &fit);
+        assert_eq!(got["provenance"], "MODEL_FIT");
+        assert_eq!(got["fit"]["iterations"], 7);
+        for r in &fit.residuals {
+            let row = &got["fit"]["tape"][&r.name];
+            assert_eq!(row["target_mm"], r.target_mm);
+            assert_eq!(row["body_mm"], r.body_mm);
+            assert_eq!(row["residual_mm"], r.body_mm - r.target_mm);
+        }
+        assert!(got["fit"]["tape"]["chest"]["residual_mm"].as_f64().unwrap() < 0.0);
+        assert!(
+            got["fit"]["tape"]["arm_length"]["residual_mm"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+        assert_eq!(
+            got["readings_mm"].as_object().unwrap().len(),
+            TAPE_FIELDS.len()
+        );
+        for (name, value) in TAPE_FIELDS.iter().zip(fit.readings) {
+            assert_eq!(got["readings_mm"][name], value);
+        }
+        assert_eq!(
+            got["fit"]["weight_kg"]["residual_kg"],
+            fit.mass_kg - 10.0001
+        );
+        wearer.weight_kg = None;
+        assert!(body_report(&wearer, &fit)["fit"]["weight_kg"].is_null());
+    }
 }

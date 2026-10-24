@@ -1533,6 +1533,16 @@ is in `ftx-wasm/tests/page.rs` and the actual compiled-browser check in `tools/c
 
 ### 12.2 Response
 
+**Rust fold diagnostic extension.** A browser fold retains the existing Anny tape fitter's raw
+`body.fit.tape` target/body values and signed `residual_mm = body_mm - target_mm`, iteration count,
+all predicted `body.readings_mm`, model mass and any supplied-weight residual in kg. Predictions are
+`MODEL_FIT`, including those whose targets came from chart priors; these are not new measurements
+or uncertainty estimates. The wasm boundary records the exact loaded model and saved measurement
+document SHA-256 identities. The page shows supplied-target residuals separately from cloth flags,
+reports unavailable diagnostics explicitly and withdraws them with the old fold on edits. The
+fitting/cloth kernels, readiness, status precedence, reference round cases and viewer geometry are
+unchanged. Numerical settling does not establish target agreement, anatomy accuracy or garment fit.
+
 - **Structure errors:** `{status: "BLOCKED", errors}`.
 - **Otherwise:**
 

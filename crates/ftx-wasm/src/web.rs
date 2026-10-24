@@ -347,7 +347,12 @@ pub fn fold_up(
         self_contact_mm,
         ftx_progress,
     )
-    .map(|inner| WebFold { inner })
+    .map(|mut inner| {
+        inner.report["body"]["model_sha256"] = serde_json::json!(body.source_sha256);
+        inner.report["measurements_sha256"] =
+            serde_json::json!(ftx_core::receipt::sha256_hex(measurements.as_bytes()));
+        WebFold { inner }
+    })
     .map_err(|e| JsError::new(&e))
 }
 

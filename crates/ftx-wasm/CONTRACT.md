@@ -38,8 +38,14 @@ uncertainty or establish real-body fit.
 was given (`.ftxbody`, not verified array by array, as the CLI loads it), and `fold_up(model, pattern,
 measurements, fit_spec, self_contact_mm, progress)` fits Anny to the tape in the drape pose, trims the
 collision skin, sews and drapes (self-contact at `self_contact_mm` when positive, the skill's 2 mm), and
-returns the fit report (`sim_report.json` without the CLI's `pattern`, `measurements_sha256`, `body` and
-`wall_s`) and the viewer page. The shared generator embeds the pinned renderer, orbit controls and
+returns the fit report (`sim_report.json` without the CLI's `pattern` and `wall_s`) and the viewer page.
+Its `body` diagnostics retain unrounded target/body/signed residual mm, supplied-weight residual kg,
+fit iterations and all predicted readings as MODEL_FIT. They use the already-computed TapeFit, not a
+second fit. The wasm boundary adds the exact loaded model and saved measurement document hashes.
+The page shows residuals beside the cloth verdict, with unavailable data explicit; existing fold
+invalidation withdraws both. Targets can be priors, and these diagnostics supply no new measured
+evidence, sigma, fit threshold or readiness approval. The CLI's historical rounded body fields are
+not a byte-parity claim for this extension. The shared generator embeds the pinned renderer, orbit controls and
 MIT notice; downloaded HTML and blob previews need no network for rendering. `web` exposes `WebBody(bytes)`, `fold_up(body, pattern, measurements, fit,
 mm)` → `WebFold {report(), viewer()}`, and calls the worker's `self.ftxProgress(line)` with the drape's
 progress lines.
