@@ -46,7 +46,10 @@ fn portable_surface_water_scenario_preserves_actual_cooling_replay_and_independe
             {"key":"missing-ret","changes":{"schema":"ftx-material-bindings/1","default":missing}}],
         "cutting":{"copies":1,"gap_mm":1.,"edge_margin_mm":0.,"end_margin_mm":0.,"seam_allowance_mm":0.},
         "comparison":{"basis":"nominal","required_consumers":["transient_surface"],
-            "objectives":[{"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}]}})).unwrap();
+            "objectives":[{"metric":"transient_surface_final_min_temperature_c","direction":"minimize"}],
+            "constraints":[{"metric":"textile_water_remaining_mass_kg","maximum":0.},
+                {"metric":"textile_water_evaporated_mass_kg","minimum":0.},
+                {"metric":"textile_water_latent_energy_j","minimum":0.}]}})).unwrap();
     let mut raw: Value = serde_json::from_str(SCENARIO).unwrap();
     raw["options"]["sew_steps"] = json!(120);
     raw["options"]["drape_steps"] = json!(0);
@@ -130,13 +133,21 @@ fn portable_surface_water_scenario_preserves_actual_cooling_replay_and_independe
     for alternative in result["manufacturing"]["alternatives"].as_array().unwrap() {
         assert_eq!(alternative["cutting"]["status"], "available");
     }
-    // Source-qualified simulation is available now; a different enthalpy ownership model cannot
-    // silently pass the existing dry-heat decision gate merely because its residual is small.
-    assert_eq!(result["comparison"]["frontier"], json!([]));
+    // The full conservative water/enthalpy model, not merely a small residual, qualifies the
+    // actual production result for temperature and textile-water decisions.
+    assert_eq!(result["comparison"]["frontier"], json!(["qualified"]));
     assert_eq!(
         keyed(&result["comparison"]["alternatives"], "qualified")["eligible"],
-        false
+        true
     );
+    let readings = &keyed(&result["comparison"]["alternatives"], "qualified")["readings"];
+    for (metric, field) in [
+        ("textile_water_remaining_mass_kg", "remaining_liquid_kg"),
+        ("textile_water_evaporated_mass_kg", "evaporated_liquid_kg"),
+        ("textile_water_latent_energy_j", "latent_energy_j"),
+    ] {
+        assert_eq!(readings[metric]["value"], water[field]);
+    }
     let mut replay = input.clone();
     for variant in &mut replay.variants {
         let row = keyed(&result["manufacturing"]["alternatives"], &variant.key);

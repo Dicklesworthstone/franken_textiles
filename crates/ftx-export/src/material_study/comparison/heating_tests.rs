@@ -3,7 +3,7 @@ use super::*;
 use crate::material_study::{Metrics, Outcome};
 use ftx_pattern::{material_binding::Changes, material_catalog::Selection, materials::Catalog};
 
-fn case(combined: bool) -> (Alternative, Value, Value) {
+pub(super) fn case(combined: bool) -> (Alternative, Value, Value) {
     let mut records = vec![];
     let mut motion = json!({"duration_s":1.,"path_sha256":"a".repeat(64),
         "initial_positions_sha256":"b".repeat(64),"triangles":[[0,1,2],[3,4,5]],
@@ -145,19 +145,19 @@ fn case(combined: bool) -> (Alternative, Value, Value) {
 fn qualified_maxwell_and_disjoint_plastic_sources_reconcile_storage_once() {
     for combined in [false, true] {
         let (a, d, mut m) = case(combined);
-        assert!(admit_heat(&a, &d, &m, Consumer::TransientSurface).is_ok());
+        assert!(admit_heat(&a, &d, &Value::Null, &m, Consumer::TransientSurface).is_ok());
         // Boundary energy is -1 J, Maxwell heat is 3 J, optional plastic heat is 2 J.
         assert_eq!(
             m["transient_surface"]["result"]["stored_change_j"],
             if combined { 4. } else { 2. }
         );
         m["transient_surface"]["result"]["stored_change_j"] = json!(5.);
-        assert!(admit_heat(&a, &d, &m, Consumer::TransientSurface).is_err());
+        assert!(admit_heat(&a, &d, &Value::Null, &m, Consumer::TransientSurface).is_err());
     }
 }
 
 #[test]
-fn coupled_surface_water_cannot_pass_the_dry_history_comparison_ledger() {
+fn incomplete_surface_water_cannot_pass_the_dry_history_comparison_ledger() {
     for location in 0..3 {
         let (a, mut descriptor, mut motion) = case(false);
         match location {
@@ -170,9 +170,15 @@ fn coupled_surface_water_cannot_pass_the_dry_history_comparison_ledger() {
             1 => motion["transient_surface"]["result"]["surface_water"] = json!({}),
             _ => motion["transient_surface"]["result"]["trace"][0]["surface_water"] = json!({}),
         }
-        let refusal = admit_heat(&a, &descriptor, &motion, Consumer::TransientSurface)
-            .err()
-            .unwrap();
+        let refusal = admit_heat(
+            &a,
+            &descriptor,
+            &Value::Null,
+            &motion,
+            Consumer::TransientSurface,
+        )
+        .err()
+        .unwrap();
         assert!(refusal.message.contains("liquid and vapor enthalpy ledger"));
         assert_eq!(motion["transient_surface"]["status"], "available");
     }
@@ -221,7 +227,7 @@ fn inconsistent_maxwell_evidence_or_work_cannot_qualify_a_heat_objective() {
             }
         }
         assert!(
-            admit_heat(&a, &d, &m, Consumer::TransientSurface).is_err(),
+            admit_heat(&a, &d, &Value::Null, &m, Consumer::TransientSurface).is_err(),
             "fault {fault}"
         );
     }
@@ -233,7 +239,7 @@ fn maxwell_outputs_need_explicit_domain_policy_and_bound_source_identity() {
     d["scenario"]["motion"]["transient_surface"]["relaxation_dissipation_heat"] = Value::Null;
     m["transient_surface"]["result"]["request"] =
         d["scenario"]["motion"]["transient_surface"].clone();
-    assert!(admit_heat(&a, &d, &m, Consumer::TransientSurface).is_err());
+    assert!(admit_heat(&a, &d, &Value::Null, &m, Consumer::TransientSurface).is_err());
     let (_, d, m) = case(false);
     a.frozen_changes
         .as_mut()
@@ -242,7 +248,7 @@ fn maxwell_outputs_need_explicit_domain_policy_and_bound_source_identity() {
         .as_mut()
         .unwrap()
         .expected_sha256 = Some("unrelated".into());
-    assert!(admit_heat(&a, &d, &m, Consumer::TransientSurface).is_err());
+    assert!(admit_heat(&a, &d, &Value::Null, &m, Consumer::TransientSurface).is_err());
 }
 
 fn coverage_case(combined: bool) -> (Alternative, Value, Value) {
@@ -282,7 +288,7 @@ fn coverage_case(combined: bool) -> (Alternative, Value, Value) {
 fn coverage_maxwell_and_mixed_sources_use_the_same_accepted_work_admission() {
     for combined in [false, true] {
         let (a, d, mut m) = coverage_case(combined);
-        assert!(admit_heat(&a, &d, &m, Consumer::TransientCoverage).is_ok());
+        assert!(admit_heat(&a, &d, &Value::Null, &m, Consumer::TransientCoverage).is_ok());
         assert_eq!(
             m["transient_coverage"]["result"]["physical_stored_change_j"],
             if combined { 4. } else { 2. }
@@ -290,8 +296,8 @@ fn coverage_maxwell_and_mixed_sources_use_the_same_accepted_work_admission() {
         // An existing valid independent-sheet history cannot excuse a changed coverage source.
         m["transient_coverage"]["result"]["relaxation_dissipation_heat"]["material_fractions"][0]
             ["observation"]["method"] = json!("unrelated source");
-        assert!(admit_heat(&a, &d, &m, Consumer::TransientCoverage).is_err());
-        assert!(admit_heat(&a, &d, &m, Consumer::TransientSurface).is_ok());
+        assert!(admit_heat(&a, &d, &Value::Null, &m, Consumer::TransientCoverage).is_err());
+        assert!(admit_heat(&a, &d, &Value::Null, &m, Consumer::TransientSurface).is_ok());
     }
 }
 
@@ -323,7 +329,7 @@ fn coverage_heat_refuses_missing_work_partial_sources_and_unrequested_conversion
             }
         }
         assert!(
-            admit_heat(&a, &d, &m, Consumer::TransientCoverage).is_err(),
+            admit_heat(&a, &d, &Value::Null, &m, Consumer::TransientCoverage).is_err(),
             "fault {fault}"
         );
     }

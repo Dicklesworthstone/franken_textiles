@@ -3036,6 +3036,22 @@ test('computed objectives display Rust admission, signed units and incomparabili
   assert.deepEqual(plain(filmTable.children[2].children.map(n=>n.textContent)),
     ['A','Eligible','None reported','0.25 kg','1.25 kg','2.25 kg','3.25 kg','4.25 J']);
   assert.deepEqual(plain(filmTable.children[3].children.slice(3).map(n=>n.textContent)),Array(5).fill('Unknown'));
+  const textileMetrics=['textile_water_evaporated_mass_kg','textile_water_remaining_mass_kg','textile_water_latent_energy_j'];
+  comparison.policy={basis:'nominal',allow_mixed_protocols:false,constraints:[],required_consumers:['transient_surface'],
+    objectives:textileMetrics.map(metric=>({metric,direction:'minimize'}))};
+  comparison.alternatives[0].readings=Object.fromEntries(textileMetrics.map((metric,i)=>[
+    metric,{value:[0.003,0.002,7500][i],unit:i===2?'J':'kg',consumer:'transient_surface'}]));
+  comparison.alternatives[1].exclusions=[{message:'Coupled textile water ledger is inconsistent'}];
+  await p.e.scenario.onclick();p.emit(report);
+  assert.match(visibleText(s),/Textile water objectives use the complete admitted coupled temperature history/);
+  assert.match(visibleText(s),/body-reservoir water has separate objectives/);
+  const textileTable=descendants(s).find(n=>n.tag==='table');
+  assert.match(visibleText(textileTable),/Evaporated textile water/);
+  assert.match(visibleText(textileTable),/Textile evaporation latent energy/);
+  assert.deepEqual(plain(textileTable.children[2].children.map(n=>n.textContent)),
+    ['A','Eligible','None reported','0.003 kg','0.002 kg','7500 J']);
+  assert.deepEqual(plain(textileTable.children[3].children.slice(3).map(n=>n.textContent)),Array(3).fill('Unknown'));
+  p.e.scenarioRequest.handlers.change();assert.equal(s.hidden,true);
 });
 
 test('reported mass comparisons display admitted ranges and unresolved alternatives without nominal reranking', async () => {
@@ -3974,7 +3990,7 @@ test('transient heat displays signed energy and remap separately, preserving ref
   p.e.scenarioRequest.handlers.change(); assert.equal(s.hidden,true); assert.equal(p.live.size,0);
 });
 
-test('textile water cooling exposes separate conserved mass and full sensible-latent ledgers without ranking claims', async () => {
+test('textile water cooling exposes separate conserved mass and the full ledger required by comparison admission', async () => {
   const p=await pageModule(); await p.load(); scenarioInputs(p);
   const report=scenarioReport(); report.scenario.scenario={motion:{transient_surface:{surface_water:{schema:'ftx-textile-surface-water/1'}}}};
   const water={initial_liquid_kg:0.005,evaporated_liquid_kg:0.003,remaining_liquid_kg:0.002,
@@ -3995,7 +4011,7 @@ test('textile water cooling exposes separate conserved mass and full sensible-la
   assert.deepEqual(plain(table('A: textile evaporation and sensible energy').children[2].children.map(n=>n.textContent)),
     ['7500','252','-254','0']);
   assert.match(visibleText(s),/temperature feeds the declared vapor-pressure table/);
-  assert.match(visibleText(s),/heat-objective ranking remains unavailable/);
+  assert.match(visibleText(s),/Comparison admission checks the complete liquid and vapor ledger/);
   const source=descendants(s).find(n=>n.tag==='details'&&n.children[0].textContent==='A: textile liquid source, exact patches and canonical vapor paths (display only)');
   source.open=true; source.handlers.toggle(); assert.match(visibleText(source),/<independent free-liquid acquisition>/);
   motion.transient_surface=refused('source pressure table exceeded');
@@ -5004,6 +5020,34 @@ test('compiled WASM adaptive synthesis replays both native selected-body scenari
         const selected=search.rows.find(row=>row.selected);
         assert.ok(Math.abs(selected.design.variables_mm.length-33.7)<=0.001);
         assert.equal(selected.max_fit_band_violation_mm,0);
+        assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
+        assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
+      }
+    } finally {globalThis.ftxProgress=previousProgress;}
+  });
+
+test('compiled WASM coupled textile-water objectives replay both native commands and named scenarios',
+  {skip:process.env.FTX_REAL_WASM!=='1' || !process.env.FTX_COUPLED_WATER_REPLAY}, async()=>{
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const dir=process.env.FTX_COUPLED_WATER_REPLAY, input=name=>fs.readFileSync(path.join(dir,name),'utf8');
+    const bytes=fs.readFileSync(path.join(dir,'model.ftxbody')), w=await workerModule({bindings:ftx});
+    const previousProgress=globalThis.ftxProgress;globalThis.ftxProgress=()=>{};
+    try {
+      for(const name of ['single','matrix']) {
+        const studyRequest=input('study.json'), scenarioRequest=input(`${name}-scenario.json`);
+        const result=await w.send({type:'scenario',request:181,pattern:input('pattern.json'),studyRequest,scenarioRequest,
+          measurements:input('body-input.json'),bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+        assert.equal(result.type,'result',result.message);
+        assert.deepEqual(result.result,JSON.parse(input(`${name}-report.json`)));
+        assert.deepEqual(result.result.comparison.frontier,['qualified']);
+        if(name==='single') {
+          const readings=result.result.comparison.alternatives.find(row=>row.key==='qualified').readings;
+          assert.ok(readings.transient_surface_final_min_temperature_c.value<20);
+          assert.equal(readings.textile_water_remaining_mass_kg.value,0);
+          assert.ok(readings.textile_water_evaporated_mass_kg.value>0);
+        }
         assert.equal(result.files.find(file=>file.name==='study-request.json').text,studyRequest);
         assert.equal(result.files.find(file=>file.name==='scenario-request.json').text,scenarioRequest);
       }
