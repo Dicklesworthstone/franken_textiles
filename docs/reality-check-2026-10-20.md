@@ -1,5 +1,9 @@
 # FrankenTextiles reality check — 2026-10-20
 
+**Latest comprehensive assessment:** [2026-10-23, source `2bc8b402`](#2026-10-23-comprehensive-reality-check).
+Earlier findings and follow-through below are retained as dated evidence; the latest assessment
+states which are resolved, current, failed or still unverified.
+
 Assessed source: `main` at `6410556378514874274e77c304efd0d4e2200a73`.
 This initial assessment and delivery plan is not release certification. It preceded product changes;
 the implementation follow-through at the end records subsequent work and current verification.
@@ -2516,3 +2520,329 @@ measured-data acceptance. The active software checklist is retired at handoff. N
 closed, no later shared Rust source is credited with this frozen run, and both unrelated untracked
 paths remain untouched. Full-project reality checking and the original empirical/release tasks
 remain broader work, not accomplishments inferred from this software delivery.
+
+## 2026-10-23 comprehensive reality check
+
+Assessed product source: `main` at `2bc8b402ed27621ac513801aae51c1886c938476`.
+Date is America/New_York; execution logs extend into October 24 UTC. Both AGENTS.md and README.md
+were read completely before investigation. The constitution, six specifications, nine crate contracts,
+subsystem notes, current dispatch/consumer/acceptance code, fixtures, tests, Git history, both Beads
+representations and GitHub job state were consulted. Source inspection emphasized actual data flow,
+publication, numerical admission and user routes. This is not a line-by-line audit of all 262,470 Rust
+lines or every subsystem note. No oracle, product source, dependency, user asset or previous round changed.
+
+### Current verdict and the five questions
+
+**The core garment engine works on meaningful supported cases. The complete current product vision is
+not finished.** This is a substantial sewing/body/cloth/export implementation with an unusually broad
+textile research platform. Its bottleneck is now matched physical evidence, coherent numerical decision
+boundaries and usable delivery, rather than absence of algorithms.
+
+1. **What works now:** a fresh source-built native bolero round drafts from the public reference
+   measurements, fits Anny, sews and drapes with 2 mm self-contact, validates the flat pattern and passes
+   all **183/183** export checks. Its four bases are flat `CONVERGED`, simulation `no gating flags`,
+   exports `PASS`, and measurements `READY_REFERENCE`. All Newton steps converge; the instantaneous
+   quiet tail has 30 steps. Production-model tests, release physics KATs and compiled-WASM tests also
+   pass as scoped below. These are executable results, not an inference from crate or Bead counts.
+2. **What is incomplete:** independent anatomical/tape and real-photo accuracy, a convenient prepared
+   capture-to-body route, complete measured material sets, empirical garment/thermal/seam acceptance,
+   some coupled moisture/compression/damage behavior, complete current cross-target qualification,
+   the G5 gauntlet and a reproducible released installation. The current full workspace suite is red.
+3. **What blocks completion:** missing compatible specimen/conditioning/geometry/interface measurements;
+   insufficient independent physical validation; a reproduced floating-point coverage boundary defect;
+   unresolved scope/default/budget contradictions; and incomplete release/current-artifact evidence.
+   Another constitutive feature or catalog family cannot supply these missing observations.
+4. **Would finishing the original active Beads close everything? No.** They cover much of the material
+   acquisition, coupling and process work, but lacked concrete remaining tasks for current-source
+   qualification, independent tape/pose and physical-photo acceptance, capture usability, scope/budget
+   reconciliation, reproducible delivery and a private muslin comparison. A broad G5 title is not an
+   executable substitute. New children `ftx-onn.8` through `.18` now cover those gaps. Experiments can
+   still falsify a model; completing software does not guarantee that an empirical gate will pass.
+5. **Which goals had no adequate active task:** those eleven concrete bridge slices below, including the
+   coverage repair, a second regression failure and missing promised contact outputs. Some had historical closed software tasks, which were left closed;
+   the missing independent acceptance is tracked separately. Existing `tm2/tm8/tmf/sp2` data/physical
+   gates were reused rather than duplicated.
+
+### Four separate claims
+
+| Claim | Current conclusion |
+|---|---|
+| Parity | A real spec-driven port with a large pinned-reference corpus. The supported native round and current WASM slices execute. Broad fresh oracle results are recorded below; trace long-tail decisions remain `ftx-q3m`. |
+| Physics | Current production-asset release KATs pass, including cantilever, friction thresholds, ease, elastic ladder, armpit wedge and two sewing paths. These known answers do not validate all real textiles or coupled garment transport. |
+| Fit | **Unproven for a real person in this assessment.** Public-prior/model-derived bodies and targets remain synthetic evidence. A private independent muslin/dressed comparison is required. |
+| Performance | README retains a bounded historical M5 Ultra browser benchmark. No new repeated latency benchmark or current M4 budget certificate was produced here. Runtime observations and pinned digests are not broad speed/determinism claims. |
+
+### Fresh checks and exact scope
+
+Logs and generated synthetic/public-reference artifacts are under ignored
+`out/reality-check-20261023/`. Remote commands used the following prefix, with a fixed clean source:
+
+```sh
+RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=verbose rch --json exec \
+  --base 2bc8b402ed27621ac513801aae51c1886c938476 --clean-overlay --no-overlay -- \
+  env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx"
+```
+
+Local native commands used
+`RCH_CARGO_WRAPPER_BYPASS=1 CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/ftx_reality_20261023_native"`.
+This deliberately builds/runs the native model-dependent lanes against the already admitted local
+asset; the remote clean source does not implicitly contain that external model. `sbh check --need 20G`
+passed first: approximately 350 GB / 8.76% free. No storage guard was bypassed.
+A preliminary RCH invocation combined mutually exclusive `--clean-overlay` and
+`--source-content-receipt`; it exited 2 before execution. The corrected fixed-base commands below
+actually ran and have terminal outcomes. No setup rejection is counted as a successful check.
+
+The retained asset SHA-256 is `8f0bb151ba19975437147d239b7ff237642a7fa63659a6fac49fa23c299a0915`;
+the fresh wasm-bindgen WASM is `7fe33bc033ba744a8bd1c677ea6dc83b2c99c8c0c6b97c6a2e8c42d0a12898e5`.
+The temporary native Cargo target directory was no longer present at the post-run hash attempt, so
+no retained native-binary hash/archive is claimed. Its completed build/test logs and new round outputs
+remain. This is another reason to keep reproducible candidate packaging separate from these tests.
+
+| Exact command or run | Result / boundary |
+|---|---|
+| `cargo fmt --check` | PASS, exit 0. |
+| `dsr quality --tool franken_textiles --dry-run` | Exit 4: no configured checks for this tool. No DSR pass claimed and no infrastructure reconfiguration undertaken. |
+| Remote `cargo clippy --workspace --all-targets --locked -- -D warnings` | PASS, exit 0, worker `vmi1153651`, terminal acknowledged. |
+| Remote `cargo test --workspace --all-targets --locked` | **FAIL, exit 101**, worker `trj`, terminal acknowledged: 100 passed, 1 failed, 8 ignored across 8 completed targets; later targets were not reached. The failure and its admission implications are detailed below. |
+| Remote `cargo test --workspace --exclude ftx-cli --all-targets --no-fail-fast --locked` | **FAIL, exit 101**, worker `vmi1152480`, terminal acknowledged: **1,885 passed, 1 failed, 17 ignored across 215 completed targets**. Failure: `portable_design_study_changes_real_manufacturing_and_replays_each_exact_pattern`, detailed below and tracked in `.18`. The other targets continued after failure. This separate denominator overlaps earlier tests and does not repair the failed full workspace. |
+| Local `cargo test --locked --release -p ftx-body -- --include-ignored` | PASS, exit 0: **33 passed, 0 failed, 0 ignored**. Includes pinned-array/reference, pose and tape-fitting cases with the real converted model. |
+| Local `cargo test --locked --release -p ftx-drape --test kat --test kat_contact --test kat_elastic --test kat_fitted -- --include-ignored` | PASS, exit 0: **14 passed, no failures or ignores**. Cross-target digest equality is not established merely by executing each native pinned-digest test. |
+| Local `cargo test --locked --release -p ftx-cli --test body_model_fit -- --include-ignored` | PASS, exit 0: **2 passed**. Full-Anny image-fit/withheld-tape/accepted-body reuse is synthetic known-correspondence evidence, not physical-camera accuracy. |
+| Local `cargo test --locked --release -p ftx-cli --test draft_workflow --test round_workflow --test export_workflow` | PASS, exit 0: **17 passed, 1 ignored**. Actual native commands, all three drafted programs, file checks and round/refusal behavior; the ignored case is not credited. |
+| Remote `cargo build --target wasm32-unknown-unknown -p ftx-wasm --locked` | PASS, exit 0, worker `trj`, terminal acknowledged; debug artifact. |
+| `python3 -m unittest discover -s scripts -p 'test*.py'` | PASS: **104 tests**. Offline adapter/source rules, not newly refreshed live offers. |
+| `node --experimental-vm-modules --test tools/check_trace_frontend.cjs tools/check_photo_frontend.cjs tools/check_compression_frontend.cjs tools/check_stock_job_frontend.cjs` | PASS: **180 passed, 28 skipped**, 208 executions. Lifecycle/routing doubles and imported suites are not 180 distinct numerical oracles. |
+| `wasm-bindgen --target web --out-dir out/reality-check-20261023/pkg "${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx/wasm32-unknown-unknown/debug/ftx_wasm.wasm"`, then `FTX_REAL_WASM=1 FTX_WASM_PKG="$PWD/out/reality-check-20261023/pkg" node --experimental-vm-modules --test tools/check_materials_frontend.cjs tools/check_photo_frontend.cjs` | PASS: **157 passed, 5 skipped**, 162 executions. Current compiled WASM executes; five optional native-replay fixture lanes remain skipped (thread cost, fit screening, adaptive design, raster camera acquisition, Brown/photo replay). |
+| Actual Chromium `tools/check_web.cjs` against the fresh bundle | PASS, exit 0: module loads; bolero, trousers and fez rounds converge; empty tape is not ready; invalid stature refuses; no console errors. No browser fold/model timing rerun in this command. |
+| Actual Chromium `tools/check_photo_web.cjs` against fresh native captures and bundle | PASS, exit 0: PNG/EXIF-6 JPEG full native report equality, scaled clicks/uncertainty/downloads, ChArUco/lens source binding, cancellation/stale clearing and malformed-input refusals. No uploads, third-party requests, storage or page errors observed. The main workbench accepts the photo file but refuses drafting when required body evidence is absent. Synthetic raster checks, not a real-photo accuracy claim. |
+| Actual Chromium `tools/check_web.cjs --viewer "$PWD/out/reality-check-20261023/bolero-workspace/rounds/000/sim/fold_viewer.html"` | PASS, exit 0: current native HTML renders from file and blob, controls/playback/retained geometry work, no page errors and **zero HTTP(S) requests**. Viewer SHA-256 `0827c84c2ac2622dd7eddea1856958b9ad1cf04b66c524bbd09e2ba0b4ee2248`. |
+| `ast-grep run --lang Rust --pattern 'fn $NAME($$$) { todo!() }' crates` | No matches, exit 1. Keyword scan found no production `todo!`/`unimplemented!` subsystem body. Direct source and runtime checks corroborate substantial implementations; this does not establish completeness. |
+
+The Chromium commands reuse the existing installed `playwright-core` via
+`FTX_PLAYWRIGHT_MODULE=playwright-core NODE_PATH=/Users/jemanuel/projects/frankenpiano_vst/web/node_modules`.
+A scratch web tree uses symlinks to current sources and the fresh package, with
+`node --preserve-symlinks-main out/reality-check-20261023/browser-root/tools/check_web.cjs --ftx NATIVE_BINARY`
+and the analogous `check_photo_web.cjs PHOTO_NATIVE_DIR`. This preserves the prior `web/pkg` instead
+of silently attributing its October 21 build to current HEAD. No browser dependency was installed.
+
+The manual native route used `ftx --json measure reference --stature-mm 920 --age-months 30 --out M`,
+`ftx --json draft zouave_bolero --measurements M --out D`, then
+`ftx --json round WS --pattern D/pattern.json --fit D/fit_spec.json --measurements M --sim --self-contact-mm 2 --export`.
+Every destination was new. The fitted body still reports the reference-chart disagreements, including
+approximately -9 mm shoulder length, +7.4 mm crotch length and -9 mm outseam; no residual was hidden.
+`READY_REFERENCE` and a clear drape are not real-wearer readiness or fit.
+The draft's fabric is the legacy `lined-jacket composite (UNCERTAIN)` (380 g/m², 10,000 N/m tensile,
+0.00012 N·m bending). Its successful numerical run does not supply the missing measured catalog
+coefficients or validate that composite against a real fabric.
+
+### Vision checklist and actionable coverage
+
+`WORKING` below means the stated bounded slice has direct execution evidence, not universal completion.
+`PARTIAL` includes implemented numerical capabilities whose broader integration/physical promise is
+unverified. Historical proof never silently becomes a current all-target certificate.
+
+| # | Testable promise | Reality, evidence and remaining Beads |
+|---|---|---|
+| 1 | Deterministic units, geometry and structured refusals (§6–7) | Real `ftx-core` kernels and error types; current native/WASM consumers execute. Full cross-target lane remains `.9/.10`; no new platform-wide determinism claim. |
+| 2 | Pattern schema, fold/mirror instances, malformed-input handling (spec 01) | WORKING supported slice: real `doc/instance/pattern`, oracle tests and native drafts/round. |
+| 3 | Seam walk, truing and flat fit contract (§8) | WORKING supported slice: `validate.rs`, mutation/differential tests and fresh converged native round. Flat authority remains distinct from 3D prediction. |
+| 4 | All five alterations and measured drafting (§8) | Real `alter` and `draft` implementations and fixtures; all three draft/validate/export CLI workflows pass. Root/domain refusals remain deliberate parity exceptions. |
+| 5 | Measurement catalog, priors, fusion and readiness (§10.1) | Real 35-item engine, provenance/sigma/conflict rules and tests; fresh round distinguishes `READY_REFERENCE`. Child size-chart range is not a universal population prior. |
+| 6 | Pinned Anny forward model and tape-target recovery, G1 (§9) | Current 33 production-asset tests pass. Sampled vertices/aggregates and hashes do not establish a maximum norm over all upstream vertices; `.9` requires correct claim scope or full upstream comparison. |
+| 7 | Independent tape functionals and anatomical placement (§9.3–4) | PARTIAL: 21 functionals and LM/residuals exist, but model-derived target recovery shares functional assumptions. `tape/landmarks/fit` and FEATURE_PARITY retain heuristics; independent acceptance `.16`, physical checks `.12/.15`. |
+| 8 | Poses, nappy and valid contact skin (§9.5) | Current pose cases pass; seated/squat volume loss and unqualified self-intersections remain documented. Broader pose-domain acceptance `.16`; no arbitrary-pose anatomical claim. |
+| 9 | Letter/A4 and ChArUco image scale (§10.1) | Real strict PNG/EXIF-JPEG, detector and uncertainty engines, local browser controls and exact-source tests. Physical print/lens accuracy remains `.12`. |
+| 10 | Printable calibration references and variants (spec 02 A.9) | PARTIAL: native/browser default Letter/A4 references exist; other dictionaries/custom browser generation remain absent. `.11` scopes supported capture, `.12` checks physical scale. |
+| 11 | Camera calibration and conditional uncertainty (§10.2) | Real Brown/intrinsic covariance and acquisition engines; current compiled-WASM calibration checks pass. Conditional assumed-noise precision is not total real capture uncertainty. |
+| 12 | Frame identity, still windows, triangulation and bundle adjustment (§10.2) | PARTIAL: real timestamp/orientation/observability/held-out engines; decoded frames, reviewed masks and calibrated controls are caller inputs. Capture handoff `.11`, empirical `.12`. |
+| 13 | Shared-shape, per-frame-pose image fit and accepted-body reuse (§9–10) | WORKING synthetic production-model slice: full-Anny CLI tests pass. Manual correspondences and sampled rectified silhouettes do not establish automatic body scanning or physical accuracy; `.11/.12/.16`. |
+| 14 | Garment mesh, grain, gathered welds, elastic and feasible start (§11.4) | WORKING supported sewn pipeline: source and oracle mesh/start tests plus fresh fitted bolero. Difficult placement/intersection cases can refuse; no automatic dressing claim. |
+| 15 | Membrane, bending, IPC, CCD and friction (§11) | Current 14 release KATs pass, including production fitted cases. Broader measured textile laws/garments remain `tm2/tm4/ki4/tm8`. |
+| 16 | Numerical stall rollback and residual/speed acceptance (§6, §11) | Prior P0 defect is repaired in source (`cloth.rs:1138`, `run.rs:457`) and fresh run: every Newton step converges and quiet tail is satisfied. Do not repeat the October 20 defect as current. |
+| 17 | Start sensitivity reported on every drape (§11.1) | PARTIAL: opt-in `--two-start-sew` compares two sewing durations at one placement; current fitted KAT passes. Ordinary runs/browser do not imply this qualification, nor independent perturbed starts. `.13` resolves the promise. |
+| 18 | Contact-correct layers for ordinary user commands (§11.4) | PARTIAL by invocation: body-only native default, self-contact opt-in; fresh bolero explicitly uses 2 mm. `.13/.14` align commands and claim scope; unlike-material pairs still need data. |
+| 19 | Metrics, PC2, mesh maps, contact maps and local review (§11.6–8) | PARTIAL: real files and fresh offline viewer pass. Accepted-step contact counts/gap history, pressure maps and elastic hold-window slip are not exposed in the saved report as promised; implementation `.17`, companion qualification `.9/.10`, complete delivery `.14`. |
+| 20 | All export formats and 51 acceptance-check kinds (§12) | WORKING supported slice: fresh bolero **183/183** checks and native export regressions. These file checks are not physical cutter/seam/hardware qualification. |
+| 21 | Trace, annotate, audit and true-size scale refusal (§13) | Real raster/vector/decoder/review implementation and corpus; `q3m` retains long-tail libm/decoder/reference decisions. A keyword scan does not close those cells. |
+| 22 | Immutable rounds with four separate verdict bases (§14) | WORKING supported route and negative CLI tests. A new round is created; no prior artifact is substituted after refusal. |
+| 23 | Browser round, photo and small-garment drape, G4 (§15) | Current compiled WASM and actual Chromium rounds execute. Historical fold benchmarks remain historical; complete current browser/body parity and bounded timing `.9/.10/.14`. |
+| 24 | Whole-outfit review and joint contact (§14, §25) | Both exist: `outfit --sim` is frozen review; `ftx-outfit-drape/1` composes real jointly simulated patterns with explicit self-contact/interfaces. Neither infers dressing order or establishes physical outfit fit. |
+| 25 | One source-bearing material authority (§25.1–2) | WORKING data/consumer architecture; **251 canonical / 262 CLI entries**, but every CLI entry reports missing mechanical coefficients. Partial usable transport/mass/purchasing data are not a complete garment material. `tm2/tm8`. |
+| 26 | Calibrated nonlinear/history/permanent response (§25.3) | PARTIAL: extensive real constitutive, strip inverse, Maxwell and permanent-set engines with source/FIT/CHECK/domain gates. Measured adequacy, damage/rupture and combined laws remain `tm4/ki1/ki4/rc1/rc2/ps1`. |
+| 27 | Draped layers, motion and qualified heat (§25.4) | PARTIAL: conservative steady/transient/coverage/exterior/heat-source paths exist. Matched full-garment topology/boundaries, compression, ventilation and experiments remain `tma/tme/tmf/tmb/tmc/cp2/ex2/ex3/op1/np1`. |
+| 28 | Vapor/water and conservative latent feedback (§25.54–74) | PARTIAL: real Ret networks, moving coverage, finite body liquid and new textile-owned free-liquid cooling. Coverage admission is currently defective (`.8`); textile dry-heat decision admission intentionally excludes the new ownership model. Sorption/wicking/wet properties/body transfer and experiments remain `vc2/tmc`. |
+| 29 | Comparable live offers and complete procurement (§25.4) | PARTIAL: dated source locks, stock/cut limits, tiers, supplier splits and mixed stock are implemented; offline Python tests pass. This review performed no new live supplier refresh. `tm6/pq1/sr2` retain supplier/lot/history qualification. |
+| 30 | Material-aware cutting, sewing and machine plans (§25.4) | PARTIAL: real roll/hide/remnant geometry, recipe/order/thread-cost planning. Missing measured seam quality, access/workholding/timing and interlocked machine qualification remain `tm7/sp2`; exported paths authorize no hardware. |
+| 31 | Material/geometry design optimization (§25.68–73) | PARTIAL: real fixed alternatives, named-case Pareto, selected-body grids and adaptive coordinate polling. The fresh portable design regression fails on an incorrect strict gross-stock growth assumption (`.18`). Bounded/local/incomplete search is reported, not a global optimum; `ds1/ds2/ms2` remain open. |
+| 32 | Current performance and native/debug/release/wasm identity (§11.7, §17.5) | UNPROVEN for the whole current workload set; current native tests and WASM slices are useful but not the full matrix. `.9/.10` retain exact hardware/source/input/denominator requirements. |
+| 33 | G5, reproducible release and reference retirement (§17.6) | NOT COMPLETE: `onn` remains open; current HEAD CI fails; GitHub releases API returns zero releases. Source-built temporary binaries are not a verified installed release. `.9/.13/.14` plus original G5 acceptance. |
+| 34 | Fit to a specific real person (§3) | UNPROVEN here. Only independent private garment evidence can close `.15`; no personal data belongs in Git. |
+| 35 | Local/private operation (§18) | File-free/local architecture and strict source/lifecycle tests support the boundary. Specific browser network checks are scoped below; this is not an audit of every future external-model integration. |
+
+### Findings that change the next action
+
+**A. Material readiness is the dominant empirical blocker.** The fresh native `materials list` returns
+262 entries; **zero** have an empty `mechanics_missing` list. The canonical corpus test pins 251 entries;
+the CLI also includes compatibility records. Source-table transcription, raw MIT rows, supplier identity
+and measured Ret/thickness are useful independent capabilities, but cannot fill missing directional
+mechanics, bending or pair friction. Even an inverse law fitted to force data cannot validate its own
+observation operator. Prioritize the conditioned specimen → independent held-out coupon → unchanged
+jacket/body → sewn physical comparison chain in `tm2/tm8/tmf/sp2`, not another material-law abstraction.
+
+**B. The red coverage test reveals a real admission-design mismatch.** The fresh remote run and
+[current HEAD GitHub run](https://github.com/Dicklesworthstone/franken_textiles/actions/runs/40040789104)
+both fail at `accepted_body_workflow.rs:461`: intended full coverage reports
+`3.6041202892671264e-17 m²` uncovered against `0.010144696744838672 m²` total. The assertion demands exact
+zero before the water assertions run. Production `material_study/comparison.rs:2240` and `:2615` also
+demand exact area/zero uncovered while adjacent allocation checks allow relative numerical error.
+The producer preserves the raw residual. Therefore a test-only tolerance change may leave valid intended
+coverage excluded from vapor/water decisions. The first runtime failure is proven; the downstream
+effect is source-established and still needs full execution after repair. `.8` requires a coherent,
+scale-aware numerical completeness policy, preserved raw residuals and meaningful partial-coverage
+negative controls. It must not clamp output, waive conservation, skip the cell or weaken physical gates.
+
+**A second red cell is an incorrect manufacturing test assumption.** The no-fail-fast run reaches
+`ftx-wasm/tests/material_study_consumers.rs:31`, where
+`portable_design_study_changes_real_manufacturing_and_replays_each_exact_pattern` demands that wider
+pieces increase purchased `stock_mass_kg`. Current compiled-WASM replay of the same authored example
+gives baseline/wider used-cut areas **0.0096 / 0.01152 m²**, but equal gross stock **0.012 m² / 0.00216 kg**.
+Independent rectangle arithmetic explains this: two 40×120 mm baseline cuts or two 48×120 mm widened
+cuts plus a 2 mm gap both fit the same 100 mm roll and 120 mm marker. Gross purchasing need not increase
+on every width edit. The longer variant correctly increases gross area to 0.014 m², mass to 0.00252 kg
+and feed from 4 to 4.8 s. `.18` must test changed cut geometry/utilization separately, preserve this
+equal-stock case and add a real marker-threshold crossing if changed purchasing is the intended proof.
+Do not change physical purchasing semantics to satisfy a bad assertion. The panic currently prevents
+the rest of that test's replay/schema/budget checks from executing, so the target remains failed.
+
+**The promised contact report is also incomplete.** Plan §11.6 names run-wide minimum gap, contact
+pressure maps and elastic slip over a hold window. The actual saved report and public
+`SolveReport`/`PhaseReport` provide Newton/energy/speed/work and thickness fields, legacy metrics and a
+final self-contact audit, without those explicit contact outputs. `.17` calls for bounded accepted-state
+diagnostics, a justified area basis before converting reactions to Pa, and a declared slip window.
+Sampled gaps must not be called exact continuous-time minima; unavailable pressure stays unavailable.
+This is product reporting, not another logging platform or a physical-pressure validation claim.
+
+**C. Product inputs still demand expert preparation.** A local photo can now yield source-bound
+PHOTO_ESTIMATED clicks and camera calibration, and a full Anny model can be fitted from synthetic
+correspondences. Arbitrary phone video still needs decoded identities, camera/scale evidence, reviewed
+correspondences/masks, partitions and bounded starts. This is an integration/usability and empirical
+accuracy gap, not a missing solver. `.11/.12` connect the existing tools and test their actual protocol;
+`.16` addresses shared-functional blind spots. External decoding/segmentation stays an explicit boundary.
+
+**D. Scope and written budgets disagree materially.** Current Rust lines, including tests/examples:
+
+| Crate | Actual | Written allocation |
+|---|---:|---:|
+| core | 5,154 | 8,000 |
+| body | 5,407 | 9,000 |
+| pattern | 38,713 | 16,000 |
+| measure | 18,528 | 16,000 |
+| drape | 69,003 | 14,000 |
+| export | 50,164 | 14,000 |
+| trace | 18,060 | 7,000 |
+| cli | 37,212 | 4,000 |
+| wasm | 11,563 | 3,000 |
+| conformance | 8,666 | 9,000 |
+| **Total** | **262,470** | **120,000 ceiling including contingency** |
+
+That is **142,470 lines / 118.7% over the ceiling**. This does not establish that the extra code or
+tests are waste. It does require an explicit maintainer scope, budget and release-slice decision; this
+review grants no revised ceiling and proposes no mass deletion/refactor. Other concrete drift:
+Phase 1 badge versus later gate claims; `material-catalog.md`'s old 30-record count; obsolete singular
+commands/absent test paths in `material-platform-progress.md`; the material/thermal platform described
+next to a broad bit-exact reference claim despite its frontier algorithms having no Python counterpart;
+trace → export beyond the stated direction; and plan/AGENTS disagreement about explicit `mul_add`.
+The plan wins technically; `.13` must resolve these contradictions deliberately rather than silently
+removing deterministic arithmetic or functionality. Default self-contact/two-path claims need the same
+precision. No current README claim is upgraded by this report alone.
+
+**E. The tracker needed lossless reconciliation before refinement.** Initially DB = 118 issues and
+JSONL = 135: 117 shared, 18 JSONL-only and one DB-only (`onn.7`). A reviewed strict additive plan
+correctly refused three conflicts, including DB comments absent from JSONL. The supported owning-engine
+`br sync --reconcile --dry-run --json --no-auto-import` then planned a monotonic union: create 18,
+update two newer rows, retain one older/DB relation state, delete zero and preserve the DB-only issue.
+`br sync --reconcile --json --no-auto-import --no-auto-flush` applied that plan in place, retaining all
+123 audit events. Flush exported **136 issues / 194 dependencies / 117 comments**, preserving the extra
+`ki4` comments. No database/WAL removal, rebuild, raw SQL, forced overwrite or direct JSONL editing was
+used. This was the smallest direct repair needed to make the requested Bead work safe.
+
+**F. Shipped reality remains narrower than source reality.** The GitHub releases API returns `[]`.
+The latest Rust workflow has successful formatting/lint/wasm/Python/frontend steps but a failed test
+step; browser bundle generation is skipped on that commit. The current browser checks here use a new
+source-bound debug package, not the older `web/pkg`. A compiled and locally exercised candidate is
+useful evidence, but neither a released installer nor G5 certification. No release, hosted deployment,
+   reference retirement or hardware execution was performed.
+
+### Bridge plan, Beads and refinement
+
+The existing empirical/coupling backlog remains authoritative: `tm2`, `md1`, `ki1/ki4`, `ms3`, `fj1`,
+`tme/tmf`, `rc1/rc2`, `ps1`, `cp2/tmc`, `op1/ex2/ex3`, `np1`, `tm6/pq1/sr2`, `tm7/sp2`, `tm8` and
+`ds1/ds2/ms2` keep their original remaining capabilities and physical acceptance. Full records were read
+for coverage; no completed source slice was reopened simply because its parent is empirical and open.
+The eleven additions are self-contained, with exact source context, files/seams, success criteria,
+negative controls, no-claim/privacy boundaries, complexity and companion evidence requirements:
+
+| Bead | Direct outcome / acceptance | Blocking prerequisites |
+|---|---|---|
+| `ftx-onn.8` P1, S/M | Coherent static/motion full-coverage admission and complete water regression; retain residuals and reject real holes, scaled/tampered cases. | None; highest immediate software repair. |
+| `ftx-onn.9` P1, M | Current-source oracle/native/ignored-production/WASM gate qualification, explicit failed/unrun cells and correct all-vertex claim scope. Companion to the repairs and existing engine. | `.8`, `.16`, `.17`, `.18`. |
+| `ftx-onn.10` P1, M | Bounded current garment/material-history timings and actual matched cross-target digests on stated hardware; retain failures and spread. | `.8`; can proceed alongside broader qualification. |
+| `ftx-onn.11` P1, M | One usable local capture → calibrated/reviewed evidence → body → drape/round route, including remaining spec-A.9 reference variants/shared browser generation and explicit external tools. | None; reuse delivered `onn.7` rather than duplicate its page. |
+| `ftx-onn.12` P1, empirical/M | Independent ruler/print/lens/physical-reference and withheld-body-measurement acceptance with predeclared errors and privacy. Companion to capture implementation. | `.11` for completed-route acceptance; acquisition can begin now. |
+| `ftx-onn.13` P1, S/owner decision | Approved scope/ceiling/release slice and harmonized dependency/FMA/default/claim/current-command truth sources. No unrequested refactor or feature loss. | None. |
+| `ftx-onn.14` P1, M | Fresh-checkout native and offline-browser candidate reproduction, exact artifacts/model and real happy/refusal paths. Companion delivery test. | `.9`, `.10`, `.13`. |
+| `ftx-onn.15` P1, empirical/M | One privately retained, predeclared muslin prediction comparison, including a seeded issue and residuals. No private data in Git. | `.9` for final prediction comparison; physical preparation can proceed independently. |
+| `ftx-onn.16` P1, M | Independent tape/path/landmark, admitted-pose mesh and from-little prior qualification; do not validate a functional solely using targets produced by that functional or label middle-phenotype defaults an age-conditioned population distribution. | None. |
+| `ftx-onn.17` P1, S/M | Accepted-state contact-gap/reaction/justified-pressure and elastic-slip outputs promised by §11.6, with units, bounded cost, rollback and native/WASM known-answer evidence. | None; feeds `.9` and the existing `cp2` pressure authority. |
+| `ftx-onn.18` P1, S | Correct design-study gross-stock monotonicity assertion using independent cut/marker arithmetic; execute the full preserved replay/refusal checks and a real stock-threshold case. | None; feeds `.9`. |
+
+All were created and related only through `br`. Existing owners/statuses were retained, including
+`onn.7`, `md1`, `q3m`, `ds1` and `ds2`. Comments preserve the delivered-versus-unverified split and
+record that closing the old six dependencies is insufficient to close G5. Parent-child links group
+the work; sibling blocking edges express prerequisites without creating a parent/child cycle.
+
+Three ambition passes changed the plan materially: (1) assess a complete user route rather than
+individual APIs; (2) optimize for matched observations and independent experiments rather than more
+catalog/law breadth; (3) expose common-model errors, actual cross-target work and bounded search/
+uncertainty limits rather than treating convergence or a persuasive image as accuracy. No additional
+solver, gate framework, dashboard, crate or speculative mathematics was introduced.
+
+Five refinement passes checked (1) every vision goal against active coverage; (2) reuse, empirical
+parallelism and dependency direction; (3) numerical and negative-control adequacy, discovering the
+production exact-zero admission issue; (4) source/denominator/companion-test and owner/release boundaries;
+and (5) exact promised outputs and remaining calibration/prior scope, adding the contact-report task.
+A final execution pass then found the independent stock-mass assertion failure; `.18` records the
+focused repair and actual-WASM/independent-arithmetic proof. Review of that correction found no further
+gap. Tests are integrated with meaningful repair/physical/
+release evidence tasks rather than creating a validator for a validator.
+
+After bridge refinement, `br` reports **147 issues: 101 closed, 41 open, 5 in progress**, with 16
+blocked. `bv --robot-triage`, `--robot-insights` and `--robot-plan` run on the flushed 147-issue graph;
+`br dep cycles --json` and bv report no active cycles. Bv's first priority remains matched material
+characterization (`tm2`), supporting the empirical-first recommendation. Ready/actionable counts differ
+between tools' scheduling policies and are not a completion percentage. Final flush/validation is
+recorded at handoff; none of the new product/empirical tasks is falsely closed by this assessment.
+
+Final Beads publication exports **147 issues / 215 dependencies / 128 comments**, with strict success
+and no export errors. Read-only comparison against the original tracked JSONL confirms that all 135
+original issue IDs, every original comment and every original dependency survive. The DB-only photo
+task and eleven new tasks are additive. Full active-and-archived `br dep cycles --include-closed --json`
+also reports zero cycles; the final bv graph includes all 147 issues.
+
+### Recommended next work and handoff
+
+1. Repair `.8` at the existing coverage/admission/test seams and `.18`'s manufacturing assertion, then
+   complete `.9` without hiding either red cell. Keep this bounded; it is not authorization to redesign
+   numerical infrastructure or the purchasing model.
+2. In parallel, obtain one compatible, fully characterized specimen set under `tm2` and its independent
+   coupon/garment tests under `tm8/tmf/sp2`. Each new measurement should unlock an existing consumer.
+3. Execute the supported capture protocol and independent photo/tape/muslin comparisons. Record where
+   the model fails instead of expanding solver features to avoid the experiment.
+4. Resolve the scope/budget/default decision, complete current performance/determinism and clean-install
+   evidence, then run the original G5 program against the declared release slice. This review is not
+   one of ten passed gauntlet rounds.
+
+Maintained changes are this in-place assessment and `br`-generated Beads records. The two pre-existing
+untracked paths (`.ee/` and the filesystem-metadata-named path) were preserved. Generated reports, bundle,
+public-reference body/drape/export outputs and raw logs remain ignored evidence. No product-code fix,
+new crate, branch/worktree, file deletion, release, model upload or empirical fit success is claimed.
