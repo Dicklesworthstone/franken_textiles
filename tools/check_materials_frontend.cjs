@@ -1795,7 +1795,7 @@ test('material changes withdraw drape and thermal outputs while environment edit
 
 test('original drafting worker also retains replayable drape JSON and frees its fold handle', async () => {
   const sent=[], raw='{"coordinate":-0.0,"coefficient":1.0}', freed=[];
-  const values={default:async()=>{},program_info:()=> '{}',
+  const values={default:async()=>{},program_info:()=> '{}',calibration_dictionaries:()=> '["DICT_4X4_50"]',
     run:()=>({page:()=>'{"status":"CONVERGED"}',file:n=>new TextEncoder().encode(n==='pattern.json'?'{"pieces":[{"placement":{"part":"torso"}}]}':'{}'),free(){}}),
     WebBody:class{},fold_up:()=>({report:()=>raw,viewer:()=>'<html/>',free:()=>freed.push('fold')})};
   const context=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});
@@ -1803,14 +1803,17 @@ test('original drafting worker also retains replayable drape JSON and frees its 
   await imports.link(()=>{});await imports.evaluate();
   const module=new vm.SourceTextModule(read('worker.js'),{context,importModuleDynamically:()=>imports});
   await module.link(()=>{});await module.evaluate();
-  for(const msg of [{type:'init',pkg:'./pkg/'},{type:'run',req:{}},{type:'body',bytes:new ArrayBuffer(8)},{type:'fold',selfContactMm:2}]) await context.onmessage({data:msg});
+  for(const msg of [{type:'init',pkg:'./pkg/'},{type:'run',req:{}},{type:'body',bytes:new ArrayBuffer(8)},{type:'fold',selfContactMm:2}]) {
+    await context.onmessage({data:msg});
+    if(msg.type==='init') assert.equal(sent.at(-1).type,'ready');
+  }
   assert.equal(sent.at(-1).type,'folded');assert.equal(sent.at(-1).reportText,raw);assert.deepEqual(freed,['fold']);
   assert.ok(read('index.html').includes('new Blob([msg.reportText]'));
 });
 
 test('drafting worker discards refused replacements, frees failed rounds and checks fold sources', async () => {
   const sent=[], freed=[], calls=[]; let failure;
-  const values={default:async()=>{},program_info:()=> '{}',
+  const values={default:async()=>{},program_info:()=> '{}',calibration_dictionaries:()=> '["DICT_4X4_50"]',
     run:()=> {
       if(failure==='run') throw Error('run refused');
       return {page:()=>{if(failure==='page') throw Error('page refused');return '{"status":"CONVERGED","zip":"round.zip"}';},
@@ -1826,7 +1829,7 @@ test('drafting worker discards refused replacements, frees failed rounds and che
   const module=new vm.SourceTextModule(read('worker.js'),{context,importModuleDynamically:()=>imports});
   await module.link(()=>{});await module.evaluate();
   const send=async data=>{await context.onmessage({data});return sent.at(-1);};
-  await send({type:'init',pkg:'./pkg/'});
+  assert.equal((await send({type:'init',pkg:'./pkg/'})).type,'ready');
   const body=()=>send({type:'body',request:2,bytes:new Uint8Array([1]).buffer});
   const run=()=>send({type:'run',request:3,req:{}});
   const fold=extra=>send({type:'fold',request:4,round:3,body:2,...extra});
@@ -1864,10 +1867,13 @@ function draftingPage() {
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
   const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,location:{href:'https://unit.invalid/'},
     localStorage:{getItem:()=>null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
-      querySelector:()=>modes.find(m=>m.checked),querySelectorAll:()=>modes}});
+      querySelector:()=>modes.find(m=>m.checked),querySelectorAll:()=>modes,
+      createElement:tag=>Object.assign(new Element(),{tag})}});
   vm.runInContext(/<script>([\s\S]*?)<\/script>/.exec(html)[1],context);
   const emit=m=>worker.onmessage({data:m}), last=type=>messages.findLast(m=>m.type===type);
-  emit({type:'ready',info:{zouave_bolero:{style:{}}},version:'test',dxf:'test'});
+  const sheetDictionaries=['DICT_4X4_50','DICT_5X5_50'];
+  emit({type:'ready',info:{zouave_bolero:{style:{}}},sheetDictionaries,version:'test',dxf:'test'});
+  assert.deepEqual(e.sheetDictionaries.children.map(option=>option.value),sheetDictionaries);
   const result=request=>emit({type:'result',request:request??last('run').request,foldable:true,
     res:{title:'current',status:'CONVERGED',basis:{},zip:'round.zip',files:[],validation:{}},blobs:{zip:new Uint8Array([1])}});
   const body=async()=>{e.bodyFile.files=[{arrayBuffer:async()=>new ArrayBuffer(1)}];await e.bodyFile.handlers.change();
