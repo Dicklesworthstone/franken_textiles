@@ -25,6 +25,13 @@ requests in for_real_child. The caller supplies an ISO as_of date: no hidden sys
 Staleness after 42 days is advisory, not a fit claim. blocking contains measurement names;
 remeasure_request contains actionable instructions.
 
+Native readiness exception: required items with primary or used-source `MODEL_FIT` provenance
+block regardless of the supplied sigma; optional items remain advisory. Mixed measured/model
+fusion cannot borrow a model's precision to qualify. Excluded model records do not affect the
+gate. Fusion and retained predictions are unchanged, and reference wearers keep the explicitly
+fictional READY_REFERENCE classification. This closes a reproduced capture-to-round case where
+1 mm synthetic model weights incorrectly produced READY; it is not a new uncertainty model.
+
 Tests pin every value/sigma/bound/method in spec 02 D.2, all five D.6 size columns, D.5 fusion
 and readiness examples, garment options, staleness boundaries and invalid inputs. Oracle parity:
 `tests/fixtures/oracle/measure/` (`tools/oracle/capture_measurements.py`, compared in

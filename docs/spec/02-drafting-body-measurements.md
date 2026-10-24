@@ -600,6 +600,17 @@ true when the prior came from the chart rather than a user record]}`.
    "Reference wearer: values are definitions built from public priors; σ is population spread. A real child would
    still need the list in for_real_child."` and `for_real_child` = the request lines.
 
+Native readiness exception: before applying sigma thresholds, a fused item with primary provenance
+`MODEL_FIT` or any *used* `MODEL_FIT` source receives item status `MODEL_FIT`. Required items block;
+optional items produce an advisory requesting independent evidence. REMEASURE and PRIOR_ONLY keep
+their existing precedence. Unused/excluded estimates cannot block independent measurements. Reference
+wearers remain explicitly fictional READY_REFERENCE, never ordinary READY. Fusion values, source
+weights and residuals are retained unchanged; an apparently small supplied sigma does not certify a
+model prediction. This intentionally strengthens the reference's sigma-only branch. The capture-to-round
+regression reproduced the defect with all required records labelled MODEL_FIT and 1 mm test weights:
+the native gate returned READY. Direct and mixed-source regressions are in
+`ftx-measure/tests/readiness.rs`; no reference fixture is regenerated.
+
 CLI `ready` exits 0 for READY/READY_REFERENCE and 3 otherwise.
 
 Integration (round driver, specified elsewhere, summarized because drafting roles feed it): piece roles select the
@@ -1096,6 +1107,17 @@ Tested invariants: wrap preserves arc length along the outline within 1 %; `roll
 - CLI: `drafting.py PROGRAM --measurements M.json [--style S.json] --out DIR` writes `pattern.json` and
   `fit_spec.json` (JSON indent 1 + newline), prints `{pattern, fit_spec, structure_errors, solved}`, exits 1 if the
   pattern has structure errors, else 0.
+
+Native CLI freshness exception: when `ftx draft --out` receives `records`, it recomputes fusion through
+the same authority as workspace drafting and rounds before calling the unchanged drafting kernel.
+The cached `fused` object cannot override changed records; invalid records refuse before output.
+Flat and fused-only inputs retain their existing behavior. This deliberately strengthens the CLI
+boundary rather than changing the reference kernel or its oracle fixtures. Evidence: at native
+revision `7fa7a8e`, replacing the 920 mm source record with a synthetic 1021.655 mm target while retaining
+the old cache still drafted a pattern labelled 920 mm; the next round re-fused the records and judged
+a different body. `ftx-cli/tests/draft_workflow.rs` covers poisoned caches, workspace consistency,
+unchanged source bytes and invalid-record refusal. This freshness check changes no provenance or
+measurement-readiness classification.
 
 Fit-spec semantics (evaluated by validation, summarized): `girth` = sum over instances of horizontal_width of the
 instance outline (120 samples/edge) at `landmark_h(landmark) − landmark_h(y0_landmark) + y0 + dy` in piece y;

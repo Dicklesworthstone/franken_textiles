@@ -537,8 +537,9 @@ fn production_image_fit_recovers_withheld_tapes_and_reuses_the_accepted_shape() 
     );
     assert_eq!(reused["result"]["body"]["shape_source"]["refitted"], false);
 
-    // A real garment and immutable rounds, with the existing public-prior target document.
-    // Its chart evidence deliberately remains READY_REFERENCE; an accepted image fit adds no tape.
+    // Draft for this synthetic body, not the different 920 mm chart wearer. Known model-derived
+    // targets stay MODEL_FIT/NOT_READY. Their 1 mm weights are arbitrary synthetic test inputs,
+    // not estimated model uncertainty or independent tape/anatomy qualification.
     let fixtures: Value = serde_json::from_slice(include_bytes!(
         "../../../tests/fixtures/oracle/draft/programs.json"
     ))
@@ -549,31 +550,63 @@ fn production_image_fit_recovers_withheld_tapes_and_reuses_the_accepted_shape() 
         .iter()
         .find(|case| case["id"] == "zouave_bolero-920")
         .unwrap();
-    for (file, value) in [
-        ("garment-pattern.json", &garment["output"]["pattern"]),
-        ("garment-fit.json", &garment["output"]["fit_spec"]),
-        (
-            "garment-measurements.json",
-            &garment["input"]["measurements"],
-        ),
-    ] {
-        std::fs::write(dir.join(file), serde_json::to_vec(value).unwrap()).unwrap();
+    let mut measurements = garment["input"]["measurements"].clone();
+    measurements["wearer"]["label"] = json!("synthetic full-model capture regression");
+    measurements["wearer"]["reference"] = json!(false);
+    measurements["wearer"]["stature_mm"] = json!(height * 1000.0);
+    for record in measurements["records"].as_array_mut().unwrap() {
+        if record["name"] == "hand_pass" {
+            // Independent authored nuisance input for this numerical case, not the other
+            // chart wearer's hand or a dimension recovered by image fitting.
+            *record = json!({"name":"hand_pass","definition_id":record["definition_id"],
+                "value_mm":210.0,"sigma_mm":1.0,"provenance":"MODEL_FIT",
+                "method":"synthetic assumed hand passage, not recovered by the fitter",
+                "source":"authored regression input; no real measurement or uncertainty claim"});
+        }
+        if let Some(i) = ftx_body::TAPE_FIELDS
+            .iter()
+            .position(|name| record["name"] == *name)
+        {
+            *record = json!({"name":record["name"],"definition_id":record["definition_id"],
+                "value_mm":expected_tapes[i],"sigma_mm":1.0,"provenance":"MODEL_FIT",
+                "method":"known synthetic forward-model target",
+                "source":"declared Anny regression shape; arbitrary test weight, not physical uncertainty"});
+        }
     }
+    std::fs::write(
+        dir.join("garment-measurements.json"),
+        serde_json::to_vec(&measurements).unwrap(),
+    )
+    .unwrap();
+    production_command(
+        &dir,
+        &[
+            "draft",
+            "zouave_bolero",
+            "--measurements",
+            "garment-measurements.json",
+            "--out",
+            "garment-draft",
+        ],
+        0,
+        "garment-draft",
+    );
     let mut round_args = vec![
         "round",
         "garment-workspace",
         "--pattern",
-        "garment-pattern.json",
+        "garment-draft/pattern.json",
         "--fit",
-        "garment-fit.json",
+        "garment-draft/fit_spec.json",
         "--measurements",
         "garment-measurements.json",
         "--as-of",
         "2026-10-24",
         "--export",
     ];
-    let flat = production_command(&dir, &round_args, 0, "garment-flat");
-    assert_eq!(flat["result"]["readiness"]["status"], "READY_REFERENCE");
+    let flat = production_command(&dir, &round_args, 2, "garment-flat");
+    assert_eq!(flat["result"]["status"], "MEASUREMENTS_NOT_READY");
+    assert_eq!(flat["result"]["readiness"]["status"], "NOT_READY");
     round_args.extend_from_slice(&[
         "--sim",
         "--body-fit",
@@ -582,16 +615,19 @@ fn production_image_fit_recovers_withheld_tapes_and_reuses_the_accepted_shape() 
         model_arg,
         "--self-contact-mm",
         "2",
+        "--arm-deg",
+        "50",
         "--sew",
         "12",
         "--drape",
         "72",
     ]);
-    let round = production_command(&dir, &round_args, 0, "garment-captured");
+    let round = production_command(&dir, &round_args, 2, "garment-captured");
     let record = &round["result"];
     assert_eq!(record["round"], 1);
     assert_eq!(record["readiness"], flat["result"]["readiness"]);
-    assert_eq!(record["basis"]["measurements"], "READY_REFERENCE");
+    assert_eq!(record["status"], "MEASUREMENTS_NOT_READY");
+    assert_eq!(record["basis"]["measurements"], "NOT_READY");
     assert_eq!(record["basis"]["flat"], "CONVERGED");
     assert_eq!(record["exports"]["pass"], true);
     assert_eq!(record["sim"]["gating"], json!([]));
@@ -635,7 +671,7 @@ fn production_image_fit_recovers_withheld_tapes_and_reuses_the_accepted_shape() 
     let html = std::fs::read_to_string(&report_path).unwrap();
     assert!(html.contains("Body used for draping — MODEL_FIT"));
     assert!(html.contains("rounds/001/sim/body_fit.json"));
-    assert!(html.contains("Measurement readiness: READY_REFERENCE"));
+    assert!(html.contains("Measurement readiness: NOT_READY"));
     assert!(!html.contains("Measurement readiness: READY</h3>"));
     println!("production capture garment basis: {}", record["basis"]);
 
@@ -666,4 +702,50 @@ fn production_image_fit_recovers_withheld_tapes_and_reuses_the_accepted_shape() 
     assert!(!failed_html.contains("Original accepted body fit"));
     assert!(!failed_html.contains("Open drape viewer"));
     assert!(html.contains("rounds/001/sim/body_fit.json"));
+
+    let replay = production_command(
+        &dir,
+        &[
+            "drape",
+            "garment-workspace/rounds/001/pattern.json",
+            "--measurements",
+            "garment-workspace/rounds/001/measurements.json",
+            "--fit",
+            "garment-workspace/rounds/001/fit_spec.json",
+            "--body-fit",
+            "garment-workspace/rounds/001/sim/body_fit.json",
+            "--model",
+            model_arg,
+            "--self-contact-mm",
+            "2",
+            "--arm-deg",
+            "50",
+            "--sew",
+            "12",
+            "--drape",
+            "72",
+            "--out",
+            "snapshot-replay",
+        ],
+        0,
+        "snapshot-replay",
+    );
+    assert!(
+        replay["result"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "body_fit.json")
+    );
+    assert_eq!(
+        std::fs::read(dir.join("snapshot-replay/body_fit.json")).unwrap(),
+        source
+    );
+    for name in ["body.obj", "garment.obj", "fold.pc2"] {
+        assert_eq!(
+            std::fs::read(saved.join("sim").join(name)).unwrap(),
+            std::fs::read(dir.join("snapshot-replay").join(name)).unwrap(),
+            "saved-round replay changed {name}"
+        );
+    }
 }

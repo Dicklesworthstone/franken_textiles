@@ -164,3 +164,87 @@ fn unknown_programs_and_style_keys_are_refused() {
     );
     assert!(!dir.join("d").exists(), "a refused draft writes nothing");
 }
+
+#[test]
+fn standalone_drafting_recomputes_record_evidence_like_workspace_drafting() {
+    let dir = workspace();
+    let fixtures = programs();
+    let case = fixtures["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "zouave_bolero-920")
+        .unwrap();
+    let mut input = case["input"]["measurements"].clone();
+    input["fused"]["stature"]["value_mm"] = serde_json::json!(9999);
+    input["fused"]["chest"]["value_mm"] = serde_json::json!(1111);
+    let bytes = serde_json::to_vec(&input).unwrap();
+    std::fs::write(dir.join("stale.json"), &bytes).unwrap();
+    run(
+        &dir,
+        &[
+            "draft",
+            "zouave_bolero",
+            "--measurements",
+            "stale.json",
+            "--out",
+            "fresh",
+        ],
+        0,
+    );
+    run(
+        &dir,
+        &[
+            "draft",
+            "zouave_bolero",
+            "--measurements",
+            "stale.json",
+            "--ws",
+            "ws",
+            "--as-of",
+            "2026-10-24",
+        ],
+        0,
+    );
+    for (name, key) in [("pattern.json", "pattern"), ("fit_spec.json", "fit_spec")] {
+        let standalone: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("fresh").join(name)).unwrap()).unwrap();
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("ws/rounds/000").join(name)).unwrap())
+                .unwrap();
+        assert_eq!(
+            standalone, saved,
+            "{name}: standalone and workspace used different evidence"
+        );
+        assert!(
+            close(&standalone, &case["output"][key]),
+            "{name}: poisoned cache changed the draft"
+        );
+    }
+    assert_eq!(std::fs::read(dir.join("stale.json")).unwrap(), bytes);
+}
+
+#[test]
+fn valid_cache_cannot_hide_invalid_records_before_standalone_publication() {
+    let dir = workspace();
+    let fixtures = programs();
+    let mut input = fixtures["cases"][0]["input"]["measurements"].clone();
+    input["records"][0]["sigma_mm"] = serde_json::json!(-1);
+    let bytes = serde_json::to_vec(&input).unwrap();
+    std::fs::write(dir.join("invalid.json"), &bytes).unwrap();
+    let refused = run(
+        &dir,
+        &[
+            "draft",
+            "zouave_bolero",
+            "--measurements",
+            "invalid.json",
+            "--out",
+            "invalid",
+        ],
+        3,
+    );
+    assert!(refused["refusal"].is_object());
+    assert!(!dir.join("invalid").exists());
+    assert_eq!(std::fs::read(dir.join("invalid.json")).unwrap(), bytes);
+}

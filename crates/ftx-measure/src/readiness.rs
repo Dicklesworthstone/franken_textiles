@@ -132,6 +132,15 @@ fn item_status(entry: Option<&Value>, sigma: f64, target: f64) -> &'static str {
         "REMEASURE"
     } else if flagged(entry, "PRIOR_ONLY") {
         "PRIOR_ONLY"
+    } else if entry["primary_provenance"] == "MODEL_FIT"
+        || entry["sources"].as_array().is_some_and(|sources| {
+            sources
+                .iter()
+                .any(|s| s["used"] == true && s["provenance"] == "MODEL_FIT")
+        })
+    {
+        // A model contribution cannot become independent evidence by declaring a precise weight.
+        "MODEL_FIT"
     } else if sigma <= target + 1e-9 {
         "OK"
     } else if sigma <= 2.0 * target + 1e-9
@@ -250,6 +259,9 @@ pub fn readiness(
                 "MISSING" => "not measured yet".to_string(),
                 "PRIOR_ONLY" => format!("only a size-chart guess (±{})", fmt(sigma, u, 1)),
                 "REMEASURE" => "tape and photo disagree — re-measure".to_string(),
+                "MODEL_FIT" => {
+                    "includes a model estimate; take independent measurements".to_string()
+                }
                 _ => format!(
                     "have {} ±{} ({})",
                     fmt(value, u, 1),

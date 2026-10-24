@@ -273,3 +273,95 @@ fn stale_dates_are_advisories_at_the_exact_threshold() {
     );
     assert!(readiness(&d, "bodice", &ReadinessOptions::default(), "2026-02-29").is_err());
 }
+
+#[test]
+fn precise_model_estimates_never_qualify_as_independent_measurements() {
+    let mut d = full_bodice();
+    for record in d["records"].as_array_mut().unwrap() {
+        record["provenance"] = json!("MODEL_FIT");
+        record["sigma_mm"] = json!(0.01);
+    }
+    for use_priors in [false, true] {
+        let options = ReadinessOptions {
+            use_priors,
+            ..Default::default()
+        };
+        let result = readiness(&d, "bodice", &options, TODAY).unwrap();
+        assert_eq!(result["status"], "NOT_READY");
+        assert_eq!(result["blocking"].as_array().unwrap().len(), 6);
+        assert!(
+            result["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .take(6)
+                .all(|item| item["status"] == "MODEL_FIT")
+        );
+        assert!(
+            result["remeasure_request"][0]
+                .as_str()
+                .unwrap()
+                .contains("model estimate")
+        );
+    }
+    d["wearer"]["reference"] = json!(true);
+    let result = check(&d, "bodice");
+    assert_eq!(result["status"], "READY_REFERENCE");
+    assert_eq!(result["for_real_child"].as_array().unwrap().len(), 6);
+}
+
+#[test]
+fn used_model_sources_cannot_hide_behind_direct_primary_provenance() {
+    let mut d = data(vec![
+        make_record("head", 490.0, 1.0, "MEASURED_TAPE", "tape", None, "").unwrap(),
+    ]);
+    assert_eq!(check(&d, "hat")["status"], "READY");
+    d["records"].as_array_mut().unwrap().push(
+        make_record(
+            "head",
+            490.0,
+            10.0,
+            "MODEL_FIT",
+            "synthetic model",
+            None,
+            "",
+        )
+        .unwrap(),
+    );
+    let result = check(&d, "hat");
+    assert_eq!(result["items"][0]["primary_provenance"], "MEASURED_TAPE");
+    assert_eq!(result["items"][0]["status"], "MODEL_FIT");
+    assert_eq!(result["status"], "NOT_READY");
+}
+
+#[test]
+fn optional_and_excluded_model_estimates_do_not_block_independent_required_evidence() {
+    let mut d = full_bodice();
+    d["records"].as_array_mut().unwrap().push(
+        make_record(
+            "waist",
+            530.0,
+            0.1,
+            "MODEL_FIT",
+            "synthetic model",
+            None,
+            "",
+        )
+        .unwrap(),
+    );
+    let result = check(&d, "bodice");
+    assert_eq!(result["status"], "READY");
+    assert!(
+        result["advisories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line.as_str().unwrap().contains("optional — waist:")
+                && line.as_str().unwrap().contains("model estimate"))
+    );
+    let mut excluded =
+        make_record("head", 490.0, 0.1, "MODEL_FIT", "synthetic model", None, "").unwrap();
+    excluded["definition_id"] = json!("unmapped-model-section");
+    let d = data(vec![tape("head", 490.0), excluded]);
+    assert_eq!(check(&d, "hat")["status"], "READY");
+}

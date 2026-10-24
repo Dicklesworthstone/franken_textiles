@@ -81,6 +81,11 @@ this handoff does not estimate uncertainty for those derived measurements. Flat
 validation, measurement readiness, drape flags and export checks retain their
 separate meanings. Neither shape reuse nor a successful drape proves garment fit.
 
+The shared readiness gate also blocks required fused values that use MODEL_FIT
+sources, even if a caller supplies a small sigma or mixes them with measured
+records. Keep model estimates separate from independent measurement evidence.
+Optional estimates stay advisory; fictional chart wearers remain READY_REFERENCE.
+
 Input limits are 16 MiB for the fit report and 512 MiB for the converted model;
 exceeding either returns a budget refusal (exit 4), never truncated input. Invalid
 reports/models and output conflicts return exit 3. Import consistency, exact
@@ -95,5 +100,20 @@ Anny asset through synthetic multi-frame fitting and accepted-shape body export.
 20 withheld tape predictions, the rest skin's topology and every exported vertex against the known
 synthetic shape, exact report preservation, and refusal to export rejected or budget-stopped fits.
 It fits two shared controls while the other controls stay at model defaults; it supplies no real
-photographs, visibility inference or empirical accuracy evidence. Production garment/round
-qualification and real-wearer accuracy remain separate tests, not established by this body-only case.
+photographs, visibility inference or empirical accuracy evidence. The bounded garment check below
+has its own scope; broader placement qualification and real-wearer accuracy remain open.
+
+The same opt-in case also drafts a bolero for its declared synthetic body, then runs a
+50-degree drape pose with 2 mm self-contact, 12 sewing and 72 gravity steps through a
+workspace round. It checks every accepted Newton step, settling, all export checks,
+exact fit-report retention, signed target comparisons and an immutable failed next
+round after the external fit is changed to REJECTED. Model-derived target records
+have explicitly synthetic test weights and an authored hand-passage assumption;
+they remain NOT_READY. A numerical garment success must not override that gate.
+
+This is a bounded 50-degree synthetic case, not general placement qualification.
+The same-body 35-degree start was refused for a negative thickness gap of about
+0.009 mm at the requested 2 mm separation. A different 920 mm chart garment also
+failed when paired with this 1022 mm model, at both 35 and 50 degrees. These failed
+starts remain recorded; no collision tolerance was reduced or solver guard bypassed.
+Independent anatomy, camera, operator and real-wearer acceptance remain open.

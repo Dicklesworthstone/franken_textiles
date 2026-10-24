@@ -896,8 +896,8 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         "settled": report["settled"],
         "numerical": report["numerical"],
         "self_contact": report["self_contact"],
-        "files": ["sim_report.json", "fold.pc2", "mesh_map.json", "fold_viewer.html",
-                  "garment.obj", "garment_strain.obj", "body.obj"],
+        "files": std::iter::once("sim_report.json")
+            .chain(files.iter().map(|(name, _)| *name)).collect::<Vec<_>>(),
     });
     if let Some(pair) = report.get("two_start") {
         result["two_start"] = pair.clone();
