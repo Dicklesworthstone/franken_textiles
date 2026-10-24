@@ -9,7 +9,7 @@
 #[path = "support/capture.rs"]
 mod capture;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ftx_body::{Affine, AnnyModel, Phenotype, Pose, age_parameter_for_years};
@@ -257,10 +257,16 @@ fn production_image_fit_recovers_withheld_tapes_and_reuses_the_accepted_shape() 
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "ftx-production-image-fit-{}-{stamp}",
-        std::process::id()
-    ));
+    // Optional durable directory keeps the actual synthetic CLI outputs for offline browser review.
+    // Exclusive creation below refuses an existing path; no alternate renderer or result copying.
+    let dir = std::env::var_os("FTX_CAPTURE_ROUND_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "ftx-production-image-fit-{}-{stamp}",
+                std::process::id()
+            ))
+        });
     std::fs::create_dir(&dir).unwrap();
     println!("production image-fit fixture: {}", dir.display());
     let source = serde_json::to_vec_pretty(&request).unwrap();
@@ -530,4 +536,134 @@ fn production_image_fit_recovers_withheld_tapes_and_reuses_the_accepted_shape() 
         "capture-body",
     );
     assert_eq!(reused["result"]["body"]["shape_source"]["refitted"], false);
+
+    // A real garment and immutable rounds, with the existing public-prior target document.
+    // Its chart evidence deliberately remains READY_REFERENCE; an accepted image fit adds no tape.
+    let fixtures: Value = serde_json::from_slice(include_bytes!(
+        "../../../tests/fixtures/oracle/draft/programs.json"
+    ))
+    .unwrap();
+    let garment = fixtures["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "zouave_bolero-920")
+        .unwrap();
+    for (file, value) in [
+        ("garment-pattern.json", &garment["output"]["pattern"]),
+        ("garment-fit.json", &garment["output"]["fit_spec"]),
+        (
+            "garment-measurements.json",
+            &garment["input"]["measurements"],
+        ),
+    ] {
+        std::fs::write(dir.join(file), serde_json::to_vec(value).unwrap()).unwrap();
+    }
+    let mut round_args = vec![
+        "round",
+        "garment-workspace",
+        "--pattern",
+        "garment-pattern.json",
+        "--fit",
+        "garment-fit.json",
+        "--measurements",
+        "garment-measurements.json",
+        "--as-of",
+        "2026-10-24",
+        "--export",
+    ];
+    let flat = production_command(&dir, &round_args, 0, "garment-flat");
+    assert_eq!(flat["result"]["readiness"]["status"], "READY_REFERENCE");
+    round_args.extend_from_slice(&[
+        "--sim",
+        "--body-fit",
+        "capture-review/fit.json",
+        "--model",
+        model_arg,
+        "--self-contact-mm",
+        "2",
+        "--sew",
+        "12",
+        "--drape",
+        "72",
+    ]);
+    let round = production_command(&dir, &round_args, 0, "garment-captured");
+    let record = &round["result"];
+    assert_eq!(record["round"], 1);
+    assert_eq!(record["readiness"], flat["result"]["readiness"]);
+    assert_eq!(record["basis"]["measurements"], "READY_REFERENCE");
+    assert_eq!(record["basis"]["flat"], "CONVERGED");
+    assert_eq!(record["exports"]["pass"], true);
+    assert_eq!(record["sim"]["gating"], json!([]));
+    assert_eq!(record["sim"]["numerical"]["settled"], true);
+    assert_eq!(record["sim"]["self_contact"]["enabled"], true);
+    for (phase, steps) in [("sew", 12), ("drape", 72)] {
+        let samples = record["sim"]["numerical"][phase]["samples"]
+            .as_array()
+            .unwrap();
+        assert_eq!(samples.len(), steps);
+        assert!(
+            samples
+                .iter()
+                .all(|sample| sample["solve"]["converged"] == true)
+        );
+    }
+    let body = &record["sim"]["body"];
+    assert_eq!(body["source_fit"], captured["result"]);
+    assert_eq!(body["shape_source"]["refitted"], false);
+    assert_eq!(body["shape_source"]["image_poses_reused"], false);
+    assert_eq!(body["phenotype"], reused["result"]["body"]["phenotype"]);
+    assert_eq!(body["provenance"], "MODEL_FIT");
+    let saved = dir.join("garment-workspace/rounds/001");
+    let source = std::fs::read(dir.join("capture-review/fit.json")).unwrap();
+    assert_eq!(
+        std::fs::read(saved.join("sim/body_fit.json")).unwrap(),
+        source
+    );
+    assert_eq!(body["shape_source"]["report_sha256"], sha256_hex(&source));
+    for row in body["measurement_comparison"].as_array().unwrap() {
+        assert_eq!(row["used_to_refit"], false);
+        assert!(
+            (row["residual_mm"].as_f64().unwrap()
+                - (row["body_mm"].as_f64().unwrap() - row["target_mm"].as_f64().unwrap()))
+            .abs()
+                < 1e-9
+        );
+    }
+    let before = std::fs::read(saved.join("round.json")).unwrap();
+    let report_path = dir.join("garment-workspace/report.html");
+    let html = std::fs::read_to_string(&report_path).unwrap();
+    assert!(html.contains("Body used for draping — MODEL_FIT"));
+    assert!(html.contains("rounds/001/sim/body_fit.json"));
+    assert!(html.contains("Measurement readiness: READY_REFERENCE"));
+    assert!(!html.contains("Measurement readiness: READY</h3>"));
+    println!("production capture garment basis: {}", record["basis"]);
+
+    // Changing the external fit cannot revise the completed round or fall back to a fresh tape fit.
+    let mut rejected = captured["result"].clone();
+    rejected["status"] = json!("REJECTED");
+    std::fs::write(
+        dir.join("capture-review/fit.json"),
+        serde_json::to_vec(&rejected).unwrap(),
+    )
+    .unwrap();
+    let failed = production_command(&dir, &round_args, 2, "garment-rejected");
+    assert_eq!(failed["result"]["round"], 2);
+    assert_eq!(failed["result"]["status"], "SIM_GATING_FLAGS");
+    assert!(failed["result"]["sim"]["refusal"].is_object());
+    assert!(failed["result"]["viewer"].is_null());
+    assert_eq!(
+        std::fs::read(saved.join("sim/body_fit.json")).unwrap(),
+        source
+    );
+    assert_eq!(std::fs::read(saved.join("round.json")).unwrap(), before);
+    assert!(
+        !dir.join("garment-workspace/rounds/002/sim/body_fit.json")
+            .exists()
+    );
+    let html = std::fs::read_to_string(report_path).unwrap();
+    let failed_html = html.split("Round 2 —").nth(1).unwrap();
+    assert!(!failed_html.contains("Original accepted body fit"));
+    assert!(!failed_html.contains("Open drape viewer"));
+    assert!(html.contains("rounds/001/sim/body_fit.json"));
 }

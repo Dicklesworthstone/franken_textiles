@@ -51,6 +51,61 @@ fn table(out: &mut String, title: &str, rows: &Value, columns: &[(&str, &str)]) 
     out.push_str("</tbody></table></div>");
 }
 
+fn imported_body(out: &mut String, body: &Value) {
+    if body["shape_source"]["kind"] != "accepted_multi_frame_fit" {
+        return;
+    }
+    out.push_str("<h3>Body used for draping — MODEL_FIT</h3>\
+        <p>The imported shape is a model estimate. Compare it with the current measurement targets before \
+        using the drape. Residual = model minus target; positive means the model is larger. \
+        Targets retain their existing evidence basis, including chart priors. These comparisons do not \
+        refit the body, change measurement readiness or certify garment fit.</p>");
+    let _ = write!(
+        out,
+        "<p>Source image-fit status: {}. Used a new fit: {}. Reused image poses: {}. \
+        Report SHA-256: <code>{}</code>.</p>",
+        cell(&body["source_fit"]["status"]),
+        cell(&body["shape_source"]["refitted"]),
+        cell(&body["shape_source"]["image_poses_reused"]),
+        cell(&body["shape_source"]["report_sha256"])
+    );
+    let mut rows = body["measurement_comparison"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    for row in &mut rows {
+        // Keep the stored residual's precision; ordinary construction tables round to 0.1 mm.
+        for key in ["target_mm", "body_mm", "residual_mm"] {
+            if row[key].is_number() {
+                row[key] = Value::String(row[key].to_string());
+            }
+        }
+    }
+    if rows.is_empty() {
+        out.push_str("<p>No current measurement targets were supplied for comparison.</p>");
+    } else {
+        table(
+            out,
+            "Imported body vs current targets — millimetres",
+            &Value::Array(rows),
+            &[
+                ("name", "Measurement"),
+                ("target_mm", "Current target"),
+                ("body_mm", "MODEL_FIT body"),
+                ("residual_mm", "Signed residual"),
+            ],
+        );
+    }
+    if body["tape_evaluation"]["status"] == "UNAVAILABLE" {
+        let _ = write!(
+            out,
+            "<p>Some model tape predictions are unavailable: {}. \
+            Missing predictions are not zero.</p>",
+            cell(&body["tape_evaluation"]["reason"])
+        );
+    }
+}
+
 fn round_dir(value: &Value) -> Option<&str> {
     let dir = value.as_str()?;
     let (base, number) = dir.split_once('/')?;
@@ -293,6 +348,7 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
         list(&mut out, &val["worst"]);
         let sim = &entry["sim"];
         if sim.is_object() {
+            imported_body(&mut out, &sim["body"]);
             out.push_str(&crate::two_start::review_html(sim));
             let _ = write!(
                 out,
@@ -308,6 +364,7 @@ pub(super) fn render(ws: &Path, entries: &[Value]) -> Result<String, Refusal> {
                 for (name, label) in [
                     ("fold_viewer.html", "Open drape viewer"),
                     ("sim_report.json", "Full drape report"),
+                    ("body_fit.json", "Original accepted body fit"),
                     ("fold.pc2", "Cloth animation"),
                     ("garment.obj", "Garment mesh"),
                     ("body.obj", "Body mesh"),
@@ -383,7 +440,10 @@ mod tests {
             "basis":{"flat":"NOT_CONVERGED","sim":"not run","exports":"not run","measurements":"NOT_READY"},
             "readiness":{"status":"NOT_READY","remeasure_request":[attack]},
             "validation":{"points":[{"label":attack,"body_mm":100.0,"finished_mm":110.0,"status":"TIGHT"}]},
-            "viewer":"javascript:alert(1)","images":["https://bad.test/track"],"exports":null});
+            "viewer":"javascript:alert(1)","images":["https://bad.test/track"],"exports":null,
+            "sim":{"body":{"shape_source":{"kind":"accepted_multi_frame_fit","report_sha256":attack},
+                "source_fit":{"status":attack},"measurement_comparison":[{"name":attack}],
+                "tape_evaluation":{"status":"UNAVAILABLE","reason":attack}}}});
         let html = render(Path::new("."), &[entry]).unwrap();
         assert!(!html.contains("<script>"));
         assert!(!html.contains("javascript:"));
@@ -408,5 +468,40 @@ mod tests {
         ] {
             assert!(!local_path(path));
         }
+    }
+
+    #[test]
+    fn imported_body_residuals_keep_precision_missing_values_and_separate_readiness() {
+        // Rendering-only saved ledger: numerical recovery is exercised by the real-CLI model test.
+        let entry = json!({"round":0,"basis":{"measurements":"NOT_READY"},
+            "readiness":{"status":"NOT_READY","remeasure_request":["independent tape needed"]},
+            "sim":{"body":{"shape_source":{"kind":"accepted_multi_frame_fit",
+                "report_sha256":"a".repeat(64),"refitted":false,"image_poses_reused":false},
+                "source_fit":{"status":"ACCEPTED"},"measurement_comparison":[
+                    {"name":"stature","target_mm":920,"body_mm":920.125,"residual_mm":0.125},
+                    {"name":"chest","target_mm":540,"body_mm":515.125,"residual_mm":-24.875},
+                    {"name":"waist","target_mm":530,"body_mm":null,"residual_mm":null}],
+                "tape_evaluation":{"status":"UNAVAILABLE","reason":"missing synthetic anatomy"}}}});
+        let html = render(Path::new("."), &[entry]).unwrap();
+        for expected in [
+            "Body used for draping — MODEL_FIT",
+            "0.125",
+            "-24.875",
+            "<td>waist</td><td>530</td><td>—</td><td>—</td>",
+            "Missing predictions are not zero",
+            "Measurement readiness: NOT_READY",
+            "independent tape needed",
+            "including chart priors",
+            "do not refit the body",
+        ] {
+            assert!(html.contains(expected), "missing {expected}");
+        }
+        assert!(!html.contains("Measurement readiness: READY"));
+        let mut text = String::new();
+        imported_body(&mut text, &json!({"readings_mm":{"stature":920}}));
+        assert!(
+            text.is_empty(),
+            "ordinary tape body gained an image-fit basis"
+        );
     }
 }

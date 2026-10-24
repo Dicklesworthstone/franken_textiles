@@ -101,6 +101,8 @@ fn completed_export_round_has_portable_previews_and_downloadable_files() {
     assert!(html.contains("READY_REFERENCE"));
     assert!(html.contains("Reference chart only"));
     assert!(html.contains("not proof of fit"));
+    assert!(!html.contains("Body used for draping — MODEL_FIT"));
+    assert!(!html.contains("Original accepted body fit"));
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
     for name in ["preview.svg", "preview_dark.svg"] {
@@ -172,5 +174,6 @@ fn failed_physics_is_distinct_from_flat_success_in_the_review() {
     assert!(html.contains("simulation failed:"));
     assert!(html.contains("gating flags (simulation failed)"));
     assert!(!html.contains("Open drape viewer"));
+    assert!(!html.contains("Original accepted body fit"));
     assert!(!dir.join("ws/rounds/000/sim/sim_report.json").exists());
 }

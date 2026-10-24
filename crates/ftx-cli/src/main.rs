@@ -763,7 +763,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
         model,
         params,
         description,
-        ..
+        source_bytes,
     } = body_source::prepare(args, Some(&meas))?;
     let rest = model.rest(&params)?;
     let posed = model.pose(&rest, &pose_deltas(&model, &rest, &pose, 1.0)?)?;
@@ -845,6 +845,9 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             obj(&full.vertices, &full.triangles, None).into_bytes(),
         ),
     ];
+    if let Some(source) = source_bytes {
+        files.push(("body_fit.json", source));
+    }
     if outfit.is_some() {
         files.push((
             "outfit_pattern.json",
