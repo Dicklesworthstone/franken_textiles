@@ -2846,3 +2846,144 @@ Maintained changes are this in-place assessment and `br`-generated Beads records
 untracked paths (`.ee/` and the filesystem-metadata-named path) were preserved. Generated reports, bundle,
 public-reference body/drape/export outputs and raw logs remain ignored evidence. No product-code fix,
 new crate, branch/worktree, file deletion, release, model upload or empirical fit success is claimed.
+
+### 2026-10-24 implementation follow-through
+
+The audit's highest-value software gaps now have working changes on `main`. This section supersedes
+the preceding handoff's open status for `.8` and `.18`; physical/material qualification and the parent
+gauntlet remain open. Detailed execution TODOs, failed attempts and self-review are in the existing
+Beads comments, rather than another planning document.
+
+- **`ftx-onn.18`, closed:** corrected the purchasing regression, not the planner. With allowance,
+  two 40 × 120 mm cuts and two 48 × 120 mm cuts both fit a 100 mm roll in one shelf. Used area grows,
+  but purchased area remains 0.012 m² and stock mass 0.00216 kg. A 90 mm roll provides the independent
+  threshold case: the wider cuts require two shelves. Typed, portable and actual compiled-WASM reports
+  agree; the full consumer target passes 10/10 on macOS and Linux. No oracle was regenerated.
+- **`ftx-onn.8`, closed:** complete vapor-coverage admission uses the projection's existing relative
+  `1e-9` scale in aggregate and per-triangle checks. Raw areas remain unchanged. Tests span scales
+  `1e-6/1/1e6`, both integration rules, every motion endpoint, negative areas, concealed row holes and
+  a genuinely uncovered body end cap. The real sewn-wrap case retains its `3.15e-17 m²` uncovered
+  residue over `0.01014 m²`; a real hole remains excluded. Its original short sewing schedule was
+  unsettled: the regression now actually settles it, with the production gate unchanged. Comparison
+  tests pass 63/63; the real CLI/portable matrix and compiled-WASM replay also pass.
+- **`ftx-onn.19`, closed:** two full macOS sweeps exposed timestamp collisions in parallel test
+  workspaces. Small atomic suffixes distinguish directories in the two existing helpers. No retry,
+  overwrite, deletion or framework was introduced. Both affected complete targets pass (21 and 7
+  tests). Those earlier full sweeps remain failed runs, not retroactive passes.
+- **`ftx-onn.17`, implemented; final broad check pending:** accepted phase endpoints report separate
+  body/self primitive counts, active thickness-offset gaps and friction-lag counts. Running minima
+  are explicitly sampled, not continuous-time clearance bounds. The final welded-vertex map uses
+  the existing full barrier-energy gradient, including edge mollifiers, and freezes geometry,
+  topology, policy and material identities. Reactions are N; physical pressure remains unavailable
+  because no justified contact area exists. `--elastic-hold-steps N`, also forwarded by `round --sim`,
+  selects the final N accepted gravity intervals, retaining duration, indices, displacement, speed
+  and quietness without changing trajectories or adding steps. A moving band reports nonquietness;
+  a selected window cannot establish stationary stress equilibrium or physical grip/fit.
+- **`ftx-onn.13`, partial; open:** README now gives the supported positional `fit-body` request and
+  explicit `--model`, describes prepared photo evidence and actual contact defaults, and distinguishes
+  optional same-placement sewing-duration sensitivity from perturbed-start robustness or an error
+  bar. The 120,000-line ceiling is visibly exceeded, not waived. Current tracked crate source at
+  `7f211b8` has 267,866 Rust lines including tests/examples; the historical audit count remains dated.
+  The source-budget/release-slice decision and plan/FMA/dependency reconciliation remain open.
+
+Contact/hold focused verification passes 140 unit, 10 materials, 24 outfit and 40 CLI tests. Four
+optimized contact KATs pass on macOS and frozen `7be1a27` Linux with the original pinned digest
+unchanged. Analytic plane forces, a full cylinder energy finite difference, self-force balance,
+no-contact/invalid states, rollback/no failed frame, casing replay, zero/oversized windows and unchanged
+trajectories are covered. Actual compiled-WASM/native active-contact and quiet/nonquiet casing reports
+agree. Native `drape` and `round --sim` both emitted the requested two-interval/three-sample window.
+The initial newly added cylinder assertion incorrectly expected zero discrete axial force; it was
+replaced by the independent energy derivative, preserving every original slip/capacity assertion.
+
+### Current bounded performance evidence (`ftx-onn.10`, closed)
+
+Build source is frozen **`9d465ae6ceaaf29e3cca5a900faf3102af9d830a`**. Later changes through `1400936`
+are documentation only. Compiler is `rustc 1.100.0-nightly (908501772 2026-08-30)`, LLVM 23.1.0;
+WASM uses wasm-bindgen 0.2.128. Release WASM SHA-256 is
+`2a9c6dbb4e37ad8d7eede72e4827efaef9551d84a7a80476500ab4a72cdbf74f`; its RCH build completed remotely
+with exit 0 and terminal acknowledgment. The actual public-prior Anny file hash is
+`8f0bb151ba19975437147d239b7ff237642a7fa63659a6fac49fa23c299a0915`.
+
+Host: Apple M5 Ultra, 36 logical CPUs, 256 GiB RAM, macOS 27.0.1 arm64. Browser: headless Chromium
+156.0.8078.4, Node 26.8.1. Shared load is retained per attempt; no affinity, governor changes or cache
+flush. Native and browser work overlap. Neither this host nor these workloads qualify the M4 target.
+
+| Garment | Native release p50 / max | Chromium release p50 / max |
+|---|---:|---:|
+| Public-prior 92 cm bolero, 2,073 mesh / 1,939 welded vertices | 14.288 / 14.485 s | 19.482 / 19.909 s |
+| Public-prior 92 cm trousers, 3,738 mesh / 3,430 welded vertices | 38.431 / 39.326 s | 49.253 / 49.638 s |
+
+Each native row has one warmup and five measured fresh processes, including model/input IO and all
+file publication. Each browser row has three warmups and five measured folds with the model retained
+in the worker, from fold click through tape fitting and UI delivery. These are separate time bases,
+not a native/WASM speed ranking. All 16/16 browser timing attempts and all 12/12 native release attempts
+converged, numerically settled and had no gating flags, with 2 mm self-contact and friction 0.4.
+N=5 nearest-rank p95 equals max; there is no tail confidence or hardware extrapolation.
+
+All browser reports repeat byte-for-byte within each garment. Final welded f64 little-endian position
+digests equal native release: bolero `97eb371942a2bbf797791b045d2d58accba4de1a04c72f5e7e635fb63f695ef5`,
+trousers `e13e333e21c981efd34f719d1b3c70692d223cfab46dc4c16914ac8e5f5808eb`.
+Every common engine report field agrees; the browser omits CLI-added `pattern`, `measurements_sha256`,
+`wall_s` and `body`. Both viewers match native bytes and render offline as file/blob with no HTTP or
+page errors. Both debug controls match, completing **14/14 native attempts** (two warmups, ten release
+measurements and two debug controls). All **30/30** retained native/browser reports agree on every
+common engine field and exact welded f64 state. Common-engine sorted JSON digests are bolero
+`411323e631e5648b2c5fdc4b7d451154765d6309b7dafbf7d34d6c147ffe1b3a` and trousers
+`3655d54c62514d334c463275ac9d5712a2f1d75c41221b73d0aa7fd374720cdb`;
+`performance-three-mode-parity.json` records the basis and 15 reports per garment. Debug controls
+are determinism evidence, not a repeated debug performance measurement.
+
+Five component workloads also execute through native debug/release and actual release WASM, with one
+warmup and five measured runs per mode: leather vapor substitution, finite-body-water matrices under
+both integration rules, FSRI cotton dry conduction, and a timed Maxwell clamped strip. All **90/90**
+executions pass complete-value and sorted-JSON-digest equality. Leather Ret supports only that transport
+consumer; FSRI explicitly admits estimated thickness; the tiny body/water and strip are artificial
+software controls. No measured directional memory, physiology, coupled real-fabric or fit claim follows.
+Missing estimate consent and exhausted strip budgets refuse in native and WASM, with outputs retained.
+
+Reproduce the browser lane with `tools/check_web.cjs --model MODEL.ftxbody --timings 5` against the
+specified release bundle. The ordinary `--model MODEL.ftxbody --ftx RELEASE_FTX` lane separately checks
+native viewer equality. Native garment commands, exact input hashes, every original report and timing
+row are retained in ignored `out/implementation-20261024/performance-native-garments-qualified/` and
+`performance-browser-timings/`. Component inputs/reports/rows are under `performance-inputs/`,
+`performance-components-qualified.{json,log}` and `performance-thermal-history/` in the same directory.
+The source files and real commands remain the existing native/WASM entry points; no benchmark platform
+was added.
+
+Component command forms (select the retained debug/release binary, and use the corresponding input
+directory for each integration rule):
+
+```sh
+ftx-materials study tests/fixtures/materials/synthetic-sewing-pattern.json examples/vapor-study/leather.json
+ftx-materials scenario-study pattern.json study.json scenario.json body-input.json model.ftxbody
+ftx materials thermal-steady tests/fixtures/materials/fsri-steady-conduction.json --json
+ftx materials strip-history tests/fixtures/materials/synthetic-strip-history.json --json
+```
+
+The actual compiled-WASM counterparts are `material_study`, `material_scenario_study` with the retained
+model, `thermal_steady` and `material_strip_history`; the frozen request texts and complete results
+are retained alongside the input hashes. Native CLI envelopes are unwrapped before comparing results.
+
+### Verification limits and unresolved handoff
+
+`cargo fmt --check`, strict `cargo clippy --all-targets -- -D warnings` and the release WASM build pass
+for the current engine source. The earlier frozen `7be1a27` full Linux suite completed **2,266 passed,
+0 failed, 29 ignored across 279 targets**, remotely acknowledged; it predates the hold option and peer
+water/strain merges. The new frozen `9d465ae` full suite is still running, so that older result is not a
+current-source full pass. DSR has no configured tool here. Disk admission later refused more heavy
+local builds at about 310 GB / 7.77% free; the admitted remote job continues.
+
+Failed checks are retained: two earlier full macOS sweeps hit the repaired temporary-directory race;
+RCH admission/queue failures were not passes; the first browser alternate-root replay lacked a renderer
+license asset; the first component digest used insertion order and discarded successful native stderr;
+the first native repeat check mistakenly included observational `wall_s`. Qualified reruns retain stderr
+and exclude only that timing field from native repeat equality. No failed/slow numerical timing sample
+was removed. A staged strip-test UBS scan reported a false-positive critical on a compile-time Cargo
+binary path passed to `Command::new`; I reviewed its red result after committing, rather than before.
+The red scan remains, with the fixed-path/fixed-`--help` argument analysis in `.19`; it is not described
+as a clean scanner result. This was a sequencing mistake, not independent review.
+
+Remaining high-value work still includes compatible real mechanical/counterface/coupon data, independent
+anatomical/photo/tape checks, a complete fresh-operator capture route, physical muslins/manufacturing
+qualification, scope/budget decisions and the original clean-install/G1–G5 gauntlet. Numerical clear
+flags, source-conditioned transport examples and passing synthetic tests do not close those items.
