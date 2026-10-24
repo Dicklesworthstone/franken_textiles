@@ -2870,7 +2870,7 @@ Beads comments, rather than another planning document.
   workspaces. Small atomic suffixes distinguish directories in the two existing helpers. No retry,
   overwrite, deletion or framework was introduced. Both affected complete targets pass (21 and 7
   tests). Those earlier full sweeps remain failed runs, not retroactive passes.
-- **`ftx-onn.17`, implemented; final broad check pending:** accepted phase endpoints report separate
+- **`ftx-onn.17`, closed:** accepted phase endpoints report separate
   body/self primitive counts, active thickness-offset gaps and friction-lag counts. Running minima
   are explicitly sampled, not continuous-time clearance bounds. The final welded-vertex map uses
   the existing full barrier-energy gradient, including edge mollifiers, and freezes geometry,
@@ -2969,9 +2969,21 @@ are retained alongside the input hashes. Native CLI envelopes are unwrapped befo
 `cargo fmt --check`, strict `cargo clippy --all-targets -- -D warnings` and the release WASM build pass
 for the current engine source. The earlier frozen `7be1a27` full Linux suite completed **2,266 passed,
 0 failed, 29 ignored across 279 targets**, remotely acknowledged; it predates the hold option and peer
-water/strain merges. The new frozen `9d465ae` full suite is still running, so that older result is not a
-current-source full pass. DSR has no configured tool here. Disk admission later refused more heavy
-local builds at about 310 GB / 7.77% free; the admitted remote job continues.
+water/strain merges. The final frozen **`9d465ae` full suite passes: 2,297 passed, 0 failed, 29 ignored
+across 279 targets**, worker `vmi1152480`, job `30078269650895186`, exit 0 and terminal acknowledgment
+true. The clean-base/no-overlay receipt's tree is `4d416e2b0b2ebe36df7e8a20f015005a9b87a6e7`, matching
+the intended source. Later handoff changes are documentation and Beads only. No ignored/model-backed
+lane becomes a pass, and this is not a G5 gauntlet round. Exact full-suite invocation:
+
+```sh
+RCH_REQUIRE_REMOTE=1 RCH_VISIBILITY=verbose rch --json exec \
+  --base 9d465ae6ceaaf29e3cca5a900faf3102af9d830a --clean-overlay --no-overlay -- \
+  env CARGO_TARGET_DIR="${RCH_TARGET_BASE:-${TMPDIR:-/tmp}}/rch_target_ftx" \
+  cargo test --workspace --all-targets --no-fail-fast --locked -j 2
+```
+
+DSR has no configured tool here. Disk admission later refused more heavy local builds at about
+310 GB / 7.77% free; the admitted remote run completed without additional local builds.
 
 Failed checks are retained: two earlier full macOS sweeps hit the repaired temporary-directory race;
 RCH admission/queue failures were not passes; the first browser alternate-root replay lacked a renderer
