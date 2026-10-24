@@ -115,6 +115,13 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   record with provenance `MODEL_FIT` and the population spread as σ (the chart prior's at the wearer's
   stature and age, else the catalogue's 12 mm), so it can be added to the file as a model value, never
   as a measurement (`tests/body_model_fit.rs`, which needs the model).
+
+Record-bearing standalone `draft`, tape-fitting `body`, and `drape` inputs are re-fused through the same
+authority as workspace rounds before fitting, model loading or output creation. A cached `fused` value cannot
+override source records. Explicit fused-only and flat inputs retain their supplied targets. Source
+hashes identify the original file bytes, and the input is never rewritten. This CLI freshness exception
+does not change fitting numerics or promote model estimates to measurements. Direct invalid-record
+controls and full-model fresh/poisoned-cache comparisons live in the existing workflow tests.
 - `ftx render DRAPE_DIR [--res WxH] [--json]` (default 960x540, each side 16 to 8192, at most 16 million
   pixels per view): the six stills of an
   `ftx drape` run (`ftx_drape::render`) from its `body.obj`, `garment.obj` and `garment_strain.obj`, written

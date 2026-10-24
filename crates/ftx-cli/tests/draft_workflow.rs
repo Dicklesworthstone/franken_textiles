@@ -246,5 +246,38 @@ fn valid_cache_cannot_hide_invalid_records_before_standalone_publication() {
     );
     assert!(refused["refusal"].is_object());
     assert!(!dir.join("invalid").exists());
+    std::fs::write(
+        dir.join("pattern.json"),
+        serde_json::to_vec(&fixtures["cases"][0]["output"]["pattern"]).unwrap(),
+    )
+    .unwrap();
+    for args in [
+        vec!["body", "--pose", "rest"],
+        vec!["drape", "pattern.json"],
+    ] {
+        let out = format!("invalid-{}", args[0]);
+        let mut args = args;
+        args.extend([
+            "--measurements",
+            "invalid.json",
+            "--model",
+            "must-not-open.ftxbody",
+            "--out",
+            &out,
+        ]);
+        let refused = run(&dir, &args, 3);
+        assert_eq!(refused["refusal"]["code"], "invalid_document", "{refused}");
+        assert!(
+            refused["refusal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("sigma"),
+            "the invalid record must be checked before opening a model: {refused}"
+        );
+        assert!(
+            !dir.join(out).exists(),
+            "invalid records cannot publish a body/drape"
+        );
+    }
     assert_eq!(std::fs::read(dir.join("invalid.json")).unwrap(), bytes);
 }

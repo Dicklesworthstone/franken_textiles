@@ -1108,16 +1108,21 @@ Tested invariants: wrap preserves arc length along the outline within 1 %; `roll
   `fit_spec.json` (JSON indent 1 + newline), prints `{pattern, fit_spec, structure_errors, solved}`, exits 1 if the
   pattern has structure errors, else 0.
 
-Native CLI freshness exception: when `ftx draft --out` receives `records`, it recomputes fusion through
-the same authority as workspace drafting and rounds before calling the unchanged drafting kernel.
+Native CLI freshness exception: when `ftx draft --out`, tape-fitting `ftx body`, or `ftx drape` receives `records`,
+it recomputes fusion through the same authority as workspace drafting and rounds before calling the
+unchanged drafting/fitting kernels. Invalid records refuse before opening a body model or creating an
+output directory; original input bytes still supply the reported measurements SHA-256.
 The cached `fused` object cannot override changed records; invalid records refuse before output.
 Flat and fused-only inputs retain their existing behavior. This deliberately strengthens the CLI
 boundary rather than changing the reference kernel or its oracle fixtures. Evidence: at native
 revision `7fa7a8e`, replacing the 920 mm source record with a synthetic 1021.655 mm target while retaining
 the old cache still drafted a pattern labelled 920 mm; the next round re-fused the records and judged
 a different body. `ftx-cli/tests/draft_workflow.rs` covers poisoned caches, workspace consistency,
-unchanged source bytes and invalid-record refusal. This freshness check changes no provenance or
-measurement-readiness classification.
+unchanged source bytes and invalid-record refusal. At `1a3ebbd`, standalone body and ordinary drape
+still pass raw cached values to fitting, so record edits can put the draft and collider on different
+bodies. They now share this CLI boundary; `body_model_fit.rs` compares fresh and poisoned-cache body
+and drape outputs on the pinned model. This freshness check changes no provenance or
+measurement-readiness classification, and fused-only callers explicitly retain their supplied targets.
 
 Fit-spec semantics (evaluated by validation, summarized): `girth` = sum over instances of horizontal_width of the
 instance outline (120 samples/edge) at `landmark_h(landmark) − landmark_h(y0_landmark) + y0 + dy` in piece y;

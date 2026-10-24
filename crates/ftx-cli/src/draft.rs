@@ -57,12 +57,7 @@ pub(super) fn cmd_draft(args: &Args) -> Result<(Value, i32, String), Refusal> {
         }
     }
     let (raw, _) = read_json(required(args, "measurements")?)?;
-    // Records are authoritative, as in workspace drafting and rounds. Preserve fused-only/flat APIs.
-    let meas = if raw.get("records").is_some() {
-        super::round::measurements(&raw)?
-    } else {
-        raw
-    };
+    let meas = super::current_measurements(raw)?;
     let style = match args.options.get("style") {
         Some(p) => Some(read_json(p)?.0),
         None => None,

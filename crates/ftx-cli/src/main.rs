@@ -225,6 +225,16 @@ fn read_json(path: &str) -> Result<(Value, Vec<u8>), Refusal> {
     Ok((v, bytes))
 }
 
+/// Recompute record-bearing inputs; explicit fused-only/flat callers retain their supplied targets.
+/// Keep the original bytes separately for source identity, never replace them with a fused serialization.
+fn current_measurements(raw: Value) -> Result<Value, Refusal> {
+    if raw.get("records").is_some() {
+        round::measurements(&raw)
+    } else {
+        Ok(raw)
+    }
+}
+
 /// Refuses an option the command does not take (a misspelt `--fit` must not silently drop the fit spec).
 fn known_options(args: &Args, command: &str, allowed: &[&str]) -> Result<(), Refusal> {
     match args.options.keys().find(|k| !allowed.contains(&k.as_str())) {
@@ -384,6 +394,7 @@ fn cmd_body(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     known_options(args, "body", &["measurements", "out", "pose", "model"])?;
     let (meas, meas_bytes) = read_json(required(args, "measurements")?)?;
+    let meas = current_measurements(meas)?;
     let out = PathBuf::from(required(args, "out")?);
     let pose_name = args.options.get("pose").map_or("drape", String::as_str);
     let pose = match pose_name {
@@ -755,6 +766,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
     ftx_drape::material::resolve(&material_probe, &opts)?;
     let meas_path = required(args, "measurements")?;
     let (meas, meas_bytes) = read_json(meas_path)?;
+    let meas = current_measurements(meas)?;
     let out = PathBuf::from(required(args, "out")?);
     let spec = fit_spec(args)?;
     // Refuse unwritable/existing destinations before the expensive fit and drape.

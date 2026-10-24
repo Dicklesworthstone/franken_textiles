@@ -32,7 +32,8 @@ fn unmeasured_readings_come_back_as_model_fit() {
         .find(|c| c["id"] == "zouave_bolero-920")
         .unwrap()["input"]["measurements"]
         .clone();
-    // a wearer measured only round the trunk
+    // An explicit fused-only four-target input; source records would instead be re-fused.
+    meas.as_object_mut().unwrap().remove("records");
     let kept: serde_json::Map<String, Value> = meas["fused"]
         .as_object()
         .unwrap()
@@ -69,6 +70,7 @@ fn unmeasured_readings_come_back_as_model_fit() {
         .keys()
         .map(String::as_str)
         .collect();
+    assert_eq!(fitted.len(), 4);
     let records = body["model_fit"].as_array().unwrap();
     let names: Vec<&str> = records
         .iter()
@@ -115,6 +117,148 @@ fn production_command(dir: &Path, args: &[&str], expected: i32, receipt: &str) -
         String::from_utf8_lossy(&out.stderr)
     );
     serde_json::from_slice(&out.stdout).unwrap()
+}
+
+#[test]
+#[ignore = "needs the admitted production Anny model; measurement authority, not empirical fit"]
+fn standalone_body_and_drape_ignore_poisoned_caches_but_retain_source_identity() {
+    let model = ftx_body::default_model_path().expect("model path");
+    assert_eq!(
+        sha256_hex(&std::fs::read(&model).unwrap()),
+        "8f0bb151ba19975437147d239b7ff237642a7fa63659a6fac49fa23c299a0915"
+    );
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir =
+        std::env::temp_dir().join(format!("ftx-body-authority-{}-{stamp}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/oracle/draft/programs.json"
+    ))
+    .unwrap();
+    let case = fixtures["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "zouave_bolero-920")
+        .unwrap();
+    let fresh = ftx_measure::fuse(&case["input"]["measurements"], true).unwrap();
+    let mut stale = fresh.clone();
+    stale["fused"]["chest"]["value_mm"] = json!(1111.0);
+    stale["fused"]["waist"]["value_mm"] = json!(1234.0);
+    std::fs::write(
+        dir.join("pattern.json"),
+        serde_json::to_vec(&case["output"]["pattern"]).unwrap(),
+    )
+    .unwrap();
+    let mut bodies = Vec::new();
+    let mut drapes = Vec::new();
+    for (key, input) in [("fresh", &fresh), ("stale", &stale)] {
+        let bytes = serde_json::to_vec(input).unwrap();
+        let source = format!("{key}.json");
+        std::fs::write(dir.join(&source), &bytes).unwrap();
+        let body_dir = format!("body-{key}");
+        let body = production_command(
+            &dir,
+            &[
+                "body",
+                "--measurements",
+                &source,
+                "--model",
+                model.to_str().unwrap(),
+                "--pose",
+                "rest",
+                "--out",
+                &body_dir,
+            ],
+            0,
+            &body_dir,
+        )["result"]["body"]
+            .clone();
+        for name in ["chest", "waist"] {
+            assert_eq!(
+                body["fit"]["tape"][name]["target_mm"],
+                fresh["fused"][name]["value_mm"]
+            );
+        }
+        assert_eq!(body["measurements_sha256"], sha256_hex(&bytes));
+        let drape_dir = format!("drape-{key}");
+        let drape = production_command(
+            &dir,
+            &[
+                "drape",
+                "pattern.json",
+                "--measurements",
+                &source,
+                "--model",
+                model.to_str().unwrap(),
+                "--sew",
+                "1",
+                "--drape",
+                "1",
+                "--out",
+                &drape_dir,
+            ],
+            2,
+            &drape_dir,
+        );
+        // One gravity step deliberately cannot establish the required three-step quiet window.
+        assert_eq!(drape["result"]["numerical"]["settled"], false);
+        let report: Value = serde_json::from_slice(
+            &std::fs::read(dir.join(&drape_dir).join("sim_report.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["measurements_sha256"], sha256_hex(&bytes));
+        assert_eq!(report["body"]["fit"], body["fit"]);
+        assert_eq!(std::fs::read(dir.join(&source)).unwrap(), bytes);
+        bodies.push(body);
+        drapes.push(drape_dir);
+    }
+    assert_ne!(
+        bodies[0]["measurements_sha256"],
+        bodies[1]["measurements_sha256"]
+    );
+    for body in &mut bodies {
+        body.as_object_mut().unwrap().remove("measurements_sha256");
+    }
+    assert_eq!(bodies[0], bodies[1]);
+    for file in ["body.obj", "garment.obj", "fold.pc2"] {
+        assert_eq!(
+            std::fs::read(dir.join(&drapes[0]).join(file)).unwrap(),
+            std::fs::read(dir.join(&drapes[1]).join(file)).unwrap(),
+            "{file}"
+        );
+    }
+    // Fused-only clients can explicitly supply a target without any source records to override it.
+    let mut explicit = fresh.clone();
+    explicit.as_object_mut().unwrap().remove("records");
+    let target = fresh["fused"]["chest"]["value_mm"].as_f64().unwrap() + 20.0;
+    explicit["fused"]["chest"]["value_mm"] = json!(target);
+    std::fs::write(
+        dir.join("explicit.json"),
+        serde_json::to_vec(&explicit).unwrap(),
+    )
+    .unwrap();
+    let explicit = production_command(
+        &dir,
+        &[
+            "body",
+            "--measurements",
+            "explicit.json",
+            "--model",
+            model.to_str().unwrap(),
+            "--out",
+            "body-explicit",
+        ],
+        0,
+        "body-explicit",
+    );
+    assert_eq!(
+        explicit["result"]["body"]["fit"]["tape"]["chest"]["target_mm"],
+        target
+    );
 }
 
 #[test]
