@@ -361,6 +361,12 @@ fn fit_screening_reaches_a_late_feasible_design_with_one_downstream_slot() {
 
 #[test]
 fn finite_body_water_objectives_use_actual_motion_in_native_and_portable_scenarios() {
+    for integration in ["right_endpoint", "composite_trapezoid"] {
+        finite_body_water_for_quadrature(integration);
+    }
+}
+
+fn finite_body_water_for_quadrature(integration: &str) {
     use ftx_drape::study::fitted::{BodyRequest, FittedBody};
     use ftx_wasm::materials::scenario::on_model;
 
@@ -421,7 +427,8 @@ fn finite_body_water_objectives_use_actual_motion_in_native_and_portable_scenari
     ))
     .unwrap();
     scenario.as_object_mut().unwrap().remove("coverage");
-    scenario["options"] = json!({"spacing":100.0,"sew_steps":120,"drape_steps":0,"step":0.001});
+    // Relax the sewn wrap before comparing motion; the original 0.12 s schedule still drifts.
+    scenario["options"] = json!({"spacing":100.0,"sew_steps":120,"drape_steps":0,"step":0.04});
     scenario["vapor_coverage"] = json!({"body_triangle_ids":[body_triangle],
         "instance_layers":{"band":"shell"},
         "settings":{"max_distance_m":0.2,"min_normal_cosine":0.1,
@@ -434,7 +441,7 @@ fn finite_body_water_objectives_use_actual_motion_in_native_and_portable_scenari
             {"time_s":0.004,"arm_abduction_deg":35.2}],"max_step_s":0.001,
         "max_trials":16,"max_pairs":100000,"max_sample_vertices":10000,
         "vapor_coverage_history":{"schema":"ftx-motion-vapor-coverage/1",
-            "integration":"right_endpoint","max_geometry_operations":1_000_000}});
+            "integration":integration,"max_geometry_operations":1_000_000}});
     let portable = |request: &Value, scenarios: &Value| -> Value {
         serde_json::from_str(
             &on_model(
@@ -457,11 +464,57 @@ fn finite_body_water_objectives_use_actual_motion_in_native_and_portable_scenari
         "{initial_simulation}"
     );
     assert_eq!(initial_simulation["motion"]["status"], "available");
-    let initial_coverage = &initial_simulation["vapor_coverage"]["result"];
     assert_eq!(
-        initial_coverage["coverage"]["uncovered_area_m2"], 0.0,
+        initial_simulation["drape"]["settled"],
+        true,
+        "drift fraction {}, p99 mm/frame {}",
+        initial_simulation["drape"]["drift_frac"],
+        initial_simulation["drape"]["drift_p99_mm_per_frame"]
+    );
+    let initial_coverage = &initial_simulation["vapor_coverage"]["result"];
+    let raw_uncovered = initial_coverage["coverage"]["uncovered_area_m2"]
+        .as_f64()
+        .unwrap();
+    let raw_area = initial_coverage["coverage"]["body_area_m2"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        raw_uncovered >= 0.0 && raw_uncovered / raw_area <= 1e-9,
         "{initial_coverage}"
     );
+    // A horizontal end cap is genuinely uncovered by the vertical wrap. Include it in the
+    // declared domain and require the real producer/comparator to retain and reject that hole.
+    let cap = body
+        .collision
+        .1
+        .iter()
+        .position(|t| {
+            let [a, b, c] = t.map(|i| body.collision.0[i]);
+            let normal = (b - a).cross(c - a);
+            normal.z.abs() > 0.9 * normal.norm()
+        })
+        .unwrap();
+    let mut partial_scenario = scenario.clone();
+    partial_scenario.as_object_mut().unwrap().remove("motion");
+    partial_scenario["vapor_coverage"]["body_triangle_ids"] = json!([body_triangle, cap]);
+    let mut partial_study = study.clone();
+    partial_study["comparison"] = json!({"basis":"nominal",
+        "required_consumers":["vapor_coverage"],
+        "objectives":[{"metric":"covered_vapor_potential_heat_flow_w","direction":"maximize"}]});
+    let partial = portable(&partial_study, &partial_scenario);
+    assert_eq!(partial["comparison"]["frontier"], json!([]));
+    for simulation in partial["simulations"].as_array().unwrap() {
+        let result = &simulation["evaluation"]["result"];
+        assert_eq!(result["drape"]["settled"], true);
+        assert_eq!(result["metrics"]["simulation_gating_clear"], true);
+        assert_eq!(result["vapor_coverage"]["status"], "available");
+        let coverage = &result["vapor_coverage"]["result"]["coverage"];
+        assert!(
+            coverage["uncovered_area_m2"].as_f64().unwrap()
+                / coverage["body_area_m2"].as_f64().unwrap()
+                > 1e-4
+        );
+    }
     let film = json!({"schema":"ftx-body-wet-film/1",
         "body_mesh_sha256":initial_coverage["body_mesh_sha256"],
         "source":"test:explicit-body-water",
@@ -490,8 +543,13 @@ fn finite_body_water_objectives_use_actual_motion_in_native_and_portable_scenari
     assert_eq!(
         result["comparison"]["frontier"],
         json!(["a-fast", "b-slow"]),
-        "{}",
+        "{:?}",
         result["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|case| (&case["key"], &case["comparison"]))
+            .collect::<Vec<_>>()
     );
     for (index, case) in result["cases"].as_array().unwrap().iter().enumerate() {
         assert_eq!(case["comparison"]["frontier"], json!(["a-fast", "b-slow"]));

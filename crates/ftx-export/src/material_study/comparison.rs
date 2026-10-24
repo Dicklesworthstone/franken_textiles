@@ -2183,6 +2183,25 @@ struct VaporFrame<'a> {
     material: &'a Value,
 }
 
+// Projection partitions barycentric triangles to 1e-9 area and allocation admission already
+// uses this relative accuracy. Completeness is scale-free at that accuracy, per body triangle
+// as well as in total; it does not rewrite the producer's covered/uncovered diagnostics.
+const VAPOR_COVERAGE_RELATIVE_TOLERANCE: f64 = 1e-9;
+
+fn complete_vapor_area(area: f64, row: &Value) -> bool {
+    let Some(covered) = finite(&row["covered_area_m2"]).filter(|a| *a >= 0.) else {
+        return false;
+    };
+    let Some(uncovered) = finite(&row["uncovered_area_m2"]).filter(|a| *a >= 0.) else {
+        return false;
+    };
+    area.is_finite()
+        && area > 0.
+        && uncovered / area <= VAPOR_COVERAGE_RELATIVE_TOLERANCE
+        && (covered / area - 1.).abs() <= VAPOR_COVERAGE_RELATIVE_TOLERANCE
+        && ((covered + uncovered) / area - 1.).abs() <= VAPOR_COVERAGE_RELATIVE_TOLERANCE
+}
+
 fn admit_vapor_frame<'a>(
     policy: &Value,
     result: &'a Value,
@@ -2237,9 +2256,7 @@ fn admit_vapor_frame<'a>(
         .as_f64()
         .filter(|a| a.is_finite() && *a > 0.)
         .ok_or_else(|| invalid("covered vapor body area unavailable"))?;
-    if coverage["uncovered_area_m2"].as_f64() != Some(0.)
-        || coverage["covered_area_m2"].as_f64() != Some(body_area)
-    {
+    if !complete_vapor_area(body_area, coverage) {
         return Err(invalid(
             "covered vapor objective requires complete declared body coverage; a partial subtotal cannot stand in for unavailable bare-body transfer",
         ));
@@ -2610,10 +2627,7 @@ fn covered_vapor_potential(result: &Value) -> Result<(f64, f64), Refusal> {
     let mut body_area = 0.;
     for (triangle, row) in body_triangles.iter().zip(body_rows) {
         let area = vapor_triangle_area(&map["body_positions_m"], triangle)?;
-        if row["area_m2"].as_f64() != Some(area)
-            || row["covered_area_m2"].as_f64() != Some(area)
-            || row["uncovered_area_m2"].as_f64() != Some(0.)
-        {
+        if row["area_m2"].as_f64() != Some(area) || !complete_vapor_area(area, row) {
             return Err(fail());
         }
         body_area += area;
@@ -2623,13 +2637,13 @@ fn covered_vapor_potential(result: &Value) -> Result<(f64, f64), Refusal> {
         || result["mixed_protocols"] != json!(mixed)
         || body_allocations
             .iter()
-            .any(|f| !f.is_finite() || (f - 1.).abs() > 1e-9)
+            .any(|f| !f.is_finite() || (f - 1.).abs() > VAPOR_COVERAGE_RELATIVE_TOLERANCE)
         || cloth_allocations
             .iter()
-            .any(|f| !f.is_finite() || *f > 1. + 1e-9)
+            .any(|f| !f.is_finite() || *f > 1. + VAPOR_COVERAGE_RELATIVE_TOLERANCE)
         || !body_area.is_finite()
         || !allocated_body_area.is_finite()
-        || (allocated_body_area - body_area).abs() > 1e-9 * body_area
+        || (allocated_body_area - body_area).abs() > VAPOR_COVERAGE_RELATIVE_TOLERANCE * body_area
         || result["coverage"]["body_area_m2"].as_f64() != Some(body_area)
         || !power.is_finite()
         || !mass.is_finite()

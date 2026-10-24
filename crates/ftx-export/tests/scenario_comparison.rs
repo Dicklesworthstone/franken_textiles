@@ -1550,6 +1550,82 @@ fn covered_vapor_objectives_require_complete_current_geometry_and_independent_ad
     }
 }
 
+fn vapor_area_residual(result: &mut Value, fraction: f64, aggregate: bool, triangles: bool) {
+    let coverage = &mut result["coverage"];
+    if aggregate {
+        let area = coverage["body_area_m2"].as_f64().unwrap();
+        coverage["covered_area_m2"] = json!(area * (1. - fraction));
+        coverage["uncovered_area_m2"] = json!(area * fraction);
+    }
+    if triangles {
+        for row in coverage["body"].as_array_mut().unwrap() {
+            let area = row["area_m2"].as_f64().unwrap();
+            row["covered_area_m2"] = json!(area * (1. - fraction));
+            row["uncovered_area_m2"] = json!(area * fraction);
+        }
+    }
+}
+
+#[test]
+fn covered_vapor_completeness_is_relative_to_each_area_and_preserves_raw_residuals() {
+    for width in [1e-6, 1., 1e6] {
+        for basis in ["nominal", "reported_bounds"] {
+            let (mut request, mut descriptor) = vapor_coverage_inputs();
+            bound_vapor_variants(&mut request, [Some([5., 15.]), Some([18., 22.])]);
+            request.comparison.as_mut().unwrap().basis =
+                serde_json::from_value(json!(basis)).unwrap();
+            descriptor["vapor_coverage_body_mesh_sha256"] = json!(digest(&json!({
+                "positions_m":[[0.,0.,0.],[width,0.,0.],[0.,1.,0.]],"triangles":[[0,1,2]]})));
+            for (fraction, aggregate, triangles, admitted) in [
+                (5e-15, true, true, true),
+                (2e-9, true, true, false),
+                (1e-6, true, false, false),
+                (1e-6, false, true, false),
+                (-5e-15, true, true, false),
+            ] {
+                let report = serde_json::to_value(
+                    request
+                        .evaluate_with(
+                            &Pattern::from_json(PATTERN).unwrap(),
+                            &descriptor,
+                            |key, pattern| {
+                                let mut simulation =
+                                    moving_vapor_frame(pattern, &descriptor, width);
+                                if key == "a" {
+                                    vapor_area_residual(
+                                        &mut simulation["vapor_coverage"]["result"],
+                                        fraction,
+                                        aggregate,
+                                        triangles,
+                                    );
+                                }
+                                Ok(simulation)
+                            },
+                        )
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    report["comparison"]["alternatives"][0]["eligible"], admitted,
+                    "width={width} basis={basis} fraction={fraction} aggregate={aggregate} triangles={triangles}: {}",
+                    report["comparison"]
+                );
+                assert_eq!(report["comparison"]["alternatives"][1]["eligible"], true);
+                let raw = &report["simulations"][0]["evaluation"]["result"]["vapor_coverage"]["result"]
+                    ["coverage"];
+                assert_eq!(
+                    raw["uncovered_area_m2"],
+                    json!(if aggregate {
+                        width * 0.5 * fraction
+                    } else {
+                        0.
+                    })
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn covered_vapor_protocols_follow_consumed_layers_and_require_separate_comparison_consent() {
     let (mut r, d) = vapor_coverage_inputs();
@@ -1840,6 +1916,59 @@ fn moving_vapor_objectives_integrate_every_current_area_and_remain_independent_o
         report["manufacturing"]["alternatives"][0]["cutting"]["status"],
         "available"
     );
+}
+
+#[test]
+fn moving_vapor_completeness_checks_initial_and_every_sample_without_clamping() {
+    for integration in ["right_endpoint", "composite_trapezoid"] {
+        for basis in ["nominal", "reported_bounds"] {
+            let (mut request, mut descriptor) = moving_vapor_inputs();
+            bound_vapor_variants(&mut request, [Some([5., 15.]), Some([18., 22.])]);
+            request.comparison.as_mut().unwrap().basis =
+                serde_json::from_value(json!(basis)).unwrap();
+            descriptor["scenario"]["motion"]["vapor_coverage_history"]["integration"] =
+                json!(integration);
+            for bad_frame in [None, Some(0), Some(1), Some(2)] {
+                let report = serde_json::to_value(request.evaluate_with(
+                    &Pattern::from_json(PATTERN).unwrap(), &descriptor, |key, pattern| {
+                        let mut simulation = synthetic_moving_vapor_with_widths(pattern, &descriptor, [1e-6, 1e6]);
+                        if key == "a" {
+                            let history = &mut simulation["motion"]["result"]["vapor_coverage_history"]["result"];
+                            for index in 0..3 {
+                                let result = if index == 0 { &mut history["initial"]["result"] }
+                                    else { &mut history["samples"][index - 1]["result"] };
+                                // A per-triangle hole must fail even when the aggregate still looks full.
+                                vapor_area_residual(result, if bad_frame == Some(index) {1e-6} else {5e-15}, bad_frame != Some(index), true);
+                            }
+                        }
+                        Ok(simulation)
+                    }).unwrap()).unwrap();
+                assert_eq!(
+                    report["comparison"]["alternatives"][0]["eligible"],
+                    bad_frame.is_none(),
+                    "integration={integration} basis={basis} bad_frame={bad_frame:?}: {}",
+                    report["comparison"]
+                );
+                assert_eq!(report["comparison"]["alternatives"][1]["eligible"], true);
+                if bad_frame.is_none() {
+                    let history = &report["simulations"][0]["evaluation"]["result"]["motion"]["result"]
+                        ["vapor_coverage_history"]["result"];
+                    assert!(
+                        history["initial"]["result"]["coverage"]["uncovered_area_m2"]
+                            .as_f64()
+                            .unwrap()
+                            > 0.
+                    );
+                    assert!(
+                        history["samples"][1]["result"]["coverage"]["uncovered_area_m2"]
+                            .as_f64()
+                            .unwrap()
+                            > 0.
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
