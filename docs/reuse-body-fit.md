@@ -51,9 +51,21 @@ report/request hashes, `refitted: false`, and `image_poses_reused: false`.
 
 Draping uses these same reconstructed parameters through the existing posing,
 skin validation, placement, contact and cloth solver; it embeds the description
-and original fit diagnostics in `sim_report.json.body`. The round retains that
-report in its simulation basis. A failed import cannot reuse an old successful
-simulation. Usual new-directory publication and exit codes remain in force.
+and original fit diagnostics in `sim_report.json.body`. It also writes the exact
+imported report bytes as `body_fit.json` beside that report. A simulated round
+keeps both under its own `rounds/NNN/sim/` directory, so changing the external
+fit file cannot revise its saved source. The construction review links this
+original report and shows the imported body's signed differences against the
+round's saved measurement targets. These targets keep their original evidence
+basis, including chart priors; they are not necessarily tape measurements.
+Residuals retain their stored numeric precision, and unavailable model predictions
+stay blank instead of becoming zero. Review discrepancies before trusting the
+drape; this table adds no pass/fail threshold or uncertainty estimate and changes
+neither the shape nor measurement readiness.
+
+The round retains the full simulation report in its simulation basis. A failed
+import cannot reuse an old successful simulation or advertise its source/viewer
+links. Usual new-directory publication and exit codes remain in force.
 
 Body height/mass are recomputed from the model. Available tape functionals are
 recomputed at the fitter's standard 35-degree A-pose, independent of the output

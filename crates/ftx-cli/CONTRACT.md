@@ -210,6 +210,14 @@ fits keep their input and output semantics. Capture consistency does not authent
 decoding, stationarity, calibration accuracy or fit, and never promotes measurement readiness.
 See `docs/multi-frame-body-fit.md` for the capture/decode boundary and input contract.
 
+Imported-shape drapes retain the exact accepted report bytes as `body_fit.json` through
+the existing create-only output writer. Simulated rounds keep it in their own `sim/`
+directory and link it from the construction review. That review displays the saved
+MODEL_FIT body's signed model-minus-target residuals at their stored precision, keeping
+missing predictions unavailable. Current targets retain their original evidence basis;
+no tolerance, refit, uncertainty estimate or readiness promotion is introduced. Failed
+simulations expose no success/source links. Ordinary tape-fitting output is unchanged.
+
 **Timed strips and draped vapor.** Both native material entry points accept
 `strip-history REQUEST.json` and `thermal-vapor-surface SIM_REPORT.json CONDITIONS.json`.
 They delegate to the production history and canonical vapor surface consumers, enforcing the same
