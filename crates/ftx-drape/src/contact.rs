@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 
 use ftx_core::intersection::{indexed_triangle_pair, segment_triangle, validate_mesh};
 use ftx_core::{Refusal, RefusalCode, Vec3};
+use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::ad::Jet;
 use crate::bvh::{Bvh, QueryBvh};
@@ -438,7 +440,7 @@ fn segment_meets_triangle(p: Vec3, q: Vec3, t: [Vec3; 3]) -> bool {
 }
 
 /// A contact candidate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum Pair {
     /// Cloth vertex against body triangle.
     VertexTri {
@@ -684,6 +686,30 @@ pub struct Contact {
     lag_h: f64,
 }
 
+/// One domain at an accepted endpoint. Counts are energy primitive pairs, not physical patches.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ContactDomainSample {
+    /// Pairs with 0 < thickness-offset gap < their barrier activation distance.
+    pub active_pairs: usize,
+    /// Minimum among those active pairs, metres; absent means no active pair, never zero gap.
+    pub minimum_active_gap_m: Option<f64>,
+    /// The primitive attaining that gap, indexing the unchanged contact topology.
+    pub minimum_active_gap_pair: Option<Pair>,
+    /// That primitive's effective offset (m), including material/crease policy.
+    pub minimum_active_gap_thickness_m: Option<f64>,
+    /// Pairs in the frozen Coulomb lag state, which can differ from endpoint activation.
+    pub friction_lag_pairs: usize,
+}
+
+/// Body and self-contact remain independent; disabled domains serialize as unavailable.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ContactSample {
+    /// Static/prescribed body contact, absent for an empty collider.
+    pub body: Option<ContactDomainSample>,
+    /// Cloth–cloth contact, absent when disabled.
+    pub self_contact: Option<ContactDomainSample>,
+}
+
 /// A frozen friction pair: normal force, tangent basis and contact weights from the lag state.
 #[derive(Clone, Copy, Debug)]
 struct FrictionPair {
@@ -756,6 +782,117 @@ fn tangent_basis(n: Vec3) -> [Vec3; 2] {
 }
 
 impl Contact {
+    /// Endpoint diagnostics for solver-accepted geometry with this contact topology.
+    /// The minimum is sampled within barrier activation, not a continuous-time clearance bound.
+    #[must_use]
+    pub fn accepted_sample(&self, x: &[Vec3]) -> ContactSample {
+        let mut sample = ContactSample {
+            body: (!self.body.triangles.is_empty()).then(ContactDomainSample::default),
+            self_contact: self.self_params.map(|_| ContactDomainSample::default()),
+        };
+        for pair in self.candidates(x, None, self.activation_range()) {
+            let st = stencil(pair, x, &self.body, &self.cloth);
+            let (kind, _) = classify(pair, &st.pts);
+            let p = self.pair_params(pair);
+            let gap = pair_gap(&st, kind, &p);
+            if gap > 0. && gap < p.dhat {
+                let domain = if pair.is_self_contact() {
+                    &mut sample.self_contact
+                } else {
+                    &mut sample.body
+                };
+                if let Some(domain) = domain {
+                    domain.active_pairs += 1;
+                    if domain.minimum_active_gap_m.is_none_or(|g| gap < g) {
+                        domain.minimum_active_gap_m = Some(gap);
+                        domain.minimum_active_gap_pair = Some(pair);
+                        domain.minimum_active_gap_thickness_m = Some(p.thickness);
+                    }
+                }
+            }
+        }
+        for lag in &self.lag {
+            let domain = if lag.pair.is_self_contact() {
+                &mut sample.self_contact
+            } else {
+                &mut sample.body
+            };
+            if let Some(domain) = domain {
+                domain.friction_lag_pairs += 1;
+            }
+        }
+        sample
+    }
+
+    /// Final barrier reactions on indexed cloth vertices, in N, excluding lagged friction.
+    /// Uses the same exact pair energy gradient (including edge mollifiers) as assembly.
+    ///
+    /// # Errors
+    /// Invalid geometry, penetrating gaps or non-finite reactions. No physical pressure area is inferred.
+    pub fn reaction_map(&self, x: &[Vec3]) -> Result<Value, Refusal> {
+        self.check_cloth(x)?;
+        let mut body = vec![Vec3::ZERO; x.len()];
+        let mut own = vec![Vec3::ZERO; x.len()];
+        let mut policies = Vec::new();
+        let mut barrier_energy_j = 0.;
+        for pair in self.candidates(x, None, self.activation_range()) {
+            let st = stencil(pair, x, &self.body, &self.cloth);
+            let (kind, _) = classify(pair, &st.pts);
+            let p = self.pair_params(pair);
+            match pair_energy(&st, kind, &p) {
+                PairEnergy::Inactive => {}
+                PairEnergy::Penetrating => {
+                    return Err(Refusal::new(
+                        RefusalCode::IntersectingStart,
+                        "reaction map requires positive contact gaps",
+                    ));
+                }
+                PairEnergy::Active(energy) => {
+                    barrier_energy_j += energy.v;
+                    let forces = if pair.is_self_contact() {
+                        &mut own
+                    } else {
+                        &mut body
+                    };
+                    for (i, vertex) in st.cloth.iter().enumerate() {
+                        if let Some(vertex) = vertex {
+                            forces[*vertex] -= Vec3::new(
+                                energy.g[3 * i],
+                                energy.g[3 * i + 1],
+                                energy.g[3 * i + 2],
+                            );
+                        }
+                    }
+                    policies.push((pair, p));
+                }
+                PairEnergy::Value(_) => unreachable!("pair_energy always returns derivatives"),
+            }
+        }
+        if !barrier_energy_j.is_finite() || body.iter().chain(&own).any(|f| !f.is_finite()) {
+            return Err(Refusal::new(
+                RefusalCode::NonFinite,
+                "contact reactions are non-finite",
+            ));
+        }
+        let digest = |v: &Value| {
+            ftx_core::receipt::sha256_hex(
+                &serde_json::to_vec(v).expect("finite contact map identity"),
+            )
+        };
+        Ok(json!({"schema":"ftx-contact-reactions/1",
+            "barrier_energy_j":barrier_energy_j,
+            "vertex_basis":"welded solver vertices; forces follow positions_m",
+            "positions_m":x,"triangles":self.cloth.triangles,
+            "cloth_state_sha256":digest(&json!([x,self.cloth.triangles,self.cloth.edges,self.cloth.edge_rest])),
+            "body_state_sha256":digest(&json!([self.body.vertices,self.body.triangles])),
+            "active_policy_sha256":digest(&json!([self.params,self.self_params,self.creases,policies])),
+            "body_force_on_cloth_n":if self.body.triangles.is_empty() {None} else {Some(body)},
+            "self_force_on_cloth_n":self.self_params.map(|_| own),
+            "pressure_pa":null,
+            "pressure_basis":"unavailable: no justified physical contact-area allocation",
+            "basis":"negative gradient of the accepted endpoint barrier energy including edge mollifiers; each assembled primitive once; excludes Coulomb friction and measured pressure/comfort/fit"}))
+    }
+
     /// A contact state for a cloth with these triangles and rest positions (2D material coordinates
     /// lifted with z = 0 are fine: only edge lengths are used).
     #[must_use]
@@ -1446,6 +1583,77 @@ mod tests {
             mu: 0.3,
             eps_v: 1e-3,
         }
+    }
+
+    #[test]
+    fn endpoint_map_matches_an_independent_plane_barrier_and_keeps_domains_separate() {
+        let p = params();
+        let gap = 0.0004;
+        let x = vec![
+            Vec3::new(-0.01, -0.01, p.thickness + gap),
+            Vec3::new(0.01, -0.01, p.thickness + gap),
+            Vec3::new(0., 0.01, p.thickness + gap),
+        ];
+        let body = Body::new(
+            vec![
+                Vec3::new(-1., -1., 0.),
+                Vec3::new(1., -1., 0.),
+                Vec3::new(0., 1., 0.),
+            ],
+            vec![[0, 1, 2]],
+            0.1,
+        )
+        .unwrap();
+        let mut contact = Contact::new(body, p, vec![[0, 1, 2]], |a, b| (x[a] - x[b]).norm());
+        contact.update_lag(&x, &x, 0.01);
+        let before = format!("{contact:?}");
+        let sample = contact.accepted_sample(&x);
+        let domain = sample.body.unwrap();
+        assert_eq!(domain.active_pairs, 3);
+        assert_eq!(domain.friction_lag_pairs, 3);
+        assert!((domain.minimum_active_gap_m.unwrap() - gap).abs() < 1e-15);
+        assert_eq!(domain.minimum_active_gap_thickness_m, Some(p.thickness));
+        assert!(sample.self_contact.is_none());
+        let map = contact.reaction_map(&x).unwrap();
+        let r = gap - p.dhat;
+        // Independent derivative of -kappa*(g-dhat)^2*ln(g/dhat), in N.
+        let expected = p.kappa * (2. * r * (gap / p.dhat).ln() + r * r / gap);
+        let forces: Vec<Vec3> =
+            serde_json::from_value(map["body_force_on_cloth_n"].clone()).unwrap();
+        for force in forces {
+            assert!(force.x.abs() < 1e-12 && force.y.abs() < 1e-12);
+            assert!((force.z - expected).abs() < 1e-12);
+        }
+        assert!(map["self_force_on_cloth_n"].is_null());
+        assert!(map["pressure_pa"].is_null());
+        assert_eq!(format!("{contact:?}"), before);
+        let away: Vec<_> = x.iter().map(|p| *p + Vec3::new(0., 0., 1.)).collect();
+        let quiet = contact.accepted_sample(&away).body.unwrap();
+        assert_eq!(quiet.active_pairs, 0);
+        assert!(quiet.minimum_active_gap_m.is_none());
+        assert_ne!(
+            map["cloth_state_sha256"],
+            contact.reaction_map(&away).unwrap()["cloth_state_sha256"]
+        );
+        let mut invalid = x;
+        invalid[0].z = f64::NAN;
+        assert!(contact.reaction_map(&invalid).is_err());
+    }
+
+    #[test]
+    fn self_reaction_map_balances_both_layers_without_a_body_reaction() {
+        let x = layers(0.0012);
+        let contact = self_layers(&x).with_self_contact(&x, params()).unwrap();
+        let sample = contact.accepted_sample(&x);
+        assert!(sample.body.is_none());
+        assert!(sample.self_contact.unwrap().active_pairs > 0);
+        let map = contact.reaction_map(&x).unwrap();
+        assert!(map["body_force_on_cloth_n"].is_null());
+        let forces: Vec<Vec3> =
+            serde_json::from_value(map["self_force_on_cloth_n"].clone()).unwrap();
+        assert!(forces.iter().copied().fold(Vec3::ZERO, |a, b| a + b).norm() < 1e-12);
+        assert!(forces[..3].iter().map(|f| f.z).sum::<f64>() < 0.);
+        assert!(forces[3..].iter().map(|f| f.z).sum::<f64>() > 0.);
     }
 
     /// KAT 1, barrier: zero with zero slope at the activation gap, infinite at contact, and the pair

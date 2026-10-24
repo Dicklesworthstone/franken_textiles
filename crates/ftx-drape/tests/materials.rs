@@ -167,7 +167,24 @@ fn the_real_drape_changes_when_only_material_observations_change() {
             assert!(sample.solve.converged);
             assert!(sample.solve.residual.is_finite());
             assert!(sample.solve.last_step / opts.step < opts.tol);
+            assert!(sample.contact.as_ref().unwrap().body.is_some());
+            assert!(sample.contact.as_ref().unwrap().self_contact.is_none());
         }
+        let reactions = &run.report["contact_diagnostics"]["final_reactions"];
+        assert_eq!(reactions["status"], "available");
+        assert_eq!(
+            reactions["result"]["positions_m"],
+            json!(run.scene.solver.x)
+        );
+        assert!(reactions["result"]["pressure_pa"].is_null());
+        assert_eq!(
+            run.report["contact_diagnostics"]["accepted_samples"],
+            opts.sew_steps + opts.drape_steps
+        );
+        assert_eq!(
+            reactions["result"]["material_report_sha256"],
+            ftx_core::receipt::sha256_hex(&serde_json::to_vec(&run.report["material"]).unwrap())
+        );
         let speed = run
             .scene
             .solver

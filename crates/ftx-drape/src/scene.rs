@@ -1082,6 +1082,8 @@ pub struct PhaseStep {
     pub solve: SolveReport,
     /// Largest instantaneous vertex speed after the step (m/s), never a window-mean drift.
     pub max_speed_m_s: f64,
+    /// Accepted endpoint contact state, absent if contact is disabled.
+    pub contact: Option<crate::contact::ContactSample>,
 }
 
 /// One phase's per-step reports.
@@ -1149,6 +1151,11 @@ pub fn run_phase(
         rep.samples.push(PhaseStep {
             solve: r,
             max_speed_m_s: scene.solver.v.iter().map(|v| v.norm()).fold(0.0, f64::max),
+            contact: scene
+                .solver
+                .contact
+                .as_ref()
+                .map(|c| c.accepted_sample(&scene.solver.x)),
         });
         frame(k, &scene.positions());
     }

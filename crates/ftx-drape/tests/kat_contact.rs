@@ -199,6 +199,34 @@ fn band_slip_on_cylinder(mu: f64, w_fraction: f64) -> (f64, f64) {
     for _ in 0..10 {
         s.step(0.002).unwrap();
     }
+    let contact = s.contact.as_ref().unwrap();
+    let sample = contact.accepted_sample(&s.x);
+    assert!(sample.body.unwrap().minimum_active_gap_m.unwrap() > 0.0);
+    assert!(sample.self_contact.is_none());
+    let map = contact.reaction_map(&s.x).unwrap();
+    let forces: Vec<Vec3> = serde_json::from_value(map["body_force_on_cloth_n"].clone()).unwrap();
+    // Continuum cylinder normals are radial. Discrete closest features/edge mollifiers can
+    // also contribute axially: check their full energy derivative, rather than asserting zero.
+    let radial: f64 = forces
+        .iter()
+        .zip(&s.x)
+        .map(|(f, x)| (f.x * x.x + f.y * x.y) / (x.x * x.x + x.y * x.y).sqrt())
+        .sum();
+    assert!(radial > 0.0);
+    let eps = 1e-7;
+    let energy = |dz| {
+        let shifted: Vec<_> = s.x.iter().map(|p| *p + Vec3::new(0., 0., dz)).collect();
+        contact.reaction_map(&shifted).unwrap()["barrier_energy_j"]
+            .as_f64()
+            .unwrap()
+    };
+    let axial = forces.iter().map(|f| f.z).sum::<f64>();
+    let difference = (energy(-eps) - energy(eps)) / (2. * eps);
+    assert!(
+        (axial - difference).abs() < 1e-6 * radial,
+        "axial {axial}, finite difference {difference}, radial {radial}"
+    );
+    assert!(map["pressure_pa"].is_null());
     (mean_z(&s.x) - z0, capacity)
 }
 

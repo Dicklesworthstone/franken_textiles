@@ -267,6 +267,12 @@ pub fn drape(
     let board = board_layout(&scene.mesh);
     let mut frames = fold_frames(&scene.mesh, &scene.placements, &board, FOLD_FRAMES);
     frames.extend(zip_frames(&scene.start.wrapped, &scene.start.relaxed));
+    let initial_positions = scene.positions();
+    let initial_contact = scene
+        .solver
+        .contact
+        .as_ref()
+        .map(|c| c.accepted_sample(&scene.solver.x));
     let mut phases = Vec::new();
     for (name, steps, g, lag) in [
         ("sew", opts.sew_steps, 0.0, opts.lag_rounds[0]),
@@ -347,6 +353,8 @@ pub fn drape(
     );
     add_numerical_report(&mut report, &sew, &drape, opts);
     report["material"] = material.report;
+    add_contact_report(&mut report, &scene, &sew, &drape, initial_contact.as_ref());
+    add_casing_windows(&mut report, &scene, &fold, &initial_positions, opts);
     if let Some(fabrics) = &material.piece_fabrics {
         report["fabric"] = json!({"basis":"per_piece", "see":"material.records"});
         let mut area = vec![0.0; scene.mesh.instances.len()];
@@ -497,6 +505,109 @@ fn add_numerical_report(
 }
 
 /// The run fields of spec 04 §6.11 that a run knows (the CLI adds file hashes and timing).
+fn add_contact_report(
+    report: &mut Value,
+    scene: &Scene,
+    sew: &PhaseReport,
+    drape: &PhaseReport,
+    initial: Option<&crate::contact::ContactSample>,
+) {
+    let samples: Vec<_> = initial
+        .into_iter()
+        .chain(
+            sew.samples
+                .iter()
+                .chain(&drape.samples)
+                .filter_map(|s| s.contact.as_ref()),
+        )
+        .collect();
+    let minimum = |own: bool| {
+        samples
+            .iter()
+            .filter_map(|s| {
+                if own {
+                    s.self_contact.as_ref()
+                } else {
+                    s.body.as_ref()
+                }
+            })
+            .filter_map(|d| d.minimum_active_gap_m)
+            .reduce(f64::min)
+    };
+    let reactions = scene
+        .solver
+        .contact
+        .as_ref()
+        .map(|c| match c.reaction_map(&scene.solver.x) {
+            Ok(mut value) => {
+                value["material_report_sha256"] = json!(ftx_core::receipt::sha256_hex(
+                    &serde_json::to_vec(&report["material"]).expect("material report JSON")
+                ));
+                json!({"status":"available","result":value})
+            }
+            Err(e) => json!({"status":"refused","refusal":e}),
+        });
+    report["contact_diagnostics"] = json!({
+        "basis":"initial and accepted phase endpoints only; thickness-offset active-pair gaps, not an exact continuous-time minimum; no active pair means unavailable, not zero",
+        "initial":initial,"accepted_samples":sew.steps+drape.steps,
+        "minimum_sampled_active_body_gap_m":minimum(false),
+        "minimum_sampled_active_self_gap_m":minimum(true),
+        "friction_basis":"counts describe the frozen lag state, not a measured sticking/sliding verdict",
+        "final_reactions":reactions});
+}
+
+fn band_window(initial: &[Vec3], frames: &[Vec<Vec3>], vertices: &[usize], step: f64) -> Value {
+    if frames.is_empty() || vertices.is_empty() {
+        return json!({"status":"not_simulated","basis":"no gravity observation window"});
+    }
+    let mean_z =
+        |frame: &[Vec3]| vertices.iter().map(|&i| frame[i].z).sum::<f64>() / vertices.len() as f64;
+    let start = mean_z(initial);
+    let shifts: Vec<_> = frames.iter().map(|f| mean_z(f) - start).collect();
+    json!({"status":"available","duration_s":frames.len() as f64*step,
+        "samples":frames.len()+1,"signed_vertical_displacement_m":shifts.last(),
+        "maximum_absolute_vertical_displacement_m":shifts.iter().map(|x| x.abs()).fold(0.,f64::max),
+        "basis":"mean casing-vertex height relative to the static body over the declared gravity phase, including settling; sampled displacement, not contact-point slip, a stationary hold experiment, or physical fit"})
+}
+
+fn add_casing_windows(
+    report: &mut Value,
+    scene: &Scene,
+    fold: &FoldUp,
+    initial: &[Vec3],
+    opts: &DrapeOptions,
+) {
+    let start = FOLD_FRAMES + ZIP_FRAMES + opts.sew_steps;
+    let initial = if opts.sew_steps == 0 {
+        initial
+    } else {
+        &fold.frames[start - 1]
+    };
+    let frames = &fold.frames[start..];
+    let mut windows = Vec::new();
+    for group in &scene.elastic_groups {
+        // Fold frames use pattern mesh vertices, while elastic edges use welded solver vertices.
+        let solver_vertices: std::collections::BTreeSet<_> = scene.elastic_rings
+            [group.rings.clone()]
+        .iter()
+        .flat_map(|r| {
+            scene.solver.model.elastics[r.clone()]
+                .iter()
+                .flat_map(|e| e.v)
+        })
+        .collect();
+        let mut seen = std::collections::BTreeSet::new();
+        let vertices: Vec<_> = scene
+            .weld
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| (solver_vertices.contains(&v) && seen.insert(v)).then_some(i))
+            .collect();
+        windows.push(json!({"instance":group.casing.instance,"window":band_window(initial,frames,&vertices,opts.step)}));
+    }
+    report["elastic_observation_windows"] = json!(windows);
+}
+
 fn add_run_fields(
     report: &mut Value,
     scene: &Scene,
@@ -738,6 +849,25 @@ mod self_contact_tests {
     use crate::scene::PhaseStep;
 
     #[test]
+    fn casing_window_retains_duration_signed_drift_and_sampled_peak() {
+        let frame = |z| vec![Vec3::new(0., 0., z), Vec3::new(1., 0., z)];
+        for (heights, end, peak) in [
+            ([0., 0.00001, 0.], 0., 0.00001),
+            ([0., -0.002, -0.01], -0.01, 0.01),
+        ] {
+            let frames: Vec<_> = heights.into_iter().map(frame).collect();
+            let result = band_window(&frames[0], &frames[1..], &[0, 1], 0.01);
+            assert_eq!(result["duration_s"], 0.02);
+            assert_eq!(result["signed_vertical_displacement_m"], end);
+            assert_eq!(result["maximum_absolute_vertical_displacement_m"], peak);
+        }
+        assert_eq!(
+            band_window(&frame(0.), &[], &[0, 1], 0.01)["status"],
+            "not_simulated"
+        );
+    }
+
+    #[test]
     fn numerical_settledness_rejects_motion_hidden_by_window_means() {
         let options = DrapeOptions::default();
         let frames = [0.0_f64, 0.001, 0.0, 0.001, 0.0, 0.001, 0.0];
@@ -754,6 +884,7 @@ mod self_contact_tests {
                     ..SolveReport::default()
                 },
                 max_speed_m_s: speed,
+                contact: None,
             });
             phase.steps += 1;
             phase.max_speed = speed;
@@ -780,6 +911,7 @@ mod self_contact_tests {
                     ..SolveReport::default()
                 },
                 max_speed_m_s: 0.0,
+                contact: None,
             });
             phase.steps += 1;
         }

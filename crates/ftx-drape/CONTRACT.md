@@ -39,6 +39,19 @@ legacy window-mean definition; they do not override the numerical gate. Neither 
 static stress equilibrium, material-history relaxation or real-person fit. Historical timings and
 verdicts below predate this stricter acceptance boundary and require fresh production-model checks.
 
+**Accepted contact observations** (`ftx-onn.17`). Every accepted phase endpoint retains separate
+body/self primitive-pair counts, the minimum active thickness-offset gap with its pair and effective
+offset (m), and frozen friction-lag counts. Disabled domains and absent active gaps remain unavailable.
+The initial endpoint and final sampled running minima are retained; these are activation-range samples,
+not an exact minimum over continuous motion. A failed step publishes no sample. The final indexed
+welded-vertex map contains barrier reactions in N from the existing exact energy gradient, including
+edge mollifiers and excluding Coulomb friction. Geometry/topology, active policy and material-report
+identities accompany it. No physical contact area is inferred, so pressure in Pa remains unavailable.
+Each elastic casing also reports signed and peak sampled mean-height displacement relative to the
+static body during the declared gravity phase, with duration and sample count. This window includes
+settling; it is not contact-point slip or a stationary hold experiment. The ideal-ring grip estimate
+remains separate. These outputs establish no measured pressure, comfort or real-person fit.
+
 **Attached trim/accessory mass** (`attached_mass`). Optional source-qualified total groups bind named
 physical pattern corners through the actual seam weld map. Explicit shares add once to sheet masses,
 entering both gravitational load and implicit inertia in sewn drape, static solves and prescribed

@@ -411,7 +411,23 @@ fn independent_casings_drive_joint_physics_and_replay_without_merging_grip_or_lo
     assert!(run.report.get("elastic").is_none());
     let rows = run.report["elastics"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
+    let windows = run.report["elastic_observation_windows"]
+        .as_array()
+        .unwrap();
+    assert_eq!(windows.len(), 2);
     for (i, group) in run.scene.elastic_groups.iter().enumerate() {
+        assert_eq!(windows[i]["instance"], casings[i].instance);
+        assert_eq!(
+            windows[i]["window"]["duration_s"],
+            opts.drape_steps as f64 * opts.step
+        );
+        assert_eq!(windows[i]["window"]["samples"], opts.drape_steps + 1);
+        assert!(
+            windows[i]["window"]["signed_vertical_displacement_m"]
+                .as_f64()
+                .unwrap()
+                .is_finite()
+        );
         assert_eq!(group.rings.len(), 2);
         for ring in &run.scene.elastic_rings[group.rings.clone()] {
             let length: f64 = run.scene.solver.model.elastics[ring.clone()]
@@ -449,6 +465,29 @@ fn independent_casings_drive_joint_physics_and_replay_without_merging_grip_or_lo
     );
     let replay = ftx_drape::run::drape(&restored, &json!({}), &body(&skin), &opts, |_| {}).unwrap();
     assert_eq!(run.scene.solver.x, replay.scene.solver.x);
+    assert_eq!(
+        run.report["elastic_observation_windows"],
+        replay.report["elastic_observation_windows"]
+    );
+    let sewing_only = ftx_drape::run::drape(
+        &restored,
+        &json!({}),
+        &body(&skin),
+        &DrapeOptions {
+            sew_steps: 6,
+            drape_steps: 0,
+            ..opts
+        },
+        |_| {},
+    )
+    .unwrap();
+    assert!(
+        sewing_only.report["elastic_observation_windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["window"]["status"] == "not_simulated")
+    );
     assert_eq!(
         run.scene.solver.model.elastics,
         replay.scene.solver.model.elastics
