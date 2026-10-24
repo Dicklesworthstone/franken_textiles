@@ -1,4 +1,6 @@
 //! Real-binary workflow using a tiny synthetic two-bone .ftxbody, never production model assets.
+#[path = "support/capture.rs"]
+mod capture;
 use ftx_body::{Affine, AnnyData, AnnyModel, Phenotype};
 use ftx_core::{Mat3, Vec2, Vec3, receipt::sha256_hex};
 use ftx_measure::camera::{Camera, Distortion, Intrinsics};
@@ -283,6 +285,224 @@ fn actual_forward_model_adapter_recovers_shape_root_and_joint_motion() {
     std::fs::hard_link(dir.join("input.json"), dir.join("alias.json")).unwrap();
     run(&dir, &["--out", "alias.json"], 3);
     assert_eq!(std::fs::read(dir.join("input.json")).unwrap(), original);
+}
+
+#[test]
+fn reviewed_capture_joins_actual_selection_cameras_and_articulated_fit() {
+    let dir = setup();
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("input.json")).unwrap()).unwrap();
+    let input = capture::wrap(&dir, original);
+    save(&dir, &input);
+    let result = run(&dir, &["--mesh-out", "capture-review"], 0)["result"].clone();
+    eprintln!("CAPTURE_REVIEW={}", dir.join("capture-review").display());
+    assert_eq!(result["status"], "ACCEPTED");
+    assert!((result["solution"]["shape"][0].as_f64().unwrap() - 0.6).abs() < 1e-5);
+    assert!((result["solution"]["shape"][1].as_f64().unwrap() - 0.45).abs() < 1e-5);
+    assert_eq!(
+        result["solution"]["anny_parameters"]["provenance"],
+        "MODEL_FIT"
+    );
+    assert_eq!(result["capture_input"]["input"], input);
+    for (i, frame) in result["mesh_review"]["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let image = &frame["source_image"];
+        assert_eq!(
+            image["sha256"],
+            input["fit"]["frames"][i]["source"]["image_sha256"]
+        );
+        assert_eq!(
+            std::fs::read(
+                dir.join("capture-review")
+                    .join(image["file"].as_str().unwrap())
+            )
+            .unwrap(),
+            std::fs::read(
+                dir.join(
+                    input["fit"]["frames"][i]["source"]["image"]
+                        .as_str()
+                        .unwrap()
+                )
+            )
+            .unwrap()
+        );
+        let svg = std::fs::read_to_string(
+            dir.join("capture-review")
+                .join(frame["reprojection_svg"]["file"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert!(svg.contains(&format!(
+            "<image href=\"{}\"",
+            image["file"].as_str().unwrap()
+        )));
+    }
+    assert_eq!(
+        result["capture_input"]["frames"].as_array().unwrap().len(),
+        2
+    );
+    assert!(
+        result["capture_input"]["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["sheet_pose"]["ok"] == true)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &std::fs::read(dir.join("capture-review/fit.json")).unwrap()
+        )
+        .unwrap(),
+        result
+    );
+    let before = std::fs::read(dir.join("capture-review/fit.json")).unwrap();
+    // RCH retires its temporary source tree. Preserve this actual generated bundle
+    // only when requested for the separate offline Chromium image/CSP check.
+    if let Some(destination) = std::env::var_os("FTX_CAPTURE_REVIEW_DIR") {
+        let destination = PathBuf::from(destination);
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&destination).unwrap();
+        for file in std::fs::read_dir(dir.join("capture-review")).unwrap() {
+            let file = file.unwrap();
+            assert!(file.file_type().unwrap().is_file());
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            std::io::copy(
+                &mut std::fs::File::open(file.path()).unwrap(),
+                &mut options.open(destination.join(file.file_name())).unwrap(),
+            )
+            .unwrap();
+        }
+        eprintln!("CAPTURE_REVIEW_ARTIFACTS={}", destination.display());
+    }
+    run(&dir, &["--mesh-out", "capture-review"], 3);
+    assert_eq!(
+        std::fs::read(dir.join("capture-review/fit.json")).unwrap(),
+        before
+    );
+    let budget = run(&dir, &["--max-evaluations", "1"], 4);
+    assert_eq!(budget["result"]["status"], "BUDGET_STOP");
+    assert!(budget["result"]["solution"].is_null());
+    assert_eq!(budget["result"]["capture_input"]["input"], input);
+    let mut failed = input;
+    failed["fit"]["frames"][0]["keypoints"][3]["pixel_px"][0] = json!(
+        failed["fit"]["frames"][0]["keypoints"][3]["pixel_px"][0]
+            .as_f64()
+            .unwrap()
+            + 20.0
+    );
+    save(&dir, &failed);
+    let rejected = run(&dir, &[], 2);
+    assert_eq!(rejected["result"]["status"], "REJECTED");
+    assert!(rejected["result"]["solution"].is_null());
+    for (a, b) in result["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(rejected["result"]["attempts"].as_array().unwrap())
+    {
+        assert_eq!(
+            a["cost_history"], b["cost_history"],
+            "capture held-out observations entered optimization"
+        );
+    }
+}
+
+#[test]
+fn capture_source_identity_lens_and_epoch_conflicts_never_publish_output() {
+    let dir = setup();
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("input.json")).unwrap()).unwrap();
+    let input = capture::wrap(&dir, original);
+    let mut duplicate = input.clone();
+    duplicate["fit"]["frames"][1]["source"] = duplicate["fit"]["frames"][0]["source"].clone();
+    let mut unknown = input.clone();
+    unknown["fit"]["frames"][0]["source"]["metadata"]["frame"]["timestamp_us"] = json!(1);
+    let mut stale = input.clone();
+    stale["fit"]["frames"][0]["calibration_sha256"] = json!("0".repeat(64));
+    let mut lens = input.clone();
+    lens["fit"]["frames"][0]["lens_id"] = json!("another-lens");
+    let mut reference = input.clone();
+    reference["reference_id"] = json!("another-stationary-sheet");
+    let mut bypass = input.clone();
+    bypass["fit"]["frames"][0]["camera"] = json!({});
+    let mut other: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("capture-calibration.json")).unwrap())
+            .unwrap();
+    other["source_note"] = json!("separately retained synthetic calibration artifact");
+    let bytes = serde_json::to_vec(&other).unwrap();
+    std::fs::write(dir.join("other-calibration.json"), &bytes).unwrap();
+    let mut epoch = input;
+    epoch["fit"]["frames"][1]["calibration"] = json!("other-calibration.json");
+    epoch["fit"]["frames"][1]["calibration_sha256"] = json!(sha256_hex(&bytes));
+    for bad in [duplicate, unknown, stale, lens, reference, bypass, epoch] {
+        save(&dir, &bad);
+        run(&dir, &["--out", "capture-invalid.json"], 3);
+        assert!(!dir.join("capture-invalid.json").exists());
+    }
+}
+
+#[test]
+fn capture_changed_pixels_masks_and_held_out_sheet_points_refuse_before_fit() {
+    let dir = setup();
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("input.json")).unwrap()).unwrap();
+    let input = capture::wrap(&dir, original);
+    save(&dir, &input);
+    for name in [
+        "capture-frame-0.png",
+        "capture-person-0.png",
+        "capture-sheet-0.png",
+    ] {
+        let path = dir.join(name);
+        let bytes = std::fs::read(&path).unwrap();
+        let mut gray = ftx_trace::raster::color::bgr_to_gray(
+            &ftx_trace::raster::image::load_png(&bytes).unwrap(),
+        );
+        gray.data[100] = 255 - gray.data[100];
+        std::fs::write(&path, encode_png_gray(&gray)).unwrap();
+        run(&dir, &["--out", "changed-capture.json"], 3);
+        assert!(!dir.join("changed-capture.json").exists());
+        std::fs::write(path, bytes).unwrap();
+    }
+    let path = dir.join("capture-reference-0.json");
+    let mut reference: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    reference["points"][1]["pixel_px"][0] =
+        json!(reference["points"][1]["pixel_px"][0].as_f64().unwrap() + 20.0);
+    std::fs::write(path, serde_json::to_vec(&reference).unwrap()).unwrap();
+    run(&dir, &["--out", "bad-camera.json"], 3);
+    assert!(!dir.join("bad-camera.json").exists());
+}
+
+#[test]
+fn capture_json_and_aggregate_evidence_budgets_publish_no_fit() {
+    let dir = setup();
+    let original: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("input.json")).unwrap()).unwrap();
+    let mut input = capture::wrap(&dir, original);
+    input["fit"]["observation_evidence"] = json!("x".repeat(4 * 1024 * 1024));
+    save(&dir, &input);
+    run(&dir, &["--out", "over-budget.json"], 4);
+    assert!(!dir.join("over-budget.json").exists());
+    std::fs::File::create(dir.join("input.json"))
+        .unwrap()
+        .set_len(17 * 1024 * 1024)
+        .unwrap();
+    run(&dir, &["--out", "oversize-input.json"], 4);
+    assert!(!dir.join("oversize-input.json").exists());
 }
 
 #[test]

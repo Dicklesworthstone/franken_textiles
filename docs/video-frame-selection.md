@@ -101,6 +101,14 @@ selected a frame (`SELECTED`); exit 2 means some windows failed (`PARTIAL` or
 `NO_USABLE_FRAMES`). Exit 3 is an invalid document, file, policy or output-write refusal.
 `--json` uses the usual CLI envelope; `--out` contains its `result` document directly.
 
+`selected_sources` additionally retains each selected frame's complete acquisition
+metadata, oriented dimensions, image/mask names, exact file SHA-256 digests and
+decoded grayscale/mask digests. Hashes come from the same bytes/buffers scored,
+without rereading or reorienting the files. These records can enter the reviewed
+`ftx-anny-capture-input/1` route described in `multi-frame-body-fit.md`; that consumer
+reruns selection and refuses changed sources. They identify supplied evidence,
+not correct segmentation, verified decoding or a physical calibration.
+
 ## Boundary with reconstruction
 
 **Sharpness is not stillness.** These windows must not be promoted to the reviewed still-window

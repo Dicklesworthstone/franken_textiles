@@ -205,16 +205,28 @@ fn projections(
     rest: &RestBody,
     body: &PosedBody,
     frame: &FitFrame,
+    photo: Option<&str>,
 ) -> Result<(String, Value), Refusal> {
     let [w, h] = frame.image_size_px;
     let title = label(&format!(
         "{} @ {} us",
         frame.frame.stream, frame.frame.timestamp_us
     ));
+    let background = photo.map_or_else(String::new, |name| {
+        format!(
+            "<image href=\"{name}\" width=\"{w}\" height=\"{h}\" preserveAspectRatio=\"none\"/>"
+        )
+    });
+    let basis = if photo.is_some() {
+        "hash-checked local source image"
+    } else {
+        "no photograph loaded"
+    };
     let mut svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" overflow=\"hidden\" role=\"img\">\
-         <title>{title}: observed and fitted keypoints; no photograph loaded</title>\
+         <title>{title}: observed and fitted keypoints; {basis}</title>\
          <rect width=\"{w}\" height=\"{h}\" fill=\"white\"/>\
+         {background}\
          <g font-family=\"sans-serif\" font-size=\"12\">"
     );
     let mut points = Vec::new();
@@ -303,7 +315,11 @@ fn projections(
     Ok((svg, result))
 }
 
-pub(super) fn prepare(adapter: &Adapter, report: &BodyFitReport) -> Result<Bundle, Refusal> {
+pub(super) fn prepare(
+    adapter: &Adapter,
+    report: &BodyFitReport,
+    capture: Option<&Value>,
+) -> Result<Bundle, Refusal> {
     let solution = report
         .solution
         .as_ref()
@@ -331,9 +347,11 @@ pub(super) fn prepare(adapter: &Adapter, report: &BodyFitReport) -> Result<Bundl
         files: Vec::new(),
     };
     let mut frames = Vec::new();
-    let mut page = String::from(
+    let mut page = [
         "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
-         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\">\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; ",
+        if capture.is_some() { "img-src 'self'; " } else { "" },
+        "style-src 'unsafe-inline'\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <title>Accepted body-fit review</title>\
          <style>body{font:16px system-ui;max-width:1100px;margin:2em auto;padding:0 1em}\
@@ -341,12 +359,15 @@ pub(super) fn prepare(adapter: &Adapter, report: &BodyFitReport) -> Result<Bundl
          a{margin-right:1em}p{line-height:1.5}</style>\
          <h1>Accepted body-fit review</h1>\
          <p>Orange circles are observed keypoints; blue crosses are projections of the complete fitted mesh. \
-         Labels retain fit/held-out partitions. No photograph is embedded or loaded. \
+         Labels retain fit/held-out partitions. ",
+        if capture.is_some() { "Hash-checked local source images are copied into this private review. " }
+        else { "No photograph is embedded or loaded. " },
+        "\
          This is not full-mask, occlusion or real-wearer fit validation.</p>\
          <p>Mesh coordinates are metres in the common calibrated world frame, +Z up. \
          Full topology is preserved; these are not certified collision skins.</p>\
          <p><a href=\"fit.json\">Complete fit and source evidence</a></p>",
-    );
+    ].concat();
     if report.input.frames.iter().any(|f| f.silhouette.is_some()) {
         page.push_str("<p>Supplied silhouette slices are shown at their original pixel coordinates: \
             thick orange segments are observed foreground, thin dashed blue segments are full-mesh coverage. \
@@ -364,7 +385,47 @@ pub(super) fn prepare(adapter: &Adapter, report: &BodyFitReport) -> Result<Bundl
             format!("frame-{i:04}.obj"),
             obj(&body.vertices, &adapter.model.data().faces)?,
         )?;
-        let (svg, projected) = projections(adapter, &rest, &body, frame)?;
+        let photograph = capture
+            .map(|capture| {
+                let record = capture["frames"]
+                    .as_array()
+                    .and_then(|frames| {
+                        frames
+                            .iter()
+                            .find(|entry| entry["frame"] == json!(frame.frame))
+                    })
+                    .ok_or_else(|| bad_input("capture review has no matching source frame"))?;
+                let manifest = capture["selection"]["source_manifest"]
+                    .as_str()
+                    .ok_or_else(|| bad_input("capture review has no source manifest"))?;
+                let base = Path::new(manifest)
+                    .parent()
+                    .ok_or_else(|| bad_input("capture manifest has no parent"))?;
+                let source = &record["source"];
+                let name = source["image"]
+                    .as_str()
+                    .ok_or_else(|| bad_input("capture source image is missing"))?;
+                let bytes = super::super::video::read_limited(&base.join(name), 128 * 1024 * 1024)?;
+                if json!(sha256_hex(&bytes)) != source["image_sha256"] {
+                    return Err(bad_input(
+                        "capture image changed during fitting; no review was published",
+                    ));
+                }
+                let extension = if bytes.starts_with(&[0xff, 0xd8]) {
+                    "jpg"
+                } else {
+                    "png"
+                };
+                bundle.push(format!("source-{i:04}.{extension}"), bytes)
+            })
+            .transpose()?;
+        let (svg, projected) = projections(
+            adapter,
+            &rest,
+            &body,
+            frame,
+            photograph.as_ref().and_then(|entry| entry["file"].as_str()),
+        )?;
         let svg_name = format!("frame-{i:04}.svg");
         let json_name = format!("frame-{i:04}.json");
         let svg_entry = bundle.push(svg_name.clone(), svg.as_bytes().to_vec())?;
@@ -373,9 +434,13 @@ pub(super) fn prepare(adapter: &Adapter, report: &BodyFitReport) -> Result<Bundl
             <p><a href=\"frame-{i:04}.obj\">Full posed OBJ</a>\
             <a href=\"{svg_name}\">Keypoint SVG</a><a href=\"{json_name}\">Coordinates and residuals</a></p>\
             {svg}</section>", label(&frame.frame.stream), frame.frame.timestamp_us).unwrap();
-        frames.push(json!({"frame":frame.frame,"mesh":entry,
+        let mut record = json!({"frame":frame.frame,"mesh":entry,
             "vertices":body.vertices.len(),"faces":counts.faces,
-            "reprojection_svg":svg_entry,"reprojections":points_entry}));
+            "reprojection_svg":svg_entry,"reprojections":points_entry});
+        if let Some(photograph) = photograph {
+            record["source_image"] = photograph;
+        }
+        frames.push(record);
     }
     page.push_str("</html>\n");
     let viewer = bundle.push("index.html".to_string(), page.into_bytes())?;

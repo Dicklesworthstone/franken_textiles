@@ -198,6 +198,18 @@ selection equality, absent/identity orientation, source preservation and create-
 nonidentity/corrupt/mask refusals. JPEG quality is decoded-pixel quality, not stillness, frame decoding,
 segmentation or measurement accuracy.
 
+`measure fit-body` also accepts `ftx-anny-capture-input/1`: reviewed selected-source records,
+original stationary-sheet points and hash-bound accepted camera calibrations join into the existing
+articulated fit. Selection, same-lens calibration and sheet pose are recomputed; source bytes,
+decoded buffers, frame/epoch/orientation and held-out identities are retained. Conflicting or changed
+inputs refuse before fitting/publication. JSON sources are capped at 16 MiB and complete capture
+evidence at 4 MiB. `--mesh-out` adds hash-checked original images to the existing private, create-only
+review bundle, under its 256 MiB limit; image changes during fitting refuse publication. Its offline
+page allows only local images and inline styles, no scripts or external resources. Original prepared-coordinate
+fits keep their input and output semantics. Capture consistency does not authenticate anatomy,
+decoding, stationarity, calibration accuracy or fit, and never promotes measurement readiness.
+See `docs/multi-frame-body-fit.md` for the capture/decode boundary and input contract.
+
 **Timed strips and draped vapor.** Both native material entry points accept
 `strip-history REQUEST.json` and `thermal-vapor-surface SIM_REPORT.json CONDITIONS.json`.
 They delegate to the production history and canonical vapor surface consumers, enforcing the same

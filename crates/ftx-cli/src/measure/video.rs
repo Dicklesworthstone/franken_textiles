@@ -1,10 +1,11 @@
 //! Local decoded-image boundary for FTX-20; no decoder process, model download or network access.
 
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use ftx_core::{Refusal, RefusalCode};
+use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use ftx_measure::video::{FrameMetadata, SelectionOptions, score_frame, select_frames};
 use ftx_trace::raster::{
     color::bgr_to_gray,
@@ -39,7 +40,7 @@ fn io(path: &Path, error: impl std::fmt::Display) -> Refusal {
     Refusal::new(RefusalCode::Io, format!("{}: {error}", path.display()))
 }
 
-fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, Refusal> {
+pub(super) fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, Refusal> {
     let metadata = std::fs::metadata(path).map_err(|e| io(path, e))?;
     if !metadata.is_file() || metadata.len() > limit as u64 {
         return Err(bad_input(format!(
@@ -62,6 +63,10 @@ fn read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, Refusal> {
 }
 
 pub(super) fn load(base: &Path, name: &str, mask: bool) -> Result<Gray, Refusal> {
+    load_hashed(base, name, mask).map(|(gray, _)| gray)
+}
+
+fn load_hashed(base: &Path, name: &str, mask: bool) -> Result<(Gray, String), Refusal> {
     if name.trim().is_empty() || name.len() > 4096 {
         return Err(bad_input(
             "image and mask paths must be nonempty and at most 4096 bytes",
@@ -82,7 +87,7 @@ pub(super) fn load(base: &Path, name: &str, mask: bool) -> Result<Gray, Refusal>
                 path.display()
             )));
         }
-        return Ok(bgr_to_gray(&photo.image));
+        return Ok((bgr_to_gray(&photo.image), sha256_hex(&bytes)));
     }
     // Restrict the evidence boundary to explicit 8-bit pixels. In particular, alpha compositing
     // on white would silently turn transparent mask backgrounds into foreground evidence.
@@ -146,12 +151,21 @@ pub(super) fn load(base: &Path, name: &str, mask: bool) -> Result<Gray, Refusal>
             path.display()
         )));
     }
-    Ok(gray)
+    Ok((gray, sha256_hex(&bytes)))
 }
 
 pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     known_options(args, "measure video-select", &["out"])?;
     let path = Path::new(super::single(args, "video-select")?);
+    let result = analyze(path)?;
+    if let Some(output) = super::option(args, "out") {
+        super::photo::save(output, &result.0)?;
+        eprintln!("wrote {output}");
+    }
+    Ok(result)
+}
+
+pub(super) fn analyze(path: &Path) -> Result<(Value, i32, String), Refusal> {
     let bytes = read_limited(path, 16 * 1024 * 1024)?;
     let mut input: Manifest = serde_json::from_slice(&bytes)
         .map_err(|e| bad_input(format!("{}: {e}", path.display())))?;
@@ -181,10 +195,11 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         .parent()
         .ok_or_else(|| bad_input("manifest needs a parent directory"))?;
     let mut scores = Vec::with_capacity(input.frames.len());
+    let mut sources = Vec::with_capacity(input.frames.len());
     for frame in &input.frames {
-        let image = load(base, &frame.image, false)?;
-        let person = load(base, &frame.person_mask, true)?;
-        let sheet = load(base, &frame.sheet_mask, true)?;
+        let (image, image_sha) = load_hashed(base, &frame.image, false)?;
+        let (person, person_sha) = load_hashed(base, &frame.person_mask, true)?;
+        let (sheet, sheet_sha) = load_hashed(base, &frame.sheet_mask, true)?;
         if [image.w, image.h] != [person.w, person.h] || [image.w, image.h] != [sheet.w, sheet.h] {
             return Err(bad_input(format!(
                 "{}: both masks must have the oriented frame's exact dimensions; no resampling is performed",
@@ -198,6 +213,17 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
             &person.data,
             &sheet.data,
         )?);
+        sources.push((
+            frame.metadata.frame.clone(),
+            json!({"metadata":frame.metadata,"image":frame.image,
+            "person_mask":frame.person_mask,"sheet_mask":frame.sheet_mask,
+            "image_size_px":[image.w,image.h],
+            "image_sha256":image_sha,"person_mask_file_sha256":person_sha,
+            "sheet_mask_file_sha256":sheet_sha,
+            "decoded_gray_sha256":sha256_hex(&image.data),
+            "person_mask_sha256":sha256_hex(&person.data),
+            "sheet_mask_sha256":sha256_hex(&sheet.data)}),
+        ));
     }
     let report = select_frames(&scores, &input.options)?;
     let missing = report
@@ -227,9 +253,13 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     value["status"] = json!(status);
     value["input"] = serde_json::to_value(input).map_err(|e| bad_input(e.to_string()))?;
     value["source_manifest"] = json!(source.to_string_lossy());
-    if let Some(output) = super::option(args, "out") {
-        super::photo::save(output, &value)?;
-        eprintln!("wrote {output}");
-    }
+    let selected: BTreeSet<_> = report.selected_frames.iter().collect();
+    value["selected_sources"] = Value::Array(
+        sources
+            .into_iter()
+            .filter(|(id, _)| selected.contains(id))
+            .map(|(_, source)| source)
+            .collect(),
+    );
     Ok((value, code, text))
 }

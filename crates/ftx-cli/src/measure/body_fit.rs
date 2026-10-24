@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 use super::{option, photo, single};
 use crate::{Args, bad_input, known_options, read_json, required};
 
+mod capture;
 mod review;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -610,9 +611,17 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         review::preflight(path)?;
     }
     let file = single(args, "fit-body")?;
-    let (value, input_bytes) = read_json(file)?;
-    let mut request: Request = serde_json::from_value(value)
-        .map_err(|e| bad_input(format!("invalid Anny body-fit request: {e}")))?;
+    let (value, input_bytes) = super::intrinsics::read_document(file)?;
+    let (mut request, capture_input) = if value["schema"] == "ftx-anny-capture-input/1" {
+        let (request, receipt) = capture::prepare(Path::new(file), value)?;
+        (request, Some(receipt))
+    } else {
+        (
+            serde_json::from_value::<Request>(value)
+                .map_err(|e| bad_input(format!("invalid Anny body-fit request: {e}")))?,
+            None,
+        )
+    };
     if request.schema != "ftx-anny-body-fit-input/1" {
         return Err(bad_input("expected ftx-anny-body-fit-input/1"));
     }
@@ -683,6 +692,9 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     value["anny_configuration"] =
         serde_json::to_value(&adapter.config).map_err(|e| bad_input(e.to_string()))?;
     value["input_sha256"] = json!(sha256_hex(&input_bytes));
+    if let Some(capture_input) = capture_input {
+        value["capture_input"] = capture_input;
+    }
     if let Some(masks) = masks {
         value["silhouette_input"] = masks;
     }
@@ -695,7 +707,7 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
     }
     if let Some(path) = mesh_out {
         if report.solution.is_some() {
-            let bundle = review::prepare(&adapter, &report)?;
+            let bundle = review::prepare(&adapter, &report, value.get("capture_input"))?;
             value["mesh_review"] = bundle.manifest.clone();
             bundle.publish(path, &value)?;
             text.push_str(&format!("\nmesh review: {}/fit.json", path.display()));

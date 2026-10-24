@@ -18,7 +18,108 @@ hashes. Keep private photos, measurements and fitted bodies outside the reposito
 
 ## Input structure
 
-The top-level document has exactly `schema: "ftx-anny-body-fit-input/1"`, `model`, and `fit`.
+### Join reviewed capture sources locally
+
+The same command also accepts `schema: "ftx-anny-capture-input/1"`. This joins
+the existing decoded-frame selector and checked sheet-pose cameras before fitting.
+It has `video_manifest` (relative local path), `reference_id`, the same `model`
+configuration below, and `fit` with the same schema, evidence, measurements and
+starts. Each `fit.frames` entry instead contains:
+
+```json
+{
+  "source": {"...": "one exact selected_sources entry from video-select"},
+  "lens_id": "the declared calibrated lens",
+  "calibration": "calibration.json",
+  "calibration_sha256": "SHA-256 of the exact accepted calibration report",
+  "reference": "sheet-points-for-this-image.json",
+  "keypoints": [{"name":"reviewed_target", "pixel_px":[640,480],
+                 "sigma_px":1, "partition":"fit"}]
+}
+```
+
+Relative paths resolve from the capture document except the video manifest's own
+image/mask paths, which remain relative to that manifest. Copy each complete
+`selected_sources` entry from `video-select`, preserving its decoded timestamp,
+already-applied rotation, image/mask hashes and lens epoch. The reference is the
+original `ftx-sheet-pose-input/1` document **without inline intrinsics**, as used
+with `sheet-pose --calibration`. Its `image` must equal that selected source's
+image label, and it must include at least one predeclared held-out sheet point.
+The source record retains both original file hashes and the decoded grayscale
+buffers used for selection; re-encoding a file therefore requires a new review.
+These person/sheet masks govern sharpness selection. They add no body silhouette
+constraints; optional fitting silhouettes require the separate review below.
+Every frame uses the same stationary `reference_id`. The calibration must match
+the declared lens, oriented image dimensions and rotation; one stream/epoch
+cannot silently switch calibration. Declared focal metadata, when present,
+must equal the checked calibration's focal lengths.
+
+The command reruns selection on current pixels, requires every requested source
+to match exactly and still be selected, recomputes the retained calibration and
+sheet pose, and then calls the unchanged articulated fitter. Original capture,
+selection and camera evidence stay in `capture_input` in the fit report. A
+changed image/mask, stale lens/calibration, failed camera or missing source
+refuses before fitting or publishing output. This does not authenticate caller
+labels or prove that the physical reference stayed stationary.
+Individual JSON sources are limited to 16 MiB; the retained capture evidence is
+limited to 4 MiB before model loading/fitting. Use a shorter reviewed decoded
+manifest when that budget is exceeded; no frames or evidence are silently dropped.
+
+Capture two or more sharp views with the same fixed, flat metric reference and
+stable lens settings. Decode locally with original presentation timestamps and
+apply orientation consistently to images, masks, keypoints and calibration;
+external FFmpeg and manual mask/correspondence review remain explicit steps.
+Choose fit/held-out observations and supported model targets before fitting.
+Independent poses may differ between images. Sharpness selection never asserts
+stillness; use the separate still-window/triangulation tools only for a reviewed
+stationary region or synchronized capture. Keep independent tape evidence for
+scale/shape observability. No accepted image fit makes measurements READY or
+establishes real-body accuracy or garment fit.
+
+With `--mesh-out NEW_DIR`, the existing local review also includes hash-checked
+copies of these original images under the observed/fitted overlays. They remain
+private workspace files (0700 directory, 0600 files); no images are embedded into
+Git or uploaded. If an image changes during fitting, review publication refuses.
+The existing 256 MiB complete review budget applies, including source images.
+
+For a clip that requires a **90-degree clockwise** display turn, an external
+decode recipe is:
+
+```sh
+(
+set -eu
+set -C
+mkdir capture-decode
+mkdir capture-decode/frames
+ffprobe -v error -select_streams v:0 -show_streams -show_frames -of json \
+  clip.mp4 > capture-decode/probe.json
+ffmpeg -hide_banner -nostdin -n -noautorotate -copyts -i clip.mp4 \
+  -map 0:v:0 -an -sn -vf 'transpose=clock,settb=1/1000000,showinfo' \
+  -fps_mode passthrough -enc_time_base 1:1000000 -f image2 -frame_pts 1 \
+  capture-decode/frames/%d.png 2> capture-decode/decode.log
+)
+```
+
+Use a new directory. Choose the actual display transform from the acquisition,
+verify it against the source, and record the clockwise turn actually applied.
+For already-oriented pixels use `settb=1/1000000,showinfo` without `transpose`.
+Names are packet presentation timestamps in the declared microsecond timebase,
+not frame ordinals. Check them against the probe and `showinfo` records; refuse
+missing, duplicate or negative timestamps instead of estimating from a nominal
+frame rate. Retain the original clip, probe, decode command and log locally.
+If an explicit stream-clock offset is needed, preserve its mapping to original
+timestamps in the decode receipt. Apply the same orientation to reviewed masks
+and coordinates; calibrate that exact orientation/resolution/lens setting.
+
+This recipe was exercised with FFmpeg 8.1.2 on a synthetic variable-rate clip:
+0, 17 and 70 ms produced `0.png`, `17000.png`, `70000.png`; the explicit turn
+changed 64×48 images to 48×64. It is decoder interoperability evidence, not a
+phone/camera or anatomy qualification. FFmpeg's [image2 documentation](https://ffmpeg.org/ffmpeg-formats.html#image2)
+defines the PTS filename option. FFmpeg is external software, not a library or
+runtime dependency of `ftx`.
+
+For the original prepared-coordinate input, the top-level document has exactly
+`schema: "ftx-anny-body-fit-input/1"`, `model`, and `fit`.
 Unknown keys, missing fields and misspelled parameters are errors. Vectors use JSON arrays,
 not objects with x/y/z keys. Use the same model topology and correspondence definitions in all
 images; there is deliberately no automatic mapping from a detector's "shoulder" to a mesh vertex.

@@ -6,6 +6,9 @@
 //! `cargo test -p ftx-cli --release --test body_model_fit -- --include-ignored`.
 //! The image-fit case uses synthetic projections of the full pinned model, not real photos.
 
+#[path = "support/capture.rs"]
+mod capture;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -469,4 +472,62 @@ fn production_image_fit_recovers_withheld_tapes_and_reuses_the_accepted_shape() 
         std::fs::read(dir.join("observations.json")).unwrap(),
         source
     );
+    let capture = capture::wrap(&dir, request);
+    std::fs::write(
+        dir.join("capture.json"),
+        serde_json::to_vec(&capture).unwrap(),
+    )
+    .unwrap();
+    let captured = production_command(
+        &dir,
+        &[
+            "measure",
+            "fit-body",
+            "capture.json",
+            "--model",
+            model_arg,
+            "--mesh-out",
+            "capture-review",
+        ],
+        0,
+        "capture-fit",
+    );
+    assert_eq!(captured["result"]["status"], "ACCEPTED");
+    assert_eq!(captured["result"]["capture_input"]["input"], capture);
+    for (i, name) in ftx_body::TAPE_FIELDS.iter().enumerate() {
+        let residual = (captured["result"]["solution"]["predicted_measurements_m"][i]
+            .as_f64()
+            .unwrap()
+            * 1000.0
+            - expected_tapes[i])
+            .abs();
+        let limit = if ftx_body::is_girth(name) { 3.0 } else { 2.0 };
+        assert!(
+            residual <= limit,
+            "capture {name}: {residual} mm > {limit} mm"
+        );
+        println!("production capture {name}: {residual:.9} mm (limit {limit} mm)");
+    }
+    for (i, truth) in [0.62, 0.43].iter().enumerate() {
+        assert!(
+            (captured["result"]["solution"]["shape"][i].as_f64().unwrap() - truth).abs() < 1e-5
+        );
+    }
+    let reused = production_command(
+        &dir,
+        &[
+            "body",
+            "--body-fit",
+            "capture-review/fit.json",
+            "--model",
+            model_arg,
+            "--pose",
+            "rest",
+            "--out",
+            "capture-body",
+        ],
+        0,
+        "capture-body",
+    );
+    assert_eq!(reused["result"]["body"]["shape_source"]["refitted"], false);
 }
