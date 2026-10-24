@@ -44,11 +44,11 @@ FrankenTextiles subsystem by subsystem as each reaches parity. It provides `ftx 
   the cloth solver.
 - `ftx drape PATTERN --measurements M --out DIR [--fit F] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N] [--model PATH]
   [--arm-deg DEG] [--self-contact-mm MM] [--self-mu MU] [--two-start] [--pose-end POSE] [--json]` (`--elastic-ea`: the stiffness EA in newtons of a drafted
-  casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does):
+  casing's elastic, default 15; 0 simulates the casing at its finished size as the reference does).
   `--elastic-hold-steps N` reports casing displacement during the last N accepted gravity steps;
   it adds no steps and changes no physics. Zero requests no window; N above `--drape` refuses.
   Duration, endpoint speed and quietness remain separate from ideal-ring capacity and physical fit.
-  an Anny body of the wearer's age (`wearer.age_months`) and sex (`wearer.sex`; unknown = sexes
+  It fits an Anny body of the wearer's age (`wearer.age_months`) and sex (`wearer.sex`; unknown = sexes
   averaged), fitted on the drape pose to whichever of the 21 tape measurements of
   `ftx_body::TAPE_FIELDS` the file has fused values for (the stature from `wearer.stature_mm` first) and
   to `wearer.weight_kg` or `wearer.bmi` when given (`ftx_body::fit_tape`; `Pose::drape`, hands and feet
