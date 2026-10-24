@@ -16,9 +16,9 @@ use ftx_drape::{
     scene::PartFrames,
 };
 use ftx_pattern::Pattern;
+use serde_json::{Value, json};
 
 static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
-use serde_json::{Value, json};
 
 struct Form;
 impl PartFrames for Form {

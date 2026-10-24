@@ -35,7 +35,7 @@ pub struct ContactParams {
     /// Offset ξ between the cloth mid-surface and the body (half the cloth thickness, m). The barrier acts
     /// on `distance − ξ`, so clearance is measured to the cloth's real surface.
     pub thickness: f64,
-    /// Barrier stiffness κ (J; scales `−(g − ĝ)² ln(g/ĝ)`, which is in m²).
+    /// Barrier stiffness κ (J/m² = N/m); multiplies `−(g − ĝ)² ln(g/ĝ)` in m².
     pub kappa: f64,
     /// Coulomb friction coefficient (0 = frictionless).
     pub mu: f64,
