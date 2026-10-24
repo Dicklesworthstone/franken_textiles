@@ -3,7 +3,10 @@ use std::{
     fs,
     path::PathBuf,
     process::{Command, Output},
-    sync::OnceLock,
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use ftx_core::{Vec3, det, receipt::sha256_hex};
@@ -13,6 +16,8 @@ use ftx_drape::{
     scene::PartFrames,
 };
 use ftx_pattern::Pattern;
+
+static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
 use serde_json::{Value, json};
 
 struct Form;
@@ -196,12 +201,13 @@ fn projection_input() -> Value {
 
 fn map_invoke(report: &Value, body: &str, request: &Value) -> (Output, PathBuf) {
     let root = std::env::temp_dir().join(format!(
-        "ftx-projection-{}-{}",
+        "ftx-projection-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&root).unwrap();
     fs::write(
@@ -460,12 +466,13 @@ fn conditions() -> Value {
 }
 fn invoke(r: &Value, m: &Value, c: &Value) -> (Output, PathBuf) {
     let root = std::env::temp_dir().join(format!(
-        "ftx-coverage-{}-{}",
+        "ftx-coverage-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT_WORKSPACE.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&root).unwrap();
     for (name, v) in [
