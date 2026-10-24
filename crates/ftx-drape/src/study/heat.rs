@@ -529,8 +529,8 @@ impl SurfaceHistory {
                         .map(|cells| vec![0.; cells.len()])
                         .collect()
                 });
-                for (cells, latent) in signed_heat.iter_mut().zip(&plan.latent_j) {
-                    cells[0] -= latent;
+                for (cells, liquid_heat) in signed_heat.iter_mut().zip(&plan.liquid_heat_j) {
+                    cells[0] += liquid_heat;
                 }
                 let mut next = self.model.advance_with_liquid(
                     &self.state,
@@ -723,10 +723,16 @@ impl SurfaceHistory {
             );
         }
         if let Some(water) = water_receipt {
+            let has_supply = water["supplied_liquid_kg"].is_number();
             result["surface_water"] = water;
             result["scope"] = json!(
                 "Independent-sheet heat on accepted mechanical geometry with explicitly qualified initial textile-owned free liquid and latent cooling. Vapor rates and exported sensible enthalpy sample old inner-cell temperature; implicit dry heat uses remaining liquid capacity. Event splitting handles dryout. All liquid and dry-textile energy terms are retained. Separately requested qualified mechanical heat is added once. No condensation, replenishment, sorption, wet-property inference, body-water transfer, temperature feedback to mechanics, added mechanical water mass, comfort or empirical garment claim."
             );
+            if has_supply {
+                result["scope"] = json!(
+                    "Independent-sheet heat on accepted mechanical geometry with source-qualified textile free liquid and separately sourced delivery rates and liquid temperatures. Reference area owns liquid and supply; current area conducts vapor. Latent removal and incoming sensible enthalpy enter the same conservative thermal balance, including independently requested mechanical heat. Exact net-depletion events handle dryout; dry supply can sustain evaporation or rewet the textile. Qualified loading-domain overflow refuses without drainage. No condensation, sorption, wet-property inference, body-water transfer, temperature feedback to mechanics, added mechanical water mass, comfort or empirical garment claim."
+                );
+            }
         }
         Ok(result)
     }

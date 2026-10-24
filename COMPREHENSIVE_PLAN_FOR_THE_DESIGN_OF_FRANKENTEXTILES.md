@@ -3273,6 +3273,36 @@ material locks remain in force; source policy for one material cannot authorize 
 
 ---
 
+### 25.76 Supply textile liquid with independent mass and sensible heat
+
+The initial-film cooling model now has an explicit version 2 continuation for supplied free liquid.
+Each retained instance declares independently sourced rates and incoming temperatures per mechanical
+interval. Delivery uses reference material area; evaporation still uses the current vapor path.
+Incoming sensible enthalpy joins the same conservative balance as dry textile storage, liquid storage,
+latent cooling, vapor export, boundary exchange and qualified material work. Dry patches can consume
+their incoming supply or rewet, while qualified maximum loading, temperature domains and condensation
+rules refuse unsupported intervals transactionally.
+
+Actual scenario comparisons can constrain supplied mass alongside temperature, evaporation and final
+inventory after reconstructing the exact schedule and its energy. Native and portable consumers retain
+the independent supply evidence and per-patch accounting. This remains a thermal free-film calculation:
+it adds no mechanical water mass, sorption, wicking, body-water transfer, wet material law or wearer-fit
+claim. Source-reported water or temperature uncertainty is not propagated.
+
+### 25.77 Constrain actual material-direction strain over declared garment regions
+
+Scenario studies can request raw material-frame Green strain on explicitly selected retained instances
+or the full retained garment. Production membrane gradients provide warp, weft and engineering shear;
+signed extrema retain exact source triangles, frozen materials and deterministic sampled witnesses.
+Initial and complete accepted-motion reports share an explicit aggregate work budget and preserve
+independent mechanical/manufacturing results when the optional consumer is unavailable.
+
+Static and motion comparison metrics support user-declared inclusive requirements on each direction.
+Decision admission reconciles source ownership, scope, canonical material domains, geometry identities,
+all accepted samples and consistent extrema. The browser exposes both the spatial scope and responsible
+samples. These are nominal design constraints: characterized strain domains are not failure limits,
+and sampled compliance establishes neither continuous-time safety nor comfort or physical garment fit.
+
 ## Appendix A. Sources
 
 - Brégier et al., "Human Mesh Modeling for Anny Body", arXiv 2511.03589 (2025); github.com/naver/anny.

@@ -28,6 +28,7 @@ pub mod heat;
 pub mod matrix;
 pub mod motion;
 mod options;
+pub mod strain;
 
 /// Coverage is anchored to triangle IDs on this session's collision body, never a saved old pose.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -96,6 +97,9 @@ pub struct Scenario {
     /// Optional source-model motion, continuing the same sewn cloth and material history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<motion::Request>,
+    /// Raw material-frame strain on selected retained instances; independent of other consumers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_strain: Option<strain::Request>,
 }
 
 fn default_motion_trials() -> usize {
@@ -169,6 +173,7 @@ pub struct Session<'a, 'body> {
     charged_motion_vertices: usize,
     motion_path: Option<Result<motion::Path, Refusal>>,
     heat_budget: heat::Budget,
+    strain_budget: strain::Budget,
 }
 
 impl<'a, 'body> Session<'a, 'body> {
@@ -202,6 +207,7 @@ impl<'a, 'body> Session<'a, 'body> {
             charged_motion_vertices: 0,
             motion_path: None,
             heat_budget: heat::Budget::default(),
+            strain_budget: strain::Budget::default(),
         })
     }
 
@@ -358,6 +364,11 @@ impl<'a, 'body> Session<'a, 'body> {
             self.charged_motion_vertices = total_retained;
             Ok((work, retained))
         });
+        let strain_admission = self
+            .scenario
+            .material_strain
+            .as_ref()
+            .map(|request| self.strain_budget.reserve(request));
         let mut run = drape(
             pattern,
             &self.scenario.fit_spec,
@@ -365,6 +376,10 @@ impl<'a, 'body> Session<'a, 'body> {
             &self.scenario.options,
             &mut progress,
         )?;
+        let mut material_strain = self.scenario.material_strain.as_ref().map(|request| {
+            strain_admission.expect("requested strain consumer has admission")?;
+            strain::History::new(request, &run)
+        });
         let surface = self
             .scenario
             .surface
@@ -403,6 +418,17 @@ impl<'a, 'body> Session<'a, 'body> {
             "charged_vertex_frames":charge,"physical_validation_claim":false,
             "comfort_claim":false,"hardware_execution_authorized":false,
             "note":"Heat is evaluated on this final computed frame even when drape flags require review. No scalar ranking or empirical fit/whole-wearer claim is made."});
+        if let Some(history) = &material_strain {
+            result["material_strain_ownership"] = json!({
+                "instances":run.scene.mesh.instances,
+                "triangle_instance":run.scene.triangle_owner});
+            result["material_strain"] = outcome(
+                history
+                    .as_ref()
+                    .map(|history| history.report(false))
+                    .map_err(Clone::clone),
+            );
+        }
         if let Some(policy) = &self.scenario.vapor_coverage {
             result["vapor_coverage"] =
                 outcome(vapor_coverage_at(policy, &run, self.body.collision));
@@ -425,6 +451,7 @@ impl<'a, 'body> Session<'a, 'body> {
                         self.body,
                         &mut run,
                         &mut self.heat_budget,
+                        material_strain.take(),
                         progress,
                     ),
                     Some(Err(refusal)) => Err(refusal.clone()),

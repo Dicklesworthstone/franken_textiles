@@ -182,6 +182,7 @@ impl Path {
 
 // Extend the kernel's per-segment transaction across the entire authored path, including velocity,
 // contact caches and material memories. Reserved thermal work stays charged after a refusal.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate(
     request: &Request,
     path: &Path,
@@ -189,16 +190,27 @@ pub(super) fn evaluate(
     body: &DrapeBody<'_>,
     run: &mut DrapeRun,
     heat_budget: &mut heat::Budget,
+    material_strain: Option<Result<super::strain::History, Refusal>>,
     progress: impl FnMut(&str),
 ) -> Result<Value, Refusal> {
     let initial = run.scene.solver.clone();
-    let result = evaluate_path(request, path, scenario, body, run, heat_budget, progress);
+    let result = evaluate_path(
+        request,
+        path,
+        scenario,
+        body,
+        run,
+        heat_budget,
+        material_strain,
+        progress,
+    );
     if result.is_err() {
         run.scene.solver = initial;
     }
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_path(
     request: &Request,
     path: &Path,
@@ -206,6 +218,7 @@ fn evaluate_path(
     body: &DrapeBody<'_>,
     run: &mut DrapeRun,
     heat_budget: &mut heat::Budget,
+    mut material_strain: Option<Result<super::strain::History, Refusal>>,
     mut progress: impl FnMut(&str),
 ) -> Result<Value, Refusal> {
     path.validate_for(request, body)?;
@@ -371,6 +384,11 @@ fn evaluate_path(
                 ));
             }
             accepted_time = time;
+            if let Some(Ok(history)) = &mut material_strain
+                && let Err(refusal) = history.advance(&sample.cloth, time)
+            {
+                material_strain = Some(Err(refusal));
+            }
             if let Some(Ok(history)) = &mut vapor_history
                 && let Err(refusal) = history.advance(crate::vapor::coverage::history::Sample {
                     time_s: time,
@@ -480,6 +498,9 @@ fn evaluate_path(
         "fit_claim":false,"settledness_claim":false,
         "thermal_basis":"Independent steady endpoint snapshots, not transient temperatures or heat during motion.",
         "scope":"Prescribed piecewise-linear body-vertex motion from the computed initial drape. All accepted substeps are retained; no independent restarts or empirical ride-up/fit claim. Body self-intersection is not certified."});
+    if let Some(history) = material_strain {
+        result["material_strain"] = outcome(history.map(|history| history.report(true)));
+    }
     if let Some(history) = initial_permanent_history {
         result["initial_membrane_plasticity_history"] = history;
     }
@@ -626,6 +647,7 @@ mod tests {
             &body,
             &mut run,
             &mut heat::Budget::default(),
+            None,
             |_| {},
         )
         .unwrap_err();

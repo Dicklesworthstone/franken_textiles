@@ -187,17 +187,34 @@ the same law, source-triangle prefix, six-node stencil and reference area, and r
 work. Unconsumed conversion observations do not split mechanical or uncoupled thermal protocols.
 Regressions: `tests/scenario_comparison/bending_heat.rs`; contract: `docs/bending-heat.md`.
 
-Source-qualified initial textile-water histories also reach the existing transient-surface
+Source-qualified textile-water histories also reach the existing transient-surface
 temperature and boundary-energy decisions. Nominal `textile_water_evaporated_mass_kg`,
 `textile_water_remaining_mass_kg` and `textile_water_latent_energy_j` objectives read the same
 admitted producer, separately from prescribed body-water histories. Admission matches frozen
 material assignments, initial thermal-frame reference topology/ownership, canonical Ret networks,
 per-patch final water and final dry/liquid sensible storage. Every retained sample reconciles
-monotone mass, latent energy, source-domain enthalpy and the combined boundary/mechanical balance.
+water inventory, latent energy, source-domain enthalpy and the combined boundary/mechanical balance.
 Missing, changed, unsupported or unrequested water cannot become zero or a feasible alternative.
 Consumed Ret protocols and the explicit coupling policy participate in protocol comparability.
 No wet-property characterization, propagated thermal/water intervals or continuous-time extrema
-are inferred; initial-only version 1 does not admit a supply-bearing ownership model.
+are inferred. Version 1 preserves initial-only ownership. Version 2 independently qualifies incoming
+liquid evidence and integrates each instance's reference-area delivery and incoming sensible enthalpy
+over every authored interval. `textile_water_supplied_mass_kg` reads that admitted cumulative delivery;
+rewetting may increase remaining liquid. Mixed schemas, missing feed evidence, altered schedules and
+unsupported loading cannot qualify. Incoming enthalpy is subtracted once in the full energy balance.
+
+**Scoped material-direction requirements.** `material_strain` and `motion_material_strain` admit raw
+dimensionless `[E11, E22, 2E12]` from the production membrane frame. Six static signed min/max metrics
+cover warp, weft and engineering shear; the `motion_` prefix requires the initial state and every
+accepted motion sample. Canonical materials/domains, complete selected triangle ownership, exact
+position/source hashes, work allowance, consistent local/global extrema and deterministic sampled
+witnesses are reconciled without duplicating the strain solver. Exact selected instances and strain
+convention participate in protocol identity; geometry may vary across declared design alternatives.
+Inclusive comparison bands are authored design requirements. Characterized domains are not failure
+limits, and these nominal sampled values establish neither safe fit nor continuous-time bounds.
+Unavailable motion strain preserves static strain readings and independent manufacturing results.
+Regressions include all twelve inclusive signed constraints, changed-source/partial-history refusal,
+actual portable design selection and native/compiled-WASM selected-body replay.
 
 **Material-following vapor studies** (`material_study::vapor`, plan §25.49). Explicit ordered layer
 occurrences resolve the final source-piece/default selections after every atomic material substitution.

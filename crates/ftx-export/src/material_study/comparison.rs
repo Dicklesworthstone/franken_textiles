@@ -14,6 +14,7 @@ use super::{Alternative, Request, ScenarioAlternative, hash, invalid};
 
 #[cfg(test)]
 mod heating_tests;
+mod material_strain;
 mod matrix;
 mod surface_water;
 mod wet_film;
@@ -55,6 +56,8 @@ pub enum Consumer {
     Vapor,
     /// Fresh, geometrically settled, gating-clear production drape in the retained scenario.
     Drape,
+    /// Raw material-frame Green strain on every selected retained triangle of the admitted drape.
+    MaterialStrain,
     /// Successful independent sheet-column heat on an admitted drape, not whole-body heat.
     Surface,
     /// Potential vapor transfer over current independent sheets on an admitted initial drape.
@@ -65,6 +68,8 @@ pub enum Consumer {
     VaporCoverage,
     /// Complete prescribed motion starting at this admitted drape, not independent static poses.
     Motion,
+    /// Raw material-frame strain over the initial state and every accepted motion sample.
+    MotionMaterialStrain,
     /// Complete potential vapor transfer on the declared covered body domain at every motion sample.
     MotionVaporCoverage,
     /// Conserved explicitly supplied body liquid over a complete covered-domain motion history.
@@ -129,6 +134,18 @@ pub enum Metric {
     SimulatedClothMassKg,
     /// Maximum absolute reported edge strain (%) across compression and extension, at report precision.
     MaxAbsoluteEdgeStrainPct,
+    /// Lowest raw warp Green strain E11 on the selected initial drape, dimensionless.
+    MinWarpGreenStrain,
+    /// Highest raw warp Green strain E11 on the selected initial drape, dimensionless.
+    MaxWarpGreenStrain,
+    /// Lowest raw weft Green strain E22 on the selected initial drape, dimensionless.
+    MinWeftGreenStrain,
+    /// Highest raw weft Green strain E22 on the selected initial drape, dimensionless.
+    MaxWeftGreenStrain,
+    /// Lowest signed raw engineering Green shear 2E12 on the selected initial drape.
+    MinEngineeringShearGreenStrain,
+    /// Highest signed raw engineering Green shear 2E12 on the selected initial drape.
+    MaxEngineeringShearGreenStrain,
     /// Signed independent sheet-column power (W), not an absolute value or warmth rating.
     IndependentSurfacePowerW,
     /// Potential latent transfer (W) over current independent draped sheets, not wearer heat loss.
@@ -143,6 +160,18 @@ pub enum Metric {
     CoveredVaporPotentialMassFlowKgS,
     /// Peak absolute original-panel edge strain (%) over the initial state and accepted motion samples.
     MotionMaxAbsoluteEdgeStrainPct,
+    /// Lowest selected raw warp E11 over the initial state and every accepted motion sample.
+    MotionMinWarpGreenStrain,
+    /// Highest selected raw warp E11 over the initial state and every accepted motion sample.
+    MotionMaxWarpGreenStrain,
+    /// Lowest selected raw weft E22 over the initial state and every accepted motion sample.
+    MotionMinWeftGreenStrain,
+    /// Highest selected raw weft E22 over the initial state and every accepted motion sample.
+    MotionMaxWeftGreenStrain,
+    /// Lowest selected signed engineering Green shear 2E12 over initial and accepted motion states.
+    MotionMinEngineeringShearGreenStrain,
+    /// Highest selected signed engineering Green shear 2E12 over initial and accepted motion states.
+    MotionMaxEngineeringShearGreenStrain,
     /// Declared quadrature of covered vapor potential over the requested motion, in joules.
     MotionCoveredVaporPotentialEnergyJ,
     /// Declared quadrature of covered vapor potential mass flow, in kilograms; no water supply.
@@ -161,6 +190,8 @@ pub enum Metric {
     TextileWaterEvaporatedMassKg,
     /// Liquid remaining on all qualified textile triangles at the final sample, in kilograms.
     TextileWaterRemainingMassKg,
+    /// Independently sourced liquid delivered to qualified textile reference areas, in kilograms.
+    TextileWaterSuppliedMassKg,
     /// Latent energy removed from the textile/liquid system over the complete motion, in joules.
     TextileWaterLatentEnergyJ,
     /// Signed incoming-side energy (J) for all independent sheets over the whole requested motion.
@@ -213,6 +244,12 @@ impl Metric {
             Self::ThreadObservedOrderCost => Consumer::SewingPurchasing,
             Self::VaporPotentialHeatFlowW | Self::VaporPotentialMassFlowKgS => Consumer::Vapor,
             Self::SimulatedClothMassKg | Self::MaxAbsoluteEdgeStrainPct => Consumer::Drape,
+            Self::MinWarpGreenStrain
+            | Self::MaxWarpGreenStrain
+            | Self::MinWeftGreenStrain
+            | Self::MaxWeftGreenStrain
+            | Self::MinEngineeringShearGreenStrain
+            | Self::MaxEngineeringShearGreenStrain => Consumer::MaterialStrain,
             Self::IndependentSurfacePowerW => Consumer::Surface,
             Self::IndependentVaporPotentialHeatFlowW
             | Self::IndependentVaporPotentialMassFlowKgS => Consumer::VaporSurface,
@@ -221,6 +258,12 @@ impl Metric {
                 Consumer::VaporCoverage
             }
             Self::MotionMaxAbsoluteEdgeStrainPct => Consumer::Motion,
+            Self::MotionMinWarpGreenStrain
+            | Self::MotionMaxWarpGreenStrain
+            | Self::MotionMinWeftGreenStrain
+            | Self::MotionMaxWeftGreenStrain
+            | Self::MotionMinEngineeringShearGreenStrain
+            | Self::MotionMaxEngineeringShearGreenStrain => Consumer::MotionMaterialStrain,
             Self::MotionCoveredVaporPotentialEnergyJ | Self::MotionCoveredVaporPotentialMassKg => {
                 Consumer::MotionVaporCoverage
             }
@@ -232,6 +275,7 @@ impl Metric {
             Self::TransientSurfaceInsideEnergyJ
             | Self::TextileWaterEvaporatedMassKg
             | Self::TextileWaterRemainingMassKg
+            | Self::TextileWaterSuppliedMassKg
             | Self::TextileWaterLatentEnergyJ
             | Self::TransientSurfaceMinSampleTemperatureC
             | Self::TransientSurfaceMaxSampleTemperatureC
@@ -263,7 +307,9 @@ impl Metric {
             | Self::MotionWetFilmRemainingLiquidMassKg
             | Self::MotionWetFilmUnmetDemandMassKg
             | Self::MotionWetFilmSuppliedMassKg => "kg",
-            Self::TextileWaterEvaporatedMassKg | Self::TextileWaterRemainingMassKg => "kg",
+            Self::TextileWaterEvaporatedMassKg
+            | Self::TextileWaterRemainingMassKg
+            | Self::TextileWaterSuppliedMassKg => "kg",
             Self::ObservedOrderCost
             | Self::SelectedObservedOrderCost
             | Self::CuttingJobObservedOrderCost
@@ -280,6 +326,18 @@ impl Metric {
             | Self::IndependentVaporPotentialMassFlowKgS => "kg/s",
             Self::SimulatedClothMassKg => "kg",
             Self::MaxAbsoluteEdgeStrainPct | Self::MotionMaxAbsoluteEdgeStrainPct => "%",
+            Self::MinWarpGreenStrain
+            | Self::MaxWarpGreenStrain
+            | Self::MinWeftGreenStrain
+            | Self::MaxWeftGreenStrain
+            | Self::MinEngineeringShearGreenStrain
+            | Self::MaxEngineeringShearGreenStrain
+            | Self::MotionMinWarpGreenStrain
+            | Self::MotionMaxWarpGreenStrain
+            | Self::MotionMinWeftGreenStrain
+            | Self::MotionMaxWeftGreenStrain
+            | Self::MotionMinEngineeringShearGreenStrain
+            | Self::MotionMaxEngineeringShearGreenStrain => "1",
             Self::IndependentSurfacePowerW | Self::BodyCoveragePowerW => "W",
             Self::TransientSurfaceInsideEnergyJ
             | Self::TransientCoverageInsideEnergyJ
@@ -333,6 +391,24 @@ impl Metric {
                 let hi = strain["max"].as_f64()?;
                 (lo.is_finite() && hi.is_finite() && lo <= hi).then(|| lo.abs().max(hi.abs()))
             }
+            Self::MinWarpGreenStrain => {
+                admitted.material_strain?["green_strain_range"][0][0].as_f64()
+            }
+            Self::MaxWarpGreenStrain => {
+                admitted.material_strain?["green_strain_range"][0][1].as_f64()
+            }
+            Self::MinWeftGreenStrain => {
+                admitted.material_strain?["green_strain_range"][1][0].as_f64()
+            }
+            Self::MaxWeftGreenStrain => {
+                admitted.material_strain?["green_strain_range"][1][1].as_f64()
+            }
+            Self::MinEngineeringShearGreenStrain => {
+                admitted.material_strain?["green_strain_range"][2][0].as_f64()
+            }
+            Self::MaxEngineeringShearGreenStrain => {
+                admitted.material_strain?["green_strain_range"][2][1].as_f64()
+            }
             Self::IndependentSurfacePowerW => {
                 simulation["surface"]["result"]["steady"]["power_w"].as_f64()
             }
@@ -353,6 +429,24 @@ impl Metric {
             }
             Self::MotionMaxAbsoluteEdgeStrainPct => {
                 admitted.motion["metrics"]["max_absolute_edge_strain_pct"].as_f64()
+            }
+            Self::MotionMinWarpGreenStrain => {
+                admitted.motion_material_strain?["green_strain_range"][0][0].as_f64()
+            }
+            Self::MotionMaxWarpGreenStrain => {
+                admitted.motion_material_strain?["green_strain_range"][0][1].as_f64()
+            }
+            Self::MotionMinWeftGreenStrain => {
+                admitted.motion_material_strain?["green_strain_range"][1][0].as_f64()
+            }
+            Self::MotionMaxWeftGreenStrain => {
+                admitted.motion_material_strain?["green_strain_range"][1][1].as_f64()
+            }
+            Self::MotionMinEngineeringShearGreenStrain => {
+                admitted.motion_material_strain?["green_strain_range"][2][0].as_f64()
+            }
+            Self::MotionMaxEngineeringShearGreenStrain => {
+                admitted.motion_material_strain?["green_strain_range"][2][1].as_f64()
             }
             Self::MotionCoveredVaporPotentialEnergyJ => {
                 admitted.motion_vapor_coverage?["totals"]["potential_energy_j"].as_f64()
@@ -381,6 +475,10 @@ impl Metric {
             }
             Self::TextileWaterRemainingMassKg => {
                 admitted.transient_surface.as_ref()?.result["surface_water"]["remaining_liquid_kg"]
+                    .as_f64()
+            }
+            Self::TextileWaterSuppliedMassKg => {
+                admitted.transient_surface.as_ref()?.result["surface_water"]["supplied_liquid_kg"]
                     .as_f64()
             }
             Self::TextileWaterLatentEnergyJ => {
@@ -447,7 +545,19 @@ impl Metric {
     fn signed(self) -> bool {
         matches!(
             self,
-            Self::IndependentSurfacePowerW
+            Self::MinWarpGreenStrain
+                | Self::MaxWarpGreenStrain
+                | Self::MinWeftGreenStrain
+                | Self::MaxWeftGreenStrain
+                | Self::MinEngineeringShearGreenStrain
+                | Self::MaxEngineeringShearGreenStrain
+                | Self::MotionMinWarpGreenStrain
+                | Self::MotionMaxWarpGreenStrain
+                | Self::MotionMinWeftGreenStrain
+                | Self::MotionMaxWeftGreenStrain
+                | Self::MotionMinEngineeringShearGreenStrain
+                | Self::MotionMaxEngineeringShearGreenStrain
+                | Self::IndependentSurfacePowerW
                 | Self::BodyCoveragePowerW
                 | Self::TransientSurfaceInsideEnergyJ
                 | Self::TransientCoverageInsideEnergyJ
@@ -691,11 +801,13 @@ impl Policy {
                 Consumer::AssemblyMass => request.assembly_mass.is_some(),
                 Consumer::Vapor => request.vapor.is_some(),
                 Consumer::Drape
+                | Consumer::MaterialStrain
                 | Consumer::Surface
                 | Consumer::VaporSurface
                 | Consumer::Coverage
                 | Consumer::VaporCoverage
                 | Consumer::Motion
+                | Consumer::MotionMaterialStrain
                 | Consumer::MotionVaporCoverage
                 | Consumer::MotionWetFilm
                 | Consumer::TransientSurface
@@ -729,11 +841,13 @@ impl Policy {
             matches!(
                 c,
                 Consumer::Drape
+                    | Consumer::MaterialStrain
                     | Consumer::Surface
                     | Consumer::VaporSurface
                     | Consumer::Coverage
                     | Consumer::VaporCoverage
                     | Consumer::Motion
+                    | Consumer::MotionMaterialStrain
                     | Consumer::MotionVaporCoverage
                     | Consumer::MotionWetFilm
                     | Consumer::TransientSurface
@@ -747,6 +861,7 @@ impl Policy {
             matches!(
                 c,
                 Consumer::Motion
+                    | Consumer::MotionMaterialStrain
                     | Consumer::MotionVaporCoverage
                     | Consumer::MotionWetFilm
                     | Consumer::TransientSurface
@@ -858,8 +973,8 @@ impl Policy {
                 "Matching reported protocols is a software comparison rule, not proof that specimens or experiments are comparable. Missing or refused required outputs exclude a row without erasing other consumers.",
                 "Stock mass includes waste, costs are dated complete independent order observations, and feed time excludes handling. No empirical fit, warmth, hardware authorization or global optimum is claimed.",
                 "Scenario objectives require matching pattern/body/scenario identities, geometric settledness and clear gating. Geometric settledness is not viscoelastic stress equilibrium or empirical fit; simulated cloth mass excludes omitted components.",
-                "Heat powers keep their signed directions and distinct sheet/domain bases. Strain uses the production report's edge extrema and precision, not an invented fit score. Different nonlinear constitutive records are conservatively protocol-incomparable unless explicitly admitted.",
-                "Motion is required only when declared by the comparison policy. Motion objectives use a complete source/path/time-matched trajectory from a settled, gating-clear initial drape; the final moving state need not be at rest. Peak strain is over original-panel edges and retained samples, not continuous-time rupture or anatomical fit.",
+                "Heat powers keep their signed directions and distinct sheet/domain bases. Edge-strain metrics use the production report's edge extrema and precision, not an invented fit score. Different nonlinear constitutive records are conservatively protocol-incomparable unless explicitly admitted.",
+                "Motion is required only when declared by the comparison policy. Motion objectives use a complete source/path/time-matched trajectory from a settled, gating-clear initial drape; the final moving state need not be at rest. Peak edge strain is over original-panel edges and retained samples, not continuous-time rupture or anatomical fit.",
                 "Transient objectives require a complete policy/path/geometry/time-matched history at every accepted mechanical sample. Energy retains its incoming-side sign and model domain; coverage includes bare paths and explicitly exposed-cloth films, not certified whole-wearer loss. Sheet and coverage energies must not be added together.",
                 "Sample temperature extrema include the declared initial state and retained mechanical sample endpoints; final temperature extrema use only the final accepted sample. Neither is a continuous-time bound or the extrema of unreported thermal substeps. Net boundary energy excludes remap residual and cancelling bare-body paths. Numerical energy/remap residuals remain in source reports; nominal admission is not empirical accuracy, a comfort threshold, or propagated uncertainty.",
             ],
@@ -867,15 +982,21 @@ impl Policy {
         if self.consumers().contains(&Consumer::Vapor) {
             report.notes.push("Vapor objectives use the declared common-area stack, pressure boundaries, films and latent heat. They describe potential transfer, not actual evaporation, sweating, condensation or wearer comfort; source protocols must be admitted independently of other thermal consumers.");
         }
+        if self.consumers().contains(&Consumer::MaterialStrain)
+            || self.consumers().contains(&Consumer::MotionMaterialStrain)
+        {
+            report.notes.push("Material-strain objectives use signed, dimensionless raw material-frame Green strains [E11, E22, 2E12] before numerical gather/compression softening, on the explicitly selected retained instances. Motion extrema include the initial state and every accepted mechanical sample; no continuous-time bound is claimed. Canonical source domains describe constitutive characterization support. Authored comparison constraints are design requirements, never measured failure, rupture, comfort or safe-fit limits. Static and motion strain consumers remain independent of thermal qualification; a refused motion history cannot substitute its static result.");
+        }
         if self.metrics().iter().any(|metric| {
             matches!(
                 metric,
                 Metric::TextileWaterEvaporatedMassKg
                     | Metric::TextileWaterRemainingMassKg
+                    | Metric::TextileWaterSuppliedMassKg
                     | Metric::TextileWaterLatentEnergyJ
             )
         }) {
-            report.notes.push("Textile-water objectives require the source-qualified initial free-film history, canonical Ret networks and the complete liquid/vapor energy ledger on the admitted motion. Reference material area owns water; current area conducts vapor. Latent energy is removed from the textile/liquid system, separately from any prescribed body-water reservoir. These are nominal conditional computations, not wet-property characterization, continuous-time temperature bounds, supplied water, comfort or measured garment validation.");
+            report.notes.push("Textile-water objectives require the source-qualified free-film history, canonical Ret networks and the complete liquid/vapor energy ledger on the admitted motion. Reference material area owns initial and supplied water; current area conducts vapor. Version 2 independently qualifies and integrates each incoming-liquid schedule and its sensible enthalpy. Latent energy is removed from the textile/liquid system, separately from any prescribed body-water reservoir. These are nominal conditional computations, not wet-property characterization, continuous-time temperature bounds, comfort or measured garment validation.");
         }
         if self.consumers().contains(&Consumer::VaporSurface) {
             report.notes.push("Independent draped-sheet vapor objectives use the admitted initial geometry, retained source Ret and declared pressure/film/latent-heat conditions. Overlapping sheets remain independent; these potentials are not covered-body evaporation, water supply, latent cooling, continuous motion totals or comfort. Consumed column protocols require separate cross-alternative admission.");
@@ -956,14 +1077,22 @@ impl Policy {
         };
         let mut admitted = Numerical {
             drape: simulation,
+            material_strain: None,
             vapor_surface: &Value::Null,
             vapor_coverage: None,
             motion: &Value::Null,
+            motion_material_strain: None,
             motion_vapor_coverage: None,
             motion_wet_film: None,
             transient_surface: None,
             transient_coverage: None,
         };
+        if self.consumers().contains(&Consumer::MaterialStrain) && !simulation.is_null() {
+            match material_strain::admit(row, descriptor, simulation, None) {
+                Ok(strain) => admitted.material_strain = Some(strain),
+                Err(e) => result.exclusions.push(e),
+            }
+        }
         if self.consumers().contains(&Consumer::VaporSurface) && !simulation.is_null() {
             match admit_vapor_surface(row, descriptor, simulation) {
                 Ok(vapor) => admitted.vapor_surface = vapor,
@@ -983,6 +1112,12 @@ impl Policy {
             }
         }
         if !admitted.motion.is_null() {
+            if self.consumers().contains(&Consumer::MotionMaterialStrain) {
+                match material_strain::admit(row, descriptor, simulation, Some(admitted.motion)) {
+                    Ok(strain) => admitted.motion_material_strain = Some(strain),
+                    Err(e) => result.exclusions.push(e),
+                }
+            }
             if self.consumers().contains(&Consumer::MotionVaporCoverage)
                 || self.consumers().contains(&Consumer::MotionWetFilm)
             {
@@ -1354,6 +1489,26 @@ impl Policy {
                 Value::Null
             },
         ))?;
+        for (consumer, strain) in [
+            (Consumer::MaterialStrain, admitted.material_strain),
+            (
+                Consumer::MotionMaterialStrain,
+                admitted.motion_material_strain,
+            ),
+        ] {
+            if consumers.contains(&consumer) {
+                let strain =
+                    strain.ok_or_else(|| invalid("admitted material-strain scope unavailable"))?;
+                // Compare the same physical instance scope and raw convention. Geometry and
+                // source-triangle count may legitimately change across declared design alternatives.
+                base = hash(&(
+                    base,
+                    json!({"consumer":consumer,
+                    "instances":strain["source"]["instances"],"scope":strain["scope"],
+                    "strain_convention":strain["strain_convention"],"unit":strain["unit"]}),
+                ))?;
+            }
+        }
         if textile_water {
             base = hash(&(
                 &base,
@@ -1481,9 +1636,11 @@ impl Policy {
 // static reading vanish, and an available status alone must not admit stale numerical results.
 struct Numerical<'a> {
     drape: &'a Value,
+    material_strain: Option<&'a Value>,
     vapor_surface: &'a Value,
     vapor_coverage: Option<&'a Value>,
     motion: &'a Value,
+    motion_material_strain: Option<&'a Value>,
     motion_vapor_coverage: Option<&'a Value>,
     motion_wet_film: Option<&'a Value>,
     transient_surface: Option<Heat<'a>>,
@@ -1536,11 +1693,13 @@ fn consumer_available(row: &Alternative, consumer: Consumer, admitted: &Numerica
         }),
         Consumer::Vapor => row.vapor.value().is_some(),
         Consumer::Drape => !admitted.drape.is_null(),
+        Consumer::MaterialStrain => admitted.material_strain.is_some(),
         Consumer::Surface => admitted.drape["surface"]["status"] == "available",
         Consumer::VaporSurface => !admitted.vapor_surface.is_null(),
         Consumer::Coverage => admitted.drape["coverage"]["status"] == "available",
         Consumer::VaporCoverage => admitted.vapor_coverage.is_some(),
         Consumer::Motion => !admitted.motion.is_null(),
+        Consumer::MotionMaterialStrain => admitted.motion_material_strain.is_some(),
         Consumer::MotionVaporCoverage => admitted.motion_vapor_coverage.is_some(),
         Consumer::MotionWetFilm => admitted.motion_wet_film.is_some(),
         Consumer::TransientSurface => admitted.transient_surface.is_some(),
