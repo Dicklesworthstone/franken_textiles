@@ -57,7 +57,7 @@ const USAGE: &str = "usage:
   ftx round WS [--pattern P] [--measurements M] [--fit F] [--fabric F.json] [--export]
             [--sim|--stills] [--body-fit REPORT] [--arm-deg DEG] [--res WIDTHxHEIGHT]
             [--update-measurements] [--note TEXT] [--as-of DATE] [--created YYYY-MM-DDTHH:MM] [--json]
-  ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N]
+  ftx drape PATTERN --measurements M --out DIR [--fit F] [--fabric F.json] [--sew N] [--drape N] [--elastic-ea N] [--elastic-hold-steps N]
             [--two-start-sew N] [--spread-vertex-mm 10] [--spread-hem-mm 6]
             [--spread-clearance-mm 3] [--spread-seam-pp 1.5]
             [--model PATH] [--body-fit REPORT] [--arm-deg DEG] [--spacing-mm MM] [--self-contact-mm MM] [--self-mu MU] [--json]
@@ -612,6 +612,7 @@ fn drape_options(args: &Args) -> Result<DrapeOptions, Refusal> {
     for (name, slot) in [
         ("sew", &mut opts.sew_steps),
         ("drape", &mut opts.drape_steps),
+        ("elastic-hold-steps", &mut opts.elastic_hold_steps),
     ] {
         if let Some(v) = args.options.get(name) {
             *slot = v
@@ -712,6 +713,7 @@ fn cmd_drape(args: &Args) -> Result<(Value, i32, String), Refusal> {
             "spacing-mm",
             "self-mu",
             "elastic-ea",
+            "elastic-hold-steps",
             "arm-deg",
             "body-fit",
             "two-start-sew",
@@ -1176,6 +1178,9 @@ mod tests {
             vec!["--self-contact-mm", "1", "--self-mu", "NaN"],
             vec!["--self-mu", "0.4"],
             vec!["--sew", "0", "--drape", "0"],
+            vec!["--elastic-hold-steps", "37"],
+            vec!["--elastic-hold-steps", "-1"],
+            vec!["--elastic-hold-steps", "1.5"],
         ] {
             let mut argv = vec!["drape", "file-that-does-not-exist.json"];
             argv.extend(options);
@@ -1188,6 +1193,8 @@ mod tests {
             drape_options(&args).unwrap_err().code,
             RefusalCode::BudgetExceeded
         );
+        let args = parse(&["drape", "--elastic-hold-steps", "2"].map(String::from)).unwrap();
+        assert_eq!(drape_options(&args).unwrap().elastic_hold_steps, 2);
     }
 
     #[test]

@@ -45,6 +45,8 @@ pub struct DrapeOptions {
     pub sew_steps: usize,
     /// Steps under gravity.
     pub drape_steps: usize,
+    /// Report-only hold window: last N accepted gravity steps; zero means not requested.
+    pub elastic_hold_steps: usize,
     /// Time step (s).
     pub step: f64,
     /// Newton tolerance on ‖Δx‖∞/h (m/s). The default, 1e-3 (each step converged to 42 µm), halves the
@@ -86,6 +88,7 @@ impl Default for DrapeOptions {
             spacing: 12.0,
             sew_steps: 12,
             drape_steps: 36,
+            elastic_hold_steps: 0,
             step: 1.0 / 24.0,
             tol: 1e-3,
             compression: 1.0,
@@ -136,6 +139,12 @@ impl DrapeOptions {
             ));
         }
         Refusal::finite("elastic stiffness", self.elastic_ea)?;
+        if self.elastic_hold_steps > self.drape_steps {
+            return Err(Refusal::new(
+                RefusalCode::OutOfRange,
+                "elastic hold window cannot exceed the declared gravity steps",
+            ));
+        }
         if self.elastic_ea < 0.0 {
             return Err(Refusal::new(
                 RefusalCode::OutOfRange,
@@ -354,7 +363,7 @@ pub fn drape(
     add_numerical_report(&mut report, &sew, &drape, opts);
     report["material"] = material.report;
     add_contact_report(&mut report, &scene, &sew, &drape, initial_contact.as_ref());
-    add_casing_windows(&mut report, &scene, &fold, &initial_positions, opts);
+    add_casing_windows(&mut report, &scene, &fold, &initial_positions, &drape, opts);
     if let Some(fabrics) = &material.piece_fabrics {
         report["fabric"] = json!({"basis":"per_piece", "see":"material.records"});
         let mut area = vec![0.0; scene.mesh.instances.len()];
@@ -575,6 +584,7 @@ fn add_casing_windows(
     scene: &Scene,
     fold: &FoldUp,
     initial: &[Vec3],
+    phase: &PhaseReport,
     opts: &DrapeOptions,
 ) {
     let start = FOLD_FRAMES + ZIP_FRAMES + opts.sew_steps;
@@ -603,8 +613,36 @@ fn add_casing_windows(
             .enumerate()
             .filter_map(|(i, &v)| (solver_vertices.contains(&v) && seen.insert(v)).then_some(i))
             .collect();
-        windows.push(json!({"instance":group.casing.instance,"window":band_window(initial,frames,&vertices,opts.step)}));
+        let hold = if opts.elastic_hold_steps == 0 {
+            json!({"status":"not_requested"})
+        } else {
+            let offset = opts.drape_steps - opts.elastic_hold_steps;
+            let anchor = if offset == 0 {
+                initial
+            } else {
+                &frames[offset - 1]
+            };
+            let mut hold = band_window(anchor, &frames[offset..], &vertices, opts.step);
+            hold["first_gravity_step"] = json!(offset + 1);
+            hold["last_gravity_step"] = json!(opts.drape_steps);
+            let samples = &phase.samples[offset..];
+            hold["maximum_vertex_speed_m_s"] =
+                json!(samples.iter().map(|s| s.max_speed_m_s).fold(0., f64::max));
+            hold["quiet_at_1_mm_s"] = json!(
+                samples
+                    .iter()
+                    .all(|s| s.solve.converged && s.max_speed_m_s <= 1e-3)
+            );
+            hold["basis"] = json!(
+                "caller-declared last N accepted gravity steps on a static body; geometric mean-band displacement, not contact-point slip; quietness checks every cloth vertex and does not establish stress equilibrium, physical hold or fit"
+            );
+            hold
+        };
+        windows.push(json!({"instance":group.casing.instance,
+            "window":band_window(initial,frames,&vertices,opts.step),"declared_hold":hold}));
     }
+    report["elastic_hold_window"] = json!({"requested_steps":opts.elastic_hold_steps,
+        "status":if opts.elastic_hold_steps == 0 {"not_requested"} else if windows.is_empty() {"unavailable_no_elastic_casings"} else {"available"}});
     report["elastic_observation_windows"] = json!(windows);
 }
 

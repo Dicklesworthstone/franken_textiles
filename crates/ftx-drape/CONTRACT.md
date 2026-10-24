@@ -51,6 +51,12 @@ Each elastic casing also reports signed and peak sampled mean-height displacemen
 static body during the declared gravity phase, with duration and sample count. This window includes
 settling; it is not contact-point slip or a stationary hold experiment. The ideal-ring grip estimate
 remains separate. These outputs establish no measured pressure, comfort or real-person fit.
+An explicit `elastic_hold_steps` (CLI `--elastic-hold-steps`, also forwarded by `round --sim`)
+selects the last N accepted gravity intervals without adding steps or changing physics. N may not
+exceed `drape_steps`; zero requests no hold window and is omitted from serialized scenario options.
+The report retains duration, step indices, sampled displacement, maximum vertex speed and whether
+every accepted endpoint is at most 1 mm/s. A moving window remains visible with false quietness;
+it cannot become a stationary hold, stress-equilibrium or fit claim by selecting it.
 
 **Attached trim/accessory mass** (`attached_mass`). Optional source-qualified total groups bind named
 physical pattern corners through the actual seam weld map. Explicit shares add once to sheet masses,

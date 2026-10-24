@@ -379,6 +379,7 @@ fn independent_casings_drive_joint_physics_and_replay_without_merging_grip_or_lo
     let before = serde_json::to_vec(&input).unwrap();
     let opts = DrapeOptions {
         spacing: 24.0,
+        elastic_hold_steps: 2,
         ..options()
     };
     let prepared = prepare(&input, &opts).unwrap();
@@ -417,6 +418,18 @@ fn independent_casings_drive_joint_physics_and_replay_without_merging_grip_or_lo
     assert_eq!(windows.len(), 2);
     for (i, group) in run.scene.elastic_groups.iter().enumerate() {
         assert_eq!(windows[i]["instance"], casings[i].instance);
+        let hold = &windows[i]["declared_hold"];
+        assert_eq!(hold["status"], "available");
+        assert_eq!(hold["duration_s"], 2.0 * opts.step);
+        assert_eq!(hold["samples"], 3);
+        assert_eq!(hold["first_gravity_step"], 2);
+        assert_eq!(hold["last_gravity_step"], 3);
+        assert_eq!(
+            hold["quiet_at_1_mm_s"],
+            run.drape.samples[1..]
+                .iter()
+                .all(|s| s.max_speed_m_s <= 1e-3)
+        );
         assert_eq!(
             windows[i]["window"]["duration_s"],
             opts.drape_steps as f64 * opts.step
@@ -465,6 +478,28 @@ fn independent_casings_drive_joint_physics_and_replay_without_merging_grip_or_lo
     );
     let replay = ftx_drape::run::drape(&restored, &json!({}), &body(&skin), &opts, |_| {}).unwrap();
     assert_eq!(run.scene.solver.x, replay.scene.solver.x);
+    let ordinary = ftx_drape::run::drape(
+        &restored,
+        &json!({}),
+        &body(&skin),
+        &DrapeOptions {
+            elastic_hold_steps: 0,
+            ..opts
+        },
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(
+        run.scene.solver.x, ordinary.scene.solver.x,
+        "report-only hold selection must not alter the trajectory"
+    );
+    assert!(
+        ordinary.report["elastic_observation_windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["declared_hold"]["status"] == "not_requested")
+    );
     assert_eq!(
         run.report["elastic_observation_windows"],
         replay.report["elastic_observation_windows"]
@@ -476,6 +511,7 @@ fn independent_casings_drive_joint_physics_and_replay_without_merging_grip_or_lo
         &DrapeOptions {
             sew_steps: 6,
             drape_steps: 0,
+            elastic_hold_steps: 0,
             ..opts
         },
         |_| {},
