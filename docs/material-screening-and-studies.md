@@ -649,6 +649,12 @@ empty binding change illustrated above. Geometry candidates use unique nonempty 
 nonempty operation lists. `ftx-material-study/1` rejects a `designs` array and keeps its existing
 fixed-geometry result shape.
 
+The workbench's material-group builder accepts either study schema. For a design policy, retain its
+`designs` and process/comparison fields and omit `variants`, `screened` and `combinations`; choose the
+materials in the page. The builder adds the frozen groups without rewriting the original operations,
+numeric source text or policy schema. The shared engine still limits the complete design/material
+product, including baseline and invalid designs, to 32 rows.
+
 | Operation | Required fields | Canonical effect |
 | --- | --- | --- |
 | `slash_spread` | `piece`, `axis`, `at_mm`, `add_mm` | Shift coordinates strictly beyond the cut; `x` changes width and `y` changes length. Negative spreads remove width/length. |

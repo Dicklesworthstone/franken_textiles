@@ -2150,10 +2150,12 @@ function addChoice(p, group, choice, pieces = ['front']) {
 }
 
 test('combination controls retain frozen selections and exact policy/pair numbers for native study evaluation', async () => {
+  for (const schema of ['ftx-material-study/1','ftx-design-study/1']) {
   const p = await pageModule(); await p.load();
   p.e.combinationMode.checked = true; p.e.combinationMode.handlers.change();
   assert.equal(p.e.study.disabled, true);
-  const policy = '{"schema":"ftx-material-study/1","assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[],"seam_allowance_mm":-0.0}}';
+  const designs = schema==='ftx-design-study/1' ? ',"designs":[{"key":"wider","operations":[{"op":"slash_spread","piece":"front","axis":"x","at_mm":10.0,"add_mm":8.0}]}]' : '';
+  const policy = `{"schema":"${schema}"${designs},"assembly_mass":{"schema":"ftx-assembly-mass/1","inventory_complete":true,"extras":[],"seam_allowance_mm":-0.0}}`;
   p.select('studyRequest', policy); p.e.studyRequest.handlers.change();
   await p.inspect('light'); addChoice(p, 'shell', 'light');
   await p.inspect('heavy'); addChoice(p, 'shell', 'heavy');
@@ -2163,7 +2165,11 @@ test('combination controls retain frozen selections and exact policy/pair number
   p.select('combinationInterfaces', pairs); p.e.combinationInterfaces.handlers.change();
   assert.equal(p.e.study.disabled, false);
   await p.e.study.onclick();
-  const sent = p.current().messages.at(-1), request = JSON.parse(sent.studyRequest);
+  const sent = p.current().messages.at(-1);
+  assert.equal(sent?.type,'study',p.e.error.textContent);
+  const request = JSON.parse(sent.studyRequest);
+  assert.equal(request.schema,schema);
+  if (designs) assert.ok(sent.studyRequest.includes(designs));
   assert.ok(sent.studyRequest.includes('"seam_allowance_mm":-0.0'));
   assert.ok(sent.studyRequest.includes(pairs));
   assert.equal(request.combinations.groups[0].choices[0].selection.expected_sha256, 'locked');
@@ -2181,6 +2187,7 @@ test('combination controls retain frozen selections and exact policy/pair number
   assert.match(p.e.combinationCount.textContent, /^2 complete/);
   await p.e.study.onclick();
   assert.equal(JSON.parse(p.current().messages.at(-1).studyRequest).combinations.groups[0].choices[1].selection.id, 'replacement');
+  }
 });
 
 test('combination controls reject overlapping targets, changed group targets, excessive products and ambiguous study sources', async () => {
@@ -2193,10 +2200,16 @@ test('combination controls reject overlapping targets, changed group targets, ex
   assert.match(p.e.combinationCount.textContent, /^32 complete/);
   addChoice(p, 'shell', 'too many'); assert.match(p.e.error.textContent, /limit of 32/);
   assert.match(p.e.combinationCount.textContent, /^32 complete/);
-  p.select('studyRequest','{"schema":"ftx-material-study/1","variants":[]}');
-  const before = p.current().messages.length; await p.e.study.onclick();
-  assert.equal(p.current().messages.length, before);
-  assert.match(p.e.error.textContent, /must omit variants/);
+  for (const schema of ['ftx-material-study/1','ftx-design-study/1']) for (const source of ['variants','screened','combinations']) {
+    p.select('studyRequest',JSON.stringify({schema,[source]:[]}));
+    const before = p.current().messages.length; await p.e.study.onclick();
+    assert.equal(p.current().messages.length, before);
+    assert.match(p.e.error.textContent, /must omit variants/);
+  }
+  for (const policy of ['null','[]','"not an object"','{"schema":"wrong"}']) {
+    p.select('studyRequest',policy);const before=p.current().messages.length;await p.e.study.onclick();
+    assert.equal(p.current().messages.length,before);assert.match(p.e.error.textContent,/policy object/);
+  }
   p.e.clearCombinations.onclick(); assert.equal(p.e.study.disabled, true);
   addChoice(p, 'base', 'one', null); addChoice(p, 'another base', 'two', null);
   assert.match(p.e.error.textContent, /Only one group/);
@@ -3175,6 +3188,57 @@ test('assembly mass and finite stock retain independent totals and refusals in m
 // Opt in after tools/build_web.sh. This executes the real production WASM through the actual
 // worker module, with only the Node transport/module loader adapted. It is not HTTP/browser or
 // native parity, successful anatomical body fitting, or empirical textile validation.
+test('compiled WASM authored designs replay real stock and sewing while excluding invalid geometry',
+  { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
+    const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');
+    const ftx=await import(require('node:url').pathToFileURL(path.join(pkg,'ftx_wasm.js')).href);
+    ftx.initSync({module:fs.readFileSync(path.join(pkg,'ftx_wasm_bg.wasm'))});
+    const pattern=fs.readFileSync(path.join(__dirname,'../tests/fixtures/materials/synthetic-sewing-pattern.json'),'utf8');
+    const original=fs.readFileSync(path.join(__dirname,'../examples/design-study.json'),'utf8');
+    for (const width of [0.100,0.090]) {
+      const input=JSON.parse(original);
+      input.variants[0].changes.default.record.properties.width.value=width;
+      const request=JSON.stringify(input), raw=ftx.material_study(pattern,request), report=JSON.parse(raw);
+      assert.equal(report.schema,'ftx-design-study-report/1');assert.equal(report.alternatives.length,8);
+      assert.equal(report.physical_validation_claim,false);assert.equal(report.hardware_execution_authorized,false);
+      assert.equal(ftx.material_study(pattern,request),raw);
+      for (const row of report.alternatives) {
+        const design=row.design;
+        assert.equal(design.source_pattern_sha256,report.source_pattern_sha256);
+        if (design.key==='unbalanced-seam') {
+          assert.equal(design.validation.passed,false);assert.equal(row.binding.status,'refused');
+          assert.equal(row.cutting.status,'refused');assert.equal(row.sewing.status,'refused');
+          assert.equal(report.comparison.frontier.includes(row.key),false);continue;
+        }
+        assert.equal(design.validation.passed,true);
+        const rebound=JSON.parse(ftx.material_bind(design.altered_pattern_json,JSON.stringify(row.frozen_changes)));
+        const bound=row.binding.result.pattern_json;
+        assert.equal(rebound.pattern_json,bound);
+        assert.equal(row.binding.result.source_pattern_sha256,design.altered_pattern_sha256);
+        assert.deepEqual(JSON.parse(ftx.cut_plan(bound,JSON.stringify(input.cutting))),row.cutting.result);
+        assert.deepEqual(JSON.parse(ftx.sew_plan(bound,JSON.stringify(input.sewing))),row.sewing.result);
+      }
+      const row=key=>report.alternatives.find(r=>r.design.key===key&&r.design.material_key==='light-sheet');
+      for (const [key,cutWidth,length] of [['baseline',0.040,0.120],['more-ease',0.048,width===0.100?0.120:0.242]]) {
+        const metrics=row(key).metrics;
+        assert.ok(Math.abs(metrics.external_cut_area_m2-2*cutWidth*0.120)<1e-14);
+        assert.ok(Math.abs(metrics.stock_area_m2-width*length)<1e-14);
+        assert.ok(Math.abs(metrics.stock_mass_kg-width*length*0.180)<1e-14);
+      }
+      assert.equal(row('more-ease').metrics.feed_seconds,row('baseline').metrics.feed_seconds);
+      assert.ok(row('longer').metrics.feed_seconds>row('baseline').metrics.feed_seconds);
+      const fixed={...input,schema:'ftx-material-study/1'};delete fixed.designs;
+      for (const prior of JSON.parse(ftx.material_study(pattern,JSON.stringify(fixed))).alternatives) {
+        const baseline=structuredClone(report.alternatives.find(r=>r.design.key==='baseline'&&r.design.material_key===prior.key));
+        delete baseline.design;baseline.key=prior.key;assert.deepEqual(baseline,prior);
+      }
+      assert.throws(()=>ftx.material_study(pattern,JSON.stringify({...input,schema:'ftx-material-study/1'})));
+      const over={...input,designs:Array.from({length:16},(_,i)=>({key:`extra-${i}`,operations:[
+        {op:'move',piece:'front',vertex:'b',dx_mm:0,dy_mm:0}]}))};
+      assert.throws(()=>ftx.material_study(pattern,JSON.stringify(over)),/32|budget|expanded/i);
+    }
+  });
+
 test('compiled WASM explicit extensometers retain acquired widths, frozen forward replay and CHECK rejection',
   { skip: process.env.FTX_REAL_WASM !== '1' }, async () => {
     const pkg=process.env.FTX_WASM_PKG?path.resolve(process.env.FTX_WASM_PKG):path.join(__dirname,'../web/pkg');

@@ -1995,7 +1995,10 @@ async function studyInput() {
   const raw = await read("studyRequest");
   if (!$("combinationMode").checked) return raw;
   const policy = JSON.parse(raw);
-  if (!policy || Array.isArray(policy) || policy.schema !== "ftx-material-study/1") throw Error("Combination mode needs an ftx-material-study/1 policy object.");
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)
+    || !["ftx-material-study/1", "ftx-design-study/1"].includes(policy.schema)) {
+    throw Error("Combination mode needs an ftx-material-study/1 or ftx-design-study/1 policy object.");
+  }
   if (["variants", "screened", "combinations"].some(key => Object.hasOwn(policy, key))) {
     throw Error("In combination mode, the study policy must omit variants, screened and combinations. Turn off combination mode to use a complete study file.");
   }
