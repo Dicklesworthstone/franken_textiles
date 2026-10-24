@@ -2,11 +2,11 @@
 
 <div align="center">
 
-[![Status](https://img.shields.io/badge/status-phase%201%20%C2%B7%20patterns%2C%20body%2C%20drape%20%2B%20contact-orange)](#honest-status)
+[![Status](https://img.shields.io/badge/status-development%20%C2%B7%20qualification%20open-orange)](#honest-status)
 [![Reference](https://img.shields.io/badge/reference-Python%20skill%20%4088e03965-3776ab)](#oracles-and-pins)
 [![Body model](https://img.shields.io/badge/body-Anny%200.6.1%20(newborn%E2%86%92adult)-2ea44f)](#bodies-anny-not-a-dress-form)
 [![Core](https://img.shields.io/badge/core-Rust%20%2F%20Wasm-b7410e)](#architecture)
-[![Budget](https://img.shields.io/badge/rust%20ceiling-120k%20lines-8250df)](#workspace-and-budget)
+[![Budget](https://img.shields.io/badge/source%20budget-exceeded-orange)](#workspace-and-budget)
 [![License](https://img.shields.io/badge/license-MIT%20%2B%20AI%20rider-yellow)](LICENSE)
 
 </div>
@@ -30,8 +30,8 @@ is deterministic, testable against known answers, and runs in a browser with not
 
 **Status.** Every crate has code: `ftx-core` (deterministic maths, geometry kernels), `ftx-body` (the Anny
 body model, poses, landmarks, tape fitting and nappy calibration), `ftx-pattern` (the pattern model,
-validation, drafting, alterations and the material catalogue/fitting/thermal platform, bit-exact with the
-reference), `ftx-measure` (the measurement catalogue, priors, fusion, the round's gate, ChArUco/paper sheet
+validation, drafting, alterations and the material catalogue/fitting/thermal platform; parity applies to
+the ported reference cases), `ftx-measure` (the measurement catalogue, priors, fusion, the round's gate, ChArUco/paper sheet
 pose and scale, camera intrinsics, 3D section girths, multi-view triangulation, bundle adjustment, stillness
 and video frame selection), `ftx-drape` (the garment mesh, start state, cloth solver with body contact,
 friction, self-contact, moving-body pose interpolation, two-start spread, frozen-outfit reviews, qualification
@@ -60,6 +60,20 @@ top-level `settled` remains its legacy window-drift metric. The historical nativ
 above are not current benchmarks. The new browser release measurements use this stricter
 boundary and the converted Anny asset. Neither numerical settling nor a clear simulation verdict
 proves that a garment fits a person.
+
+Native `drape` and `round --sim` use body contact by default; add `--self-contact-mm 2` to simulate
+cloth layers against each other. The browser fold form enables that option initially. Ordinary runs
+execute one sewing schedule. `--two-start-sew 18` optionally compares a second sewing duration at the
+same placement; it reports path sensitivity, not a statistical error bar or proof of a unique equilibrium.
+Accepted reports retain body/self contact counts, sampled active gaps and final barrier reactions in N.
+`--elastic-hold-steps N` selects the final N gravity intervals for a casing-displacement report without
+adding simulation steps. Pressure remains unavailable without a justified physical contact area; a quiet
+window does not establish physical grip or fit. See the [drape contract](crates/ftx-drape/CONTRACT.md).
+
+Photo/video body fitting requires prepared, calibrated frames and reviewed correspondences or masks.
+The [decoded-frame selection](docs/video-frame-selection.md), [multi-frame fitting](docs/multi-frame-body-fit.md)
+and [accepted-shape reuse](docs/reuse-body-fit.md) guides document those stages. An arbitrary phone clip
+is not yet a complete capture-to-body input; an accepted image fit does not promote measurement readiness.
 
 ### Material substitutions and heat
 
@@ -166,7 +180,9 @@ the Blender sim could not answer:
   reproduces that (KAT 4) and judges a waistband by it: the elastic's tension on the body against the
   garment's weight (KAT 7, the elastic ladder).
 - **Is it tight?** No collider inset, so clearance and hoop strain are exact.
-- **Is it settled?** A residual and a velocity, not a jitter statistic. Two start states give an error bar.
+- **Is it settled?** Every Newton step must converge, and gravity draping requires three consecutive
+  accepted endpoints at at most 1 mm/s. The legacy drift metric is reported separately. Optional paired
+  sewing schedules expose sensitivity to sewing duration; perturbed-placement robustness remains unqualified.
 
 Every metric and flag of the reference (seam closure, ring strain, contact, slip, hem balance, ride-up, band
 positions) is kept with the same gating/advisory split.
@@ -222,6 +238,11 @@ directory whose verdict names its basis. The browser page runs the same crates a
 | `ftx-conformance` | Oracle, known-answer and determinism tests | 9,000 |
 | **Ceiling** (incl. 20,000 contingency) | | **120,000** |
 
+This is the original planned budget, and the implementation exceeds it: the frozen `2bc8b402` audit
+counted 262,470 Rust lines including tests and examples. The expanded material/thermal work in plan §25
+does not silently waive the ceiling. A maintainer decision on scope, source budget and release slice
+remains open as `ftx-onn.13`; tests and working features will not be removed merely to reduce the count.
+
 `#![forbid(unsafe_code)]` everywhere. No Python, PyTorch, BLAS or C/C++ at runtime. Numerical code lifted
 from [frankensim](https://github.com/Dicklesworthstone/frankensim) (sparse LDLᵀ, orthotropic membrane,
 barrier function, deterministic elementary functions) carries a provenance header per file.
@@ -235,7 +256,7 @@ ftx draft zouave_bolero --measurements M.json --out DIR        # a measured draf
 ftx round WS --pattern DIR/pattern.json --measurements M.json --sim --export  # gate + validate + drape + exports
 ftx qualify --ws WS                                            # three chest qualification bands (-20/0/+20 mm)
 ftx body --measurements M.json --out DIR                       # fit Anny to tape measurements and write body.obj
-ftx measure fit-body --frames F.json --measurements M.json --out DIR  # multi-frame body fit from photo/video
+ftx measure fit-body OBS.json --model MODEL.ftxbody --out accepted-fit.json  # prepared multi-frame observations
 ftx drape P.json --measurements M.json --fit F.json --out DIR  # the cloth solver on its own
 ftx export all P.json --out DIR                                # all files + 51 acceptance checks
 ftx trace sheet.png --out DIR                                  # trace a PNG/JPEG/WebP pattern sheet
