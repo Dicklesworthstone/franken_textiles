@@ -1514,11 +1514,13 @@ It spends the user's image quota. This is an adapter, not core logic (§14).
 **Body rules:**
 
 Native/WASM freshness exception: an uploaded `mode: "file"` document is validated and re-fused from
-its source records even when it contains a nonempty cached `fused` object. At `00c3edf` the reference
-fast path reused that cache: editing a valid record or retaining a once-READY cache over MODEL_FIT
-records could leave drafting, readiness and saved fold inputs on obsolete values. The existing fusion,
-readiness, drafting and export engines remain authorities; input records are retained and the caller's
-document is not mutated. This intentionally strengthens the reference file boundary. Chart/tape modes,
+its source records even when it contains a nonempty cached `fused` object. The adapter at `00c3edf`
+followed the reference's cache fast path: editing a valid record or retaining a once-READY cache over MODEL_FIT
+records could leave drafting and saved fold inputs on obsolete values/provenance. The readiness gate
+already re-fused records and rejected model estimates; this boundary now keeps its saved inputs and
+draft consistent with that gate. The existing fusion, readiness, drafting and export engines remain
+authorities; input records are retained and the caller's document is not mutated. This intentionally
+strengthens the reference file boundary. Chart/tape modes,
 the original oracle bytes and their valid consistent-file cases remain unchanged. Regression evidence
 is in `ftx-wasm/tests/page.rs` and the actual compiled-browser check in `tools/check_web.cjs`.
 

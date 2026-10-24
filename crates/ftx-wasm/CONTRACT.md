@@ -29,6 +29,7 @@ alphabetically (the drafting programs return sorted maps); the reference lists t
 records even when `fused` is nonempty. Cached values cannot override edits, invent independent evidence
 from MODEL_FIT records or supply a stale readiness result. The original records and caller input remain
 unchanged; the round's saved measurements, validation, draft and later fold inputs use current fusion.
+Readiness already re-fused records; this repair aligns the draft and saved provenance with that gate.
 This explicit reference exception is covered beyond the unchanged oracle cases in `tests/page.rs` and
 the actual compiled-browser upload/download checks in `tools/check_web.cjs`. It does not estimate new
 uncertainty or establish real-body fit.

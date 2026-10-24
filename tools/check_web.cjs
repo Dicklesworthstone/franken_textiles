@@ -7,6 +7,7 @@
 //   node tools/check_web.cjs --model PATH.ftxbody --timings 20   # browser timing lane; no native comparison
 //   node tools/check_web.cjs --calibration-sheets NATIVE_DIR  # six local downloads, without page JavaScript
 //   node tools/check_web.cjs --generated-calibration-sheets NATIVE_DIR  # actual WASM generation/replay
+//   node tools/check_web.cjs --web-dir STAGED_WEB   # retained build with the same page/worker assets
 //
 // Needs Playwright with its Chromium (npm i -g playwright && npx playwright install chromium).
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
@@ -20,6 +21,7 @@ const { performance } = require("perf_hooks");
 
 const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : null; };
 const root = path.resolve(__dirname, "..");
+const webDir = path.resolve(arg("--web-dir") || path.join(root, "web"));
 const model = arg("--model");
 const standalone = arg("--viewer");
 const calibrationSheets = arg("--calibration-sheets");
@@ -241,7 +243,7 @@ async function offlineViewer(browser, file) {
     process.exit(failed ? 1 : 0);
   }
   const port = 20000 + Math.floor(Math.random() * 20000);
-  const srv = spawn("python3", ["-m", "http.server", String(port), "-d", path.join(root, "web")], { stdio: ["ignore", "ignore", "inherit"] });
+  const srv = spawn("python3", ["-m", "http.server", String(port), "-d", webDir], { stdio: ["ignore", "ignore", "inherit"] });
   await new Promise((r) => setTimeout(r, 1200));
   const browser = await chromium.launch();
   if (calibrationSheets || generatedSheets) {
@@ -253,7 +255,8 @@ async function offlineViewer(browser, file) {
     return;
   }
   const page = await browser.newPage({ userAgent });
-  const errors = [];
+  const errors = [], requests = [];
+  page.context().on("request", r => { if (/^https?:/.test(r.url())) requests.push({ url: r.url(), method: r.method() }); });
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   page.on("pageerror", (e) => errors.push(String(e)));
   const runs = async () => +(await page.evaluate(() => document.body.dataset.runs || 0));
@@ -360,15 +363,19 @@ async function offlineViewer(browser, file) {
     const source = oracle.cases.find(c => c.id === "file-pattern-spec").input.body.measurements;
     const stale = structuredClone(source);
     stale.fused.chest.value_mm = 1111; stale.fused.waist.value_mm = 1234;
-    const modeled = structuredClone(source); modeled.wearer.reference = false;
-    for (const r of modeled.records) {
-      r.provenance = "MODEL_FIT"; r.method = "test: synthetic model prediction, not a measurement";
+    const measured = structuredClone(source); measured.wearer.reference = false;
+    for (const r of measured.records) {
+      r.provenance = "MEASURED_TAPE"; r.method = "test: synthetic independent tape control";
       r[Object.hasOwn(r, "sigma_deg") ? "sigma_deg" : "sigma_mm"] = 1;
     }
     await page.check("input[name=program][value=zouave_bolero]");
     await page.check("input[name=bodyMode][value=file]");
-    let original;
-    for (const [name, input] of [["fresh", source], ["stale", stale], ["modeled", modeled]]) {
+    let original, ready;
+    for (const name of ["fresh", "stale", "measured", "modeled"]) {
+      const input = name === "fresh" ? source : name === "stale" ? stale : name === "measured" ? measured : structuredClone(ready);
+      if (name === "modeled") for (const r of input.records) {
+        r.provenance = "MODEL_FIT"; r.method = "test: model estimate, not an independent measurement";
+      }
       const upload = path.join(work, `upload-${name}.json`), raw = Buffer.from(JSON.stringify(input));
       fs.writeFileSync(upload, raw, { flag: "wx" });
       await page.setInputFiles("#measFile", upload);
@@ -379,11 +386,16 @@ async function offlineViewer(browser, file) {
       execFileSync("unzip", ["-q", "round.zip"], { cwd: dir });
       const measurements = fs.readFileSync(path.join(dir, "measurements.json"));
       const pattern = fs.readFileSync(path.join(dir, "pattern.json"));
+      const readiness = JSON.parse(fs.readFileSync(path.join(dir, "readiness.json")));
       if (name === "fresh") original = { measurements, pattern };
       if (name === "stale") check(measurements.equals(original.measurements) && pattern.equals(original.pattern), "poisoned cache leaves actual saved measurements/pattern bytes unchanged");
+      if (name === "measured") {
+        ready = JSON.parse(measurements);
+        check(readiness.status === "READY" && (await page.textContent("#resStatus")) === "CONVERGED", "synthetic independent tape control has a READY cache and converged flat round");
+      }
       if (name === "modeled") {
         check(JSON.parse(measurements).fused.chest.primary_provenance === "MODEL_FIT", "model records remain MODEL_FIT in actual saved fold input");
-        check((await page.textContent("#resStatus")) === "MEASUREMENTS_NOT_READY", "model records cannot make the browser measurement gate READY");
+        check(readiness.status === "NOT_READY" && (await page.textContent("#resStatus")) === "MEASUREMENTS_NOT_READY", "formerly READY cache cannot promote model records through the browser measurement gate");
       }
       check(fs.readFileSync(upload).equals(raw), `${name} source upload remains unchanged`);
     }
@@ -427,6 +439,7 @@ async function offlineViewer(browser, file) {
       }
     }
     check(errors.length === 0, `no console errors${errors.length ? ": " + errors.slice(0, 3).join(" | ") : ""}`);
+    check(requests.every(r => r.method === "GET" && r.url.startsWith(`http://localhost:${port}/`)), "actual browser rounds make only local GET requests, with no upload or external request");
   } finally {
     await browser.close();
     srv.kill();
