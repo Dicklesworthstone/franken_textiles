@@ -25,6 +25,14 @@ validation, readiness, exports, table, solved, title, the key files) and every d
 to 1e-9 relative); the exports' bytes are the exporters' own (their fixtures). Style defaults list their keys
 alphabetically (the drafting programs return sorted maps); the reference lists them in definition order.
 
+**Uploaded evidence freshness.** File-mode measurement documents are validated and re-fused from their
+records even when `fused` is nonempty. Cached values cannot override edits, invent independent evidence
+from MODEL_FIT records or supply a stale readiness result. The original records and caller input remain
+unchanged; the round's saved measurements, validation, draft and later fold inputs use current fusion.
+This explicit reference exception is covered beyond the unchanged oracle cases in `tests/page.rs` and
+the actual compiled-browser upload/download checks in `tools/check_web.cjs`. It does not estimate new
+uncertainty or establish real-body fit.
+
 **The fold-up.** `fold` is `ftx drape` without files: `load_body(bytes)` reads a converted model the page
 was given (`.ftxbody`, not verified array by array, as the CLI loads it), and `fold_up(model, pattern,
 measurements, fit_spec, self_contact_mm, progress)` fits Anny to the tape in the drape pose, trims the

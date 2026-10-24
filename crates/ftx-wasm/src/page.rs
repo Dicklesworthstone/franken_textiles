@@ -233,11 +233,8 @@ pub fn body_file(body: &PyJson, today: &str) -> Result<Value, String> {
                 errs[..errs.len().min(5)].join("; ")
             ));
         }
-        return if truthy(&data["fused"]) {
-            Ok(data)
-        } else {
-            fuse(&data, true).map_err(msg)
-        };
+        // Uploaded records are authoritative; cached predictions cannot choose the round's body/gate.
+        return fuse(&data, true).map_err(msg);
     }
     let stature = number(&get("stature_cm"))? * 10.0;
     if !(500.0..=2200.0).contains(&stature) {

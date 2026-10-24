@@ -150,3 +150,109 @@ fn the_page_round_matches_webapp_py() {
             .join("\n")
     );
 }
+
+fn file_request() -> Value {
+    let oracle: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/oracle/web/webapp.json"
+    ))
+    .unwrap();
+    oracle["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "file-pattern-spec")
+        .unwrap()["input"]
+        .clone()
+}
+
+#[test]
+fn uploaded_records_override_a_poisoned_cache_in_every_round_document() {
+    let fresh = file_request();
+    let expected = ftx_wasm::page::run(&fresh.to_string(), TODAY, CREATED).unwrap();
+    let mut stale = fresh.clone();
+    stale["body"]["measurements"]["fused"]["chest"]["value_mm"] = json!(1111.0);
+    stale["body"]["measurements"]["fused"]["waist"]["value_mm"] = json!(1234.0);
+    let original = stale.clone();
+    let got = ftx_wasm::page::run(&stale.to_string(), TODAY, CREATED).unwrap();
+    assert!(
+        got.files == expected.files,
+        "round file bytes changed after cache poisoning"
+    );
+    assert!(
+        got.zip == expected.zip,
+        "ZIP bytes changed after cache poisoning"
+    );
+    assert!(
+        got.page == expected.page,
+        "page changed after cache poisoning"
+    );
+    assert_eq!(stale, original, "an upload is not rewritten");
+}
+
+#[test]
+fn an_edited_record_drives_the_uploaded_body_and_bad_records_still_refuse() {
+    let mut request = file_request();
+    let data = &mut request["body"]["measurements"];
+    data["wearer"]["reference"] = json!(false);
+    let chest = data["records"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["name"] == "chest")
+        .unwrap();
+    chest["value_mm"] = json!(620.0);
+    chest["sigma_mm"] = json!(1.0);
+    chest["provenance"] = json!("MEASURED_TAPE");
+    chest["method"] = json!("test: synthetic edited tape target");
+    let original = request.clone();
+    let body = PyJson::from_value(&request["body"]);
+    let got = ftx_wasm::page::body_file(&body, TODAY).unwrap();
+    assert!(
+        got["fused"]["chest"]["value_mm"].as_f64().unwrap() > 600.0,
+        "{got}"
+    );
+    assert_eq!(got["fused"]["chest"]["primary_provenance"], "MEASURED_TAPE");
+    assert_eq!(request, original);
+    request["body"]["measurements"]["records"][0]["sigma_mm"] = json!(-1.0);
+    let refused = ftx_wasm::page::run(&request.to_string(), TODAY, CREATED).unwrap_err();
+    assert!(refused.contains("sigma"), "{refused}");
+}
+
+#[test]
+fn a_ready_cache_cannot_promote_model_records_to_independent_evidence() {
+    let mut request = file_request();
+    let data = &mut request["body"]["measurements"];
+    data["wearer"]["reference"] = json!(false);
+    for record in data["records"].as_array_mut().unwrap() {
+        record["provenance"] = json!("MEASURED_TAPE");
+        record["method"] = json!("test: synthetic independent tape control");
+        let sigma = if record.get("sigma_deg").is_some() {
+            "sigma_deg"
+        } else {
+            "sigma_mm"
+        };
+        record[sigma] = json!(1.0);
+    }
+    let measured = ftx_measure::fuse(data, true).unwrap();
+    *data = measured;
+    let control = ftx_wasm::page::run(&request.to_string(), TODAY, CREATED).unwrap();
+    assert_eq!(control.page.to_value()["readiness"]["status"], "READY");
+    for record in request["body"]["measurements"]["records"]
+        .as_array_mut()
+        .unwrap()
+    {
+        record["provenance"] = json!("MODEL_FIT");
+        record["method"] = json!("test: model estimate, not an independent measurement");
+    }
+    let got = ftx_wasm::page::run(&request.to_string(), TODAY, CREATED).unwrap();
+    assert_eq!(got.page.to_value()["readiness"]["status"], "NOT_READY");
+    assert_eq!(got.page.to_value()["status"], "MEASUREMENTS_NOT_READY");
+    let bytes = &got
+        .files
+        .iter()
+        .find(|(name, _)| name == "measurements.json")
+        .unwrap()
+        .1;
+    let saved: Value = serde_json::from_slice(bytes).unwrap();
+    assert_eq!(saved["fused"]["chest"]["primary_provenance"], "MODEL_FIT");
+}

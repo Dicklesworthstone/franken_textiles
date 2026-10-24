@@ -355,6 +355,42 @@ async function offlineViewer(browser, file) {
       const err = await settle("#go", 120000);
       check(!err && (await page.textContent("#resStatus")) === status, `${program} round ${status}`);
     }
+    // Actual file uploads through the page/worker/WASM; saved fold inputs must follow records.
+    const oracle = JSON.parse(fs.readFileSync(path.join(root, "tests/fixtures/oracle/web/webapp.json")));
+    const source = oracle.cases.find(c => c.id === "file-pattern-spec").input.body.measurements;
+    const stale = structuredClone(source);
+    stale.fused.chest.value_mm = 1111; stale.fused.waist.value_mm = 1234;
+    const modeled = structuredClone(source); modeled.wearer.reference = false;
+    for (const r of modeled.records) {
+      r.provenance = "MODEL_FIT"; r.method = "test: synthetic model prediction, not a measurement";
+      r[Object.hasOwn(r, "sigma_deg") ? "sigma_deg" : "sigma_mm"] = 1;
+    }
+    await page.check("input[name=program][value=zouave_bolero]");
+    await page.check("input[name=bodyMode][value=file]");
+    let original;
+    for (const [name, input] of [["fresh", source], ["stale", stale], ["modeled", modeled]]) {
+      const upload = path.join(work, `upload-${name}.json`), raw = Buffer.from(JSON.stringify(input));
+      fs.writeFileSync(upload, raw, { flag: "wx" });
+      await page.setInputFiles("#measFile", upload);
+      check(await page.locator("#results").evaluate(e => e.classList.contains("hidden")), `${name} upload withdraws the previous round`);
+      check(!(await settle("#go", 120000)), `${name} file round executes`);
+      const dir = path.join(work, `upload-${name}`); fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, "round.zip"), await bytes("a[download$='.zip']"), { flag: "wx" });
+      execFileSync("unzip", ["-q", "round.zip"], { cwd: dir });
+      const measurements = fs.readFileSync(path.join(dir, "measurements.json"));
+      const pattern = fs.readFileSync(path.join(dir, "pattern.json"));
+      if (name === "fresh") original = { measurements, pattern };
+      if (name === "stale") check(measurements.equals(original.measurements) && pattern.equals(original.pattern), "poisoned cache leaves actual saved measurements/pattern bytes unchanged");
+      if (name === "modeled") {
+        check(JSON.parse(measurements).fused.chest.primary_provenance === "MODEL_FIT", "model records remain MODEL_FIT in actual saved fold input");
+        check((await page.textContent("#resStatus")) === "MEASUREMENTS_NOT_READY", "model records cannot make the browser measurement gate READY");
+      }
+      check(fs.readFileSync(upload).equals(raw), `${name} source upload remains unchanged`);
+    }
+    const invalid = structuredClone(source); invalid.records[0].sigma_mm = -1;
+    await page.setInputFiles("#measFile", { name: "invalid.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(invalid)) });
+    check(/sigma/.test(await settle("#go", 120000)), "valid cache cannot hide an invalid uploaded record");
+    check(await page.locator("#results").evaluate(e => e.classList.contains("hidden")), "refused upload exposes no prior round downloads");
     await page.check("input[name=program][value=zouave_trousers]");
     await page.check("input[name=bodyMode][value=tape]");
     await page.waitForFunction(() => document.querySelectorAll("#tapeRows input").length > 0, null, { timeout: 30000 });
