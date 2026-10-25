@@ -448,6 +448,24 @@ test('design studies use the canonical study APIs and retain exact source, opera
   }
 });
 
+test('selected-body manufacturing uses the canonical model API, frees handles and never falls back', async () => {
+  const calls=[],freed=[],raw=' {"schema":"ftx-design-study-report/1","alternatives":[],"x":-0.0}\n';
+  let fail=false;
+  const w=await workerModule({bindings:{default:async()=>{},
+    WebBody:class {free(){freed.push('body');}},
+    material_study:()=>{throw Error('must not fall back');},
+    material_study_on_body:(_model,...args)=>{calls.push(args);if(fail)throw Error('fit refused');return raw;}}});
+  const msg={type:'study',request:42,onBody:true,bytes:new ArrayBuffer(8),
+    pattern:' {"p":1.0}',studyRequest:' {"v":-0.0}',measurements:' {"schema":"ftx-scenario-body/1"}\n'};
+  const result=await w.send(msg);assert.equal(result.type,'result');
+  assert.deepEqual(calls[0],[msg.pattern,msg.studyRequest,msg.measurements]);
+  assert.equal(result.files.find(f=>f.name==='design-study.json').text,raw);
+  assert.equal(result.files.find(f=>f.name==='body-input.json').text,msg.measurements);
+  assert.deepEqual(freed,['body']);
+  fail=true;assert.match((await w.send(msg)).message,/fit refused/);assert.deepEqual(freed,['body','body']);
+  assert.match((await w.send({...msg,onBody:'yes'})).message,/boolean/);
+});
+
 test('pressure conditioning preserves exact request and frozen selection through the shared worker', async () => {
   const w = await workerModule(), request = '{"pressure_pa":250.0,"coordinate":-0.0}';
   const result = await w.send({ type: 'pressure', request: 24, compressionRequest: request });
@@ -750,6 +768,30 @@ async function pageModule() {
   const bind = async () => { await e.bind.onclick(); emit({ pattern, pattern_json:JSON.stringify(pattern), pieces: [], pattern_sha256: 'test' }, [{ name: 'pattern.json', text: '{}', mime: 'application/json' }]); };
   return { e, current, workers, ready, select, emit, load, inspect, bind, live, blobs, windowEvents };
 }
+test('selected-body manufacturing is opt-in and invalidates only current body-dependent outputs', async () => {
+  const p=await pageModule();await p.load();p.select('studyRequest',' {"schema":"ftx-design-study/1","x":1.0}');
+  p.e.studyRequest.handlers.change();assert.equal(p.e.study.disabled,false);
+  p.e.studyOnBody.checked=true;p.e.studyOnBody.handlers.change();assert.equal(p.e.study.disabled,true);
+  p.select('body');p.e.body.files[0].arrayBuffer=async()=>new Uint8Array([1,2,3]).buffer;
+  p.e.body.handlers.change();assert.equal(p.e.study.disabled,true);
+  p.select('scenarioBody',' {"schema":"ftx-scenario-body/1","n":-0.0}');p.e.scenarioBody.handlers.change();
+  p.ready();assert.equal(p.e.study.disabled,false);assert.equal(p.e.scenario.disabled,true); // no scenario required
+  await p.e.study.onclick();const msg=p.current().messages.at(-1);
+  assert.equal(msg.onBody,true);assert.equal(msg.measurements,' {"schema":"ftx-scenario-body/1","n":-0.0}');
+  assert.deepEqual([...new Uint8Array(msg.bytes)],[1,2,3]);assert.equal(msg.scenarioRequest,undefined);
+  p.emit({alternatives:[]},[{name:'body-input.json',text:msg.measurements,mime:'application/json'}]);
+  assert.equal(p.live.size,1);
+  p.e.scenarioRequest.handlers.change();assert.equal(p.live.size,1);
+  p.e.measurements.handlers.change();assert.equal(p.live.size,1); // separate selected-body request owns evidence
+  p.e.body.handlers.change();assert.equal(p.live.size,0);
+  p.ready();await p.e.study.onclick();const old=p.current(),request=old.messages.at(-1).request;
+  p.e.scenarioBody.handlers.change();assert.equal(old.dead,true);
+  old.emit({type:'result',request,result:{alternatives:[]},files:[{name:'stale.json',text:'{}'}]});assert.equal(p.live.size,0);
+  p.ready();p.e.studyOnBody.checked=false;p.e.studyOnBody.handlers.change();p.ready();
+  await p.e.study.onclick();assert.equal(p.current().messages.at(-1).onBody,false);
+  assert.equal(p.current().messages.at(-1).measurements,undefined);
+});
+
 test('material page freezes named assignments, withdraws dependent outputs and ignores stale worker replies', async () => {
   const p = await pageModule(); await p.load(); await p.inspect('linen');
   p.e.target.value = 'lining'; p.e.assign.onclick(); await p.e.bind.onclick();
@@ -5206,6 +5248,14 @@ test('compiled WASM fit screening reaches the same late design and named-case fr
     const bytes=fs.readFileSync(path.join(dir,'model.ftxbody')), w=await workerModule({bindings:ftx});
     const previousProgress=globalThis.ftxProgress; globalThis.ftxProgress=()=>{};
     try {
+      const standalone=await w.send({type:'study',request:169,onBody:true,pattern:input('pattern.json'),
+        studyRequest:input('study.json'),measurements:input('body-input.json'),
+        bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+      assert.equal(standalone.type,'result',standalone.message);
+      assert.deepEqual(standalone.result,JSON.parse(input('manufacturing-report.json')));
+      assert.equal(standalone.result.design_search.fit_screening.rows.find(row=>row.selected).design.key,'grid:0006');
+      assert.equal(standalone.files.find(file=>file.name==='body-input.json').text,input('body-input.json'));
+      assert.equal(standalone.result.simulations,undefined);assert.equal(standalone.result.scenario,undefined);
       for(const name of ['single','matrix']) {
         const studyRequest=input('study.json'), scenarioRequest=input(`${name}-scenario.json`);
         const result=await w.send({type:'scenario',request:170,pattern:input('pattern.json'),studyRequest,scenarioRequest,

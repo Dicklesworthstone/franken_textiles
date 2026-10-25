@@ -49,6 +49,7 @@ function controls() {
   $("replaceCalibratedInterface").disabled = !!pending || !calibratedPair;
   for (const op of ["stripAcquisition", "stripExperiment", "stripHistory", "stripFit"]) $(op).disabled ||= !has(`${op}Request`);
   $("study").disabled ||= !source || !has("studyRequest");
+  if ($("studyOnBody").checked) $("study").disabled ||= !has("body") || (!has("scenarioBody") && !has("measurements"));
   $("scenario").disabled ||= !source || !has("studyRequest") || !has("scenarioRequest") || !has("body") || (!has("scenarioBody") && !has("measurements"));
   if ($("combinationMode").checked && !combinationGroups.size) {
     $("study").disabled = true; $("scenario").disabled = true;
@@ -2060,8 +2061,9 @@ async function execute(op) {
       if (!sourceText) throw Error("Load the original pattern first.");
       // Alternatives always start at the original, never the currently bound single-material preview.
       msg.pattern = sourceText; msg.studyRequest = await studyInput();
-      if (op === "scenario") {
-        msg.scenarioRequest = await read("scenarioRequest");
+      if (op === "study") msg.onBody = $("studyOnBody").checked;
+      if (op === "scenario" || msg.onBody) {
+        if (op === "scenario") msg.scenarioRequest = await read("scenarioRequest");
         msg.measurements = await read(has("scenarioBody") ? "scenarioBody" : "measurements");
         msg.bytes = await read("body", true);
       }
@@ -2230,7 +2232,12 @@ for (const [id, keys] of Object.entries({ measurements:["exports","fold","heat",
   stripAcquisitionRequest:["stripAcquisition"], stripExperimentRequest:["stripExperiment"],
   stripHistoryRequest:["stripHistory"], vaporSurfaceConditions:["vaporSurface"],
   screenRequest:["screen"], studyRequest:["study","scenario"], scenarioRequest:["scenario"], scenarioBody:["scenario"] })) {
-  $(id).addEventListener("change", () => invalidate(id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : keys));
+  $(id).addEventListener("change", () => {
+    const affected = id === "measurements" && has("scenarioBody") ? keys.filter(k => k !== "scenario") : [...keys];
+    if ($("studyOnBody").checked && (id === "body" || id === "scenarioBody" || (id === "measurements" && !has("scenarioBody")))) affected.push("study");
+    invalidate(affected);
+  });
 }
+$("studyOnBody").addEventListener("change", () => invalidate(["study"]));
 window.addEventListener("pagehide", () => { ++epoch; worker?.terminate(); clear(["bind", ...operations]); });
 start();

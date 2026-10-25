@@ -297,9 +297,17 @@ self.onmessage = async ({ data: msg }) => {
         files = [file("material-screen.json", raw), file("screen-request.json", msg.screenRequest)];
         break;
       case "study":
-        raw = ftx.material_study(msg.pattern, msg.studyRequest); result = json(raw);
+        if (msg.onBody !== undefined && typeof msg.onBody !== "boolean") throw Error("Declare selected-body manufacturing as a boolean.");
+        if (msg.onBody) {
+          if (typeof ftx.material_study_on_body !== "function") throw Error("Rebuild web/pkg: missing selected-body manufacturing.");
+          const model = new ftx.WebBody(new Uint8Array(msg.bytes));
+          try { raw = ftx.material_study_on_body(model, msg.pattern, msg.studyRequest, msg.measurements); }
+          finally { model.free(); }
+        } else raw = ftx.material_study(msg.pattern, msg.studyRequest);
+        result = json(raw);
         files = [file(result.schema === "ftx-design-study-report/1" ? "design-study.json" : "material-study.json", raw), file("original-pattern.json", msg.pattern),
           file("study-request.json", msg.studyRequest)];
+        if (msg.onBody) files.push(file("body-input.json", msg.measurements));
         break;
       case "scenario": {
         // A new handle for every invocation: no previous alternative's body or cloth state.

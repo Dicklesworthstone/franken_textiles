@@ -268,6 +268,84 @@ fn fit_screening_reaches_a_late_feasible_design_with_one_downstream_slot() {
         save(&export.join("body-input.json"), &body_input);
     }
     let winner = json!(serde_json::to_string(&("grid:0006", "light-sheet")).unwrap());
+    let manufacturing: Value = serde_json::from_str(
+        &ftx_wasm::materials::scenario::manufacturing_on_model(
+            &model,
+            &digest,
+            pattern,
+            &request.to_string(),
+            &body_input.to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manufacturing["comparison"]["frontier"], json!([winner]));
+    assert!(manufacturing.get("simulations").is_none());
+    assert!(manufacturing.get("scenario").is_none());
+    for (binary, prefix) in [
+        (
+            env!("CARGO_BIN_EXE_ftx"),
+            &["--json", "materials", "study-on-body"][..],
+        ),
+        (env!("CARGO_BIN_EXE_ftx-materials"), &["study-on-body"][..]),
+    ] {
+        let output = Command::new(binary)
+            .current_dir(&dir)
+            .args(prefix)
+            .args([
+                "pattern.json",
+                "study.json",
+                "body-input.json",
+                "model.ftxbody",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} / {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let native: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(native.get("result").unwrap_or(&native), &manufacturing);
+    }
+    if let Some(export) = &export {
+        save(&export.join("manufacturing-report.json"), &manufacturing);
+    }
+    let evaluate = |request: &Value, body: &Value, digest: &str| {
+        ftx_wasm::materials::scenario::manufacturing_on_model(
+            &model,
+            digest,
+            pattern,
+            &request.to_string(),
+            &body.to_string(),
+        )
+    };
+    let mut missing = request.clone();
+    missing.as_object_mut().unwrap().remove("design_fit");
+    assert!(evaluate(&missing, &body_input, &digest).is_err());
+    assert!(evaluate(&request, &body_input, &"c".repeat(64)).is_err());
+    let mut rejected = body_input.clone();
+    rejected["accepted_body_fit"]["status"] = json!("REJECTED");
+    assert!(evaluate(&request, &rejected, &digest).is_err());
+    let mut excessive = request.clone();
+    excessive["design_grid"]["fit_screening"]["max_candidates"] = json!(257);
+    assert!(evaluate(&excessive, &body_input, &digest).is_err());
+    let mut requires_drape = request.clone();
+    requires_drape["comparison"]["required_consumers"] = json!(["drape"]);
+    assert!(evaluate(&requires_drape, &body_input, &digest).is_err());
+    let mut changed = body_input.clone();
+    changed["accepted_body_fit"]["solution"]["shape"][0] = json!(0.61);
+    changed["accepted_body_fit"]["solution"]["anny_parameters"]["phenotype"]["height"] =
+        json!(0.61);
+    let different: Value =
+        serde_json::from_str(&evaluate(&request, &changed, &digest).unwrap()).unwrap();
+    assert_ne!(different["request_sha256"], manufacturing["request_sha256"]);
+    assert_eq!(
+        different["design_search"]["fit_screening"]["qualified_designs"],
+        0
+    );
+    assert_eq!(different["comparison"]["frontier"], json!([]));
     for scenario in [&scenario, &matrix] {
         let actual: Value = serde_json::from_str(
             &on_model(
@@ -284,6 +362,19 @@ fn fit_screening_reaches_a_late_feasible_design_with_one_downstream_slot() {
         .unwrap();
         assert_eq!(actual["comparison"]["frontier"], json!([winner]));
         let manufacturing = &actual["manufacturing"];
+        let mut direct: Value =
+            serde_json::from_str(&evaluate(&request, &body_input, &digest).unwrap()).unwrap();
+        // Scenario comparison lives in the outer report. Every manufacturing/source/fit field
+        // still matches; the complete standalone report is separately equal to both CLIs above.
+        assert!(manufacturing.get("comparison").is_none());
+        assert!(
+            direct
+                .as_object_mut()
+                .unwrap()
+                .remove("comparison")
+                .is_some()
+        );
+        assert_eq!(manufacturing, &direct);
         assert_eq!(manufacturing["alternatives"].as_array().unwrap().len(), 2);
         let screening = &manufacturing["design_search"]["fit_screening"];
         assert_eq!(screening["screened_designs"], 9);

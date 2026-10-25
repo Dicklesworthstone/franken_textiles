@@ -113,6 +113,17 @@ pub(super) fn run(args: &Args) -> Result<(Value, i32, String), Refusal> {
         let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
         return Ok((result, 0, text));
     }
+    if action == "study-on-body" {
+        known_options(args, "materials", &[])?;
+        let [pattern, request, body, model] = &args.positional[2..] else {
+            return Err(bad_input(
+                "usage: ftx materials study-on-body PATTERN.json STUDY.json BODY.json MODEL.ftxbody",
+            ));
+        };
+        let result = scenario::manufacturing(pattern, request, body, model)?;
+        let text = serde_json::to_string_pretty(&result).map_err(|e| bad_input(e.to_string()))?;
+        return Ok((result, 0, text));
+    }
     if action == "scenario-study" {
         known_options(args, "materials", &[])?;
         let [pattern, request, scenario, measurements, model] = &args.positional[2..] else {

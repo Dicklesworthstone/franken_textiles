@@ -132,6 +132,14 @@ bounded moving-coverage potential as the native history command. Scenario motion
 The browser displays complete sample coverage and potential integrals, preserves exact replay bytes,
 and withdraws stale histories on dependent edits. This evolves no moisture state or latent cooling.
 
+**Selected-body manufacturing.** `materials::scenario::manufacturing_on_model`
+and `material_study_on_body` reuse the ordinary selected-body and flat-fit
+authorities with `Request::evaluate_with_fit_body`, retaining the existing report
+schema and identities. Explicit `design_fit` is required; body setup and
+scenario-dependent objective failures refuse rather than falling back. No cloth
+session or thermal solver is invoked. Browser downloads keep original pattern,
+study and body-input text; dependent edits/cancellation withdraw stale outputs.
+
 **Complete mixed-stock jobs.** `manufacturing::cut_job` / wasm32
 `material_cut_job(pattern, request)` invoke the canonical explicit roll/finite-stock routing planner.
 The combined JSON input limit is 64 MiB. Every original instance/copy is accounted for once; pricing

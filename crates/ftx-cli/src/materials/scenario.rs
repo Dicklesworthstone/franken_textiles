@@ -34,6 +34,41 @@ fn read<T: DeserializeOwned>(path: &str, remaining: &mut u64) -> Result<T, Refus
     serde_json::from_slice(&bytes(path, remaining)?).map_err(invalid)
 }
 
+/// Existing selected-body/flat-fit manufacturing, without a numerical scenario session.
+pub(super) fn manufacturing(
+    pattern: &str,
+    request: &str,
+    body_input: &str,
+    model: &str,
+) -> Result<Value, Refusal> {
+    let mut remaining = 64 * 1024 * 1024;
+    let source = ftx_pattern::Pattern::new(read(pattern, &mut remaining)?);
+    let request: Request = read(request, &mut remaining)?;
+    if request.design_fit.is_none() {
+        return Err(invalid(
+            "selected-body manufacturing requires an explicit design_fit contract",
+        ));
+    }
+    if let Some(policy) = &request.comparison {
+        policy.validate(&request, false)?;
+    }
+    let input: Value = read(body_input, &mut remaining)?;
+    let body = BodyRequest::read(&input)?;
+    let bytes = bytes(model, &mut (512 * 1024 * 1024))?;
+    let digest = sha256_hex(&bytes);
+    let model = AnnyModel::from_data(AnnyData::from_bytes(&bytes, true)?)?;
+    let fitted = FittedBody::prepare(&model, &digest, &body)?;
+    let reference = fitted.flat_fit_body(&model, &digest)?;
+    serde_json::to_value(request.evaluate_with_fit_body(
+        &source,
+        Some(&Context {
+            body: &reference,
+            identity: reference.identity(),
+        }),
+    )?)
+    .map_err(invalid)
+}
+
 pub(super) fn run(
     pattern: &str,
     request: &str,

@@ -60,6 +60,7 @@ const USAGE: &str = "ftx-materials catalog [SEARCH]
 ftx-materials screen REQUEST.json
 ftx-materials study PATTERN.json REQUEST.json
 ftx-materials scenario-study PATTERN.json STUDY.json SCENARIO.json MEASUREMENTS.json MODEL.ftxbody
+ftx-materials study-on-body PATTERN.json STUDY.json BODY.json MODEL.ftxbody
 ftx-materials stock-plan PATTERN.json STOCK.json
 ftx-materials stock-identities PATTERN.json STOCK.json
 ftx-materials stock-price PATTERN.json STOCK.json PRICING.json
@@ -253,6 +254,9 @@ fn run(args: &[String]) -> Result<Value, Refusal> {
         ["pressure-condition", path] => screening::pressure_condition(path),
         ["compression-stack", path] => screening::compression_stack(path),
         ["study", pattern, request] => screening::study(pattern, request),
+        ["study-on-body", pattern, request, body, model] => {
+            scenarios::manufacturing(pattern, request, body, model)
+        }
         [
             "scenario-study",
             pattern,

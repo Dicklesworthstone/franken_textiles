@@ -17,7 +17,10 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
-const root = path.resolve(__dirname, '..'), web = path.join(root, 'web');
+const root = path.resolve(__dirname, '..');
+const webIndex = process.argv.indexOf('--web-dir');
+if (webIndex >= 0 && !process.argv[webIndex + 1]) throw Error('--web-dir requires a staged site directory');
+const web = webIndex < 0 ? path.join(root, 'web') : path.resolve(process.argv[webIndex + 1]);
 const index = process.argv.indexOf('--native');
 const native = path.resolve(index < 0 ? path.join(root, 'target/debug/ftx-materials') : process.argv[index + 1]);
 const stripIndex = process.argv.indexOf('--strip-proof');
@@ -32,7 +35,10 @@ const areaProof = areaIndex < 0 ? null : path.resolve(process.argv[areaIndex + 1
 const swatchAreaIndex = process.argv.indexOf('--swatch-area-proof');
 if (swatchAreaIndex >= 0 && !process.argv[swatchAreaIndex + 1]) throw Error('--swatch-area-proof requires a native capture directory');
 const swatchAreaProof = swatchAreaIndex < 0 ? null : path.resolve(process.argv[swatchAreaIndex + 1]);
-assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof,swatchAreaProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
+const fitIndex = process.argv.indexOf('--fit-manufacturing-proof');
+if (fitIndex >= 0 && !process.argv[fitIndex + 1]) throw Error('--fit-manufacturing-proof requires the native fit-screening replay directory');
+const fitProof = fitIndex < 0 ? null : path.resolve(process.argv[fitIndex + 1]);
+assert.ok([stripProof,outfitProof,compressionProof,purchasingProof,areaProof,swatchAreaProof,fitProof].filter(Boolean).length <= 1, 'Choose one focused browser check');
 const fixture = n => path.join(root, 'tests/fixtures/materials', n);
 const load = n => JSON.parse(fs.readFileSync(fixture(n), 'utf8'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ftx-materials-browser-'));
@@ -57,7 +63,7 @@ const server = http.createServer((req, res) => {
 });
 (async () => {
   assert.ok(fs.existsSync(path.join(web, 'pkg/ftx_wasm_bg.wasm')), 'Build web/pkg first');
-  if (!stripProof && !outfitProof && !compressionProof && !purchasingProof && !areaProof && !swatchAreaProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
+  if (!stripProof && !outfitProof && !compressionProof && !purchasingProof && !areaProof && !swatchAreaProof && !fitProof) assert.ok(fs.existsSync(native), 'Build the native ftx-materials first');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args:['--no-sandbox'] });
@@ -82,6 +88,58 @@ const server = http.createServer((req, res) => {
   try {
     await page.goto(origin); await page.click('a[href="materials.html"]');
     await page.waitForFunction(() => document.getElementById('status').textContent.startsWith('Ready'), null, {timeout:60000});
+    if (fitProof) {
+      const source=name=>fs.readFileSync(path.join(fitProof,name),'utf8');
+      const expected=JSON.parse(source('manufacturing-report.json'));
+      const originals=new Map(['pattern.json','study.json','body-input.json','model.ftxbody'].map(name=>[name,fs.readFileSync(path.join(fitProof,name))]));
+      await page.setInputFiles('#patternFile',path.join(fitProof,'pattern.json'));
+      await page.waitForFunction(()=>!document.getElementById('bind').disabled);
+      await page.setInputFiles('#studyRequest',path.join(fitProof,'study.json'));
+      await page.check('#studyOnBody');assert.equal(await page.isDisabled('#study'),true);
+      await page.setInputFiles('#body',path.join(fitProof,'model.ftxbody'));
+      await page.setInputFiles('#scenarioBody',path.join(fitProof,'body-input.json'));
+      assert.equal(await page.isDisabled('#scenario'),true);assert.equal(await page.isDisabled('#study'),false);
+      assert.equal(await run('study'),'');
+      const report=JSON.parse(await download('design-study.json'));
+      assert.deepEqual(report,expected);
+      const screening=report.design_search.fit_screening;
+      assert.equal(screening.screened_designs,9);assert.equal(screening.rejected_designs,8);
+      assert.equal(screening.selected_designs,1);assert.equal(screening.rows.find(r=>r.selected).design.key,'grid:0006');
+      assert.equal(report.alternatives.find(r=>r.design.key==='grid:0006').design.variables_mm.length,30);
+      assert.equal(report.simulations,undefined);assert.equal(report.scenario,undefined);
+      assert.equal(await download('original-pattern.json'),source('pattern.json'));
+      assert.equal(await download('study-request.json'),source('study.json'));
+      assert.equal(await download('body-input.json'),source('body-input.json'));
+      for (const [i,row] of report.alternatives.entries()) {
+        assert.equal(await download(`alternative-${i+1}-design-pattern.json`),row.design.altered_pattern_json);
+        if (row.binding.status==='available') assert.equal(await download(`alternative-${i+1}-pattern.json`),row.binding.result.pattern_json);
+      }
+      for (const [i,row] of screening.rows.entries())
+        assert.equal(await download(`screened-design-${i+1}-pattern.json`),row.design.altered_pattern_json);
+      await input('scenarioRequest',{schema:'unused'});assert.equal(await page.locator('a[download="design-study.json"]').count(),1);
+      await input('measurements',{wearer:{stature_mm:999}});assert.equal(await page.locator('a[download="design-study.json"]').count(),1);
+      await page.setInputFiles('#body',{name:'replacement.ftxbody',mimeType:'application/octet-stream',buffer:originals.get('model.ftxbody')});
+      assert.equal(await page.locator('a[download="design-study.json"]').count(),0);
+      assert.equal(await run('study'),'');assert.deepEqual(JSON.parse(await download('design-study.json')),expected);
+      const rejected=JSON.parse(source('body-input.json'));rejected.accepted_body_fit.status='REJECTED';
+      await input('scenarioBody',rejected);assert.equal(await page.locator('a[download="design-study.json"]').count(),0);
+      assert.match(await run('study'),/accepted|ACCEPTED/);
+      assert.equal(await page.locator('a[download="design-study.json"]').count(),0);
+      await page.setInputFiles('#scenarioBody',path.join(fitProof,'body-input.json'));
+      const noFit=JSON.parse(source('study.json'));delete noFit.design_fit;await input('studyRequest',noFit);
+      assert.match(await run('study'),/design_fit/);assert.equal(await page.locator('a[download="design-study.json"]').count(),0);
+      await page.setInputFiles('#studyRequest',path.join(fitProof,'study.json'));
+      assert.equal(await run('study'),'');assert.deepEqual(JSON.parse(await download('design-study.json')),expected);
+      await page.uncheck('#studyOnBody');assert.equal(await page.locator('a[download="design-study.json"]').count(),0);
+      const legacy=load('synthetic-sewing-pattern.json');
+      await page.setInputFiles('#studyRequest',{name:'legacy.json',mimeType:'application/json',buffer:fs.readFileSync(path.join(root,'examples/design-study.json'))});
+      await input('patternFile',legacy);await page.waitForFunction(()=>!document.getElementById('study').disabled);
+      assert.equal(await run('study'),'');assert.equal(JSON.parse(await download('design-study.json')).alternatives.length,8);
+      for (const [name,raw] of originals) assert.ok(fs.readFileSync(path.join(fitProof,name)).equals(raw),name);
+      assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.ok(methods.every(m=>m==='GET'));
+      console.log('PASS: actual selected-body manufacturing matches complete native report, selects +30mm after six refusals, retains exact sources, invalidates dependent edits/refusals, preserves legacy study and makes only local GET requests. Synthetic software evidence, no cloth/heat or physical fit claim. Artifacts:',work);
+      return;
+    }
     if (swatchAreaProof) {
       const raw=fs.readFileSync(path.join(root,'examples/area-identification/swatch.json'),'utf8');
       assert.equal(raw,fs.readFileSync(path.join(swatchAreaProof,'native-input.json'),'utf8'));

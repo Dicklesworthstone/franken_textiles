@@ -786,6 +786,27 @@ those rows. Library callers can use `evaluate_with_fit_body`, `evaluate_with_fit
 
 ### One selected body authority
 
+Manufacturing-only fit studies can use that same selected body without running a
+cloth or thermal scenario:
+
+```sh
+ftx materials study-on-body pattern.json study.json body-input.json model.ftxbody
+ftx-materials study-on-body pattern.json study.json body-input.json model.ftxbody
+```
+
+The study must declare `design_fit`. `body-input.json` accepts the same
+`ftx-scenario-body/1` request (including an intact accepted fit) or legacy
+measurements as scenario studies. The model, source request, reference-pose
+geometry and MODEL_FIT readings identify every design's fit gate. Cutting and
+sewing run only for admitted designs; no drape, heat, strain/pressure or physical
+fit result is inferred. Scenario-dependent objectives refuse on this route.
+
+In the workbench, enable **Constrain manufacturing to the selected body**, load
+the local model and body-source request (or measurements), and use the ordinary
+manufacturing comparison button. The original body input is downloadable beside
+the study. Changing any selected body source withdraws this result. With the
+option off, the existing body-independent manufacturing path is unchanged.
+
 The native and portable model adapters construct `FittedBody::flat_fit_body` once, only when fit
 targets are requested. It reuses the selected shape without refitting and evaluates existing tape
 sections and actual model-frame landmarks in the standard 35-degree A-pose. Reference measurements

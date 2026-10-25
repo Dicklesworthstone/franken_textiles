@@ -17,6 +17,42 @@ use serde_json::{Value, json};
 
 use super::{budget, invalid};
 
+/// Compare fit-constrained manufacturing on one selected model, without cloth/thermal execution.
+/// The report and design identities are the existing manufacturing authority's, unchanged.
+///
+/// # Errors
+/// Excessive/invalid input, absent fit contract, unavailable body or scenario-only objectives.
+pub fn manufacturing_on_model(
+    model: &AnnyModel,
+    model_sha256: &str,
+    pattern: &str,
+    request: &str,
+    body_input: &str,
+) -> Result<String, Refusal> {
+    budget(&[pattern, request, body_input, model_sha256])?;
+    let source = ftx_pattern::Pattern::from_json(pattern).map_err(invalid)?;
+    let request: Request = serde_json::from_str(request).map_err(invalid)?;
+    if request.design_fit.is_none() {
+        return Err(invalid(
+            "selected-body manufacturing requires an explicit design_fit contract",
+        ));
+    }
+    if let Some(policy) = &request.comparison {
+        policy.validate(&request, false)?;
+    }
+    let body: Value = serde_json::from_str(body_input).map_err(invalid)?;
+    let fitted = FittedBody::prepare(model, model_sha256, &BodyRequest::read(&body)?)?;
+    let reference = fitted.flat_fit_body(model, model_sha256)?;
+    let report = request.evaluate_with_fit_body(
+        &source,
+        Some(&Context {
+            body: &reference,
+            identity: reference.identity(),
+        }),
+    )?;
+    serde_json::to_string(&report).map_err(invalid)
+}
+
 /// Evaluate source-locked alternatives on a caller's fixed body using production consumers.
 /// This also gives native conformance tests a file-free seam without a converted Anny asset.
 /// The scenario input also accepts `ftx-drape-scenario-matrix/1`, sharing one manufacturing study

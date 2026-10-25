@@ -243,7 +243,8 @@ the unchanged <code>baseline</code> is included automatically. Every design is c
 alternatives, up to 32 total candidates. Invalid alterations retain their refusal and cannot win a comparison.
 Download each exact altered pattern, final material-bound pattern, and original study inputs for replay.</p>
 <p class="note">For fit-driven alterations, use <code>design_grid</code> with explicit linked variable values and
-<code>design_fit</code> with your <code>fabric-fit/1</code> targets, then run the body scenario below.
+<code>design_fit</code> with your <code>fabric-fit/1</code> targets, then enable selected-body manufacturing here
+or run the body scenario below.
 Optional <code>design_grid.fit_screening: {"max_candidates":64}</code> checks a bounded grid prefix against
 the selected body before sending up to <code>max_designs</code> passing alterations to manufacturing and simulation.
 The report retains rejected designs, passing designs outside that allowance, and unvisited points separately.
@@ -277,6 +278,10 @@ It must omit <code>variants</code>, <code>screened</code> and <code>combinations
 missing friction evidence stays missing. Omitting the pool preserves the original pattern's interfaces. An empty list clears them.
 Up to eight groups may target disjoint source pieces, with at most one default group. Up to 32 complete combinations are evaluated.</p>
 </details>
+<label><input id="studyOnBody" type="checkbox"> Constrain manufacturing to the selected body</label>
+<p class="note">Requires <code>design_fit</code> in the study, the section-3 local model and the body-source request below
+  (or section-3 measurements). Uses the selected shape's MODEL_FIT readings without running cloth or heat.
+  Fit refusals remain visible and cannot rank; no physical fit or safe-ease claim is made.</p>
 <button id="study" data-command="study" disabled>Compare manufacturing alternatives</button>
 <p class="note">The study request contains explicit <code>variants</code>, a <code>screened</code> request, or grouped <code>combinations</code>, and its own shared roll cutting,
 finite-stock, sewing, declared assembly mass and dated purchasing inputs. Add <code>finite_stock</code> with an <code>ftx-finite-stock-request/1</code>

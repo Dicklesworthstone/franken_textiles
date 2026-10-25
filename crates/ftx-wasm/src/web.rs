@@ -302,6 +302,27 @@ pub fn material_scenario_study(
     .map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Fit-constrained manufacturing on the explicitly selected body, with no drape/heat session.
+///
+/// # Errors
+/// Invalid/oversized input, missing design_fit, unavailable body or scenario-dependent policy.
+#[wasm_bindgen]
+pub fn material_study_on_body(
+    body: &WebBody,
+    pattern: &str,
+    request: &str,
+    body_input: &str,
+) -> Result<String, JsError> {
+    crate::materials::scenario::manufacturing_on_model(
+        &body.inner,
+        &body.source_sha256,
+        pattern,
+        request,
+        body_input,
+    )
+    .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// A finished fold-up: the fit report and the viewer page.
 #[wasm_bindgen]
 pub struct WebFold {
