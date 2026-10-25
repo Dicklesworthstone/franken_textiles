@@ -5,9 +5,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use ftx_body::{
-    AnnyData, AnnyModel, BodyFrames, BodyParams, Pose, TAPE_FIELDS, Wearer,
-    accepted_shape::AcceptedShape, default_model_path, pose_deltas, skin_mesh, tape_readings,
-    tape_targets,
+    AnnyData, AnnyModel, BodyParams, Pose, accepted_shape, default_model_path, pose_deltas,
+    skin_mesh,
 };
 use ftx_core::{Refusal, RefusalCode, receipt::sha256_hex};
 use serde_json::{Map, Value, json};
@@ -101,107 +100,9 @@ pub(super) fn prepare(args: &Args, measurements: Option<&Value>) -> Result<Prepa
     }
     // Hash and parse the SAME bytes: replacing the path mid-read cannot change the evaluated model.
     let model = AnnyModel::from_data(AnnyData::from_bytes(&model_bytes, true)?)?;
-    if model.data().header.anny_version != "0.6.1" || model.data().header.model != "anny" {
-        return Err(bad_input(
-            "body-fit reuse requires the pinned Anny 0.6.1 model",
-        ));
-    }
-    let shape = AcceptedShape::read(&report, &hash, &model.data().header.labels.local_changes)?;
     let data = measurements.map(crate::round::measurements).transpose()?;
-    if let Some(data) = &data {
-        let wearer = &data["wearer"];
-        if let Some(months) = wearer.get("age_months").filter(|v| !v.is_null()) {
-            let months = months
-                .as_f64()
-                .filter(|n| n.is_finite())
-                .ok_or_else(|| bad_input("wearer age must be finite"))?;
-            if (months / 12.0 - shape.years).abs() > 1e-10 {
-                return Err(bad_input(
-                    "measurement wearer age differs from the accepted body-fit configuration",
-                ));
-            }
-        }
-        if let Some(sex) = wearer.get("sex").filter(|v| !v.is_null()) {
-            let sex = sex
-                .as_str()
-                .ok_or_else(|| bad_input("wearer sex must be a string"))?;
-            if Wearer::gender_of(Some(sex)) != shape.params.phenotype.gender {
-                return Err(bad_input(
-                    "measurement wearer sex differs from the accepted body-fit configuration",
-                ));
-            }
-        }
-    }
-    let rest = model.rest(&shape.params)?;
-    let anthropometry = model.anthropometry(&rest);
-    if !anthropometry.height.is_finite()
-        || anthropometry.height <= 0.0
-        || !anthropometry.mass.is_finite()
-    {
-        return Err(bad_input("accepted body has invalid recomputed dimensions"));
-    }
-    let faces: Vec<_> = model
-        .data()
-        .faces
-        .iter()
-        .map(|f| f.map(|i| i as usize))
-        .collect();
-    // Recompute at the fitter's measurement pose, independent of the requested visualization pose.
-    // Small/non-anatomical test models may lack tape landmarks: report unavailable, never invent zero.
-    let tape = (|| {
-        let posed = model.pose(
-            &rest,
-            &pose_deltas(&model, &rest, &Pose::a_pose(35.0), 1.0)?,
-        )?;
-        let frames = BodyFrames::new(&model, &posed)?;
-        tape_readings(&faces, anthropometry.height, &posed, &frames)
-            .ok_or_else(|| bad_input("body tape sections are unavailable"))
-    })();
-    let mut readings = Map::new();
-    readings.insert("stature".into(), json!(anthropometry.height * 1000.0));
-    let tape_status = match tape {
-        Ok(values) if values.iter().all(|v| v.is_finite() && *v > 0.0) => {
-            readings.extend(
-                TAPE_FIELDS
-                    .iter()
-                    .zip(values)
-                    .map(|(n, v)| (n.to_string(), json!(v))),
-            );
-            json!({"status":"AVAILABLE","pose":"a_pose_35","provenance":"MODEL_FIT"})
-        }
-        Ok(_) => json!({"status":"UNAVAILABLE","reason":"non-finite or nonpositive tape readings"}),
-        Err(e) => json!({"status":"UNAVAILABLE","reason":e.message}),
-    };
-    let comparisons: Vec<Value> = data
-        .as_ref()
-        .into_iter()
-        .flat_map(tape_targets)
-        .map(|t| {
-            let predicted = readings.get(&t.name).and_then(Value::as_f64);
-            json!({"name":t.name,"target_mm":t.value_mm,"body_mm":predicted,
-            "residual_mm":predicted.map(|v| v-t.value_mm),"used_to_refit":false})
-        })
-        .collect();
-    let p = shape.params.phenotype;
-    let local: Map<String, Value> = model
-        .data()
-        .header
-        .labels
-        .local_changes
-        .iter()
-        .zip(&shape.params.local_changes)
-        .filter(|(_, v)| **v != 0.0)
-        .map(|(n, v)| (n.clone(), json!(v)))
-        .collect();
-    let description = json!({"model":"anny 0.6.1","model_sha256":hash,
-        "age_years":shape.years,"gender":p.gender,"provenance":"MODEL_FIT",
-        "phenotype":{"gender":p.gender,"age":p.age,"height":p.height,"weight":p.weight,"muscle":p.muscle,"proportions":p.proportions},
-        "local_changes":local,"readings_mm":readings,"mass_kg":anthropometry.mass,"tape_evaluation":tape_status,
-        "measurement_comparison":comparisons,"model_fit":[],
-        "shape_source":{"kind":"accepted_multi_frame_fit","report_sha256":sha256_hex(&report_bytes),
-            "input_sha256":shape.input_sha256,"refitted":false,"image_poses_reused":false},
-        "source_fit":report,
-        "no_claim":"Saved shape reused without refitting; source residuals and assumptions remain in source_fit. Recomputed dimensions are MODEL_FIT, not new evidence. No covariance or real-wearer fit is certified."});
+    let (shape, description) =
+        accepted_shape::prepare(&model, &hash, &report_bytes, data.as_ref())?;
     eprintln!(
         "body: reusing accepted image-fit shape without tape refitting; source {}",
         sha256_hex(&report_bytes)
@@ -209,7 +110,7 @@ pub(super) fn prepare(args: &Args, measurements: Option<&Value>) -> Result<Prepa
     Ok(PreparedBody {
         model,
         params: shape.params,
-        description: description.as_object().unwrap().clone(),
+        description,
         source_bytes: Some(report_bytes),
     })
 }

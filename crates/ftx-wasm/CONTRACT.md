@@ -35,7 +35,7 @@ the actual compiled-browser upload/download checks in `tools/check_web.cjs`. It 
 uncertainty or establish real-body fit.
 
 **The fold-up.** `fold` is `ftx drape` without files: `load_body(bytes)` reads a converted model the page
-was given (`.ftxbody`, not verified array by array, as the CLI loads it), and `fold_up(model, pattern,
+was given (`.ftxbody`, with array hashes checked, at most 512 MiB), and `fold_up(model, pattern,
 measurements, fit_spec, self_contact_mm, progress)` fits Anny to the tape in the drape pose, trims the
 collision skin, sews and drapes (self-contact at `self_contact_mm` when positive, the skill's 2 mm), and
 returns the fit report (`sim_report.json` without the CLI's `pattern` and `wall_s`) and the viewer page.
@@ -49,6 +49,12 @@ not a byte-parity claim for this extension. The shared generator embeds the pinn
 MIT notice; downloaded HTML and blob previews need no network for rendering. `web` exposes `WebBody(bytes)`, `fold_up(body, pattern, measurements, fit,
 mm)` → `WebFold {report(), viewer()}`, and calls the worker's `self.ftxProgress(line)` with the drape's
 progress lines.
+
+The opt-in accepted-fit fold uses `ftx_body::accepted_shape::prepare`, retaining the
+original report bytes and exact parameters without tape refitting or image-pose
+reuse. It checks the same model/wearer identity and exposes the existing native
+arm-angle choice. Report replacement, edits and failed reads invalidate the fold;
+no stale shape or tape fallback is allowed. Draft/readiness remain independent.
 
 **The page.** `web/index.html` is the skill's `browser/index.html` with its Pyodide worker replaced by
 `web/worker.js` (a module worker loading `web/pkg`, built by `tools/build_web.sh`: release wasm32 build plus

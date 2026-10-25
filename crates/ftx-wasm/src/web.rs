@@ -356,6 +356,44 @@ pub fn fold_up(
     .map_err(|e| JsError::new(&e))
 }
 
+/// Drape an explicitly associated accepted image-fit shape, with no fallback or tape refitting.
+///
+/// # Errors
+/// Rejected/inconsistent fit, wrong model/wearer, bad pose or a refused cloth solve.
+#[wasm_bindgen]
+pub fn fold_up_with_body_fit(
+    body: &WebBody,
+    pattern: &str,
+    measurements: &str,
+    fit_spec: &str,
+    self_contact_mm: f64,
+    body_fit: &str,
+    arm_deg: f64,
+) -> Result<WebFold, JsError> {
+    let parse = |s: &str| -> Result<serde_json::Value, JsError> {
+        serde_json::from_str(s).map_err(|e| JsError::new(&e.to_string()))
+    };
+    fold::fold_up_with_body_fit(
+        &body.inner,
+        &parse(pattern)?,
+        &parse(measurements)?,
+        &parse(fit_spec)?,
+        self_contact_mm,
+        &fold::BodyFitSource {
+            model_sha256: &body.source_sha256,
+            report: body_fit,
+            arm_deg,
+        },
+        ftx_progress,
+    )
+    .map(|mut inner| {
+        inner.report["measurements_sha256"] =
+            serde_json::json!(ftx_core::receipt::sha256_hex(measurements.as_bytes()));
+        WebFold { inner }
+    })
+    .map_err(|e| JsError::new(&e))
+}
+
 /// Local source-locked sewing plan, including explicit multi-pass, reverse-feed and backtack recipes.
 ///
 /// # Errors

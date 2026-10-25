@@ -85,6 +85,15 @@ checks the installed files against the wheel's RECORD and every array against sp
 dtype, shape, index range, bone order or (with `verify`) SHA-256. Blend shapes are CSR-sparse f64,
 reconstructing the package's dense array exactly.
 
+**Accepted shared shapes.** `accepted_shape::prepare` is the common file-free
+native/browser importer. It checks an ACCEPTED `ftx-body-fit/1` report against the
+caller-supplied digest of the same array-verified pinned model, reconstructs the
+named parameters, checks declared wearer age/sex, and recomputes MODEL_FIT tape
+predictions at 35 degrees. It retains source residuals, exact report/request
+identities and signed comparisons without refitting or inventing uncertainty.
+Measurements must already be validated and fused by the caller. Missing anatomy
+remains unavailable. Report consistency is not authenticity or real-person fit.
+
 **Units and frames.** Metres, +Z up, the body faces −Y, +X is the body's left. Rest bodies sit in the
 template frame (soles near z = −0.82 m); posed bodies are root-relative. Nothing is grounded here.
 

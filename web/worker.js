@@ -76,12 +76,20 @@ onmessage = async (ev) => {
       if (!body || !docs) throw new Error("load the body model and run a round first");
       if (msg.round !== docs.request || msg.body !== bodyRequest) throw new Error("the garment or body changed: run the current round and load its body first");
       foldRequest = msg.request;
-      const fold = ftx.fold_up(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm);
+      if (msg.bodyFit != null && (typeof msg.bodyFit !== "string" || msg.bodyFit.length > 16 * 1024 * 1024)) {
+        throw new Error("accepted body-fit report must be JSON text of at most 16 MiB");
+      }
+      const imported = msg.bodyFit != null;
+      if (imported && msg.bodyFitConsent !== true) throw new Error("associate the accepted fit with this wearer before folding");
+      const fold = imported
+        ? ftx.fold_up_with_body_fit(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm, msg.bodyFit, msg.armDeg)
+        : ftx.fold_up(body, docs.pattern, docs.measurements, docs.fit, msg.selfContactMm);
       try {
         const reportText = fold.report(); // preserve numerical JSON for source-locked thermal replay
         const report = JSON.parse(reportText);
         const viewer = fold.viewer();
-        return postMessage({ type: "folded", request: msg.request, report, reportText, viewer });
+        return postMessage({ type: "folded", request: msg.request, report, reportText, viewer,
+          bodyFitText: imported ? msg.bodyFit : null });
       } finally { fold.free(); }
     }
   } catch (e) {

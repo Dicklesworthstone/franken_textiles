@@ -27,7 +27,10 @@ pub struct Fold {
 /// # Errors
 /// Not a converted model, or a malformed one.
 pub fn load_body(bytes: &[u8]) -> Result<AnnyModel, String> {
-    AnnyData::from_bytes(bytes, false)
+    if bytes.len() > 512 * 1024 * 1024 {
+        return Err("body model exceeds 512 MiB".into());
+    }
+    AnnyData::from_bytes(bytes, true)
         .and_then(AnnyModel::from_data)
         .map_err(|r| r.message)
 }
@@ -73,6 +76,57 @@ pub fn fold_up(
     measurements: &Value,
     fit_spec: &Value,
     self_contact_mm: f64,
+    progress: impl FnMut(&str),
+) -> Result<Fold, String> {
+    fold_on_source(
+        model,
+        pattern,
+        measurements,
+        fit_spec,
+        self_contact_mm,
+        None,
+        progress,
+    )
+}
+
+/// Explicit imported shape and ordinary drape-pose choice; image-frame poses are never reused.
+pub struct BodyFitSource<'a> {
+    pub model_sha256: &'a str,
+    pub report: &'a str,
+    pub arm_deg: f64,
+}
+
+/// Drape the exact accepted shape without tape fitting. The model must be array-verified.
+///
+/// # Errors
+/// Invalid report/model/wearer identity, excessive input, invalid pose or refused cloth solve.
+pub fn fold_up_with_body_fit(
+    model: &AnnyModel,
+    pattern: &Value,
+    measurements: &Value,
+    fit_spec: &Value,
+    self_contact_mm: f64,
+    source: &BodyFitSource<'_>,
+    progress: impl FnMut(&str),
+) -> Result<Fold, String> {
+    fold_on_source(
+        model,
+        pattern,
+        measurements,
+        fit_spec,
+        self_contact_mm,
+        Some(source),
+        progress,
+    )
+}
+
+fn fold_on_source(
+    model: &AnnyModel,
+    pattern: &Value,
+    measurements: &Value,
+    fit_spec: &Value,
+    self_contact_mm: f64,
+    source: Option<&BodyFitSource<'_>>,
     mut progress: impl FnMut(&str),
 ) -> Result<Fold, String> {
     let m = |r: ftx_core::Refusal| r.message;
@@ -84,7 +138,7 @@ pub fn fold_up(
     if !placed {
         return Err("no piece has a fold-up placement: the pattern is judged flat".into());
     }
-    if !measurements["wearer"]["age_months"].is_number() {
+    if source.is_none() && !measurements["wearer"]["age_months"].is_number() {
         return Err("the fold-up fits a body of the wearer's age: fill in the age (months)".into());
     }
     if !self_contact_mm.is_finite() || self_contact_mm < 0.0 {
@@ -98,14 +152,45 @@ pub fn fold_up(
         opts.self_contact = Some(p);
     }
     ftx_drape::material::resolve(&pat, &opts).map_err(m)?;
-    let wearer = Wearer::from_measurements(measurements).map_err(m)?;
-    let pose = Pose::drape();
-    let fit = fit_tape(model, &wearer, &tape_targets(measurements), &pose).map_err(m)?;
-    progress(&format!(
-        "body: fitted in {} iterations, {:.2} kg",
-        fit.iterations, fit.mass_kg
-    ));
-    let rest = model.rest(&fit.params).map_err(m)?;
+    let mut pose = Pose::drape();
+    let (params, description) = if let Some(source) = source {
+        if !source.arm_deg.is_finite() || !(0.0..=180.0).contains(&source.arm_deg) {
+            return Err("arm angle must be finite and between 0 and 180 degrees".into());
+        }
+        pose.arm_abduction_deg = Some(source.arm_deg);
+        let data = if measurements.get("records").is_some() || measurements.get("schema").is_some()
+        {
+            ftx_measure::fuse(measurements, true).map_err(m)?
+        } else {
+            measurements.clone()
+        };
+        let (shape, mut description) = ftx_body::accepted_shape::prepare(
+            model,
+            source.model_sha256,
+            source.report.as_bytes(),
+            Some(&data),
+        )
+        .map_err(m)?;
+        description.insert(
+            "pose".into(),
+            json!(format!(
+                "drape: arms at {}° and straight, hands and feet left out of contact",
+                source.arm_deg
+            )),
+        );
+        progress("body: reusing accepted image-fit shape without tape refitting");
+        (shape.params, Value::Object(description))
+    } else {
+        let wearer = Wearer::from_measurements(measurements).map_err(m)?;
+        let fit = fit_tape(model, &wearer, &tape_targets(measurements), &pose).map_err(m)?;
+        progress(&format!(
+            "body: fitted in {} iterations, {:.2} kg",
+            fit.iterations, fit.mass_kg
+        ));
+        let description = body_report(&wearer, &fit);
+        (fit.params, description)
+    };
+    let rest = model.rest(&params).map_err(m)?;
     let posed = model
         .pose(&rest, &pose_deltas(model, &rest, &pose, 1.0).map_err(m)?)
         .map_err(m)?;
@@ -124,7 +209,7 @@ pub fn fold_up(
         arm_deg: pose.arm_abduction_deg.unwrap_or(Pose::A_POSE_DEG),
     };
     let mut run = drape(&pat, fit_spec, &body, &opts, &mut progress).map_err(m)?;
-    run.report["body"] = body_report(&wearer, &fit);
+    run.report["body"] = description;
     let html = viewer(&run, &pat, &body, TEMPLATE)?;
     Ok(Fold {
         report: run.report,

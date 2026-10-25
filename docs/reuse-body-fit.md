@@ -5,6 +5,14 @@ An accepted `ftx measure fit-body` report can now supply the actual body shape t
 `--body-fit`, the existing tape-fitting path is unchanged. With it, no tape fit,
 parameter rounding, fallback fit, or silent shape adjustment occurs.
 
+The browser workshop also accepts this saved report in its fold-up panel. Select
+the same converted model, choose the accepted-fit report, and explicitly associate
+it with the current wearer. The report is used only for the draped body; it does
+not change the flat draft or measurement-readiness verdict. Clearing the report
+restores tape fitting. A rejected replacement never falls back to a previous
+shape or to tape fitting. The arm-angle control selects the ordinary drape pose,
+not an image-frame pose; a refused start remains a refusal at that angle.
+
 ```sh
 ftx measure fit-body observations.json --model anny.ftxbody --out accepted-fit.json
 ftx body --body-fit accepted-fit.json --model anny.ftxbody \
