@@ -1879,7 +1879,7 @@ function draftingPage() {
   class LocalURL extends URL {}
   LocalURL.createObjectURL=blob=>{const u=`blob:${++next}`;live.set(u,blob);return u;};
   LocalURL.revokeObjectURL=u=>assert.equal(live.delete(u),true);
-  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,location:{href:'https://unit.invalid/'},
+  const context=vm.createContext({Worker,URL:LocalURL,Blob,JSON,Date,TextDecoder,location:{href:'https://unit.invalid/'},
     localStorage:{getItem:()=>null,setItem(){}},document:{body:{dataset:{}},getElementById:id=>{assert.ok(e[id],id);return e[id];},
       querySelector:()=>modes.find(m=>m.checked),querySelectorAll:()=>modes,
       createElement:tag=>Object.assign(new Element(),{tag})}});
@@ -1964,7 +1964,7 @@ test('primary workshop retains exact accepted-fit sources and invalidates replac
   const p=draftingPage();await p.e.go.handlers.click();p.result();await p.body();
   const readiness=p.e.resStatus.textContent, raw='{ "schema": "ftx-body-fit/1", "v": 1.0000000000000002 }';
   p.e.bodyArmDeg.value='50';
-  const select=async text=>{p.e.bodyFitFile.files=[{size:100,text:async()=>text}];await p.e.bodyFitFile.handlers.change();};
+  const select=async text=>{p.e.bodyFitFile.files=[{size:100,arrayBuffer:async()=>new TextEncoder().encode(text).buffer}];await p.e.bodyFitFile.handlers.change();};
   await select(raw);assert.equal(p.e.foldGo.disabled,true);
   p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();assert.equal(p.e.foldGo.disabled,false);
   p.e.foldGo.handlers.click();const msg=p.last('fold');
@@ -1976,18 +1976,21 @@ test('primary workshop retains exact accepted-fit sources and invalidates replac
   assert.match(p.e.foldSummary.innerHTML,/Original accepted body fit/);
   assert.ok((await Promise.all([...p.live.values()].map(b=>b.text()))).includes(raw));
   assert.equal(p.e.resStatus.textContent,readiness);
-  p.e.bodyArmDeg.handlers.change();assert.equal(p.live.size,1); // withdraw report/viewer/source together
-  const pending=deferred();p.e.bodyFitFile.files=[{size:100,text:()=>pending.promise}];
+  p.e.bodyArmDeg.handlers.input();assert.equal(p.live.size,1); // withdraw report/viewer/source while editing
+  const pending=deferred();p.e.bodyFitFile.files=[{size:100,arrayBuffer:()=>pending.promise}];
   const loading=p.e.bodyFitFile.handlers.change();assert.equal(p.e.foldGo.disabled,true);
-  await select('replacement');pending.resolve(raw);await loading;
+  await select('replacement');pending.resolve(new TextEncoder().encode(raw).buffer);await loading;
   p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();p.e.foldGo.handlers.click();
   assert.equal(p.last('fold').bodyFit,'replacement');
-  const old=p.last('fold');p.e.bodyFitFile.files=[{size:100,text:async()=>{throw Error('fit read refused');}}];
+  const old=p.last('fold');p.e.bodyFitFile.files=[{size:100,arrayBuffer:async()=>{throw Error('fit read refused');}}];
   await p.e.bodyFitFile.handlers.change();assert.equal(p.e.foldGo.disabled,true);
   p.emit({type:'folded',request:old.request,report,reportText:'{}',viewer:'old',bodyFitText:raw});assert.equal(p.live.size,1);
-  p.e.bodyFitFile.files=[{size:16*1024*1024+1,text:async()=>{throw Error('must not read');}}];
+  p.e.bodyFitFile.files=[{size:16*1024*1024+1,arrayBuffer:async()=>{throw Error('must not read');}}];
   await p.e.bodyFitFile.handlers.change();assert.match(p.e.errorText.textContent,/exceeds 16 MiB/);
   assert.equal(p.e.foldGo.disabled,true);
+  p.e.bodyFitFile.files=[{size:2,arrayBuffer:async()=>new Uint8Array([0xff,0xff]).buffer}];
+  await p.e.bodyFitFile.handlers.change();assert.equal(p.e.foldGo.disabled,true);
+  assert.match(p.e.errorText.textContent,/encoded data|encoding/i);
   await select(raw);p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();
   p.dispatch('stature','input');assert.equal(p.e.bodyFitConsent.checked,false);
   await p.e.go.handlers.click();p.result();assert.equal(p.e.foldGo.disabled,true);
