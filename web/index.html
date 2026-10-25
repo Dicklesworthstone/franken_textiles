@@ -89,11 +89,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   <section>
     <h2>2. Body</h2>
     <p><a href="photo.html">Measure photo landmarks locally</a> with a blank Letter/A4 reference,
-      then combine the photo-estimated records with stature and the other required measurements before drafting.</p>
+      then add their downloaded records below alongside stature and the other required measurements.</p>
     <div class="seg" id="bodyModes">
       <label><input type="radio" name="bodyMode" value="chart" checked>Size-chart demo <small>(no child needed)</small></label>
       <label><input type="radio" name="bodyMode" value="tape">My tape measurements</label>
-      <label><input type="radio" name="bodyMode" value="file">Measurements file <small>(<code>fab measure fuse</code>)</small></label>
+      <label><input type="radio" name="bodyMode" value="file">Measurements file</label>
     </div>
     <div id="personBox">
       <div class="row">
@@ -110,6 +110,19 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
       <div class="scroll"><table class="tape"><tbody id="tapeRows"></tbody></table></div>
     </div>
     <div id="fileBox" class="hidden"><label>measurements.json <input type="file" id="measFile" accept=".json,application/json"></label></div>
+    <details>
+      <summary>Add photo or other measurement evidence</summary>
+      <p>Choose <b>My tape measurements</b> or a primary <b>Measurements file</b>, then add local
+        <code>fabric-measurements/1</code> files. Their original records are fused with the primary body's
+        records; definitions, uncertainty, conflicts and MODEL_FIT restrictions still apply.</p>
+      <label>Additional measurements <input type="file" id="supplementalFiles" multiple accept=".json,application/json"></label>
+      <p><label><input type="checkbox" id="supplementalConsent">I have checked that every added file describes this same wearer.</label></p>
+      <p><button type="button" id="clearSupplemental">Clear added files</button></p>
+      <small>Up to 8 files, 16 MiB combined and 4096 total records. Files stay local and their exact text is
+        retained in the round's measurements download. The earliest known date is used only when all dates
+        are known; otherwise the combined date is unknown. Review source dates yourself. A clicked length
+        does not establish a girth or physical fit. Size-chart demos cannot be combined with wearer evidence.</small>
+    </details>
     <details id="calibrationSheets">
       <summary>Print a photo scale reference</summary>
       <p>Download a ChArUco sheet for your paper size. Print the PDF at <b>100% / Actual size</b>,
@@ -266,7 +279,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         placeholder="${f.chart == null ? "" : esc(f.chart)}" aria-label="${esc(human(f.name))} (${f.unit})"> ${f.unit}</td></tr>`).join("");
     $("tapeRows").querySelectorAll("input").forEach((el) => el.addEventListener("input", () => {
       const t = store.get("tape", {}); t[el.dataset.name] = el.value; store.set("tape", t);
-      invalidateRound();
+      invalidateEvidence();
     }));
   }
   async function readJson(input, what) {
@@ -286,6 +299,22 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
         body.nappies = $("nappies").checked && nappyGarment();
         body.tape = {};
         $("tapeRows").querySelectorAll("input").forEach((el) => { if (el.value !== "") body.tape[el.dataset.name] = +el.value; });
+      }
+    }
+    const sources = Array.from($("supplementalFiles").files || []);
+    if (sources.length) {
+      if (m === "chart") throw Error("Choose tape measurements or a measurements file before adding wearer evidence.");
+      if (!$("supplementalConsent").checked) throw Error("Confirm that every added file describes this same wearer.");
+      if (sources.length > 8 || sources.reduce((n, f) => n + f.size, 0) > 16 * 1024 * 1024) {
+        throw Error("Choose at most 8 additional measurement files, 16 MiB combined.");
+      }
+      body.supplemental_same_wearer = true;
+      body.supplemental_measurements = [];
+      let bytes = 0;
+      for (const source of sources) {
+        const buffer = await source.arrayBuffer(); bytes += buffer.byteLength;
+        if (bytes > 16 * 1024 * 1024) throw Error("Additional measurements exceed 16 MiB.");
+        body.supplemental_measurements.push(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer));
       }
     }
     if (program === "audit") {
@@ -396,6 +425,10 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
     $("go").disabled = !ready || dead;
     if (ready && !dead) status("Inputs changed; draft and check again.");
   }
+  function invalidateEvidence() {
+    $("supplementalConsent").checked = false;
+    invalidateRound();
+  }
 
   worker.onmessage = (ev) => {
     const msg = ev.data;
@@ -480,7 +513,7 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
 
   document.querySelectorAll("input[name=bodyMode]").forEach((el) => {
     if (el.value === store.get("bodyMode", "chart")) el.checked = true;
-    el.addEventListener("change", () => { showBodyMode(); invalidateRound(); });
+    el.addEventListener("change", () => { showBodyMode(); invalidateEvidence(); });
   });
   for (const id of ["stature", "age", "sex"]) {
     const v = store.get(id, null);
@@ -490,9 +523,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
   $("nappies").checked = !!store.get("nappies", false);
   $("nappies").addEventListener("change", () => { store.set("nappies", $("nappies").checked); requestFields(); });
   showBodyMode();
-  for (const id of ["stature", "age", "sex", "nappies", "style", "patternFile", "fitFile", "measFile"]) {
+  for (const id of ["style", "patternFile", "fitFile"]) {
     for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateRound);
   }
+  for (const id of ["stature", "age", "sex", "nappies", "measFile", "supplementalFiles"]) {
+    for (const event of ["input", "change"]) $(id).addEventListener(event, invalidateEvidence);
+  }
+  $("supplementalConsent").addEventListener("change", invalidateRound);
+  $("clearSupplemental").addEventListener("click", () => { $("supplementalFiles").value = ""; invalidateEvidence(); });
   $("selfContact").addEventListener("change", invalidateFold);
   $("resetStyle").addEventListener("click", () => {
     $("style").value = JSON.stringify(info[program].style, null, 1); store.set("style-" + program, null); invalidateRound();

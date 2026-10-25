@@ -1972,6 +1972,40 @@ test('primary workshop cancels delayed measurement reads and accepts only the la
   p.emit({type:'fields',request:fresh.request,program:'zouave_bolero',rows:[]});assert.equal(p.e.tapeRows.innerHTML,'');
 });
 
+test('primary workshop transports original local evidence only with current wearer consent', async () => {
+  const p=draftingPage();p.modes[0].checked=false;p.modes[1].checked=true;
+  const raw='\n{"schema":"fabric-measurements/1","signed":-0.0}\n',bytes=Buffer.from(raw);
+  p.e.supplementalFiles.files=[{size:bytes.length,arrayBuffer:async()=>bytes}];
+  await p.e.go.handlers.click();assert.equal(p.last('run'),undefined);
+  assert.match(p.e.errorText.textContent,/same wearer/);
+  p.e.supplementalConsent.checked=true;await p.e.go.handlers.click();
+  const request=p.last('run');assert.equal(request.req.body.supplemental_same_wearer,true);
+  assert.deepEqual([...request.req.body.supplemental_measurements],[raw]);
+  p.result();assert.equal(p.live.size,1);
+  p.dispatch('stature','input');assert.equal(p.e.supplementalConsent.checked,false);
+  assert.equal(p.live.size,0);p.result(request.request);assert.equal(p.live.size,0);
+  p.modes[1].checked=false;p.modes[2].checked=true;
+  p.e.measFile.files=[{text:async()=>'{}'}];p.e.supplementalConsent.checked=true;
+  await p.e.go.handlers.click();assert.equal(p.last('run').req.body.mode,'file');
+  assert.deepEqual([...p.last('run').req.body.supplemental_measurements],[raw]);
+  p.dispatch('measFile','change');assert.equal(p.e.supplementalConsent.checked,false);
+});
+
+test('primary workshop rejects invalid evidence bytes and superseded reads without a prior result', async () => {
+  const p=draftingPage();p.modes[0].checked=false;p.modes[1].checked=true;
+  const pending=deferred();p.e.supplementalFiles.files=[{size:2,arrayBuffer:()=>pending.promise}];
+  p.e.supplementalConsent.checked=true;const reading=p.e.go.handlers.click();
+  p.dispatch('supplementalFiles','change');pending.resolve(Buffer.from('{}'));await reading;
+  assert.equal(p.last('run'),undefined);assert.equal(p.e.supplementalConsent.checked,false);
+  p.e.supplementalFiles.files=[{size:2,arrayBuffer:async()=>new Uint8Array([0xc3,0x28])}];
+  p.e.supplementalConsent.checked=true;await p.e.go.handlers.click();
+  assert.equal(p.last('run'),undefined);assert.match(p.e.errorText.textContent,/encoded data|encoding/i);
+  p.e.supplementalFiles.files=[{size:16*1024*1024+1,arrayBuffer:()=>{throw Error('must not read');}}];
+  await p.e.go.handlers.click();assert.match(p.e.errorText.textContent,/16 MiB/);
+  p.e.supplementalFiles.files=Array(9).fill({size:1,arrayBuffer:()=>{throw Error('must not read');}});
+  await p.e.go.handlers.click();assert.match(p.e.errorText.textContent,/at most 8/);
+});
+
 test('primary workshop preserves signed body-fit precision, escapes targets and leaves readiness separate', async () => {
   // UI transport fixture only; numerical fitting is exercised by the compiled-browser model lane.
   const p=draftingPage();await p.e.go.handlers.click();p.result();await p.body();

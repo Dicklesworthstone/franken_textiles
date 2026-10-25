@@ -34,6 +34,14 @@ This explicit reference exception is covered beyond the unchanged oracle cases i
 the actual compiled-browser upload/download checks in `tools/check_web.cjs`. It does not estimate new
 uncertainty or establish real-body fit.
 
+**Supplemental measurements.** Tape/file bodies may import up to eight original measurement-document
+strings (16 MiB total, 4096 combined records), with explicit same-wearer association. Shared validation
+and fusion consume their records, never cached values; source text and photo uncertainty reports remain
+in `measurement_imports`. Reference/demo mixing refuses. An unknown source date keeps the aggregate date
+unknown; otherwise the oldest date is retained. This is no per-record freshness or independence proof.
+Source/body edits reset consent, invalidate downloads and discard superseded reads/replies. The imports
+remain local and never enter browser storage. The numerical fusion and readiness rules are unchanged.
+
 **The fold-up.** `fold` is `ftx drape` without files: `load_body(bytes)` reads a converted model the page
 was given (`.ftxbody`, with array hashes checked, at most 512 MiB), and `fold_up(model, pattern,
 measurements, fit_spec, self_contact_mm, progress)` fits Anny to the tape in the drape pose, trims the

@@ -27,6 +27,7 @@ const acceptedFit = arg("--accepted-fit"), acceptedMeasurements = arg("--accepte
 const standalone = arg("--viewer");
 const calibrationSheets = arg("--calibration-sheets");
 const generatedSheets = arg("--generated-calibration-sheets");
+const evidenceReplay = arg("--measurement-evidence");
 const timingArg = arg("--timings");
 const timingRuns = Number(timingArg || 0);
 if ((acceptedFit || acceptedMeasurements) && (!model || !acceptedFit || !acceptedMeasurements || standalone || timingArg)) {
@@ -46,6 +47,72 @@ const ftx = arg("--ftx") || path.join(root, "target/release/ftx");
 const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 let failed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (!ok) failed++; };
+
+async function measurementEvidence(page, settle, bytes, work, nativeDir) {
+  const assert = require("node:assert/strict");
+  const request = JSON.parse(fs.readFileSync(path.join(nativeDir, "request.json")));
+  const source = fs.readFileSync(path.join(nativeDir, "photo-measurements.json"));
+  await page.check('input[name=program][value=zouave_bolero]');
+  await page.check('input[name=bodyMode][value=tape]');
+  await page.fill("#stature", String(request.body.stature_cm));
+  await page.fill("#age", String(request.body.age_months));
+  await page.locator('#tapeRows input[data-name="chest"]').waitFor();
+  for (const input of await page.locator("#tapeRows input").all()) await input.fill("");
+  for (const [name, value] of Object.entries(request.body.tape)) {
+    await page.fill(`#tapeRows input[data-name="${name}"]`, String(value));
+  }
+  await page.locator("summary").filter({hasText:"Add photo or other measurement evidence"}).click();
+  const upload = async (name, buffer) => page.setInputFiles("#supplementalFiles", {name, mimeType:"application/json", buffer});
+  const absent = async () => assert.equal(await page.locator("#results").evaluate(e=>e.classList.contains("hidden")), true);
+  await upload("photo-measurements.json", source);
+  assert.match(await settle("#go",120000), /same wearer/);await absent();
+  await page.check("#supplementalConsent");assert.equal(await settle("#go",120000), "");
+  const dir=path.join(work,"measurement-evidence");fs.mkdirSync(dir);
+  // Save an actual Chromium download, then compare its documents with the native shared-round run.
+  const waiting=page.waitForEvent("download");await page.click("#resFiles a[download$='.zip']");
+  const download=await waiting;assert.equal(await download.failure(),null);
+  fs.copyFileSync(await download.path(),path.join(dir,"round.zip"));
+  execFileSync("unzip",["-q","round.zip"],{cwd:dir});
+  for(const name of ["measurements.json","pattern.json","readiness.json","fit_spec.json"]) {
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir,name))),JSON.parse(fs.readFileSync(path.join(nativeDir,name))),name);
+  }
+  const measured=JSON.parse(fs.readFileSync(path.join(dir,"measurements.json")));
+  assert.equal(measured.measurement_imports[0],source.toString("utf8"));
+  assert.equal(measured.fused.arm_length.primary_provenance,"PHOTO_ESTIMATED");assert.equal(measured.taken_on,null);
+  assert.ok(measured.records.some(r=>r.provenance==="MEASURED_TAPE"));
+  await page.evaluate(()=>{window.__holdEvidence=true;});await page.click("#go");
+  await page.waitForFunction(()=>!!window.__heldEvidence,null,{timeout:120000});
+  await upload("same-bytes-new-source.json",source);await absent();
+  await page.evaluate(()=>{const h=window.__heldEvidence;delete window.__heldEvidence;
+    h.worker.dispatchEvent(new MessageEvent("message",{data:h.data}));});
+  await absent();assert.equal(await page.isChecked("#supplementalConsent"),false);
+  await page.check("#supplementalConsent");assert.equal(await settle("#go",120000),"");
+  await page.fill('#tapeRows input[data-name="chest"]',"55");await absent();
+  assert.equal(await page.isChecked("#supplementalConsent"),false);
+  assert.match(await settle("#go",120000),/same wearer/);
+  await page.fill('#tapeRows input[data-name="chest"]',String(request.body.tape.chest));
+  const invalid=JSON.parse(source);invalid.records[0].sigma_mm=-1;
+  for(const [name,buffer,pattern] of [["invalid.json",Buffer.from(JSON.stringify(invalid)),/sigma/],
+    ["invalid-utf8.json",Buffer.from([0xc3,0x28]),/encoded data|encoding/i]]) {
+    await upload(name,buffer);await page.check("#supplementalConsent");
+    assert.match(await settle("#go",120000),pattern);await absent();
+  }
+  await upload("photo-replacement.json",source);await page.check("#supplementalConsent");
+  assert.equal(await settle("#go",120000),"");
+  // A saved combined file retains source text but must not append those same records again.
+  await page.click("#clearSupplemental");await absent();
+  await page.check('input[name=bodyMode][value=file]');
+  await page.setInputFiles("#measFile",path.join(dir,"measurements.json"));
+  assert.equal(await settle("#go",120000),"");
+  const replay=JSON.parse(await bytes('a[download="measurements.json"]'));
+  assert.deepEqual(replay,measured);
+  const imageHash=JSON.parse(source).photo.image_input.sha256;
+  assert.equal(await page.evaluate(hash=>Object.values(localStorage).some(s=>s.includes(hash)),imageHash),false);
+  await page.check('input[name=bodyMode][value=tape]');
+  for (const input of await page.locator("#tapeRows input").all()) await input.fill("");
+  await page.check('input[name=bodyMode][value=file]');
+  console.log("PASS measurement evidence: actual EXIF-photo records plus tape, full native measurements/pattern/readiness/fit equality, exact imported text, real ZIP download, source edit/refusal controls and saved-file replay. Artifacts:",dir);
+}
 
 async function printableReferences(browser, origin, expectedDir) {
   const assert = require("node:assert/strict");
@@ -259,6 +326,16 @@ async function offlineViewer(browser, file) {
     return;
   }
   const page = await browser.newPage({ userAgent });
+  if (evidenceReplay) await page.addInitScript(()=>{
+    const Original=window.Worker;
+    window.Worker=class extends Original {
+      constructor(...args) {super(...args);this.addEventListener("message",e=>{
+        if(window.__holdEvidence && e.data.type==="result") {
+          e.stopImmediatePropagation();window.__holdEvidence=false;window.__heldEvidence={worker:this,data:e.data};
+        }
+      });}
+    };
+  });
   const errors = [], requests = [];
   page.context().on("request", r => { if (/^https?:/.test(r.url())) requests.push({ url: r.url(), method: r.method() }); });
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
@@ -407,6 +484,7 @@ async function offlineViewer(browser, file) {
     await page.setInputFiles("#measFile", { name: "invalid.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(invalid)) });
     check(/sigma/.test(await settle("#go", 120000)), "valid cache cannot hide an invalid uploaded record");
     check(await page.locator("#results").evaluate(e => e.classList.contains("hidden")), "refused upload exposes no prior round downloads");
+    if (evidenceReplay) await measurementEvidence(page, settle, bytes, work, path.resolve(evidenceReplay));
     await page.check("input[name=program][value=zouave_trousers]");
     await page.check("input[name=bodyMode][value=tape]");
     await page.waitForFunction(() => document.querySelectorAll("#tapeRows input").length > 0, null, { timeout: 30000 });

@@ -256,3 +256,182 @@ fn a_ready_cache_cannot_promote_model_records_to_independent_evidence() {
     let saved: Value = serde_json::from_slice(bytes).unwrap();
     assert_eq!(saved["fused"]["chest"]["primary_provenance"], "MODEL_FIT");
 }
+
+fn photo_body() -> (Value, String) {
+    let photo = ftx_wasm::photo::Photo::new(
+        include_bytes!("../../../tests/fixtures/photo/plain-letter-exif6.jpg"),
+        "letter",
+    )
+    .unwrap()
+    .measure(r#"{"arm_length":[[30,400],[530,400]]}"#, "{}")
+    .unwrap();
+    let text = serde_json::to_string_pretty(&photo).unwrap() + "\n";
+    (
+        json!({"mode":"tape","stature_cm":92,"age_months":30,
+            "tape":{"chest":54,"waist":50,"waist_height":56},
+            "supplemental_same_wearer":true,"supplemental_measurements":[text]}),
+        text,
+    )
+}
+
+#[test]
+fn real_photo_records_join_tape_through_ordinary_fusion_and_the_full_round() {
+    let (body, text) = photo_body();
+    let original = body.clone();
+    let got = ftx_wasm::page::body_file(&PyJson::from_value(&body), TODAY).unwrap();
+    let mut base = body.clone();
+    base.as_object_mut()
+        .unwrap()
+        .remove("supplemental_measurements");
+    let mut expected = ftx_wasm::page::body_file(&PyJson::from_value(&base), TODAY).unwrap();
+    let photo: Value = serde_json::from_str(&text).unwrap();
+    expected["records"]
+        .as_array_mut()
+        .unwrap()
+        .extend(photo["records"].as_array().unwrap().clone());
+    let fused = ftx_measure::fuse(&expected, true).unwrap();
+    assert_eq!(got["fused"], fused["fused"]);
+    assert_eq!(got["records"], expected["records"]);
+    assert_eq!(got["measurement_imports"], json!([text]));
+    assert!(got["taken_on"].is_null());
+    assert_eq!(
+        got["fused"]["arm_length"]["primary_provenance"],
+        "PHOTO_ESTIMATED"
+    );
+    assert_eq!(body, original);
+    let request = json!({"body":body,"program":"zouave_bolero"});
+    let round = ftx_wasm::page::run(&request.to_string(), TODAY, CREATED).unwrap();
+    let direct = ftx_wasm::page::run(
+        &json!({"body":{"mode":"file","measurements":got},
+        "program":"zouave_bolero"})
+        .to_string(),
+        TODAY,
+        CREATED,
+    )
+    .unwrap();
+    assert_eq!(round.files, direct.files);
+    assert_eq!(round.zip, direct.zip);
+    assert_eq!(round.page, direct.page);
+    if let Some(dir) = std::env::var_os("FTX_EVIDENCE_REPLAY_DIR") {
+        use std::io::Write;
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, bytes) in [
+            ("request.json", request.to_string().into_bytes()),
+            ("photo-measurements.json", text.into_bytes()),
+        ]
+        .into_iter()
+        .chain(round.files.into_iter().filter(|(name, _)| {
+            [
+                "measurements.json",
+                "pattern.json",
+                "readiness.json",
+                "fit_spec.json",
+            ]
+            .contains(&name.as_str())
+        })) {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dir.join(name))
+                .unwrap();
+            file.write_all(&bytes).unwrap();
+        }
+    }
+}
+
+#[test]
+fn supplemental_dates_caches_and_readiness_keep_the_original_evidence_authority() {
+    let (mut body, text) = photo_body();
+    let mut photo: Value = serde_json::from_str(&text).unwrap();
+    photo["taken_on"] = json!("2026-08-01");
+    photo["fused"]["arm_length"] = json!({"value_mm":9999});
+    body["supplemental_measurements"] = json!([photo.to_string()]);
+    let got = ftx_wasm::page::body_file(&PyJson::from_value(&body), TODAY).unwrap();
+    assert_eq!(got["taken_on"], "2026-08-01");
+    assert!(got["fused"]["arm_length"]["value_mm"].as_f64().unwrap() < 300.0);
+    photo["records"] = json!([ftx_measure::make_record(
+        "chest",
+        700.0,
+        1.0,
+        "PHOTO_ESTIMATED",
+        "synthetic conflicting observation",
+        None,
+        ""
+    )
+    .unwrap()]);
+    body["supplemental_measurements"] = json!([photo.to_string()]);
+    let conflict = ftx_wasm::page::body_file(&PyJson::from_value(&body), TODAY).unwrap();
+    assert!(
+        conflict["fused"]["chest"]["flags"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("REMEASURE"))
+    );
+
+    let mut ready = file_request()["body"]["measurements"].clone();
+    ready["wearer"]["reference"] = json!(false);
+    for r in ready["records"].as_array_mut().unwrap() {
+        r["provenance"] = json!("MODEL_FIT");
+        r["sigma_mm"] = json!(1.0);
+    }
+    body = json!({"mode":"file","measurements":ready,"supplemental_same_wearer":true,
+        "supplemental_measurements":[text]});
+    let round = ftx_wasm::page::run(
+        &json!({"body":body,"program":"zouave_bolero"}).to_string(),
+        TODAY,
+        CREATED,
+    )
+    .unwrap();
+    assert_eq!(round.page.to_value()["readiness"]["status"], "NOT_READY");
+    let body = ftx_wasm::page::body_file(&PyJson::from_value(&body), TODAY).unwrap();
+    assert_eq!(body["fused"]["chest"]["primary_provenance"], "MODEL_FIT");
+}
+
+#[test]
+fn supplemental_sources_refuse_bad_identity_schema_records_and_budgets() {
+    let (body, text) = photo_body();
+    let reject = |b: Value, message: &str| {
+        let error = ftx_wasm::page::body_file(&PyJson::from_value(&b), TODAY).unwrap_err();
+        assert!(error.contains(message), "{error}");
+    };
+    let mut b = body.clone();
+    b["supplemental_same_wearer"] = json!(false);
+    reject(b, "same wearer");
+    let mut b = body.clone();
+    b["mode"] = json!("chart");
+    reject(b, "size-chart demo");
+    let mut b = body.clone();
+    b["supplemental_measurements"] = json!({});
+    reject(b, "list");
+    let mut b = body.clone();
+    b["supplemental_measurements"] = json!([{}]);
+    reject(b, "JSON text");
+    let mut b = body.clone();
+    b["supplemental_measurements"] = json!(["{}"]);
+    reject(b, "schema");
+    let mut b = body.clone();
+    b["supplemental_measurements"] = json!([text, text]);
+    reject(b, "twice");
+    let mut b = body.clone();
+    b["supplemental_measurements"] = json!(vec![text.clone(); 9]);
+    reject(b, "1–8");
+    let mut b = body.clone();
+    b["supplemental_measurements"] = json!([" ".repeat(16 * 1024 * 1024 + 1)]);
+    reject(b, "16 MiB");
+    let mut photo: Value = serde_json::from_str(&text).unwrap();
+    photo["wearer"]["reference"] = json!(true);
+    let mut b = body.clone();
+    b["supplemental_measurements"] = json!([photo.to_string()]);
+    reject(b, "reference wearer");
+    photo["wearer"]["reference"] = json!(false);
+    photo["records"][0]["sigma_mm"] = json!(-1);
+    let mut b = body.clone();
+    b["supplemental_measurements"] = json!([photo.to_string()]);
+    reject(b, "sigma");
+    photo["records"][0]["sigma_mm"] = json!(3);
+    photo["records"] = json!(vec![photo["records"][0].clone(); 4096]);
+    let mut b = body;
+    b["supplemental_measurements"] = json!([photo.to_string()]);
+    reject(b, "4096");
+}

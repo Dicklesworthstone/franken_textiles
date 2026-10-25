@@ -219,6 +219,70 @@ pub fn form_fields(
 /// The reference's messages: a stature outside 50–220 cm, an unknown measurement, a reading that is not a
 /// measurement, an invalid file.
 pub fn body_file(body: &PyJson, today: &str) -> Result<Value, String> {
+    let mut data = base_body_file(body, today)?;
+    let Some(sources) = body.get("supplemental_measurements") else {
+        return Ok(data);
+    };
+    let PyJson::List(sources) = sources else {
+        return Err("supplemental measurements must be a list of original JSON text".into());
+    };
+    if sources.is_empty() {
+        return Ok(data);
+    }
+    if sources.len() > 8
+        || !matches!(
+            body.get("supplemental_same_wearer"),
+            Some(PyJson::Bool(true))
+        )
+    {
+        return Err("associate 1–8 supplemental files with this same wearer explicitly".into());
+    }
+    if truthy(&data["wearer"]["reference"]) {
+        return Err("supplemental measurements cannot be combined with a size-chart demo".into());
+    }
+    let mut imports = match data.get("measurement_imports") {
+        None => Vec::new(),
+        Some(Value::Array(a)) => a.clone(),
+        Some(_) => return Err("measurement_imports must be an array".into()),
+    };
+    let mut bytes = 0usize;
+    for source in sources {
+        let PyJson::Str(text) = source else {
+            return Err("supplemental measurements must be original JSON text".into());
+        };
+        bytes = bytes.saturating_add(text.len());
+        if bytes > 16 * 1024 * 1024 {
+            return Err("supplemental measurement text exceeds 16 MiB".into());
+        }
+        if imports.iter().any(|s| s.as_str() == Some(text)) {
+            return Err("the same supplemental measurement file was supplied twice".into());
+        }
+        let next: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let errors = validate_measurements(&next);
+        if !errors.is_empty() {
+            return Err(format!("supplemental measurements: {}", errors.join("; ")));
+        }
+        if truthy(&next["wearer"]["reference"]) {
+            return Err("a reference wearer cannot supply real-wearer evidence".into());
+        }
+        let records = next["records"].as_array().unwrap();
+        let combined = data["records"].as_array_mut().unwrap();
+        if combined.len().saturating_add(records.len()) > 4096 {
+            return Err("combined measurements exceed 4096 records".into());
+        }
+        combined.extend(records.iter().cloned());
+        // An unknown source date must not inherit today's tape-entry date.
+        data["taken_on"] = match (data["taken_on"].as_str(), next["taken_on"].as_str()) {
+            (Some(a), Some(b)) => json!(a.min(b)),
+            _ => Value::Null,
+        };
+        imports.push(json!(text));
+    }
+    data["measurement_imports"] = json!(imports);
+    fuse(&data, true).map_err(msg)
+}
+
+fn base_body_file(body: &PyJson, today: &str) -> Result<Value, String> {
     let get = |k: &str| body.get(k).cloned().unwrap_or(PyJson::Null);
     let mode = match get("mode") {
         PyJson::Str(s) => s,

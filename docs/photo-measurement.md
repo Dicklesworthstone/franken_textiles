@@ -38,9 +38,17 @@ capture assertions and checked calibration document remain in the downloaded rep
 Give a measurement name and click its two points, or edit the named-pair JSON directly.
 Review camera distance, possible depth offset, click uncertainty and bootstrap settings,
 then **Measure point pairs**. Download the ordinary `photo-measurements.json`, exact
-point pairs and explicit options. Combine these records with stature and the other
-required measurements using `ftx measure fuse` (see below), then load the combined
-file through the Pattern Workbench's **Measurements file** body mode. A photo-only
+point pairs and explicit options. In the Pattern Workbench, choose **My tape measurements**
+and enter stature and the other available tape readings, or choose a primary **Measurements file**.
+Open **Add photo or other measurement evidence**, select the downloaded photo file and any other
+ordinary measurement documents, and confirm that they all describe this same wearer. **Draft and check**
+uses the existing Rust fusion/readiness engines and saves the combined records with every supplemental
+file's exact source text in `measurement_imports`. No terminal is required for this route.
+Source/body edits clear consent and withdraw old outputs. Files never enter browser storage.
+At most eight supplemental files (16 MiB total, 4096 combined records) are admitted; reference-wearer
+files and chart demos cannot be mixed with wearer evidence. The combined date is unknown if any source
+date is unknown; otherwise it is the oldest date. Review original dates and applicability yourself.
+The native alternative remains `ftx measure fuse` (below). A photo-only
 file with no stature cannot draft a garment. The records retain PHOTO_ESTIMATED
 provenance, source image hash/orientation and decomposed conditional uncertainty;
 the capture date remains unknown. Two point clicks do not establish a girth.

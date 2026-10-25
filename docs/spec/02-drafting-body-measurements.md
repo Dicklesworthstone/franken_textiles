@@ -898,12 +898,27 @@ not ready or photo not usable; argument errors use the parser's own exit (2).
 | `add FILE` | `--name` (req), `--value` (repeatable, with unit), `--sigma` (with unit), `--provenance` (default MEASURED_TAPE), `--method`, `--definition-id`, `--notes`, `--out` (default: update FILE) | one record per value; σ = `--sigma`, else catalogue tape σ for MEASURED_TAPE, else provenance default for mm units, else error `give --sigma for <name> (<provenance> has no default)` |
 | `validate FILE` | | `{file, valid, errors}`; exit 1 when invalid |
 | `fuse FILES…` | `--no-priors`, `--out` | merge files (first is the base; a base wearer with all-null fields takes the next file's wearer; records concatenated; taken_on filled from the first that has one; `photo` dropped), then fuse |
+
 | `ready FILES…` | `--garment` (req), `--passes-hip`, `--closed-cuff`, `--nappies` (true or "use the wearer flag"), `--elastic-waist`, `--cuff-level` knee/calf/ankle (calf), `--cuff-opening`, `--as-of`, `--no-priors`, `--out` | readiness; exit 3 unless READY/READY_REFERENCE |
 | `girth-from-section` | `--level` (waist), `--width-mm`, `--depth-mm`, `--sigma-width-mm` 0, `--sigma-depth-mm` 0, `--from FILE`, `--k`, `--k-sigma`, `--k-ratio` 1, `--k-ratio-sigma` 0, `--clothing-mm` 0, `--tape-girth-mm`, `--sigma-tape-mm` 10, `--name`, `--out` | `--from` reads `<level>_width` and `<level>_depth` records (`<file>: no <key> record` if absent); missing w or d → `give --width-mm and --depth-mm, or --from FILE`; with `--tape-girth-mm` output calibrate_k; else girth_from_section plus, when a name is known (`--name` or a K_SECTION level), a `PHOTO_ESTIMATED` `record` with method `girth-from-section k·Ramanujan(width <w:g>, depth <d:g>), k=<k>` |
 | `calib-sheet` | `--paper` letter/a4 (letter), `--out` dir (req), `--square-mm` 22, `--marker-mm` 16, `--dictionary` DICT_4X4_50 | writes the three files; prints the sidecar |
 | `photo-scale` | `--image` (req), exactly one of `--sheet` / `--paper` (letter, a4, auto), `--annotate`, `--out` | scale report (+ `image`, and `sheet` for ChArUco); exit 3 unless ok |
 | `measure-photo` | `--image`, `--sheet`/`--paper`, `--points` (req), `--depth-offset-mm` 0, `--camera-distance-mm` 2500, `--click-px` 3, `--view`, `--points-from-width`, `--sheet-level-sigma-deg` 1.5, `--annotate`, `--out` | measurement file with PHOTO_ESTIMATED records |
 | `reference` | `--stature-mm` (req), `--age-months`, `--sex`, `--label`, `--out` | reference wearer |
+
+Browser extension: a tape/file body request may supply `supplemental_measurements`, an array of
+at most eight original UTF-8 `fabric-measurements/1` document strings (16 MiB combined), and
+`supplemental_same_wearer: true`. The explicit assertion associates all supplied records with the
+primary wearer; source wearer metadata never silently replaces that wearer. Chart/demo bodies and
+reference-wearer documents refuse this combination. Every source is validated before its records
+are appended, with at most 4096 combined records; duplicate source strings refuse. Recompute ordinary
+fusion from the combined original records, ignoring every cached `fused` value. Preserve the exact
+supplemental text in the saved measurements' `measurement_imports` array, including photo source and
+uncertainty reports. Existing imports are retained, not re-applied as new observations.
+For this mixed-source extension, `taken_on` is the oldest input date only if every input has a known
+date, otherwise null. This conservative aggregate cannot establish per-record freshness; source dates
+remain inspectable. No provenance, sigma, definition, conflict or readiness rule changes. Source/body
+edits withdraw outputs and wearer consent. Evidence import is local and never enters browser storage.
 
 ---
 
