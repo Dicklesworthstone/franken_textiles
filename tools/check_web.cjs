@@ -11,7 +11,7 @@
 //
 // Needs Playwright with its Chromium (npm i -g playwright && npx playwright install chromium).
 const { chromium } = require(process.env.FTX_PLAYWRIGHT_MODULE || "playwright");
-const { spawn, execFileSync } = require("child_process");
+const { spawn, spawnSync, execFileSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
@@ -23,11 +23,15 @@ const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? pro
 const root = path.resolve(__dirname, "..");
 const webDir = path.resolve(arg("--web-dir") || path.join(root, "web"));
 const model = arg("--model");
+const acceptedFit = arg("--accepted-fit"), acceptedMeasurements = arg("--accepted-measurements");
 const standalone = arg("--viewer");
 const calibrationSheets = arg("--calibration-sheets");
 const generatedSheets = arg("--generated-calibration-sheets");
 const timingArg = arg("--timings");
 const timingRuns = Number(timingArg || 0);
+if ((acceptedFit || acceptedMeasurements) && (!model || !acceptedFit || !acceptedMeasurements || standalone || timingArg)) {
+  throw Error("accepted-fit checks need --model, --accepted-fit and --accepted-measurements; run separately from timing/viewer checks");
+}
 if (process.argv.includes("--timings") && (!model || standalone || !/^[1-9][0-9]*$/.test(timingArg || "") || timingRuns > 100)) {
   throw Error("--timings needs --model and an integer run count from 1 to 100; it is separate from --viewer");
 }
@@ -458,6 +462,53 @@ async function offlineViewer(browser, file) {
           `${program} edits withdraw residuals and downloads`);
         await page.locator("#selfContact").check();
       }
+    }
+    if (acceptedFit) {
+      const assert = require("node:assert/strict"), raw = fs.readFileSync(acceptedFit);
+      const input = fs.readFileSync(acceptedMeasurements), saved = JSON.parse(raw);
+      await page.check("input[name=program][value=zouave_bolero]");
+      await page.check("input[name=bodyMode][value=file]");
+      await page.setInputFiles("#measFile", acceptedMeasurements);
+      assert.equal(await settle("#go", 120000), "");
+      const status = await page.textContent("#resStatus"), dir = path.join(work, "accepted-fit");
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, "round.zip"), await bytes("a[download$='.zip']"), {flag:"wx"});
+      execFileSync("unzip", ["-q", "round.zip"], {cwd:dir});
+      await page.locator("details").filter({has:page.locator("#bodyFitFile")}).locator("summary").click();
+      await page.setInputFiles("#bodyFitFile", acceptedFit);
+      await page.waitForFunction(() => /Fit report read/.test(document.getElementById("status").textContent));
+      assert.equal(await page.locator("#foldGo").isDisabled(),true);
+      await page.check("#bodyFitConsent");await page.fill("#bodyArmDeg","50");
+      assert.equal(await settle("#foldGo",900000),"");
+      const report = JSON.parse(await bytes("a[download='sim_report.json']"));
+      assert.deepEqual(report.body.source_fit,saved);
+      assert.deepEqual(report.body.phenotype,saved.solution.anny_parameters.phenotype);
+      assert.equal(report.body.shape_source.refitted,false);
+      assert.equal(report.body.shape_source.image_poses_reused,false);
+      assert.equal(report.body.shape_source.report_sha256,sha(raw));
+      assert.ok((await bytes("a[download='body_fit.json']")).equals(raw));
+      assert.equal(await page.textContent("#resStatus"),status);
+      assert.match(await page.textContent("#foldSummary"),/without refitting/);
+      const viewer = await bytes("a[download='fold_viewer.html']");
+      fs.writeFileSync(path.join(dir,"body_fit.json"),raw,{flag:"wx"});
+      const nativeRun = spawnSync(ftx,["drape","pattern.json","--measurements","measurements.json","--fit","fit_spec.json",
+        "--body-fit","body_fit.json","--arm-deg","50","--self-contact-mm","2","--model",model,"--out","native"],
+        {cwd:dir,stdio:["ignore","pipe","inherit"]});
+      assert.ok([0,2].includes(nativeRun.status),String(nativeRun.stdout)); // retain any ordinary drape gating flags
+      const native = JSON.parse(fs.readFileSync(path.join(dir,"native/sim_report.json")));
+      delete native.pattern;delete native.wall_s;
+      assert.deepEqual(report,native);
+      assert.ok(viewer.equals(fs.readFileSync(path.join(dir,"native/fold_viewer.html"))));
+      check(true,"accepted fit: complete native/browser report and viewer equality, exact original report bytes, no refit or readiness promotion");
+      const rejected = {...saved,status:"REJECTED"};
+      await page.setInputFiles("#bodyFitFile",{name:"rejected.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify(rejected))});
+      await page.waitForFunction(() => /Fit report read/.test(document.getElementById("status").textContent));
+      assert.equal(await page.locator("#foldSummary a").count(),0);
+      assert.equal(await page.locator("#foldGo").isDisabled(),true);await page.check("#bodyFitConsent");
+      assert.match(await settle("#foldGo",120000),/accepted Anny shape/);
+      assert.equal(await page.locator("#foldSummary a").count(),0);
+      assert.ok(fs.readFileSync(acceptedFit).equals(raw));assert.ok(fs.readFileSync(acceptedMeasurements).equals(input));
+      check(true,"rejected replacement refuses without stale downloads or tape fallback; source inputs unchanged");
     }
     check(errors.length === 0, `no console errors${errors.length ? ": " + errors.slice(0, 3).join(" | ") : ""}`);
     check(requests.every(r => r.method === "GET" && r.url.startsWith(`http://localhost:${port}/`)), "actual browser rounds make only local GET requests, with no upload or external request");
