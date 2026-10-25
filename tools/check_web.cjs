@@ -80,6 +80,11 @@ async function measurementEvidence(page, settle, bytes, work, nativeDir) {
   assert.equal(measured.measurement_imports[0],source.toString("utf8"));
   assert.equal(measured.fused.arm_length.primary_provenance,"PHOTO_ESTIMATED");assert.equal(measured.taken_on,null);
   assert.ok(measured.records.some(r=>r.provenance==="MEASURED_TAPE"));
+  await page.click("#clearSupplemental");assert.equal(await settle("#go",120000),"");
+  assert.notDeepEqual(JSON.parse(await bytes('a[download="pattern.json"]')),
+    JSON.parse(fs.readFileSync(path.join(dir,"pattern.json"))),"photo arm length must change the actual drafted pattern");
+  await upload("photo-measurements.json",source);await page.check("#supplementalConsent");
+  assert.equal(await settle("#go",120000),"");
   await page.evaluate(()=>{window.__holdEvidence=true;});await page.click("#go");
   await page.waitForFunction(()=>!!window.__heldEvidence,null,{timeout:120000});
   await upload("same-bytes-new-source.json",source);await absent();
