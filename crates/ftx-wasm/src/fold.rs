@@ -91,8 +91,11 @@ pub fn fold_up(
 
 /// Explicit imported shape and ordinary drape-pose choice; image-frame poses are never reused.
 pub struct BodyFitSource<'a> {
+    /// SHA-256 of the same array-verified model being evaluated.
     pub model_sha256: &'a str,
+    /// Original saved report text; its exact bytes remain the source authority.
     pub report: &'a str,
+    /// Ordinary drape arm abduction in degrees, independent of image-frame poses.
     pub arm_deg: f64,
 }
 

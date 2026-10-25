@@ -1215,6 +1215,123 @@ fn drape_and_round_reach_shape_reuse_without_falling_back_to_tape() {
 }
 
 #[test]
+fn browser_fold_replays_the_native_accepted_shape_without_tape_refitting() {
+    let dir = setup();
+    eprintln!("browser fold replay artifacts: {}", dir.display());
+    let bytes = model_bytes_with_rig(true);
+    let hash = sha256_hex(&bytes);
+    let raw = serde_json::to_string_pretty(&receipt(&hash)).unwrap();
+    let model = ftx_wasm::fold::load_body(&bytes).unwrap();
+    let mut pattern: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/materials/synthetic-scenario-pattern.json"
+    ))
+    .unwrap();
+    let width = std::f64::consts::TAU * 180.0;
+    pattern["pieces"][0]["vertices"]["b"][0] = json!(width);
+    pattern["pieces"][0]["vertices"]["c"][0] = json!(width);
+    pattern["pieces"][0]["placement"]["radius_mm"] = json!(180.0);
+    pattern["pieces"][0]["placement"]["x0"] = json!(width / 2.0);
+    // Deliberately conflicts with the accepted 1300mm shape; must remain only a signed residual.
+    let measurements = json!({"wearer":{"age_months":30,"sex":"F","stature_mm":1111}});
+    let source = ftx_wasm::fold::BodyFitSource {
+        model_sha256: &hash,
+        report: &raw,
+        arm_deg: 50.0,
+    };
+    let portable = ftx_wasm::fold::fold_up_with_body_fit(
+        &model,
+        &pattern,
+        &measurements,
+        &json!({}),
+        2.0,
+        &source,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(portable.report["body"]["readings_mm"]["stature"], 1300.0);
+    assert_eq!(
+        portable.report["body"]["measurement_comparison"][0]["residual_mm"],
+        189.0
+    );
+    assert_eq!(portable.report["body"]["shape_source"]["refitted"], false);
+    assert_eq!(portable.report["body"]["source_fit"], receipt(&hash));
+    std::fs::write(dir.join("rig.ftxbody"), &bytes).unwrap();
+    std::fs::write(dir.join("accepted.json"), &raw).unwrap();
+    save(&dir.join("pattern.json"), &pattern);
+    save(&dir.join("m.json"), &measurements);
+    let out = Command::new(env!("CARGO_BIN_EXE_ftx"))
+        .current_dir(&dir)
+        .args([
+            "drape",
+            "pattern.json",
+            "--measurements",
+            "m.json",
+            "--body-fit",
+            "accepted.json",
+            "--model",
+            "rig.ftxbody",
+            "--arm-deg",
+            "50",
+            "--self-contact-mm",
+            "2",
+            "--out",
+            "sim",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        matches!(out.status.code(), Some(0 | 2)),
+        "{} / {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut native = read(&dir.join("sim/sim_report.json"));
+    for field in ["pattern", "wall_s", "measurements_sha256"] {
+        native.as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(native, portable.report);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("sim/fold_viewer.html")).unwrap(),
+        portable.viewer
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("sim/body_fit.json")).unwrap(),
+        raw
+    );
+    // Synthetic cloth output is compared exactly even when it carries physical/numerical flags.
+    for (report, age, digest, angle) in [
+        (raw.replace("ACCEPTED", "REJECTED"), 30, hash.clone(), 50.0),
+        (raw.clone(), 31, hash.clone(), 50.0),
+        (raw.clone(), 30, "c".repeat(64), 50.0),
+        (raw.clone(), 30, hash.clone(), f64::NAN),
+    ] {
+        let mut m = measurements.clone();
+        m["wearer"]["age_months"] = json!(age);
+        assert!(
+            ftx_wasm::fold::fold_up_with_body_fit(
+                &model,
+                &pattern,
+                &m,
+                &json!({}),
+                2.0,
+                &ftx_wasm::fold::BodyFitSource {
+                    model_sha256: &digest,
+                    report: &report,
+                    arm_deg: angle
+                },
+                |_| {}
+            )
+            .is_err()
+        );
+    }
+    let mut damaged = bytes.clone();
+    *damaged.last_mut().unwrap() ^= 1;
+    assert!(ftx_wasm::fold::load_body(&damaged).is_err());
+    assert_eq!(raw, serde_json::to_string_pretty(&receipt(&hash)).unwrap());
+}
+
+#[test]
 fn report_budget_is_enforced_before_model_or_output_access() {
     let dir = setup();
     let f = std::fs::OpenOptions::new()

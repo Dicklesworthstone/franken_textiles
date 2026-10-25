@@ -1822,7 +1822,10 @@ test('drafting worker discards refused replacements, frees failed rounds and che
         free:()=>freed.push('round')};
     },
     WebBody:class {constructor(bytes){if(bytes[0]===0)throw Error('body refused');}free(){freed.push('body');}},
-    fold_up:()=>{calls.push('fold');return {report:()=>'{"gating":[]}',viewer:()=>'<html/>',free:()=>freed.push('fold')};}};
+    fold_up:()=>{calls.push('fold');return {report:()=>'{"gating":[]}',viewer:()=>'<html/>',free:()=>freed.push('fold')};},
+    fold_up_with_body_fit:(_body,_pattern,_measurements,_fit,mm,source,angle)=>{
+      calls.push({source,mm,angle});if(source==='refused')throw Error('import refused');
+      return {report:()=>'{"body":{"provenance":"MODEL_FIT"}}',viewer:()=>'<html/>',free:()=>freed.push('import')};}};
   const context=vm.createContext({JSON,Date,TextDecoder,Uint8Array,WebAssembly,Error,self:{},onmessage:null,postMessage:m=>sent.push(m)});
   const imports=new vm.SyntheticModule(Object.keys(values),function(){for(const[n,v]of Object.entries(values))this.setExport(n,v);},{context});
   await imports.link(()=>{});await imports.evaluate();
@@ -1845,6 +1848,17 @@ test('drafting worker discards refused replacements, frees failed rounds and che
   assert.match((await fold()).message,/load the body model/); // no fallback to the prior model
   await body();assert.equal((await fold()).type,'folded');
   await send({type:'clearBody'});assert.match((await fold()).message,/load the body model/);
+  await body();
+  const exact='{ "schema": "ftx-body-fit/1", "unrounded": 1.0000000000000002 }';
+  assert.match((await fold({bodyFit:exact})).message,/associate/);
+  const imported=await fold({bodyFit:exact,bodyFitConsent:true,armDeg:50,selfContactMm:2});
+  assert.equal(imported.type,'folded');assert.equal(imported.bodyFitText,exact);
+  assert.deepEqual(calls.at(-1),{source:exact,mm:2,angle:50});
+  const tapeCalls=calls.filter(x=>x==='fold').length;
+  assert.match((await fold({bodyFit:'refused',bodyFitConsent:true,armDeg:50})).message,/import refused/);
+  assert.equal(calls.filter(x=>x==='fold').length,tapeCalls); // never fall back on import failure
+  assert.match((await fold({bodyFit:{},bodyFitConsent:true})).message,/JSON text/);
+  assert.equal((await fold()).type,'folded');assert.equal(sent.at(-1).bodyFitText,null);
 });
 
 // The original inline workshop script, using a small DOM transport double. These tests inspect
@@ -1943,6 +1957,42 @@ test('primary workshop preserves signed body-fit precision, escapes targets and 
   assert.equal(await [...p.live.values()].find(b=>b.type==='application/json').text(),raw);
   p.e.selfContact.handlers.change();assert.equal(p.e.foldSummary.textContent,'');
   assert.equal(p.live.size,1);
+});
+
+test('primary workshop retains exact accepted-fit sources and invalidates replacements without tape fallback', async () => {
+  // Explicit UI transport double; actual imported shape/garment checks use native and compiled WASM.
+  const p=draftingPage();await p.e.go.handlers.click();p.result();await p.body();
+  const readiness=p.e.resStatus.textContent, raw='{ "schema": "ftx-body-fit/1", "v": 1.0000000000000002 }';
+  p.e.bodyArmDeg.value='50';
+  const select=async text=>{p.e.bodyFitFile.files=[{size:100,text:async()=>text}];await p.e.bodyFitFile.handlers.change();};
+  await select(raw);assert.equal(p.e.foldGo.disabled,true);
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();assert.equal(p.e.foldGo.disabled,false);
+  p.e.foldGo.handlers.click();const msg=p.last('fold');
+  assert.equal(msg.bodyFit,raw);assert.equal(msg.bodyFitConsent,true);assert.equal(msg.armDeg,50);
+  const report={settled:true,body:{mass_kg:9,shape_source:{kind:'accepted_multi_frame_fit'},
+    measurement_comparison:[{name:'chest',target_mm:100,body_mm:100.0001,residual_mm:0.0001}]}};
+  p.emit({type:'folded',request:msg.request,report,reportText:JSON.stringify(report),viewer:'<html/>',bodyFitText:raw});
+  assert.match(p.e.foldSummary.innerHTML,/without refitting/);assert.match(p.e.foldSummary.innerHTML,/\+0\.0001/);
+  assert.match(p.e.foldSummary.innerHTML,/Original accepted body fit/);
+  assert.ok((await Promise.all([...p.live.values()].map(b=>b.text()))).includes(raw));
+  assert.equal(p.e.resStatus.textContent,readiness);
+  p.e.bodyArmDeg.handlers.change();assert.equal(p.live.size,1); // withdraw report/viewer/source together
+  const pending=deferred();p.e.bodyFitFile.files=[{size:100,text:()=>pending.promise}];
+  const loading=p.e.bodyFitFile.handlers.change();assert.equal(p.e.foldGo.disabled,true);
+  await select('replacement');pending.resolve(raw);await loading;
+  p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();p.e.foldGo.handlers.click();
+  assert.equal(p.last('fold').bodyFit,'replacement');
+  const old=p.last('fold');p.e.bodyFitFile.files=[{size:100,text:async()=>{throw Error('fit read refused');}}];
+  await p.e.bodyFitFile.handlers.change();assert.equal(p.e.foldGo.disabled,true);
+  p.emit({type:'folded',request:old.request,report,reportText:'{}',viewer:'old',bodyFitText:raw});assert.equal(p.live.size,1);
+  p.e.bodyFitFile.files=[{size:16*1024*1024+1,text:async()=>{throw Error('must not read');}}];
+  await p.e.bodyFitFile.handlers.change();assert.match(p.e.errorText.textContent,/exceeds 16 MiB/);
+  assert.equal(p.e.foldGo.disabled,true);
+  await select(raw);p.e.bodyFitConsent.checked=true;p.e.bodyFitConsent.handlers.change();
+  p.dispatch('stature','input');assert.equal(p.e.bodyFitConsent.checked,false);
+  await p.e.go.handlers.click();p.result();assert.equal(p.e.foldGo.disabled,true);
+  p.e.bodyFitFile.files=[];await p.e.bodyFitFile.handlers.change();assert.equal(p.e.foldGo.disabled,false);
+  p.e.foldGo.handlers.click();assert.equal(p.last('fold').bodyFit,null);
 });
 
 test('primary workshop cannot install a superseded body, revive a cleared model or use a dead worker', async () => {
