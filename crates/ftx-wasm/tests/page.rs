@@ -317,8 +317,8 @@ fn real_photo_records_join_tape_through_ordinary_fusion_and_the_full_round() {
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).unwrap();
         for (name, bytes) in [
-            ("request.json", request.to_string().into_bytes()),
-            ("photo-measurements.json", text.into_bytes()),
+            ("request.json".to_string(), request.to_string().into_bytes()),
+            ("photo-measurements.json".to_string(), text.into_bytes()),
         ]
         .into_iter()
         .chain(round.files.into_iter().filter(|(name, _)| {
